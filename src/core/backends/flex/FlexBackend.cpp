@@ -1,6 +1,9 @@
 #include "core/backends/flex/FlexBackend.h"
 
+#include <QThread>
+
 #include "core/RadioConnection.h"
+#include "core/PanadapterStream.h"
 #include "models/ModelCapabilities.h"
 
 namespace AetherSDR {
@@ -8,22 +11,24 @@ namespace AetherSDR {
 FlexBackend::FlexBackend(QObject* parent)
     : IRadioBackend(parent)
 {
-}
+    // Own the wire objects + their worker threads. Order is load-bearing and
+    // preserved verbatim from the former RadioModel ctor (#502): PanadapterStream
+    // thread FIRST, then RadioConnection thread. Both objects are parentless and
+    // moved onto their thread; the thread is this-parented.
+    m_networkThread = new QThread(this);
+    m_networkThread->setObjectName("PanadapterStream");
+    m_panStream = new PanadapterStream;   // no parent — moved to thread
+    m_panStream->moveToThread(m_networkThread);
+    connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
+    m_networkThread->start();
 
-FlexBackend::~FlexBackend() = default;
+    m_connThread = new QThread(this);
+    m_connThread->setObjectName("RadioConnection");
+    m_connection = new RadioConnection;   // no parent — moved to thread
+    m_connection->moveToThread(m_connThread);
+    connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
+    m_connThread->start();
 
-void FlexBackend::attachConnection(RadioConnection* conn)
-{
-    if (m_connection == conn) {
-        return;
-    }
-    if (m_connection) {
-        disconnect(m_connection, nullptr, this, nullptr);
-    }
-    m_connection = conn;
-    if (!m_connection) {
-        return;
-    }
     // Observe wire lifecycle and re-emit as the interface's own signals. Queued
     // (auto) connections: the connection lives on its worker thread.
     connect(m_connection, &RadioConnection::connected,
@@ -32,6 +37,44 @@ void FlexBackend::attachConnection(RadioConnection* conn)
             this, &IRadioBackend::disconnected);
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
+}
+
+FlexBackend::~FlexBackend()
+{
+    // Teardown in the exact #502 order the former RadioModel dtor used:
+    // connection first (BlockingQueued disconnect → deleteLater → thread
+    // quit/wait), then panStream (BlockingQueued stop → …).
+    if (m_connection && m_connThread && m_connThread->isRunning()) {
+        RadioConnection* connection = m_connection;
+        QMetaObject::invokeMethod(connection, &RadioConnection::disconnectFromRadio,
+                                  Qt::BlockingQueuedConnection);
+        connection->deleteLater();
+        m_connThread->quit();
+        m_connThread->wait(3000);
+    } else {
+        delete m_connection;
+    }
+    if (m_connThread && m_connThread->isRunning()) {
+        m_connThread->quit();
+        m_connThread->wait(3000);
+    }
+    m_connection = nullptr;
+
+    if (m_panStream && m_networkThread && m_networkThread->isRunning()) {
+        PanadapterStream* panStream = m_panStream;
+        QMetaObject::invokeMethod(panStream, &PanadapterStream::stop,
+                                  Qt::BlockingQueuedConnection);
+        panStream->deleteLater();
+        m_networkThread->quit();
+        m_networkThread->wait(3000);
+    } else {
+        delete m_panStream;
+    }
+    if (m_networkThread && m_networkThread->isRunning()) {
+        m_networkThread->quit();
+        m_networkThread->wait(3000);
+    }
+    m_panStream = nullptr;
 }
 
 void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
@@ -55,7 +98,9 @@ RadioCapabilities FlexBackend::capabilities() const
     // FlexBackend refines these from live radio status as touchpoints convert.
     const ModelCapabilities mc = capabilitiesFor(caps.model);
     caps.maxSlices = mc.maxSlices;
-    caps.maxPanadapters = mc.maxSlices;   // pan capacity tracks slice capacity
+    // approx: pan capacity is not strictly slice count on real Flex hardware;
+    // refined from live radio status in a later touchpoint conversion.
+    caps.maxPanadapters = mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
 
     // Every current FlexRadio transmits; RX-only WAN/observer nuance is layered
@@ -64,22 +109,25 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canTransmit = true;
     caps.hasTuner = true;
 
-    caps.extensionNamespaces = { QStringLiteral("flex") };
+    // Advertise NO extension namespaces yet: no flex verb is routed through the
+    // seam, and invokeExtension() can't produce a reply. Advertising "flex"
+    // would let a client pre-check the namespace and then hang awaiting an
+    // extensionResult/Error that never comes. "flex" is declared here when the
+    // first amp/tuner/DAX verb converts.
     return caps;
 }
 
 void FlexBackend::connectRadio(const RadioConnectRequest& /*request*/)
 {
-    // 2.2 skeleton: RadioModel still orchestrates connect (RadioInfo assembly,
-    // WAN/SmartLink duality, auto-reconnect). The backend will own this in a
-    // later increment once the RadioConnectRequest→RadioInfo adaptation and the
-    // WAN branch move behind the seam.
+    // RadioModel still orchestrates connect (RadioInfo assembly, WAN/SmartLink
+    // duality, auto-reconnect); the backend owns the objects but not yet the
+    // connect flow — that adaptation moves behind the seam in a later increment.
 }
 
 void FlexBackend::disconnectRadio()
 {
-    // 2.2 skeleton: RadioModel still orchestrates the staged gracefulDisconnect
-    // (handle/streamId/seq) and teardown ordering. Owned by the backend later.
+    // RadioModel still orchestrates the staged gracefulDisconnect
+    // (handle/streamId/seq). Owned by the backend later.
 }
 
 bool FlexBackend::isConnected() const
@@ -113,11 +161,16 @@ void FlexBackend::setKeying(bool key)
 }
 
 void FlexBackend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/,
-                                  quint64 /*requestId*/, const QVariant& /*arg*/)
+                                  quint64 requestId, const QVariant& /*arg*/)
 {
-    // No flex extension verbs are routed through the seam yet; they land with
-    // the amp/tuner/DAX touchpoint conversions. A real reply would arrive via
-    // extensionResult()/extensionError() keyed by requestId.
+    // No flex extension verbs are routed through the seam yet. Honor the async
+    // contract by construction: a caller awaiting a reply (requestId != 0) gets
+    // an error, never a hang. Real verbs land with the amp/tuner/DAX touchpoint
+    // conversions.
+    if (requestId != 0) {
+        emit extensionError(requestId,
+                            QStringLiteral("flex: no extension verbs implemented"));
+    }
 }
 
 void FlexBackend::send(const QString& cmd)

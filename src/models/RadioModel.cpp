@@ -393,13 +393,20 @@ QJsonObject clientInfoToJson(quint32 handle,
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
 {
-    // PanadapterStream runs on its own network thread (#502)
-    m_networkThread = new QThread(this);
-    m_networkThread->setObjectName("PanadapterStream");
-    m_panStream = new PanadapterStream;  // no parent — will be moved to thread
-    m_panStream->moveToThread(m_networkThread);
-    connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
-    m_networkThread->start();
+    // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
+    // FlexBackend creates the RadioConnection and PanadapterStream on their
+    // worker threads (in the load-bearing #502 order — panStream first) and
+    // tears them down. RadioModel keeps non-owning pointers, obtained here, so
+    // all the signal wiring and command/WAN orchestration below is byte-for-byte
+    // as before — the move is ownership-only.
+    {
+        auto flex = std::make_unique<FlexBackend>();
+        flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
+        flex->setModelProvider([this]{ return m_model; });
+        m_connection = flex->connection();   // non-owning; the backend owns it
+        m_panStream  = flex->panStream();    // non-owning; the backend owns it
+        m_backend = std::move(flex);
+    }
 
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
     // WHEN a dax_rx stream must exist (refcounted acquire/release from the
@@ -438,15 +445,8 @@ RadioModel::RadioModel(QObject* parent)
         sendCommand(QString("stream remove 0x%1").arg(streamId, 0, 16));
     });
 
-    // RadioConnection runs on its own worker thread (#502) so TCP I/O
-    // (including ping RTT measurement) is never blocked by paintEvent.
-    m_connThread = new QThread(this);
-    m_connThread->setObjectName("RadioConnection");
-    m_connection = new RadioConnection;  // no parent — will be moved to thread
-    m_connection->moveToThread(m_connThread);
-    connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
-    m_connThread->start();
-
+    // RadioConnection (created + owned by the backend above, on its own worker
+    // thread #502 so TCP I/O never blocks paintEvent) — wire its signals to us.
     // Signals from RadioConnection auto-queue to main thread (#502)
     connect(m_connection, &RadioConnection::statusReceived,
             this, &RadioModel::onStatusReceived);
@@ -475,19 +475,6 @@ RadioModel::RadioModel(QObject* parent)
     // Forward VITA-49 meter packets to MeterModel (cross-thread, auto-queued)
     connect(m_panStream, &PanadapterStream::meterDataReady,
             &m_meterModel, &MeterModel::updateValues);
-
-    // aetherd RFC step 2.2: introduce the radio-facing seam (§5.5). The backend
-    // observes the connection lifecycle and carries the core-verb scaffold; it
-    // does not yet own the wire objects or sit on the command hot path, so this
-    // is purely additive / behavior-neutral. Constructed here so it is wired
-    // before any status arrives and torn down first in ~RadioModel.
-    {
-        auto flex = std::make_unique<FlexBackend>();
-        flex->attachConnection(m_connection);
-        flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
-        flex->setModelProvider([this]{ return m_model; });
-        m_backend = std::move(flex);
-    }
 
     // Forward tuner commands to the radio — route through tune inhibit check
     connect(&m_tunerModel, &TunerModel::commandReady, this, [this](const QString& cmd){
@@ -646,48 +633,18 @@ RadioModel::RadioModel(QObject* parent)
 
 RadioModel::~RadioModel()
 {
-    // Destroy the backend first, while m_connection is still alive, so its
-    // observation of the connection's lifecycle signals tears down cleanly
-    // (FlexBackend is a QObject; ~QObject auto-disconnects). (aetherd 2.2)
-    m_backend.reset();
-
-    // Disconnect all signals BEFORE member destruction to prevent
-    // use-after-free (ASAN). (#502)
+    // Disconnect RadioModel's own connections to the wire objects BEFORE they
+    // are torn down, to prevent use-after-free (ASAN). (#502) The objects are
+    // still alive here — the backend owns them and destroys them next.
     QObject::disconnect(m_connection, nullptr, this, nullptr);
     QObject::disconnect(m_panStream, nullptr, this, nullptr);
 
-    // Stop connection thread (#502)
-    if (m_connection && m_connThread && m_connThread->isRunning()) {
-        RadioConnection* connection = m_connection;
-        QMetaObject::invokeMethod(connection, &RadioConnection::disconnectFromRadio,
-                                  Qt::BlockingQueuedConnection);
-        connection->deleteLater();
-        m_connThread->quit();
-        m_connThread->wait(3000);
-    } else {
-        delete m_connection;
-    }
-    if (m_connThread && m_connThread->isRunning()) {
-        m_connThread->quit();
-        m_connThread->wait(3000);
-    }
+    // Destroy the backend, which owns the RadioConnection + PanadapterStream and
+    // their worker threads: ~FlexBackend runs the exact #502 teardown ordering
+    // (BlockingQueued disconnect/stop → deleteLater → thread quit/wait) that
+    // used to live here. (aetherd 2.2b)
+    m_backend.reset();
     m_connection = nullptr;
-
-    // Stop network thread (#502)
-    if (m_panStream && m_networkThread && m_networkThread->isRunning()) {
-        PanadapterStream* panStream = m_panStream;
-        QMetaObject::invokeMethod(panStream, &PanadapterStream::stop,
-                                  Qt::BlockingQueuedConnection);
-        panStream->deleteLater();
-        m_networkThread->quit();
-        m_networkThread->wait(3000);
-    } else {
-        delete m_panStream;
-    }
-    if (m_networkThread && m_networkThread->isRunning()) {
-        m_networkThread->quit();
-        m_networkThread->wait(3000);
-    }
     m_panStream = nullptr;
 }
 

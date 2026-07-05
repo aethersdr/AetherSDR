@@ -41,7 +41,7 @@
 
 namespace AetherSDR {
 
-class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned by value below)
+class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection, processes incoming status messages,
@@ -664,18 +664,17 @@ private:
     void stageSessionModelsForReconnect();
     void pruneStaleSessionModels(quint64 generation);
 
-    RadioConnection*  m_connection{nullptr};
-    QThread*          m_connThread{nullptr};
-    // aetherd RFC step 2.2: the radio-facing seam (§5.5). RadioModel owns the
-    // backend; in 2.2 it observes the connection lifecycle and carries the
-    // core-verb scaffold. Ownership of the wire objects moves into it later.
+    // aetherd RFC step 2 (§5.5): the radio-facing seam. Held via std::unique_ptr
+    // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
+    // PanadapterStream and their worker threads; RadioModel keeps the two
+    // NON-OWNING pointers below, obtained from the backend at construction.
     std::unique_ptr<IRadioBackend> m_backend;
+    RadioConnection*  m_connection{nullptr};   // non-owning — owned by m_backend
     // Sequence counter and callback map — owned by RadioModel on main thread.
     // RadioConnection no longer manages callbacks. (#502)
     std::atomic<quint32> m_seqCounter{1};
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
-    PanadapterStream* m_panStream{nullptr};
-    QThread*          m_networkThread{nullptr};
+    PanadapterStream* m_panStream{nullptr};    // non-owning — owned by m_backend
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
     TunerModel       m_tunerModel;

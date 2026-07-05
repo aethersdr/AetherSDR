@@ -4,28 +4,27 @@
 
 #include "core/backends/IRadioBackend.h"
 
+class QThread;
+
 namespace AetherSDR {
 
 class RadioConnection;
+class PanadapterStream;
 
-// FlexBackend — the first IRadioBackend implementor (aetherd RFC step 2.2),
+// FlexBackend — the first IRadioBackend implementor (aetherd RFC step 2),
 // wrapping the SmartSDR / FlexRadio wire stack.
 //
-// This is the introductory SKELETON. It is constructed, owned, and torn down by
-// RadioModel inside the real connection lifecycle, and it observes live wire
-// lifecycle events (re-emitting them as the interface's connected/disconnected/
-// connectionError). It does NOT yet:
-//   * absorb ownership of RadioConnection / PanadapterStream or their worker
-//     threads (the #502 ASAN teardown ordering is the migration's single
-//     riskiest move — its own verified increment, 2.2b), nor
-//   * reroute the command hot path (sendCmd) or the slice-0 RX data plane.
-// So this change is purely ADDITIVE and behavior-neutral: nothing above the
-// seam is rerouted through the backend yet.
+// As of 2.2b it OWNS the wire objects: the RadioConnection and PanadapterStream
+// plus their two worker threads, created here in the exact order RadioModel
+// used (panStream thread first, connection thread second) and torn down here in
+// the exact #502 order (BlockingQueued stop → deleteLater → thread quit/wait).
+// RadioModel holds non-owning pointers it obtains via connection()/panStream()
+// and keeps its command/WAN orchestration and its sub-models — so the move is
+// ownership-only and behavior-neutral.
 //
-// The canonical core verbs (setSliceFrequency/Mode/Filter, setKeying) build the
-// exact SmartSDR command strings and emit them through the model-provided
-// command sink. They are correct but not yet on the live path — the touchpoint
-// burndown (2.3) routes each model through them one at a time.
+// The canonical core verbs build the exact SmartSDR command strings and emit
+// them through the model-provided command sink; they grow onto the live path as
+// the touchpoint burndown converts each model (2.3).
 class FlexBackend : public IRadioBackend {
     Q_OBJECT
 
@@ -33,15 +32,18 @@ public:
     explicit FlexBackend(QObject* parent = nullptr);
     ~FlexBackend() override;
 
-    // ---- transitional wiring (2.2: RadioModel still owns these objects) ----
-    // Observe the connection's lifecycle signals (non-owning; the connection
-    // lives on its worker thread, so these arrive via queued connections).
-    void attachConnection(RadioConnection* conn);
+    // The owned wire objects, on their worker threads. Non-owning to callers;
+    // valid for the backend's lifetime. RadioModel grabs these post-construction
+    // and its connection()/panStream() getters delegate to them.
+    RadioConnection*  connection() const { return m_connection; }
+    PanadapterStream* panStream()  const { return m_panStream; }
+
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
     // existing sendCommand() funnel, so verbs reuse the one wire-write path.
     void setCommandSink(std::function<void(const QString&)> sink);
-    // Live model-string source, for capabilities() (avoids caching a value that
-    // changes when the `model` status arrives).
+    // Live model-string source for capabilities(). Call on the main thread,
+    // where RadioModel lives — capabilities() is not thread-safe (no off-thread
+    // caller exists yet; this documents the assumption).
     void setModelProvider(std::function<QString()> provider);
 
     // ---- IRadioBackend ----
@@ -59,7 +61,10 @@ public:
 private:
     void send(const QString& cmd);
 
-    RadioConnection* m_connection{nullptr};   // non-owning in 2.2 (RadioModel owns it)
+    RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
+    QThread*          m_connThread{nullptr};    // owned (this-parented)
+    PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
+    QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<void(const QString&)> m_sink;
     std::function<QString()> m_modelProvider;
 };
