@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 
 namespace AetherSDR {
@@ -79,6 +80,31 @@ namespace {
     constexpr double kReanchorMaxStartHz = 2000.0;  // re-anchor only into lobes
                                              // starting by here (voice humps
                                              // rise by ~1.2-2 kHz)
+    // Cut-vs-reanchor hysteresis (F3): the cut ("separate stronger station")
+    // pivot was a single razor edge (runConfident at exactly floor+minPeakDb,
+    // plateau at exactly ref+kReboundDb), so a ~0.2 dB wiggle in a WEAK bass
+    // lobe flipped the high-cut by the whole treble-hump width (bistable ESSB
+    // amputation). Require BOTH the pre-gap run to clear the gate by a margin
+    // AND the resuming lobe to exceed the rebound by a margin before cutting;
+    // otherwise re-anchor (keeping a real signal is the safer error). Each
+    // margin is a dead-band a 0.2 dB perturbation cannot cross.
+    constexpr float  kRunConfidentHystDb = 2.0f;   // over the presence gate to CUT
+    constexpr float  kSeparateMarginDb   = 2.0f;   // over kReboundDb to CUT
+    // Weak-run re-anchor guard (F4): an UNCONFIDENT run bypasses the silence
+    // stop and scans to kScanHz, so without these a weak near-carrier blip plus
+    // an adjacent station 1.5-2 kHz up would re-anchor onto the neighbour. A
+    // re-anchor now additionally requires the INNER (pre-gap) lobe to be a real
+    // sustained lobe (>= kInnerReanchorMinWidthHz occupied AND >= floor +
+    // kEnvGateDb + kInnerReanchorMinDb), and the bridged at-floor gap to be
+    // bounded (kUnconfBridgeMaxHz — also an unconfident silence-stop so the
+    // scan no longer runs to kScanHz across dead air).
+    // Occupied width (above the gate) understates a weak lobe by ~2x the 300 Hz
+    // envelope smear, so a genuine ~600-700 Hz raw bass reads ~290-390 Hz here
+    // while a narrow carrier/het blip erodes to near zero — 250 Hz separates
+    // them with margin.
+    constexpr double kInnerReanchorMinWidthHz = 250.0;
+    constexpr float  kInnerReanchorMinDb      = 1.0f;   // over the occupied gate
+    constexpr double kUnconfBridgeMaxHz       = 1300.0;
     constexpr int    kReferencePct = 75;     // in-band reference = this percentile
                                              // of the kept extent (tracks a
                                              // treble hump; robust to a transient)
@@ -99,6 +125,23 @@ namespace {
     // near the floor — it cannot walk the edge far past the signal).
     constexpr float  kEnvAttackAlpha  = 0.30f;  // fast rise  (~0.1 s time constant)
     constexpr float  kEnvReleaseAlpha = 0.03f;  // slow fall  (~1.1 s time constant)
+
+    // ── Edge-het rejection (opt-in, OccupiedRegionParams::hetReject) ─────────
+    // A narrow strong interferer (het/carrier) near a passband edge shows up as
+    // a RAW bin far above the local SMOOTHED envelope (a broad voice hump lifts
+    // its own envelope, so raw-minus-env stays small; only a narrow spike has a
+    // large raw-minus-env). When enabled, a het found within kHetSearchHz of a
+    // cut pulls that cut kHetGuardHz inboard of the het (a filter skirt is not a
+    // brick wall, so cut BELOW it), never past the signal peak. Cross-frame
+    // stability (a het drifting/QSB-ing in and out) is provided by the engine's
+    // temporal pipeline (median + peak-hold + slow narrowing), so the detector
+    // here stays single-frame and stateless. A mid-band het (not near an edge)
+    // is left to the notch/ANF — a bandpass edge can't remove it without gutting
+    // voice. kHetExcessDb is high enough that a formant peak or a steep voice
+    // skirt is never mistaken for a het.
+    constexpr double kHetSearchHz = 300.0;   // scan this far in/out of each cut
+    constexpr float  kHetExcessDb = 15.0f;   // raw over local envelope = a het
+    constexpr double kHetGuardHz  = 150.0;   // place the cut this far below it
 
     // ── Per-frequency noise floor (spec Stage B) ────────────────────────────
     // A single scalar floor mis-thresholds a TILTED floor: with a global 10th-pct
@@ -421,11 +464,27 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
                     refSoFar = w[idx];
                 }
                 if (plateau > std::max(preGapLevel, refSoFar) + kReboundDb) {
-                    const bool runConfident =
-                        runMaxEnv >= scalarFloor + params.minPeakDb;
-                    if (runConfident) break;   // separate stronger lobe -> cut
+                    // CUT as a separate station only when BOTH conditions clear
+                    // their dead-bands (F3) — a razor pivot flipped the high-cut
+                    // by the whole treble width on a ~0.2 dB bass wiggle.
+                    const bool runEstablished =
+                        runMaxEnv >= scalarFloor + params.minPeakDb + kRunConfidentHystDb;
+                    const bool clearlySeparate =
+                        plateau > std::max(preGapLevel, refSoFar) + kReboundDb + kSeparateMarginDb;
+                    if (runEstablished && clearlySeparate) break;   // separate stn -> cut
                     if (o * hzPerBin > kReanchorMaxStartHz) break;  // adjacent stn
-                    // else: re-anchor into the tuned signal's dominant hump
+                    // Re-anchor into the tuned signal's dominant hump — but for a
+                    // WEAK (unestablished) run guard against grabbing a neighbour
+                    // (F4): the inner pre-gap lobe must be a real sustained lobe,
+                    // not a near-carrier blip.
+                    if (!runEstablished) {
+                        const double innerWidthHz = (keptEndO - firstO) * hzPerBin;
+                        const bool innerReal =
+                            innerWidthHz >= kInnerReanchorMinWidthHz &&
+                            runMaxEnv >= scalarFloor + kEnvGateDb + kInnerReanchorMinDb;
+                        if (!innerReal) break;   // weak blip + neighbour -> don't grab
+                    }
+                    // else: re-anchor
                 }
             }
             keptEndO = o;
@@ -444,8 +503,12 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
             // AUTO badge confidently showing a bass-only fit).
             if (v < floorGateAt(o)) {
                 silenceHz += hzPerBin;
-                if (silenceHz > kSilenceHz &&
-                    runMaxEnv >= scalarFloor + params.minPeakDb) break;
+                // Confident run: kSilenceHz of contiguous at-floor spectrum is a
+                // true band edge. Unconfident run: keep looking past a mid scoop
+                // for the dominant hump, but bound the bridge (kUnconfBridgeMaxHz,
+                // F4) so the scan can't run across dead air to a neighbour.
+                const bool confident = runMaxEnv >= scalarFloor + params.minPeakDb;
+                if (silenceHz > (confident ? kSilenceHz : kUnconfBridgeMaxHz)) break;
             } else {
                 silenceHz = 0.0;
             }
@@ -557,10 +620,48 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
     }
     if (farO < nearO) farO = nearO;
 
+    // ── Edge-het rejection (opt-in) ─────────────────────────────────────────
+    // Find a narrow strong interferer (het/carrier) within kHetSearchHz of a
+    // finalised edge and record the audio frequency to cut at — applied AFTER
+    // the intelligibility margin below, so the margin cannot re-cross the het.
+    // Never cuts past the signal peak (a het inboard of the peak is left to the
+    // notch — a bandpass edge can't remove it without gutting voice).
+    int hetHighCutHz = INT_MAX;   // clamp audioHigh at/below this
+    int hetLowCutHz  = 0;         // clamp audioLow  at/above this
+    if (params.hetReject) {
+        const int searchBins = std::max(1, static_cast<int>(kHetSearchHz / hzPerBin));
+        const int hetGuard   = static_cast<int>(kHetGuardHz);
+        const auto isHet = [&](int o) -> bool {
+            return o >= 0 && o <= scanBins &&
+                   binsDbm[std::clamp(binAt(o), 0, N - 1)] - envAt(o) >= kHetExcessDb;
+        };
+        // High edge: the innermost het within reach of farO and above the peak.
+        for (int o = std::max(peakO + 1, farO - searchBins);
+             o <= std::min(scanBins, farO + searchBins); ++o) {
+            if (isHet(o)) {
+                hetHighCutHz = std::max(static_cast<int>(peakO * hzPerBin),
+                                        static_cast<int>(o * hzPerBin) - hetGuard);
+                break;
+            }
+        }
+        // Low edge: a het just above the low cut (below the peak) raises it.
+        for (int o = std::min(peakO - 1, nearO + searchBins);
+             o >= std::max(0, nearO - searchBins); --o) {
+            if (isHet(o)) {
+                hetLowCutHz = std::min(static_cast<int>(peakO * hzPerBin),
+                                       static_cast<int>(o * hzPerBin) + hetGuard);
+                break;
+            }
+        }
+    }
+
     // Offset indices -> audio cut magnitudes (Hz), plus intelligibility margin.
     int audioLow  = static_cast<int>(std::floor(nearO * hzPerBin)) - kMarginHz;
     int audioHigh = static_cast<int>(std::ceil (farO  * hzPerBin)) + kMarginHz;
     audioLow = std::max(0, audioLow);
+    // Edge-het cut wins over the margin (opt-in; sentinels no-op when disabled).
+    audioHigh = std::min(audioHigh, hetHighCutHz);
+    audioLow  = std::max(audioLow,  hetLowCutHz);
     if (audioHigh - audioLow < kMinBwHz) return r;
     // SSB-voice shape gate: the energy must start near the carrier. A band that
     // starts well above it (e.g. a 1600-4000 data/het signal) isn't the SSB

@@ -37,6 +37,8 @@ struct OccupiedRegionParams {
                                        // noise floor by at least this (Min SNR)
     float  splatterDownDb  = 25.0f;    // outer-cap level below the in-band reference
     double splatterGuardHz = 3200.0;   // splatter cap engages only past this extent
+    bool   hetReject       = false;    // opt-in: pull a cut inboard of a narrow
+                                       // strong interferer sitting near the edge
 };
 
 // measureOccupiedRegion — a single-signal occupied-bandwidth edge-finder
