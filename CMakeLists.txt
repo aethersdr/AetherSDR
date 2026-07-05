@@ -1527,7 +1527,13 @@ if(FFTW3_FOUND)
         # declarations; define FFTW_DLL so fftw3.h emits __declspec(dllimport)
         # and the linker can resolve __imp_fftwf_* symbols from the import lib.
         $<$<BOOL:${WIN32}>:FFTW_DLL>)
-    target_include_directories(aethercore PRIVATE ${FFTW3_INCLUDE_DIRS})
+    # PUBLIC: core/SpectralNR.h includes <fftw3.h> under HAVE_FFTW3 (also
+    # PUBLIC), and SpectralNR.h is pulled in by AudioEngine.h — a header many
+    # gui TUs include. A PRIVATE include dir is lost to the exe, so those gui
+    # TUs fail to find fftw3.h wherever it is off the default path (Windows
+    # bundled third_party/fftw3). The library link stays PRIVATE (symbols reach
+    # the exe transitively through the static lib).
+    target_include_directories(aethercore PUBLIC ${FFTW3_INCLUDE_DIRS})
     target_link_directories(aethercore PRIVATE ${FFTW3_LIBRARY_DIRS})
     target_link_libraries(aethercore PRIVATE ${FFTW3_LIBRARIES})
     # Copy DLL to build dir on Windows
@@ -1542,7 +1548,10 @@ endif()
 
 if(ORT_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
-    target_include_directories(aethercore PRIVATE ${ORT_INCLUDE_DIRS})
+    # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under
+    # HAVE_ONNX (PUBLIC) and is pulled in by gui/MainWindow.h. Same transitive
+    # leak as FFTW3 above. Library link stays PRIVATE (transitive via the lib).
+    target_include_directories(aethercore PUBLIC ${ORT_INCLUDE_DIRS})
     target_link_libraries(aethercore PRIVATE ${ORT_LIBRARIES})
     if(WIN32 AND ORT_DLLS)
         foreach(_ort_dll IN LISTS ORT_DLLS)
@@ -1597,13 +1606,15 @@ if(ENABLE_SPECBLEACH)
             message(WARNING "fftw3f.lib not found — run scripts/setup/setup-fftw.ps1 and gen-fftw3f-lib.bat")
         endif()
     else()
-        # libspecbleach C sources include <fftw3.h> directly — ensure it's findable
+        # libspecbleach C sources include <fftw3.h> directly — ensure it's
+        # findable. PUBLIC for the same transitive reason as the main FFTW3
+        # block above (AudioEngine.h -> SpectralNR.h -> <fftw3.h> reaches gui).
         if(FFTW3_INCLUDE_DIRS)
-            target_include_directories(aethercore PRIVATE ${FFTW3_INCLUDE_DIRS})
+            target_include_directories(aethercore PUBLIC ${FFTW3_INCLUDE_DIRS})
         else()
             find_path(FFTW3_H_DIR fftw3.h HINTS ${CMAKE_SOURCE_DIR}/third_party/fftw3/include)
             if(FFTW3_H_DIR)
-                target_include_directories(aethercore PRIVATE ${FFTW3_H_DIR})
+                target_include_directories(aethercore PUBLIC ${FFTW3_H_DIR})
             endif()
         endif()
         # libspecbleach uses fftwf (float precision FFTW3)
