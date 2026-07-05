@@ -15,6 +15,7 @@
 #include <QSignalSpy>
 #include <QVariantMap>
 #include <QString>
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -62,6 +63,38 @@ int main(int argc, char** argv)
             const QList<QVariant> a = spy.takeFirst();
             CHECK(qFuzzyCompare(a.at(1).toDouble(), 14.2));
             CHECK(qFuzzyCompare(a.at(2).toDouble(), 0.2));
+        }
+    }
+
+    // ---- Facet 1b: DECODE (min/max dBm) + the NaN "unchanged" sentinel ----
+    {
+        FlexBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::panRangeChanged);
+
+        // Neither field present → no emission.
+        backend.decodePanRange(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("center"), QStringLiteral("7.1")}});
+        CHECK(spy.count() == 0);
+
+        // min_dbm only → emitted; max carries NaN (unchanged), min is signed.
+        backend.decodePanRange(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("min_dbm"), QStringLiteral("-130")}});
+        CHECK(spy.count() == 1);
+        {
+            const QList<QVariant> a = spy.takeFirst();
+            CHECK(qFuzzyCompare(a.at(1).toDouble(), -130.0));
+            CHECK(std::isnan(a.at(2).toDouble()));
+        }
+
+        // both present → both carried (both negative — proves no numeric sentinel).
+        backend.decodePanRange(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("min_dbm"), QStringLiteral("-125")},
+                                {QStringLiteral("max_dbm"), QStringLiteral("-40")}});
+        CHECK(spy.count() == 1);
+        {
+            const QList<QVariant> a = spy.takeFirst();
+            CHECK(qFuzzyCompare(a.at(1).toDouble(), -125.0));
+            CHECK(qFuzzyCompare(a.at(2).toDouble(), -40.0));
         }
     }
 
@@ -120,6 +153,19 @@ int main(int argc, char** argv)
         // No actual change → no emission.
         pan.setCenterBandwidth(7.15, -1.0);
         CHECK(info.count() == 0);
+
+        // setRange: NaN = "leave unchanged" (max held, only min moves); returns
+        // whether anything changed (gates the setDbmRange side-effect).
+        QSignalSpy lvl(&pan, &PanadapterModel::levelChanged);
+        const float origMax = pan.maxDbm();
+        CHECK(pan.setRange(-125.0, std::nan("")) == true);
+        CHECK(qFuzzyCompare(pan.minDbm(), -125.0f));
+        CHECK(qFuzzyCompare(pan.maxDbm(), origMax));
+        CHECK(lvl.count() == 1);
+        lvl.clear();
+        // Same values → no change, no emission, returns false.
+        CHECK(pan.setRange(-125.0, std::nan("")) == false);
+        CHECK(lvl.count() == 0);
 
         // applyWnbExtension applies only present keys and clamps the level.
         QSignalSpy wnbSpy(&pan, &PanadapterModel::wnbStateChanged);

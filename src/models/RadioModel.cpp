@@ -434,6 +434,22 @@ RadioModel::RadioModel(QObject* parent)
         emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
     });
 
+    // aetherd RFC 2.3: min/max dBm — the second universal pan field. The backend
+    // decodes the display level range; RadioModel applies it to the addressed
+    // pan and preserves the two side-effects the old inline block owned: the
+    // panStream setDbmRange (only when the range actually changed, to avoid a
+    // redundant GPU-scale reset) and the legacy panadapterLevelChanged signal.
+    connect(m_backend.get(), &IRadioBackend::panRangeChanged, this,
+            [this](const QString& panId, double minDbm, double maxDbm) {
+        auto* pan = m_panadapters.value(panId, nullptr);
+        if (!pan) pan = activePanadapter();
+        if (!pan) return;
+        if (pan->setRange(minDbm, maxDbm)) {
+            m_panStream->setDbmRange(pan->panStreamId(), pan->minDbm(), pan->maxDbm());
+        }
+        emit panadapterLevelChanged(pan->minDbm(), pan->maxDbm());
+    });
+
     // aetherd RFC 2.3 extension template: Flex-specific pan fields (WNB) ride
     // the namespaced extensionStatus channel; RadioModel routes them to the
     // addressed PanadapterModel. Other namespaces/kinds are ignored here.
@@ -5014,6 +5030,13 @@ void RadioModel::onStatusReceived(const QString& object,
 
             if (ownerPan)
                 ownerPan->applyWaterfallStatus(kvs);
+            // aetherd RFC 2.3 waterfall dual-parse convergence: waterfall status
+            // also carries center/bandwidth. Route it through the same backend
+            // decode as pan status so the two ingestion surfaces are single-
+            // sourced onto setCenterBandwidth (the gap disclosed on #4063),
+            // instead of applyWaterfallStatus parsing them independently.
+            if (ownerPan && m_flexBackend)
+                m_flexBackend->decodePanCenterBandwidth(ownerPan->panId(), kvs);
             if (activeWfId().isEmpty() && ownerPan == activePanadapter())
                 ownerPan->setWaterfallId(wfId);
             updateStreamFilters();
@@ -5859,32 +5882,22 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     auto* pan = m_panadapters.value(panId, nullptr);
     const bool panMatchedById = pan != nullptr;
     if (!pan) pan = activePanadapter();  // fallback
-    const float previousMinDbm = pan ? pan->minDbm() : 0.0f;
-    const float previousMaxDbm = pan ? pan->maxDbm() : 0.0f;
     if (pan) {
         pan->applyPanStatus(kvs);
     }
 
-    // aetherd RFC 2.3: center/bandwidth decode moved to the backend. Driving it
-    // from this choke point (not a live statusReceived observer) means both live
-    // and deferred/replayed status flow through the converted path. The
-    // panCenterBandwidthChanged signal applies to the model + emits the legacy
-    // panadapterInfoChanged (in the ctor-wired handler above).
+    // aetherd RFC 2.3: the universal display-geometry fields decode in the
+    // backend and drive the model via normalized signals. Driving them from this
+    // choke point (not a live statusReceived observer) means both live and
+    // deferred/replayed status flow through the converted path.
+    //   - center/bandwidth → panCenterBandwidthChanged → setCenterBandwidth
+    //     (+ legacy panadapterInfoChanged, in the ctor-wired handler)
+    //   - min/max dBm      → panRangeChanged → setRange (+ the setDbmRange GPU
+    //     side-effect and legacy panadapterLevelChanged, likewise ctor-wired)
     if (m_flexBackend) {
         m_flexBackend->decodePanCenterBandwidth(panId, kvs);
+        m_flexBackend->decodePanRange(panId, kvs);
         m_flexBackend->decodePanExtensions(panId, kvs);
-    }
-    if (kvs.contains("min_dbm") || kvs.contains("max_dbm")) {
-        const float minDbm = pan ? pan->minDbm() : kvs.value("min_dbm", "-130").toFloat();
-        const float maxDbm = pan ? pan->maxDbm() : kvs.value("max_dbm", "-20").toFloat();
-        if (pan) {
-            const bool levelChanged = (pan->minDbm() != previousMinDbm)
-                || (pan->maxDbm() != previousMaxDbm);
-            if (levelChanged) {
-                m_panStream->setDbmRange(pan->panStreamId(), minDbm, maxDbm);
-            }
-        }
-        emit panadapterLevelChanged(minDbm, maxDbm);
     }
     // Track usable ypixels from radio status — the radio encodes FFT bins as
     // pixel Y positions (0..ypixels-1), so PanadapterStream needs this for dBm

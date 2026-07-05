@@ -43,6 +43,12 @@ public:
     // value means "leave unchanged" (the radio may report one without the
     // other). Emits infoChanged when either actually changes.
     void setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Normalized display-level-range setter driven by the backend (aetherd RFC
+    // 2.3, second universal pan field). NaN for either bound means "leave
+    // unchanged" (dBm is signed, so no numeric sentinel is safe). Emits
+    // levelChanged when either bound actually changes; returns whether anything
+    // changed so the caller can gate the panStream setDbmRange side-effect.
+    bool setRange(double minDbm, double maxDbm);
     // Flex-specific WNB extension applied from the backend's namespaced
     // extensionStatus("flex","panWnb",…). Applies only the keys present;
     // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3

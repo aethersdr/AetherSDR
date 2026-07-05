@@ -1,5 +1,7 @@
 #include "core/backends/flex/FlexBackend.h"
 
+#include <limits>
+
 #include <QThread>
 
 #include "core/RadioConnection.h"
@@ -205,6 +207,26 @@ void FlexBackend::decodePanCenterBandwidth(const QString& panId,
     const double bandwidth = kvs.contains(QStringLiteral("bandwidth"))
         ? kvs.value(QStringLiteral("bandwidth")).toDouble() : -1.0;
     emit panCenterBandwidthChanged(panId, center, bandwidth);
+}
+
+void FlexBackend::decodePanRange(const QString& panId,
+                                 const QMap<QString, QString>& kvs)
+{
+    // Only emit when the wire carried these fields — matches the old
+    // applyPanStatus behavior of touching min/max dBm only when present.
+    if (!kvs.contains(QStringLiteral("min_dbm"))
+        && !kvs.contains(QStringLiteral("max_dbm"))) {
+        return;
+    }
+    // dBm is signed (-130…-20 typical), so a negative value can't mean
+    // "absent" the way it does for center/bandwidth. Carry NaN for the field
+    // the radio omitted; the model's setRange() treats NaN as "leave unchanged".
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double minDbm = kvs.contains(QStringLiteral("min_dbm"))
+        ? kvs.value(QStringLiteral("min_dbm")).toDouble() : nan;
+    const double maxDbm = kvs.contains(QStringLiteral("max_dbm"))
+        ? kvs.value(QStringLiteral("max_dbm")).toDouble() : nan;
+    emit panRangeChanged(panId, minDbm, maxDbm);
 }
 
 void FlexBackend::decodePanExtensions(const QString& panId,

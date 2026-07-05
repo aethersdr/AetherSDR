@@ -75,6 +75,11 @@ public:
     // PanadapterModel::applyPanStatus until they convert too.
     void decodePanCenterBandwidth(const QString& panId,
                                   const QMap<QString, QString>& kvs);
+    // Decode the universal panadapter display level range (min_dbm/max_dbm) and
+    // emit the normalized panRangeChanged signal. dBm is signed, so an omitted
+    // field is carried as NaN ("unchanged"), not a negative sentinel.
+    void decodePanRange(const QString& panId,
+                        const QMap<QString, QString>& kvs);
     // Decode the Flex-specific pan fields that are NOT part of the core profile
     // (currently the WNB group) and emit them on the namespaced extensionStatus
     // channel. (aetherd RFC 2.3 extension template.)

@@ -2,6 +2,7 @@
 #include "core/PerfTelemetry.h"
 #include <QDebug>
 #include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -87,6 +88,25 @@ void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
     }
 }
 
+bool PanadapterModel::setRange(double minDbm, double maxDbm)
+{
+    bool changed = false;
+    // NaN means "leave unchanged" — the radio may report one bound without the
+    // other, and dBm is signed so a numeric sentinel would be ambiguous.
+    if (!std::isnan(minDbm) && float(minDbm) != m_minDbm) {
+        m_minDbm = float(minDbm);
+        changed = true;
+    }
+    if (!std::isnan(maxDbm) && float(maxDbm) != m_maxDbm) {
+        m_maxDbm = float(maxDbm);
+        changed = true;
+    }
+    if (changed) {
+        emit levelChanged(m_minDbm, m_maxDbm);
+    }
+    return changed;
+}
+
 void PanadapterModel::applyWnbExtension(const QVariantMap& fields)
 {
     bool dirty = false;
@@ -110,8 +130,6 @@ void PanadapterModel::applyWnbExtension(const QVariantMap& fields)
 
 void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
 {
-    bool levelChanged = false;
-
     // #3977: ownership is radio-authoritative. When another session reclaims
     // this pan (MultiFlex reconnect), the radio broadcasts the new
     // client_handle; tracking it here lets a superseded session stop
@@ -125,15 +143,8 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
     }
 
     // center/bandwidth now decode in FlexBackend → panCenterBandwidthChanged →
-    // setCenterBandwidth() (aetherd RFC 2.3, the first converted pan touchpoint).
-    if (kvs.contains("min_dbm")) {
-        float v = kvs["min_dbm"].toFloat();
-        if (v != m_minDbm) { m_minDbm = v; levelChanged = true; }
-    }
-    if (kvs.contains("max_dbm")) {
-        float v = kvs["max_dbm"].toFloat();
-        if (v != m_maxDbm) { m_maxDbm = v; levelChanged = true; }
-    }
+    // setCenterBandwidth(); min/max dBm likewise → panRangeChanged → setRange()
+    // (aetherd RFC 2.3 — the two converted universal pan display-geometry fields).
     if (kvs.contains("rfgain")) {
         int g = kvs["rfgain"].toInt();
         if (g != m_rfGain) {
@@ -220,9 +231,6 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
             emit daxiqChannelChanged(ch);
         }
     }
-
-    if (levelChanged)
-        emit this->levelChanged(m_minDbm, m_maxDbm);
 }
 
 void PanadapterModel::applyWaterfallStatus(const QMap<QString, QString>& kvs)
@@ -240,20 +248,11 @@ void PanadapterModel::applyWaterfallStatus(const QMap<QString, QString>& kvs)
         }
     }
 
-    // Waterfall status shares center/bandwidth with pan — sync if present
-    if (kvs.contains("center") || kvs.contains("bandwidth")) {
-        bool changed = false;
-        if (kvs.contains("center")) {
-            double c = kvs["center"].toDouble();
-            if (c != m_centerMhz) { m_centerMhz = c; changed = true; }
-        }
-        if (kvs.contains("bandwidth")) {
-            double b = kvs["bandwidth"].toDouble();
-            if (b != m_bandwidthMhz) { m_bandwidthMhz = b; changed = true; }
-        }
-        if (changed)
-            emit infoChanged(m_centerMhz, m_bandwidthMhz);
-    }
+    // Waterfall status also carries center/bandwidth; those now decode through
+    // the same FlexBackend::decodePanCenterBandwidth path as pan status (driven
+    // from RadioModel's waterfall-status choke point), so the two ingestion
+    // surfaces are single-sourced. (aetherd RFC 2.3 — waterfall dual-parse
+    // convergence; the gap disclosed on #4063.)
 }
 
 } // namespace AetherSDR

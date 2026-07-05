@@ -115,6 +115,14 @@ signals:
     void panCenterBandwidthChanged(const QString& panId,
                                    double centerMhz, double bandwidthMhz);
 
+    // Panadapter display level range (universal — the Y-axis geometry that
+    // pairs with center/bandwidth's X-axis). Unlike center/bandwidth, dBm is
+    // signed, so the "unchanged" sentinel for an omitted field is NaN, not a
+    // negative value — the backend carries NaN for whichever of min/max the
+    // wire did not report. (aetherd RFC 2.3 — second converted universal pan
+    // field, following the center/bandwidth template.)
+    void panRangeChanged(const QString& panId, double minDbm, double maxDbm);
+
     // Vendor-specific status data that is NOT part of the core profile — the
     // namespaced *extension* channel (aetherd RFC §5.5). A client that doesn't
     // understand `ns` ignores it; `kind` names the event within the namespace
