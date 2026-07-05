@@ -621,6 +621,10 @@ private:
     // DSP grid re-layout
     QGridLayout* m_dspGrid{nullptr};
     void relayoutDspGrid();
+    // Shared visibility rule for the 8000-series extended DSP filters
+    // (NRS/RNN/NRF) — one place so setSlice/syncFromSlice/setHasExtendedDsp
+    // can't drift on the mode gate. Caller must hold a valid m_slice. (#2177)
+    void updateExtendedDspVisibility();
     // RTTY Mark/Shift (shown only in RTTY mode)
     QWidget* m_rttyContainer{nullptr};
     // DIG offset (shown only in DIGL/DIGU mode)
