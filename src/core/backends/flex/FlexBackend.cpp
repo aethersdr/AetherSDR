@@ -91,6 +91,11 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
     m_sink = std::move(sink);
 }
 
+void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)
+{
+    m_sliceSink = std::move(sink);
+}
+
 void FlexBackend::setModelProvider(std::function<QString()> provider)
 {
     m_modelProvider = std::move(provider);
@@ -146,20 +151,21 @@ bool FlexBackend::isConnected() const
 
 void FlexBackend::setSliceFrequency(int sliceId, double hz)
 {
-    // Matches SliceModel::setFrequency's wire string exactly.
-    send(QStringLiteral("slice tune %1 %2 autopan=0")
-             .arg(sliceId)
-             .arg(hz / 1'000'000.0, 0, 'f', 6));
+    // Matches SliceModel::setFrequency's wire string exactly. Slice verbs use
+    // the TX-inhibit-guarded slice sink (§6), not the generic sink.
+    sendSlice(QStringLiteral("slice tune %1 %2 autopan=0")
+                  .arg(sliceId)
+                  .arg(hz / 1'000'000.0, 0, 'f', 6));
 }
 
 void FlexBackend::setSliceMode(int sliceId, const QString& mode)
 {
-    send(QStringLiteral("slice set %1 mode=%2").arg(sliceId).arg(mode));
+    sendSlice(QStringLiteral("slice set %1 mode=%2").arg(sliceId).arg(mode));
 }
 
 void FlexBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 {
-    send(QStringLiteral("filt %1 %2 %3").arg(sliceId).arg(lowHz).arg(highHz));
+    sendSlice(QStringLiteral("filt %1 %2 %3").arg(sliceId).arg(lowHz).arg(highHz));
 }
 
 void FlexBackend::setKeying(bool key)
@@ -201,9 +207,43 @@ void FlexBackend::decodePanCenterBandwidth(const QString& panId,
     emit panCenterBandwidthChanged(panId, center, bandwidth);
 }
 
+void FlexBackend::decodePanExtensions(const QString& panId,
+                                      const QMap<QString, QString>& kvs)
+{
+    // WNB (wideband noise blanker) is a Flex-specific pan feature, not core
+    // profile — carry only the keys the wire reported, namespaced under "flex".
+    QVariantMap wnb;
+    if (kvs.contains(QStringLiteral("wnb"))) {
+        wnb.insert(QStringLiteral("wnb"),
+                   kvs.value(QStringLiteral("wnb")).toInt() != 0);
+    }
+    if (kvs.contains(QStringLiteral("wnb_level"))) {
+        wnb.insert(QStringLiteral("wnb_level"),
+                   kvs.value(QStringLiteral("wnb_level")).toInt());
+    }
+    if (kvs.contains(QStringLiteral("wnb_updating"))) {
+        wnb.insert(QStringLiteral("wnb_updating"),
+                   kvs.value(QStringLiteral("wnb_updating")).toInt() != 0);
+    }
+    if (!wnb.isEmpty()) {
+        wnb.insert(QStringLiteral("panId"), panId);
+        emit extensionStatus(QStringLiteral("flex"),
+                             QStringLiteral("panWnb"), wnb);
+    }
+}
+
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {
+        m_sink(cmd);
+    }
+}
+
+void FlexBackend::sendSlice(const QString& cmd)
+{
+    if (m_sliceSink) {
+        m_sliceSink(cmd);
+    } else if (m_sink) {
         m_sink(cmd);
     }
 }

@@ -341,6 +341,11 @@ signals:
     void playOnChanged(bool on);
     void playEnabledChanged(bool enabled);
     void commandReady(const QString& cmd);  // ready to send to radio
+    // aetherd RFC 2.3 encode template: express intent instead of building the
+    // wire string. RadioModel routes this to FlexBackend::setSliceMode, whose
+    // output goes through the TX-inhibit-guarded slice sink. (The other slice
+    // commands still use commandReady until they convert.)
+    void modeChangeRequested(const QString& mode);
 
 private:
     int     m_id{0};

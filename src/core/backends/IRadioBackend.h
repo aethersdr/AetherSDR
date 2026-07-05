@@ -115,6 +115,14 @@ signals:
     void panCenterBandwidthChanged(const QString& panId,
                                    double centerMhz, double bandwidthMhz);
 
+    // Vendor-specific status data that is NOT part of the core profile — the
+    // namespaced *extension* channel (aetherd RFC §5.5). A client that doesn't
+    // understand `ns` ignores it; `kind` names the event within the namespace
+    // and `fields` carries only the keys the wire actually reported. This is the
+    // status counterpart to invokeExtension's request/reply.
+    void extensionStatus(const QString& ns, const QString& kind,
+                         const QVariantMap& fields);
+
     // ---- data plane UP (RFC §4.2) ----
     // Declared here so backends have a normalized outlet for spectrum/waterfall/
     // audio; the concrete zero-copy/binary frame formats are step-4 work. Until

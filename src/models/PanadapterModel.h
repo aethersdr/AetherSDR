@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QMap>
+#include <QVariantMap>
 #include <QString>
 #include <QStringList>
 
@@ -42,6 +43,11 @@ public:
     // value means "leave unchanged" (the radio may report one without the
     // other). Emits infoChanged when either actually changes.
     void setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Flex-specific WNB extension applied from the backend's namespaced
+    // extensionStatus("flex","panWnb",…). Applies only the keys present;
+    // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3
+    // extension template — the decode lives in FlexBackend, not here.)
+    void applyWnbExtension(const QVariantMap& fields);
     float minDbm() const { return m_minDbm; }
     float maxDbm() const { return m_maxDbm; }
     QString rxAntenna() const { return m_rxAntenna; }

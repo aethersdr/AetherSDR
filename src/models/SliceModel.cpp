@@ -76,7 +76,9 @@ void SliceModel::setMode(const QString& mode)
 {
     if (m_mode == mode) return;
     m_mode = mode;
-    sendCommand(QString("slice set %1 mode=%2").arg(m_id).arg(mode));
+    // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
+    // and routes it through the TX-inhibit-guarded slice sink.
+    emit modeChangeRequested(mode);
     emit modeChanged(mode);
 }
 

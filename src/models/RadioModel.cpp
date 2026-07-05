@@ -408,6 +408,11 @@ RadioModel::RadioModel(QObject* parent)
     {
         auto flex = std::make_unique<FlexBackend>();
         flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
+        // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
+        // moving slice encode behind the seam keeps TX safety above it.
+        flex->setSliceCommandSink([this](const QString& cmd){
+            sendSliceCommand(nullptr, cmd);   // guard looks up the slice from cmd
+        });
         flex->setModelProvider([this]{ return m_model; });
         m_connection = flex->connection();   // non-owning; the backend owns it
         m_panStream  = flex->panStream();    // non-owning; the backend owns it
@@ -427,6 +432,19 @@ RadioModel::RadioModel(QObject* parent)
         pan->setCenterBandwidth(centerMhz, bandwidthMhz);
         // Legacy signal MainWindow still consumes (unchanged behavior).
         emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
+    });
+
+    // aetherd RFC 2.3 extension template: Flex-specific pan fields (WNB) ride
+    // the namespaced extensionStatus channel; RadioModel routes them to the
+    // addressed PanadapterModel. Other namespaces/kinds are ignored here.
+    connect(m_backend.get(), &IRadioBackend::extensionStatus, this,
+            [this](const QString& ns, const QString& kind, const QVariantMap& fields) {
+        if (ns != QLatin1String("flex") || kind != QLatin1String("panWnb")) {
+            return;
+        }
+        auto* pan = m_panadapters.value(fields.value("panId").toString(), nullptr);
+        if (!pan) pan = activePanadapter();
+        if (pan) pan->applyWnbExtension(fields);
     });
 
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
@@ -5692,6 +5710,11 @@ void RadioModel::handleSliceStatus(int id,
             connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
                 sendSliceCommand(s, cmd);
             });
+            // aetherd RFC 2.3 encode template: mode intent routes through the
+            // backend verb, whose output goes through the guarded slice sink.
+            connect(s, &SliceModel::modeChangeRequested, this, [this, s](const QString& mode){
+                if (m_flexBackend) m_flexBackend->setSliceMode(s->sliceId(), mode);
+            });
             connect(s, &SliceModel::txSliceChanged, this, [this](bool) {
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
             });
@@ -5839,6 +5862,7 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     // panadapterInfoChanged (in the ctor-wired handler above).
     if (m_flexBackend) {
         m_flexBackend->decodePanCenterBandwidth(panId, kvs);
+        m_flexBackend->decodePanExtensions(panId, kvs);
     }
     if (kvs.contains("min_dbm") || kvs.contains("max_dbm")) {
         const float minDbm = pan ? pan->minDbm() : kvs.value("min_dbm", "-130").toFloat();

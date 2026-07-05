@@ -44,6 +44,11 @@ public:
     // Where the core verbs emit their SmartSDR command strings — RadioModel's
     // existing sendCommand() funnel, so verbs reuse the one wire-write path.
     void setCommandSink(std::function<void(const QString&)> sink);
+    // Slice verbs (setSliceFrequency/Mode/Filter) route through THIS sink, which
+    // RadioModel wires to its TX-inhibit-guarded sendSliceCommand — so keeping
+    // the encode's TX safety above the seam (RFC §6). Falls back to the generic
+    // sink if unset. (aetherd RFC 2.3 encode template.)
+    void setSliceCommandSink(std::function<void(const QString&)> sink);
     // Live model-string source for capabilities(). Call on the main thread,
     // where RadioModel lives — capabilities() is not thread-safe (no off-thread
     // caller exists yet; this documents the assumption).
@@ -70,15 +75,22 @@ public:
     // PanadapterModel::applyPanStatus until they convert too.
     void decodePanCenterBandwidth(const QString& panId,
                                   const QMap<QString, QString>& kvs);
+    // Decode the Flex-specific pan fields that are NOT part of the core profile
+    // (currently the WNB group) and emit them on the namespaced extensionStatus
+    // channel. (aetherd RFC 2.3 extension template.)
+    void decodePanExtensions(const QString& panId,
+                             const QMap<QString, QString>& kvs);
 
 private:
     void send(const QString& cmd);
+    void sendSlice(const QString& cmd);   // guarded slice path (§6)
 
     RadioConnection*  m_connection{nullptr};    // owned; lives on m_connThread
     QThread*          m_connThread{nullptr};    // owned (this-parented)
     PanadapterStream* m_panStream{nullptr};     // owned; lives on m_networkThread
     QThread*          m_networkThread{nullptr}; // owned (this-parented)
     std::function<void(const QString&)> m_sink;
+    std::function<void(const QString&)> m_sliceSink;
     std::function<QString()> m_modelProvider;
 };
 
