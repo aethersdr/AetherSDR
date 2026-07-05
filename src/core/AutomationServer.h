@@ -9,6 +9,10 @@
 #include <QJsonObject>
 #include <QString>
 
+#ifdef HAVE_WEBSOCKETS
+class QWebSocket;
+#endif
+
 #include <deque>
 #include <functional>
 #include <memory>
@@ -271,6 +275,12 @@ private:
     // QEvent::Leave so the fade-after-exit timer can be observed. Unlike drag,
     // no button is pressed, matching a real hover.
     QJsonObject doHover(const QString& target, const QString& action) const;
+    // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
+    // ancestor so the target widget sits in its viewport. Widgets parked below
+    // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)
+    // receive no paint events until scrolled into view, so a driver must be
+    // able to bring them on screen before measuring or grabbing them.
+    QJsonObject doScrollTo(const QString& target) const;
     // showMenu <target>: pop a QToolButton/QPushButton drop-down menu, posted
     // onto the GUI event loop with the owning window raised — showing the native
     // popup from inside the socket-read callback re-enters Cocoa and segfaults on
@@ -303,6 +313,7 @@ private:
     //                     waterfall the client view had already purged.
     //   streams reset   — clear the Layer-A orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
+    QJsonObject doTci(const QString& action, const QString& value);
     QJsonObject doAudioCapture(const QString& action,
                                const QString& arg,
                                const QString& path) const;
@@ -349,6 +360,11 @@ private:
     QJsonObject doStation(const QString& name);
     void applyAgentStation(const QString& name);  // capture prior + send
     void restoreStation();                        // re-send the user's real name
+    // QRZ callsign lookup (status | cached <call> | lookup <call> |
+    // spottext <text>).  spottext feeds the CW callsign spotter the given
+    // text as if the decoder produced it — end-to-end card-pop proof with
+    // no radio or live CW required. No keying.
+    QJsonObject doQrz(const QString& action, const QString& value);
     // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
     // width) propagates to a realistic value for headless render-size fidelity.
     QJsonObject doResize(const QString& value, const QString& target) const;
@@ -399,6 +415,23 @@ private:
     QString m_agentStation;          // applied name (AETHER_AUTOMATION_STATION)
     QString m_priorStationName;      // user's real station name, captured to restore
     bool    m_stationApplied{false};
+
+#ifdef HAVE_WEBSOCKETS
+    // In-process TCI client simulator (`tci start|status|stop`, #3305/#4009).
+    // Connects to the app's own TCI server over loopback exactly like WSJT-X
+    // (init burst → ready → audio_samplerate + audio_start) so agents can
+    // exercise the TCI/DAX lifecycle — including abrupt-disconnect reaping —
+    // without an external WebSocket client.
+    QWebSocket* m_tciSim{nullptr};
+    bool    m_tciSimReady{false};
+    bool    m_tciSimAudioStarted{false};
+    qint64  m_tciSimBinaryFrames{0};
+    qint64  m_tciSimBinaryBytes{0};
+    qint64  m_tciSimTextMsgs{0};
+    qint64  m_tciSimLastFrameMs{-1};
+    QString m_tciSimCloseReason;
+    QElapsedTimer m_tciSimTimer;
+#endif
 
     // TX safety rails (active only when AETHER_AUTOMATION_ALLOW_TX is set).
     QTimer* m_txWatchdog{nullptr};

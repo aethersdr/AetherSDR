@@ -1423,6 +1423,17 @@ void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
     }
     m_daxStreamIds[streamId] = channel;
     m_loggedDaxPacketStreams.remove(streamId);
+    // Ownership table (#3305): the create we requested has materialized (or a
+    // leftover stream from a previous arm was adopted). If nobody holds the
+    // channel, start the grace clock — an unheld stream is an orphan-in-waiting.
+    {
+        auto& st = m_daxChannelStates[channel];
+        st.streamId = streamId;
+        st.createPending = false;
+        st.generation = ++m_daxGenCounter;
+        if (st.holders == 0)
+            scheduleDaxRemovalLocked(channel);
+    }
     qCDebug(lcVita49) << "PanadapterStream: registered DAX stream" << Qt::hex << streamId << "-> channel" << channel;
 }
 
@@ -1438,19 +1449,266 @@ quint32 PanadapterStream::daxStreamIdForChannel(int channel) const
 
 void PanadapterStream::unregisterDaxStream(quint32 streamId)
 {
-    QMutexLocker lock(&m_streamMutex);
-    m_daxStreamIds.remove(streamId);
-    m_loggedDaxPacketStreams.remove(streamId);
-    // DAX audio streams use the PLC path too; drop the per-stream PLC
-    // entry so it doesn't outlive the stream itself (#2738).
-    m_audioPlc.remove(streamId);
-    qCDebug(lcVita49) << "PanadapterStream: unregistered DAX stream" << Qt::hex << streamId;
+    int channel = 0;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        m_daxStreamIds.remove(streamId);
+        m_loggedDaxPacketStreams.remove(streamId);
+        // DAX audio streams use the PLC path too; drop the per-stream PLC
+        // entry so it doesn't outlive the stream itself (#2738).
+        m_audioPlc.remove(streamId);
+        // Ownership table (#3305): if the radio tore the stream down while
+        // consumers still hold the channel (profile load / slice teardown),
+        // schedule a re-create. Our own removals erase the entry first, so
+        // this only fires for radio-initiated teardown.
+        for (auto it = m_daxChannelStates.begin(); it != m_daxChannelStates.end(); ++it) {
+            if (it->streamId == streamId) {
+                channel = it.key();
+                it->streamId = 0;
+                it->generation = ++m_daxGenCounter;
+                if (it->holders != 0)
+                    scheduleDaxRecreateLocked(it.key());
+                else
+                    m_daxChannelStates.erase(it);
+                break;
+            }
+        }
+        qCDebug(lcVita49) << "PanadapterStream: unregistered DAX stream" << Qt::hex << streamId;
+    }
+    if (channel)
+        emit daxStreamUnregistered(channel, streamId);
 }
 
 QList<quint32> PanadapterStream::daxStreamIds() const
 {
     QMutexLocker lock(&m_streamMutex);
     return m_daxStreamIds.keys();
+}
+
+// ---- Centralized DAX RX channel ownership (#3305) ----
+
+const char* PanadapterStream::daxConsumerName(DaxConsumer who)
+{
+    switch (who) {
+    case DaxConsumer::Bridge: return "bridge";
+    case DaxConsumer::Tci:    return "tci";
+    case DaxConsumer::Rade:   return "rade";
+    }
+    return "?";
+}
+
+static inline quint8 daxHolderBit(PanadapterStream::DaxConsumer who)
+{
+    return quint8(1u << quint8(who));
+}
+
+quint32 PanadapterStream::acquireDaxChannel(int channel, DaxConsumer who)
+{
+    if (channel < 1 || channel > 4) return 0;
+    bool needCreate = false;
+    quint32 streamId = 0;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        auto& st = m_daxChannelStates[channel];
+        const quint8 bit = daxHolderBit(who);
+        const bool alreadyHeld = st.holders & bit;
+        st.holders |= bit;
+        // Any acquire invalidates a pending deferred removal.
+        st.generation = ++m_daxGenCounter;
+        if (st.streamId == 0 && !st.createPending) {
+            st.createPending = true;
+            needCreate = true;
+        }
+        streamId = st.streamId;
+        if (!alreadyHeld) {
+            qCInfo(lcVita49) << "PanadapterStream: DAX ch" << channel
+                             << "acquired by" << daxConsumerName(who)
+                             << "holders=0x" + QString::number(st.holders, 16)
+                             << (needCreate ? "(creating stream)" : "");
+        }
+    }
+    if (needCreate)
+        emit daxStreamCreateNeeded(channel);
+    return streamId;
+}
+
+void PanadapterStream::releaseDaxChannel(int channel, DaxConsumer who)
+{
+    if (channel < 1 || channel > 4) return;
+    QMutexLocker lock(&m_streamMutex);
+    auto it = m_daxChannelStates.find(channel);
+    if (it == m_daxChannelStates.end()) return;
+    const quint8 bit = daxHolderBit(who);
+    if (!(it->holders & bit)) return;
+    it->holders &= ~bit;
+    it->generation = ++m_daxGenCounter;
+    qCInfo(lcVita49) << "PanadapterStream: DAX ch" << channel
+                     << "released by" << daxConsumerName(who)
+                     << "holders=0x" + QString::number(it->holders, 16);
+    if (it->holders == 0) {
+        if (it->streamId != 0) {
+            scheduleDaxRemovalLocked(channel);
+        } else if (!it->createPending) {
+            m_daxChannelStates.erase(it);
+        }
+        // else: a create is in flight for a channel nobody wants anymore.
+        // Keep the entry so registerDaxStream() finds it when the status
+        // lands, sees holders==0, and schedules ONE deterministic removal —
+        // erasing here would make the registration re-insert a fresh entry
+        // and bounce through create→remove churn (review #4017 item 3).
+    }
+}
+
+void PanadapterStream::notifyDaxCreateFailed(int channel)
+{
+    if (channel < 1 || channel > 4) return;
+    bool retryArmed = false;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        auto it = m_daxChannelStates.find(channel);
+        if (it == m_daxChannelStates.end() || it->streamId != 0) return;
+        it->createPending = false;
+        it->generation = ++m_daxGenCounter;
+        if (it->holders == 0) {
+            m_daxChannelStates.erase(it);
+        } else {
+            // Still wanted: retry on a gentle cadence. Each cycle re-enters
+            // this method on failure, so a persistent condition (DAX slots
+            // exhausted on the radio) costs one command per kDaxCreateRetryMs
+            // — and heals the moment a slot frees or the connection is up.
+            const quint32 gen = it->generation;
+            QTimer::singleShot(kDaxCreateRetryMs, this, [this, channel, gen]() {
+                bool needCreate = false;
+                {
+                    QMutexLocker lock(&m_streamMutex);
+                    auto it = m_daxChannelStates.find(channel);
+                    if (it == m_daxChannelStates.end()) return;
+                    if (it->generation != gen) return;
+                    if (it->holders == 0 || it->streamId != 0 || it->createPending) return;
+                    it->createPending = true;
+                    it->generation = ++m_daxGenCounter;
+                    needCreate = true;
+                }
+                if (needCreate) {
+                    qCInfo(lcVita49) << "PanadapterStream: retrying DAX ch" << channel
+                                     << "stream create after failure (#3305)";
+                    emit daxStreamCreateNeeded(channel);
+                }
+            });
+            retryArmed = true;
+        }
+    }
+    qCWarning(lcVita49) << "PanadapterStream: DAX ch" << channel
+                        << "stream create failed/dropped —"
+                        << (retryArmed ? "retry armed" : "channel unheld, entry dropped");
+}
+
+void PanadapterStream::releaseAllDaxChannels(DaxConsumer who)
+{
+    for (int ch = 1; ch <= 4; ++ch)
+        releaseDaxChannel(ch, who);
+}
+
+bool PanadapterStream::daxChannelHeldBy(int channel, DaxConsumer who) const
+{
+    QMutexLocker lock(&m_streamMutex);
+    auto it = m_daxChannelStates.constFind(channel);
+    return it != m_daxChannelStates.constEnd() && (it->holders & daxHolderBit(who));
+}
+
+QVector<PanadapterStream::DaxChannelSnapshot> PanadapterStream::daxChannelSnapshot() const
+{
+    QMutexLocker lock(&m_streamMutex);
+    QVector<DaxChannelSnapshot> out;
+    out.reserve(m_daxChannelStates.size());
+    for (auto it = m_daxChannelStates.constBegin(); it != m_daxChannelStates.constEnd(); ++it) {
+        DaxChannelSnapshot s;
+        s.channel = it.key();
+        s.streamId = it->streamId;
+        s.createPending = it->createPending;
+        for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade}) {
+            if (it->holders & daxHolderBit(who))
+                s.holders << QString::fromLatin1(daxConsumerName(who));
+        }
+        out.append(s);
+    }
+    std::sort(out.begin(), out.end(),
+              [](const DaxChannelSnapshot& a, const DaxChannelSnapshot& b) {
+        return a.channel < b.channel;
+    });
+    return out;
+}
+
+void PanadapterStream::resetDaxChannelsForDisconnect()
+{
+    QMutexLocker lock(&m_streamMutex);
+    // Radio reaps every stream of a disconnected client itself
+    // (state-machines.md §4.2) — no removal commands, just forget. Bump every
+    // generation via the counter so in-flight deferred lambdas expire.
+    ++m_daxGenCounter;
+    m_daxChannelStates.clear();
+    qCDebug(lcVita49) << "PanadapterStream: DAX channel ownership reset for disconnect";
+}
+
+// m_streamMutex held. Last holder left: remove the radio-side stream after a
+// grace window. The window absorbs the radio's transient unbind/rebind
+// dax=0/dax=<ch> status pairs (#3626) — a re-acquire inside the window bumps
+// the generation and the removal quietly expires.
+void PanadapterStream::scheduleDaxRemovalLocked(int channel)
+{
+    auto it = m_daxChannelStates.find(channel);
+    if (it == m_daxChannelStates.end()) return;
+    const quint32 gen = it->generation;
+    QTimer::singleShot(kDaxRemovalGraceMs, this, [this, channel, gen]() {
+        quint32 removeId = 0;
+        {
+            QMutexLocker lock(&m_streamMutex);
+            auto it = m_daxChannelStates.find(channel);
+            if (it == m_daxChannelStates.end()) return;
+            if (it->generation != gen) return;      // state changed — expired
+            if (it->holders != 0) return;           // re-acquired
+            removeId = it->streamId;
+            m_daxChannelStates.erase(it);
+        }
+        if (removeId) {
+            qCInfo(lcVita49) << "PanadapterStream: DAX ch" << channel
+                             << "unheld past grace — removing stream"
+                             << Qt::hex << removeId << "(#3305)";
+            unregisterDaxStream(removeId);   // entry already erased: no recreate
+            emit daxStreamUnregistered(channel, removeId);
+            emit daxStreamRemoveNeeded(removeId, channel);
+        }
+    });
+}
+
+// m_streamMutex held. The radio destroyed a stream we still hold (profile
+// load / slice teardown replaces dax_rx streams without a TCI/bridge
+// disconnect — the #3476 "switched profile, never came back" failure).
+// Re-create after a short backoff so a genuine teardown storm can't turn
+// into a create storm.
+void PanadapterStream::scheduleDaxRecreateLocked(int channel)
+{
+    auto it = m_daxChannelStates.find(channel);
+    if (it == m_daxChannelStates.end()) return;
+    const quint32 gen = it->generation;
+    QTimer::singleShot(kDaxRecreateDelayMs, this, [this, channel, gen]() {
+        bool needCreate = false;
+        {
+            QMutexLocker lock(&m_streamMutex);
+            auto it = m_daxChannelStates.find(channel);
+            if (it == m_daxChannelStates.end()) return;
+            if (it->generation != gen) return;
+            if (it->holders == 0 || it->streamId != 0 || it->createPending) return;
+            it->createPending = true;
+            it->generation = ++m_daxGenCounter;  // keep the mutation⇒generation-bump invariant
+            needCreate = true;
+        }
+        if (needCreate) {
+            qCInfo(lcVita49) << "PanadapterStream: DAX ch" << channel
+                             << "still held after radio-side removal — re-creating (#3476)";
+            emit daxStreamCreateNeeded(channel);
+        }
+    });
 }
 
 void PanadapterStream::registerIqStream(quint32 streamId, int channel)

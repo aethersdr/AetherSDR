@@ -1164,8 +1164,9 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     AetherSDR::ThemeManager::instance().applyStyleSheet(filterLabel, "QLabel { color: {{color.text.label}}; font-size: 14px; }");
     filterRow->addWidget(filterLabel);
 
-    QString cbStyle = "QCheckBox { color: #a0b0c0; font-size: 14px; spacing: 3px; }"
-                      "QCheckBox::indicator { width: 14px; height: 14px; }";
+    const QString cbStyle =
+        "QCheckBox { color: {{color.text.secondary}}; font-size: 14px; spacing: 3px; }"
+        + ThemeManager::checkBoxIndicatorStyle();
     auto swatchStyle = [](const QColor& c) {
         return QString("QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
                        "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name());
@@ -1188,7 +1189,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxFilterCQ = new QCheckBox("CQ");
     m_wsjtxFilterCQ->setChecked(s.value("WsjtxFilterCQ", "True").toString() == "True");
-    m_wsjtxFilterCQ->setStyleSheet(cbStyle);
+    ThemeManager::instance().applyStyleSheet(m_wsjtxFilterCQ, cbStyle);
     connect(m_wsjtxFilterCQ, &QCheckBox::toggled, this, [this](bool on) {
         if (on) m_wsjtxFilterPOTA->setChecked(false);
         auto& s = AppSettings::instance();
@@ -1214,7 +1215,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxFilterPOTA = new QCheckBox("CQ POTA");
     m_wsjtxFilterPOTA->setChecked(s.value("WsjtxFilterPOTA", "True").toString() == "True");
-    m_wsjtxFilterPOTA->setStyleSheet(cbStyle);
+    ThemeManager::instance().applyStyleSheet(m_wsjtxFilterPOTA, cbStyle);
     connect(m_wsjtxFilterPOTA, &QCheckBox::toggled, this, [this](bool on) {
         if (on) m_wsjtxFilterCQ->setChecked(false);
         auto& s = AppSettings::instance();
@@ -1240,7 +1241,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     m_wsjtxFilterCallingMe = new QCheckBox("Calling Me");
     m_wsjtxFilterCallingMe->setChecked(s.value("WsjtxFilterCallingMe", "True").toString() == "True");
-    m_wsjtxFilterCallingMe->setStyleSheet(cbStyle);
+    ThemeManager::instance().applyStyleSheet(m_wsjtxFilterCallingMe, cbStyle);
     connect(m_wsjtxFilterCallingMe, &QCheckBox::toggled, this, [](bool on) {
         auto& s = AppSettings::instance();
         s.setValue("WsjtxFilterCallingMe", on ? "True" : "False");
@@ -1642,17 +1643,14 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     int frow = 0;
 
     const QString fdvCheckStyle =
-        "QCheckBox { color: #d7e4f2; spacing: 8px; background: transparent; border: none; }"
-        "QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #5d748d; border-radius: 3px; background: #0b1520; }"
-        "QCheckBox::indicator:hover { border-color: #81abd9; background: #142130; }"
-        "QCheckBox::indicator:checked { border: 2px solid #8cc8ff; background: #2f71b6; }"
-        "QCheckBox::indicator:disabled { border-color: #405262; background: #10161d; }";
+        "QCheckBox { color: {{color.text.primary}}; spacing: 8px; background: transparent; border: none; }"
+        + ThemeManager::checkBoxIndicatorStyle();
 
     // Enable checkbox spans all columns so it sits reliably inside the grid,
     // not above it (avoids group-box title margin clipping on dark themes).
     m_fdvReportCheck = new QCheckBox("Enable FreeDV Reporter reporting when RADE is active");
     m_fdvReportCheck->setChecked(s.value("FreeDvAutoReport", "False").toString() == "True");
-    m_fdvReportCheck->setStyleSheet(fdvCheckStyle);
+    ThemeManager::instance().applyStyleSheet(m_fdvReportCheck, fdvCheckStyle);
     connect(m_fdvReportCheck, &QCheckBox::toggled, this, [this](bool on) {
         if (on) {
             // Resolve the effective callsign and grid the same way
@@ -1721,7 +1719,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_fdvUseRadioCallsignCheck = new QCheckBox("Use radio");
     m_fdvUseRadioCallsignCheck->setChecked(
         s.value("FreeDvUseRadioCallsign", "True").toString() == "True");
-    m_fdvUseRadioCallsignCheck->setStyleSheet(fdvCheckStyle);
+    ThemeManager::instance().applyStyleSheet(m_fdvUseRadioCallsignCheck, fdvCheckStyle);
     connect(m_fdvUseRadioCallsignCheck, &QCheckBox::toggled, this, [this](bool on) {
         auto& as = AppSettings::instance();
         as.setValue("FreeDvUseRadioCallsign", on ? "True" : "False");
@@ -1756,7 +1754,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     // GPS checkbox — only on FLEX-8000 class and Aurora, which have GPS hardware
     if (m_radioModel->hasGpsHardware()) {
         m_fdvUseGpsCheck = new QCheckBox("Use GPS");
-        m_fdvUseGpsCheck->setStyleSheet(fdvCheckStyle);
+        ThemeManager::instance().applyStyleSheet(m_fdvUseGpsCheck, fdvCheckStyle);
         bool useGps = s.value("FreeDvUseGpsGrid", "True").toString() == "True";
         m_fdvUseGpsCheck->setChecked(useGps);
         m_fdvGridEdit->setReadOnly(useGps);
@@ -1875,9 +1873,9 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     static constexpr const char* bands[] = {
         "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"
     };
-    QString cbStyle =
-        "QCheckBox { color: #a0b0c0; font-size: 12px; spacing: 3px; }"
-        "QCheckBox::indicator { width: 13px; height: 13px; }";
+    const QString cbStyle =
+        "QCheckBox { color: {{color.text.secondary}}; font-size: 12px; spacing: 3px; }"
+        + ThemeManager::checkBoxIndicatorStyle();
     auto& sf = AppSettings::instance();
     for (const char* band : bands) {
         auto* cb = new QCheckBox(band);
@@ -1886,7 +1884,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
         cb->setChecked(on);
         if (!on)
             m_proxyModel->setBandVisible(QString(band), false);
-        cb->setStyleSheet(cbStyle);
+        ThemeManager::instance().applyStyleSheet(cb, cbStyle);
         connect(cb, &QCheckBox::toggled, this, [this, b = QString(band), key](bool on) {
             m_proxyModel->setBandVisible(b, on);
             auto& s = AppSettings::instance();

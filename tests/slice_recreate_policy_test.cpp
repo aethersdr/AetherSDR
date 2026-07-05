@@ -93,40 +93,35 @@ void testNoRestoredPanNoSettingsUsesDefaults()
     check(d.antenna == QStringLiteral("ANT1"), "cold start: defaults to ANT1");
 }
 
-// Edge: pan restored but its center hasn't been reported by the radio yet
-// (claimed this instant, "display pan ... center=" still in flight). We still
-// reuse the pan — never create a second one — and fall back to LastFrequency.
-void testRestoredPanCenterNotYetKnownFallsBackToLastFreq()
+// Edge: a restored pan whose center parsed to 0 from a zero/malformed
+// "display pan ... center=" status. PanadapterModel::applyPanStatus does an
+// unchecked toDouble(), so a bad center leaves m_centerMhz == 0, which reaches
+// decide() via RadioModel's restoredPanCenterMhz. We still reuse the pan (never
+// a duplicate) and fall back to LastFrequency, then to the 14.225 default —
+// covering decide()'s restoredPanCenterMhz <= 0 branches, which are retained
+// precisely for this case. (#3416)
+void testRestoredPanCenterZeroFallsBack()
 {
     Inputs in;
     in.hasRestoredPan = true;
-    in.restoredPanCenterMhz = 0.0;   // not reported yet
+    in.restoredPanCenterMhz = 0.0;   // radio reported center=0 / unparseable
     in.lastFreqMhz = 21.300000;
     in.lastMode = QStringLiteral("USB");
 
-    const Decision d = decide(in);
-
+    Decision d = decide(in);
     check(d.action == Action::ReuseRestoredPan,
-          "center unknown: still reuse the pan (no duplicate)");
+          "center zero: still reuse the pan (no duplicate)");
     check(freqEq(d.freqMhz, 21.300000),
-          "center unknown: fall back to LastFrequency");
-}
+          "center zero: fall back to LastFrequency");
 
-void testRestoredPanCenterUnknownNoSettingsFallsBackToDefault()
-{
-    Inputs in;
-    in.hasRestoredPan = true;
-    in.restoredPanCenterMhz = 0.0;
     in.lastFreqMhz = 0.0;
     in.lastMode = QString();
-
-    const Decision d = decide(in);
-
+    d = decide(in);
     check(d.action == Action::ReuseRestoredPan,
-          "center+settings unknown: still reuse the pan");
+          "center+settings zero: still reuse the pan");
     check(freqEq(d.freqMhz, 14.225000),
-          "center+settings unknown: fall back to 14.225 default");
-    check(d.mode == QStringLiteral("USB"), "center unknown: default mode USB");
+          "center+settings zero: fall back to 14.225 default");
+    check(d.mode == QStringLiteral("USB"), "center zero: default mode USB");
 }
 
 // The restored-pan center always wins over LastFrequency, even when both are on
@@ -152,8 +147,7 @@ int main()
     testIssue3212BundleScenario();
     testNoRestoredPanCreatesNew();
     testNoRestoredPanNoSettingsUsesDefaults();
-    testRestoredPanCenterNotYetKnownFallsBackToLastFreq();
-    testRestoredPanCenterUnknownNoSettingsFallsBackToDefault();
+    testRestoredPanCenterZeroFallsBack();
     testRestoredPanCenterWinsOverLastFrequency();
 
     if (failures == 0) {

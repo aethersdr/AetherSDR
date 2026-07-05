@@ -54,6 +54,7 @@
 #include "models/SliceModel.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QPointer>
 #include <QSet>
@@ -74,6 +75,7 @@ constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr int kPanDimensionDecoderFallbackMs = 650;
+constexpr int kKiwiGestureViewUpdateMs = 100;
 constexpr qint64 kProfileLoadDimensionSettleMs = kPanDimensionDecoderFallbackMs + 100;
 
 int currentAutoSqlMarginDb()
@@ -1453,9 +1455,14 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
     if (m_daxBridge) {
         auto* panStream = m_radioModel.panStream();
-        QSet<int> requestedChannels;
         bool txSliceIsDigital = false;
 
+        // Post-profile-load reconcile (#3305): reseed the slice→channel shadow
+        // and (re)acquire whatever the restored slices carry. The manager
+        // dedupes against live streams, and streams the radio destroyed during
+        // the load are re-created automatically by its removed-status recreate
+        // path — no manual stream remove/create here anymore. Channels held by
+        // TCI or RADE are simply co-held; nothing is stomped.
         for (auto* slice : m_radioModel.slices()) {
             if (!slice) {
                 continue;
@@ -1475,34 +1482,9 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
             if (channel < 1 || channel > 4) {
                 continue;
             }
-
-#ifdef HAVE_WEBSOCKETS
-            const bool tciUsingChannel = tciServer() && tciServer()->ownsDaxChannel(channel);
-#else
-            const bool tciUsingChannel = false;
-#endif
-#ifdef HAVE_RADE
-            const bool radeUsingChannel =
-                (m_radeDaxStreamId != 0 && panStream
-                 && m_radeDaxStreamId == panStream->daxStreamIdForChannel(channel));
-#else
-            const bool radeUsingChannel = false;
-#endif
-            quint32 existingStream = panStream ? panStream->daxStreamIdForChannel(channel) : 0;
-            if (!tciUsingChannel && panStream && resetDaxRxStreams) {
-                if (existingStream != 0 && !radeUsingChannel) {
-                    m_radioModel.sendCommand(
-                        QString("stream remove 0x%1").arg(existingStream, 0, 16));
-                    panStream->unregisterDaxStream(existingStream);
-                    existingStream = 0;
-                }
-            }
-
-            if (!tciUsingChannel && !radeUsingChannel && existingStream == 0
-                    && !requestedChannels.contains(channel)) {
-                m_radioModel.sendCommand(
-                    QString("stream create type=dax_rx dax_channel=%1").arg(channel));
-                requestedChannels.insert(channel);
+            if (panStream) {
+                panStream->acquireDaxChannel(
+                    channel, PanadapterStream::DaxConsumer::Bridge);
             }
         }
 
@@ -1579,6 +1561,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
+        // #3977 ownership note: foreign-owned pans are refused at the handler
+        // entry (before the local decoder commit) and again centrally in
+        // RadioModel::sendCommand — no per-command gate needed here.
         m_radioModel.sendCommand(
             QString("display pan set %1 min_dbm=%2 max_dbm=%3")
                 .arg(applet->panId())
@@ -1635,15 +1620,33 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     };
 
+    auto kiwiGestureLastViewUpdate = std::make_shared<QElapsedTimer>();
+    const auto updateKiwiWaterfallViewForGesture =
+        [updateKiwiWaterfallView,
+         kiwiGestureLastViewUpdate](double centerMhz, double bandwidthMhz) {
+            const bool updateDue =
+                !kiwiGestureLastViewUpdate->isValid()
+                || kiwiGestureLastViewUpdate->elapsed()
+                       >= kKiwiGestureViewUpdateMs;
+            if (!updateDue) {
+                return;
+            }
+            updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+            kiwiGestureLastViewUpdate->restart();
+        };
+
     const auto updateKiwiWaterfallViewUnlessDeferred =
-        [updateKiwiWaterfallView, sw](double centerMhz, double bandwidthMhz) {
+        [updateKiwiWaterfallView, updateKiwiWaterfallViewForGesture, sw,
+         kiwiGestureLastViewUpdate](double centerMhz, double bandwidthMhz) {
             if (sw && sw->waterfallViewUpdateDeferred()) {
                 return;
             }
             if (sw && sw->frequencyRangeGestureActive()) {
+                updateKiwiWaterfallViewForGesture(centerMhz, bandwidthMhz);
                 return;
             }
             updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+            kiwiGestureLastViewUpdate->invalidate();
         };
 
     connect(sw, &SpectrumWidget::frequencyRangeChanged,
@@ -1651,20 +1654,36 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(sw, &SpectrumWidget::frequencyRangeChangeRequested,
             this, updateKiwiWaterfallViewUnlessDeferred);
     connect(sw, &SpectrumWidget::centerChangeRequested,
-            this, [updateKiwiWaterfallView, sw](double centerMhz) {
+            this, [updateKiwiWaterfallView, updateKiwiWaterfallViewForGesture,
+                   sw, kiwiGestureLastViewUpdate](double centerMhz) {
                 if (!sw) {
                     return;
                 }
-                if (sw->panDragActive()
-                    || sw->frequencyRangeGestureActive()) {
+                if (sw->frequencyRangeGestureActive()) {
+                    return;
+                }
+                if (sw->panDragActive()) {
+                    updateKiwiWaterfallViewForGesture(centerMhz,
+                                                      sw->bandwidthMhz());
                     return;
                 }
                 updateKiwiWaterfallView(centerMhz, sw->bandwidthMhz());
+                kiwiGestureLastViewUpdate->invalidate();
             });
     connect(sw, &SpectrumWidget::panDragSettled,
-            this, updateKiwiWaterfallView);
+            this, [updateKiwiWaterfallView,
+                   kiwiGestureLastViewUpdate](double centerMhz,
+                                              double bandwidthMhz) {
+                updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+                kiwiGestureLastViewUpdate->invalidate();
+            });
     connect(sw, &SpectrumWidget::frequencyRangeSettled,
-            this, updateKiwiWaterfallView);
+            this, [updateKiwiWaterfallView,
+                   kiwiGestureLastViewUpdate](double centerMhz,
+                                              double bandwidthMhz) {
+                updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+                kiwiGestureLastViewUpdate->invalidate();
+            });
 
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
@@ -1887,6 +1906,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
+        // #3977: refuse the WHOLE operation — local decoder commit included —
+        // when this session no longer owns the pan. Gating only the outbound
+        // command (RadioModel::sendCommand backstop) would leave the local
+        // FFT decoder committed to a range the radio never adopted, with no
+        // levelChanged echo to ever resync it.
+        if (auto* pan = m_radioModel.panadapter(applet->panId());
+            pan && !pan->ownedByClient(m_radioModel.ourClientHandle())) {
+            return;
+        }
+
         pendingDbm->active = true;
         pendingDbm->minDbm = minDbm;
         pendingDbm->maxDbm = maxDbm;
@@ -1895,11 +1924,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sendDbmRangeCommand(minDbm, maxDbm);
     });
     connect(sw, &SpectrumWidget::dbmRangeDragFinished,
-            this, [sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+            this, [this, applet, sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
         if (sw->kiwiSdrWaterfallActive()) {
             sw->setDbmRange(minDbm, maxDbm);
             sw->prepareForFftScaleChange();
             sw->reacquireNoiseFloorLock();
+            return;
+        }
+
+        // #3977: same whole-operation refusal as dbmRangeChangeRequested.
+        if (auto* pan = m_radioModel.panadapter(applet->panId());
+            pan && !pan->ownedByClient(m_radioModel.ourClientHandle())) {
             return;
         }
 

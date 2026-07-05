@@ -177,7 +177,8 @@ void FreeDvReporterDialog::buildBody()
 
     m_trackCheck = new QCheckBox("Track");
     ThemeManager::instance().applyStyleSheet(m_trackCheck,
-        "QCheckBox { color: {{color.text.primary}}; }");
+        "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+        + ThemeManager::checkBoxIndicatorStyle());
     bottom->addWidget(m_trackCheck);
 
     m_bandRadio = new QRadioButton("Band");

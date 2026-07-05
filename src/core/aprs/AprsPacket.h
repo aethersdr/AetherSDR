@@ -118,6 +118,12 @@ QString encodeStatus(const QString& text);
 // 6-character Maidenhead locator ("DN18rg").
 QString gridSquare(double lat, double lon);
 
+// Radio-reported GPS coordinate (the "gps" status lat/lon fields): plain
+// decimal degrees, or the hemisphere + whole degrees + decimal minutes form
+// the 6000-series GPSDO sends ("N 33 33.484" / "W 112 16.050"). Returns
+// false when neither form matches.
+bool parseGpsCoordinate(const QString& text, double& degreesOut);
+
 // Great-circle distance (statute miles) and initial bearing (0-360 deg).
 double distanceMiles(double lat1, double lon1, double lat2, double lon2);
 double bearingDeg(double lat1, double lon1, double lat2, double lon2);

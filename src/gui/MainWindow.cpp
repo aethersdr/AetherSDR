@@ -1264,6 +1264,11 @@ MainWindow::MainWindow(QWidget* parent)
     // works without a radio connected.
     initNetScheduler();
 
+    // QRZ callsign lookup: CW spotter → lookup service → contact card →
+    // wireCallsignLookup() (MainWindow_Callsign.cpp). Client-side; works
+    // without a radio connected.
+    wireCallsignLookup();
+
     // Radio-model + TX-audio-stream wiring → wireRadioModel()
     // (MainWindow_Session.cpp, #3351 Phase 2c).
     wireRadioModel();
@@ -6404,7 +6409,13 @@ void MainWindow::routeCwDecoderOutput()
                    &m_cwDecoder, &CwDecoder::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                    &m_cwDecoderTx, &CwDecoder::stop);
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
+                   &m_cwCallsignSpotter, &CwCallsignSpotter::feedText);
     }
+
+    // Text from the old applet's stream must never concatenate with the
+    // new one's — a station boundary, as far as the spotter is concerned.
+    m_cwCallsignSpotter.clear();
 
     m_cwDecoderApplet = target;
 
@@ -6441,6 +6452,8 @@ void MainWindow::routeCwDecoderOutput()
                 &m_cwDecoder, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoderTx, &CwDecoder::stop);
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
+                &m_cwCallsignSpotter, &CwCallsignSpotter::feedText);
     }
 }
 

@@ -129,61 +129,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // Capture DAX RX stream creation responses so we can register them
     // in PanadapterStream for VITA-49 routing (#1331).
     if (m_model) {
-        connect(m_model, &RadioModel::statusReceived,
-                this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
-            if (!obj.startsWith("stream ")) return;
-            const QStringList parts = obj.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-            if (parts.size() < 2) return;
-            bool ok = false;
-            quint32 streamId = parts[1].toUInt(&ok, 0);
-            if (!ok || streamId == 0) return;
-            const bool removed = parts.contains(QStringLiteral("removed")) || kvs.contains(QStringLiteral("removed"));
-            if (removed) {
-                for (auto it = m_tciDaxStreamIds.begin(); it != m_tciDaxStreamIds.end(); ++it) {
-                    if (it.value() == streamId) {
-                        qCInfo(lcCat) << "TCI: radio removed DAX RX stream" << Qt::hex << streamId
-                                      << "for channel" << it.key()
-                                      << "— clearing cache entry so re-arm recreates it (#3476)";
-                        // Erase (not zero) the entry. Leaving a key behind keeps
-                        // ensureDaxForTci()'s `contains(ch)` guard true, so after a
-                        // profile load / slice teardown — which destroys the radio's
-                        // dax_rx stream without a TCI disconnect — the sliceAdded
-                        // re-arm skips `stream create` and TCI RX stays silent until
-                        // a full reconnect. That is the #3476/#3364 "switched profile,
-                        // never came back" failure. Pending creates (value 0) are
-                        // never matched here (streamId != 0), so an in-flight request
-                        // is safe.
-                        m_tciDaxBorrowedChannels.remove(it.key());
-                        m_tciDaxStreamIds.erase(it);
-                        break;
-                    }
-                }
-                if (m_model->panStream())
-                    m_model->panStream()->unregisterDaxStream(streamId);
-                return;
-            }
-            if (kvs.value("type") != "dax_rx") return;
-            if (!streamStatusBelongsToUs(kvs, m_model->ourClientHandle())) {
-                qCDebug(lcCat) << "TCI: ignoring DAX RX stream for another client"
-                               << "stream=0x" + QString::number(streamId, 16)
-                               << "owner=" << kvs.value("client_handle");
-                return;
-            }
-            int ch = kvs.value("dax_channel").toInt();
-            if (!streamId || ch < 1 || ch > 4) return;
-            // Only register if this channel is one we requested (placeholder = 0)
-            if (!m_tciDaxStreamIds.contains(ch)) return;
-            if (m_tciDaxStreamIds[ch] != 0) return; // already registered
-            m_tciDaxStreamIds[ch] = streamId;
-            if (m_model->panStream()) {
-                m_model->panStream()->registerDaxStream(streamId, ch);
-                qCDebug(lcCat) << "TCI: registered DAX RX stream"
-                               << "0x" + QString::number(streamId, 16)
-                               << "for channel" << ch;
-                qCInfo(lcCat) << "TCI: registered DAX RX stream" << Qt::hex << streamId
-                              << "for channel" << ch << "(#1331)";
-            }
-        });
+        // Stream registration + radio-side-removal recovery now live in the
+        // centralized DAX channel manager (RadioModel::handleDaxRxStreamRegistry
+        // + PanadapterStream refcounting, #3305). The #3476 "profile load
+        // destroyed the stream, never came back" recreate is automatic there.
+        // TCI only keeps its channel→trx routing cache truthful (#3669/#3766).
+        if (m_model->panStream()) {
+            connect(m_model->panStream(), &PanadapterStream::daxStreamUnregistered,
+                    this, [this](int ch, quint32) {
+                m_channelTrx.remove(ch);
+            });
+        }
 
         // Re-trigger DAX setup when the radio (re)connects or a slice
         // is added AFTER a TCI client has already requested audio.  Without
@@ -198,33 +154,16 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, [this](bool connected) {
             if (!connected) {
-                // Radio dropped: our DAX RX streams are dead server-side, but
-                // an unexpected disconnect sends no `stream … removed` status,
-                // so m_tciDaxStreamIds keeps stale IDs. Without clearing them,
-                // ensureDaxForTci() on reconnect hits its `contains(ch)` guard
-                // and skips `stream create`, leaving WSJT-X RX silent — the
-                // very symptom #3270 targets. Unregister the streams we own
-                // (skip borrowed — the DAX bridge owns those and tears them
-                // down itself) and reset so the reconnect re-arm starts clean.
-                // (#3270)
-                if (m_model->panStream()) {
-                    for (auto it = m_tciDaxStreamIds.cbegin();
-                         it != m_tciDaxStreamIds.cend(); ++it) {
-                        if (it.value() != 0
-                                && !m_tciDaxBorrowedChannels.contains(it.key())) {
-                            m_model->panStream()->unregisterDaxStream(it.value());
-                        }
-                    }
-                }
-                m_tciDaxStreamIds.clear();
-                m_tciDaxBorrowedChannels.clear();
-                m_channelTrx.clear();   // routing cache stale once the channel→stream map is torn down (#3766)
-                // Also drop the slice-assignment bookkeeping: slices are being
-                // destroyed with the connection, and a releaseDaxForTci() that
-                // runs later (e.g. the debounced grace timer firing after a
-                // quick radio reconnect) must not setDaxChannel(0) on the
-                // RECREATED slices — that would strip a profile-restored DAX
-                // assignment from a slice we no longer manage.
+                // Radio dropped: RadioModel resets the DAX channel manager
+                // (the radio reaps our streams server-side, #3305). Drop the
+                // routing cache and the slice-assignment bookkeeping: slices
+                // are being destroyed with the connection, and a
+                // releaseDaxForTci() that runs later (e.g. the debounced grace
+                // timer firing after a quick radio reconnect) must not
+                // setDaxChannel(0) on the RECREATED slices — that would strip
+                // a profile-restored DAX assignment from a slice we no longer
+                // manage.
+                m_channelTrx.clear();
                 m_tciDaxSlices.clear();
                 return;
             }
@@ -245,6 +184,32 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                                   << "for active audio client (#3270)";
                     ensureDaxForTci();
                     return;
+                }
+            }
+        });
+        // A removed slice never fires daxChannelChanged, so without this the
+        // Tci hold on its channel stays set forever and the dax_rx stream
+        // lingers until the TCI client disconnects (pre-existing orphan,
+        // closed alongside #3305 per PR #4017 review item 4). Release any
+        // Tci-held channel that no remaining slice carries; the sliceAdded
+        // re-arm above re-acquires when a replacement slice appears.
+        connect(m_model, &RadioModel::sliceRemoved,
+                this, [this](int sliceId) {
+            m_tciDaxSlices.remove(sliceId);
+            auto* ps = m_model ? m_model->panStream() : nullptr;
+            if (!ps) return;
+            for (int ch = 1; ch <= 4; ++ch) {
+                if (!ps->daxChannelHeldBy(ch, PanadapterStream::DaxConsumer::Tci))
+                    continue;
+                bool stillWanted = false;
+                for (auto* s : m_model->slices()) {
+                    if (s && s->daxChannel() == ch) { stillWanted = true; break; }
+                }
+                if (!stillWanted) {
+                    qCInfo(lcCat) << "TCI: releasing DAX channel" << ch
+                                  << "after slice" << sliceId << "removal (#3305)";
+                    ps->releaseDaxChannel(ch, PanadapterStream::DaxConsumer::Tci);
+                    m_channelTrx.remove(ch);
                 }
             }
         });
@@ -2001,44 +1966,21 @@ void TciServer::ensureDaxForTci()
         }
     }
 
-    // Create DAX RX streams for channels that need them.  If an existing stream
-    // is already registered in PanadapterStream (e.g. created by DaxBridge or
-    // left over from a previous session), reuse it rather than stacking a
-    // second subscription — duplicate streams cause daxAudioReady to fire
-    // twice per period, doubling the apparent audio speed at the TCI client.
-    for (int ch : channelsNeeded) {
-        if (m_tciDaxStreamIds.contains(ch)) continue; // already have/pending
-        quint32 existingId = m_model->panStream()
-                           ? m_model->panStream()->daxStreamIdForChannel(ch)
-                           : 0;
-        if (existingId != 0) {
-            m_tciDaxStreamIds[ch] = existingId;
-            m_tciDaxBorrowedChannels.insert(ch);
-            qCDebug(lcCat) << "TCI: reusing existing DAX RX stream"
-                           << "0x" + QString::number(existingId, 16)
-                           << "for channel" << ch;
-            qCInfo(lcCat) << "TCI: reusing existing DAX RX stream" << Qt::hex << existingId
-                          << "for channel" << ch << "(#1331)";
-        } else {
-            m_tciDaxStreamIds[ch] = 0;
-            m_model->sendCommand(QString("stream create type=dax_rx dax_channel=%1").arg(ch));
-            qCDebug(lcCat) << "TCI: creating DAX RX stream for channel" << ch;
-            qCInfo(lcCat) << "TCI: creating DAX RX stream for channel" << ch << "(#1331)";
-        }
-    }
-
-    // Re-assert slice → DAX channel mapping so the radio registers our
-    // stream as a client.  Without this, dax_clients stays 0 and the
-    // radio sends silence instead of demodulated audio. (#1439)
-    for (auto* s : m_model->slices()) {
-        int ch = s->daxChannel();
-        if (ch > 0 && channelsNeeded.contains(ch)) {
-            m_model->sendCommand(QString("slice set %1 dax=%2")
-                .arg(s->sliceId()).arg(ch));
-            qCDebug(lcCat) << "TCI: re-asserting DAX channel" << ch
-                           << "on slice" << s->sliceId();
-            qCInfo(lcCat) << "TCI: re-asserting dax=" << ch
-                          << "on slice" << s->sliceId();
+    // Acquire the needed channels from the centralized manager (#3305). It
+    // creates the radio-side stream only when the channel gains its FIRST
+    // holder — never a duplicate subscription (duplicate streams made
+    // daxAudioReady fire twice per period, doubling apparent audio speed) —
+    // and reuses anything the DAX bridge or a previous arm already created.
+    // Acquire is idempotent, so re-arm paths can call this freely.
+    //
+    // The #1439 dax_clients re-assert is a one-shot in RadioModel tied to the
+    // actual `stream create`. The unconditional re-assert that used to live
+    // here re-asserted LIVE bindings, which the radio answers with a transient
+    // unbind/rebind dax=0/dax=<ch> pair — the seed of the #4009 storm.
+    if (m_model->panStream()) {
+        for (int ch : channelsNeeded) {
+            m_model->panStream()->acquireDaxChannel(
+                ch, PanadapterStream::DaxConsumer::Tci);
         }
     }
 }
@@ -2052,8 +1994,8 @@ void TciServer::scheduleDaxRelease()
     // permanent silence (#3363 / #3476 / Tune-ATU). Defer it; a reconnecting
     // client that re-arms audio cancels the timer (cancelDaxRelease()), so the
     // stream survives and audio resumes with no recreate. If the radio actually
-    // destroyed the streams meanwhile (profile slice recreate), the reactive
-    // "stream removed" handler keeps m_tciDaxStreamIds truthful regardless.
+    // destroyed the streams meanwhile (profile slice recreate), the centralized
+    // manager's removed-status recovery re-creates them (#3305).
     if (!m_daxReleaseTimer) { releaseDaxForTci(); return; }
     qCWarning(lcCat) << "TCI: last audio client gone — deferring DAX RX release"
                      << kDaxReleaseGraceMs << "ms (cancelled if a client reconnects)";
@@ -2085,19 +2027,11 @@ void TciServer::rearmDaxForProfileLoad()
         return;
     }
 
-    if (m_model->panStream()) {
-        for (auto it = m_tciDaxStreamIds.cbegin(); it != m_tciDaxStreamIds.cend(); ++it) {
-            if (it.value() != 0 && !m_tciDaxBorrowedChannels.contains(it.key())) {
-                m_model->sendCommand(QString("stream remove 0x%1")
-                    .arg(it.value(), 8, 16, QChar('0')));
-                m_model->panStream()->unregisterDaxStream(it.value());
-            }
-        }
-    }
-
-    m_tciDaxStreamIds.clear();
-    m_tciDaxBorrowedChannels.clear();
-    m_channelTrx.clear();   // routing cache stale once the channel→stream map is torn down (#3669)
+    // Streams the profile load destroyed radio-side are re-created
+    // automatically by the DAX channel manager's removed-status recovery
+    // (#3305/#3476); we only need to refresh the routing cache and re-run the
+    // slice policy (idempotent acquires).
+    m_channelTrx.clear();   // routing cache stale across a profile load (#3669)
     m_tciDaxSlices.clear();
 
     qCInfo(lcCat) << "TCI: profile load completed - re-arming DAX for active audio client";
@@ -2111,32 +2045,19 @@ void TciServer::releaseDaxForTci()
     // DIAG (qCWarning so it survives default log levels): this is the path that
     // silences WSJT-X RX on a client disconnect / audio_stop. It ran invisibly
     // in the 26.6.2 repro because qCInfo(lcCat) is suppressed below warning.
-    qCWarning(lcCat) << "TCI: releaseDaxForTci() tearing down DAX RX —"
-                     << m_tciDaxStreamIds.size() << "stream(s),"
+    qCWarning(lcCat) << "TCI: releaseDaxForTci() releasing DAX RX —"
                      << m_tciDaxSlices.size() << "slice assignment(s);"
                      << "RX audio stops until the next audio_start re-arms it";
 
-    // Remove DAX RX streams we created (skip borrowed streams — owned by DaxBridge
-    // or pre-existing; removing them would break other audio consumers).
-    for (auto it = m_tciDaxStreamIds.begin(); it != m_tciDaxStreamIds.end(); ++it) {
-        int ch = it.key();
-        quint32 streamId = it.value();
-        if (m_tciDaxBorrowedChannels.contains(ch)) continue;
-        if (streamId != 0) {
-            if (m_model->panStream()) {
-                m_model->panStream()->unregisterDaxStream(streamId);
-            }
-            if (m_model->isConnected()) {
-                m_model->sendCommand(QString("stream remove 0x%1")
-                    .arg(streamId, 8, 16, QChar('0')));
-            }
-            qCWarning(lcCat) << "TCI: removed DAX RX stream" << Qt::hex << streamId
-                             << "channel" << ch << "(#1331)";
-        }
+    // Release TCI's hold on every channel. The centralized manager removes a
+    // radio-side stream only when the LAST holder releases (after a grace
+    // window), so a channel the DAX bridge or RADE still uses survives — the
+    // old "skip borrowed" bookkeeping, enforced structurally (#3305).
+    if (m_model->panStream()) {
+        m_model->panStream()->releaseAllDaxChannels(
+            PanadapterStream::DaxConsumer::Tci);
     }
-    m_tciDaxStreamIds.clear();
-    m_tciDaxBorrowedChannels.clear();
-    m_channelTrx.clear();   // routing cache stale once the channel→stream map is torn down (#3669)
+    m_channelTrx.clear();   // routing cache stale once the channel holds are dropped (#3669)
 
     // Release DAX channel assignments we made
     for (int sliceId : m_tciDaxSlices) {

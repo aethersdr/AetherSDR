@@ -921,6 +921,13 @@ void MainWindow::buildMenuBar()
     connect(pskMapAction, &QAction::triggered,
             this, &MainWindow::showPskReporterMapDialog);
 
+    auto* callsignLookupAct = viewMenu->addAction("Callsign Lookup...");
+    callsignLookupAct->setMenuRole(QAction::NoRole);
+    callsignLookupAct->setShortcut(QKeySequence("Ctrl+Shift+L"));
+    callsignLookupAct->setToolTip("Look up a callsign on QRZ.com");
+    connect(callsignLookupAct, &QAction::triggered,
+            this, [this] { showCallsignLookupDialog(); });
+
 #ifdef HAVE_WEBSOCKETS
     {
         auto* fdvReporterAct = viewMenu->addAction(tr("FreeDV Reporter..."));

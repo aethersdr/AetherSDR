@@ -1,6 +1,7 @@
 #include "PskReporterMapDialog.h"
 
 #include "core/AppSettings.h"
+#include "core/aprs/AprsPacket.h"
 #include "core/MaidenheadLocator.h"
 #include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
@@ -406,12 +407,12 @@ void PskReporterMapDialog::updateHomeFromRadio()
         return;
     }
     const QString label = m_radioModel->callsign();
-    bool ok = false;
-    double lat = m_radioModel->gpsLat().toDouble(&ok);
-    double lon = 0.0;
-    if (ok) {
-        lon = m_radioModel->gpsLon().toDouble(&ok);
-    }
+    // The 6000-series GPSDO reports "N 33 33.484" (hemisphere/deg/decimal-
+    // minutes), not decimal degrees; parseGpsCoordinate accepts both forms
+    // (#3994) — plain toDouble() here would fail and drop to the coarser grid.
+    double lat = 0.0, lon = 0.0;
+    const bool ok = aprs::parseGpsCoordinate(m_radioModel->gpsLat(), lat)
+                    && aprs::parseGpsCoordinate(m_radioModel->gpsLon(), lon);
     // GPS fix preferred; fall back to the radio's grid locator.
     if (!ok || (lat == 0.0 && lon == 0.0)) {
         if (!MaidenheadLocator::toLatLon(m_radioModel->gpsGrid(), lat, lon)) {

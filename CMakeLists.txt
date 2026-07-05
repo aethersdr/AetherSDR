@@ -569,6 +569,10 @@ set(CORE_SOURCES
     src/core/RNNoiseFilter.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
+    src/core/CwCallsignSpotter.cpp
+    src/core/CallsignInfo.cpp
+    src/core/QrzClient.cpp
+    src/core/CallsignLookupService.cpp
     src/core/RttyDecoder.cpp
     src/core/VoiceSignalDetector.cpp
     src/core/SpectrogramBuffer.cpp
@@ -679,6 +683,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
     src/gui/MainWindow_Nets.cpp
+    src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/MapView.cpp
@@ -722,6 +727,8 @@ set(GUI_SOURCES
     src/gui/DspParamPopup.cpp
     src/gui/DxClusterDialog.cpp
     src/gui/DxClusterStartupCommandsDialog.cpp
+    src/gui/CallsignCard.cpp
+    src/gui/CallsignLookupDialog.cpp
     src/gui/CwxPanel.cpp
     src/gui/BandStackPanel.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -757,6 +764,7 @@ set(GUI_SOURCES
     src/gui/PhoneApplet.cpp
     src/gui/EqApplet.cpp
     src/gui/WaveApplet.cpp
+    src/gui/WaveformScopeModel.cpp
     src/gui/WaveformWidget.cpp
     src/gui/ClientEqApplet.cpp
     src/gui/ClientEqCurveWidget.cpp
@@ -799,7 +807,6 @@ set(GUI_SOURCES
     src/gui/StripPuduPanel.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
-    src/gui/StripWaveform.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp
@@ -1274,6 +1281,7 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/panscope.frag
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
+            resources/shaders/wavescope.frag
     )
 endif()
 
@@ -1881,6 +1889,27 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
+# Regression test for #4003 — QsoRecorder must not dereference a SliceModel that
+# was freed (reconnect prune) before recording starts. QPointer auto-nulls the
+# reference; the test deletes the slice and asserts the metadata is cleared.
+add_executable(qso_recorder_slice_lifetime_test
+    tests/qso_recorder_slice_lifetime_test.cpp
+    src/core/QsoRecorder.cpp
+    src/core/AppSettings.cpp
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+)
+target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_slice_lifetime_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_slice_lifetime_test COMMAND qso_recorder_slice_lifetime_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
@@ -1935,6 +1964,14 @@ add_executable(adaptive_filter_test
 target_include_directories(adaptive_filter_test PRIVATE src)
 target_link_libraries(adaptive_filter_test PRIVATE Qt6::Core)
 add_test(NAME adaptive_filter_test COMMAND adaptive_filter_test)
+
+add_executable(waveform_scope_model_test
+    tests/waveform_scope_model_test.cpp
+    src/gui/WaveformScopeModel.cpp
+)
+target_include_directories(waveform_scope_model_test PRIVATE src)
+target_link_libraries(waveform_scope_model_test PRIVATE Qt6::Core)
+add_test(NAME waveform_scope_model_test COMMAND waveform_scope_model_test)
 
 add_executable(kiwi_sdr_protocol_test
     tests/kiwi_sdr_protocol_test.cpp
@@ -2138,6 +2175,23 @@ add_executable(display_inventory_policy_test
 target_include_directories(display_inventory_policy_test PRIVATE src)
 target_link_libraries(display_inventory_policy_test PRIVATE Qt6::Core)
 add_test(NAME display_inventory_policy_test COMMAND display_inventory_policy_test)
+
+# QRZ callsign lookup — spotter stream detection, callsign regex,
+# CallsignInfo JSON round-trip, 7-day cache TTL rule.
+add_executable(qrz_callsign_test
+    tests/qrz_callsign_test.cpp
+    src/core/CwCallsignSpotter.cpp
+    src/core/CallsignInfo.cpp
+    src/core/CtyDatParser.cpp
+    # LogManager provides lcQrz (spotter's qCDebug category); it drags
+    # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(qrz_callsign_test PRIVATE src)
+target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
@@ -2481,6 +2535,7 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -2498,6 +2553,7 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
+add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
 
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp

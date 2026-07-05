@@ -3294,9 +3294,11 @@ void Ax25HfPacketDecodeDialog::handleGpsUpdate()
 {
     if (!m_radio || !m_aprsBeacon)
         return;
-    bool latOk = false, lonOk = false;
-    const double lat = m_radio->gpsLat().toDouble(&latOk);
-    const double lon = m_radio->gpsLon().toDouble(&lonOk);
+    // The GPSDO reports "N 33 33.484" (hemisphere, degrees, decimal
+    // minutes), not decimal degrees; parseGpsCoordinate accepts both forms.
+    double lat = 0.0, lon = 0.0;
+    const bool latOk = aprs::parseGpsCoordinate(m_radio->gpsLat(), lat);
+    const bool lonOk = aprs::parseGpsCoordinate(m_radio->gpsLon(), lon);
     // "Fine Lock" / "Coarse Lock" mean the fix is real; "Present" /
     // "Not Present" mean no usable position.
     const bool locked =

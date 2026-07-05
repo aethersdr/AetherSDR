@@ -14,6 +14,7 @@
 #include "NetSchedulerDialog.h"
 
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 #include "core/MemoryRecallPolicy.h"
 #include "core/NetScheduleStore.h"
 #include "core/NetScheduler.h"
@@ -120,6 +121,41 @@ void MainWindow::tuneToNet(const NetEntry& entry)
         return;
 
     const double freqMhz = entry.preset.freq;
+
+    // Nets can sit on transverter-only bands. applyTuneRequest() runs the
+    // band-stack preselect (home of the XVTR support check and its "band isn't
+    // available" feedback) only for CommandedTargetCenter, so an AbsoluteJump
+    // net tune would silently move the slice onto a band this radio can't
+    // reach (#3930). Mirror the preselectBandStackForTune() guard here and
+    // refuse before touching the radio.
+    if (freqMhz > 54.0 || slice->frequency() > 54.0) {
+        const QString targetBand = BandSettings::bandForFrequency(freqMhz);
+        const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
+        if (targetBand != currentBand) {
+            const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
+            const auto stackKeyResult = XvtrPolicy::resolveBandStackKey(
+                targetBand, xvtrs, m_radioModel.capabilities());
+            if (!stackKeyResult.isSupported()) {
+                QString reason = stackKeyResult.unsupportedReason;
+                if (freqMhz > 54.0 && xvtrs.isEmpty()) {
+                    reason = QString("Band %1 requires a configured XVTR before "
+                                     "Aether can tune it.")
+                                 .arg(targetBand);
+                }
+                qCWarning(lcProtocol).noquote().nospace()
+                    << "MainWindow: net tune cannot preselect band stack"
+                    << " source=net-tune net=" << entry.name
+                    << " from_band=" << currentBand
+                    << " to_band=" << targetBand
+                    << " freq_mhz=" << QString::number(freqMhz, 'f', 6)
+                    << " reason=" << reason
+                    << " available_xvtrs=" << xvtrListSummary(xvtrs);
+                statusBar()->showMessage(
+                    QString("Can't tune %1 — %2").arg(entry.name, reason), 5000);
+                return;
+            }
+        }
+    }
 
     // Route the net's frequency change through the canonical tune-and-recenter
     // policy — the same AbsoluteJump path a DX-cluster spot uses to jump to an

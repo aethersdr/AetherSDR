@@ -112,7 +112,7 @@ def main():
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect", "slice", "audioCapture",
-                             "record", "testtone"],
+                             "record", "testtone", "tci"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
@@ -204,8 +204,9 @@ def main():
                     req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
-        elif args.command in ("record", "testtone"):
+        elif args.command in ("record", "testtone", "tci"):
             # record <start|stop|status|path|dir [path]> | testtone <on [hz] [db]|off>
+            # tci <start [port]|status|stop [abrupt]>
             req = {"cmd": args.command}
             if args.rest:
                 req["action"] = args.rest[0]

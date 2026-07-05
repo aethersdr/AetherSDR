@@ -1612,6 +1612,21 @@ QString ThemeManager::resolve(const QString& stylesheetTemplate) const
     return resolveFor(nullptr, stylesheetTemplate);
 }
 
+QString ThemeManager::checkBoxIndicatorStyle()
+{
+    // Single source of truth for the checkbox indicator used across dialogs
+    // (RadioSetupDialog, DxClusterDialog, FreeDvReporterDialog).  Kept as an
+    // unresolved token template so applyStyleSheet() expands it per widget
+    // and it re-paints on theme switches.
+    static const QString kStyle =
+        "QCheckBox::indicator { width: 14px; height: 14px; "
+        "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
+        "QCheckBox::indicator:hover { border-color: {{color.accent}}; background: {{color.background.1}}; }"
+        "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
+        "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
+    return kStyle;
+}
+
 QString ThemeManager::resolveFor(const QWidget* widget,
                                  const QString& stylesheetTemplate) const
 {

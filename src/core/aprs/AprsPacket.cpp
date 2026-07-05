@@ -620,6 +620,36 @@ QString encodeStatus(const QString& text)
     return QLatin1Char('>') + text.trimmed();
 }
 
+bool parseGpsCoordinate(const QString& text, double& degreesOut)
+{
+    const QString s = text.trimmed();
+    if (s.isEmpty())
+        return false;
+
+    bool ok = false;
+    const double decimalDegrees = s.toDouble(&ok);
+    if (ok) {
+        degreesOut = decimalDegrees;
+        return true;
+    }
+
+    static const QRegularExpression hemiDegMin(
+        QStringLiteral("^([NSEW])\\s+(\\d{1,3})\\s+(\\d{1,2}(?:\\.\\d+)?)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = hemiDegMin.match(s);
+    if (!m.hasMatch())
+        return false;
+    const double minutes = m.captured(3).toDouble();
+    if (minutes >= 60.0)
+        return false;
+    double degrees = m.captured(2).toDouble() + minutes / 60.0;
+    const QChar hemisphere = m.captured(1).at(0).toUpper();
+    if (hemisphere == QLatin1Char('S') || hemisphere == QLatin1Char('W'))
+        degrees = -degrees;
+    degreesOut = degrees;
+    return true;
+}
+
 QString gridSquare(double lat, double lon)
 {
     lat = qBound(-90.0, lat, 89.99999) + 90.0;

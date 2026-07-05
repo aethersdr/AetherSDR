@@ -32,9 +32,35 @@ void PanadapterModel::setWaterfallId(const QString& id)
     }
 }
 
+namespace {
+// Handles arrive either as bare lowercase hex (our own assignment) or as the
+// radio's "0x…" status form. Hex-only on purpose — parseStatusHandle() in
+// core/StreamStatus.h accepts decimal, which would misread bare-hex "40000000".
+quint32 parseHandleHex(const QString& text)
+{
+    QStringView v(text);
+    if (v.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+        v = v.mid(2);
+    }
+    bool ok = false;
+    const quint32 parsed = v.toUInt(&ok, 16);
+    return ok ? parsed : 0;
+}
+}  // namespace
+
 void PanadapterModel::setClientHandle(const QString& h)
 {
     m_clientHandle = h;
+    m_ownerHandle = parseHandleHex(h);
+}
+
+bool PanadapterModel::ownedByClient(quint32 handle) const
+{
+    // An unknown owner is treated as ours: the radio hasn't told us
+    // otherwise, and failing open here would break every dBm command.
+    // Fail-open is ONLY safe for gating our own outbound commands — evidence
+    // against other clients must use ownerHandle() and fail closed (#3977).
+    return m_ownerHandle == 0 || m_ownerHandle == handle;
 }
 
 void PanadapterModel::setRfGainInfo(int low, int high, int step)
@@ -49,6 +75,18 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
 {
     bool infoChanged = false;
     bool levelChanged = false;
+
+    // #3977: ownership is radio-authoritative. When another session reclaims
+    // this pan (MultiFlex reconnect), the radio broadcasts the new
+    // client_handle; tracking it here lets a superseded session stop
+    // adjusting a pan it no longer owns.
+    if (kvs.contains("client_handle")) {
+        const quint32 parsed = parseHandleHex(kvs.value("client_handle"));
+        if (parsed != 0 && parsed != m_ownerHandle) {
+            m_ownerHandle = parsed;
+            m_clientHandle = QString::number(parsed, 16);
+        }
+    }
 
     if (kvs.contains("center")) {
         double c = kvs["center"].toDouble();

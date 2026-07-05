@@ -35,8 +35,11 @@ struct Inputs {
     // m_panadapters (i.e. the radio restored it for us).
     bool hasRestoredPan{false};
     // The restored pan's center frequency in MHz, as last reported by the radio
-    // ("display pan ... center="). <= 0 means the radio has not reported a
-    // center yet (pan only just claimed).
+    // ("display pan ... center="). PanadapterModel initialises m_centerMhz to
+    // 14.1, so a just-claimed pan reports a positive center rather than 0 — but
+    // a zero/malformed "center=" status still parses (unchecked toDouble in
+    // applyPanStatus) to 0.0, so decide()'s <= 0 fallback paths remain reachable
+    // (see testRestoredPanCenterZeroFallsBack).
     double restoredPanCenterMhz{0.0};
     // Client-persisted last frequency (AppSettings "LastFrequency"). <= 0 means
     // unset. Used only as a fallback — see decide().

@@ -23,6 +23,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
@@ -120,6 +121,7 @@ class AetherDspDialog;
 class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
+class CallsignLookupDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class FlexControlDialog;
@@ -444,6 +446,11 @@ private:
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
     void refreshCwDecodeState();
+    // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
+    // service → contact card on the CW decode panel + lookup dialog.
+    void wireCallsignLookup();
+    void onCwCallsignSpotted(const QString& call);
+    void showCallsignLookupDialog(const QString& call = QString());
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
@@ -698,6 +705,7 @@ private:
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;
+    CwCallsignSpotter m_cwCallsignSpotter;
     RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
@@ -824,6 +832,7 @@ private:
     bool    m_rc28HoldConsumed[2]{false, false};
     // RC-28 stateful action flags
     bool    m_rc28PttLatched{false};
+    uint8_t m_lastRC28LedByte{0xFF};  // last byte sent; 0xFF forces first write
     bool    m_hidFastTune{false};
     bool    m_hidFineTune{false};
     int     m_hidPulseAccum{0};     // accumulated RC-28 encoder pulses for sensitivity divider
@@ -944,6 +953,7 @@ private:
 
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;
+    QPointer<CallsignLookupDialog> m_callsignLookupDialog;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
     QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
@@ -1220,8 +1230,8 @@ private:
     QThread*    m_radeThread{nullptr};
     int  m_radeSliceId{-1};
     bool m_radePrevMute{false};
-    quint32 m_radeDaxStreamId{0};
-    QMetaObject::Connection m_radeDaxStreamConn;
+    int m_radeDaxChannel{0};  // DAX channel RADE holds via PanadapterStream (#3305)
+    QMetaObject::Connection m_radeDaxReconcileConn;  // RADE slice dax= change → move the Rade hold
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
     QString m_lastRadeRxCallsign;
@@ -1281,12 +1291,8 @@ private:
     // up so the radio registers a DAX client for slices 1-3, not just slice 0.
     void wireDaxSlice(SliceModel* slice);
     void onDaxChannelChanged(SliceModel* slice, int newCh);
-    // #3626: defer + re-validate DAX RX stream teardown so a radio's transient
-    // dax=0 rebroadcast can't drive a create/remove storm. See the .cpp comment.
-    void scheduleDaxRxStreamRemoval(int ch);
     QList<QMetaObject::Connection> m_daxSliceConns;
     QHash<int, int> m_daxSliceLastCh;  // sliceId -> last-known DAX channel
-    QSet<int>       m_daxPendingRxRemoval;  // channels with a deferred teardown in flight (#3626)
 #endif
 };
 

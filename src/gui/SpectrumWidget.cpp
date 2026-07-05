@@ -896,6 +896,17 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         setAttribute(Qt::WA_NativeWindow);
     }
 #  else
+    // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the
+    // software OpenGL rasterizer requested in main.cpp actually takes effect.
+    // Without this, QRhiWidget defaults to D3D11 on Windows and ignores
+    // QT_OPENGL entirely, making the flag a silent no-op there (#3597). On Linux
+    // the default backend is already OpenGL, so this is a harmless explicit
+    // restatement that keeps the two platforms on the same code path.
+    if (qtSoftwareOpenGlRequested()) {
+        setApi(QRhiWidget::Api::OpenGL);
+        qInfo() << "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software — forcing "
+                   "OpenGL QRhi backend (software rasterizer) instead of D3D11";
+    }
     // Warn if running under XWayland — GLX context switching between the main
     // window and child dialogs (e.g. Radio Setup) can trigger BadAccess (#1233).
     // main.cpp normally forces native Wayland, but log it if we ended up here.
@@ -3596,6 +3607,7 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfRowsSinceRateChange = 0;
     m_prevTileScanline.clear();
     m_kiwiSdrFftTrace.clear();
+    m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrLastWaterfallBins.clear();
     m_kiwiSdrLastWaterfallCenterMhz = 0.0;
     m_kiwiSdrLastWaterfallBandwidthMhz = 0.0;
@@ -3692,6 +3704,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.rowsSinceRateChange = m_wfRowsSinceRateChange;
     updated.prevTileScanline = std::move(m_prevTileScanline);
     updated.kiwiFftTrace = std::move(m_kiwiSdrFftTrace);
+    updated.kiwiFftFallbackSeedMask = std::move(m_kiwiSdrFftFallbackSeedMask);
     updated.kiwiLastWaterfallBins = std::move(m_kiwiSdrLastWaterfallBins);
     updated.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
     updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
@@ -3754,6 +3767,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_wfRowsSinceRateChange = restored.rowsSinceRateChange;
     m_prevTileScanline = std::move(restored.prevTileScanline);
     m_kiwiSdrFftTrace = std::move(restored.kiwiFftTrace);
+    m_kiwiSdrFftFallbackSeedMask = std::move(restored.kiwiFftFallbackSeedMask);
     m_kiwiSdrLastWaterfallBins = std::move(restored.kiwiLastWaterfallBins);
     m_kiwiSdrLastWaterfallCenterMhz = restored.kiwiLastWaterfallCenterMhz;
     m_kiwiSdrLastWaterfallBandwidthMhz = restored.kiwiLastWaterfallBandwidthMhz;
@@ -4260,6 +4274,8 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         || !m_kiwiSdrFftTrace.isEmpty();
     if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
         m_resetFftSmoothingOnNextFrame = m_resetFftSmoothingOnNextFrame || hadSpectrum;
+        m_fftFallbackSeedMask.clear();
+        m_kiwiSdrFftFallbackSeedMask.clear();
         return hadSpectrum;
     }
 
@@ -4274,17 +4290,37 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         // frame. Keep the last trace visible until the next real FFT row instead
         // of flashing the line off for one frame.
         m_resetFftSmoothingOnNextFrame = m_resetFftSmoothingOnNextFrame || hadSpectrum;
+        m_fftFallbackSeedMask.clear();
+        m_kiwiSdrFftFallbackSeedMask.clear();
         return hadSpectrum;
     }
 
-    auto reprojectBins = [&](QVector<float>& bins, float fallback) {
+    auto reprojectBins = [&](QVector<float>& bins, float fallback,
+                             QVector<quint8>* fallbackSeedMask = nullptr,
+                             bool extendFallbackEdges = false) {
         const int binCount = bins.size();
         if (binCount <= 0) {
+            if (fallbackSeedMask) {
+                fallbackSeedMask->clear();
+            }
             return;
         }
 
+        QVector<quint8> oldFallbackSeedMask;
+        if (fallbackSeedMask) {
+            oldFallbackSeedMask = std::move(*fallbackSeedMask);
+        }
+        const bool hadFallbackSeedMask = oldFallbackSeedMask.size() == binCount;
+
         const QVector<float> oldBins = std::move(bins);
         QVector<float> reprojected(binCount, fallback);
+        QVector<quint8> reprojectedFallbackSeedMask;
+        if (fallbackSeedMask) {
+            reprojectedFallbackSeedMask = QVector<quint8>(binCount, quint8(1));
+        }
+
+        int firstProjected = -1;
+        int lastProjected = -1;
 
         for (int dst = 0; dst < binCount; ++dst) {
             const double dstFrac = (static_cast<double>(dst) + 0.5) / binCount;
@@ -4299,19 +4335,51 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
             if (srcLeft < 0 || srcRight >= binCount) {
                 const int src = std::clamp(static_cast<int>(std::round(srcPos)), 0, binCount - 1);
                 reprojected[dst] = oldBins[src];
+                if (fallbackSeedMask) {
+                    reprojectedFallbackSeedMask[dst] =
+                        hadFallbackSeedMask ? oldFallbackSeedMask[src] : quint8(0);
+                }
+                if (firstProjected < 0) {
+                    firstProjected = dst;
+                }
+                lastProjected = dst;
                 continue;
             }
 
             const float t = static_cast<float>(srcPos - srcLeft);
             reprojected[dst] = oldBins[srcLeft] * (1.0f - t) + oldBins[srcRight] * t;
+            if (fallbackSeedMask) {
+                reprojectedFallbackSeedMask[dst] =
+                    hadFallbackSeedMask
+                    ? quint8(oldFallbackSeedMask[srcLeft] || oldFallbackSeedMask[srcRight])
+                    : quint8(0);
+            }
+            if (firstProjected < 0) {
+                firstProjected = dst;
+            }
+            lastProjected = dst;
+        }
+
+        if (extendFallbackEdges && firstProjected >= 0) {
+            for (int dst = 0; dst < firstProjected; ++dst) {
+                reprojected[dst] = reprojected[firstProjected];
+            }
+            for (int dst = lastProjected + 1; dst < binCount; ++dst) {
+                reprojected[dst] = reprojected[lastProjected];
+            }
         }
 
         bins = std::move(reprojected);
+        if (fallbackSeedMask) {
+            *fallbackSeedMask = std::move(reprojectedFallbackSeedMask);
+        }
     };
 
     reprojectBins(m_bins, m_refLevel - m_dynamicRange);
-    reprojectBins(m_smoothed, m_refLevel - m_dynamicRange);
-    reprojectBins(m_kiwiSdrFftTrace, kKiwiSdrWaterfallMinDbm);
+    reprojectBins(m_smoothed, m_refLevel - m_dynamicRange,
+                  &m_fftFallbackSeedMask, true);
+    reprojectBins(m_kiwiSdrFftTrace, kKiwiSdrWaterfallMinDbm,
+                  &m_kiwiSdrFftFallbackSeedMask, true);
     return !m_bins.isEmpty() || !m_smoothed.isEmpty()
         || !m_kiwiSdrFftTrace.isEmpty();
 }
@@ -5030,11 +5098,22 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     if (m_resetFftSmoothingOnNextFrame) {
         m_smoothed = *spectrumBins;
         m_resetFftSmoothingOnNextFrame = false;
+        m_fftFallbackSeedMask.clear();
     } else if (m_smoothed.size() != spectrumBins->size()) {
         m_smoothed = *spectrumBins;
+        m_fftFallbackSeedMask.clear();
     } else {
-        for (int i = 0; i < spectrumBins->size(); ++i)
-            m_smoothed[i] = SMOOTH_ALPHA * (*spectrumBins)[i] + (1.0f - SMOOTH_ALPHA) * m_smoothed[i];
+        const bool seedFallbackBins =
+            m_fftFallbackSeedMask.size() == spectrumBins->size();
+        for (int i = 0; i < spectrumBins->size(); ++i) {
+            if (seedFallbackBins && m_fftFallbackSeedMask[i]) {
+                m_smoothed[i] = (*spectrumBins)[i];
+            } else {
+                m_smoothed[i] = SMOOTH_ALPHA * (*spectrumBins)[i]
+                    + (1.0f - SMOOTH_ALPHA) * m_smoothed[i];
+            }
+        }
+        m_fftFallbackSeedMask.clear();
     }
     m_bins = *spectrumBins;
 
@@ -5394,6 +5473,7 @@ void SpectrumWidget::clearKiwiSdrWaterfallRows()
     m_kiwiWaterfallState = WaterfallStreamState{};
     m_kiwiProfileWaterfallStates.clear();
     m_kiwiSdrFftTrace.clear();
+    m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrFftTraceFloorDbm = -1000.0f;
     m_kiwiSdrFftTraceFloorValid = false;
     if (m_kiwiSdrWaterfallActive) {
@@ -5432,17 +5512,42 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
 
     // Display-only spatial smoothing: m_smoothed is temporal, so it reduces
     // frame shimmer but leaves adjacent-bin stair steps intact.
+    //
+    // #3932/#3967: the 5-tap blend exists to melt the radio's RBW stair-steps
+    // when zoomed IN (bins repeat as plateaus once the span drops below the
+    // FFT's resolution). Applied unconditionally (#3836) it low-passes every
+    // trace — rounding off narrow carriers and defocusing the noise floor at
+    // wide spans ("out of focus", 26.6.5). Gate the blend on the measured
+    // plateau fraction so it only engages when stair-steps actually exist:
+    // zoomed-in plateaus (long equal runs, frac >~0.65) get the full blend,
+    // a busy wide span (frac <~0.35, adjacent noise bins rarely equal) gets
+    // none, and the ramp between avoids a visible mode flip while zooming.
+    int plateauPairs = 0;
+    for (int i = 1; i < srcCount; ++i) {
+        if (std::abs(bins[i] - bins[i - 1]) < 0.01f) {
+            ++plateauPairs;
+        }
+    }
+    const float plateauFrac =
+        static_cast<float>(plateauPairs) / static_cast<float>(srcCount - 1);
+    const float smoothBlend = kFftDisplaySpatialSmoothBlend
+        * std::clamp((plateauFrac - 0.35f) / 0.30f, 0.0f, 1.0f);
+
     QVector<float>& displayBins = m_fftDisplaySmoothScratch;
-    displayBins.resize(srcCount);
-    displayBins[0] = bins[0];
-    displayBins[srcCount - 1] = bins[srcCount - 1];
-    for (int i = 1; i < srcCount - 1; ++i) {
-        const float localSmooth = (i >= 2 && i + 2 < srcCount)
-            ? (bins[i - 2] + 4.0f * bins[i - 1] + 6.0f * bins[i]
-               + 4.0f * bins[i + 1] + bins[i + 2]) * 0.0625f
-            : (bins[i - 1] + 2.0f * bins[i] + bins[i + 1]) * 0.25f;
-        displayBins[i] = bins[i] * (1.0f - kFftDisplaySpatialSmoothBlend)
-            + localSmooth * kFftDisplaySpatialSmoothBlend;
+    if (smoothBlend <= 0.0f) {
+        displayBins = bins;
+    } else {
+        displayBins.resize(srcCount);
+        displayBins[0] = bins[0];
+        displayBins[srcCount - 1] = bins[srcCount - 1];
+        for (int i = 1; i < srcCount - 1; ++i) {
+            const float localSmooth = (i >= 2 && i + 2 < srcCount)
+                ? (bins[i - 2] + 4.0f * bins[i - 1] + 6.0f * bins[i]
+                   + 4.0f * bins[i + 1] + bins[i + 2]) * 0.0625f
+                : (bins[i - 1] + 2.0f * bins[i] + bins[i + 1]) * 0.25f;
+            displayBins[i] = bins[i] * (1.0f - smoothBlend)
+                + localSmooth * smoothBlend;
+        }
     }
 
     int dstCount = std::max(targetPoints, srcCount);
@@ -5553,6 +5658,8 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
         m_kiwiSdrLastWaterfallFrameValid = true;
     }
 
+    // Keep the trace/3DSS smoothing local to those consumers; the scrolling
+    // waterfall below uses decoded bins so narrow Kiwi carriers stay sharp.
     const QVector<float> smoothedBins = smoothKiwiSdrWaterfallBins(binsDbm);
     if (m_kiwiSdrWaterfallActive && rowHasUsableTraceCoverage) {
         // 3DSS rows must be in the visible panadapter frequency frame. Raw Kiwi
@@ -5572,13 +5679,51 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
         QVector<float> kiwiTrace = KiwiSdrTraceMath::mapRowToTrace(
             smoothedBins, destWidth, rowCenterMhz, rowBandwidthMhz,
             m_centerMhz, m_bandwidthMhz, kKiwiSdrWaterfallMinDbm);
+        const QVector<quint8> kiwiTraceCoverage =
+            KiwiSdrTraceMath::mapRowCoverageMask(
+                smoothedBins.size(), destWidth, rowCenterMhz, rowBandwidthMhz,
+                m_centerMhz, m_bandwidthMhz);
         stabilizeKiwiSdrFftTrace(kiwiTrace, rowCanDriveAutoLevel);
         if (m_kiwiSdrFftTrace.size() != kiwiTrace.size()) {
             m_kiwiSdrFftTrace = kiwiTrace;
+            m_kiwiSdrFftFallbackSeedMask.clear();
         } else {
+            const bool seedFallbackBins =
+                m_kiwiSdrFftFallbackSeedMask.size() == kiwiTrace.size();
+            const bool hasCoverageMask = kiwiTraceCoverage.size() == kiwiTrace.size();
+            QVector<quint8> nextFallbackSeedMask;
+            if (seedFallbackBins) {
+                nextFallbackSeedMask = m_kiwiSdrFftFallbackSeedMask;
+            }
             for (int i = 0; i < kiwiTrace.size(); ++i) {
-                m_kiwiSdrFftTrace[i] = SMOOTH_ALPHA * kiwiTrace[i]
-                    + (1.0f - SMOOTH_ALPHA) * m_kiwiSdrFftTrace[i];
+                const bool pendingFallback =
+                    seedFallbackBins && m_kiwiSdrFftFallbackSeedMask[i];
+                if (hasCoverageMask && !kiwiTraceCoverage[i] && pendingFallback) {
+                    continue;
+                }
+                if (pendingFallback) {
+                    m_kiwiSdrFftTrace[i] = kiwiTrace[i];
+                    nextFallbackSeedMask[i] = quint8(0);
+                } else {
+                    m_kiwiSdrFftTrace[i] = SMOOTH_ALPHA * kiwiTrace[i]
+                        + (1.0f - SMOOTH_ALPHA) * m_kiwiSdrFftTrace[i];
+                }
+            }
+            if (seedFallbackBins) {
+                bool hasPendingFallback = false;
+                for (quint8 pending : nextFallbackSeedMask) {
+                    if (pending) {
+                        hasPendingFallback = true;
+                        break;
+                    }
+                }
+                if (hasPendingFallback) {
+                    m_kiwiSdrFftFallbackSeedMask = std::move(nextFallbackSeedMask);
+                } else {
+                    m_kiwiSdrFftFallbackSeedMask.clear();
+                }
+            } else {
+                m_kiwiSdrFftFallbackSeedMask.clear();
             }
         }
         if (!m_kiwiSdrFftTrace.isEmpty()) {
@@ -5610,7 +5755,7 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             }
         }
     }
-    pushKiwiSdrWaterfallRow(smoothedBins, destWidth,
+    pushKiwiSdrWaterfallRow(binsDbm, destWidth,
                             rowCenterMhz, rowBandwidthMhz);
     if (visibleStream) {
         leanCappedUpdate();
@@ -8153,11 +8298,14 @@ void SpectrumWidget::initSpectrumPipeline()
     QRhi* r = rhi();
 
     // Column texture is (re)created at the spectrum viewport width in
-    // renderGpuFrame; only the fixed resources are built here. R32F is
-    // universal on the desktop backends; fall back to R16F (mandatory
-    // linear-filterable since GLES3) for anything that lacks it.
-    m_fftColFormat = r->isTextureFormatSupported(QRhiTexture::R32F)
-        ? QRhiTexture::R32F : QRhiTexture::R16F;
+    // renderGpuFrame; only the fixed resources are built here. The column is
+    // sampled with LINEAR filtering, so the format must be linearly
+    // *filterable*, not merely creatable — isTextureFormatSupported() cannot
+    // distinguish the two, and float32 filtering is optional on GLES (and on
+    // some older GL drivers). R16F is filterable on every QRhi backend and
+    // half precision is ample for the normalized 0..1 amplitude stored here
+    // (same conclusion as PR #3968). Use it unconditionally.
+    m_fftColFormat = QRhiTexture::R16F;
     m_fftScopeUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
                                  5 * 4 * sizeof(float));
     m_fftScopeUbo->create();

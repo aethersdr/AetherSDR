@@ -24,6 +24,16 @@ public:
     void setWaterfallId(const QString& id);
     QString clientHandle() const { return m_clientHandle; }
     void setClientHandle(const QString& h);
+    // #3977: true when this pan belongs to the given connection handle. The
+    // radio reassigns client_handle when another session reclaims the pan;
+    // callers gate outbound pan-set commands on this so a superseded session
+    // stops adjusting the new owner's display. Fails OPEN on unknown owner —
+    // safe only for gating our own commands.
+    bool ownedByClient(quint32 handle) const;
+    // Parsed owner (0 = radio never told us). Fail-CLOSED source for
+    // eviction evidence: only pans whose confirmed owner is us may count
+    // foreign writes against another client (#3977).
+    quint32 ownerHandle() const { return m_ownerHandle; }
 
     // Display state
     double centerMhz() const { return m_centerMhz; }
@@ -95,6 +105,7 @@ private:
     QString     m_panId;
     QString     m_waterfallId;
     QString     m_clientHandle;
+    quint32     m_ownerHandle{0};   // parsed m_clientHandle; 0 = unknown (#3977)
     double      m_centerMhz{14.1};
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};

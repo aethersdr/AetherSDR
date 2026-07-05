@@ -137,12 +137,16 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
+| | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
+| | [`get clients`](#get-clients) | Radio client roster + foreign-pan-write forensics (#3977). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
+| | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
+| | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
@@ -150,11 +154,13 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
+| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X-shaped). |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
 | | [`record <action>`](#record) | Drive the client QSO WAV recorder. |
 | **Identity** | [`station <name>`](#station) | Set this client's MultiFlex station name. |
+| **QRZ lookup** | [`qrz <action>`](#qrz) | Callsign-lookup status / cache probe / lookup / CW-spot simulation. |
 | **Transmit ⚠️** | [`key ptt on\|off` / `key mox`](#key) | Key/unkey via PTT / MOX. |
 | | [`cwx send <text> \| speed <wpm> \| stop`](#cwx) | Drive the CWX CW keyer. |
 | | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
@@ -204,6 +210,10 @@ Each `<node>`:
   "panIndex": 0,                           // SpectrumWidget only: pass to `grab pan`/`pan close`
   "noiseFloorDbm": -99.68,                 // SpectrumWidget only: measured floor (see `floors`)
   "displayFloorDbm": -99.17,               // SpectrumWidget only: display floor
+  "gaugeLabel": "71.3°C",                  // HGauge only: centred bar label (live overlay text)
+  "gaugeValue": 71.3,                      // HGauge only: current numeric value
+  "gaugeRange": { "min": 0, "max": 120, "redStart": 70, "yellowStart": 55 },  // HGauge only: scale + zones
+  "gaugeTicks": "0,30,55,70,90,120",       // HGauge only: comma-joined tick labels
   "sliceId": 0,                            // present on widgets tagged with a slice
   "keying": true,                          // present only on TX-keying controls (invoke refuses these)
   "actions": [ <action>, … ],              // QMenu only: popup actions and state
@@ -257,6 +267,16 @@ present.
   `"checked"`); `text` restores the identity.
 - `noiseFloorDbm` / `displayFloorDbm` — a `SpectrumWidget`'s live measured floors
   (the same values [`floors`](#floors) returns), for numeric floor assertions.
+- `gaugeLabel` / `gaugeValue` / `gaugeRange` / `gaugeTicks` — an `HGauge`'s
+  centred bar label, current numeric value, scale (`min`/`max`/`redStart`/`yellowStart`),
+  and tick labels. `HGauge` is a custom-painted widget with no `Q_OBJECT`, so it
+  otherwise serializes as a bare `QWidget` carrying only its `accessibleName`;
+  these fields make the horizontal bar gauges (PA temp / supply / fan on the
+  Radio Hardware applet, and the TX SWR / forward-power / ALC / mic / compression
+  meters) numerically assertable — e.g. proving the MtrApplet °C↔°F toggle
+  switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
+  (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
+  screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
 
 ### `grab`
 PNG capture of a single widget.
@@ -327,8 +347,8 @@ the no-op is an explicit, assertable signal.
 | `wheel` | any visible widget | one wheel notch: `-1` or `1` |
 | `setText` | `QLineEdit` | the text (side-effect-free — does **not** submit) |
 | `submit` | `QLineEdit` | optional text, then fires `returnPressed` (retune / login / send) |
-| `setCurrentText` | `QComboBox` | item text |
-| `setCurrentIndex` | `QComboBox` | integer index |
+| `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
+| `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
 | `selectRow` | `QAbstractItemView` (`QTableWidget`/`QTreeWidget`/`QListWidget`) | integer row index |
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
@@ -411,6 +431,9 @@ connects).
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
+| `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
+| `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
+| `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
@@ -449,6 +472,46 @@ cost a few integer adds per frame.
 `reset` zeroes the counters after the read so successive reads measure
 disjoint intervals: `get panstats 0 reset`.
 
+### `get clients`
+Multi-session forensics (#3977/#3951): every client connected to the radio,
+which of them have written **our** pans' dBm range, and which stale
+predecessor sessions this client has evicted. `get pans` shows the symptom
+(`minDbm` drifting between polls); this shows the culprit. Pan snapshots
+(`get pan`/`pans`) also carry `clientHandle` + `ownedByUs` for ownership
+assertions.
+
+```json
+→ {"cmd":"get","model":"clients"}
+← {"ok":true,"model":"clients","evictionEnabled":false,
+   "ourHandle":"0x443a5d3c","station":"Shack",
+   "clients":[
+     {"handle":"0x443a5d3c","station":"Shack","program":"AetherSDR","source":"","isUs":true},
+     {"handle":"0x42ffe1c4","station":"Shack","program":"AetherSDR","source":"","isUs":false}],
+   "foreignPanWrites":[
+     {"handle":"0x42ffe1c4","dbmWrites":3,"lastPanId":"0x40000000",
+      "lastMs":1783125692000,"evicted":true}],
+   "evictedHandles":["0x42ffe1c4"]}
+```
+
+| field | meaning |
+|---|---|
+| `clients` | radio's client roster (from `sub client all`): handle, station, program, `isUs` |
+| `foreignPanWrites` | per-handle tally of `min_dbm`/`max_dbm` status writes some OTHER client made against a pan whose radio-confirmed owner is us — the #3951 zombie signature |
+| `evictedHandles` | stale same-station/same-program sessions whose `client disconnect` the radio **acknowledged** (confirmed, not merely attempted), via pan-reclaim or the 3-strike foreign-write rule |
+| `evictionEnabled` | whether the 3-strike eviction may act. **Off by default** — detection and forensics always run; the force-disconnect requires `AppSettings["StaleSessionDefense"]` = `{"EvictionEnabled": true}`. The pan-reclaim eviction (scoped to our own pre-reconnect handle) is always active |
+
+Counters and eviction marks are per-connection: they reset on disconnect,
+because the radio recycles handle values across sessions.
+
+Test recipe for session-fight classes of bugs: connect a second client to the
+same pan (or replay `display pan set … min_dbm=…` from a raw TCP session —
+see `tools/zombie_session_sim.py`), then assert `foreignPanWrites`
+increments. With `EvictionEnabled` true and the offender's station+program
+matching ours (it must be a **GUI** client to appear in the roster — a
+`--bind-client-id` non-GUI zombie is tallied and logged but never evicted),
+`evicted` flips true once the radio acknowledges the disconnect and the
+offender's connection drops.
+
 ### `get dsp`
 Client-side **AetherDSP** noise-reduction state — the counterpart to the
 radio-side `nr`/`nb`/`anf` in `get slice`. There is no widget that exposes which
@@ -484,6 +547,36 @@ only non-screenshot way to assert it.
   NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
   #3902 — no container, so it exposes only `intensity`.)
 - A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`.
+
+### `get wavestats`
+Per-scope paint/append counters from every `WaveformWidget` instance — the
+sidebar WAVE applet (`waveAppletScope`) plus the Aetherial strip's TX/RX
+waveform panels (`stripWaveformScope`). This is the no-profiler way to prove a
+rendering-cost change: `paintMsPerSec` is the main-thread paint budget the
+scope actually consumed, in milliseconds per wall-clock second.
+
+```json
+→ {"cmd":"get","model":"wavestats"}
+← {"ok":true,"model":"wavestats","scopes":[{
+   "name":"waveAppletScope","windowTitle":"AetherSDR","windowClass":"AetherSDR::MainWindow",
+   "floating":false,"visible":true,"tx":false,"paused":false,
+   "mode":"Scope","fps":60,"windowMs":1000,"sampleRate":48000,
+   "widthPx":244,"heightPx":110,"sinceMs":40012,
+   "paintCount":2381,"paintsPerSec":59.5,"avgPaintUs":312.4,"maxPaintUs":1893,
+   "paintMsPerSec":18.6,"appendsPerSec":124.9,"samplesPerSec":47980.1}]}
+```
+
+- `paintMsPerSec` — `avgPaintUs × paintsPerSec / 1000`; the headline number.
+- `mode` uses the applet's UI names: `Scope` / `Envelope` / `History` / `Bands`.
+- `floating` + `windowClass` — which top-level surface hosts the scope
+  (`MainWindow` docked, `FloatingContainerWindow` popped out, or the strip).
+- Counters accumulate from app start; a selector narrows to one scope
+  (`get wavestats waveAppletScope`) and the pseudo-property `reset` zeroes
+  the counters after the read (`get wavestats "" reset`) so successive reads
+  measure disjoint intervals.
+- Hidden scopes keep counting appends (the data feed stays live) but never
+  paint — `paintsPerSec` 0 with a nonzero `appendsPerSec` is the expected
+  hidden-widget signature, not a bug.
 
 ### `tune`
 Set the **active slice's** frequency in MHz — the most fundamental control the
@@ -586,6 +679,30 @@ one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
 — note each `HGauge` owns its own popup, so with several meters hovered the name
 resolves to the first-created one; hover a single meter per instance for an
 unambiguous grab.
+
+### `scrollTo` (alias `ensureVisible`)
+Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the
+viewport. Widgets parked below the fold of a scroll area receive **no paint
+events at all** until scrolled into view (macOS clips paint delivery to the
+exposed area), so a driver must bring them on screen before measuring,
+hovering, or grabbing live content — e.g. the Aetherial strip's waveform
+panel at the bottom of the strip's scroll column.
+
+```json
+→ {"cmd":"scrollTo","target":"stripWaveformScope"}
+← {"ok":true,"target":"stripWaveformScope","class":"WaveformWidget",
+   "scrollArea":"QScrollArea","vScroll":812,"hScroll":0,"inViewport":true}
+```
+
+`vScroll`/`hScroll` echo the resulting scrollbar positions and `inViewport`
+confirms the widget's rect now intersects the viewport — assert on it before
+trusting a follow-up measurement.
+
+Related targeting change: when several widgets match a class, accessibleName,
+or objectName target, resolution now prefers a **visible** match (every scroll
+area owns hidden `QScrollBar`s next to the visible one; the strip owns a
+hidden TX scope next to the visible RX one). Hidden widgets remain addressable
+when they're the only match, so hidden-container grabs keep working.
 
 ### `showMenu` (alias `openMenu`)
 Pop a `QToolButton`/`QPushButton` drop-down menu. The show is posted onto the GUI
@@ -848,6 +965,55 @@ toggle — it does **not** key the transmitter.
 Accepts `on`/`off` (also `1`/`0`, `true`/`false`, `enable`/`disable`). The radio
 echoes the change asynchronously — re-read with `get transmit showTxInWaterfall`.
 
+### `get dax`
+Read the centralized DAX RX channel-ownership table (#3305): which consumers
+(`bridge` / `tci` / `rade`) hold each channel, the radio-side stream id, and
+whether a `stream create` is in flight — plus each slice's `dax=` assignment.
+This is the assertion surface for DAX/TCI lifecycle tests: storm regressions
+(#4009), co-hold survival across a bridge or TCI teardown (#3363), and
+grace-window stream removal, all without log-grepping.
+
+```json
+→ {"cmd":"get","model":"dax"}
+← {"ok":true,"model":"dax",
+   "channels":[{"channel":1,"streamId":"0x4000008","createPending":false,
+                "holders":["bridge","tci"]}],
+   "slices":[{"sliceId":0,"daxChannel":1}]}
+```
+
+Semantics to assert against: a channel with holders and `streamId=0x0` +
+`createPending=true` is mid-create; a channel with a stream and **no** holders
+is inside the 1.5 s removal grace window (it disappears once the removal
+lands); a channel entry that persists with holders across a consumer teardown
+proves the co-hold path.
+
+### `tci`
+In-process TCI **client** simulator. Connects to this app's own TCI server
+over loopback and speaks the WSJT-X dialect: drain the init burst until
+`ready;`, then send `audio_samplerate:48000;` + `audio_start:0;`, then count
+the binary audio frames the server pushes. Removes the external-WebSocket
+dependency for TCI/DAX lifecycle testing. Requires the TCI server to be
+running (toggle via `invoke tciEnable click` if needed).
+
+```json
+→ {"cmd":"tci","action":"start"}            // optional value = port
+← {"ok":true,"action":"start","port":50001} // default = the TciPort setting (50001 unless changed)
+
+→ {"cmd":"tci","action":"status"}
+← {"ok":true,"running":true,"connected":true,"ready":true,"audioStarted":true,
+   "binaryFrames":412,"binaryBytes":1687552,"textMessages":37,"msSinceLastFrame":18}
+
+→ {"cmd":"tci","action":"stop","value":"abrupt"}   // omit value for graceful audio_stop + close
+← {"ok":true,"action":"stop","abrupt":true,"binaryFrames":412, …}
+```
+
+`stop abrupt` closes the socket without `audio_stop` — the WSJT-X
+watchdog-reconnect shape — so a test can assert the server's debounced DAX
+release and the manager's grace-window `stream remove` (watch with `get dax`).
+`binaryFrames` climbing at a steady rate (~47/s at 48 kHz) is the "audio is
+actually flowing" assertion; `msSinceLastFrame` spiking while `audioStarted`
+is true means the stream went silent.
+
 ### `get sync`
 Read the Receive Sync state used by the spectrum overlay and Auto Assist
 (`sync`, alias `receiveSync`).
@@ -998,6 +1164,43 @@ is persisted on the front panel.
 Must be a single token (no spaces) and requires a connected radio. The agent name
 is applied automatically on connect and the user's real name is restored when the
 bridge stops.
+
+### `qrz`
+QRZ.com callsign-lookup subsystem (CW decoder contact card + View → Callsign
+Lookup). Four actions; none touch the radio and none key TX.
+
+```json
+→ {"cmd":"qrz","action":"status"}
+← {"ok":true,"enabled":true,"hasCredentials":true,"cacheEntries":42,
+   "hasOwnLocation":true}
+
+→ {"cmd":"qrz","action":"cached","value":"KI6BCJ"}
+← {"ok":true,"found":true,"entry":{"call":"KI6BCJ","nameFmt":"…","grid":"CM97",
+   "stale":false,"photoPath":"/…/qrz-photos/KI6BCJ.jpg", …}}
+
+→ {"cmd":"qrz","action":"lookup","value":"W1AW"}
+← {"ok":true,"queued":true,"call":"W1AW","note":"async — poll `qrz cached W1AW`…"}
+
+→ {"cmd":"qrz","action":"spottext","value":"CQ CQ DE KI6BCJ KI6BCJ K"}
+← {"ok":true,"fed":"CQ CQ DE KI6BCJ KI6BCJ K"}
+```
+
+- `status` — enable flag, credential presence, lookup-cache entry count, and
+  whether an own position (radio GPS/grid, or the operator's own QRZ record)
+  is available for card distance/bearing.
+- `cached <call>` — cache probe; returns the entry (plus `stale`, 7-day TTL,
+  and `photoPath` when a photo is cached) or `found:false`. Never hits the
+  network — safe to poll after `lookup`.
+- `lookup <call>` — queue a real lookup through the service (cache-first;
+  network only on miss/stale). Async: poll `qrz cached <call>` for arrival.
+- `spottext <text>` — feed text into the **CW callsign spotter** as if the CW
+  decoder produced it. Drives the real detection path ("DE <call> <call>" →
+  service → contact card on the CW decode panel), so an agent can prove the
+  end-to-end screen-pop with no radio, no live CW, and — with a seeded cache —
+  no QRZ account. Verify with `grab callsignCard` / `dumpTree`.
+
+Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
+`qrz spottext CQ CQ DE KI6BCJ KI6BCJ K`.
 
 ---
 

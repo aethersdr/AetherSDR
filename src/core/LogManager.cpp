@@ -42,6 +42,7 @@ Q_LOGGING_CATEGORY(lcWaveform,   "aether.waveform",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcKiwiSdr,    "aether.kiwisdr",     QtDebugMsg)
 Q_LOGGING_CATEGORY(lcKiwiSdrAudio, "aether.kiwisdr.audio", QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAutomation, "aether.automation",  QtInfoMsg)
+Q_LOGGING_CATEGORY(lcQrz,        "aether.qrz",         QtWarningMsg)
 
 LogManager::LogManager()
 {
@@ -76,6 +77,7 @@ LogManager::LogManager()
         {"aether.kiwisdr",    "KiwiSDR",     "KiwiSDR remote RX antennas: connect, handshake, audio/waterfall negotiation, reconnect, profile lifecycle"},
         {"aether.kiwisdr.audio", "KiwiSDR Audio/DSP", "Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default)"},
         {"aether.automation", "Automation Bridge", "Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER_AUTOMATION only)"},
+        {"aether.qrz",        "QRZ Lookup",   "QRZ.com callsign lookups: session, cache, CW callsign spotting, photos"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.

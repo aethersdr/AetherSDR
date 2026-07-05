@@ -54,6 +54,10 @@ public:
     int  qsoCount()    const { return m_workedStatus.totalQsos(); }
     int  entityCount() const { return m_workedStatus.entityCount(); }
 
+    // The loaded cty.dat parser — shared with CallsignLookupService for
+    // prefix-fallback contact cards so cty.dat is parsed exactly once.
+    const CtyDatParser* ctyParser() const { return &m_ctyParser; }
+
     // Configurable colors (loaded/saved via AppSettings externally)
     QColor colorNewDxcc{0xFF, 0x30, 0x30};   // bright red
     QColor colorNewBand{0xFF, 0x8C, 0x00};   // orange

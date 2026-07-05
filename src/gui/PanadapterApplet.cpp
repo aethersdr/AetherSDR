@@ -1,4 +1,5 @@
 #include "PanadapterApplet.h"
+#include "CallsignCard.h"
 #include "CwDecodeSettings.h"
 #include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
@@ -298,7 +299,25 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         menu->exec(m_cwText->mapToGlobal(pos));
         delete menu;
     });
-    cwLayout->addWidget(m_cwText);
+    // Decoded text + contact card side by side.  The card stays hidden
+    // until the QRZ wiring spots a station identifying itself in the RX
+    // stream ("DE <call> <call>") and fills it with the lookup result.
+    auto* cwTextRow = new QHBoxLayout;
+    cwTextRow->setContentsMargins(0, 0, 0, 0);
+    cwTextRow->setSpacing(4);
+    cwTextRow->addWidget(m_cwText, 1);
+    m_cwCallsignCard = new CallsignCard(CallsignCard::Variant::Compact, m_cwPanel);
+    m_cwCallsignCard->setCloseButtonVisible(true);
+    m_cwCallsignCard->setMinimumWidth(240);
+    m_cwCallsignCard->setMaximumWidth(320);
+    // Cap the height so the card stays card-shaped (not a full-height
+    // sidebar) when the operator drags the decode panel tall.
+    m_cwCallsignCard->setMaximumHeight(120);
+    m_cwCallsignCard->setVisible(false);
+    connect(m_cwCallsignCard, &CallsignCard::closeRequested,
+            m_cwCallsignCard, &QWidget::hide);
+    cwTextRow->addWidget(m_cwCallsignCard, 0, Qt::AlignTop);
+    cwLayout->addLayout(cwTextRow);
 
     m_cwPanel->hide();
     layout->addWidget(m_cwPanel);
@@ -638,6 +657,8 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     m_cwText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
         .arg(color, clean.toHtmlEscaped()));
     m_cwText->moveCursor(QTextCursor::End);
+
+    emit cwRxTextDisplayed(clean);
 }
 
 void PanadapterApplet::appendCwTextTx(const QString& text, float cost)

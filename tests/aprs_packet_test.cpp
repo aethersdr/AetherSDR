@@ -267,6 +267,27 @@ static void testGeoHelpers()
           "symbol description");
 }
 
+static void testParseGpsCoordinate()
+{
+    double v = 0.0;
+    // FLEX-6700 GPSDO wire format, from a live "gps" status capture.
+    CHECK(aprs::parseGpsCoordinate(QStringLiteral("N 33 33.484"), v)
+              && near(v, 33.558067, 1e-5), "GPSDO latitude");
+    CHECK(aprs::parseGpsCoordinate(QStringLiteral("W 112 16.050"), v)
+              && near(v, -112.2675, 1e-5), "GPSDO longitude");
+    CHECK(aprs::parseGpsCoordinate(QStringLiteral("s 12 30.0"), v)
+              && near(v, -12.5, 1e-9), "lowercase south hemisphere");
+    CHECK(aprs::parseGpsCoordinate(QStringLiteral("33.5581"), v)
+              && near(v, 33.5581, 1e-9), "decimal degrees pass through");
+    CHECK(aprs::parseGpsCoordinate(QStringLiteral("-112.2675"), v)
+              && near(v, -112.2675, 1e-9), "negative decimal degrees");
+    CHECK(!aprs::parseGpsCoordinate(QString(), v), "empty rejected");
+    CHECK(!aprs::parseGpsCoordinate(QStringLiteral("Locked"), v),
+          "non-coordinate text rejected");
+    CHECK(!aprs::parseGpsCoordinate(QStringLiteral("N 33 65.0"), v),
+          "minutes >= 60 rejected");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -279,6 +300,7 @@ int main(int argc, char** argv)
     testWeather();
     testEncoders();
     testGeoHelpers();
+    testParseGpsCoordinate();
     if (g_failures) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
         return 1;

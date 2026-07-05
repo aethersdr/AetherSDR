@@ -6,6 +6,8 @@
 #include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
 #include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
+#include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
+#include "CallsignUtils.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
 
@@ -17,6 +19,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QTabBar>
 #include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -59,6 +62,12 @@
 #include <QToolButton>   // doShowMenu: QToolButton::menu()
 #include <QWidgetAction>  // describeAction: header rows (disabled QWidgetAction + QLabel)
 #include <QContextMenuEvent>  // doContextMenu: synthesize a right-click menu trigger
+#ifdef HAVE_WEBSOCKETS
+#include <QWebSocket>         // doTci: in-process TCI client simulator (#3305)
+#endif
+
+#include <QScrollArea>   // doScrollTo: ensureWidgetVisible on the ancestor
+#include <QScrollBar>    // doScrollTo: echo the resulting scrollbar positions
 
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -355,6 +364,26 @@ QJsonObject describeWidget(const QWidget* w)
         }
     }
 
+    // Surface an HGauge's label/value/scale when the widget publishes them as
+    // dynamic properties (custom-painted, no Q_OBJECT, so read generically via
+    // the meta-object — same decoupled pattern as noiseFloorDbm above). Lets a
+    // driver assert the MtrApplet °C/°F range switch and the live numeric
+    // overlays (PA Temp, fan RPM) numerically, not by pixel-reading (#3886).
+    {
+        const QVariant gl = w->property("gaugeLabel");
+        if (gl.isValid()) {
+            o[QStringLiteral("gaugeLabel")] = gl.toString();
+            o[QStringLiteral("gaugeValue")] = w->property("gaugeValue").toDouble();
+            QJsonObject range;
+            range[QStringLiteral("min")] = w->property("gaugeMin").toDouble();
+            range[QStringLiteral("max")] = w->property("gaugeMax").toDouble();
+            range[QStringLiteral("redStart")] = w->property("gaugeRedStart").toDouble();
+            range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
+            o[QStringLiteral("gaugeRange")] = range;
+            o[QStringLiteral("gaugeTicks")] = w->property("gaugeTicks").toString();
+        }
+    }
+
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {
@@ -381,22 +410,38 @@ QJsonObject describeWidget(const QWidget* w)
 }
 
 // Depth-first match by class name (full or short) or accessibleName.
-QWidget* matchRecursive(QWidget* w, const QString& target)
+// Prefers a VISIBLE match: class/accessibleName targets are often shared by
+// several instances where only one is on screen (e.g. every scroll area owns
+// hidden QScrollBars alongside the visible one), and drivers almost always
+// mean the visible control. Falls back to the first hidden match so hidden
+// widgets stay addressable (grab of a hidden container is a supported flow).
+QWidget* matchRecursiveImpl(QWidget* w, const QString& target, QWidget** firstAny)
 {
     const QString fullClass = QString::fromUtf8(w->metaObject()->className());
     if (fullClass == target
         || shortClassName(w) == target
         || w->accessibleName() == target) {
-        return w;
+        if (w->isVisible())
+            return w;
+        if (!*firstAny)
+            *firstAny = w;
     }
     const QObjectList children = w->children();
     for (QObject* child : children) {
         if (auto* cw = qobject_cast<QWidget*>(child)) {
-            if (QWidget* m = matchRecursive(cw, target))
+            if (QWidget* m = matchRecursiveImpl(cw, target, firstAny))
                 return m;
         }
     }
     return nullptr;
+}
+
+QWidget* matchRecursive(QWidget* w, const QString& target)
+{
+    QWidget* firstAny = nullptr;
+    if (QWidget* visible = matchRecursiveImpl(w, target, &firstAny))
+        return visible;
+    return firstAny;
 }
 
 // Last-resort match by a button's visible text — agents often know a control
@@ -1044,10 +1089,17 @@ QJsonObject sliceSnapshot(const SliceModel* s)
     };
 }
 
-QJsonObject panSnapshot(const PanadapterModel* p)
+QJsonObject panSnapshot(const PanadapterModel* p, quint32 ourHandle)
 {
     return QJsonObject{
         {QStringLiteral("panId"),        p->panId()},
+        // #3977: radio-authoritative owner of this pan; assertions on
+        // multi-session tests key off these two fields. Empty string (not
+        // "0x") when the radio has not yet attributed the pan.
+        {QStringLiteral("clientHandle"),
+         p->clientHandle().isEmpty() ? QString()
+                                     : QStringLiteral("0x") + p->clientHandle()},
+        {QStringLiteral("ownedByUs"),    p->ownedByClient(ourHandle)},
         {QStringLiteral("centerMhz"),    p->centerMhz()},
         {QStringLiteral("bandwidthMhz"), p->bandwidthMhz()},
         {QStringLiteral("minDbm"),       p->minDbm()},
@@ -1800,6 +1852,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("qrz")) {
+            action = tok(1);  // status | cached | lookup | spottext
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // callsign, or free-form CW text
         } else if (cmd == QLatin1String("streams")) {
             action = tok(1);  // "" (Layer A UDP-orphan) | "radio" (Layer B) | "reset"
         } else if (cmd == QLatin1String("audioCapture")) {
@@ -1887,6 +1944,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("hover requires a target widget"));
         return doHover(target, action);
     }
+    if (cmd == QLatin1String("scrollTo") || cmd == QLatin1String("ensureVisible")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("scrollTo requires a target widget"));
+        return doScrollTo(target);
+    }
     if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
         if (target.isEmpty())
             return err(QStringLiteral("drag requires a target and '<dx> <dy>'"));
@@ -1954,6 +2016,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("streams"))
         return doStreams(action);
+    if (cmd == QLatin1String("tci")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("tci requires an action (start [port] | status | stop [abrupt])"));
+        return doTci(action, value);
+    }
     if (cmd == QLatin1String("audioCapture"))
         return doAudioCapture(action.isEmpty() ? QStringLiteral("status") : action,
                               value, path);
@@ -2000,6 +2067,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("mark requires annotation text"));
         return doMark(value);
     }
+    if (cmd == QLatin1String("qrz"))
+        return doQrz(action.isEmpty() ? QStringLiteral("status") : action, value);
 
     return err(QStringLiteral("unknown command: ") + cmd);
 }
@@ -2209,13 +2278,22 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
         }
     }
 
-    // 1. Exact objectName (cheap, unambiguous).
+    // 1. Exact objectName (cheap; visible instance preferred when several
+    //    widgets share a name, e.g. the strip's TX and RX waveform scopes).
+    QWidget* namedHidden = nullptr;
     for (QWidget* tlw : tops) {
         if (tlw->objectName() == target)
             return tlw;
-        if (QWidget* c = tlw->findChild<QWidget*>(target))
-            return c;
+        const QList<QWidget*> named = tlw->findChildren<QWidget*>(target);
+        for (QWidget* c : named) {
+            if (c->isVisible())
+                return c;
+            if (!namedHidden)
+                namedHidden = c;
+        }
     }
+    if (namedHidden)
+        return namedHidden;
     // 2. Class name or accessibleName (e.g. "SpectrumWidget" for the panadapter).
     for (QWidget* tlw : tops) {
         if (QWidget* m = matchRecursive(tlw, target))
@@ -2462,8 +2540,22 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         }
     } else if (action == QLatin1String("setCurrentText")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
+        else if (auto* tb = qobject_cast<QTabBar*>(w)) {
+            // Select a tab by its label — the only way to reach deferred
+            // setup-dialog tabs (built on first selection) from the bridge.
+            for (int i = 0; i < tb->count(); ++i) {
+                if (tb->tabText(i).compare(value, Qt::CaseInsensitive) == 0) {
+                    tb->setCurrentIndex(i);
+                    done = true;
+                    break;
+                }
+            }
+            if (!done)
+                return err(QStringLiteral("no tab labeled '%1'").arg(value));
+        }
     } else if (action == QLatin1String("setCurrentIndex")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentIndex(value.toInt()); done = true; }
+        else if (auto* tb = qobject_cast<QTabBar*>(w)) { tb->setCurrentIndex(value.toInt()); done = true; }
     } else if (action == QLatin1String("selectRow")) {
         // Select a whole row in an item view (QTableWidget / QTreeWidget /
         // QListWidget / any QAbstractItemView) so the dialog's row-scoped
@@ -2609,6 +2701,99 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("dsp"), data}};
     }
+    if (model == QLatin1String("clients")) {
+        // #3977: the multi-session forensics snapshot — who is connected to
+        // the radio, which sessions have written OUR pans' dBm range, and
+        // which stale predecessors we have evicted. `get pans` shows the
+        // symptom (minDbm drifting); this shows the culprit.
+        RadioModel* radio = m_radioModel;
+        if (!radio) {
+            return err(QStringLiteral("no radio model available"));
+        }
+        QJsonArray clients;
+        const auto& infoMap = radio->clientInfoMap();
+        for (auto it = infoMap.cbegin(); it != infoMap.cend(); ++it) {
+            clients.append(QJsonObject{
+                {QStringLiteral("handle"),
+                 QStringLiteral("0x") + QString::number(it.key(), 16)},
+                {QStringLiteral("station"), it.value().station},
+                {QStringLiteral("program"), it.value().program},
+                {QStringLiteral("source"), it.value().source},
+                {QStringLiteral("isUs"), it.key() == radio->ourClientHandle()},
+            });
+        }
+        QJsonArray foreign;
+        const auto& writes = radio->foreignPanWrites();
+        for (auto it = writes.cbegin(); it != writes.cend(); ++it) {
+            foreign.append(QJsonObject{
+                {QStringLiteral("handle"),
+                 QStringLiteral("0x") + QString::number(it.key(), 16)},
+                {QStringLiteral("dbmWrites"), it.value().count},
+                {QStringLiteral("lastPanId"), it.value().panId},
+                {QStringLiteral("lastMs"), it.value().lastMs},
+                {QStringLiteral("evicted"),
+                 radio->evictedPredecessorHandles().contains(it.key())},
+            });
+        }
+        QJsonArray evicted;
+        for (quint32 h : radio->evictedPredecessorHandles()) {
+            evicted.append(QStringLiteral("0x") + QString::number(h, 16));
+        }
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("model"), model},
+            // evictedHandles lists radio-CONFIRMED disconnects only; eviction
+            // itself is opt-in (StaleSessionDefense.EvictionEnabled) — when
+            // false, strikes are tallied and logged but nothing is disconnected.
+            {QStringLiteral("evictionEnabled"), radio->staleSessionEvictionEnabled()},
+            {QStringLiteral("ourHandle"),
+             QStringLiteral("0x")
+                 + QString::number(radio->ourClientHandle(), 16)},
+            {QStringLiteral("station"),
+             [&] {  // radio-authoritative, falling back to the local intent
+                 const QString reported =
+                     infoMap.value(radio->ourClientHandle()).station;
+                 return reported.isEmpty() ? radio->ourStationName() : reported;
+             }()},
+            {QStringLiteral("clients"), clients},
+            {QStringLiteral("foreignPanWrites"), foreign},
+            {QStringLiteral("evictedHandles"), evicted}};
+    }
+    if (model == QLatin1String("dax")) {
+        // Centralized DAX RX channel-ownership snapshot (#3305): who holds
+        // which channel, the radio-side stream id, and whether a create is in
+        // flight — plus each slice's dax assignment. This is the direct
+        // assertion surface for DAX/TCI lifecycle tests (storm regression,
+        // co-hold survival, grace-window removal) that previously required
+        // log-grepping.
+        if (!m_radioModel)
+            return err(QStringLiteral("no radio model available"));
+        auto* ps = m_radioModel->panStream();
+        if (!ps)
+            return err(QStringLiteral("no panadapter stream available"));
+        QJsonArray channels;
+        for (const auto& c : ps->daxChannelSnapshot()) {
+            channels.append(QJsonObject{
+                {QStringLiteral("channel"),       c.channel},
+                {QStringLiteral("streamId"),      QStringLiteral("0x")
+                     + QString::number(c.streamId, 16)},
+                {QStringLiteral("createPending"), c.createPending},
+                {QStringLiteral("holders"),       QJsonArray::fromStringList(c.holders)},
+            });
+        }
+        QJsonArray sliceDax;
+        for (const SliceModel* s : m_radioModel->slices()) {
+            if (!s) continue;
+            sliceDax.append(QJsonObject{
+                {QStringLiteral("sliceId"),    s->sliceId()},
+                {QStringLiteral("daxChannel"), s->daxChannel()},
+            });
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("channels"), channels},
+                           {QStringLiteral("slices"), sliceDax}};
+    }
     if (model == QLatin1String("panstats")) {
         // Per-panadapter frame-cost counters from every SpectrumWidget, for
         // before/after rendering-cost proofs without a profiler attach.
@@ -2655,6 +2840,39 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
                            {QStringLiteral("pans"), pans}};
+    }
+    if (model == QLatin1String("wavestats")) {
+        // Per-scope paint/append counters from every WaveformWidget
+        // instance (sidebar WAVE applet + Aetherial strip panels), for
+        // before/after rendering-cost proofs without a profiler attach.
+        // selector filters by objectName ("waveAppletScope" /
+        // "stripWaveformScope"); property "reset" zeroes the counters
+        // after the read so successive reads measure disjoint intervals.
+        // GUI-header-free: found by class name, snapshotted via meta-call.
+        const bool reset = property == QLatin1String("reset");
+        QJsonArray scopes;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("WaveformWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w))
+                continue;
+            seen.insert(w);
+            if (!selector.isEmpty() && w->objectName() != selector)
+                continue;
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "wavestatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset)))
+                continue;
+            scopes.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("scopes"), scopes}};
     }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
@@ -2709,7 +2927,9 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slices"), arr}};
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
-        for (const PanadapterModel* p : radio->panadapters()) arr.append(panSnapshot(p));
+        for (const PanadapterModel* p : radio->panadapters()) {
+            arr.append(panSnapshot(p, radio->ourClientHandle()));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pans"), arr}};
     } else if (model == QLatin1String("slice")) {
         const SliceModel* s = nullptr;
@@ -2734,10 +2954,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             p = radio->panadapter(selector);   // by panId, e.g. "0x40000000"
         if (!p)
             return err(QStringLiteral("no panadapter for selector '") + selector + QStringLiteral("'"));
-        data = panSnapshot(p);
+        data = panSnapshot(p, radio->ourClientHandle());
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|kiwi)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {
@@ -3542,6 +3762,70 @@ QJsonObject AutomationServer::doStation(const QString& name)
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
 }
 
+// ── QRZ callsign lookup (#3646) ─────────────────────────────────────────────
+QJsonObject AutomationServer::doQrz(const QString& action, const QString& value)
+{
+    auto& svc = CallsignLookupService::instance();
+
+    if (action == QLatin1String("status")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("enabled"), svc.enabled()},
+            {QStringLiteral("hasCredentials"), svc.hasCredentials()},
+            {QStringLiteral("cacheEntries"), svc.cacheEntryCount()},
+            {QStringLiteral("hasOwnLocation"), svc.hasOwnLocation()},
+        };
+    }
+    if (action == QLatin1String("cached")) {
+        const QString call = Callsigns::normalized(value);
+        if (call.isEmpty())
+            return err(QStringLiteral("qrz cached requires a callsign"));
+        const CallsignInfo info = svc.cachedEntry(call);
+        if (!info.isValid())
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("found"), false},
+                               {QStringLiteral("call"), call}};
+        QJsonObject o = info.toJson();
+        o.insert(QStringLiteral("stale"),
+                 info.isOlderThan(CallsignLookupService::kCacheTtlSec));
+        o.insert(QStringLiteral("photoPath"), svc.photoPathFor(call));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("found"), true},
+                           {QStringLiteral("entry"), o}};
+    }
+    if (action == QLatin1String("lookup")) {
+        const QString call = Callsigns::normalized(value);
+        if (call.isEmpty())
+            return err(QStringLiteral("qrz lookup requires a callsign"));
+        // Shape-gate like the GUI dialog does: the bridge must not let an agent
+        // drive unbounded authenticated QRZ queries over arbitrary tokens (#3990).
+        if (!Callsigns::isLikelyCallsign(call))
+            return err(QStringLiteral("qrz lookup: '") + call
+                       + QStringLiteral("' is not a plausible callsign"));
+        svc.lookup(call);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("queued"), true},
+                           {QStringLiteral("call"), call},
+                           {QStringLiteral("note"),
+                            QStringLiteral("async — poll `qrz cached %1` for the result").arg(call)}};
+    }
+    if (action == QLatin1String("spottext")) {
+        if (value.trimmed().isEmpty())
+            return err(QStringLiteral("qrz spottext requires CW text, e.g. \"CQ CQ DE KI6BCJ KI6BCJ K\""));
+        QWidget* mw = topLevelWindowForTarget({});
+        QObject* spotter = mw ? mw->findChild<QObject*>(QStringLiteral("cwCallsignSpotter"))
+                              : nullptr;
+        if (!spotter)
+            return err(QStringLiteral("CW callsign spotter not found (main window not up yet?)"));
+        const bool ok = QMetaObject::invokeMethod(spotter, "feedText",
+                                                  Qt::DirectConnection,
+                                                  Q_ARG(QString, value));
+        return QJsonObject{{QStringLiteral("ok"), ok},
+                           {QStringLiteral("fed"), value}};
+    }
+    return err(QStringLiteral("qrz requires status|cached|lookup|spottext"));
+}
+
 // Resolve the top-level window a window-scoped verb acts on: the target's
 // window() when given, else the QMainWindow (or first visible real top-level).
 // Skips scroll-area viewports and popup QMenus so the main window wins. Shared by
@@ -3900,6 +4184,46 @@ QJsonObject AutomationServer::doHover(const QString& target, const QString& acti
     };
 }
 
+QJsonObject AutomationServer::doScrollTo(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+
+    QScrollArea* area = nullptr;
+    for (QWidget* p = w->parentWidget(); p; p = p->parentWidget()) {
+        if (auto* sa = qobject_cast<QScrollArea*>(p)) {
+            area = sa;
+            break;
+        }
+    }
+    if (!area)
+        return err(QStringLiteral("'") + target
+                   + QStringLiteral("' has no QScrollArea ancestor to scroll"));
+
+    area->ensureWidgetVisible(w);
+
+    // Round-trip confirmation: the scrollbar position that resulted and
+    // whether the widget's rect now intersects the viewport.
+    const int vValue = area->verticalScrollBar()
+        ? area->verticalScrollBar()->value() : 0;
+    const int hValue = area->horizontalScrollBar()
+        ? area->horizontalScrollBar()->value() : 0;
+    const QRect vp = area->viewport()->rect()
+        .translated(area->viewport()->mapToGlobal(QPoint(0, 0)));
+    const QRect wr = w->rect().translated(w->mapToGlobal(QPoint(0, 0)));
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("scrollArea"), shortClassName(area)},
+        {QStringLiteral("vScroll"), vValue},
+        {QStringLiteral("hScroll"), hValue},
+        {QStringLiteral("inViewport"), vp.intersects(wr)},
+    };
+}
+
 // ── Button drop-down popup (#3646 fidelity) ─────────────────────────────────
 // `showMenu <target>` pops a QToolButton/QPushButton drop-down menu. The show is
 // POSTED onto the GUI event loop (singleShot(0)) and the owning window is
@@ -4119,6 +4443,142 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 //                              with leaked waterfalls (parent pan gone) — catches
 //                              resource-level lingering that emits no UDP (#3843).
 // `streams reset` clears the Layer-A orphan tally to re-baseline a before/after.
+// `tci start [port] | status | stop [abrupt]` — in-process TCI client
+// simulator (#3305/#4009). Speaks the same WebSocket dialect as WSJT-X: drain
+// the init burst until `ready;`, then `audio_samplerate` + `audio_start`, then
+// count the binary audio frames the server pushes back. `stop abrupt` closes
+// the socket without `audio_stop` (the WSJT-X watchdog-reconnect shape) so
+// tests can assert the debounced release + grace-window stream removal.
+QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
+{
+#ifndef HAVE_WEBSOCKETS
+    Q_UNUSED(action);
+    Q_UNUSED(value);
+    return err(QStringLiteral("TCI is not built into this binary (HAVE_WEBSOCKETS off)"));
+#else
+    const auto status = [this]() {
+        QJsonObject o{{QStringLiteral("ok"), true},
+                      {QStringLiteral("running"), m_tciSim != nullptr}};
+        if (m_tciSim) {
+            o[QStringLiteral("connected")]    = m_tciSim->state() == QAbstractSocket::ConnectedState;
+            o[QStringLiteral("ready")]        = m_tciSimReady;
+            o[QStringLiteral("audioStarted")] = m_tciSimAudioStarted;
+        }
+        o[QStringLiteral("binaryFrames")] = m_tciSimBinaryFrames;
+        o[QStringLiteral("binaryBytes")]  = m_tciSimBinaryBytes;
+        o[QStringLiteral("textMessages")] = m_tciSimTextMsgs;
+        o[QStringLiteral("msSinceLastFrame")] =
+            (m_tciSimLastFrameMs >= 0 && m_tciSimTimer.isValid())
+                ? m_tciSimTimer.elapsed() - m_tciSimLastFrameMs : -1;
+        if (!m_tciSimCloseReason.isEmpty())
+            o[QStringLiteral("closeReason")] = m_tciSimCloseReason;
+        return o;
+    };
+
+    if (action == QLatin1String("status"))
+        return status();
+
+    if (action == QLatin1String("start")) {
+        if (m_tciSim)
+            return err(QStringLiteral("tci sim already running — `tci stop` first"));
+        bool okPort = false;
+        int port = value.trimmed().toInt(&okPort);
+        if (!okPort || port <= 0)
+            port = AppSettings::instance().value("TciPort", "50001").toInt();
+        m_tciSimReady = false;
+        m_tciSimAudioStarted = false;
+        m_tciSimBinaryFrames = 0;
+        m_tciSimBinaryBytes = 0;
+        m_tciSimTextMsgs = 0;
+        m_tciSimLastFrameMs = -1;
+        m_tciSimCloseReason.clear();
+        m_tciSimTimer.start();
+        m_tciSim = new QWebSocket(QStringLiteral("aether-automation-tci-sim"),
+                                  QWebSocketProtocol::VersionLatest, this);
+        connect(m_tciSim, &QWebSocket::textMessageReceived,
+                this, [this](const QString& msg) {
+            ++m_tciSimTextMsgs;
+            if (m_tciSimReady) return;
+            const QStringList cmds = msg.split(QLatin1Char(';'));
+            for (const QString& c : cmds) {
+                if (c.trimmed() == QLatin1String("ready")) {
+                    m_tciSimReady = true;
+                    m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:48000;"));
+                    m_tciSim->sendTextMessage(QStringLiteral("audio_start:0;"));
+                    m_tciSimAudioStarted = true;
+                    qCInfo(lcAutomation) << "tci sim: ready received — audio_start sent";
+                    break;
+                }
+            }
+        });
+        connect(m_tciSim, &QWebSocket::binaryMessageReceived,
+                this, [this](const QByteArray& b) {
+            ++m_tciSimBinaryFrames;
+            m_tciSimBinaryBytes += b.size();
+            m_tciSimLastFrameMs = m_tciSimTimer.elapsed();
+        });
+        connect(m_tciSim, &QWebSocket::disconnected, this, [this]() {
+            if (m_tciSimCloseReason.isEmpty())
+                m_tciSimCloseReason = QStringLiteral("server closed");
+            // Tear down so `tci status` reports running=false and a later
+            // `tci start` isn't rejected as "already running" after a
+            // server/radio-side close (PR #4017 review item 5). The stop path
+            // nulls m_tciSim before its own close lands — only reap here when
+            // the disconnect came from the socket we still track.
+            if (auto* sock = qobject_cast<QWebSocket*>(sender());
+                    sock && sock == m_tciSim) {
+                m_tciSim->deleteLater();
+                m_tciSim = nullptr;
+                m_tciSimReady = false;
+                m_tciSimAudioStarted = false;
+                qCInfo(lcAutomation) << "tci sim: torn down after server-side close"
+                                     << m_tciSimCloseReason;
+            }
+        });
+        m_tciSim->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+        qCInfo(lcAutomation) << "tci sim: connecting to ws://127.0.0.1:" << port;
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("action"), QStringLiteral("start")},
+                           {QStringLiteral("port"), port}};
+    }
+
+    if (action == QLatin1String("stop")) {
+        if (!m_tciSim)
+            return err(QStringLiteral("tci sim is not running"));
+        const bool abrupt = value.trimmed().compare(QLatin1String("abrupt"),
+                                                    Qt::CaseInsensitive) == 0;
+        QJsonObject o = status();
+        m_tciSimCloseReason = abrupt ? QStringLiteral("client abort (abrupt)")
+                                     : QStringLiteral("client stop");
+        // Null m_tciSim BEFORE abort()/close(). abort() emits QWebSocket::
+        // disconnected synchronously (same-thread direct delivery), re-entering
+        // the disconnected lambda; if m_tciSim were still set there it would
+        // deleteLater()+null it, and the deleteLater() below would then fire on
+        // a dangling pointer. Nulling first makes the lambda's sock==m_tciSim
+        // guard fail so it no-ops, and we own the teardown here (#4017).
+        QWebSocket* sim = m_tciSim;
+        const bool wasAudioStarted = m_tciSimAudioStarted;
+        m_tciSim = nullptr;
+        m_tciSimReady = false;
+        m_tciSimAudioStarted = false;
+        if (abrupt) {
+            sim->abort();
+        } else {
+            if (wasAudioStarted)
+                sim->sendTextMessage(QStringLiteral("audio_stop:0;"));
+            sim->close();
+        }
+        sim->deleteLater();
+        o[QStringLiteral("action")] = QStringLiteral("stop");
+        o[QStringLiteral("abrupt")] = abrupt;
+        qCInfo(lcAutomation) << "tci sim: stopped" << (abrupt ? "(abrupt)" : "(graceful)");
+        return o;
+    }
+
+    return err(QStringLiteral("tci requires an action (start [port] | status | stop [abrupt])"));
+#endif
+}
+
 QJsonObject AutomationServer::doStreams(const QString& action)
 {
     if (!m_radioModel)
