@@ -1255,9 +1255,16 @@ if(Qt6WebSockets_FOUND)
 endif()
 
 if(Qt6Keychain_FOUND)
-    # PUBLIC: gui setup tabs test HAVE_KEYCHAIN; the library links the backend.
+    # PUBLIC (both): gui setup tabs test HAVE_KEYCHAIN *and* MqttApplet.cpp /
+    # MqttSettingsDialog.cpp include <qt6keychain/keychain.h> directly, so the
+    # exe's gui TUs need the imported target's INTERFACE_INCLUDE_DIRECTORIES.
+    # A PRIVATE link on a static lib propagates only $<LINK_ONLY:...> — the
+    # include dir would be lost and the gui TU fails to find the header on any
+    # platform where qtkeychain is not on a default include path (e.g. the
+    # bundled third_party/qtkeychain on Windows). Matches Qt6::SerialPort /
+    # Qt6::WebSockets, which are PUBLIC for the same reason.
     target_compile_definitions(aethercore PUBLIC HAVE_KEYCHAIN)
-    target_link_libraries(aethercore PRIVATE Qt6Keychain::Qt6Keychain)
+    target_link_libraries(aethercore PUBLIC Qt6Keychain::Qt6Keychain)
     # Local Windows builds run straight from the build dir with no packaging
     # step — windeployqt, which stages qt6keychain.dll for the installer, isn't
     # involved — so the DLL needs to land next to the exe or the app fails to

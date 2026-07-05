@@ -18,6 +18,8 @@ class QWebSocket;
 #include <memory>
 #include <vector>
 
+#include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
+
 class QLocalServer;
 class QLocalSocket;
 class QWidget;
@@ -26,7 +28,6 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
-class IConnectionAutomation;
 class AudioEngine;
 class QsoRecorder;
 
@@ -212,7 +213,14 @@ public:
     // MainWindow/RadioModel connection flow. The engine holds only the
     // gui-free IConnectionAutomation interface (aetherd RFC step 1 / EB1
     // boundary); lifetime across deferred calls is guarded via asQObject().
-    void setConnectionAutomation(IConnectionAutomation* conn) { m_connection = conn; }
+    void setConnectionAutomation(IConnectionAutomation* conn)
+    {
+        m_connection = conn;
+        // Guard on the implementor's QObject so a destroyed panel reads back as
+        // null, preserving the old QPointer<ConnectionPanel> safety net (the
+        // raw interface pointer alone cannot auto-null). See connection().
+        m_connectionGuard = conn ? conn->asQObject() : nullptr;
+    }
     void setConnectionDialogHost(QObject* host) { m_connectionDialogHost = host; }
     void setSliceReceiveSourceHandler(
         std::function<QJsonObject(const QString&)> handler)
@@ -406,7 +414,15 @@ private:
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
     QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
     QPointer<QsoRecorder> m_qsoRecorder;          // for record(); may be null
-    IConnectionAutomation* m_connection = nullptr;  // connect/disconnect verbs; guard via asQObject()
+    IConnectionAutomation* m_connection = nullptr;  // connect/disconnect verbs
+    QPointer<QObject> m_connectionGuard;            // auto-nulls when the impl is destroyed
+    // Returns the connection hook only while its implementor is alive, so every
+    // synchronous use fails closed ("unavailable") after the panel is gone —
+    // exactly as the former QPointer<ConnectionPanel> member did.
+    IConnectionAutomation* connection() const
+    {
+        return m_connectionGuard ? m_connection : nullptr;
+    }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;

@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 128 touchpoint headers (105 core, 23 models) — 127/128 tagged, 0/128 converted.
+**Totals:** 140 touchpoint headers (117 core, 23 models) — 140/140 tagged, 0/140 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -48,7 +48,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/FreeDvClient.h` | 4 | universal — FreeDV Reporter spot client (qso.freedv.org); radio-agnostic spotting fed by canonical freq/TX + RADE SNR | unconverted |
 | `core/GpuSelector.h` | 2 | ui-support — GPU enumeration + persisted QRhi render-adapter choice applied at app startup; pure client rendering plumbing | unconverted |
 | `core/HidEncoderManager.h` | 2 | ui-support — USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state | unconverted |
-| `core/IConnectionAutomation.h` | 1 | — | unconverted |
+| `core/IConnectionAutomation.h` | 1 | ui-support — Gui-free connect/disconnect/dialog hook the automation bridge drives; bridge plumbing, not radio state. | unconverted |
 | `core/IambicKeyer.h` | 3 | universal — Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling. | unconverted |
 | `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
 | `core/KiwiSdrClient.h` | 2 | vendor(kiwi) — KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself | unconverted |
@@ -113,6 +113,18 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/WfmDemodulator.h` | 1 | mixed(flex) — WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source is DAX IQ + SmartSDR cmds (flex) | unconverted |
 | `core/WfmSettings.h` | 1 | ui-support — Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration. | unconverted |
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
+| `core/aprs/AprsBeacon.h` | 1 | universal — APRS position/status beacon composition; radio-agnostic packet operating feature. | unconverted |
+| `core/aprs/AprsMessenger.h` | 2 | universal — APRS messaging (send/ack/retry) over canonical TX path; radio-agnostic. | unconverted |
+| `core/aprs/AprsPacket.h` | 2 | universal — APRS/AX.25 packet parse+encode data types; radio-agnostic. | unconverted |
+| `core/aprs/AprsSettings.h` | 2 | ui-support — APRS client settings holder (callsign/SSID/paths); client-side settings, not radio state. | unconverted |
+| `core/aprs/AprsStationList.h` | 1 | universal — Heard-APRS-station model (calls/positions/last-heard); radio-agnostic spot-like data. | unconverted |
+| `core/pms/PmsMailbox.h` | 1 | universal — Packet personal-message-system mailbox store/logic; radio-agnostic operating feature. | unconverted |
+| `core/tnc/AetherAx25LibmodemShim.h` | 1 | universal — AX.25 modem shim bridging the client AFSK/libmodem demod to the TNC; radio-agnostic DSP glue. | unconverted |
+| `core/tnc/Ax25.h` | 1 | universal — AX.25 frame data types/constants; radio-agnostic protocol layer. | unconverted |
+| `core/tnc/Ax25FrameFormatter.h` | 1 | universal — AX.25 frame human-formatting; radio-agnostic. | unconverted |
+| `core/tnc/HeardList.h` | 1 | universal — Heard-station list for the packet monitor; radio-agnostic. | unconverted |
+| `core/tnc/KissTncServer.h` | 1 | ui-support — KISS-over-TCP server exposing the TNC to external apps; external integration, needs a home (cf CatPort/TciServer). | unconverted |
+| `core/tnc/TncTerminal.h` | 1 | universal — Packet terminal session model (command/monitor); radio-agnostic operating feature. | unconverted |
 | `models/AntennaGeniusModel.h` | 4 | vendor(flex) — 4O3A Antenna Genius switch client: UDP discovery + SmartSDR-like TCP protocol; Flex-ecosystem accessory | unconverted |
 | `models/BandDefs.h` | 4 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 7 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |

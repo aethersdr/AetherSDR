@@ -44,11 +44,9 @@ MANIFEST_MD = REPO / "docs" / "architecture" / "aetherd-touchpoints.md"
 TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.json"
 STATUS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-status.json"
 
-# Matches: #include "core/Foo.h" | "models/Foo.h" | "../core/Foo.h" | "Foo.h"
-INCLUDE_RE = re.compile(
-    r'^\s*#\s*include\s+"(?P<path>(?:\.\./)*(?:(?P<mod>core|models)/)?'
-    r'(?P<name>[A-Za-z0-9_]+\.h))"'
-)
+# Matches any quoted .h include; resolution (incl. core/models subdirs like
+# core/aprs/AprsPacket.h) happens in resolve_engine_header.
+INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"(?P<inc>[^"]+\.h)"')
 
 
 def ui_files():
@@ -61,18 +59,23 @@ def ui_files():
             )
 
 
-def resolve_engine_header(mod, name):
-    """Return (module, header-name) if the include resolves into the
-    engine, else None. Bare includes are resolved against core/ and
-    models/ only when no same-named gui header exists (gui files
-    include siblings by bare name)."""
-    if mod:
-        return (mod, name) if (ENGINE_DIRS[mod] / name).is_file() else None
-    if (REPO / "src" / "gui" / name).is_file():
+def resolve_engine_header(inc):
+    """Return (module, relpath) if an include resolves into the engine, else
+    None. Handles module-qualified paths WITH subdirectories
+    (core/aprs/AprsPacket.h -> ("core", "aprs/AprsPacket.h")) and bare-name
+    sibling includes (resolved against core/ and models/ only when no
+    same-named gui header exists — gui files include siblings by bare name)."""
+    p = re.sub(r"^(?:\.\./)+", "", inc)  # strip any leading ../
+    if p.startswith(("core/", "models/")):
+        mod, rest = p.split("/", 1)
+        return (mod, rest) if (ENGINE_DIRS[mod] / rest).is_file() else None
+    if "/" in p:  # a subdir path that isn't under core/ or models/
+        return None
+    if (REPO / "src" / "gui" / p).is_file():
         return None
     for m, d in ENGINE_DIRS.items():
-        if (d / name).is_file():
-            return (m, name)
+        if (d / p).is_file():
+            return (m, p)
     return None
 
 
@@ -89,7 +92,7 @@ def scan():
             m = INCLUDE_RE.match(line)
             if not m:
                 continue
-            hit = resolve_engine_header(m.group("mod"), m.group("name"))
+            hit = resolve_engine_header(m.group("inc"))
             if hit:
                 touchpoints.setdefault(hit, set()).add(rel)
     return {k: sorted(v) for k, v in sorted(touchpoints.items())}

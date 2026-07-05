@@ -3005,7 +3005,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         return err(QStringLiteral("connect dialog requires show|hide"));
     }
 
-    IConnectionAutomation* conn = m_connection;
+    IConnectionAutomation* conn = connection();
     if (!conn) {
         return err(QStringLiteral("connection panel unavailable"));
     }
@@ -3135,7 +3135,7 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
     }
 
     QObject* host = m_connectionDialogHost;
-    IConnectionAutomation* conn = m_connection;
+    IConnectionAutomation* conn = connection();
     if (!host && !conn) {
         return err(QStringLiteral("connection dialog unavailable"));
     }
@@ -3171,7 +3171,7 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
 
 QJsonObject AutomationServer::doDisconnect()
 {
-    IConnectionAutomation* conn = m_connection;
+    IConnectionAutomation* conn = connection();
     if (!conn) {
         return err(QStringLiteral("connection panel unavailable"));
     }

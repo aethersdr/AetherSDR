@@ -239,6 +239,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/IConnectionAutomation.h": {
+  "tag": "ui-support",
+  "note": "Gui-free connect/disconnect/dialog hook the automation bridge drives; bridge plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/IambicKeyer.h": {
   "tag": "universal",
   "note": "Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling.",
@@ -620,6 +626,78 @@
  "core/WsjtxClient.h": {
   "tag": "ui-support",
   "note": "UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/aprs/AprsBeacon.h": {
+  "tag": "universal",
+  "note": "APRS position/status beacon composition; radio-agnostic packet operating feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/aprs/AprsMessenger.h": {
+  "tag": "universal",
+  "note": "APRS messaging (send/ack/retry) over canonical TX path; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/aprs/AprsPacket.h": {
+  "tag": "universal",
+  "note": "APRS/AX.25 packet parse+encode data types; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/aprs/AprsSettings.h": {
+  "tag": "ui-support",
+  "note": "APRS client settings holder (callsign/SSID/paths); client-side settings, not radio state.",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/aprs/AprsStationList.h": {
+  "tag": "universal",
+  "note": "Heard-APRS-station model (calls/positions/last-heard); radio-agnostic spot-like data.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/pms/PmsMailbox.h": {
+  "tag": "universal",
+  "note": "Packet personal-message-system mailbox store/logic; radio-agnostic operating feature.",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/tnc/AetherAx25LibmodemShim.h": {
+  "tag": "universal",
+  "note": "AX.25 modem shim bridging the client AFSK/libmodem demod to the TNC; radio-agnostic DSP glue.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/Ax25.h": {
+  "tag": "universal",
+  "note": "AX.25 frame data types/constants; radio-agnostic protocol layer.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/Ax25FrameFormatter.h": {
+  "tag": "universal",
+  "note": "AX.25 frame human-formatting; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/HeardList.h": {
+  "tag": "universal",
+  "note": "Heard-station list for the packet monitor; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/tnc/KissTncServer.h": {
+  "tag": "ui-support",
+  "note": "KISS-over-TCP server exposing the TNC to external apps; external integration, needs a home (cf CatPort/TciServer).",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/tnc/TncTerminal.h": {
+  "tag": "universal",
+  "note": "Packet terminal session model (command/monitor); radio-agnostic operating feature.",
   "split": "",
   "confidence": "medium"
  },
