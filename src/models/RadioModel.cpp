@@ -2,6 +2,7 @@
 #include "AntennaAliasStore.h"
 #include "BandSettings.h"
 #include "core/CommandParser.h"
+#include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/LogManager.h"
@@ -475,6 +476,19 @@ RadioModel::RadioModel(QObject* parent)
     connect(m_panStream, &PanadapterStream::meterDataReady,
             &m_meterModel, &MeterModel::updateValues);
 
+    // aetherd RFC step 2.2: introduce the radio-facing seam (§5.5). The backend
+    // observes the connection lifecycle and carries the core-verb scaffold; it
+    // does not yet own the wire objects or sit on the command hot path, so this
+    // is purely additive / behavior-neutral. Constructed here so it is wired
+    // before any status arrives and torn down first in ~RadioModel.
+    {
+        auto flex = std::make_unique<FlexBackend>();
+        flex->attachConnection(m_connection);
+        flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
+        flex->setModelProvider([this]{ return m_model; });
+        m_backend = std::move(flex);
+    }
+
     // Forward tuner commands to the radio — route through tune inhibit check
     connect(&m_tunerModel, &TunerModel::commandReady, this, [this](const QString& cmd){
         if (cmd.startsWith("tgxl autotune")) {
@@ -632,6 +646,11 @@ RadioModel::RadioModel(QObject* parent)
 
 RadioModel::~RadioModel()
 {
+    // Destroy the backend first, while m_connection is still alive, so its
+    // observation of the connection's lifecycle signals tears down cleanly
+    // (FlexBackend is a QObject; ~QObject auto-disconnects). (aetherd 2.2)
+    m_backend.reset();
+
     // Disconnect all signals BEFORE member destruction to prevent
     // use-after-free (ASAN). (#502)
     QObject::disconnect(m_connection, nullptr, this, nullptr);

@@ -486,6 +486,7 @@ endif()
 
 # Sources
 set(CORE_SOURCES
+    src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp

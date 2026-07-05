@@ -65,7 +65,17 @@ or add an exemption.
 
 ---
 
-## Block 2 — land with RFC step 2 (`IRadioBackend` seam)
+## Block 2 — PARTIALLY LANDED with RFC step 2.2 (FlexBackend skeleton)
+
+> The In-flight status (2a) and the "where radio-facing code goes" routing
+> table (a trimmed 2b) landed in `AGENTS.md` with the 2.2 FlexBackend
+> skeleton, reconciled to the skeleton reality (FlexBackend exists but the
+> wire stack hasn't moved behind it yet). **Still pending, to land when 2.3
+> per-touchpoint conversions begin:** the touchpoint-claim protocol, the
+> before/after `verify_slice0_rx.py` verification recipe, and the
+> Autonomous Agent Boundaries carve-out (2c) that authorizes agents to
+> convert enumerated touchpoints — premature before the first conversion
+> proves the process. The blocks below are what remains for 2.3.
 
 ### 2a. In the "In-flight" subsection, replace the status sentence
 

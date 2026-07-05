@@ -34,11 +34,14 @@
 #include <QMap>
 #include <QSet>
 #include <functional>
+#include <memory>
 
 #include <QTimer>
 #include <QElapsedTimer>
 
 namespace AetherSDR {
+
+class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned by value below)
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection, processes incoming status messages,
@@ -663,6 +666,10 @@ private:
 
     RadioConnection*  m_connection{nullptr};
     QThread*          m_connThread{nullptr};
+    // aetherd RFC step 2.2: the radio-facing seam (§5.5). RadioModel owns the
+    // backend; in 2.2 it observes the connection lifecycle and carries the
+    // core-verb scaffold. Ownership of the wire objects moves into it later.
+    std::unique_ptr<IRadioBackend> m_backend;
     // Sequence counter and callback map — owned by RadioModel on main thread.
     // RadioConnection no longer manages callbacks. (#502)
     std::atomic<quint32> m_seqCounter{1};

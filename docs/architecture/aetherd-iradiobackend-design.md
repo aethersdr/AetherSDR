@@ -161,8 +161,20 @@ the interface has no implementor.
 - **2.1 — interface + capabilities (this PR):** `IRadioBackend.h` +
   `RadioCapabilities.h` land as a pure addition (header-only, AUTOMOC-listed,
   no implementor wired). Zero behavior change.
-- **2.2 — `FlexBackend` skeleton** delegating to the existing SmartSDR stack,
-  wired behind `RadioModel`. Next PR; AGENTS.md staging Block 2 lands with it
-  (the routing rules become actionable once a backend exists).
-- **2.3 — split the five `mixed` models** (5 PRs).
+- **2.2 — `FlexBackend` skeleton (this PR):** `FlexBackend` implements
+  `IRadioBackend`, is constructed/owned/torn-down by `RadioModel` in the real
+  connection lifecycle, and observes live wire lifecycle events (re-emitting
+  connected/disconnected/connectionError). The core verbs build the exact
+  SmartSDR strings into RadioModel's command sink (scaffold for 2.3). Purely
+  ADDITIVE: the wire objects and the command hot path are NOT rerouted, so
+  behavior is unchanged. AGENTS.md gets the "where backend code goes" routing
+  table.
+- **2.2b — move wire ownership behind the seam:** `FlexBackend` absorbs
+  `RadioConnection`/`PanadapterStream` + their worker threads and the #502
+  teardown ordering; `RadioModel::connection()`/`panStream()` delegate. The
+  single riskiest move (thread lifetime + slice-0 RX plane) — its own
+  harness-verified PR.
+- **2.3 — split the five `mixed` models** (5 PRs); AGENTS.md gains the
+  touchpoint-claim protocol + verification recipe + the autonomous-conversion
+  carve-out.
 - **2.4 — move the remaining vendor headers behind the seam.**

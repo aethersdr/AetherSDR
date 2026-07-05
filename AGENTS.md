@@ -233,9 +233,14 @@ The accepted RFC at
 (tracking issue #3849) splits this codebase into an engine library
 (`libaethercore`), a headless engine daemon (`aetherd`), and thin UI
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
-follows the RFC's §10 staged order; **step 1 (`libaethercore`) has
-landed** — the engine is a static library, the app is a shell that links
-it. Steps 2+ have not landed.
+follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
+step-2 seam have landed** — the engine is a static library, and
+`IRadioBackend` (`src/core/backends/`) with its first implementor
+`FlexBackend` (`src/core/backends/flex/`) exist. `FlexBackend` is a
+skeleton so far: RadioModel owns it and it observes the connection
+lifecycle, but the SmartSDR wire stack moves behind it incrementally
+(2.2b–2.4). The versioned protocol (step 3+) has not landed — UI code
+still consumes models directly, and that remains correct.
 
 **Build targets (post-RFC step 1):**
 
@@ -266,6 +271,21 @@ Boundaries above). One rule is already CI-enforced: the engine
 (`src/core/` + `src/models/`) must not gain new `gui/` includes or
 QtWidgets usage (`tools/check_engine_boundary.py`, warning for tracked
 legacy files, error for new ones).
+
+**Where radio-facing code goes now that the seam exists.** Route by kind:
+
+| Your change | Goes |
+|---|---|
+| Code speaking a vendor wire protocol (commands, discovery, stream parsing) | that family's backend under `src/core/backends/<family>/`, behind `IRadioBackend` — never in `gui/`, and increasingly not in the models (they're being decoupled from the wire over 2.2b–2.4) |
+| A new radio family | a new `IRadioBackend` implementation under `src/core/backends/<family>/` — requires an approved design doc naming its open protocol authority (Constitution Principles I & IV apply per backend) |
+| A new engine feature | `libaethercore`, exposed through models — never via a new gui→core header |
+
+Do **not** yet reroute existing model↔wire code through `FlexBackend`
+wholesale — the per-touchpoint conversion is staged work
+(`docs/architecture/aetherd-touchpoints.md`), and its claim protocol +
+before/after `tools/verify_slice0_rx.py` verification recipe land in this
+file when those conversions (2.3) begin. Until then the models' existing
+direct wire access remains correct.
 
 ---
 
