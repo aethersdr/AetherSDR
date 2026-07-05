@@ -3002,7 +3002,7 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         "QPushButton:hover { background: {{color.background.1}}; }");
     connect(addBtn, &QPushButton::clicked, this, [this, xvtrTabs, buildXvtrPage] {
         m_model->sendCmdPublic("xvtr create",
-            [this, xvtrTabs, buildXvtrPage](int code, const QString& body) {
+            [this, xvtrTabs, buildXvtrPage](int code, const QString& /* body */) {
                 if (code != 0) return;
                 // Wait briefly for the radio's status update to arrive
                 QTimer::singleShot(300, this, [this, xvtrTabs, buildXvtrPage] {

@@ -193,7 +193,7 @@ void ClientCompCurveWidget::drawGrid(QPainter& p, const QRectF& r) const
     p.restore();
 }
 
-void ClientCompCurveWidget::drawCurve(QPainter& p, const QRectF& r) const
+void ClientCompCurveWidget::drawCurve(QPainter& p, const QRectF& /* r */) const
 {
     if (!m_comp) return;
 
@@ -231,7 +231,7 @@ void ClientCompCurveWidget::drawCurve(QPainter& p, const QRectF& r) const
     p.restore();
 }
 
-void ClientCompCurveWidget::drawBall(QPainter& p, const QRectF& r) const
+void ClientCompCurveWidget::drawBall(QPainter& p, const QRectF& /* r */) const
 {
     if (!m_comp) return;
     const float inDb = std::clamp(m_lastInputDb, kMinDb, kMaxDb);

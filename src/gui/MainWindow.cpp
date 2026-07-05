@@ -228,7 +228,9 @@
 #endif
 #include <QDebug>
 #ifdef Q_OS_WIN
-#define NOMINMAX
+#ifndef NOMINMAX
+#define NOMINMAX  // guard against redefinition when an earlier include/toolchain predefines it (#4031)
+#endif
 #include <windows.h>
 #include <windowsx.h>
 #include <psapi.h>

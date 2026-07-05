@@ -186,7 +186,7 @@ void ClientGateCurveWidget::drawGrid(QPainter& p, const QRectF& r) const
     p.restore();
 }
 
-void ClientGateCurveWidget::drawCurve(QPainter& p, const QRectF& r) const
+void ClientGateCurveWidget::drawCurve(QPainter& p, const QRectF& /* r */) const
 {
     if (!m_gate) return;
 
@@ -221,7 +221,7 @@ void ClientGateCurveWidget::drawCurve(QPainter& p, const QRectF& r) const
     p.restore();
 }
 
-void ClientGateCurveWidget::drawBall(QPainter& p, const QRectF& r) const
+void ClientGateCurveWidget::drawBall(QPainter& p, const QRectF& /* r */) const
 {
     if (!m_gate) return;
     const float inDb  = std::clamp(m_lastInputDb, kMinDb, kMaxDb);

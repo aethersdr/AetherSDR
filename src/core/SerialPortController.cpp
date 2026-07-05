@@ -9,8 +9,12 @@
 #endif
 
 #ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX  // guard: may already be defined by the build system (#4031)
+#endif
 #include <windows.h>
 #include <QThread>
 #include <QMetaObject>

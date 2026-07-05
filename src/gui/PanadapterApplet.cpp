@@ -799,7 +799,7 @@ void PanadapterApplet::appendRttyText(const QString& text, float confidence)
     m_rttyText->moveCursor(QTextCursor::End);
 }
 
-void PanadapterApplet::setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked)
+void PanadapterApplet::setRttyStats(float markLevel, float /* spaceLevel */, float snrDb, bool locked)
 {
     const int markSegs = qBound(0, qRound(markLevel * 15.0f), 15);
 

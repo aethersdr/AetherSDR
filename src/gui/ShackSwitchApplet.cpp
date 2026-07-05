@@ -355,8 +355,6 @@ void ShackSwitchApplet::rebuildAntennaRows()
     }
 
     const auto antennas = m_model->antennas();
-    const int rxA = m_model->portA().rxAntenna;
-    const int rxB = m_model->portB().rxAntenna;
     const auto& dev = m_model->connectedDevice();
     const bool dualPort = dev.radioPorts >= 2;
 

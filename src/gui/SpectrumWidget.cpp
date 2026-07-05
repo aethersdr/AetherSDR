@@ -9851,7 +9851,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 // Compute the effective frequency grid step in MHz, honouring user override (#1390).
 // When m_freqGridSpacingKhz is 0 (Auto), uses the 1-2-5 sequence for ~5 grid lines.
 // When a manual value is set, clamps up to the next valid option if labels would overlap.
-double SpectrumWidget::effectiveGridStepMhz(int widgetWidth) const
+double SpectrumWidget::effectiveGridStepMhz(int /* widgetWidth */) const
 {
     // 1-2-5 auto algorithm
     auto autoStep = [&]() {

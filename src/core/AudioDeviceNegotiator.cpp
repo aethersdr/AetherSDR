@@ -29,7 +29,7 @@ QAudioFormat makeFormat(int rate, AFN::SampleFmt fmt, int channels)
     return f;
 }
 
-AFN::DeviceCaps probe(const QAudioDevice& dev, AFN::Direction dir, AFN::TargetOs os,
+AFN::DeviceCaps probe(const QAudioDevice& dev, AFN::Direction /* dir */, AFN::TargetOs os,
                       bool bluetoothHfp, int preferredRateOverride)
 {
     AFN::DeviceCaps caps;

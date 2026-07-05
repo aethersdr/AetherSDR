@@ -37,7 +37,6 @@ QVector<float> SpectrogramBuffer::extractPatch(double sigFreqMhz,
 
         const int   N        = fr.bins.size();
         const double startMhz = fr.centerMhz - fr.bandwidthMhz / 2.0;
-        const double hzPerBin = fr.bandwidthMhz * 1.0e6 / N;
 
         // Resample N input bins into kPatchFreqBins output bins
         // covering [sigFreqMhz - halfWin, sigFreqMhz + halfWin].

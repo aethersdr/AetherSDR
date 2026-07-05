@@ -1037,6 +1037,11 @@ qsizetype AudioEngine::externalKiwiOutputBufferBytes() const
 
 AudioEngine::AudioEngine(QObject* parent)
     : QObject(parent)
+    // NOTE: initializer order below MUST match member declaration order in
+    // AudioEngine.h (m_cwSidetone/m_cwRecordSidetone are declared before the
+    // m_clientEq* block) to keep -Wreorder clean (#4031).
+    , m_cwSidetone(std::make_unique<CwSidetoneGenerator>(48000))
+    , m_cwRecordSidetone(std::make_unique<CwSidetoneGenerator>(DEFAULT_SAMPLE_RATE))
     , m_clientEqRx(std::make_unique<ClientEq>())
     , m_clientEqTx(std::make_unique<ClientEq>())
     , m_clientCompTx(std::make_unique<ClientComp>())
@@ -1052,8 +1057,6 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientReverbTx(std::make_unique<ClientReverb>())
     , m_clientFinalLimiterTx(std::make_unique<ClientFinalLimiter>())
     , m_clientTxTestTone(std::make_unique<ClientTxTestTone>())
-    , m_cwSidetone(std::make_unique<CwSidetoneGenerator>(48000))
-    , m_cwRecordSidetone(std::make_unique<CwSidetoneGenerator>(DEFAULT_SAMPLE_RATE))
     , m_clientQuindarTone(std::make_unique<ClientQuindarTone>())
 {
     // Recorder-sidetone generator: always enabled at a fixed, audible level and
