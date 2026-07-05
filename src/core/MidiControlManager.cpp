@@ -39,11 +39,6 @@ bool isVfoTuneKnobParamId(const QString& paramId)
     return paramId == QLatin1String("rx.tuneKnob");
 }
 
-bool isUnitRelativeCcPulse(int value)
-{
-    return value == 1 || value == 127;
-}
-
 int relativeCcDelta(int value)
 {
     return (value < 64) ? value : (value - 128);

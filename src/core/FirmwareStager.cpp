@@ -397,7 +397,11 @@ void FirmwareStager::verifyAndExtract()
     }
 
     QFile hashFile(outPath);
-    hashFile.open(QIODevice::ReadOnly);
+    if (!hashFile.open(QIODevice::ReadOnly)) {
+        qCWarning(lcFirmware) << "FirmwareStager: cannot open staged firmware for hashing:" << outPath;
+        emit stageFailed("Cannot read staged firmware for verification.");
+        return;
+    }
     QCryptographicHash fwHash(QCryptographicHash::Md5);
     fwHash.addData(&hashFile);
     const QString fwMd5 = fwHash.result().toHex().toLower();

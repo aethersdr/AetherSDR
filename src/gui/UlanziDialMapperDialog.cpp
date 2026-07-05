@@ -54,11 +54,6 @@ static QPixmap& ulanziDialPixmap()
     }
     return pm;
 }
-static QSize ulanziDialImageSize()
-{
-    const QPixmap& pm = ulanziDialPixmap();
-    return pm.isNull() ? QSize() : pm.size();
-}
 
 // Dedicated paint surface for the dial body + connector lines.  Lives
 // inside the dialog's bodyWidget layout so we don't fight the global

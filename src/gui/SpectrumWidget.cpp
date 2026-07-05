@@ -4628,11 +4628,6 @@ void SpectrumWidget::applyDbmRangeImmediate(float minDbm, float maxDbm)
 
 // ─── Slice color table (shared via SliceColors.h) ────────────────────────────
 
-static QColor sliceColor(int sliceId, bool active) {
-    if (active) return SliceColorManager::instance().activeColor(sliceId);
-    return SliceColorManager::instance().dimColor(sliceId);
-}
-
 // Variant that respects the SliceLetterDisplay mode (#2606): when set to
 // RadioIndexed, the colour follows the radio-provided per-client letter
 // rather than the global slice id so the slice marker / passband colour

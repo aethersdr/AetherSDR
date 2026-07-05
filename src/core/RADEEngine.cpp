@@ -291,7 +291,7 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
     // RADE encoder needs 12 feature frames (120ms)
     int n_features_in = rade_n_features_in_out(m_rade);
     int n_tx_out = rade_n_tx_out(m_rade);
-    while ((m_txFeatAccum.size() / sizeof(float)) >= qsizetype(n_features_in) || (m_eooRequested && !m_txFeatAccum.isEmpty())) {
+    while ((m_txFeatAccum.size() / static_cast<qsizetype>(sizeof(float))) >= qsizetype(n_features_in) || (m_eooRequested && !m_txFeatAccum.isEmpty())) {
         int nFeatures = m_txFeatAccum.size() / sizeof(float);
         int nToProcess = std::min(n_features_in, nFeatures);
         

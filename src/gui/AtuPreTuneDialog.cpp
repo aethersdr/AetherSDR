@@ -91,13 +91,6 @@ constexpr int kAutoModeTunePowerWarnW = 20;
 // exists yet to nest under. (#2649 #8)
 constexpr const char* kLicenseClassKey = "OperatorLicenseClass";
 
-// computeCenters() is now in AtuPreTuneCenters.h (header-only) so the
-// unit test can exercise it without dragging in this dialog. (#2648)
-int pointsForRange(double lowMhz, double highMhz, int segmentKhz)
-{
-    return computeCenters(lowMhz, highMhz, segmentKhz).size();
-}
-
 // Walk each contiguous region from BandPlanManager (which already merges
 // adjacent segments — see #2822) and produce tune centers per region. On
 // discrete-channel bands (US 60m: 5 USB channels at 2.8 kHz each separated
