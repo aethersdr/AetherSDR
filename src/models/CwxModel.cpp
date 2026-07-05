@@ -18,8 +18,9 @@ QVector<CwxModel::SpeedSegment>
 CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
 {
     QVector<SpeedSegment> segs;
-    if (text.isEmpty())
+    if (text.isEmpty()) {
         return segs;
+    }
 
     QString accumText;
     int     accumWpm    = baseWpm;
@@ -43,7 +44,11 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
         int j = i;
         if (prevWasSpace) {
             while (j < text.size() && (text[j] == '+' || text[j] == '-')) {
-                if (text[j] == '+') ++plus; else ++minus;
+                if (text[j] == '+') {
+                    ++plus;
+                } else {
+                    ++minus;
+                }
                 ++j;
             }
             // Treat as modifier only when immediately followed by a word char
@@ -64,12 +69,13 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
         const bool hasModifier = (plus > 0 || minus > 0);
         const int  delta   = (plus - minus) * step;
         const int  wordWpm = hasModifier
-                           ? qBound(5, baseWpm + delta, 100)
+                           ? qBound(kMinWpm, baseWpm + delta, kMaxWpm)
                            : baseWpm;
 
         if (wordWpm != accumWpm) {
-            if (!accumText.isEmpty())
+            if (!accumText.isEmpty()) {
                 segs.append({accumText, accumWpm});
+            }
             accumText.clear();
             accumWpm = wordWpm;
         }
@@ -87,8 +93,9 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
         i = j;
     }
 
-    if (!accumText.isEmpty())
+    if (!accumText.isEmpty()) {
         segs.append({accumText, accumWpm});
+    }
 
     return segs;
 }
@@ -173,7 +180,7 @@ void CwxModel::clearBuffer()
 void CwxModel::setSpeed(int wpm)
 {
     m_pendingWpmEchoes = 0;   // user set the base — abandon transient suppression (#3976)
-    wpm = qBound(5, wpm, 100);
+    wpm = qBound(kMinWpm, wpm, kMaxWpm);
     if (wpm != m_speed) {
         m_speed = wpm;
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
@@ -183,7 +190,7 @@ void CwxModel::setSpeed(int wpm)
 
 void CwxModel::setSpeedStep(int step)
 {
-    step = qBound(1, step, 20);
+    step = qBound(kMinSpeedStep, step, kMaxSpeedStep);
     if (step != m_speedStep) {
         m_speedStep = step;
         emit speedStepChanged(m_speedStep);

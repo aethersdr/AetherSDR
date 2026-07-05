@@ -11,6 +11,17 @@ class CwxModel : public QObject {
 public:
     explicit CwxModel(QObject* parent = nullptr);
 
+    // Single source of truth for the CWX speed clamps and defaults, shared by
+    // the model's setters, expandSpeedModifiers(), and the CwxPanel spin
+    // ranges so the [5,100] WPM / [1,20] step bounds and their defaults aren't
+    // duplicated as bare literals across files. (#3976 review)
+    static constexpr int kMinWpm         = 5;
+    static constexpr int kMaxWpm         = 100;
+    static constexpr int kDefaultWpm     = 20;
+    static constexpr int kMinSpeedStep   = 1;
+    static constexpr int kMaxSpeedStep   = 20;
+    static constexpr int kDefaultSpeedStep = 3;
+
     // A contiguous run of text to be keyed at a single WPM.
     // expandSpeedModifiers() returns a sequence of these.
     struct SpeedSegment {
@@ -76,9 +87,9 @@ signals:
 private:
     void emitExpandedSend(const QVector<SpeedSegment>& segs);
 
-    int     m_speed{20};
+    int     m_speed{kDefaultWpm};
     int     m_delay{5};
-    int     m_speedStep{3};
+    int     m_speedStep{kDefaultSpeedStep};
     // Count of self-originated transient `cwx wpm` commands whose radio echoes
     // must be swallowed in applyStatus so they don't clobber the authoritative
     // base speed or flicker the UI. Reset on user setSpeed / clearBuffer so a

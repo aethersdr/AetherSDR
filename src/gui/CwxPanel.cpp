@@ -34,8 +34,9 @@ QJsonObject readCwxPanelSettings()
 {
     const QString json = AetherSDR::AppSettings::instance()
         .value(kCwxPanelSettingsKey, QString{}).toString();
-    if (json.isEmpty())
+    if (json.isEmpty()) {
         return {};
+    }
     const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
     return doc.isObject() ? doc.object() : QJsonObject{};
 }
@@ -50,7 +51,10 @@ void writeCwxPanelSettings(const QJsonObject& obj)
 
 int readSpeedStep()
 {
-    return qBound(1, readCwxPanelSettings().value(kSpeedStepField).toInt(3), 20);
+    return qBound(AetherSDR::CwxModel::kMinSpeedStep,
+                  readCwxPanelSettings().value(kSpeedStepField)
+                      .toInt(AetherSDR::CwxModel::kDefaultSpeedStep),
+                  AetherSDR::CwxModel::kMaxSpeedStep);
 }
 
 void writeSpeedStep(int step)
@@ -66,8 +70,9 @@ QString bubbleTextFor(const QString& rawText, int baseWpm, int step)
 {
     const auto segs = AetherSDR::CwxModel::expandSpeedModifiers(rawText, baseWpm, step);
     QString result;
-    for (const auto& s : segs)
+    for (const auto& s : segs) {
         result += s.text;
+    }
     return result.isEmpty() ? rawText : result;
 }
 
@@ -243,8 +248,8 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->addWidget(speedLabel);
 
     m_speedSpin = new QSpinBox;
-    m_speedSpin->setRange(5, 100);
-    m_speedSpin->setValue(20);
+    m_speedSpin->setRange(CwxModel::kMinWpm, CwxModel::kMaxWpm);
+    m_speedSpin->setValue(CwxModel::kDefaultWpm);
     m_speedSpin->setFixedWidth(50);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_speedSpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 2px; font-size: 11px; padding: 2px; }");
@@ -458,7 +463,7 @@ void CwxPanel::buildSetupView()
 
     topRow->addWidget(new QLabel("Step:"));
     m_speedStepSpin = new QSpinBox;
-    m_speedStepSpin->setRange(1, 20);
+    m_speedStepSpin->setRange(CwxModel::kMinSpeedStep, CwxModel::kMaxSpeedStep);
     m_speedStepSpin->setValue(readSpeedStep());
     m_speedStepSpin->setSuffix(" wpm");
     m_speedStepSpin->setFixedWidth(60);
@@ -473,11 +478,20 @@ void CwxPanel::buildSetupView()
             this, [this](int v) { if (m_model) m_model->setDelay(v); });
     connect(m_qskBtn, &QPushButton::toggled,
             this, [this](bool on) { if (m_model) m_model->setQsk(on); });
+    // Live-update the model on every change (cheap, in-memory) but persist
+    // only on editingFinished (focus-out / Enter) so sweeping the arrows or
+    // wheel doesn't trigger one full atomic settings-file rewrite per tick.
     connect(m_speedStepSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, [this](int v) {
-                if (m_model) m_model->setSpeedStep(v);
-                writeSpeedStep(v);
+                if (m_model) {
+                    m_model->setSpeedStep(v);
+                }
             });
+    connect(m_speedStepSpin, &QSpinBox::editingFinished, this, [this]() {
+        if (m_speedStepSpin) {
+            writeSpeedStep(m_speedStepSpin->value());
+        }
+    });
 
     // Style labels
     for (auto* lbl : m_setupPage->findChildren<QLabel*>())
