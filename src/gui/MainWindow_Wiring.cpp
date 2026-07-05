@@ -3522,6 +3522,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             // and honours these keys (e.g. band=440 on an IC-9700 gateway).
             // Real Flex radios never declare bands, so their unsupported-band
             // refusal below is unchanged.
+            //
+            // NB the resolveBandStackKey() attempt above runs FIRST, so a
+            // declared band that ALSO matches the impersonated model's native
+            // capability resolves natively and never reaches here — e.g. a
+            // gateway advertising FLEX-6700 (has2Meters) + bands=2m,440,23cm
+            // sends the bare native key `2` for 2m, but the declared tokens
+            // `440`/`23cm` for the bands the model has no native slot for. A
+            // declaring bridge must therefore honour both the bare Flex keys
+            // and its declared tokens, per band.
             stackKey = bandName;
         }
 

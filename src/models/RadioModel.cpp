@@ -2,6 +2,7 @@
 #include "AntennaAliasStore.h"
 #include "BandDefs.h"
 #include "BandSettings.h"
+#include "DeclaredBands.h"
 #include "core/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/AppSettings.h"
@@ -38,26 +39,9 @@ constexpr int kSessionRestorePruneDelayMs = 5000;
 constexpr int kWaterfallLineDurationMinMs = 1;
 constexpr int kWaterfallLineDurationMaxMs = 100;
 
-// "bands=2m,440,23cm" (discovery/status) -> canonical band-name list.
-// Names are validated against BandDefs and deduplicated, so a malformed
-// declaration can't inject junk into the band UI; unknown names are dropped.
-QStringList parseDeclaredBands(const QString& csv)
-{
-    QStringList out;
-    const QStringList parts = csv.split(',', Qt::SkipEmptyParts);
-    for (const QString& part : parts) {
-        const QString name = part.trimmed();
-        for (const auto& def : kBands) {
-            const QString canon = QString::fromLatin1(def.name);
-            if (name.compare(canon, Qt::CaseInsensitive) == 0) {
-                if (!out.contains(canon))
-                    out.append(canon);
-                break;
-            }
-        }
-    }
-    return out;
-}
+// parseDeclaredBands() moved to DeclaredBands.{h,cpp} so the Principle-VII
+// validation (allow-list against BandDefs, dedup, case-fold) has a light,
+// dependency-free test target (declared_bands_test). Behaviour unchanged.
 
 QJsonArray toJsonArray(const QStringList& values)
 {
