@@ -16,6 +16,12 @@ namespace AetherSDR {
 // the surface every radio family has — plus a namespaced `extensions` bag for
 // vendor-specific capability values that don't belong in the core. Typed where
 // it's universal, open where it's vendor.
+//
+// NOT the same as models/ModelCapabilities: that is model-string-*derived*
+// truth (a static FlexLib platform table keyed by the model name, Principle I);
+// this is the radio's *reported* self-description produced by a backend and
+// surfaced to clients. A FlexBackend may seed this FROM ModelCapabilities, but
+// the two are distinct concepts (derived-from-name vs reported-by-backend).
 struct RadioCapabilities {
     // Identity
     QString family;   // backend id: "flex", "kiwi", … (stable, lowercase)
