@@ -685,6 +685,12 @@ RadioModel::~RadioModel()
     m_backend.reset();
     m_connection = nullptr;
     m_panStream = nullptr;
+    // The transitional alias points into the just-destroyed backend — null it so
+    // the many `if (m_flexBackend)` guards (decode calls in handlePanadapterStatus,
+    // the slice modeChangeRequested lambda) fail closed instead of dereferencing a
+    // dangling pointer. handlePanadapterStatus is also reachable via the WAN
+    // statusReceived connection, so this isn't purely theoretical. (#4063 review)
+    m_flexBackend = nullptr;
 }
 
 bool RadioModel::isConnected() const
@@ -5712,6 +5718,10 @@ void RadioModel::handleSliceStatus(int id,
             });
             // aetherd RFC 2.3 encode template: mode intent routes through the
             // backend verb, whose output goes through the guarded slice sink.
+            // TODO(2.x): route via IRadioBackend once encode is backend-owned —
+            // today this no-ops on the wire for any non-Flex backend (m_flexBackend
+            // null) while still emitting modeChanged. Fine while Flex is the only
+            // backend. (#4063 review)
             connect(s, &SliceModel::modeChangeRequested, this, [this, s](const QString& mode){
                 if (m_flexBackend) m_flexBackend->setSliceMode(s->sliceId(), mode);
             });

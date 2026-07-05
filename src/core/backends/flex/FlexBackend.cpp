@@ -218,10 +218,21 @@ void FlexBackend::decodePanExtensions(const QString& panId,
                    kvs.value(QStringLiteral("wnb")).toInt() != 0);
     }
     if (kvs.contains(QStringLiteral("wnb_level"))) {
-        wnb.insert(QStringLiteral("wnb_level"),
-                   kvs.value(QStringLiteral("wnb_level")).toInt());
+        // Guard the numeric parse: a malformed/non-numeric wnb_level must be
+        // ignored, not applied as 0. The old inline applyPanStatus path did
+        // exactly this (toInt(&ok) + if(ok)), mirroring FlexLib's own
+        // uint.TryParse + skip-on-failure (Panadapter.cs:1244). Dropping the
+        // guard would silently snap the WNB-level UI to 0 (Principle VII).
+        bool ok = false;
+        const int level = kvs.value(QStringLiteral("wnb_level")).toInt(&ok);
+        if (ok) {
+            wnb.insert(QStringLiteral("wnb_level"), level);
+        }
     }
     if (kvs.contains(QStringLiteral("wnb_updating"))) {
+        // FlexLib v4.2.18 exposes wnb_updating on display pan status while the
+        // radio normalizes the SCU-level WNB threshold; it is distinct from the
+        // per-pan WNB enable flag ("wnb") above — keep them separate.
         wnb.insert(QStringLiteral("wnb_updating"),
                    kvs.value(QStringLiteral("wnb_updating")).toInt() != 0);
     }

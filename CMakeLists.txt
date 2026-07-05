@@ -2544,6 +2544,13 @@ target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
 set_target_properties(flex_backend_lifecycle_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_backend_lifecycle_test COMMAND flex_backend_lifecycle_test)
 
+# aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
+add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
+target_include_directories(aetherd_pan_decode_test PRIVATE src)
+target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
+add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
     src/models/UsbCableModel.cpp
