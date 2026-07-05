@@ -1,5 +1,4 @@
 #include "RxApplet.h"
-#include "AdaptiveFilterControls.h"
 #include "FilterPassbandWidget.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
@@ -1144,18 +1143,10 @@ void RxApplet::buildUI()
 
     root->addLayout(columns);
 
-    // Adaptive RX filter (SSB only) — a SELF-CONTAINED 2-column group BELOW the
-    // main controls, deliberately kept out of the left/right columns above: those
-    // contain the filter passband (expanding size policy), so hosting the adaptive
-    // rows there made toggling them restretch the passband. As its own widget it
-    // just grows downward. The widget lays the group out in two sub-columns
-    // (checkbox + bounds left, presets right). Shown for USB/LSB by
-    // updateModeSettings(). RFC #3878.
-    m_adaptive = new AdaptiveFilterControls(
-        AdaptiveFilterControls::SecAll, /*withHeader=*/true, /*compact=*/true,
-        /*twoColumn=*/true);
-    m_adaptive->setVisible(false);
-    root->addWidget(m_adaptive);
+    // The adaptive RX filter controls (RFC #3878) live solely in the VFO flag —
+    // a single host avoids syncing the enable/bounds/preset state across two
+    // widgets. The applet's filter-width readout still shows "AUTO" while a fit
+    // is live (refreshFilterWidth()).
 
     // Tooltips
     m_lockBtn->setToolTip("Locks the VFO frequency to prevent accidental tuning.");
@@ -2349,9 +2340,6 @@ void RxApplet::connectSlice(SliceModel* s)
 
     // DSP toggles removed — use VFO DSP tab or spectrum overlay
 
-    // Adaptive RX filter — bind the control group to this slice.
-    if (m_adaptive) m_adaptive->setSlice(s);
-
     // RIT
     {
         QSignalBlocker b(m_ritOnBtn);
@@ -2442,7 +2430,6 @@ void RxApplet::connectSlice(SliceModel* s)
 void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
-    if (m_adaptive) m_adaptive->setSlice(nullptr);  // drops its own slice signals
     m_savedSquelchOn = false;
 }
 
@@ -2675,9 +2662,6 @@ void RxApplet::updateModeSettings(const QString& mode)
     m_agcContainer->setVisible(!isFM);
     m_ritContainer->setVisible(!isFM);
     m_xitContainer->setVisible(!isFM);
-
-    // Adaptive RX filter is SSB-only.
-    if (m_adaptive) m_adaptive->setVisible(mode == "USB" || mode == "LSB");
 
     // QSK visibility — only meaningful in CW mode
     m_qskBtn->setVisible(mode == "CW");

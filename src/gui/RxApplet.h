@@ -5,7 +5,7 @@
 #include <QTimer>
 
 class ScrollableLabel;
-namespace AetherSDR { class FilterPassbandWidget; class AdaptiveFilterControls; }
+namespace AetherSDR { class FilterPassbandWidget; }
 
 class QButtonGroup;
 class QHBoxLayout;
@@ -235,9 +235,6 @@ private:
     QGridLayout*            m_filterGrid{nullptr};
     QWidget*                m_filterContainer{nullptr};
     AetherSDR::FilterPassbandWidget* m_filterPassband{nullptr};
-    // Adaptive RX filter control group (SSB only) — the same reusable two-column
-    // widget as the VFO flag, bound to the active slice. RFC #3878.
-    AdaptiveFilterControls* m_adaptive{nullptr};
 
     // FM duplex/repeater controls (shown only in FM/NFM/DFM modes)
     QWidget*        m_fmContainer{nullptr};
