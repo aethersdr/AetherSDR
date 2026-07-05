@@ -3922,7 +3922,14 @@ void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
         ? QStringLiteral("Disconnected")
         : trimmedDetail;
     message.timeoutMs = 0;
-    message.dismissible = true;
+    // Owner-managed status: syncKiwiSdrPanadapterUiState re-asserts this card
+    // on every state/slice/waterfall event, so a user dismissal either lies
+    // (the card resurrects seconds later, even mid-fade) or — in a quiet
+    // Waiting state that never re-syncs — permanently hides the only
+    // disconnected-pan indicator while the pan looks healthy. Not
+    // user-dismissible; setKiwiSdrConnectionOverlay(false) is the sole owner
+    // of its lifecycle. (#3999 review)
+    message.dismissible = false;
     upsertOverlayMessage(std::move(message));
 }
 
@@ -3988,7 +3995,9 @@ QVariantList SpectrumWidget::overlayMessageSnapshot() const
     return m_panadapterMessageOverlay->messageSnapshot();
 }
 
-void SpectrumWidget::showInterlockNotification(const QString& message, int durationMs)
+void SpectrumWidget::showInterlockNotification(const QString& message,
+                                               const QString& key,
+                                               int durationMs)
 {
     const QString text = message.trimmed();
     if (text.isEmpty()) {
@@ -3996,12 +4005,21 @@ void SpectrumWidget::showInterlockNotification(const QString& message, int durat
     }
 
     PanadapterOverlayMessage overlay;
-    overlay.id = QStringLiteral("interlock.%1").arg(
-        QString::number(static_cast<qulonglong>(qHash(text)), 16));
-    overlay.title = text.startsWith(QStringLiteral("Transmit is disabled"),
-                                    Qt::CaseInsensitive)
-        ? tr("Transmit disabled")
-        : tr("Notice");
+    // Fixed id → latest-wins: the radio's authoritative denial supersedes an
+    // earlier local preflight message in place, instead of the two stacking
+    // side-by-side for the full 5s (the pre-PR single QLabel showed latest
+    // only, and the operator could otherwise act on the stale card). (#3999 review)
+    overlay.id = QStringLiteral("interlock.active");
+    // Classify by the producer's stable, translation-invariant key, not by
+    // sniffing the localized message text: the old startsWith("Transmit is
+    // disabled") match broke in every non-English locale, and the radio's most
+    // authoritative reasons ("radio:...") never matched the prefix at all and
+    // degraded to the low-salience "Notice" heading. (#3999 review)
+    const bool txBlock = key.startsWith(QStringLiteral("radio:"))
+        || key.startsWith(QStringLiteral("pan-tx-inhibit:"))
+        || key.startsWith(QStringLiteral("local-ptt:"))
+        || key.startsWith(QStringLiteral("tx-filter:"));
+    overlay.title = txBlock ? tr("Transmit disabled") : tr("Notice");
     overlay.detail = text;
     overlay.timeoutMs = qMax(1, durationMs);
     overlay.dismissible = true;

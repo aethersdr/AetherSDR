@@ -442,6 +442,7 @@ private:
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message,
+                                             const QString& key = QString(),
                                              const QString& panId = QString());
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();

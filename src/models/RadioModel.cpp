@@ -1164,7 +1164,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
     m_lastInterlockNotificationKey = effectiveKey;
     m_lastInterlockNotificationMs = now;
-    emit interlockNotificationRequested(trimmed, panId.trimmed());
+    emit interlockNotificationRequested(trimmed, effectiveKey, panId.trimmed());
 }
 
 // ─── Actions ──────────────────────────────────────────────────────────────────

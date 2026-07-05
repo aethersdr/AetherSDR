@@ -143,7 +143,9 @@ public:
     Q_INVOKABLE bool automationRemoveOverlayMessage(const QString& id);
     Q_INVOKABLE void automationClearOverlayMessages();
     Q_INVOKABLE QVariantList overlayMessageSnapshot() const;
-    void showInterlockNotification(const QString& message, int durationMs = 5000);
+    void showInterlockNotification(const QString& message,
+                                   const QString& key = QString(),
+                                   int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);

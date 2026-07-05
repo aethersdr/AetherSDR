@@ -12,6 +12,7 @@
 #include <QRegion>
 #include <QResizeEvent>
 #include <QStringList>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -252,6 +253,14 @@ bool PanadapterMessageOverlay::upsertMessage(PanadapterOverlayMessage message)
             || item.message.detail != message.detail
             || item.message.dismissible != message.dismissible
             || item.message.tone != message.tone;
+        // Identical, untimed re-upsert of an existing card: nothing to change
+        // and no countdown to refresh. Owner-managed status cards (e.g.
+        // kiwi.connection) get re-asserted from ~10 event-driven sync sites,
+        // so skip the full relayout() — sort + word-wrap sizing + setMask +
+        // repaint — that would otherwise churn against the 60 fps FFT feed. (#3999 review)
+        if (!wasRemoving && !contentChanged && expiry < 0 && item.expiresAtMs < 0) {
+            return true;
+        }
         item.message = std::move(message);
         item.expiresAtMs = expiry;
         item.removing = false;
@@ -507,7 +516,22 @@ bool PanadapterMessageOverlay::event(QEvent* event)
             event->ignore();
             return false;
         }
-        break;
+        // Inside a card: consume the event. Letting it fall through to
+        // QWidget's default handlers ignore()s it, and Qt then re-delivers it
+        // to the panadapter underneath — a click on a card (including the
+        // "Transmit disabled" warning) would click-tune the slice at a
+        // frequency the card is hiding. (#3999 review)
+        event->accept();
+        return true;
+    }
+    case QEvent::Wheel: {
+        auto* wheel = static_cast<QWheelEvent*>(event);
+        if (pointInsideMessage(wheel->position().toPoint())) {
+            event->accept();  // don't zoom/step the pan under a card
+            return true;
+        }
+        event->ignore();
+        return false;
     }
     default:
         break;
@@ -561,8 +585,15 @@ QSize PanadapterMessageOverlay::cardSizeFor(
 
     const int textW = qMax(titleBounds.width(),
                            detailBounds.width() + countdownReserve);
-    const int maxBoxWidth = qMax(kCardMinWidth, width() - 32);
-    const int boxW = qBound(kCardMinWidth,
+    // The 360px design floor overflows narrow overlays — PanadapterStack
+    // splitter panes drag well below that in side-by-side layouts — pushing
+    // the card past the right edge and the close button entirely off-widget
+    // (unreadable, unclickable). Clamp the floor to the available width when
+    // the overlay is smaller than the design minimum. (#3999 review)
+    const int available = qMax(120, width() - 2 * kStackMargin);
+    const int floorW = qMin(kCardMinWidth, available);
+    const int maxBoxWidth = qMax(floorW, available);
+    const int boxW = qBound(floorW,
                             textW + sideReserve,
                             maxBoxWidth);
     int boxH = kCardPaddingTop + kCardPaddingBottom;
@@ -810,8 +841,13 @@ void PanadapterMessageOverlay::scheduleExpiryTimer()
 
 void PanadapterMessageOverlay::updateCloseButtons()
 {
+    // Below a usable width the X would sit on top of the text or off the card
+    // edge; suppress it there (the card still shows and, if timed, still
+    // expires). (#3999 review)
+    const int minWidthForClose = kIconColumnWidth + kCloseSize + 2 * kCloseInset;
     for (Item& item : m_items) {
-        if (!item.message.dismissible || item.removing || item.opacity <= 0.05) {
+        if (!item.message.dismissible || item.removing || item.opacity <= 0.05
+            || item.currentRect.width() < minWidthForClose) {
             if (item.closeButton) {
                 item.closeButton->hide();
             }
@@ -906,8 +942,19 @@ void PanadapterMessageOverlay::updateAccessibilityDescription(bool notify)
 
 bool PanadapterMessageOverlay::pointInsideMessage(const QPoint& point) const
 {
+    // Mirror updateInputMask()'s membership exactly: any card still painted
+    // (opacity > 0.01) is in the input mask and receives events — including a
+    // card fading out. If this diverged (e.g. by skipping `removing` items),
+    // a click on a still-visible fading card would take the ignore() path in
+    // event() and fall through to click-tune the panadapter beneath. (#3999 review)
     for (const Item& item : m_items) {
-        if (!item.removing && item.currentRect.contains(point)) {
+        if (item.opacity <= 0.01) {
+            continue;
+        }
+        if (!item.currentRect.isEmpty() && item.currentRect.contains(point)) {
+            return true;
+        }
+        if (!item.targetRect.isEmpty() && item.targetRect.contains(point)) {
             return true;
         }
     }

@@ -7441,11 +7441,12 @@ SpectrumWidget* MainWindow::spectrumForSlice(SliceModel* s) const
 }
 
 void MainWindow::showPanadapterInterlockNotification(const QString& message,
+                                                     const QString& key,
                                                      const QString& panId)
 {
     if (!panId.trimmed().isEmpty() && m_panStack) {
         if (SpectrumWidget* sw = m_panStack->spectrum(panId.trimmed())) {
-            sw->showInterlockNotification(message, 5000);
+            sw->showInterlockNotification(message, key, 5000);
             return;
         }
     }
@@ -7461,7 +7462,7 @@ void MainWindow::showPanadapterInterlockNotification(const QString& message,
         target = activeSlice();
 
     if (auto* sw = spectrumForSlice(target))
-        sw->showInterlockNotification(message, 5000);
+        sw->showInterlockNotification(message, key, 5000);
 }
 
 // ─── Pan layout application ───────────────────────────────────────────────────

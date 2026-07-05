@@ -4456,6 +4456,12 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
 
     QPoint local = w->rect().center();
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() == 1) {
+        // One coordinate is ambiguous — silently hit-testing rect().center()
+        // instead lets a mask/pass-through assertion pass against the wrong
+        // point with ok:true. (#3999 review)
+        return err(QStringLiteral("hitTest needs both x and y (got one coordinate)"));
+    }
     if (parts.size() >= 2) {
         bool okx = false;
         bool oky = false;
@@ -4597,9 +4603,9 @@ QJsonObject AutomationServer::doPanMessage(const QString& action,
             if (m_radioModel && m_radioModel->activePanadapter()) {
                 activePanId = m_radioModel->activePanadapter()->panId();
             }
+            const QList<QWidget*> spectra =
+                findWidgetsByClass(QStringLiteral("SpectrumWidget"));
             if (!activePanId.isEmpty()) {
-                const QList<QWidget*> spectra =
-                    findWidgetsByClass(QStringLiteral("SpectrumWidget"));
                 for (QWidget* sw : spectra) {
                     for (QWidget* a = sw; a; a = a->parentWidget()) {
                         if (shortClassName(a) == QLatin1String("PanadapterApplet")
@@ -4609,7 +4615,16 @@ QJsonObject AutomationServer::doPanMessage(const QString& action,
                     }
                 }
             }
-            return panSpectrumWidgetForIndex(0);
+            // Active pan unresolved (startup / mid-reconnect / null
+            // activePanadapter). Only fall back when there is exactly one
+            // panadapter — otherwise silently injecting into pan 0 would target
+            // the wrong surface with ok:true. With multiple pans, let the
+            // caller surface "no panadapter spectrum for target" (mirrors how
+            // `grab pan` errors via panSpectrumWidgetForIndex). (#3999 review)
+            if (spectra.size() == 1) {
+                return spectra.first();
+            }
+            return nullptr;
         }
 
         bool okIndex = false;
@@ -4692,6 +4707,16 @@ QJsonObject AutomationServer::doPanMessage(const QString& action,
         }
         if (title.trimmed().isEmpty() && detail.trimmed().isEmpty()) {
             return err(QStringLiteral("panmessage add requires title or detail"));
+        }
+        const QString toneLower = tone.trimmed().toLower();
+        if (!toneLower.isEmpty()
+            && toneLower != QLatin1String("info")
+            && toneLower != QLatin1String("warning")) {
+            // Reject unknown tones instead of silently mapping them to Info
+            // while echoing the bogus value back as honored — a `tone=danger`
+            // test would otherwise pass while exercising Info styling. (#3999 review)
+            return err(QStringLiteral("panmessage tone must be 'info' or 'warning' (got '")
+                       + tone.trimmed() + QStringLiteral("')"));
         }
         bool accepted = false;
         QMetaObject::invokeMethod(spectrum, "automationUpsertOverlayMessage",

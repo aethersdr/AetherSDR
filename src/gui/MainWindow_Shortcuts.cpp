@@ -610,7 +610,8 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             [this, on](int code, const QString& body) {
                 if (code != 0) {
                     showPanadapterInterlockNotification(
-                        QString("FDX not available: %1").arg(body.trimmed()));
+                        QString("FDX not available: %1").arg(body.trimmed()),
+                        QStringLiteral("fdx-unavailable"));
                     return;
                 }
                 // Radio accepted; no status echo follows, so apply manually.

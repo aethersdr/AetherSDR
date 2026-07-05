@@ -294,6 +294,14 @@ PNG capture of a single widget.
 - The panadapter is a GPU (`QRhiWidget`) surface; the bridge does the correct
   framebuffer readback for it, so the capture is the *real* rendered spectrum,
   not a blank.
+- **The panadapter message overlay is *not* in this framebuffer.** Connection
+  status cards (e.g. the KiwiSDR "Not connected" card), interlock
+  "Transmit disabled" warnings, and anything posted via [`panmessage`](#panmessage)
+  are a sibling widget stacked over the surface — they are captured only by
+  `grab pan-visible <index>`, never by `grab SpectrumWidget` / `grab pan <index>`.
+  A flow that verifies disconnect/interlock state from a framebuffer grab will
+  silently pass on a broken connection; use `grab pan-visible` (or read
+  `panmessage list`) for that state.
 
 **`grab pan <index> [path]`** captures a *specific* pan's raw spectrum surface
 in a multi-pan layout, keyed on the `panIndex` from `dumpTree`. Plain
@@ -881,6 +889,18 @@ capture the operator-visible stack, including the close buttons.
 
 Messages with `timeoutMs > 0` render a small countdown badge on the card and
 report the same value in the `countdown` snapshot field.
+
+> ⚠️ **This verb shares the production overlay.** The same overlay carries
+> owner-managed cards — the KiwiSDR `kiwi.connection` status card and the
+> `interlock.active` "Transmit disabled" warning. Consequences for tests:
+> - `panmessage clear` deletes **live** status cards too. Their producers only
+>   re-post on the next state transition, so a quiet pan can be left with no
+>   disconnected/interlock indicator until something changes. Prefer
+>   `panmessage remove <id>` scoped to an id your test created.
+> - `add` can upsert those production ids directly (e.g. forge a
+>   `Transmit disabled` card, or overwrite `kiwi.connection`), indistinguishable
+>   from the real path. Namespace injected ids (e.g. a `test.` prefix) so a
+>   teardown `clear`/`remove` can't touch operator-facing status.
 
 ### `connect` / `disconnect`
 Connect through the same dialog and model path as the visible **Connect to

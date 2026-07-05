@@ -519,7 +519,12 @@ signals:
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
     // Short operator-facing interlock warnings for the panadapter overlay.
-    void interlockNotificationRequested(const QString& message, const QString& panId);
+    // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",
+    // "pan-tx-inhibit:...") so the UI can classify the notice without sniffing
+    // the localized message text.
+    void interlockNotificationRequested(const QString& message,
+                                        const QString& key,
+                                        const QString& panId);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);
