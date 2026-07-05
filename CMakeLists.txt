@@ -1984,6 +1984,22 @@ target_include_directories(waveform_scope_model_test PRIVATE src)
 target_link_libraries(waveform_scope_model_test PRIVATE Qt6::Core)
 add_test(NAME waveform_scope_model_test COMMAND waveform_scope_model_test)
 
+# Engine-level test: drives AdaptiveFilterEngine::processFrame through a real
+# SliceModel (signals only, no radio) with monotonic timestamps — covers the
+# wall-clock pacing / send-throttle / QSO-handoff logic the measurement test
+# can't reach. Both AdaptiveFilterEngine and SliceModel are Q_OBJECT (AUTOMOC).
+add_executable(adaptive_engine_test
+    tests/adaptive_engine_test.cpp
+    src/core/AdaptiveFilterEngine.cpp
+    src/core/OccupiedRegion.cpp
+    src/models/SliceModel.cpp
+    src/core/KiwiSdrProtocol.cpp
+)
+target_include_directories(adaptive_engine_test PRIVATE src)
+target_link_libraries(adaptive_engine_test PRIVATE Qt6::Core)
+set_target_properties(adaptive_engine_test PROPERTIES AUTOMOC ON)
+add_test(NAME adaptive_engine_test COMMAND adaptive_engine_test)
+
 add_executable(kiwi_sdr_protocol_test
     tests/kiwi_sdr_protocol_test.cpp
     src/core/KiwiSdrProtocol.cpp

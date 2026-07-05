@@ -95,6 +95,15 @@ OccupiedRegion measure(const QVector<float>& bins, bool usb, float noiseFloorDbm
     return measureAt(kN, kBwMhz, bins, usb, noiseFloorDbm);
 }
 
+OccupiedRegion measureP(const QVector<float>& bins, bool usb, float noiseFloorDbm,
+                        const AetherSDR::OccupiedRegionParams& params)
+{
+    QVector<float> avgEnv;
+    return measureOccupiedRegion(bins, kCenter, kBwMhz, kCarrier,
+                                 usb ? QStringLiteral("USB") : QStringLiteral("LSB"),
+                                 noiseFloorDbm, avgEnv, params);
+}
+
 // A flat-topped voice "hump" between [lowHz, highHz] at `level`, else floor.
 std::function<float(double)> hump(double lowHz, double highHz, float level)
 {
@@ -461,6 +470,44 @@ int main()
             std::snprintf(d, sizeof d, "  [%s] valid=%d", tag(usb), r.valid ? 1 : 0);
             report("two-hump: distant lobe not re-anchored (reject)", !r.valid, d);
         }
+        // (h) F4 — a NARROW near-carrier carrier/het (not a real bass lobe) plus
+        // a neighbour ~1700 Hz up across a ~1400 Hz at-floor gap must NOT be
+        // grabbed: the inner lobe fails the width guard AND the gap exceeds the
+        // unconfident bridge, so the scan stops and only the blip is judged
+        // (fails presence -> reject).
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 250 && f <= 400)   return -111.0f;   // ~150 Hz carrier blip
+                if (f >= 1800 && f <= 3200) return -80.0f;    // strong neighbour
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[64];
+            std::snprintf(d, sizeof d, "  [%s] valid=%d high=%d", tag(usb), r.valid ? 1 : 0, r.highHz);
+            report("two-hump F4: narrow blip + far neighbour not grabbed",
+                   !r.valid || r.highHz < 1500, d);
+        }
+        // (i) F3 boundary — a single voice whose weak bass hovers RIGHT at the
+        // Normal presence gate (floor+9) with a treble hump across an armed
+        // 400 Hz valley must resolve STABLY (re-anchor, keep the treble) across a
+        // +/-0.3 dB bass perturbation, not flip the high-cut by the whole hump.
+        {
+            const auto mk = [](float bassDb) {
+                return [bassDb](double f) -> float {
+                    if (f >= 300 && f <= 1100)  return bassDb;            // bass at the gate
+                    if (f >= 1500 && f <= 2900) return -95.0f;            // treble hump
+                    return -1000.0f;
+                };
+            };
+            const OccupiedRegion rlo = measure(buildSpectrum(usb, -120.0f, 0.0f, mk(-111.3f)), usb, -120.0f);
+            const OccupiedRegion rhi = measure(buildSpectrum(usb, -120.0f, 0.0f, mk(-110.7f)), usb, -120.0f);
+            char d[96];
+            std::snprintf(d, sizeof d, "  [%s] lo.high=%d hi.high=%d", tag(usb), rlo.highHz, rhi.highHz);
+            report("two-hump F3: bass-at-gate resolves stably (no flip)",
+                   rlo.valid && rhi.valid && rlo.highHz >= 2600 && rhi.highHz >= 2600 &&
+                   std::abs(rlo.highHz - rhi.highHz) <= 200, d);
+        }
     });
 
     // ── 15. Level-invariant outer edge — width must not track SNR ───────────
@@ -579,6 +626,44 @@ int main()
         // still produce a fit from the clipped-but-present energy.
         report("edge carrier: clipped scan measures without OOB access",
                r.valid && rf.valid, d);
+    });
+
+    // ── 19. Edge-het rejection (opt-in) — pull the cut inboard of a het ─────
+    // A ~3 kHz voice with a strong narrow het at ~2650 Hz (just inside the high
+    // edge). With hetReject OFF the het rides inside the passband (edge ~2.7 k+);
+    // with it ON the high-cut is pulled below the het (~2.5 k). A mid-band het
+    // (test-2 shape, het at 2 kHz) leaves the edges unmoved either way.
+    forEachMode([](bool usb) {
+        const auto sig = [](double f) -> float {
+            if (f >= 2600 && f <= 2700) return -45.0f;      // strong narrow het
+            if (f >= 300 && f <= 2900)  return -85.0f;      // voice hump
+            return -1000.0f;
+        };
+        const auto bins = buildSpectrum(usb, -115.0f, 0.0f, sig);
+        AetherSDR::OccupiedRegionParams on;  on.hetReject = true;
+        AetherSDR::OccupiedRegionParams off; off.hetReject = false;
+        const OccupiedRegion ron  = measureP(bins, usb, -115.0f, on);
+        const OccupiedRegion roff = measureP(bins, usb, -115.0f, off);
+        char d[112];
+        std::snprintf(d, sizeof d, "  [%s] on.high=%d off.high=%d", tag(usb), ron.highHz, roff.highHz);
+        report("edge-het: high-cut pulled below the het when enabled",
+               ron.valid && roff.valid && ron.highHz <= 2600 && roff.highHz > ron.highHz, d);
+    });
+    forEachMode([](bool usb) {
+        // Mid-band het (well inside the voice) must NOT move the edges — a
+        // bandpass edge can't exclude it, so leave it to the notch.
+        const auto sig = [](double f) -> float {
+            if (f >= 1950 && f <= 2050) return -45.0f;       // mid-band het
+            if (f >= 300 && f <= 2700)  return -85.0f;
+            return -1000.0f;
+        };
+        const auto bins = buildSpectrum(usb, -115.0f, 0.0f, sig);
+        AetherSDR::OccupiedRegionParams on; on.hetReject = true;
+        const OccupiedRegion r = measureP(bins, usb, -115.0f, on);
+        char d[96];
+        std::snprintf(d, sizeof d, "  [%s] low=%d high=%d", tag(usb), r.lowHz, r.highHz);
+        report("edge-het: mid-band het leaves edges unmoved",
+               r.valid && r.highHz >= 2400 && r.highHz <= 3200, d);
     });
 
     std::printf("\n%s (%d failure%s)\n",
