@@ -146,6 +146,13 @@ void SliceModel::setAdaptiveSplatter(int level)
     emit adaptiveSplatterChanged(level);
 }
 
+void SliceModel::setAdaptiveHetReject(bool on)
+{
+    if (m_adaptiveHetReject == on) return;
+    m_adaptiveHetReject = on;
+    emit adaptiveHetRejectChanged(on);
+}
+
 void SliceModel::setAdaptiveActive(bool on)
 {
     if (m_adaptiveActive == on) return;

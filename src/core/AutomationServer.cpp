@@ -1085,6 +1085,7 @@ QJsonObject sliceSnapshot(const SliceModel* s)
         {QStringLiteral("adaptiveMinSnr"),        s->adaptiveMinSnr()},
         {QStringLiteral("adaptiveResponse"),      s->adaptiveResponse()},
         {QStringLiteral("adaptiveSplatter"),      s->adaptiveSplatter()},
+        {QStringLiteral("adaptiveHetReject"),     s->adaptiveHetReject()},
         {QStringLiteral("adaptiveActive"),        s->adaptiveActive()},
     };
 }

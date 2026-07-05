@@ -51,6 +51,7 @@ public:
     int     adaptiveMinSnr()        const { return m_adaptiveMinSnr; }   // 0=Sensitive,1=Normal,2=Strong
     int     adaptiveResponse()      const { return m_adaptiveResponse; } // 0=Fast,1=Normal,2=Slow
     int     adaptiveSplatter()      const { return m_adaptiveSplatter; } // 0=Tight,1=Normal,2=Wide
+    bool    adaptiveHetReject()     const { return m_adaptiveHetReject; } // opt-in edge-het cut
     bool    adaptiveActive()        const { return m_adaptiveActive; }
     bool    isActive()   const { return m_active; }
     bool    isTxSlice()  const { return m_txSlice; }
@@ -161,6 +162,7 @@ public:
     void setAdaptiveMinSnr(int level);     // 0=Sensitive,1=Normal,2=Strong
     void setAdaptiveResponse(int level);   // 0=Fast,1=Normal,2=Slow
     void setAdaptiveSplatter(int level);   // 0=Tight,1=Normal,2=Wide
+    void setAdaptiveHetReject(bool on);    // opt-in edge-het cut
     void setAdaptiveActive(bool on);
     // Engine-driven passband write: same wire command as setFilterWidth, but
     // a distinct entry point so the engine can recognise its own writes (vs
@@ -270,6 +272,7 @@ signals:
     void adaptiveMinSnrChanged(int level);
     void adaptiveResponseChanged(int level);
     void adaptiveSplatterChanged(int level);
+    void adaptiveHetRejectChanged(bool on);
     void adaptiveActiveChanged(bool on);
     void activeChanged(bool active);
     void txSliceChanged(bool tx);
@@ -358,6 +361,7 @@ private:
     int     m_adaptiveMinSnr{1};         // 0=Sensitive,1=Normal,2=Strong
     int     m_adaptiveResponse{1};       // 0=Fast,1=Normal,2=Slow
     int     m_adaptiveSplatter{1};       // 0=Tight,1=Normal,2=Wide
+    bool    m_adaptiveHetReject{false};  // opt-in edge-het cut
     bool    m_adaptiveActive{false};     // a confident live fit is applied
     bool    m_active{false};
     bool    m_txSlice{false};
