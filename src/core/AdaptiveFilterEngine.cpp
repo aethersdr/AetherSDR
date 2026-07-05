@@ -405,8 +405,24 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     {
         const int regWidth = reg.highHz - reg.lowHz;
         const int tgtWidthNow = (st.tgtHigh == INT_MIN) ? 0 : st.tgtHigh - st.tgtLow;
-        if (tgtWidthNow > 0 && regWidth < tgtWidthNow - kStepMarginHz) ++st.stepRun;
-        else st.stepRun = 0;
+        // Over-to-over handoff only: an ACTIVE, non-baseline fit that isn't
+        // commit-frozen. Otherwise stepRun recounts with tgt never moving (the
+        // low-SNR widen-only branch holds it) and the flush re-fires every
+        // kStepFlushFrames — churning avgEnv/refTrail and flickering AUTO — and
+        // it must not intrude on the first-fit engage from baseline. Once a
+        // non-frozen narrowing commits, tgt moves and stepRun stops re-accruing,
+        // so no separate latch is needed. (atBaseline/lowSnr are computed below;
+        // inline them here since the flush precedes them.)
+        const bool atBaselineNow =
+            (st.tgtLow == st.baseLow && st.tgtHigh == st.baseHigh);
+        const bool commitFrozen =
+            (reg.peakDbm - reg.floorDbm) < (params.minPeakDb + kNarrowFreezeMarginDb);
+        if (st.active && !atBaselineNow && !commitFrozen
+                && tgtWidthNow > 0 && regWidth < tgtWidthNow - kStepMarginHz) {
+            ++st.stepRun;
+        } else {
+            st.stepRun = 0;
+        }
         if (st.stepRun >= kStepFlushFrames) {
             flushSmoothing(st);
             st.narrowRun = resp.narrow;   // step already confirmed -> commit next

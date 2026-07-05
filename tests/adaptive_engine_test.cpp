@@ -122,8 +122,10 @@ int main(int argc, char** argv)
         char det[128];
         std::snprintf(det, sizeof det, "  sends=%d (%.1f/s) minGap=%.0fms",
                       sends, perSec, d.writes.size() > 1 ? minGap / 1e6 : 0.0);
+        // Require >= 2 sends so the rate lock can't pass vacuously (a future
+        // change that stops the glide sending entirely must fail, not go green).
         report("no filt storm at 60 fps: <=8/s and >=125ms spacing",
-               perSec <= 8.0 && (d.writes.size() < 2 || minGap >= 124'000'000), det);
+               perSec <= 8.0 && d.writes.size() >= 2 && minGap >= 124'000'000, det);
     }
 
     // ── 2. Engage tracks a single signal ────────────────────────────────────
