@@ -471,7 +471,8 @@ MainWindow::ReceiveSyncTarget MainWindow::resolveReceiveSyncTarget() const
         if (receiveSyncAudioAudible(slice->flexAudioMute(),
                                     slice->flexAudioGain())) {
             flexCandidates.append({.sliceId = slice->sliceId(),
-                                   .frequencyHz = frequencyHz});
+                                   .frequencyHz = frequencyHz,
+                                   .kiwiProfileId = QString()});
         }
     }
 

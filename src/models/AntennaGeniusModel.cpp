@@ -270,8 +270,10 @@ void AntennaGeniusModel::disconnectFromDevice()
     m_deliberateDisconnect = false;
     m_antennas.clear();
     m_bands.clear();
-    m_portA = AgPortStatus{1};
-    m_portB = AgPortStatus{2};
+    m_portA = AgPortStatus{};
+    m_portA.portId = 1;
+    m_portB = AgPortStatus{};
+    m_portB.portId = 2;
     m_pending.clear();
 }
 
