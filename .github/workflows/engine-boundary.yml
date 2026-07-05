@@ -1,0 +1,37 @@
+name: Engine Boundary Check
+
+# aetherd-migration ratchet (docs/aetherd-headless-engine-design.md §10):
+# the engine (src/core/ + src/models/) must never depend on the UI —
+# no gui/ header includes, no QtWidgets. Known legacy offenders are
+# tracked in tools/check_engine_boundary.py and warn without blocking;
+# NEW violations fail the job (--strict). The legacy lists only shrink.
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "src/core/**"
+      - "src/models/**"
+      - "tools/check_engine_boundary.py"
+      - ".github/workflows/engine-boundary.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  engine-boundary:
+    name: Engine/UI dependency direction
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      # Full-tree scan (fast, stdlib-only): findings annotate inline;
+      # only non-legacy violations fail the job.
+      - name: Run engine-boundary check
+        run: python tools/check_engine_boundary.py --strict

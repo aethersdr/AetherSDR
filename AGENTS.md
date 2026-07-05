@@ -223,6 +223,28 @@ full thread diagram, data flow, cross-thread signal map, and GPU rendering notes
 Worker threads communicate exclusively via auto-queued signals. Never hold
 a mutex in the audio callback.
 
+### In-flight: aetherd engine/UI decoupling (RFC accepted 2026-07-04)
+
+The accepted RFC at
+[`docs/aetherd-headless-engine-design.md`](docs/aetherd-headless-engine-design.md)
+(tracking issue #3849) splits this codebase into an engine library
+(`libaethercore`), a headless engine daemon (`aetherd`), and thin UI
+clients, with pluggable radio backends (`IRadioBackend`). Implementation
+follows the RFC's §10 staged order; **no step has landed yet**.
+
+**Until migration rules appear in this file, nothing changes for you.**
+Do not pre-emptively restructure code toward the RFC — no new engine/UI
+seams, no backend interfaces, no speculative library targets. Each
+migration step lands together with an update to this file stating the new
+rules (pre-drafted in
+[`docs/aetherd-agents-md-staging.md`](docs/aetherd-agents-md-staging.md));
+if a rule isn't in this file, its step hasn't landed. Architecture changes
+ahead of the RFC steps remain maintainer-only (see Autonomous Agent
+Boundaries above). One rule is already CI-enforced: the engine
+(`src/core/` + `src/models/`) must not gain new `gui/` includes or
+QtWidgets usage (`tools/check_engine_boundary.py`, warning for tracked
+legacy files, error for new ones).
+
 ---
 
 ## SmartSDR Protocol (v1.4.0.0)

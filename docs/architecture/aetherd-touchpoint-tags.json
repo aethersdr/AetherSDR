@@ -1,0 +1,764 @@
+{
+ "core/AdaptiveFilterEngine.h": {
+  "tag": "universal",
+  "note": "GUI-thread adaptive RX passband coordinator over SliceModel/spectrum frames; canonical radio state, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AgcTCalibrator.h": {
+  "tag": "universal",
+  "note": "Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state.",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/AppSettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AudioEngine.h": {
+  "tag": "mixed(flex)",
+  "note": "Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering",
+  "split": "Core: RX/TX volume/mute/pan, NR (NR2/RN2/NR4/DFNR/AFX), client EQ/Comp/Gate/DeEss/Tube/Pudu/Reverb/limiter chains, CW sidetone/keying, metering/scopes, device selection. Vendor 'flex': VITA-49 TX packetization (FLEX_OUI, PCC codes), DAX TX stream IDs/routes, Opus SmartLink TX, PanadapterStream feed. Vendor 'kiwi': feedKiwiSdrAudioData + per-source Kiwi buffers/gain/pan/delay.",
+  "confidence": "high"
+ },
+ "core/AudioOutputRouter.h": {
+  "tag": "ui-support",
+  "note": "Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AutomationServer.h": {
+  "tag": "ui-support",
+  "note": "QLocalServer GUI-automation/test bridge (dumpTree/grab/invoke on QWidgets); dev tooling, stays in gui shell",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/BandStackSettings.h": {
+  "tag": "universal",
+  "note": "Per-radio band-stack memories (freq/mode/filter/AGC/NB-NR) \u2014 canonical radio state; only the XML store is client-side",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CallsignInfo.h": {
+  "tag": "universal",
+  "note": "Callsign lookup result struct (name/QTH/grid, JSON cache form); radio-agnostic spot/logging data.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CallsignLookupService.h": {
+  "tag": "universal",
+  "note": "Orchestrates QRZ/cty.dat callsign lookups + cache; radio-agnostic spot/logging integration.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CallsignUtils.h": {
+  "tag": "universal",
+  "note": "Stateless callsign parsing/validation helpers; radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CatPort.h": {
+  "tag": "ui-support",
+  "note": "CAT server (TCP+PTY, rigctld/TS-2000/FlexCAT dialects) for external apps; desktop integration, needs a home",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ChannelStripPresets.h": {
+  "tag": "universal",
+  "note": "Named-preset save/recall/import-export for the engine audio DSP chain; operates on core-profile DSP state.",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/ClientComp.h": {
+  "tag": "universal",
+  "note": "Client-side TX dynamics DSP (compressor/limiter/drive/phase rotator + GR meters); radio-agnostic engine DSP.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientDeEss.h": {
+  "tag": "universal",
+  "note": "Client TX DSP de-esser (sidechain bandpass + dynamics, meters); radio-agnostic engine DSP chain stage",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientEq.h": {
+  "tag": "universal",
+  "note": "Client-side parametric EQ DSP in AudioEngine (RX/TX paths); radio-agnostic engine DSP, no vendor protocol ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientFinalLimiter.h": {
+  "tag": "universal",
+  "note": "Final-stage brickwall limiter in client TX DSP chain (ceiling/trim/DC-block + meters); radio-agnostic DSP.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientGate.h": {
+  "tag": "universal",
+  "note": "Client TX-chain downward expander/noise gate DSP (thresh/ratio/hold + meters) \u2014 radio-agnostic engine DSP.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientPudu.h": {
+  "tag": "universal",
+  "note": "Client-side TX audio exciter (PooDoo dual-band DSP) \u2014 engine TX DSP chain module, no radio-family coupling",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientPuduMonitor.h": {
+  "tag": "universal",
+  "note": "TX-audio monitor: record/replay post-DSP client TX chain output without keying; radio-agnostic DSP feature",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientQuindarTone.h": {
+  "tag": "universal",
+  "note": "Engine-side TX DSP stage: Quindar tone/Morse intro-outro on PTT; works over any radio's TX audio path.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientReverb.h": {
+  "tag": "universal",
+  "note": "Client TX-chain Freeverb DSP (size/decay/damping/predelay/mix + meters); radio-agnostic engine DSP feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientTube.h": {
+  "tag": "universal",
+  "note": "Client TX-chain tube saturator DSP (drive/tone/env follower); radio-agnostic engine DSP, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientTxTestTone.h": {
+  "tag": "universal",
+  "note": "1 kHz TX test-tone generator injected at head of client TX DSP chain; radio-agnostic engine DSP feature",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CommandParser.h": {
+  "tag": "vendor(flex)",
+  "note": "Stateless parser/builder for SmartSDR TCP wire lines (V/H/C/R/S/M, FlexLib semantics) \u2014 pure Flex protocol.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CwCallsignSpotter.h": {
+  "tag": "universal",
+  "note": "Spots callsigns from the client-side CW decoder stream; radio-agnostic engine feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CwDecoder.h": {
+  "tag": "universal",
+  "note": "Client-side CW/Morse decoder (ggmorse) over generic 24kHz PCM; radio-agnostic engine DSP feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CwSidetoneGenerator.h": {
+  "tag": "universal",
+  "note": "Engine-side low-latency CW sidetone DSP driven by keying intent; radio-agnostic (DAX only in comment).",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CwTrace.h": {
+  "tag": "ui-support",
+  "note": "Header-only helpers minting monotonic ms timestamps + trace IDs for CW keying latency diagnostics, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/CwxLocalKeyer.h": {
+  "tag": "universal",
+  "note": "Local CW sidetone keyer: text+WPM in, key-down edges out; radio-agnostic despite Flex 'CWX' naming.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DaxTxPolicy.h": {
+  "tag": "vendor(flex)",
+  "note": "Policy deciding when to claim a Flex dax_tx stream vs deferring to SmartSDR DAX2; whole surface is DAX/VITA-49.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DeviceDiagnostics.h": {
+  "tag": "ui-support",
+  "note": "Host audio-device diagnostics (Qt device BT/USB heuristics, JSON snapshots for troubleshooting), not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DvkWavTransfer.h": {
+  "tag": "vendor(flex)",
+  "note": "DVK WAV upload/download via SmartSDR 'dvk' verbs + ad-hoc TCP port streaming; FlexLib 5MB limit baked in",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DxClusterClient.h": {
+  "tag": "universal",
+  "note": "Telnet DX cluster spot client (Spider/AR/CC); emits radio-agnostic DxSpot on canonical freq state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DxccColorProvider.h": {
+  "tag": "universal",
+  "note": "DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/FirmwareStager.h": {
+  "tag": "vendor(flex)",
+  "note": "Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload \u2014 pure Flex",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/FirmwareUploader.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 \u2014 pure Flex protocol",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/FlexControlManager.h": {
+  "tag": "vendor(flex)",
+  "note": "FlexControl USB knob serial driver (VID 0x2192); Flex ecosystem hardware but client-side input, home=gui shell",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/FreeDvClient.h": {
+  "tag": "universal",
+  "note": "FreeDV Reporter spot client (qso.freedv.org); radio-agnostic spotting fed by canonical freq/TX + RADE SNR",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/GpuSelector.h": {
+  "tag": "ui-support",
+  "note": "GPU enumeration + persisted QRhi render-adapter choice applied at app startup; pure client rendering plumbing",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/HidEncoderManager.h": {
+  "tag": "ui-support",
+  "note": "USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/IambicKeyer.h": {
+  "tag": "universal",
+  "note": "Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/KiwiPublicDirectory.h": {
+  "tag": "vendor(kiwi)",
+  "note": "Fetches/parses kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/KiwiSdrClient.h": {
+  "tag": "vendor(kiwi)",
+  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) \u2014 the kiwi backend itself",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/KiwiSdrManager.h": {
+  "tag": "vendor(kiwi)",
+  "note": "KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/KiwiSdrProtocol.h": {
+  "tag": "vendor(kiwi)",
+  "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/LogManager.h": {
+  "tag": "ui-support",
+  "note": "App-wide diagnostic logging: category registry, log file/retention, runtime toggles. Plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MacMicPermission.h": {
+  "tag": "ui-support",
+  "note": "macOS mic permission dialog at app startup; OS permission plumbing, no radio state \u2014 belongs in the client app",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MaidenheadLocator.h": {
+  "tag": "ui-support",
+  "note": "Header-only Maidenhead grid/lat-lon/distance/bearing math; stateless shared utility, not a protocol surface",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MemoryCsvCompat.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR memory-CSV import/export codec (exact 22-col format); Flex ecosystem interchange, not core protocol.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MemoryFieldValues.h": {
+  "tag": "mixed(flex)",
+  "note": "Canonical memory-channel value lists + sanitizers; concepts universal, wire forms mirror FlexLib protocol",
+  "split": "Memory-field vocab (modes, offset dirs, tone modes, CTCSS tones, tuning steps) is core-profile; wire-form casing, 0x7f-space encoding, and mode set mirrored from FlexLib Slice.cs/Memory.cs are flex extension",
+  "confidence": "high"
+ },
+ "core/MemoryRecallPolicy.h": {
+  "tag": "mixed(flex)",
+  "note": "Memory-recall intent (offset/tone math) is core, but builders emit SmartSDR slice command strings (flex)",
+  "split": "memoryRepeaterTxOffsetFreq (repeater offset semantics) is core-profile; buildMemoryRecall*Command emit literal SmartSDR \"slice tune/set\" wire strings \u2014 flex encoding",
+  "confidence": "high"
+ },
+ "core/MidiControlManager.h": {
+  "tag": "ui-support",
+  "note": "RtMidi input-device manager (ports, bindings, MIDI Learn) driving client setters; control-surface plumbing",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MidiSettings.h": {
+  "tag": "ui-support",
+  "note": "MIDI controller binding/profile persistence (XML files) \u2014 client input-device config, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MqttAntennaAlias.h": {
+  "tag": "ui-support",
+  "note": "MQTT topic parsing/queue for antenna-alias pushes from a broker; external integration plumbing, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MqttClient.h": {
+  "tag": "ui-support",
+  "note": "Generic libmosquitto MQTT pub/sub wrapper for external integrations; no radio state, needs a home not a protocol msg",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/MqttSettings.h": {
+  "tag": "ui-support",
+  "note": "Settings store for the MQTT broker bridge (conn config, topics, buttons, keychain); external integration plumbing",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NetRecurrence.h": {
+  "tag": "ui-support",
+  "note": "Pure RRULE math for net reminders; NetEntry is operator-scoped client state, so aligns with NetScheduler/NetEntry",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NetScheduleStore.h": {
+  "tag": "ui-support",
+  "note": "Local JSON persistence of NetEntry, which its header calls operator-scoped client state \u2014 not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NetScheduler.h": {
+  "tag": "ui-support",
+  "note": "Timer engine firing net-reminder alerts from NetEntry list; pure client calendar plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NetworkPathResolver.h": {
+  "tag": "ui-support",
+  "note": "Local NIC/IPv4 enumeration + interface-pick helper for connection setup; host networking plumbing, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NetworkSettings.h": {
+  "tag": "ui-support",
+  "note": "AppSettings JSON wrapper persisting VITA-49 SO_RCVBUF tuning; settings storage, not radio state \u2014 engine config knob, no protocol msg",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NvidiaAfxPack.h": {
+  "tag": "ui-support",
+  "note": "Download/install manager for NVIDIA AFX BNR runtime pack (CUDA/TensorRT); deployment plumbing, no radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NvidiaBnrSettings.h": {
+  "tag": "ui-support",
+  "note": "AppSettings-backed JSON store for Maxine BNR intensity + licence acceptance; persistence, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PanadapterStream.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR VITA-49 UDP receiver (FlexLib PCCs, DAX/IQ routing, SmartLink WAN reg); emits core-profile data",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PerfTelemetry.h": {
+  "tag": "ui-support",
+  "note": "Singleton perf-instrumentation logger for client render/UDP/input timing; diagnostics, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PeripheralSettings.h": {
+  "tag": "ui-support",
+  "note": "Client settings blob (AutoReconnect + legacy-key migration) for peripheral devices atop AppSettings; no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PgxlConnection.h": {
+  "tag": "vendor(flex)",
+  "note": "Direct TCP client (port 9008) for 4O3A Power Genius XL amp telemetry \u2014 Flex-ecosystem accessory protocol.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PipeWireAudioBridge.h": {
+  "tag": "mixed(flex)",
+  "note": "Linux virtual-audio bridge to WSJT-X etc.; audio routing is core, DAX channel model/rates are flex",
+  "split": "Streaming demod RX / TX mic audio to host apps via OS virtual devices is core-profile (any backend can feed it, and the PipeWire/PulseAudio device plumbing is vendor-neutral engine-host code); the 4-channel DAX model, 24 kHz DAX rates, and \"AetherSDR DAX 1-4\" naming are Flex DAX extensions.",
+  "confidence": "high"
+ },
+ "core/PotaClient.h": {
+  "tag": "universal",
+  "note": "POTA spot poller (api.pota.app) emitting DxSpot frequency/mode spots; radio-agnostic spot feature, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ProfileTransfer.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR .ssdr_cfg database import/export over Flex TCP transfer protocol (meta_subset, ports 4995/42607)",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PropForecastClient.h": {
+  "tag": "ui-support",
+  "note": "Web client fetching NOAA SWPC/hamqsl propagation data for dashboards; no radio state, external integration",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/PskReporterClient.h": {
+  "tag": "ui-support",
+  "note": "pskreporter.info HTTP/MQTT fetcher for reception reports of our call; external service feed for a map dialog, no radio state",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/QrzLookupSettings.h": {
+  "tag": "ui-support",
+  "note": "QRZ credential/settings holder (keychain-backed); client-side settings plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/QsoRecorder.h": {
+  "tag": "universal",
+  "note": "QSO WAV recorder gated by MOX using canonical slice freq/mode + audio streams; no vendor protocol ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RADEEngine.h": {
+  "tag": "universal",
+  "note": "Engine-side RADE/FreeDV digital-voice codec (PCM in/out, EOO, sync/SNR); DAX mentions are just audio plumbing",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RadioConnection.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR TCP text-protocol connection (commands/replies/status) \u2014 Flex wire protocol, per calibration anchor",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/RadioDiscovery.h": {
+  "tag": "mixed(flex)",
+  "note": "Device-discovery list/events are core-profile; SmartSDR UDP:4992 parsing + Multi-Flex/license fields are flex",
+  "split": "Discovered-device list surface (name/model/serial/address/status, discovered/updated/lost events) is core-profile; SmartSDR UDP 4992 broadcast parsing, multi-Flex/GUI-client fields (guiClient*, mf_enable), maxLicensedVersion/turfRegion, and bind/re-bind churn tied to SmartSDR discovery are flex vendor extension.",
+  "confidence": "high"
+ },
+ "core/ReceivePresentationSync.h": {
+  "tag": "mixed(flex)",
+  "note": "Cross-source RX latency sync (queues + GCC-PHAT); mechanism is core, but API hardcodes Flex/KiwiSdr pair",
+  "split": "Core-profile: presentation delay queue, per-surface delay/due-time model, sync settings/status, GCC-PHAT audio delay estimator \u2014 all generalize to N sources. Vendor: hardcoded Flex/KiwiSdr source and reference enums, Flex-vs-Kiwi offset polarity, and flex/kiwi audio-pair selection (kiwiProfileId, flexSliceId) \u2014 should become generic source IDs with flex/kiwi bindings.",
+  "confidence": "high"
+ },
+ "core/RttyDecoder.h": {
+  "tag": "universal",
+  "note": "Radio-agnostic RTTY (Baudot) DSP decoder over generic 24 kHz PCM; engine-side digital-mode decode feature.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SerialPortController.h": {
+  "tag": "ui-support",
+  "note": "USB-serial DTR/RTS PTT + CTS/DSR/DCD key/paddle input; local hardware I/O device, emits intent only",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SettingsHelpers.h": {
+  "tag": "ui-support",
+  "note": "QSlider live/persist debounce wiring for AppSettings saves; pure Qt client plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ShortcutManager.h": {
+  "tag": "ui-support",
+  "note": "Keyboard shortcut registry: QShortcut bindings, persistence, conflict checks \u2014 client input plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SignalClassifier.h": {
+  "tag": "universal",
+  "note": "ONNX CNN voice/carrier classifier over spectrogram patches; radio-agnostic engine DSP/analysis feature",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SmartLinkClient.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartLink WAN client: FlexRadio Auth0 login + TLS to smartlink.flexradio.com, WAN radio list/hole-punch.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SpectrogramBuffer.h": {
+  "tag": "universal",
+  "note": "Ring buffer of FFT frames per panadapter feeding CNN classifier patches; pure spectrum data, radio-agnostic.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SpotCollectorClient.h": {
+  "tag": "ui-support",
+  "note": "UDP listener for DXLab SpotCollector desktop app; external integration feeding DxSpot, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SpotCommandPolicy.h": {
+  "tag": "ui-support",
+  "note": "Settings-backed passive-spots toggle gating whether client emits spot-add cmds; pure AppSettings policy, no radio state",
+  "split": "",
+  "confidence": "medium"
+ },
+ "core/SpotModeResolver.h": {
+  "tag": "universal",
+  "note": "Maps DX-cluster spot mode/comment/band-plan to canonical radio mode; pure spot-to-state logic, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/StreamStatus.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR stream-status parsing: client_handle ownership, DAX RX/TX orphan-stream firmware quirks \u2014 pure Flex wire logic",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/SupportBundle.h": {
+  "tag": "ui-support",
+  "note": "Diagnostics bundle: archives logs/sysinfo and opens email client; client-side support tooling, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TciServer.h": {
+  "tag": "mixed(flex)",
+  "note": "TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX",
+  "split": "TCI gateway over canonical slice/mode/TX/meter/audio state = core-profile engine service; DAX stream ownership/auto-assign, DAX RX/IQ audio plumbing (ownsDaxChannel, m_tciDax*, onDaxAudioReady/onIqDataReady, rearmDaxForProfileLoad) = flex extension",
+  "confidence": "high"
+ },
+ "core/TgxlConnection.h": {
+  "tag": "vendor(flex)",
+  "note": "Direct TCP client for 4O3A Tuner Genius XL port-9010 protocol (relay/autotune); Flex-ecosystem accessory.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ThemeManager.h": {
+  "tag": "ui-support",
+  "note": "Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) \u2014 pure client GUI plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/TxKeyingMarker.h": {
+  "tag": "ui-support",
+  "note": "QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/UlanziDialBackend.h": {
+  "tag": "ui-support",
+  "note": "Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/UpdateChecker.h": {
+  "tag": "ui-support",
+  "note": "App self-update checker polling GitHub releases API; pure client plumbing, no radio state \u2014 belongs in gui shell.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/VersionNumber.h": {
+  "tag": "ui-support",
+  "note": "Semver parse/compare utility used by update checker and What's New dialog; app plumbing, not radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/VirtualAudioBridge.h": {
+  "tag": "mixed(flex)",
+  "note": "POSIX-shm virtual audio device bridge feeding digi-mode apps; routing is generic, semantics are Flex DAX",
+  "split": "Core: route RX/TX PCM to external apps via virtual audio devices, per-channel gain, RMS level signals (client-host plumbing). Flex: DAX channel model (4 RX + 1 TX), /aethersdr-dax-* shm names, 24 kHz FLEX-8600 native DAX rate, DAX TX stream wiring.",
+  "confidence": "high"
+ },
+ "core/VoiceSignalDetector.h": {
+  "tag": "universal",
+  "note": "Engine-side DSP: detects voice signals in FFT bins using band-plan segments; radio-agnostic spectrum analysis",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WanConnection.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartLink TLS transport speaking SmartSDR V/H/R/S/M protocol with wan validate handshake + TOFU cert pinning",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WaveformInstaller.h": {
+  "tag": "vendor(flex)",
+  "note": "Uploads Docker waveform images via SmartSDR fw 4.2.18 'file upload' TCP protocol \u2014 Flex-only ecosystem.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WfmDemodulator.h": {
+  "tag": "mixed(flex)",
+  "note": "WFM demod around WfmDsp: demod/Doppler-offset intent is core; IQ source is DAX IQ + SmartSDR cmds (flex)",
+  "split": "WFM demod capability + freq-offset/volume intent = core-profile; DAX IQ capture device/channel, DaxIqModel wiring, SmartSDR commandReady = flex",
+  "confidence": "high"
+ },
+ "core/WfmSettings.h": {
+  "tag": "ui-support",
+  "note": "Client-side settings blob (AppSettings JSON) storing WFM audio output device id + legacy-key migration.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/WsjtxClient.h": {
+  "tag": "ui-support",
+  "note": "UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface",
+  "split": "",
+  "confidence": "medium"
+ },
+ "models/AntennaGeniusModel.h": {
+  "tag": "vendor(flex)",
+  "note": "4O3A Antenna Genius switch client: UDP discovery + SmartSDR-like TCP protocol; Flex-ecosystem accessory",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/BandDefs.h": {
+  "tag": "universal",
+  "note": "Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/BandPlanManager.h": {
+  "tag": "universal",
+  "note": "Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/BandSettings.h": {
+  "tag": "universal",
+  "note": "Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) \u2014 band memories, no vendor fields",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/CwxModel.h": {
+  "tag": "universal",
+  "note": "CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/DaxIqModel.h": {
+  "tag": "vendor(flex)",
+  "note": "Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps \u2014 DAX is Flex-only",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/DvkModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Voice keyer slots/commands are core-profile; status parsing + FlexLib SsdrErrors mapping are flex.",
+  "split": "Core: voice-keyer slots/status + rec/preview/playback intent. Vendor: SmartSDR status parsing, SsdrErrors code mapping, reply correlation.",
+  "confidence": "high"
+ },
+ "models/EqualizerModel.h": {
+  "tag": "universal",
+  "note": "8-band TX/RX audio EQ state (enable + band gains) \u2014 core capability; SmartSDR wire parsing/cmds move to flex adapter",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/FlexWaveformModel.h": {
+  "tag": "vendor(flex)",
+  "note": "FlexLib waveform/WFP container management: parses SmartSDR waveform status, emits Flex protocol commands",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/MemoryEntry.h": {
+  "tag": "universal",
+  "note": "POD memory-channel record (freq/mode/offset/tone/squelch/filter/digital offsets) \u2014 canonical memories surface",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/MeterModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Meter registry+values are core-profile; VITA-49 raw scaling, TGXL/PGXL amp routing, COMPPEAK quirks are Flex",
+  "split": "Core: meter defs/values, S-meter, TX pwr/SWR, mic/ALC, telemetry. Flex: VITA-49 scaling, TGXL/PGXL handles, COMPPEAK slice quirks",
+  "confidence": "high"
+ },
+ "models/NetEntry.h": {
+  "tag": "ui-support",
+  "note": "Net scheduler entry: RRULE/timezone/reminder metadata, operator-scoped local JSON; radio state only via embedded MemoryEntry",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/PanadapterModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Per-pan display state is core-profile; DAX IQ ch, client_handle, VITA stream IDs, SmartSDR kv parsing are flex.",
+  "split": "Core: center/bandwidth, dBm range, antenna list, RF gain, WNB, fps/waterfall cadence. Flex ext: daxiqChannel, clientHandle, VITA-49 stream IDs, loopA/B, preamp string, applyPanStatus/applyWaterfallStatus kv parsing of SmartSDR status.",
+  "confidence": "high"
+ },
+ "models/ProfileLoadCommand.h": {
+  "tag": "vendor(flex)",
+  "note": "Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/RadioModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex",
+  "split": "Core: slices/pans/meters/TX/memories/audio levels/CW keying/GPS/antennas/network quality. Flex: SmartLink WAN, Multi-Flex client handles, DAX/NetCW streams, PGXL amp, licenses, USB cables, waveforms, profiles, SmartSDR protocol plumbing.",
+  "confidence": "high"
+ },
+ "models/RadioSession.h": {
+  "tag": "universal",
+  "note": "Per-radio session aggregate: owns RadioModel + id/label; session concept is core-profile, no vendor surface",
+  "split": "",
+  "confidence": "medium"
+ },
+ "models/RadioStatusOwnership.h": {
+  "tag": "vendor(flex)",
+  "note": "SmartSDR status parsing helpers: Flex hex handles, client_handle ownership, remote_audio_rx, interlock gate",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/SliceModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Slice state (freq/mode/filter/DSP) is core-profile; DAX, index_letter, SmartSDR status KVs are flex ext",
+  "split": "Core: freq/mode/filter, RIT/XIT, AGC, squelch, NB/NR/ANF DSP, FM repeater, antennas, record/play. Flex: daxChannel, index_letter, panId handle, SmartSDR applyStatus KVs, speex NRS profile workaround, ESC/diversity, RTTY/DIG offsets as Flex slice params. External-receive (kiwi) audio-replacement shims are backend-adapter glue.",
+  "confidence": "high"
+ },
+ "models/SpotModel.h": {
+  "tag": "universal",
+  "note": "Panadapter spot store (callsign/freq/mode/lifetime/priority) on canonical state; kv ingest is trivially generic",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/TnfModel.h": {
+  "tag": "universal",
+  "note": "Tracking notch filter state (freq/width/depth/permanent, global enable) \u2014 generic DSP notch surface; kv parse is transport detail",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/TransmitModel.h": {
+  "tag": "mixed(flex)",
+  "note": "TX state model: power/MOX/VOX/CW/filter are core-profile; ATU, DAX, APD, profiles, interlock are Flex.",
+  "split": "Core: RF/tune power, MOX/PTT+Quindar, VOX, mic level/proc, CW params, TX filter, monitor. Flex: ATU, DAX, APD samplers, TX/mic profiles, interlock ACC/RCA delays+polarity, SmartSDR status-kv parsing/commands.",
+  "confidence": "high"
+ },
+ "models/TunerModel.h": {
+  "tag": "vendor(flex)",
+  "note": "4o3a TGXL tuner state/commands via SmartSDR 'atu'/'tgxl' TCP verbs + direct port-9010 relay control",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/XvtrPolicy.h": {
+  "tag": "mixed(flex)",
+  "note": "XVTR policy: transverter list/freq translation is core; waterfall-tile offset + FLEX model power clamps are flex",
+  "split": "Core: Transverter struct, RF/IF frequency mapping intent. Flex: ModelCapabilities-based band-stack keys, waterfall tile offset matching, FLEX-64/6600 max-power dBm ranges.",
+  "confidence": "high"
+ }
+}
