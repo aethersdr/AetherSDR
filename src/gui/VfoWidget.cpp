@@ -2860,7 +2860,26 @@ void VfoWidget::setSmartSdrPlus(bool has)
 
 void VfoWidget::setHasExtendedDsp(bool has)
 {
+    if (m_hasExtendedDsp == has)
+        return;
     m_hasExtendedDsp = has;
+    // The model status that gates the extended firmware filters (NRS/RNN/NRF)
+    // can arrive AFTER the slice's initial DSP layout — e.g. a GUIClientID
+    // session restore pushes the slice first, then the `model` status arrives
+    // and MainWindow re-pushes this flag. Without a refresh here the flag flips
+    // but the buttons stay hidden until the next mode change (the AU-510 / 8600
+    // symptom, #2177 follow-up). Re-evaluate their visibility now, mirroring
+    // syncFromSlice()'s rule. Until a slice is set, setSlice()/syncFromSlice()
+    // will read the flag on their own.
+    if (!m_slice)
+        return;
+    const QString mode = m_slice->mode();
+    const bool isFm = (mode == "FM" || mode == "NFM");
+    const bool isCw = (mode == "CW" || mode == "CWL");
+    m_nrsBtn->setVisible(!isFm && m_hasExtendedDsp);
+    m_rnnBtn->setVisible(!isCw && !isFm && m_hasExtendedDsp);
+    m_nrfBtn->setVisible(!isFm && m_hasExtendedDsp);
+    relayoutDspGrid();
 }
 
 // Accent the ADSP launcher when any client-side NR module is active (#3800).
