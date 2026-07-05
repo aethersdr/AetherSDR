@@ -2331,6 +2331,29 @@ target_link_libraries(cwx_panel_test PRIVATE
     Qt6::Core Qt6::Widgets
 )
 
+add_executable(dvk_panel_test
+    tests/dvk_panel_test.cpp
+    # DvkPanel references DvkWavTransfer (upload/download + signals); the real
+    # impl pulls in RadioModel + the radio stack, so we link a no-op stub and
+    # let AUTOMOC generate the signal code from the header. (#3514)
+    tests/dvk_wav_transfer_stub.cpp
+    src/gui/DvkPanel.cpp
+    src/gui/DvkPanel.h
+    src/models/DvkModel.cpp
+    src/models/DvkModel.h
+    src/core/DvkWavTransfer.h
+    # DvkPanel.cpp calls ThemeManager::resolve(); pull in the manager + its
+    # logging deps so the test links (same set as cwx_panel_test).
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(dvk_panel_test PRIVATE src)
+target_link_libraries(dvk_panel_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network
+)
+
 add_executable(meter_model_test
     tests/meter_model_test.cpp
     src/models/MeterModel.cpp

@@ -508,17 +508,24 @@ void CwxPanel::setShortcutsEnabled(bool enabled)
 // ApplicationShortcuts and, directly, by the #3514 regression test.
 void CwxPanel::fireMacro(int index)
 {
-    if (!m_model || index < 0 || index >= 12) return;
+    if (!m_model || index < 0 || index >= 12) {
+        return;
+    }
     // #3514: a hidden CWX keyer must not transmit stored macros on an
-    // accidental F-key press. Gated here rather than in the shortcut
-    // enable state so the Qt "one enabled shortcut per key" invariant
-    // (#2464/#2582) stays intact — the shortcut still activates; the
-    // fire just returns early.
-    if (!isVisible()) return;
+    // accidental F-key press (keyboard F1-F12 path; the FlexControl/MIDI
+    // macro action is a deliberate physical press and fires at the model
+    // layer without this gate — see MainWindow_Controllers "CwxF"). Gated
+    // here rather than in the shortcut enable state so the Qt "one enabled
+    // shortcut per key" invariant (#2464/#2582) stays intact — the shortcut
+    // still activates; the fire just returns early.
+    if (!isVisible()) {
+        return;
+    }
     if (m_activeModeProvider) {
         const QString mode = m_activeModeProvider();
-        if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
+        if (mode != QLatin1String("CW") && mode != QLatin1String("CWL")) {
             return;
+        }
     }
     // Log the macro text to the history feed BEFORE firing the command so
     // the snapshot of m_model->sentIndex() lines up with the chars about

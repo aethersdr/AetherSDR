@@ -28,6 +28,13 @@ public:
     // to avoid Qt shortcut ambiguity. (#2582)
     void setShortcutsEnabled(bool enabled);
 
+    // Test seam: fire the F(id) playback exactly as its ApplicationShortcut
+    // does, including the #3514 visibility guard (and its stop-exemption), so
+    // the regression test can exercise the guarded path without Qt shortcut
+    // dispatch (which won't route to a hidden widget headlessly). Mirrors
+    // CwxPanel::fireMacroForTest. (1-based: 1=F1, 12=F12)
+    void firePlaybackForTest(int id) { firePlayback(id); }
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 
@@ -66,6 +73,7 @@ private:
     QVector<QShortcut*> m_shortcuts;
 
     void selectSlot(int id);
+    void firePlayback(int id);   // #3514: guarded F1-F12 playback fire (1-based)
     void showContextMenu(int id, const QPoint& globalPos);
     void startRename(int id);
     void commitRename();

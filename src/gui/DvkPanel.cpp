@@ -222,24 +222,17 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     // flips enable state based on the active slice's mode (mutually
     // exclusive with CwxPanel's F1-F12 set) so Qt still sees at most one
     // enabled shortcut per key and never emits activatedAmbiguously
-    // (#2464, #2582). The playback fire is additionally gated on panel
+    // (#2464, #2582). The playback START is additionally gated on panel
     // visibility at fire time so a hidden DVK can't transmit a stored
-    // voice message on an accidental F-key press. (#3514)
+    // voice message on an accidental F-key press; the STOP path stays
+    // reachable while hidden so an in-flight transmission can always be
+    // killed (see firePlayback). (#3514)
     for (int i = 0; i < 12; ++i) {
         auto* sc = new QShortcut(QKeySequence(Qt::Key_F1 + i), window());
         sc->setContext(Qt::ApplicationShortcut);
         sc->setEnabled(false);
         m_shortcuts.append(sc);
-        connect(sc, &QShortcut::activated, this, [this, i]() {
-            // #3514: don't fire stored voice messages when the panel is hidden.
-            if (!isVisible()) return;
-            int id = i + 1;
-            selectSlot(id);
-            if (m_model->status() == DvkModel::Playback && m_model->activeId() == id)
-                m_model->playbackStop(id);
-            else if (durationForSlot(id) > 0)
-                m_model->playbackStart(id);
-        });
+        connect(sc, &QShortcut::activated, this, [this, i]() { firePlayback(i + 1); });
     }
 
     // Escape: cancel rename if active, otherwise stop DVK operation.
@@ -274,6 +267,32 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 void DvkPanel::setShortcutsEnabled(bool enabled)
 {
     for (auto* sc : m_shortcuts) sc->setEnabled(enabled);
+}
+
+// Fire the F(id) playback slot. Invoked by the F1-F12 ApplicationShortcuts
+// and, directly, by the #3514 regression test.
+void DvkPanel::firePlayback(int id)
+{
+    if (!m_model) {
+        return;
+    }
+    // #3514: a hidden DVK must not START a stored voice message on an
+    // accidental F-key press — but STOPPING an in-flight transmission must
+    // stay reachable regardless of visibility (same reasoning as the ungated
+    // ESC/CW-abort exemption, #1552: abort paths must always be usable).
+    // Gated here rather than in the shortcut enable state so the Qt "one
+    // enabled shortcut per key" invariant (#2464/#2582) stays intact.
+    const bool stopping = m_model->status() == DvkModel::Playback
+                          && m_model->activeId() == id;
+    if (!isVisible() && !stopping) {
+        return;
+    }
+    selectSlot(id);
+    if (stopping) {
+        m_model->playbackStop(id);
+    } else if (durationForSlot(id) > 0) {
+        m_model->playbackStart(id);
+    }
 }
 
 void DvkPanel::selectSlot(int id)
