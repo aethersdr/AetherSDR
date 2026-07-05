@@ -26,14 +26,21 @@ namespace {
     // (perf(gui) #3958), which would halve every dwell/hold/confidence window
     // in wall-clock time AND push the frame-counted send throttle to ~15
     // filt/s — violating RFC #3878 cond. 2 (<= ~8/s). Rather than re-express
-    // the whole pipeline in seconds (a redesign), frames arriving faster than
-    // kMinFrameSpacingMs are simply not accepted: a native ~30 fps stream
-    // (33 ms) passes untouched with jitter headroom, a 60 fps stream is paced
-    // down to ~30 — the calibration rate — and the measurement cost halves as
-    // a bonus. kMinSendSpacingMs additionally enforces the filt-rate condition
-    // directly in wall-clock, independent of any fps assumption.
-    constexpr qint64 kMinFrameSpacingNs = 25LL * 1000000LL;   // <= 40 fps accepted
-    constexpr qint64 kMinSendSpacingNs  = 125LL * 1000000LL;  // <= 8 filt/s
+    // the whole pipeline in seconds (a redesign), we DECIMATE to the ~30 fps
+    // the constants were calibrated at, using a fixed-period accumulator:
+    // st.lastFrameNs holds the scheduled PHASE of the last accepted frame (not
+    // its arrival), and a frame is accepted only once the phase clock has
+    // advanced a full kFramePeriodNs. Because the phase marches at a constant
+    // period regardless of input jitter, 40/60/90 fps (and jittery) sources all
+    // decimate to a stable ~30 fps average — unlike a min-spacing-vs-last-
+    // arrival gate, which snaps its reference to each accepted frame and so
+    // collapses intermediate rates into a 20-40 fps sawtooth. kFramePeriodNs is
+    // set just below the native 33.3 ms (30 fps) interval so a native-30 stream
+    // passes untouched with a couple ms of jitter headroom. kMinSendSpacingNs
+    // additionally enforces the filt-rate condition directly in wall-clock,
+    // independent of any fps assumption.
+    constexpr qint64 kFramePeriodNs    = 31LL * 1000000LL;   // ~30 fps target
+    constexpr qint64 kMinSendSpacingNs = 125LL * 1000000LL;  // <= 8 filt/s
 
     // ── Pipeline constants (in frames; paced to ~30 fps above) ──────────────
     // Biased toward LOCKING: once fitted, the passband should sit still and move
@@ -105,9 +112,11 @@ namespace {
     //     as the signal weakens (the level-invariant cap needs headroom it
     //     doesn't have down here), so a weak station's "narrow" reading is an
     //     SNR artifact: widen-only until the peak clears the floor by
-    //     kLowSnrNarrowFreezeDb. Deliberately above the strongest presence
-    //     preset (14 dB), so every preset has a widen-only band just above
-    //     engagement.
+    //     (minPeakDb + kNarrowFreezeMarginDb). Scaled to the ACTIVE presence
+    //     preset so the freeze always sits just ABOVE the engagement gate
+    //     (Sensitive 6->9, Normal 9->12, Strong 14->17); a fixed threshold
+    //     (was 16 dB) sat far above the Sensitive/Normal gates and made a
+    //     medium signal that engaged never able to narrow.
     //   * FADING — while the in-band reference is falling (QSB fade in
     //     progress) the measured width is shrinking with it; freeze narrowing
     //     until the level stabilises. Median-of-first vs median-of-last over a
@@ -115,20 +124,27 @@ namespace {
     // Both suppress only the narrowing COMMIT — measurement, dwell and
     // widening stay live, so a genuine width change commits the moment the
     // freeze lifts.
-    constexpr float  kLowSnrNarrowFreezeDb = 16.0f;
+    constexpr float  kNarrowFreezeMarginDb = 3.0f;   // over the presence gate
     constexpr int    kFadeWindowFrames     = 20;     // ~0.7 s at the paced rate
     constexpr int    kFadeEndFrames        = 6;      // median span at each end
     constexpr float  kFadeDropDb           = 2.5f;
-    // Re-engage restore: a deep fade releases AUTO (confidence decays) and the
-    // filter reverts to baseline; when the SAME station comes back the fresh
-    // engage fit is built from the first weak frames and lands narrow. Instead,
-    // a fit remembered at the dropout is restored verbatim if the slice is
-    // still on the same frequency and the gap was shorter than kRefitMemoryNs
-    // (HF QSB cycles run ~5-30 s; 20 s rides a deep fade but expires before
-    // "same frequency" plausibly means a different station). The normal
-    // pipeline then refines from there — widening is fast, narrowing takes the
-    // slow dwell, so a stale-wide restore is safe.
-    constexpr qint64 kRefitMemoryNs = 20LL * 1000000000LL;
+    // Sustained-step flush (kill the QSO width carry-over). In a QSO two
+    // operators alternate on ONE dial frequency; when op A (say 4 kHz) unkeys
+    // and op B (3.5 kHz) keys up, A's medians linger in the 75-frame peak-hold
+    // window and its 80th-pct high-cut stays applied to B for ~2 s. Counting
+    // "gap" frames does NOT work: the per-offset peak-hold envelope (avgEnv,
+    // ~1.1 s release) rides the PTT gap so the measurement stays VALID at A's
+    // width across it. But that same peak-hold means the measurement only reads
+    // sustainedly NARROWER than the applied filter when the signal itself is
+    // genuinely narrower (a different, narrower operator) — a brief word/sibilant
+    // gap keeps the envelope wide. So: when the instantaneous measured width
+    // sits more than kStepMarginHz inside the current target for kStepFlushFrames
+    // consecutive frames, retire the stale peak-hold (flushSmoothing) so B fits
+    // its own width promptly. kStepMarginHz is well above the deadband so only a
+    // real operator-sized step (not QSB jitter or a small legitimate narrowing,
+    // which the normal slow narrow-dwell handles) triggers it.
+    constexpr int    kStepFlushFrames = 20;   // ~0.67 s sustained (> a word gap)
+    constexpr int    kStepMarginHz    = 350;  // operator-sized step, not jitter
     constexpr int    kSnapHz        = 50;     // 50 Hz grid
     constexpr int    kMinBwHz       = 50;     // never narrower than this
     // Glide + send throttle (RFC #3878 cond. 2 — no filt command storm). Emit
@@ -220,27 +236,49 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
 
     SliceState& st = m_state[slice->sliceId()];
 
-    // ── Frame pacing: keep the pipeline at its ~30 fps calibration ──────────
+    // ── Frame pacing: decimate to the ~30 fps calibration (fixed-period phase)
     // Placed before any state update so a rejected frame is invisible — all
-    // frame counters keep their calibrated meaning. Frames without a timestamp
-    // (emittedNs <= 0) are accepted unpaced (no basis to space them).
+    // frame counters keep their calibrated meaning. st.lastFrameNs is the
+    // scheduled phase, advanced by exactly one period per accepted frame so the
+    // average accept rate is source-independent (see kFramePeriodNs). If the
+    // phase has fallen more than a period behind (a stall from a tune or the
+    // TX-suspend gap), re-phase to now so catch-up never bursts. Frames without
+    // a timestamp (emittedNs <= 0, e.g. unit tests) are accepted unpaced.
     if (emittedNs > 0) {
-        if (st.lastFrameNs != 0 && emittedNs - st.lastFrameNs < kMinFrameSpacingNs)
-            return;
-        st.lastFrameNs = emittedNs;
+        if (st.lastFrameNs == 0) {
+            st.lastFrameNs = emittedNs;                 // seed + accept first frame
+        } else if (emittedNs - st.lastFrameNs < kFramePeriodNs) {
+            return;                                     // too soon -> drop
+        } else {
+            st.lastFrameNs += kFramePeriodNs;
+            if (emittedNs - st.lastFrameNs >= kFramePeriodNs)
+                st.lastFrameNs = emittedNs;             // stalled -> re-phase
+        }
     }
 
-    // Clear the per-fit smoothing/measurement state for a fresh fit, WITHOUT
-    // touching the baseline (the operator's manual filter). Shared by the tune
-    // and mode-change resets so both always clear the same fields.
-    const auto clearFit = [](SliceState& s) {
+    // Flush the width MEMORY (smoothing/measurement inputs) without touching the
+    // live passband, baseline, or confidence/AUTO state. Used by the
+    // between-overs flush: hold tgt/cur through the dead air, but drop every
+    // input that would carry the previous operator's width or reference onto the
+    // next one (median/hold windows, candidate + dwell, the narrowing run, the
+    // fade trail, and the per-bin envelope so it re-seeds to the new signal).
+    const auto flushSmoothing = [](SliceState& s) {
         s.rawLow.clear(); s.rawHigh.clear();
         s.medLow.clear(); s.medHigh.clear();
         s.candLow = 0; s.candHigh = 0;
-        s.dwell = 0; s.refractory = 0; s.sinceWrite = 0;
-        s.confScore = 0; s.active = false;
+        s.dwell = 0; s.narrowRun = 0; s.stepRun = 0;
         s.avgEnv.clear();
         s.refTrail.clear();
+    };
+
+    // Clear the per-fit smoothing/measurement state for a fresh fit, WITHOUT
+    // touching the baseline (the operator's manual filter). Shared by the tune
+    // and mode-change resets so both always clear the same fields. This is the
+    // full reset (flushSmoothing plus the confidence/AUTO/dwell-settle state).
+    const auto clearFit = [&flushSmoothing](SliceState& s) {
+        flushSmoothing(s);
+        s.refractory = 0; s.sinceWrite = 0;
+        s.confScore = 0; s.active = false;
     };
 
     // ── Tune detection: re-fit fresh on a frequency jump ────────────────────
@@ -269,7 +307,6 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
         clearFit(st);
         st.haveBaseline = false;     // re-capture baseline from the new mode
         st.framesSinceTune = 0;
-        st.lastGoodLow = INT_MIN;    // signed convention flips — memory invalid
     }
     st.lastMode = mode;
 
@@ -313,9 +350,11 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     const int maxHigh = slice->adaptiveMaxHighCut();
 
     // Operator-tunable presets: Minimum SNR + Splatter rejection -> measurement
-    // knobs; Response speed -> dwell/settle timing (below).
-    const OccupiedRegionParams params =
+    // knobs; Response speed -> dwell/settle timing (below); Het reject -> opt-in
+    // edge-het cut.
+    OccupiedRegionParams params =
         measureParams(slice->adaptiveMinSnr(), slice->adaptiveSplatter());
+    params.hetReject = slice->adaptiveHetReject();
     const ResponseTuning resp = responseTuning(slice->adaptiveResponse());
 
     // While idle (no confident fit — reverted to the operator's baseline), keep
@@ -335,21 +374,8 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     // weak/marginal signal cannot flicker the badge between AUTO and the value.
     st.confScore = reg.valid ? std::min(st.confScore + kConfUp, kConfMax)
                              : std::max(st.confScore - kConfDown, 0);
-    if (!st.active && st.confScore >= kConfHigh) {
-        st.active = true;
-    } else if (st.active && st.confScore <= kConfLow) {
-        st.active = false;
-        // Genuine dropout (confidence fully decayed): remember the confident
-        // fit before the invalid branch reverts to baseline, so a return of
-        // the same station within kRefitMemoryNs restores it instead of
-        // re-fitting narrow from the first weak frames.
-        if (emittedNs > 0 && st.tgtLow != INT_MIN &&
-            !(st.tgtLow == st.baseLow && st.tgtHigh == st.baseHigh)) {
-            st.lastGoodLow = st.tgtLow; st.lastGoodHigh = st.tgtHigh;
-            st.lastGoodFreqMhz = freqMhz;
-            st.lastGoodNs = emittedNs;
-        }
-    }
+    if (!st.active && st.confScore >= kConfHigh)      st.active = true;
+    else if (st.active && st.confScore <= kConfLow)   st.active = false;
 
     if (!reg.valid) {
         // A momentary measurement gap (e.g. a speech pause). If we are
@@ -363,8 +389,28 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
             st.medLow.clear(); st.medHigh.clear();
             st.dwell = 0;
         }
+        st.stepRun = 0;   // an invalid frame is not a sustained step
         glideToward(slice, st, st.active, emittedNs);
         return;
+    }
+
+    // ── Sustained-step flush (QSO handoff; see kStepFlushFrames) ────────────
+    // The instantaneous measured width vs the applied target: only a genuinely
+    // narrower operator (not a word gap, which the peak-hold rides wide) reads
+    // narrower for kStepFlushFrames straight. When it does, retire the stale
+    // peak-hold and pre-load the narrowing confirmation (the step is already
+    // proven) so the new operator's width commits promptly instead of waiting
+    // out the 75-frame hold. Guarded to a real operator-sized step so QSB jitter
+    // and small legitimate narrowings fall through to the normal slow path.
+    {
+        const int regWidth = reg.highHz - reg.lowHz;
+        const int tgtWidthNow = (st.tgtHigh == INT_MIN) ? 0 : st.tgtHigh - st.tgtLow;
+        if (tgtWidthNow > 0 && regWidth < tgtWidthNow - kStepMarginHz) ++st.stepRun;
+        else st.stepRun = 0;
+        if (st.stepRun >= kStepFlushFrames) {
+            flushSmoothing(st);
+            st.narrowRun = resp.narrow;   // step already confirmed -> commit next
+        }
     }
 
     // Clamp to operator bounds AND fixed SSB-voice guardrails, enforce MIN_BW,
@@ -400,6 +446,9 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     holdHigh = std::min(holdHigh, maxHigh);
 
     // ── Inertia: candidate must hold (deadband + dwell) before committing ────
+    // WIDENING / first-fit use candidate-proximity dwell: the peak-hold keeps a
+    // widening candidate stable, so requiring holdLow/holdHigh to sit within the
+    // deadband of the anchored candidate for needDwell frames is a good confirm.
     const bool sameCandidate = std::abs(holdLow - st.candLow) <= kDeadbandHz &&
                                std::abs(holdHigh - st.candHigh) <= kDeadbandHz;
     if (sameCandidate) {
@@ -421,17 +470,25 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     const int wantWidth = wantHi - wantLo;
     const int curWidth  = (st.tgtHigh == INT_MIN) ? 0 : st.tgtHigh - st.tgtLow;
     const bool narrowing = wantWidth < curWidth - kDeadbandHz;
+    // NARROWING uses a DIRECTION-consistent counter instead of candidate
+    // proximity: as long as the want stays narrower than the applied filter the
+    // confirmation accrues, so QSB jitter that wobbles the exact edge by more
+    // than the deadband (which perpetually re-anchored the candidate and reset
+    // dwell, freezing narrowing forever) no longer blocks it. Any non-narrowing
+    // frame resets the run, so a signal merely oscillating around the current
+    // width never accrues and never ratchets narrow.
+    if (narrowing) ++st.narrowRun; else st.narrowRun = 0;
     // First fit out of idle: the passband is still parked at the operator's
     // baseline (nobody fitted yet — a transmission just started). Commit on the
-    // short engage dwell so the filter starts adapting promptly; later moves use
-    // the normal widen/narrow dwell so they stay calm.
+    // short engage dwell so the filter starts adapting promptly.
     const bool atBaseline = (st.tgtLow == st.baseLow && st.tgtHigh == st.baseHigh);
-    const int needDwell = atBaseline    ? resp.engage
-                        : narrowing     ? resp.narrow
-                                        : resp.widen;
-    // Narrowing-freeze inputs (see kLowSnrNarrowFreezeDb block): a weak peak
-    // or a falling in-band reference makes a narrower reading untrustworthy.
-    const bool lowSnr = (reg.peakDbm - reg.floorDbm) < kLowSnrNarrowFreezeDb;
+
+    // Narrowing-freeze inputs (see kNarrowFreezeMarginDb block): a weak peak or
+    // a falling in-band reference makes a narrower reading untrustworthy. The
+    // freeze threshold tracks the active presence preset so it sits just above
+    // engagement (never a dead band that blocks a medium signal from narrowing).
+    const float narrowFreezeDb = params.minPeakDb + kNarrowFreezeMarginDb;
+    const bool lowSnr = (reg.peakDbm - reg.floorDbm) < narrowFreezeDb;
     st.refTrail.append(reg.referenceDbm);
     if (st.refTrail.size() > kFadeWindowFrames) st.refTrail.removeFirst();
     bool fading = false;
@@ -440,32 +497,25 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
         const float late  = medianOfF(st.refTrail.mid(st.refTrail.size() - kFadeEndFrames));
         fading = (early - late) > kFadeDropDb;
     }
-    // Re-engage restore is possible only on the engage commit (passband still
-    // at baseline), same frequency, within the memory window.
-    const bool restorable = atBaseline && st.lastGoodLow != INT_MIN &&
-                            emittedNs > 0 &&
-                            emittedNs - st.lastGoodNs <= kRefitMemoryNs &&
-                            std::abs(freqMhz - st.lastGoodFreqMhz) <= 0.0003;
 
     // Settle after each change before allowing the next, so the filter feels
     // calm rather than continuously nudging.
     if (st.refractory > 0) --st.refractory;
-    if (differs && st.dwell >= needDwell && st.refractory == 0) {
-        if (restorable) {
-            // Same station back after a dropout: restore the pre-fade fit
-            // verbatim (the fresh candidate is built from the first weak
-            // frames and lands narrow); the pipeline refines from there.
-            st.tgtLow = st.lastGoodLow; st.tgtHigh = st.lastGoodHigh;
-            st.lastGoodLow = INT_MIN;   // consumed
-            st.dwell = 0;
-            st.refractory = resp.refractory;
-        } else if (narrowing && (lowSnr || fading)) {
-            // Widen-only: hold the target; dwell keeps accumulating so the
+    const auto commit = [&] {
+        st.tgtLow = wantLo; st.tgtHigh = wantHi;
+        st.dwell = 0; st.narrowRun = 0;
+        st.refractory = resp.refractory;
+    };
+    if (differs && st.refractory == 0) {
+        if (narrowing && (lowSnr || fading)) {
+            // Widen-only: hold the target; narrowRun keeps accruing so the
             // narrowing commits the moment the freeze lifts.
+        } else if (atBaseline) {
+            if (st.dwell >= resp.engage) commit();          // prompt first fit
+        } else if (narrowing) {
+            if (st.narrowRun >= resp.narrow) commit();       // slow, jitter-robust
         } else {
-            st.tgtLow = wantLo; st.tgtHigh = wantHi;
-            st.dwell = 0;
-            st.refractory = resp.refractory;
+            if (st.dwell >= resp.widen) commit();            // widen a live fit
         }
     }
 
