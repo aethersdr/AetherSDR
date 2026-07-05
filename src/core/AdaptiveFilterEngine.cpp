@@ -185,11 +185,33 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
                                         qint64 emittedNs)
 {
     if (!slice) return;
+
+    // emittedNs is 0 in production (only stamped under perf-telemetry logging);
+    // substitute a monotonic engine clock so the wall-clock gates below aren't
+    // silently inert. +1 keeps it strictly positive so it never re-reads as the
+    // "no timestamp" sentinel. (#3945 review)
+    if (emittedNs <= 0) {
+        if (!m_fallbackClock.isValid()) m_fallbackClock.start();
+        emittedNs = m_fallbackClock.nsecsElapsed() + 1;
+    }
+
     const QString mode = slice->mode();
     const bool isUsb = (mode == QStringLiteral("USB"));
     const bool ssb   = isUsb || (mode == QStringLiteral("LSB"));
     if (!ssb || !slice->adaptiveFilterEnabled()) {
-        if (m_state.contains(slice->sliceId())) resetSlice(slice->sliceId());
+        if (m_state.contains(slice->sliceId())) {
+            // Restore the operator's manual baseline before dropping state, so
+            // disabling the feature (or leaving SSB) doesn't strand the passband
+            // at the last auto-fit width. Only when the operator DISABLED it on
+            // an SSB slice — a mode change already resets the filter to the mode
+            // default, and we must not fight that. (#3945 review)
+            const SliceState& st = m_state[slice->sliceId()];
+            if (ssb && st.haveBaseline &&
+                (st.curLow != st.baseLow || st.curHigh != st.baseHigh)) {
+                slice->applyAdaptiveFilter(st.baseLow, st.baseHigh);
+            }
+            resetSlice(slice->sliceId());
+        }
         return;
     }
 

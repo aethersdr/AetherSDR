@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QString>
 #include <QVector>
+#include <QElapsedTimer>
 
 #include <climits>                 // INT_MIN (SliceState sentinels)
 
@@ -74,6 +75,15 @@ private:
                      qint64 emittedNs);
 
     QHash<int, SliceState> m_state;
+
+    // Monotonic fallback clock. The per-frame emittedNs timestamp is only
+    // stamped when perf-telemetry logging is enabled (it doubles as a
+    // telemetry gate in PanadapterStream / MainWindow_Session), so in normal
+    // operation it arrives as 0 — which would leave every wall-clock timing
+    // gate below (frame pacing, the <=8 filt/s send cap, re-engage-restore)
+    // inert. When emittedNs <= 0 we substitute this clock so the guarantees
+    // hold regardless of telemetry state. (#3945 review)
+    QElapsedTimer m_fallbackClock;
 };
 
 } // namespace AetherSDR
