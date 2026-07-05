@@ -66,11 +66,13 @@ private:
     QComboBox* m_minSnr{nullptr};
     QComboBox* m_response{nullptr};
     QComboBox* m_splatter{nullptr};
+    QComboBox* m_hetReject{nullptr};
     QWidget*   m_loRow{nullptr};
     QWidget*   m_hiRow{nullptr};
     QWidget*   m_snrRow{nullptr};
     QWidget*   m_responseRow{nullptr};
     QWidget*   m_splatterRow{nullptr};
+    QWidget*   m_hetRow{nullptr};
 };
 
 } // namespace AetherSDR

@@ -150,6 +150,9 @@ AdaptiveFilterControls::AdaptiveFilterControls(int sections, bool withHeader,
         for (const QString& o : {tr("Fast"), tr("Normal"), tr("Slow")}) m_response->addItem(o);
         std::tie(m_splatterRow, m_splatter) = makeRow(rightTarget, tr("Splat"), tr("Adaptive splatter rejection"));
         for (const QString& o : {tr("Tight"), tr("Normal"), tr("Wide")}) m_splatter->addItem(o);
+        std::tie(m_hetRow, m_hetReject) = makeRow(rightTarget, tr("Het"),
+            tr("Edge-het reject: narrow the passband to exclude a strong het near an edge (leaves a mid-band het to the notch)"));
+        for (const QString& o : {tr("Off"), tr("On")}) m_hetReject->addItem(o);
     }
 
     // Top-pack each column (the shorter one absorbs the slack at the bottom) so
@@ -180,6 +183,9 @@ AdaptiveFilterControls::AdaptiveFilterControls(int sections, bool withHeader,
     if (m_splatter) connect(m_splatter, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (m_slice) { m_slice->setAdaptiveSplatter(i); savePrefs(m_slice); }
     });
+    if (m_hetReject) connect(m_hetReject, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (m_slice) { m_slice->setAdaptiveHetReject(i != 0); savePrefs(m_slice); }
+    });
 
     updateVisibility();
 }
@@ -198,6 +204,7 @@ void AdaptiveFilterControls::setSlice(SliceModel* slice)
     if (m_minSnr)   { QSignalBlocker b(m_minSnr);   m_minSnr->setCurrentIndex(std::clamp(slice->adaptiveMinSnr(), 0, 2)); }
     if (m_response) { QSignalBlocker b(m_response); m_response->setCurrentIndex(std::clamp(slice->adaptiveResponse(), 0, 2)); }
     if (m_splatter) { QSignalBlocker b(m_splatter); m_splatter->setCurrentIndex(std::clamp(slice->adaptiveSplatter(), 0, 2)); }
+    if (m_hetReject) { QSignalBlocker b(m_hetReject); m_hetReject->setCurrentIndex(slice->adaptiveHetReject() ? 1 : 0); }
 
     // Live sync: slice value changes (from any host, or the engine) -> controls.
     // Every instance tracks enabled (for visibility); the rest only if built.
@@ -226,6 +233,9 @@ void AdaptiveFilterControls::setSlice(SliceModel* slice)
     if (m_splatter) connect(slice, &SliceModel::adaptiveSplatterChanged, this, [this](int i) {
         QSignalBlocker b(m_splatter); m_splatter->setCurrentIndex(std::clamp(i, 0, 2));
     });
+    if (m_hetReject) connect(slice, &SliceModel::adaptiveHetRejectChanged, this, [this](bool on) {
+        QSignalBlocker b(m_hetReject); m_hetReject->setCurrentIndex(on ? 1 : 0);
+    });
 
     updateVisibility();
 }
@@ -236,7 +246,7 @@ void AdaptiveFilterControls::updateVisibility()
     // slice (source of truth) so it stays correct even when enabled is toggled
     // programmatically (e.g. the engine disabling adaptive on a manual edit).
     const bool on = m_slice && m_slice->adaptiveFilterEnabled();
-    for (QWidget* r : {m_loRow, m_hiRow, m_snrRow, m_responseRow, m_splatterRow})
+    for (QWidget* r : {m_loRow, m_hiRow, m_snrRow, m_responseRow, m_splatterRow, m_hetRow})
         if (r) r->setVisible(on);
 
     // Invalidate our own cached sizeHint so the host reads the new (shorter)
@@ -258,6 +268,7 @@ void AdaptiveFilterControls::loadPrefs(SliceModel* slice)
     slice->setAdaptiveMinSnr(o.value("minSnr").toInt(1));      // default Normal
     slice->setAdaptiveResponse(o.value("response").toInt(1));  // default Normal
     slice->setAdaptiveSplatter(o.value("splatter").toInt(1));  // default Normal
+    slice->setAdaptiveHetReject(o.value("hetReject").toBool(false));  // opt-in, off
     // Session-scoped by design: the adaptive filter always starts DISABLED and
     // the operator enables it explicitly each session. Only the config above
     // persists; the saved "enabled" value is deliberately not restored.
@@ -289,6 +300,7 @@ void AdaptiveFilterControls::savePrefs(SliceModel* slice)
     o["minSnr"]     = slice->adaptiveMinSnr();
     o["response"]   = slice->adaptiveResponse();
     o["splatter"]   = slice->adaptiveSplatter();
+    o["hetReject"]  = slice->adaptiveHetReject();
     root[QString::number(slice->sliceId())] = o;
     const QString after =
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
