@@ -269,7 +269,7 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
 
     // Process 10ms frames (LPCNET_FRAME_SIZE = 160 samples @ 16kHz)
     while ((m_txAccum.size() / sizeof(int16_t)) >= LPCNET_FRAME_SIZE || (m_eooRequested && !m_txAccum.isEmpty())) {
-        int nToTake = std::min<int>(LPCNET_FRAME_SIZE, m_txAccum.size() / sizeof(int16_t));
+        int nToTake = std::min<int>(LPCNET_FRAME_SIZE, static_cast<int>(m_txAccum.size() / sizeof(int16_t)));
         QByteArray sampleArray = m_txAccum.left(nToTake * sizeof(int16_t));
         m_txAccum.remove(0, sampleArray.size());
 
@@ -292,7 +292,7 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
     int n_features_in = rade_n_features_in_out(m_rade);
     int n_tx_out = rade_n_tx_out(m_rade);
     while ((m_txFeatAccum.size() / static_cast<qsizetype>(sizeof(float))) >= qsizetype(n_features_in) || (m_eooRequested && !m_txFeatAccum.isEmpty())) {
-        int nFeatures = m_txFeatAccum.size() / sizeof(float);
+        int nFeatures = static_cast<int>(m_txFeatAccum.size() / sizeof(float));
         int nToProcess = std::min(n_features_in, nFeatures);
         
         std::vector<float> feat_in(n_features_in, 0.0f);

@@ -71,9 +71,9 @@ public:
     void setGainMax(float v)    { m_gainMax.store(v); }
     void setQspp(float v)      { m_qSpp.store(v); }
     void setGainSmooth(float v) { m_gainSmooth.store(v); }
-    float gainMax() const       { return m_gainMax.load(); }
-    float qspp() const         { return m_qSpp.load(); }
-    float gainSmooth() const    { return m_gainSmooth.load(); }
+    float gainMax() const       { return static_cast<float>(m_gainMax.load()); }
+    float qspp() const         { return static_cast<float>(m_qSpp.load()); }
+    float gainSmooth() const    { return static_cast<float>(m_gainSmooth.load()); }
 
     // Gain method: 0=Linear, 1=Log, 2=Gamma (default, MMSE-LSA), 3=Trained
     void setGainMethod(int m)   { m_gainMethod.store(m); }

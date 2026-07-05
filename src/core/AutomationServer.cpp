@@ -4923,7 +4923,7 @@ QJsonObject AutomationServer::doLog(const QString& action, const QString& arg,
     }
 
     if (action == QLatin1String("unsubscribe")) {
-        const bool was = sock && m_logSubscribers.remove(sock) > 0;
+        const bool was = sock && m_logSubscribers.remove(sock);
         if (m_logSubscribers.isEmpty() && m_logDrain)
             m_logDrain->stop();
         return QJsonObject{{QStringLiteral("ok"), true},

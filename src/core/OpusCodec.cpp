@@ -95,7 +95,7 @@ QByteArray OpusCodec::encode(const QByteArray& pcmStereo)
     if (!m_encoder || pcmStereo.isEmpty()) return {};
 
     // Input: stereo int16 interleaved, FRAME_SIZE sample frames (240 × 2 channels)
-    int totalSamples = pcmStereo.size() / sizeof(int16_t);
+    int totalSamples = static_cast<int>(pcmStereo.size() / sizeof(int16_t));
     int frameSamples = totalSamples / CHANNELS;  // per-channel sample count
 
     // Opus needs exactly FRAME_SIZE samples per channel per encode call

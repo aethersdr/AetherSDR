@@ -1726,7 +1726,7 @@ bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
 void ThemeManager::clearWidgetTracking(QWidget* widget)
 {
     if (!widget) return;
-    if (m_trackedWidgets.remove(widget) > 0) {
+    if (m_trackedWidgets.remove(widget)) {
         QObject::disconnect(widget, &QObject::destroyed,
                             this, &ThemeManager::onTrackedWidgetDestroyed);
     }

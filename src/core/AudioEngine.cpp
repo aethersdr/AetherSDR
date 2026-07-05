@@ -5660,7 +5660,7 @@ void AudioEngine::processNr2(const QByteArray& stereoPcm,
 
 QByteArray AudioEngine::applyBoost(const QByteArray& pcm, float gain) const
 {
-    const int nSamples = pcm.size() / sizeof(int16_t);
+    const int nSamples = static_cast<int>(pcm.size() / sizeof(int16_t));
     const auto* src = reinterpret_cast<const int16_t*>(pcm.constData());
     QByteArray out(pcm.size(), Qt::Uninitialized);
     auto* dst = reinterpret_cast<int16_t*>(out.data());
@@ -6783,7 +6783,7 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     // P/CW mic gauge shows DAX audio level regardless of mic profile (#517)
     {
         const auto* src = reinterpret_cast<const float*>(float32pcm.constData());
-        const int samples = float32pcm.size() / sizeof(float);
+        const int samples = static_cast<int>(float32pcm.size() / sizeof(float));
         float peak = 0.0f;
         double sumSq = 0.0;
         for (int i = 0; i < samples; ++i) {

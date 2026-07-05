@@ -29,6 +29,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "SpectralNR.h"
 #include "LogManager.h"
+#include <QByteArray>
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -280,9 +281,9 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
     // This gives us a head start if Thetis is installed
 #ifdef _WIN32
     {
-        const char* appData = std::getenv("APPDATA");
-        if (appData) {
-            std::string thetisWisdom = std::string(appData)
+        const QByteArray appData = qgetenv("APPDATA");
+        if (!appData.isEmpty()) {
+            std::string thetisWisdom = std::string(appData.constData())
                 + "\\OpenHPSDR\\Thetis-x64\\wdspWisdom00";
             std::lock_guard<std::mutex> lock(s_fftwMutex);
             if (fftw_import_wisdom_from_filename(thetisWisdom.c_str())) {

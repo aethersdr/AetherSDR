@@ -523,7 +523,7 @@ void SmartMtrWidget::drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const
     p.setFont(f);
 
     QColor c(255, 255, 255);
-    c.setAlphaF(0.6); // white, 60% opacity
+    c.setAlphaF(0.6f); // white, 60% opacity
     p.setPen(c);
 
     // Bound the label to the marker span [kScaleMin, kScaleMax] so it never sits

@@ -5631,7 +5631,7 @@ void RadioModel::handleSliceStatus(int id,
             m_ownedSliceIds.insert(id);
             // If this slot was previously foreign (e.g. another client
             // released it and we just got assigned), drop the foreign mark.
-            if (m_foreignSliceOwners.remove(id) > 0) {
+            if (m_foreignSliceOwners.remove(id)) {
                 emit slotOccupancyChanged(id);
             }
             qCDebug(lcProtocol) << "RadioModel: slice" << id << "is ours (client_handle match)";
@@ -5680,7 +5680,7 @@ void RadioModel::handleSliceStatus(int id,
             emit sliceRemoved(id);
             stale->deleteLater();
             emit slotOccupancyChanged(id);
-        } else if (m_foreignSliceOwners.remove(id) > 0) {
+        } else if (m_foreignSliceOwners.remove(id)) {
             // Foreign client released their slot — clear the dim marker.
             emit slotOccupancyChanged(id);
         }
