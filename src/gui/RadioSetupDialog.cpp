@@ -3699,10 +3699,16 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
 
     // Helper: create source combo (shared across CAT, BCD, Bit)
     auto makeSourceCombo = []() {
-        auto* combo = new QComboBox;
+        // GuardedComboBox: this combo lives in the scroll-wrapped USB Cables
+        // tab and sends a destructive `source=` set on change, so a stray
+        // wheel-scroll must not silently re-route a live cable's source.
+        auto* combo = new GuardedComboBox;
         combo->addItems({"None", "TX Pan", "TX Slice", "Active Slice",
                          "TX Ant", "RX Ant", "Ordinal Slice"});
         combo->setStyleSheet(kCombo);
+        combo->setAccessibleName("Cable source");
+        combo->setAccessibleDescription(
+            "Signal source routed to this cable");
         return combo;
     };
     // Map source display name → protocol value
@@ -3803,6 +3809,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         hg->addWidget(new QLabel("Name:"), row, 0);
         auto* nameEdit = new QLineEdit;
         nameEdit->setStyleSheet(kEdit);
+        nameEdit->setAccessibleName("Cable name");
         hg->addWidget(nameEdit, row, 1);
         ++row;
 
@@ -3844,16 +3851,26 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     // pointer before the deferred callback runs; (2) a bounded timeout armed
     // on send, in case the radio never echoes back at all.
     auto pendingTypeChangeSn = std::make_shared<QString>();
-    auto sendCableType = [cableModel, cableList, pendingTypeChangeSn](const QString& proto) {
+    // Generation counter so the bounded timeout can't clear a *newer* pending.
+    // Each send bumps the generation; the timer captures its own generation and
+    // only clears if it's still current. Without this, retyping the same serial
+    // twice within 5s would let the first timer clear the second retype's
+    // pending (QTimer::singleShot is fire-and-forget and can't be cancelled),
+    // reintroducing the stuck-panel bug on exactly the lossy radios the timeout
+    // exists to protect.
+    auto pendingTypeChangeGen = std::make_shared<quint64>(0);
+    auto sendCableType = [cableModel, cableList, pendingTypeChangeSn,
+                          pendingTypeChangeGen](const QString& proto) {
         auto* item = cableList->currentItem();
         if (!item) {
             return;
         }
         const QString sn = item->data(Qt::UserRole).toString();
         *pendingTypeChangeSn = sn;
+        const quint64 gen = ++(*pendingTypeChangeGen);
         cableModel->sendSet(sn, "type", proto);
-        QTimer::singleShot(5000, [pendingTypeChangeSn, sn]() {
-            if (*pendingTypeChangeSn == sn) {
+        QTimer::singleShot(5000, [pendingTypeChangeSn, pendingTypeChangeGen, gen]() {
+            if (*pendingTypeChangeGen == gen) {
                 pendingTypeChangeSn->clear();
             }
         });
@@ -3981,14 +3998,23 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         auto* bg = new QGridLayout(bcdGroup);
         bg->setSpacing(4);
         bg->addWidget(new QLabel("BCD Type:"), 0, 0);
-        bcdTypeCombo = new QComboBox;
+        // GuardedComboBox: scroll-wrapped tab + destructive `type=` on change.
+        // NB this sub-type combo sends `type=` via sendBcdProp, which does NOT
+        // arm pendingTypeChangeSn. That is correct only because
+        // UsbCableModel::normalizeTypeFamily() collapses bcd/vbcd/bcd_vbcd to
+        // one family, so a sub-type change updates in place (cableChanged) and
+        // never triggers the remove+recreate path that would need a reselect.
+        // If that invariant ever changes, route this through sendCableType.
+        bcdTypeCombo = new GuardedComboBox;
         bcdTypeCombo->addItems({"HF (bcd)", "VHF (vbcd)", "HF+VHF (bcd_vbcd)"});
         bcdTypeCombo->setStyleSheet(kCombo);
+        bcdTypeCombo->setAccessibleName("BCD sub-type");
         bg->addWidget(bcdTypeCombo, 0, 1);
         bg->addWidget(new QLabel("Polarity:"), 1, 0);
-        bcdPolarityCombo = new QComboBox;
+        bcdPolarityCombo = new GuardedComboBox;  // destructive polarity= on change
         bcdPolarityCombo->addItems({"Active High", "Active Low"});
         bcdPolarityCombo->setStyleSheet(kCombo);
+        bcdPolarityCombo->setAccessibleName("BCD polarity");
         bg->addWidget(bcdPolarityCombo, 1, 1);
         bg->addWidget(new QLabel("Source:"), 2, 0);
         bcdSourceCombo = makeSourceCombo();
@@ -4073,6 +4099,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         };
 
         bitWidgets.enabled = new QCheckBox;
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bitWidgets.enabled, kCheck);
         addRow("Enabled:", bitWidgets.enabled);
 
         bitWidgets.source = makeSourceCombo();
@@ -4109,6 +4136,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         addRow("Polarity:", bitWidgets.polarity);
 
         bitWidgets.pttDependent = new QCheckBox;
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bitWidgets.pttDependent, kCheck);
         addRow("PTT Dependent:", bitWidgets.pttDependent);
 
         bitWidgets.pttDelay = new QSpinBox;
@@ -4254,9 +4282,12 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         auto* lg = new QGridLayout(ldpaGroup);
         lg->setSpacing(4);
         lg->addWidget(new QLabel("Band:"), 0, 0);
-        ldpaBandCombo = new QComboBox;
+        // GuardedComboBox: scroll-wrapped tab + destructive `band=` on change.
+        ldpaBandCombo = new GuardedComboBox;
         ldpaBandCombo->addItems({"2m", "4m"});
         ldpaBandCombo->setStyleSheet(kCombo);
+        ldpaBandCombo->setAccessibleName("LDPA band");
+        ldpaBandCombo->setAccessibleDescription("LDPA amplifier band (2m or 4m)");
         lg->addWidget(ldpaBandCombo, 0, 1);
         ldpaPreampCheck = new QCheckBox("Preamp");
         AetherSDR::ThemeManager::instance().applyStyleSheet(ldpaPreampCheck, kCheck);

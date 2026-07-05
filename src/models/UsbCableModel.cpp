@@ -209,6 +209,12 @@ void UsbCableModel::parseLdpaStatus(UsbCable& cable, const QMap<QString, QString
         } else if (k == "preamp") {
             cable.preamp = (v == "1");
         } else if (k == "source") {
+            // AetherSDR extension beyond the FlexLib authority (Principle I):
+            // FlexLib's UsbLdpaCable.cs writes source= on set but does NOT
+            // parse it back from status (only band/preamp are read). We read it
+            // in case the radio echoes it, but the value is unverified against
+            // the reference client — harmless if the radio never sends it. See
+            // the CAT/BCD/Bit paths, where FlexLib does round-trip source=.
             cable.source = v;
         } else if (k == "source_rx_ant") {
             cable.sourceRxAnt = v;
