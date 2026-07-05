@@ -5938,10 +5938,8 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
         // Update both values together before the radio echo arrives. Explicit
         // zoom workflows are especially sensitive to center/bandwidth skew;
         // splitting them produced the P1/P2 waterfall-loss and zoom-drift bugs.
-        pan->applyPanStatus({
-            {"center", centerStr},
-            {"bandwidth", bandwidthStr},
-        });
+        // (aetherd RFC 2.3: setCenterBandwidth replaces applyPanStatus here.)
+        pan->setCenterBandwidth(centerMhz, bandwidthMhz);
     }
 
     m_radioModel.sendCommand(
@@ -8518,7 +8516,7 @@ void MainWindow::recenterPanFollowOnSlice0()
     auto* pan = m_radioModel.panadapter(panId);
     if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
     const QString freqStr = QString::number(freq, 'f', 6);
-    if (pan) pan->applyPanStatus({{"center", freqStr}});
+    if (pan) pan->setCenterBandwidth(freq, -1.0);  // aetherd RFC 2.3
     m_radioModel.sendCommand(
         QString("display pan set %1 center=%2").arg(panId, freqStr));
 }

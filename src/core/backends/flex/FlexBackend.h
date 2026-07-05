@@ -80,11 +80,25 @@ public:
     // field is carried as NaN ("unchanged"), not a negative sentinel.
     void decodePanRange(const QString& panId,
                         const QMap<QString, QString>& kvs);
+    // Universal pan RF gain / antenna selection — decoded from Flex status and
+    // emitted as the normalized typed signals (aetherd RFC 2.3; rfgain+antenna
+    // promoted to universal per the 2026-07-05 classification).
+    void decodePanRfGain(const QString& panId, const QMap<QString, QString>& kvs);
+    void decodePanAntenna(const QString& panId, const QMap<QString, QString>& kvs);
+    // Waterfall line duration (universal display timing), decoded from the
+    // waterfall-status plane and emitted as panWaterfallLineDurationChanged.
+    void decodeWaterfallLineDuration(const QString& panId,
+                                     const QMap<QString, QString>& kvs);
     // Decode the Flex-specific pan fields that are NOT part of the core profile
-    // (currently the WNB group) and emit them on the namespaced extensionStatus
-    // channel. (aetherd RFC 2.3 extension template.)
+    // (the WNB group) and emit them on the namespaced extensionStatus channel.
+    // (aetherd RFC 2.3 extension template.)
     void decodePanExtensions(const QString& panId,
                              const QMap<QString, QString>& kvs);
+    // The remaining Flex-specific display-pan status keys — wide, loop A/B, fps,
+    // preamp, DAX-IQ channel, MultiFlex client_handle ownership, waterfall
+    // stream-id — bundled onto the namespaced extensionStatus("flex","panState")
+    // channel. Present-only (each key rides only when the wire reported it).
+    void decodePanState(const QString& panId, const QMap<QString, QString>& kvs);
 
 private:
     void send(const QString& cmd);

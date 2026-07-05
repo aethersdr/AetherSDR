@@ -645,8 +645,9 @@ void AtuPreTuneDialog::beginNextPoint()
         const QString centerStr = QString::number(center, 'f', 6);
         const QString widthStr  = QString::number(width,  'f', 6);
         if (auto* pan = m_radio->panadapter(m_originalPanId)) {
-            pan->applyPanStatus({{"center", centerStr},
-                                 {"bandwidth", widthStr}});
+            // Local model nudge before the radio echo (aetherd RFC 2.3: the
+            // normalized setter replaces applyPanStatus({center,bandwidth})).
+            pan->setCenterBandwidth(center, width);
         }
         m_radio->sendCommand(
             QString("display pan set %1 center=%2 bandwidth=%3")
@@ -887,8 +888,9 @@ void AtuPreTuneDialog::restoreOriginalFrequency()
         const QString centerStr = QString::number(m_originalPanCenterMhz, 'f', 6);
         const QString widthStr  = QString::number(m_originalPanBandwidthMhz, 'f', 6);
         if (auto* pan = m_radio->panadapter(m_originalPanId)) {
-            pan->applyPanStatus({{"center", centerStr},
-                                 {"bandwidth", widthStr}});
+            // Local model nudge before the radio echo (aetherd RFC 2.3: the
+            // normalized setter replaces applyPanStatus({center,bandwidth})).
+            pan->setCenterBandwidth(m_originalPanCenterMhz, m_originalPanBandwidthMhz);
         }
         m_radio->sendCommand(
             QString("display pan set %1 center=%2 bandwidth=%3")

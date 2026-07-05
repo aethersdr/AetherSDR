@@ -128,77 +128,77 @@ void PanadapterModel::applyWnbExtension(const QVariantMap& fields)
     }
 }
 
-void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
+void PanadapterModel::setRfGain(int gain)
 {
-    // #3977: ownership is radio-authoritative. When another session reclaims
-    // this pan (MultiFlex reconnect), the radio broadcasts the new
-    // client_handle; tracking it here lets a superseded session stop
-    // adjusting a pan it no longer owns.
-    if (kvs.contains("client_handle")) {
-        const quint32 parsed = parseHandleHex(kvs.value("client_handle"));
-        if (parsed != 0 && parsed != m_ownerHandle) {
-            m_ownerHandle = parsed;
-            m_clientHandle = QString::number(parsed, 16);
-        }
+    if (gain != m_rfGain) {
+        m_rfGain = gain;
+        emit rfGainChanged(m_rfGain);
     }
+}
 
-    // center/bandwidth now decode in FlexBackend → panCenterBandwidthChanged →
-    // setCenterBandwidth(); min/max dBm likewise → panRangeChanged → setRange()
-    // (aetherd RFC 2.3 — the two converted universal pan display-geometry fields).
-    if (kvs.contains("rfgain")) {
-        int g = kvs["rfgain"].toInt();
-        if (g != m_rfGain) {
-            m_rfGain = g;
-            emit rfGainChanged(m_rfGain);
-        }
+void PanadapterModel::setRxAntenna(const QString& ant)
+{
+    if (ant != m_rxAntenna) {
+        m_rxAntenna = ant;
+        emit rxAntennaChanged(m_rxAntenna);
     }
-    if (kvs.contains("pre")) {
-        QString pre = kvs["pre"];
-        if (pre != m_preamp) {
-            // Preamp is internal state only — no UI listeners, no emit.
-            m_preamp = pre;
-        }
+}
+
+void PanadapterModel::setAntList(const QStringList& ants)
+{
+    if (ants != m_antList) {
+        m_antList = ants;
+        emit antListChanged(m_antList);
     }
-    // WNB decode moved to FlexBackend → extensionStatus("flex","panWnb") →
-    // applyWnbExtension() (aetherd RFC 2.3 extension template).
-    if (kvs.contains("wide")) {
-        bool wide = kvs["wide"].toInt() != 0;
+}
+
+void PanadapterModel::setWaterfallLineDuration(int ms)
+{
+    // PerfTelemetry is fed every report (even when unchanged), and
+    // waterfallLineDurationReported likewise always fires; the change-gated
+    // signal is waterfallLineDurationChanged. Semantics preserved verbatim from
+    // the old applyWaterfallStatus.
+    PerfTelemetry::instance().setWaterfallLineDurationMs(ms);
+    if (ms != m_waterfallLineDuration) {
+        m_waterfallLineDuration = ms;
+        emit waterfallLineDurationChanged(m_waterfallLineDuration);
+    }
+    emit waterfallLineDurationReported(ms);
+}
+
+void PanadapterModel::applyStateExtension(const QVariantMap& fields)
+{
+    // The Flex-specific display-pan fields, applied from the backend's
+    // namespaced extensionStatus("flex","panState",…). Each key applies only
+    // when present, with the exact per-field semantics the old applyPanStatus
+    // had (aetherd RFC 2.3 — the decode lives in FlexBackend, not here).
+    if (fields.contains(QStringLiteral("wide"))) {
+        const bool wide = fields.value(QStringLiteral("wide")).toInt() != 0;
         if (wide != m_wideActive) {
             m_wideActive = wide;
             emit wideChanged(m_wideActive);
         }
     }
-    if (kvs.contains("loopa") || kvs.contains("loopb")) {
+    if (fields.contains(QStringLiteral("loopa"))
+        || fields.contains(QStringLiteral("loopb"))) {
         bool changed = false;
-        if (kvs.contains("loopa")) {
-            const bool loopA = kvs["loopa"].toInt() != 0;
-            if (loopA != m_loopA) {
-                m_loopA = loopA;
-                changed = true;
-            }
-            if (loopA && m_loopB) {
-                m_loopB = false;
-                changed = true;
-            }
+        if (fields.contains(QStringLiteral("loopa"))) {
+            const bool loopA = fields.value(QStringLiteral("loopa")).toInt() != 0;
+            if (loopA != m_loopA) { m_loopA = loopA; changed = true; }
+            if (loopA && m_loopB) { m_loopB = false; changed = true; }
         }
-        if (kvs.contains("loopb")) {
-            const bool loopB = kvs["loopb"].toInt() != 0;
-            if (loopB != m_loopB) {
-                m_loopB = loopB;
-                changed = true;
-            }
-            if (loopB && m_loopA) {
-                m_loopA = false;
-                changed = true;
-            }
+        if (fields.contains(QStringLiteral("loopb"))) {
+            const bool loopB = fields.value(QStringLiteral("loopb")).toInt() != 0;
+            if (loopB != m_loopB) { m_loopB = loopB; changed = true; }
+            if (loopB && m_loopA) { m_loopA = false; changed = true; }
         }
         if (changed) {
             emit loopChanged(m_loopA, m_loopB);
         }
     }
-    if (kvs.contains("fps")) {
+    if (fields.contains(QStringLiteral("fps"))) {
         bool ok = false;
-        const int fps = kvs["fps"].toInt(&ok);
+        const int fps = fields.value(QStringLiteral("fps")).toInt(&ok);
         if (ok) {
             if (fps != m_fps) {
                 m_fps = fps;
@@ -207,52 +207,33 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
             emit fpsReported(fps);
         }
     }
-    if (kvs.contains("ant_list")) {
-        QStringList ants = kvs["ant_list"].split(',', Qt::SkipEmptyParts);
-        if (ants != m_antList) {
-            m_antList = ants;
-            emit antListChanged(m_antList);
-        }
+    if (fields.contains(QStringLiteral("pre"))) {
+        const QString pre = fields.value(QStringLiteral("pre")).toString();
+        // Preamp is internal state only — no UI listeners, no emit (#1498).
+        if (pre != m_preamp) { m_preamp = pre; }
     }
-    if (kvs.contains("rxant")) {
-        const QString ant = kvs["rxant"];
-        if (ant != m_rxAntenna) {
-            m_rxAntenna = ant;
-            emit rxAntennaChanged(m_rxAntenna);
-        }
-    }
-    if (kvs.contains("waterfall")) {
-        setWaterfallId(kvs["waterfall"]);
-    }
-    if (kvs.contains("daxiq_channel")) {
-        int ch = kvs["daxiq_channel"].toInt();
+    if (fields.contains(QStringLiteral("daxiq_channel"))) {
+        const int ch = fields.value(QStringLiteral("daxiq_channel")).toInt();
         if (ch != m_daxiqChannel) {
             m_daxiqChannel = ch;
             emit daxiqChannelChanged(ch);
         }
     }
-}
-
-void PanadapterModel::applyWaterfallStatus(const QMap<QString, QString>& kvs)
-{
-    if (kvs.contains("line_duration")) {
-        bool ok = false;
-        const int ms = kvs["line_duration"].toInt(&ok);
-        if (ok) {
-            PerfTelemetry::instance().setWaterfallLineDurationMs(ms);
-            if (ms != m_waterfallLineDuration) {
-                m_waterfallLineDuration = ms;
-                emit waterfallLineDurationChanged(m_waterfallLineDuration);
-            }
-            emit waterfallLineDurationReported(ms);
+    // #3977: ownership is radio-authoritative. When another session reclaims
+    // this pan (MultiFlex reconnect), the radio broadcasts the new
+    // client_handle; tracking it lets a superseded session stop adjusting a pan
+    // it no longer owns. Semantics preserved verbatim (parsed != 0 && changed).
+    if (fields.contains(QStringLiteral("client_handle"))) {
+        const quint32 parsed =
+            parseHandleHex(fields.value(QStringLiteral("client_handle")).toString());
+        if (parsed != 0 && parsed != m_ownerHandle) {
+            m_ownerHandle = parsed;
+            m_clientHandle = QString::number(parsed, 16);
         }
     }
-
-    // Waterfall status also carries center/bandwidth; those now decode through
-    // the same FlexBackend::decodePanCenterBandwidth path as pan status (driven
-    // from RadioModel's waterfall-status choke point), so the two ingestion
-    // surfaces are single-sourced. (aetherd RFC 2.3 — waterfall dual-parse
-    // convergence; the gap disclosed on #4063.)
+    if (fields.contains(QStringLiteral("waterfall"))) {
+        setWaterfallId(fields.value(QStringLiteral("waterfall")).toString());
+    }
 }
 
 } // namespace AetherSDR

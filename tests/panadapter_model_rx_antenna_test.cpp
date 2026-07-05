@@ -29,29 +29,32 @@ int main(int argc, char** argv)
     PanadapterModel pan(QStringLiteral("0x40000000"));
     QSignalSpy spy(&pan, &PanadapterModel::rxAntennaChanged);
 
-    pan.applyPanStatus({{QStringLiteral("rxant"), QStringLiteral("ANT1")}});
+    // aetherd RFC 2.3: rxant/rfgain decode moved to FlexBackend; the model now
+    // exposes normalized setRxAntenna/setRfGain. This test pins their change-
+    // gating semantics (the wire→setter decode is covered by aetherd_pan_decode_test).
+    pan.setRxAntenna(QStringLiteral("ANT1"));
     EXPECT_EQ(pan.rxAntenna(), QStringLiteral("ANT1"));
     EXPECT_EQ(spy.count(), 1);
     EXPECT_EQ(spy.takeFirst().at(0).toString(), QStringLiteral("ANT1"));
 
-    pan.applyPanStatus({{QStringLiteral("rxant"), QStringLiteral("ANT1")}});
+    pan.setRxAntenna(QStringLiteral("ANT1"));
     EXPECT_EQ(spy.count(), 0);
 
-    pan.applyPanStatus({{QStringLiteral("rxant"), QStringLiteral("RX_A")}});
+    pan.setRxAntenna(QStringLiteral("RX_A"));
     EXPECT_EQ(pan.rxAntenna(), QStringLiteral("RX_A"));
     EXPECT_EQ(spy.count(), 1);
     EXPECT_EQ(spy.takeFirst().at(0).toString(), QStringLiteral("RX_A"));
 
     QSignalSpy gainSpy(&pan, &PanadapterModel::rfGainChanged);
-    pan.applyPanStatus({{QStringLiteral("rfgain"), QStringLiteral("20")}});
+    pan.setRfGain(20);
     EXPECT_EQ(pan.rfGain(), 20);
     EXPECT_EQ(gainSpy.count(), 1);
     EXPECT_EQ(gainSpy.takeFirst().at(0).toInt(), 20);
 
-    pan.applyPanStatus({{QStringLiteral("rfgain"), QStringLiteral("20")}});
+    pan.setRfGain(20);
     EXPECT_EQ(gainSpy.count(), 0);
 
-    pan.applyPanStatus({{QStringLiteral("rfgain"), QStringLiteral("-8")}});
+    pan.setRfGain(-8);
     EXPECT_EQ(pan.rfGain(), -8);
     EXPECT_EQ(gainSpy.count(), 1);
     EXPECT_EQ(gainSpy.takeFirst().at(0).toInt(), -8);

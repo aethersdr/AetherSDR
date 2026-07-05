@@ -229,6 +229,74 @@ void FlexBackend::decodePanRange(const QString& panId,
     emit panRangeChanged(panId, minDbm, maxDbm);
 }
 
+void FlexBackend::decodePanRfGain(const QString& panId,
+                                  const QMap<QString, QString>& kvs)
+{
+    if (!kvs.contains(QStringLiteral("rfgain"))) {
+        return;
+    }
+    emit panRfGainChanged(panId, kvs.value(QStringLiteral("rfgain")).toInt());
+}
+
+void FlexBackend::decodePanAntenna(const QString& panId,
+                                   const QMap<QString, QString>& kvs)
+{
+    // Selected RX antenna and the available list arrive independently — emit
+    // each only when its wire key is present (matches the old applyPanStatus).
+    if (kvs.contains(QStringLiteral("ant_list"))) {
+        const QStringList ants =
+            kvs.value(QStringLiteral("ant_list")).split(',', Qt::SkipEmptyParts);
+        emit panAntennaListChanged(panId, ants);
+    }
+    if (kvs.contains(QStringLiteral("rxant"))) {
+        emit panRxAntennaChanged(panId, kvs.value(QStringLiteral("rxant")));
+    }
+}
+
+void FlexBackend::decodeWaterfallLineDuration(const QString& panId,
+                                              const QMap<QString, QString>& kvs)
+{
+    if (!kvs.contains(QStringLiteral("line_duration"))) {
+        return;
+    }
+    // Guard the numeric parse — a malformed line_duration must be ignored, not
+    // applied as 0 (the old applyWaterfallStatus used toInt(&ok) + if(ok)).
+    bool ok = false;
+    const int ms = kvs.value(QStringLiteral("line_duration")).toInt(&ok);
+    if (ok) {
+        emit panWaterfallLineDurationChanged(panId, ms);
+    }
+}
+
+void FlexBackend::decodePanState(const QString& panId,
+                                 const QMap<QString, QString>& kvs)
+{
+    // Bundle the remaining Flex-specific display-pan keys onto one namespaced
+    // extension event; carry only the keys the wire actually reported so the
+    // model applies exactly what changed (present-only, like the WNB group).
+    QVariantMap st;
+    const auto carry = [&](const char* key) {
+        if (kvs.contains(QLatin1String(key))) {
+            st.insert(QLatin1String(key), kvs.value(QLatin1String(key)));
+        }
+    };
+    // Raw strings — the model parses each with its existing per-field semantics
+    // (bool flags, ok-guarded fps, hex client_handle, waterfall stream-id).
+    carry("wide");
+    carry("loopa");
+    carry("loopb");
+    carry("fps");
+    carry("pre");
+    carry("daxiq_channel");
+    carry("client_handle");
+    carry("waterfall");
+    if (!st.isEmpty()) {
+        st.insert(QStringLiteral("panId"), panId);
+        emit extensionStatus(QStringLiteral("flex"),
+                             QStringLiteral("panState"), st);
+    }
+}
+
 void FlexBackend::decodePanExtensions(const QString& panId,
                                       const QMap<QString, QString>& kvs)
 {

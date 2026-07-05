@@ -3012,7 +3012,7 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
             ? kPanFollowAnimationDurationMs
             : 0;
 
-        pan->applyPanStatus({{"center", QString::number(result.newCenterMhz, 'f', 6)}});
+        pan->setCenterBandwidth(result.newCenterMhz, -1.0);  // aetherd RFC 2.3
         m_radioModel.sendCommand(
             QString("display pan set %1 center=%2")
                 .arg(pan->panId()).arg(result.newCenterMhz, 0, 'f', 6));
@@ -3102,7 +3102,7 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
     // Apply the center optimistically so the owning spectrum repaints
     // immediately; SpectrumWidget decides whether that becomes a short
     // retargetable animation or an immediate snap based on shift size.
-    pan->applyPanStatus({{"center", QString::number(result.newCenterMhz, 'f', 6)}});
+    pan->setCenterBandwidth(result.newCenterMhz, -1.0);  // aetherd RFC 2.3
     m_radioModel.sendCommand(
         QString("display pan set %1 center=%2")
             .arg(pan->panId()).arg(result.newCenterMhz, 0, 'f', 6));

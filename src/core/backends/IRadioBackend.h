@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 #include <QVariantMap>
 
@@ -122,6 +123,20 @@ signals:
     // wire did not report. (aetherd RFC 2.3 — second converted universal pan
     // field, following the center/bandwidth template.)
     void panRangeChanged(const QString& panId, double minDbm, double maxDbm);
+
+    // Panadapter RF gain (universal — every family has an RX gain control; the
+    // range/step are family-specific and reported via RadioCapabilities). The
+    // backend decodes it from vendor status; RadioModel drives the pan.
+    void panRfGainChanged(const QString& panId, int gain);
+
+    // Panadapter antenna selection (universal). Two signals because the wire may
+    // report the selected RX antenna and the available list independently.
+    void panRxAntennaChanged(const QString& panId, const QString& antenna);
+    void panAntennaListChanged(const QString& panId, const QStringList& antennas);
+
+    // Waterfall line duration in ms (universal display timing). Decoded from the
+    // waterfall-status plane; RadioModel drives the pan's waterfall model state.
+    void panWaterfallLineDurationChanged(const QString& panId, int ms);
 
     // Vendor-specific status data that is NOT part of the core profile — the
     // namespaced *extension* channel (aetherd RFC §5.5). A client that doesn't

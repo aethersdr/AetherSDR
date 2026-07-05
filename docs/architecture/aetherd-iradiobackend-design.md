@@ -97,7 +97,7 @@ the wire semantics that produce and consume it.**
 | `RadioModel` | connection state, the slice/pan/meter/transmit sub-model set, frequency/mode plumbing | Multi-Flex handles, GUIClientID session restore, SmartSDR status routing, `m_connection`/`m_panStream` ownership |
 | `SliceModel` | freq, mode, filter low/high, RX gain, active flag, S-meter binding | DAX channel, `client_handle` ownership, Flex slice-index quirks |
 | `TransmitModel` | keying intent, TX power setpoint, mic/monitor levels, the CHAIN DSP stage state | ATU/TGXL/amp verbs, Flex profile load, `mox`-less interlock decode |
-| `PanadapterModel` | center, span, min/max dBm, per-pan display state | FlexLib stream-id (0x40xx/0x42xx) wiring, `display pan` status keys |
+| `PanadapterModel` | center, span, min/max dBm, **rfgain, antenna (rxant/ant_list)**, waterfall line-duration, per-pan display state | `wide`, loop A/B, `fps`, preamp, DAX-IQ channel, MultiFlex `client_handle`, waterfall stream-id — all on the `flex`/`panWnb`+`panState` extension channel |
 | `MeterModel` | the meter values the UI renders (via `MeterSmoother`) | Flex meter-id catalog, SLC/LEVEL source decode |
 
 Approach: keep the existing model classes as the core-profile shape; move the
@@ -152,6 +152,12 @@ backend *after* the seam is proven, retiring its side-channels (RFC §5.5).
 4. **Directory layout** → **`src/core/backends/`** confirmed: the interface at
    `src/core/backends/IRadioBackend.h`, each family under
    `src/core/backends/<family>/` (FlexBackend → `src/core/backends/flex/`).
+5. **Pan field classification (rfgain + antenna)** → **promoted to universal
+   typed signals**, extending this doc's literal pan row. Rationale: RF gain and
+   antenna selection are genuine cross-radio concepts, so a second backend (e.g.
+   HL2) emits them via the typed signals and the existing UI works with zero
+   vendor-specific handling. `wide`/loop/`fps`/preamp/DAX-IQ/`client_handle`/
+   waterfall-id remain Flex extensions on the `panState` channel.
 
 These are settled as the working defaults; any can be revised in review while
 the interface has no implementor.

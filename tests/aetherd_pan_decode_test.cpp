@@ -137,6 +137,92 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- Facet 1c: DECODE (rfgain / antenna — universal) ----
+    {
+        FlexBackend backend;
+        QSignalSpy gain(&backend, &IRadioBackend::panRfGainChanged);
+        QSignalSpy rxant(&backend, &IRadioBackend::panRxAntennaChanged);
+        QSignalSpy antlist(&backend, &IRadioBackend::panAntennaListChanged);
+
+        backend.decodePanRfGain(QStringLiteral("0x40000000"),
+                                {{QStringLiteral("rfgain"), QStringLiteral("-8")}});
+        CHECK(gain.count() == 1);
+        CHECK(gain.takeFirst().at(1).toInt() == -8);   // signed gain preserved
+
+        backend.decodePanAntenna(QStringLiteral("0x40000000"),
+                                 {{QStringLiteral("rxant"), QStringLiteral("ANT2")},
+                                  {QStringLiteral("ant_list"), QStringLiteral("ANT1,ANT2,RX_A")}});
+        CHECK(rxant.count() == 1);
+        CHECK(rxant.takeFirst().at(1).toString() == QStringLiteral("ANT2"));
+        CHECK(antlist.count() == 1);
+        CHECK(antlist.takeFirst().at(1).toStringList().size() == 3);
+    }
+
+    // ---- Facet 2b: EXTENSION (panState bundle) + client_handle #3977 ----
+    {
+        FlexBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::extensionStatus);
+
+        // No panState keys → no emission.
+        backend.decodePanState(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("center"), QStringLiteral("7.1")}});
+        CHECK(spy.count() == 0);
+
+        backend.decodePanState(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("wide"), QStringLiteral("1")},
+                                {QStringLiteral("loopa"), QStringLiteral("1")},
+                                {QStringLiteral("daxiq_channel"), QStringLiteral("3")},
+                                {QStringLiteral("client_handle"), QStringLiteral("0x5C0FFEE0")},
+                                {QStringLiteral("waterfall"), QStringLiteral("0x42000000")}});
+        CHECK(spy.count() == 1);
+        {
+            const QList<QVariant> a = spy.takeFirst();
+            CHECK(a.at(0).toString() == QStringLiteral("flex"));
+            CHECK(a.at(1).toString() == QStringLiteral("panState"));
+            const QVariantMap f = a.at(2).toMap();
+            CHECK(f.value(QStringLiteral("panId")).toString() == QStringLiteral("0x40000000"));
+            CHECK(f.contains(QStringLiteral("wide")));
+            CHECK(f.contains(QStringLiteral("client_handle")));
+            CHECK(!f.contains(QStringLiteral("fps")));   // absent key not carried
+        }
+    }
+
+    // ---- Facet 1d: DECODE (waterfall line_duration guard) ----
+    {
+        FlexBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::panWaterfallLineDurationChanged);
+        backend.decodeWaterfallLineDuration(QStringLiteral("0x40000000"),
+                                            {{QStringLiteral("line_duration"), QStringLiteral("100")}});
+        CHECK(spy.count() == 1);
+        CHECK(spy.takeFirst().at(1).toInt() == 100);
+        // Malformed → dropped, not applied as 0.
+        backend.decodeWaterfallLineDuration(QStringLiteral("0x40000000"),
+                                            {{QStringLiteral("line_duration"), QStringLiteral("nope")}});
+        CHECK(spy.count() == 0);
+    }
+
+    // ---- Facet 3b: model sink — applyStateExtension incl. #3977 ownership ----
+    {
+        PanadapterModel pan(QStringLiteral("0x40000000"));
+        QSignalSpy wide(&pan, &PanadapterModel::wideChanged);
+        QSignalSpy dax(&pan, &PanadapterModel::daxiqChannelChanged);
+        QVariantMap st;
+        st.insert(QStringLiteral("wide"), QStringLiteral("1"));
+        st.insert(QStringLiteral("daxiq_channel"), QStringLiteral("3"));
+        st.insert(QStringLiteral("client_handle"), QStringLiteral("0x5C0FFEE0"));
+        pan.applyStateExtension(st);
+        CHECK(pan.wideActive() == true);
+        CHECK(wide.count() == 1);
+        CHECK(pan.daxiqChannel() == 3);
+        CHECK(dax.count() == 1);
+        // #3977: owner handle tracked (parsed hex, non-zero).
+        CHECK(pan.ownerHandle() == 0x5C0FFEE0u);
+        // A zero client_handle must NOT overwrite a known owner (fail-closed).
+        QVariantMap z; z.insert(QStringLiteral("client_handle"), QStringLiteral("0x0"));
+        pan.applyStateExtension(z);
+        CHECK(pan.ownerHandle() == 0x5C0FFEE0u);
+    }
+
     // ---- Facet 3: model sinks ----
     {
         PanadapterModel pan(QStringLiteral("0x40000000"));

@@ -63,6 +63,13 @@ public:
     int rfGainHigh() const { return m_rfGainHigh; }
     int rfGainStep() const { return m_rfGainStep; }
     void setRfGainInfo(int low, int high, int step);
+    // Normalized setters driven by the backend (aetherd RFC 2.3 — rfgain +
+    // antenna promoted to universal typed signals). Each emits its existing
+    // change-signal only on an actual change; the wire decode lives in
+    // FlexBackend, not here.
+    void setRfGain(int gain);
+    void setRxAntenna(const QString& ant);
+    void setAntList(const QStringList& ants);
     bool wnbActive() const { return m_wnbActive; }
     int wnbLevel() const { return m_wnbLevel; }
     bool wnbUpdating() const { return m_wnbUpdating; }
@@ -71,6 +78,11 @@ public:
     bool loopB() const { return m_loopB; }
     int fps() const { return m_fps; }
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
+    // Normalized waterfall-line-duration setter driven by the backend (universal
+    // display timing). Feeds PerfTelemetry and always emits
+    // waterfallLineDurationReported; the change-gated signal fires only on a real
+    // change. (aetherd RFC 2.3.)
+    void setWaterfallLineDuration(int ms);
     int fftYPixels() const { return m_fftYPixels; }
     bool setFftYPixels(int yPixels) {
         if (m_fftYPixels == yPixels) {
@@ -95,9 +107,13 @@ public:
     bool isWaterfallConfigured() const { return m_wfConfigured; }
     void setWaterfallConfigured(bool c) { m_wfConfigured = c; }
 
-    // Apply status from protocol
-    void applyPanStatus(const QMap<QString, QString>& kvs);
-    void applyWaterfallStatus(const QMap<QString, QString>& kvs);
+    // Flex-specific display-pan state applied from the backend's namespaced
+    // extensionStatus("flex","panState",…): wide, loop A/B, fps, preamp, DAX-IQ
+    // channel, MultiFlex client_handle ownership, waterfall stream-id. Applies
+    // only the keys present. (aetherd RFC 2.3 — the decode lives in FlexBackend;
+    // this is the last of PanadapterModel's Flex status decode to move, so the
+    // old applyPanStatus/applyWaterfallStatus wire-decoders are now gone.)
+    void applyStateExtension(const QVariantMap& fields);
 
 signals:
     void infoChanged(double centerMhz, double bandwidthMhz);

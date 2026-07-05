@@ -1173,7 +1173,7 @@ void MainWindow::activateWFM(int sliceId)
         auto* pan = m_radioModel.panadapter(panId);
         if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
         const QString freqStr = QString::number(freq, 'f', 6);
-        if (pan) pan->applyPanStatus({{"center", freqStr}});
+        if (pan) pan->setCenterBandwidth(freq, -1.0);  // aetherd RFC 2.3
         m_radioModel.sendCommand(
             QString("display pan set %1 center=%2").arg(panId, freqStr));
     };
