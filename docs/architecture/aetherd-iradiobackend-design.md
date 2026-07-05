@@ -59,12 +59,15 @@ public:
     // ... the enumerated core-profile setters (from the `universal` tag set)
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
-    virtual QVariant invokeExtension(const QString& ns,
-                                     const QString& verb, const QVariant&) = 0;
+    // Fire-and-forget: the reply arrives async via extensionResult/Error,
+    // keyed by the caller's requestId (0 = no reply expected).
+    virtual void invokeExtension(const QString& ns, const QString& verb,
+                                 quint64 requestId, const QVariant&) = 0;
 
     // ---- state & streams UP (normalized) ----
-    // signals: sliceChanged(id, kvs), meterUpdate(...), spectrumFrame(...),
-    //          waterfallRow(...), audioFrame(...) — the §4.2 frame formats
+    // signals: sliceChanged(id, kvs), meterUpdate(...),
+    //          extensionResult(requestId, QVariant), extensionError(requestId, reason),
+    //          spectrumFrame(...), waterfallRow(...), audioFrame(...) — §4.2 formats
 };
 ```
 

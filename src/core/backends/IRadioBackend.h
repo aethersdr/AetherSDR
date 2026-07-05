@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 #include <QString>
 #include <QVariant>
@@ -77,8 +78,15 @@ public:
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
     // discover available namespaces via capabilities().extensionNamespaces.
-    virtual QVariant invokeExtension(const QString& ns, const QString& verb,
-                                     const QVariant& arg = {}) = 0;
+    //
+    // Fire-and-forget like every other DOWN verb: the result of a real device
+    // command (ATU tune, amp state, …) arrives later on the wire, so it comes
+    // back asynchronously via extensionResult(requestId, …) / extensionError.
+    // The caller (above the seam) mints requestId and correlates the reply; a
+    // requestId of 0 means "no reply expected". A synchronous QVariant return
+    // would have to block or fabricate a local value against an async backend.
+    virtual void invokeExtension(const QString& ns, const QString& verb,
+                                 quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
     // ---- connection state UP ----
@@ -86,6 +94,13 @@ signals:
     void disconnected();
     void connectionError(const QString& reason);
     void capabilitiesChanged();
+
+    // ---- vendor-extension replies UP (correlate to invokeExtension) ----
+    // The async result of an invokeExtension() call, keyed by the caller's
+    // requestId. A backend that completes locally may emit this synchronously;
+    // one speaking a wire protocol emits it when the device answers.
+    void extensionResult(quint64 requestId, const QVariant& result);
+    void extensionError(quint64 requestId, const QString& reason);
 
     // ---- normalized model state UP (RadioModel connects these to its
     //      sub-models; Q2) — the key/value shape mirrors the models' fields ----
