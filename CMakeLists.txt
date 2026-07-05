@@ -842,13 +842,6 @@ set(GUI_SOURCES
     src/gui/CompactColorPicker.cpp
 )
 
-set(ALL_SOURCES
-    src/main.cpp
-    ${CORE_SOURCES}
-    ${MODEL_SOURCES}
-    ${GUI_SOURCES}
-)
-
 # Bundled RNNoise (Mozilla/Xiph BSD-3) — client-side neural noise suppression
 set(RNNOISE_DIR ${CMAKE_SOURCE_DIR}/third_party/rnnoise)
 set(RNNOISE_SOURCES
@@ -1039,18 +1032,39 @@ endif()
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
-add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
+# aetherd RFC step 1 (dry run): engine static library — src/core + src/models
+# plus the vendored C/C++ sources those engine files compile against
+# (rnnoise, ggmorse, RADE, specbleach; mosquitto/rtmidi are appended below in
+# their feature blocks). Qt resources (resources.qrc, DFNR model qrc) stay on
+# the executable: rcc registration runs from the exe's static initializers and
+# is process-global, so core code reading ":/..." keeps working.
+add_library(aethercore STATIC
+    ${CORE_SOURCES}
+    ${MODEL_SOURCES}
+    ${RNNOISE_SOURCES}
+    ${GGMORSE_SOURCES}
+    ${RADE_SOURCES}
+    ${SPECBLEACH_SOURCES}
+)
+
+add_executable(AetherSDR
+    src/main.cpp
+    ${GUI_SOURCES}
+    ${RESOURCES}
+    ${DFNR_RESOURCES}
+)
+target_link_libraries(AetherSDR PRIVATE aethercore)
 
 if (USE_SYSTEM_ZLIB)
-    target_link_libraries(AetherSDR PRIVATE PkgConfig::zlib)
+    target_link_libraries(aethercore PRIVATE PkgConfig::zlib)      # core: ZipArchive
 else()
-    target_link_libraries(AetherSDR PRIVATE zlibstatic) # bundled third_party/zlib 1.3.1
+    target_link_libraries(aethercore PRIVATE zlibstatic) # bundled third_party/zlib 1.3.1
 endif()
 
 if (USE_SYSTEM_MSPACK)
-    target_link_libraries(AetherSDR PRIVATE PkgConfig::libmspack)
+    target_link_libraries(aethercore PRIVATE PkgConfig::libmspack) # core: CabExtractor
 else()
-    target_link_libraries(AetherSDR PRIVATE mspack_static)
+    target_link_libraries(aethercore PRIVATE mspack_static)
 endif()
 
 # Link the system libmosquitto target only when MQTT is enabled — the
@@ -1059,7 +1073,7 @@ endif()
 # (ENABLE_MQTT=OFF + USE_SYSTEM_LIBMOSQUITTO=ON) would configure cleanly
 # then fail at link time with a missing target.
 if (ENABLE_MQTT AND USE_SYSTEM_LIBMOSQUITTO)
-    target_link_libraries(AetherSDR PRIVATE PkgConfig::libmosquitto)
+    target_link_libraries(aethercore PRIVATE PkgConfig::libmosquitto) # core: MqttClient
 endif()
 
 # Optionally change binary name to lower case on Linux
@@ -1134,8 +1148,8 @@ if(APPLE)
         MACOSX_BUNDLE_ICON_FILE "AetherSDR.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in"
     )
-    target_link_libraries(AetherSDR PRIVATE "-framework AVFoundation" "-framework Accelerate")
-    target_sources(AetherSDR PRIVATE src/core/MacNRFilter.cpp)
+    target_link_libraries(aethercore PRIVATE "-framework AVFoundation" "-framework Accelerate") # core: MacNRFilter/VirtualAudioBridge
+    target_sources(aethercore PRIVATE src/core/MacNRFilter.cpp)
 
     # Generate AetherSDR.icns at build time from docs/assets/logo-circle.png so local
     # builds get an app icon without any extra setup (sips and iconutil are
@@ -1180,7 +1194,10 @@ elseif(WIN32)
     endif()
 endif()
 
-target_include_directories(AetherSDR PRIVATE
+# PUBLIC: src/ is the project include root for both layers ("core/..." and
+# "gui/..." includes); the vendored include dirs leak into headers used by
+# gui translation units today (e.g. hidapi via MainWindow_Controllers.cpp).
+target_include_directories(aethercore PUBLIC
     src/
     ${RNNOISE_DIR}/include
     ${RNNOISE_DIR}/src
@@ -1188,7 +1205,11 @@ target_include_directories(AetherSDR PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/r8brain
 )
 
-target_link_libraries(AetherSDR PRIVATE
+# Engine dependency surface. NOTE (dry run): Qt6::Widgets is linked into the
+# engine because five core files still use QtWidgets (TxKeyingMarker.h,
+# ThemeManager.cpp, AutomationServer.cpp, ShortcutManager.cpp,
+# SettingsHelpers.cpp). A real step-1 PR must relocate/split those first.
+target_link_libraries(aethercore PUBLIC
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
@@ -1197,36 +1218,46 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Multimedia
     aether_libmodem_core
     aether_afskdemod
-    qgeoview
+    ${CMAKE_DL_LIBS}   # NvidiaAfxFilter dlopen
+)
+
+target_link_libraries(AetherSDR PRIVATE
+    qgeoview           # gui/map only
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
 if (USE_SYSTEM_LIQUID_DSP)
-    target_link_libraries(AetherSDR PRIVATE PkgConfig::liquid-dsp)
+    target_link_libraries(aethercore PRIVATE PkgConfig::liquid-dsp)
 else()
     # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
     # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
-    target_link_libraries(AetherSDR PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>)
+    target_link_libraries(aethercore PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>)
 endif()
 
 if(Qt6SerialPort_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
-    target_link_libraries(AetherSDR PRIVATE Qt6::SerialPort)
+    # PUBLIC: gui (MainWindow.cpp, RadioSetupDialog.cpp) uses QSerialPort and
+    # #ifdef HAVE_SERIALPORT directly.
+    target_compile_definitions(aethercore PUBLIC HAVE_SERIALPORT)
+    target_link_libraries(aethercore PUBLIC Qt6::SerialPort)
 endif()
 
 if(Qt6WebSockets_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_WEBSOCKETS)
-    target_sources(AetherSDR PRIVATE
+    # PUBLIC: gui (MainWindow_Spots.cpp) uses QWebSocket directly.
+    target_compile_definitions(aethercore PUBLIC HAVE_WEBSOCKETS)
+    target_sources(aethercore PRIVATE
         src/core/FreeDvClient.cpp
+    )
+    target_sources(AetherSDR PRIVATE
         src/gui/FreeDvReporterDialog.cpp
         src/gui/FreeDvReporterModel.cpp
     )
-    target_link_libraries(AetherSDR PRIVATE Qt6::WebSockets)
+    target_link_libraries(aethercore PUBLIC Qt6::WebSockets)
 endif()
 
 if(Qt6Keychain_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_KEYCHAIN)
-    target_link_libraries(AetherSDR PRIVATE Qt6Keychain::Qt6Keychain)
+    # PUBLIC: gui setup tabs test HAVE_KEYCHAIN; the library links the backend.
+    target_compile_definitions(aethercore PUBLIC HAVE_KEYCHAIN)
+    target_link_libraries(aethercore PRIVATE Qt6Keychain::Qt6Keychain)
     # Local Windows builds run straight from the build dir with no packaging
     # step — windeployqt, which stages qt6keychain.dll for the installer, isn't
     # involved — so the DLL needs to land next to the exe or the app fails to
@@ -1241,12 +1272,15 @@ if(Qt6Keychain_FOUND)
 endif()
 
 if(Qt6DBus_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_DBUS)
-    target_link_libraries(AetherSDR PRIVATE Qt6::DBus)
+    target_compile_definitions(aethercore PUBLIC HAVE_DBUS)
+    target_link_libraries(aethercore PRIVATE Qt6::DBus)
 endif()
 
 if(AETHER_GPU_SPECTRUM)
-    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
+    # PUBLIC on the engine: src/core/AutomationServer.cpp compiles QRhiWidget
+    # grab paths under #ifdef AETHER_GPU_SPECTRUM (QRhiWidget is public
+    # QtWidgets API on Qt 6.7+, so no GuiPrivate needed engine-side).
+    target_compile_definitions(aethercore PUBLIC AETHER_GPU_SPECTRUM)
 
     # Apply the manual private-include paths now that AetherSDR exists. Covers
     # Debian multi-arch and Windows/macOS aqt installs that lack the Qt6::GuiPrivate
@@ -1309,36 +1343,40 @@ endif()
 
 # Bundled RtMidi (MIT license) — MIDI controller support on all platforms
 message(STATUS "MIDI controller support enabled (RtMidi)")
-target_compile_definitions(AetherSDR PRIVATE HAVE_MIDI)
-target_sources(AetherSDR PRIVATE
+target_compile_definitions(aethercore PUBLIC HAVE_MIDI) # gui MidiMappingDialog + MainWindow check it too
+target_sources(aethercore PRIVATE
     src/core/MidiControlManager.cpp
-    src/core/MidiSettings.cpp
+    src/core/MidiSettings.cpp)
+target_sources(AetherSDR PRIVATE
     src/gui/MidiMappingDialog.cpp)
 if (USE_SYSTEM_RTMIDI)
     find_package(PkgConfig REQUIRED)
     if(PkgConfig_FOUND)
         pkg_check_modules(rtmidi REQUIRED IMPORTED_TARGET rtmidi)
     endif()
-    target_link_libraries(AetherSDR PRIVATE PkgConfig::rtmidi)
+    target_link_libraries(aethercore PRIVATE PkgConfig::rtmidi)
 else()
-    target_sources(AetherSDR PRIVATE third_party/rtmidi/RtMidi.cpp)
-    target_include_directories(AetherSDR PRIVATE third_party/rtmidi)
+    target_sources(aethercore PRIVATE third_party/rtmidi/RtMidi.cpp)
+    # PUBLIC: MidiControlManager.h includes RtMidi.h
+    target_include_directories(aethercore PUBLIC third_party/rtmidi)
 endif()
 
 if(APPLE)
-    target_compile_definitions(AetherSDR PRIVATE __MACOSX_CORE__)
-    target_link_libraries(AetherSDR PRIVATE "-framework CoreMIDI" "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
+    # RtMidi backend selectors — PUBLIC because MidiControlManager.h includes
+    # RtMidi.h (its class layout is backend-conditional in places).
+    target_compile_definitions(aethercore PUBLIC __MACOSX_CORE__)
+    target_link_libraries(aethercore PRIVATE "-framework CoreMIDI" "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
 elseif(WIN32)
-    target_compile_definitions(AetherSDR PRIVATE __WINDOWS_MM__)
-    target_link_libraries(AetherSDR PRIVATE winmm)
-    target_link_libraries(AetherSDR PRIVATE dxgi)  # GpuSelector adapter enumeration
+    target_compile_definitions(aethercore PUBLIC __WINDOWS_MM__)
+    target_link_libraries(aethercore PRIVATE winmm)
+    target_link_libraries(aethercore PRIVATE dxgi)  # GpuSelector adapter enumeration
 else()
-    target_compile_definitions(AetherSDR PRIVATE __LINUX_ALSA__)
+    target_compile_definitions(aethercore PUBLIC __LINUX_ALSA__)
     find_package(PkgConfig REQUIRED)
     if(PkgConfig_FOUND)
         pkg_check_modules(alsa REQUIRED IMPORTED_TARGET alsa)
     endif()
-    target_link_libraries(AetherSDR PRIVATE PkgConfig::alsa)
+    target_link_libraries(aethercore PRIVATE PkgConfig::alsa)
 endif()
 
 # hidapi — USB HID encoder support (Stream Deck, Icom RC-28, Griffin PowerMate, Contour Shuttle)
@@ -1371,37 +1409,41 @@ endif()
 # expose the same Qt signal contract (see UlanziDialBackend.h); the
 # mapper dialog and MainWindow dispatcher are unchanged across
 # platforms.  See #3232 for the design.
+target_sources(aethercore PRIVATE
+    src/core/UlanziDialBackend.h)   # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
 target_sources(AetherSDR PRIVATE
-    src/core/UlanziDialBackend.h
     src/gui/UlanziDialMapperDialog.cpp
     src/gui/UlanziDialMapperDialog.h)
 if(UNIX AND NOT APPLE)
-    target_sources(AetherSDR PRIVATE
+    target_sources(aethercore PRIVATE
         src/core/EvdevEncoderManager.cpp
         src/core/EvdevEncoderManager.h)
 endif()
 if(WIN32)
-    target_sources(AetherSDR PRIVATE
+    target_sources(aethercore PRIVATE
         src/core/UlanziDialWindowsManager.cpp
         src/core/UlanziDialWindowsManager.h)
 endif()
 if(APPLE)
-    target_sources(AetherSDR PRIVATE
+    target_sources(aethercore PRIVATE
         src/core/UlanziDialMacOSManager.cpp
         src/core/UlanziDialMacOSManager.h)
-    target_link_libraries(AetherSDR PRIVATE
+    target_link_libraries(aethercore PRIVATE
         "-framework IOKit"
         "-framework CoreFoundation")
 endif()
 
 if(HIDAPI_FOUND)
     message(STATUS "hidapi found — USB HID encoder support enabled")
-    target_compile_definitions(AetherSDR PRIVATE HAVE_HIDAPI)
-    target_sources(AetherSDR PRIVATE
+    # PUBLIC: gui (MainWindow_Controllers.cpp) includes hidapi.h and checks
+    # HAVE_HIDAPI directly.
+    target_compile_definitions(aethercore PUBLIC HAVE_HIDAPI)
+    target_sources(aethercore PRIVATE
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
-        src/core/HidDeviceParser.h
+        src/core/HidDeviceParser.h)
+    target_sources(AetherSDR PRIVATE
         src/gui/RC28MappingDialog.cpp
         src/gui/RC28MappingDialog.h)
     set(HIDAPI_NORMALIZED_INCLUDE_DIRS ${HIDAPI_INCLUDE_DIRS})
@@ -1415,8 +1457,8 @@ if(HIDAPI_FOUND)
         endif()
     endforeach()
     list(REMOVE_DUPLICATES HIDAPI_NORMALIZED_INCLUDE_DIRS)
-    target_include_directories(AetherSDR PRIVATE ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${HIDAPI_LIBRARIES})
+    target_include_directories(aethercore PUBLIC ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
+    target_link_libraries(aethercore PRIVATE ${HIDAPI_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND HIDAPI_DLL)
         add_custom_command(TARGET AetherSDR POST_BUILD
@@ -1465,22 +1507,22 @@ else()
 endif()
 
 if(PORTAUDIO_FOUND)
-    target_sources(AetherSDR PRIVATE src/core/CwSidetonePortAudioSink.cpp)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_PORTAUDIO)
-    target_include_directories(AetherSDR PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
-    target_link_directories(AetherSDR PRIVATE ${PORTAUDIO_LIBRARY_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${PORTAUDIO_LIBRARIES})
+    target_sources(aethercore PRIVATE src/core/CwSidetonePortAudioSink.cpp)
+    target_compile_definitions(aethercore PUBLIC HAVE_PORTAUDIO)
+    target_include_directories(aethercore PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
+    target_link_directories(aethercore PRIVATE ${PORTAUDIO_LIBRARY_DIRS})
+    target_link_libraries(aethercore PRIVATE ${PORTAUDIO_LIBRARIES})
 endif()
 
 if(FFTW3_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_FFTW3
+    target_compile_definitions(aethercore PUBLIC HAVE_FFTW3
         # On Windows lld-link (used by ClangCL) requires explicit dllimport
         # declarations; define FFTW_DLL so fftw3.h emits __declspec(dllimport)
         # and the linker can resolve __imp_fftwf_* symbols from the import lib.
         $<$<BOOL:${WIN32}>:FFTW_DLL>)
-    target_include_directories(AetherSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
-    target_link_directories(AetherSDR PRIVATE ${FFTW3_LIBRARY_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${FFTW3_LIBRARIES})
+    target_include_directories(aethercore PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_link_directories(aethercore PRIVATE ${FFTW3_LIBRARY_DIRS})
+    target_link_libraries(aethercore PRIVATE ${FFTW3_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND FFTW3_DLL)
         add_custom_command(TARGET AetherSDR POST_BUILD
@@ -1492,9 +1534,9 @@ if(FFTW3_FOUND)
 endif()
 
 if(ORT_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_ONNX)
-    target_include_directories(AetherSDR PRIVATE ${ORT_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${ORT_LIBRARIES})
+    target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
+    target_include_directories(aethercore PRIVATE ${ORT_INCLUDE_DIRS})
+    target_link_libraries(aethercore PRIVATE ${ORT_LIBRARIES})
     if(WIN32 AND ORT_DLLS)
         foreach(_ort_dll IN LISTS ORT_DLLS)
             add_custom_command(TARGET AetherSDR POST_BUILD
@@ -1506,38 +1548,39 @@ if(ORT_FOUND)
 endif()
 
 if(RADE_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)
+    # PUBLIC defines: gui (RadeApplet etc.) checks HAVE_RADE/HAVE_OPUS.
+    target_compile_definitions(aethercore PUBLIC HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)
     if(RADE_WAV_TAP)
         set(RADE_TAP_DIR "${CMAKE_BINARY_DIR}/rade_taps"
             CACHE PATH "Output directory for RADE WAV tap files")
-        target_compile_definitions(AetherSDR PRIVATE RADE_WAV_TAP
+        target_compile_definitions(aethercore PRIVATE RADE_WAV_TAP
             RADE_TAP_DIR="${RADE_TAP_DIR}")
     endif()
-    target_include_directories(AetherSDR PRIVATE ${RADE_DIR}/src)
+    target_include_directories(aethercore PRIVATE ${RADE_DIR}/src)
     if(WIN32)
-        target_link_libraries(AetherSDR PRIVATE opus)
+        target_link_libraries(aethercore PRIVATE opus)
     else()
-        target_link_libraries(AetherSDR PRIVATE opus m)
+        target_link_libraries(aethercore PRIVATE opus m)
     endif()
 elseif(OPUS_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_OPUS)
-    target_include_directories(AetherSDR PRIVATE ${OPUS_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${OPUS_LIBRARIES})
+    target_compile_definitions(aethercore PUBLIC HAVE_OPUS)
+    target_include_directories(aethercore PRIVATE ${OPUS_INCLUDE_DIRS})
+    target_link_libraries(aethercore PRIVATE ${OPUS_LIBRARIES})
 endif()
 
 if(ENABLE_SPECBLEACH)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_SPECBLEACH)
-    target_include_directories(AetherSDR PRIVATE
+    target_compile_definitions(aethercore PUBLIC HAVE_SPECBLEACH)
+    target_include_directories(aethercore PRIVATE
         ${CMAKE_SOURCE_DIR}/third_party/libspecbleach/include
         ${CMAKE_SOURCE_DIR}/third_party/libspecbleach/src)
     if(MSVC AND SPECBLEACH_STATIC_LIB)
         # Link pre-built clang-cl static lib
-        add_dependencies(AetherSDR specbleach_build)
-        target_link_libraries(AetherSDR PRIVATE ${SPECBLEACH_STATIC_LIB})
+        add_dependencies(aethercore specbleach_build)
+        target_link_libraries(aethercore PRIVATE ${SPECBLEACH_STATIC_LIB})
         # fftw3f (float precision) for Windows
         set(FFTW3F_LIB "${CMAKE_SOURCE_DIR}/third_party/fftw3/lib/fftw3f.lib")
         if(EXISTS ${FFTW3F_LIB})
-            target_link_libraries(AetherSDR PRIVATE ${FFTW3F_LIB})
+            target_link_libraries(aethercore PRIVATE ${FFTW3F_LIB})
             set(FFTW3F_DLL "${CMAKE_SOURCE_DIR}/third_party/fftw3/bin/libfftw3f-3.dll")
             add_custom_command(TARGET AetherSDR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -1549,17 +1592,17 @@ if(ENABLE_SPECBLEACH)
     else()
         # libspecbleach C sources include <fftw3.h> directly — ensure it's findable
         if(FFTW3_INCLUDE_DIRS)
-            target_include_directories(AetherSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
+            target_include_directories(aethercore PRIVATE ${FFTW3_INCLUDE_DIRS})
         else()
             find_path(FFTW3_H_DIR fftw3.h HINTS ${CMAKE_SOURCE_DIR}/third_party/fftw3/include)
             if(FFTW3_H_DIR)
-                target_include_directories(AetherSDR PRIVATE ${FFTW3_H_DIR})
+                target_include_directories(aethercore PRIVATE ${FFTW3_H_DIR})
             endif()
         endif()
         # libspecbleach uses fftwf (float precision FFTW3)
         find_library(FFTW3F_LIB fftw3f HINTS /opt/homebrew/lib /usr/local/lib ${CMAKE_SOURCE_DIR}/third_party/fftw3/lib)
         if(FFTW3F_LIB)
-            target_link_libraries(AetherSDR PRIVATE ${FFTW3F_LIB})
+            target_link_libraries(aethercore PRIVATE ${FFTW3F_LIB})
         else()
             message(WARNING "fftw3f not found — NR4 will fail to link")
         endif()
@@ -1569,17 +1612,17 @@ if(ENABLE_SPECBLEACH)
 endif()
 
 if(ENABLE_DFNR)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_DFNR)
-    target_include_directories(AetherSDR PRIVATE ${DEEPFILTER_DIR}/include)
-    target_link_libraries(AetherSDR PRIVATE ${DFNR_LIB})
+    target_compile_definitions(aethercore PUBLIC HAVE_DFNR)
+    target_include_directories(aethercore PRIVATE ${DEEPFILTER_DIR}/include)
+    target_link_libraries(aethercore PRIVATE ${DFNR_LIB})
     if(WIN32)
-        target_link_libraries(AetherSDR PRIVATE ws2_32 bcrypt userenv ntdll)
+        target_link_libraries(aethercore PRIVATE ws2_32 bcrypt userenv ntdll)
     elseif(APPLE)
         # Rust runtime deps on macOS
-        target_link_libraries(AetherSDR PRIVATE "-framework Security" "-framework CoreFoundation")
+        target_link_libraries(aethercore PRIVATE "-framework Security" "-framework CoreFoundation")
     else()
         # Rust runtime deps on Linux
-        target_link_libraries(AetherSDR PRIVATE pthread dl m)
+        target_link_libraries(aethercore PRIVATE pthread dl m)
     endif()
     # Copy DLL and model to build directory
     if(DFNR_DLL AND EXISTS ${DFNR_DLL})
@@ -1623,11 +1666,12 @@ if(ENABLE_NVIDIA_AFX)
     # Pi etc. — which also have no NVIDIA GPU) and macOS get the DFNR fallback,
     # not BNR. The arch guard means BNR is simply absent there (no dead button).
     if(((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-        target_compile_definitions(AetherSDR PRIVATE HAVE_NVIDIA_AFX)
+        # PUBLIC: gui surfaces the BNR button under #ifdef HAVE_NVIDIA_AFX.
+        target_compile_definitions(aethercore PUBLIC HAVE_NVIDIA_AFX)
         # Linux loads the AFX runtime via libdl; Windows uses the Win32
         # LoadLibrary family from kernel32 (linked by default).
         if(UNIX)
-            target_link_libraries(AetherSDR PRIVATE ${CMAKE_DL_LIBS})
+            target_link_libraries(aethercore PRIVATE ${CMAKE_DL_LIBS})
         endif()
         message(STATUS "NVIDIA AFX GPU denoiser enabled (runtime-loaded)")
     else()
@@ -1639,71 +1683,76 @@ if(ENABLE_MQTT)
     # HAVE_MQTT gates the project's MQTT client code (MqttApplet,
     # RadioModel plumbing) — must be set regardless of whether
     # libmosquitto is the bundled or the system copy.
-    target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT)
+    target_compile_definitions(aethercore PUBLIC HAVE_MQTT) # gui MqttApplet checks it
     if (USE_SYSTEM_LIBMOSQUITTO)
         # System libmosquitto is conventionally built with TLS support on
         # distro packages — assume HAVE_MQTT_TLS unless the packager
         # explicitly opted out via -DMQTT_TLS=OFF.
         if(MQTT_TLS)
-            target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT_TLS)
+            target_compile_definitions(aethercore PUBLIC HAVE_MQTT_TLS)
         endif()
     else()
-        target_include_directories(AetherSDR PRIVATE
+        target_include_directories(aethercore PRIVATE
             ${MOSQUITTO_DIR}/include
             ${MOSQUITTO_DIR}/src)
-        target_sources(AetherSDR PRIVATE ${MOSQUITTO_SOURCES})
+        target_sources(aethercore PRIVATE ${MOSQUITTO_SOURCES})
         if(OpenSSL_FOUND)
             set(MQTT_TLS_FLAG " -DWITH_TLS")
-            target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT_TLS)
-            target_link_libraries(AetherSDR PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+            target_compile_definitions(aethercore PUBLIC HAVE_MQTT_TLS)
+            target_link_libraries(aethercore PRIVATE OpenSSL::SSL OpenSSL::Crypto)
         else()
             set(MQTT_TLS_FLAG "")
         endif()
         if(WIN32)
             set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-w -DLIBMOSQUITTO_STATIC -DLIBMOSQCOMMON_STATIC${MQTT_TLS_FLAG}")
-            target_compile_definitions(AetherSDR PRIVATE LIBMOSQUITTO_STATIC LIBMOSQCOMMON_STATIC)
+            target_compile_definitions(aethercore PRIVATE LIBMOSQUITTO_STATIC LIBMOSQCOMMON_STATIC)
         else()
             set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
                 COMPILE_FLAGS "-w -DWITH_THREADING${MQTT_TLS_FLAG}")
         endif()
     endif()
     if(NOT WIN32)
-        target_link_libraries(AetherSDR PRIVATE pthread)
+        target_link_libraries(aethercore PRIVATE pthread)
     endif()
 endif()
 
 if(HAVE_PIPEWIRE)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_PIPEWIRE)
+    target_compile_definitions(aethercore PUBLIC HAVE_PIPEWIRE) # gui checks HAVE_PIPEWIRE too
     message(STATUS "Linux DAX bridge enabled (PulseAudio pipe modules)")
 endif()
 
 if(HAVE_PIPEWIRE_NATIVE)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_PIPEWIRE_NATIVE)
-    target_include_directories(AetherSDR PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
-    target_compile_options(AetherSDR PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
+    target_compile_definitions(aethercore PUBLIC HAVE_PIPEWIRE_NATIVE)
+    target_include_directories(aethercore PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
+    target_link_libraries(aethercore PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
+    target_compile_options(aethercore PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
     message(STATUS "Linux DAX RX uses native pw_stream (libpipewire-0.3 ${PIPEWIRE_NATIVE_VERSION})")
 endif()
 
-# Pass project version to code
-target_compile_definitions(AetherSDR PRIVATE
+# Pass project version to code — PUBLIC so main.cpp and gui (About dialog,
+# Ax25HfPacketDecodeDialog) see it as before.
+target_compile_definitions(aethercore PUBLIC
     AETHERSDR_VERSION="${PROJECT_VERSION}"
 )
 
-# Compiler warnings
-if(MSVC)
-    target_compile_options(AetherSDR PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
-else()
-    target_compile_options(AetherSDR PRIVATE
-        -Wall -Wextra -Wpedantic
-        $<$<CONFIG:Debug>:-g3 -fsanitize=address>
-        $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
-    )
-    target_link_options(AetherSDR PRIVATE
-        $<$<CONFIG:Debug>:-fsanitize=address>
-    )
-endif()
+# Compiler warnings — same flags for both first-party targets. Vendored
+# sources compiled into aethercore keep their per-source -w COMPILE_FLAGS,
+# which land after these target options and win (unchanged from monolith).
+foreach(_aether_tgt aethercore AetherSDR)
+    if(MSVC)
+        target_compile_options(${_aether_tgt} PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
+    else()
+        target_compile_options(${_aether_tgt} PRIVATE
+            -Wall -Wextra -Wpedantic
+            $<$<CONFIG:Debug>:-g3 -fsanitize=address>
+            $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
+        )
+        target_link_options(${_aether_tgt} PRIVATE
+            $<$<CONFIG:Debug>:-fsanitize=address>
+        )
+    endif()
+endforeach()
 
 
 # ── Unit test harnesses ──────────────────────────────────────────────────────

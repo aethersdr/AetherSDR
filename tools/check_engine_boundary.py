@@ -39,9 +39,10 @@ GUI_DIR = REPO / "src" / "gui"
 
 # Legacy boundary violations inside the engine, tracked for relocation
 # or seam-extraction in RFC step 1. Shrink these lists; never grow them.
-KNOWN_GUI_INCLUDE_LEGACY = {
-    "src/core/AutomationServer.cpp",  # gui/ConnectionPanel.h
-}
+# EB1 is now clear: no engine file includes a gui/ header (AutomationServer's
+# ConnectionPanel dependency was inverted behind IConnectionAutomation in the
+# step-1 PR). Any EB1 finding is now a hard error.
+KNOWN_GUI_INCLUDE_LEGACY = set()
 KNOWN_WIDGETS_LEGACY = {
     "src/core/TxKeyingMarker.h",
     "src/core/ThemeManager.cpp",

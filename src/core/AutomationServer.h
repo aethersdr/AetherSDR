@@ -26,7 +26,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
-class ConnectionPanel;
+class IConnectionAutomation;
 class AudioEngine;
 class QsoRecorder;
 
@@ -206,10 +206,13 @@ public:
     void setAudioEngine(AudioEngine* audio) { m_audioEngine = audio; }
     // QSO recorder handle for the record() verb (start/stop/status/path).
     void setQsoRecorder(QsoRecorder* rec) { m_qsoRecorder = rec; }
-    // Real connection dialog hook for the connect/disconnect verbs. The bridge
-    // asks ConnectionPanel to emit the same signals the visible buttons do, so
-    // automation exercises the normal MainWindow/RadioModel connection path.
-    void setConnectionPanel(ConnectionPanel* panel) { m_connectionPanel = panel; }
+    // Real connection hook for the connect/disconnect/dialog verbs. The bridge
+    // asks the implementor (the GUI's ConnectionPanel) to drive the same path
+    // the visible buttons do, so automation exercises the normal
+    // MainWindow/RadioModel connection flow. The engine holds only the
+    // gui-free IConnectionAutomation interface (aetherd RFC step 1 / EB1
+    // boundary); lifetime across deferred calls is guarded via asQObject().
+    void setConnectionAutomation(IConnectionAutomation* conn) { m_connection = conn; }
     void setConnectionDialogHost(QObject* host) { m_connectionDialogHost = host; }
     void setSliceReceiveSourceHandler(
         std::function<QJsonObject(const QString&)> handler)
@@ -403,7 +406,7 @@ private:
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
     QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
     QPointer<QsoRecorder> m_qsoRecorder;          // for record(); may be null
-    QPointer<ConnectionPanel> m_connectionPanel;  // for connect/disconnect verbs
+    IConnectionAutomation* m_connection = nullptr;  // connect/disconnect verbs; guard via asQObject()
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;

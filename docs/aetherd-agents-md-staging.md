@@ -23,7 +23,12 @@ describes — never earlier, never later.
 
 ---
 
-## Block 1 — land with RFC step 1 (`libaethercore` extraction)
+## Block 1 — LANDED 2026-07-04 with RFC step 1 (`libaethercore` extraction)
+
+> This block has been merged into `AGENTS.md` (In-flight subsection +
+> build-targets table + agent-guidelines bullet), reconciled to the real
+> target name (`aethercore`) and the EB1-now-zero state. Kept here for
+> history; delete on the next staging-doc edit.
 
 ### 1a. In the "In-flight: aetherd engine/UI decoupling" subsection, replace the status sentence
 

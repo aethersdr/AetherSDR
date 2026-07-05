@@ -32,6 +32,9 @@ When helping with AetherSDR:
 - Flag any proposal that would break slice 0 RX flow
 - If unsure about protocol behavior → ask for logs/wireshark captures first
 - **Use `AppSettings`, never `QSettings`** — see "Settings Persistence" below
+- **New engine code goes in `libaethercore`** (`src/core/` or `src/models/`),
+  exposed to the UI through models — never via a new gui→core header include.
+  See "Build targets" and "In-flight: aetherd" under Architecture Overview.
 - **Read `CONTRIBUTING.md`** for full contributor guidelines, coding conventions,
   and the AI-to-AI debugging protocol (open a GitHub issue for cross-agent coordination)
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
@@ -230,7 +233,26 @@ The accepted RFC at
 (tracking issue #3849) splits this codebase into an engine library
 (`libaethercore`), a headless engine daemon (`aetherd`), and thin UI
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
-follows the RFC's §10 staged order; **no step has landed yet**.
+follows the RFC's §10 staged order; **step 1 (`libaethercore`) has
+landed** — the engine is a static library, the app is a shell that links
+it. Steps 2+ have not landed.
+
+**Build targets (post-RFC step 1):**
+
+| Target | Contents | May link |
+|---|---|---|
+| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. **Never `gui/`; QtWidgets only via the tracked-legacy files below, shrinking to zero** |
+| `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
+
+The engine→gui dependency direction is CI-enforced
+(`tools/check_engine_boundary.py`, `engine-boundary.yml`, `--strict`): no
+`core/`/`models/` file may include a `gui/` header (**EB1 — now zero,
+any finding is an error**), nor use QtWidgets (**EB2** — a shrinking
+tracked-legacy set warns, new usage errors). If your change trips the
+check, restructure the change — do not move the file, weaken the check,
+or add an exemption. Engine code that needs a UI callback defines a
+gui-free interface in `core/` (e.g. `IConnectionAutomation`) that the gui
+implements — never a `gui/` include.
 
 **Until migration rules appear in this file, nothing changes for you.**
 Do not pre-emptively restructure code toward the RFC — no new engine/UI

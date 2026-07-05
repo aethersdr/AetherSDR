@@ -2,6 +2,7 @@
 
 #include "core/RadioDiscovery.h"
 #include "core/SmartLinkClient.h"
+#include "core/IConnectionAutomation.h"
 
 #include <QWidget>
 #include <QListWidget>
@@ -20,7 +21,7 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 // Novice-first dialog for local, SmartLink, and manual/VPN radio connections.
-class ConnectionPanel : public QWidget {
+class ConnectionPanel : public QWidget, public IConnectionAutomation {
     Q_OBJECT
 
 public:
@@ -30,10 +31,24 @@ public:
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
-    QList<RadioInfo> automationLocalRadios() const;
-    bool automationConnectLocalSerial(const QString& serial, QString* error = nullptr);
-    bool automationConnectByIp(const QString& hostOrIp, QString* error = nullptr);
-    bool automationDisconnect(QString* error = nullptr);
+
+    // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
+    QList<RadioInfo> automationLocalRadios() const override;
+    bool automationConnectLocalSerial(const QString& serial, QString* error = nullptr) override;
+    bool automationConnectByIp(const QString& hostOrIp, QString* error = nullptr) override;
+    bool automationDisconnect(QString* error = nullptr) override;
+    bool automationDialogVisible() const override { return isVisible(); }
+    void automationSetDialogVisible(bool visible) override
+    {
+        if (visible) {
+            show();
+            raise();
+            activateWindow();
+        } else {
+            hide();
+        }
+    }
+    QObject* asQObject() override { return this; }
 
 protected:
     void paintEvent(QPaintEvent* event) override;

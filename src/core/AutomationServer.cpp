@@ -9,7 +9,7 @@
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
-#include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
+#include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
 
 #include <QAction>
 #include <QLocalServer>
@@ -3005,13 +3005,13 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         return err(QStringLiteral("connect dialog requires show|hide"));
     }
 
-    ConnectionPanel* panel = m_connectionPanel;
-    if (!panel) {
+    IConnectionAutomation* conn = m_connection;
+    if (!conn) {
         return err(QStringLiteral("connection panel unavailable"));
     }
 
     if (a == QLatin1String("list")) {
-        const QList<RadioInfo> radios = panel->automationLocalRadios();
+        const QList<RadioInfo> radios = conn->automationLocalRadios();
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("count"), radios.size()},
@@ -3024,7 +3024,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     if (a == QLatin1String("local")) {
-        const QList<RadioInfo> radios = panel->automationLocalRadios();
+        const QList<RadioInfo> radios = conn->automationLocalRadios();
         if (radios.isEmpty()) {
             return err(QStringLiteral("no local radios have been discovered"));
         }
@@ -3038,13 +3038,13 @@ QJsonObject AutomationServer::doConnect(const QString& action,
                 return err(QStringLiteral("first discovered local radio has no serial"));
             }
 
-            QPointer<ConnectionPanel> guardedPanel = panel;
-            QTimer::singleShot(0, qApp, [guardedPanel, selectedSerial] {
-                if (!guardedPanel) {
+            QPointer<QObject> guard(conn->asQObject());
+            QTimer::singleShot(0, qApp, [guard, conn, selectedSerial] {
+                if (!guard) {
                     return;
                 }
                 QString error;
-                if (!guardedPanel->automationConnectLocalSerial(selectedSerial, &error)) {
+                if (!conn->automationConnectLocalSerial(selectedSerial, &error)) {
                     qCWarning(lcAutomation).noquote()
                         << "connect local first failed after scheduling:" << error;
                 }
@@ -3068,13 +3068,13 @@ QJsonObject AutomationServer::doConnect(const QString& action,
                     continue;
                 }
 
-                QPointer<ConnectionPanel> guardedPanel = panel;
-                QTimer::singleShot(0, qApp, [guardedPanel, serial] {
-                    if (!guardedPanel) {
+                QPointer<QObject> guard(conn->asQObject());
+                QTimer::singleShot(0, qApp, [guard, conn, serial] {
+                    if (!guard) {
                         return;
                     }
                     QString error;
-                    if (!guardedPanel->automationConnectLocalSerial(serial, &error)) {
+                    if (!conn->automationConnectLocalSerial(serial, &error)) {
                         qCWarning(lcAutomation).noquote()
                             << "connect local serial failed after scheduling:" << error;
                     }
@@ -3102,13 +3102,13 @@ QJsonObject AutomationServer::doConnect(const QString& action,
             return err(QStringLiteral("connect ip requires a host or IP address"));
         }
 
-        QPointer<ConnectionPanel> guardedPanel = panel;
-        QTimer::singleShot(0, qApp, [guardedPanel, target] {
-            if (!guardedPanel) {
+        QPointer<QObject> guard(conn->asQObject());
+        QTimer::singleShot(0, qApp, [guard, conn, target] {
+            if (!guard) {
                 return;
             }
             QString error;
-            if (!guardedPanel->automationConnectByIp(target, &error)) {
+            if (!conn->automationConnectByIp(target, &error)) {
                 qCWarning(lcAutomation).noquote()
                     << "connect ip failed after scheduling:" << error;
             }
@@ -3135,15 +3135,15 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
     }
 
     QObject* host = m_connectionDialogHost;
-    ConnectionPanel* panel = m_connectionPanel;
-    if (!host && !panel) {
+    IConnectionAutomation* conn = m_connection;
+    if (!host && !conn) {
         return err(QStringLiteral("connection dialog unavailable"));
     }
 
-    const bool wasVisible = panel && panel->isVisible();
+    const bool wasVisible = conn && conn->automationDialogVisible();
     QPointer<QObject> guardedHost = host;
-    QPointer<ConnectionPanel> guardedPanel = panel;
-    QTimer::singleShot(0, qApp, [guardedHost, guardedPanel, show] {
+    QPointer<QObject> guard(conn ? conn->asQObject() : nullptr);
+    QTimer::singleShot(0, qApp, [guardedHost, guard, conn, show] {
         if (guardedHost) {
             const char* method = show ? "showConnectionDialog" : "hideConnectionDialog";
             if (QMetaObject::invokeMethod(guardedHost, method, Qt::DirectConnection)) {
@@ -3154,16 +3154,10 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
                 << "- falling back to direct panel visibility";
         }
 
-        if (!guardedPanel) {
+        if (!guard) {
             return;
         }
-        if (show) {
-            guardedPanel->show();
-            guardedPanel->raise();
-            guardedPanel->activateWindow();
-        } else {
-            guardedPanel->hide();
-        }
+        conn->automationSetDialogVisible(show);
     });
 
     return QJsonObject{
@@ -3177,21 +3171,21 @@ QJsonObject AutomationServer::doConnectDialog(const QString& action)
 
 QJsonObject AutomationServer::doDisconnect()
 {
-    ConnectionPanel* panel = m_connectionPanel;
-    if (!panel) {
+    IConnectionAutomation* conn = m_connection;
+    if (!conn) {
         return err(QStringLiteral("connection panel unavailable"));
     }
     if (!m_radioModel || !m_radioModel->isConnected()) {
         return err(QStringLiteral("not connected to a radio"));
     }
 
-    QPointer<ConnectionPanel> guardedPanel = panel;
-    QTimer::singleShot(0, qApp, [guardedPanel] {
-        if (!guardedPanel) {
+    QPointer<QObject> guard(conn->asQObject());
+    QTimer::singleShot(0, qApp, [guard, conn] {
+        if (!guard) {
             return;
         }
         QString error;
-        if (!guardedPanel->automationDisconnect(&error)) {
+        if (!conn->automationDisconnect(&error)) {
             qCWarning(lcAutomation).noquote()
                 << "disconnect failed after scheduling:" << error;
         }

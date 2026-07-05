@@ -429,7 +429,7 @@ int main(int argc, char* argv[])
             automation->setAudioEngine(window.audioEngine());
             automation->setQsoRecorder(window.qsoRecorder());  // for the record() verb
             automation->setConnectionDialogHost(&window);
-            automation->setConnectionPanel(
+            automation->setConnectionAutomation(
                 window.findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
             automation->setSliceReceiveSourceHandler(
                 [&window](const QString& arg) {
