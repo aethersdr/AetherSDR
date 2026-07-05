@@ -218,6 +218,10 @@ QrzClient::ParsedResponse QrzClient::parseXml(const QByteArray& xml)
             const auto name = r.name();
             if (name == QLatin1String("Session")) { block = Block::Session; continue; }
             if (name == QLatin1String("Callsign")) { block = Block::Callsign; continue; }
+            if (block == Block::None)
+                continue;  // outside any recognized block (e.g. the <QRZDatabase> root) —
+                           // readElementText() would read to ITS end tag and swallow every
+                           // child, including <Session>/<Callsign>, before we ever see them
 
             const QString text = r.readElementText(QXmlStreamReader::SkipChildElements).trimmed();
             if (block == Block::Session) {
