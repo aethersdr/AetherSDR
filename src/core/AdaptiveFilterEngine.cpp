@@ -149,17 +149,20 @@ namespace {
 
     int snap50(int hz) { return ((hz + kSnapHz / 2) / kSnapHz) * kSnapHz; }
 
+    // These take the vector by value (they need a mutable copy) and select a
+    // single order statistic, so nth_element (O(n)) is used rather than a full
+    // sort (O(n log n)) — same result, cheaper per frame. (#3945 review)
     int medianOf(QVector<int> v)
     {
         if (v.isEmpty()) return 0;
-        std::sort(v.begin(), v.end());
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
         return v[v.size() / 2];
     }
 
     float medianOfF(QVector<float> v)
     {
         if (v.isEmpty()) return 0.0f;
-        std::sort(v.begin(), v.end());
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
         return v[v.size() / 2];
     }
 
@@ -167,9 +170,9 @@ namespace {
     int percentileOf(QVector<int> v, int pct)
     {
         if (v.isEmpty()) return 0;
-        std::sort(v.begin(), v.end());
         const int idx = std::clamp(pct * (static_cast<int>(v.size()) - 1) / 100,
                                    0, static_cast<int>(v.size()) - 1);
+        std::nth_element(v.begin(), v.begin() + idx, v.end());
         return v[idx];
     }
 }
@@ -367,9 +370,13 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     // Clamp to operator bounds AND fixed SSB-voice guardrails, enforce MIN_BW,
     // snap to 50 Hz. low-cut in [minLow, 400] (keep warmth); high-cut in
     // [1800, maxHigh] (keep intelligibility). The combo ranges guarantee
-    // minLow <= 400 < 1800 <= maxHigh, so the clamps never invert.
-    int audioLow  = std::clamp(reg.lowHz,  minLow, kMaxLowCutHz);
-    int audioHigh = std::clamp(reg.highHz, kMinHighCutHz, maxHigh);
+    // minLow <= 400 < 1800 <= maxHigh, but a corrupt pref or an out-of-range
+    // automation setter could cross them — and std::clamp with lo > hi is UB,
+    // so pin the bounds first. (#3945 review)
+    const int lowLo  = std::min(minLow,  kMaxLowCutHz);
+    const int highHi = std::max(maxHigh, kMinHighCutHz);
+    int audioLow  = std::clamp(reg.lowHz,  lowLo, kMaxLowCutHz);
+    int audioHigh = std::clamp(reg.highHz, kMinHighCutHz, highHi);
     if (audioHigh - audioLow < kMinBwHz) audioHigh = audioLow + kMinBwHz;
     audioLow  = snap50(audioLow);
     audioHigh = snap50(audioHigh);

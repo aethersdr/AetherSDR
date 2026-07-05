@@ -194,6 +194,10 @@ namespace {
               bucketDb((kFloorHistBelowDb + kFloorHistAboveDb) / kFloorHistBuckets) {}
 
         int bucketOf(float v) const {
+            // Guard NaN before the cast: static_cast<int>(NaN) is UB and could
+            // land outside [0, buckets) after clamp, indexing counts[] OOB.
+            // (#3945 review)
+            if (!std::isfinite(v)) return 0;
             return std::clamp(static_cast<int>((v - lo) / bucketDb),
                               0, kFloorHistBuckets - 1);
         }

@@ -280,8 +280,8 @@ void AdaptiveFilterControls::savePrefs(SliceModel* slice)
 {
     if (!slice) return;
     auto& s = AppSettings::instance();
-    QJsonObject root = QJsonDocument::fromJson(
-        s.value("AdaptiveFilter", QString{}).toString().toUtf8()).object();
+    const QString before = s.value("AdaptiveFilter", QString{}).toString();
+    QJsonObject root = QJsonDocument::fromJson(before.toUtf8()).object();
     QJsonObject o;
     o["enabled"]    = slice->adaptiveFilterEnabled();
     o["minLowCut"]  = slice->adaptiveMinLowCut();
@@ -290,8 +290,14 @@ void AdaptiveFilterControls::savePrefs(SliceModel* slice)
     o["response"]   = slice->adaptiveResponse();
     o["splatter"]   = slice->adaptiveSplatter();
     root[QString::number(slice->sliceId())] = o;
-    s.setValue("AdaptiveFilter",
-               QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
+    const QString after =
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    // Idempotent: skip the disk write when nothing changed. A single enable
+    // toggle otherwise fans out to 3 savePrefs calls (the toggled handler plus
+    // the adaptiveFilterEnabledChanged handler on both host controls); only the
+    // first actually changes content, the rest short-circuit here. (#3945 review)
+    if (after == before) return;
+    s.setValue("AdaptiveFilter", after);
     s.save();
 }
 

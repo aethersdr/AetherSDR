@@ -166,6 +166,7 @@ private:
 
     void applyFilterPreset(int widthHz);
     void updateFilterButtons();
+    void refreshFilterWidth();   // "AUTO" while adaptive is live, else the width
     void updateModeSettings(const QString& mode);
     void rebuildFilterButtons();
     void saveFilterPresets();

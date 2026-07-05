@@ -210,7 +210,7 @@ int main()
 
     // ── 7. Weak signal below the presence gate — no fit ─────────────────────
     forEachMode([](bool usb) {
-        // Peak only ~4 dB over the floor (< kMinPeakDb = 7) -> not confident.
+        // Peak only ~4 dB over the floor (< the Normal minPeakDb gate, 9 dB) -> not confident.
         const auto bins = buildSpectrum(usb, -110.0f, 0.0f, hump(300, 2700, -106.0f));
         const OccupiedRegion r = measure(bins, usb, -110.0f);
         char d[64];
@@ -232,7 +232,7 @@ int main()
                r.valid && r.highHz >= 2400 && r.highHz <= 3500, d);
     });
 
-    // ── 9. In-band reference is a MEDIAN, not the peak ──────────────────────
+    // ── 9. In-band reference is the 75th percentile, below the peak ─────────
     forEachMode([](bool usb) {
         // A loud transient bin inside the core must not drag the reference up.
         const auto sig = [](double f) -> float {
@@ -245,7 +245,7 @@ int main()
         char d[112];
         std::snprintf(d, sizeof d, "  [%s] ref=%.1f peak=%.1f",
                       tag(usb), r.referenceDbm, r.peakDbm);
-        report("reference is the core median, below the transient peak",
+        report("reference is the core 75th percentile, below the transient peak",
                r.valid && r.referenceDbm <= -74.0f && r.referenceDbm >= -88.0f &&
                r.referenceDbm < r.peakDbm - 3.0f, d);
     });

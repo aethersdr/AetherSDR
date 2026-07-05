@@ -2011,6 +2011,21 @@ void RxApplet::updateAntennaButtons()
     updateAntennaButton(m_txAntBtn, m_slice->txAntenna(), true);
 }
 
+void RxApplet::refreshFilterWidth()
+{
+    if (!m_slice) return;
+    // Mirror VfoWidget::updateFilterLabel: show "AUTO" while the adaptive filter
+    // holds a confident live fit, otherwise the normal width readout. Keeps this
+    // label in sync with the VFO flag's (#794/#1225/#2197 two-readout drift)
+    // instead of animating a gliding number against the flag's "AUTO". (#3945)
+    if (m_slice->adaptiveFilterEnabled() && m_slice->adaptiveActive()) {
+        m_filterWidthLbl->setText(QStringLiteral("AUTO"));
+    } else {
+        m_filterWidthLbl->setText(formatFilterWidth(
+            m_slice->filterLow(), m_slice->filterHigh(), m_slice->mode()));
+    }
+}
+
 void RxApplet::connectSlice(SliceModel* s)
 {
     // ── Header ─────────────────────────────────────────────────────────────
@@ -2071,7 +2086,7 @@ void RxApplet::connectSlice(SliceModel* s)
             this, [this](const QStringList&) { updateAntennaButtons(); });
 
     // Filter width label
-    m_filterWidthLbl->setText(formatFilterWidth(s->filterLow(), s->filterHigh(), s->mode()));
+    refreshFilterWidth();
 
     // QSK
     {
@@ -2162,13 +2177,17 @@ void RxApplet::connectSlice(SliceModel* s)
     m_filterPassband->setMode(s->mode());
     connect(s, &SliceModel::filterChanged, this, [this](int lo, int hi) {
         updateFilterButtons();
-        m_filterWidthLbl->setText(formatFilterWidth(lo, hi, m_slice ? m_slice->mode() : QString()));
+        refreshFilterWidth();
         m_filterPassband->setFilter(lo, hi);
     });
     connect(s, &SliceModel::modeChanged, this, [this](const QString& mode) {
         m_filterPassband->setMode(mode);
-        if (m_slice)
-            m_filterWidthLbl->setText(formatFilterWidth(m_slice->filterLow(), m_slice->filterHigh(), mode));
+        refreshFilterWidth();
+    });
+    // Keep the width label switching between "AUTO" and the number as the
+    // adaptive filter engages/disengages, matching the VFO flag. (#3945 review)
+    connect(s, &SliceModel::adaptiveActiveChanged, this, [this](bool) {
+        refreshFilterWidth();
     });
 
     // AGC mode

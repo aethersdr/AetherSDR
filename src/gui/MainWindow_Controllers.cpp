@@ -1739,7 +1739,19 @@ void MainWindow::registerMidiParams()
         [this]() -> float { auto* s = activeSlice(); return s && s->nbOn() ? 1 : 0; });
 
     reg("rx.adaptiveFilter", "Adaptive RX Filter", "RX", P::Toggle, 0, 1,
-        [this](float v) { if (auto* s = activeSlice()) s->setAdaptiveFilterEnabled(v > 0.5f); },
+        [this](float v) {
+            auto* s = activeSlice();
+            if (!s) return;
+            const bool on = v > 0.5f;
+            // Only meaningful on SSB — enabling on a non-SSB slice would latch a
+            // hidden 'enabled' state the operator can't see or clear (the
+            // controls are SSB-only). Disabling is always allowed. (#3945 review)
+            if (on && s->mode() != QStringLiteral("USB")
+                   && s->mode() != QStringLiteral("LSB")) {
+                return;
+            }
+            s->setAdaptiveFilterEnabled(on);
+        },
         [this]() -> float { auto* s = activeSlice(); return s && s->adaptiveFilterEnabled() ? 1 : 0; });
 
     reg("rx.nrEnable", "Noise Reduction", "RX", P::Toggle, 0, 1,
