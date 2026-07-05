@@ -399,6 +399,12 @@ RadioModel::RadioModel(QObject* parent)
     // tears them down. RadioModel keeps non-owning pointers, obtained here, so
     // all the signal wiring and command/WAN orchestration below is byte-for-byte
     // as before — the move is ownership-only.
+    //
+    // Note: the threads now start here (as the ctor's first statement) rather
+    // than adjacent to their signal wiring below. Safe because RadioConnection::
+    // init()/PanadapterStream::init() only allocate sockets/timers and neither
+    // auto-connects nor emits — so there is no lost-signal window before our
+    // statusReceived/etc. connections are made. Keep that true if init() grows.
     {
         auto flex = std::make_unique<FlexBackend>();
         flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });

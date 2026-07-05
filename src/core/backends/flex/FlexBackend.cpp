@@ -41,6 +41,15 @@ FlexBackend::FlexBackend(QObject* parent)
 
 FlexBackend::~FlexBackend()
 {
+    // Sever our own lifecycle observation of the connection FIRST — as the old
+    // ~RadioModel's earlier m_backend.reset() effectively did (the backend was
+    // destroyed, auto-disconnecting these links, before the wire teardown ran).
+    // Otherwise disconnectFromRadio below could re-emit connected/disconnected
+    // through this half-destroyed backend. (#4058 review)
+    if (m_connection) {
+        disconnect(m_connection, nullptr, this, nullptr);
+    }
+
     // Teardown in the exact #502 order the former RadioModel dtor used:
     // connection first (BlockingQueued disconnect → deleteLater → thread
     // quit/wait), then panStream (BlockingQueued stop → …).

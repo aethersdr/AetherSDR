@@ -2515,6 +2515,15 @@ if(UNIX)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 
+# aetherd RFC step 2.2b regression guard: FlexBackend ctor/dtor thread ownership
+# + #502 teardown ordering. FlexBackend pulls RadioConnection/PanadapterStream
+# and their deep deps, so link the engine library rather than list sources.
+add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)
+target_include_directories(flex_backend_lifecycle_test PRIVATE src)
+target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
+set_target_properties(flex_backend_lifecycle_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_backend_lifecycle_test COMMAND flex_backend_lifecycle_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
     src/models/UsbCableModel.cpp
