@@ -491,7 +491,9 @@ void PipeWireAudioBridge::feedSilenceToAllPipes()
 
     // Write silence (zero float32 samples) to each active RX path.
     QByteArray silence(monoSamples * static_cast<int>(sizeof(float)), '\0');
+#ifdef HAVE_PIPEWIRE_NATIVE
     const auto* silenceFloat = reinterpret_cast<const float*>(silence.constData());
+#endif
     for (int i = 0; i < NUM_CHANNELS; ++i) {
 #ifdef HAVE_PIPEWIRE_NATIVE
         if (m_nativeRx[i]) {

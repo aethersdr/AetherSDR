@@ -850,7 +850,7 @@ void HidEncoderManager::setTMate2Indicators(bool tx, const QString& mode,
 
 void HidEncoderManager::setTMate2OverlayIndicators(const QString& overlayType,
                                                     int overlayValue,
-                                                    const QString& mode)
+                                                    const QString& /* mode */)
 {
     if (!m_device || !isTMate2()) return;
 
