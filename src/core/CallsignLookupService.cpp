@@ -122,8 +122,12 @@ void CallsignLookupService::loadPasswordFromKeychain()
     connect(job, &QKeychain::Job::finished, this, [this, username](QKeychain::Job* j) {
         auto* readJob = static_cast<QKeychain::ReadPasswordJob*>(j);
         if (j->error() != QKeychain::NoError || readJob->textData().isEmpty()) {
-            qCDebug(lcQrz) << "no stored QRZ password";
-            m_client->setCredentials(username, {});
+            // Keychain empty or unreadable (locked, access denied to this
+            // binary, …) — fall back to a password typed this session so
+            // lookups still work; it just won't survive a restart.
+            qCDebug(lcQrz) << "no stored QRZ password"
+                           << (m_sessionPassword.isEmpty() ? "" : "(using session password)");
+            m_client->setCredentials(username, m_sessionPassword);
         } else {
             m_client->setCredentials(username, readJob->textData());
         }
@@ -131,14 +135,18 @@ void CallsignLookupService::loadPasswordFromKeychain()
     });
     job->start();
 #else
-    qCWarning(lcQrz) << "QRZ password persistence unavailable: built without QtKeychain";
-    m_client->setCredentials(username, {});
+    if (m_sessionPassword.isEmpty())
+        qCWarning(lcQrz) << "QRZ password persistence unavailable: built without QtKeychain";
+    m_client->setCredentials(username, m_sessionPassword);
     emit configurationChanged();
 #endif
 }
 
 void CallsignLookupService::savePassword(const QString& password)
 {
+    // Whatever the keychain does, the typed password must work *now* —
+    // persistence and usability are separate concerns.
+    m_sessionPassword = password;
 #ifdef HAVE_KEYCHAIN
     if (password.isEmpty()) {
         auto* job = new QKeychain::DeletePasswordJob(QLatin1String(kKeychainService));
@@ -161,8 +169,8 @@ void CallsignLookupService::savePassword(const QString& password)
     });
     job->start();
 #else
-    Q_UNUSED(password);
-    qCWarning(lcQrz) << "cannot save QRZ password: built without QtKeychain";
+    qCWarning(lcQrz) << "QRZ password kept for this session only: built without QtKeychain";
+    loadPasswordFromKeychain();   // applies the session password to the client
 #endif
 }
 
@@ -179,7 +187,7 @@ void CallsignLookupService::readPassword(std::function<void(const QString&)> cal
     });
     job->start();
 #else
-    callback({});
+    callback(m_sessionPassword);
 #endif
 }
 

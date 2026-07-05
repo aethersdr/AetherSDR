@@ -51,6 +51,18 @@ public:
     // stored session.  Result arrives via loginTestFinished.
     void testLogin(const QString& username, const QString& password);
 
+    // Parsed subset of a QRZ XML response — session block + callsign block.
+    // Public (with parseXml) so the unit tests can pin the parser against
+    // real <QRZDatabase>-wrapped response shapes — the root element bug
+    // fixed in #4043 silently broke login end-to-end and no test caught it.
+    struct ParsedResponse {
+        QString sessionKey;
+        QString sessionError;
+        QString sessionMessage;
+        CallsignInfo info;
+    };
+    static ParsedResponse parseXml(const QByteArray& xml);
+
 signals:
     // `call` is the queried (normalized) form; `info.call` is QRZ's canonical
     // base call, which can differ for portable/prefixed queries — consumers
@@ -65,15 +77,6 @@ private:
     void handleLoginReply(QNetworkReply* reply);
     void handleLookupReply(QNetworkReply* reply, const QString& call, bool retriedAfterRelogin);
     QNetworkReply* getUrl(const QString& query);
-
-    // Parsed subset of a QRZ XML response — session block + callsign block.
-    struct ParsedResponse {
-        QString sessionKey;
-        QString sessionError;
-        QString sessionMessage;
-        CallsignInfo info;
-    };
-    static ParsedResponse parseXml(const QByteArray& xml);
 
     QNetworkAccessManager m_nam;
     QString m_username;

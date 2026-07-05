@@ -9,6 +9,7 @@
 #include "core/CtyDatParser.h"
 #include "core/CwCallsignSpotter.h"
 #include "core/MaidenheadLocator.h"
+#include "core/QrzClient.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -216,6 +217,73 @@ int main(int argc, char** argv)
               "grid distance computes");
         check(km > 4000 && km < 4400, "CM97→FN31 distance ≈ 4200 km");
         check(brg > 55 && brg < 90, "CM97→FN31 initial bearing ≈ ENE");
+    }
+
+    // ── QrzClient::parseXml — real <QRZDatabase>-wrapped responses ──────
+    // Regression coverage for #4043: readElementText() on the unrecognized
+    // root element consumed the entire document, so <Session> was never
+    // seen and login failed end-to-end.  These pin the three shapes the
+    // live API actually returns.
+    {
+        // Login success: Session with Key.
+        const QByteArray login =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            "<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n"
+            "  <Session>\n"
+            "    <Key>2331uf894c4bd29f3923f3bacf02c532d7bd9</Key>\n"
+            "    <Count>123</Count>\n"
+            "    <SubExp>Wed Jan 1 12:34:03 2027</SubExp>\n"
+            "    <GMTime>Sun Aug 16 03:51:47 2026</GMTime>\n"
+            "  </Session>\n"
+            "</QRZDatabase>\n";
+        const auto r = QrzClient::parseXml(login);
+        check(r.sessionKey == "2331uf894c4bd29f3923f3bacf02c532d7bd9",
+              "login response yields session key despite QRZDatabase root");
+        check(r.sessionError.isEmpty(), "login response has no error");
+
+        // Lookup success: Callsign + Session blocks.
+        const QByteArray lookup =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            "<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n"
+            "  <Callsign>\n"
+            "    <call>KI6BCJ</call>\n"
+            "    <fname>Pat</fname>\n"
+            "    <name>Jensen</name>\n"
+            "    <addr2>San Jose</addr2>\n"
+            "    <state>CA</state>\n"
+            "    <country>United States</country>\n"
+            "    <grid>CM97</grid>\n"
+            "    <class>E</class>\n"
+            "    <lat>37.300000</lat>\n"
+            "    <lon>-121.900000</lon>\n"
+            "    <image>https://cdn-xml.qrz.com/x/ki6bcj/photo.jpg</image>\n"
+            "  </Callsign>\n"
+            "  <Session>\n"
+            "    <Key>2331uf894c4bd29f3923f3bacf02c532d7bd9</Key>\n"
+            "  </Session>\n"
+            "</QRZDatabase>\n";
+        const auto l = QrzClient::parseXml(lookup);
+        check(l.info.call == "KI6BCJ" && l.info.firstName == "Pat",
+              "lookup response parses callsign block");
+        check(l.info.city == "San Jose" && l.info.grid == "CM97"
+              && l.info.licenseClass == "E",
+              "lookup response parses location fields");
+        check(l.info.hasLatLon && std::abs(l.info.latitude - 37.3) < 0.001
+              && std::abs(l.info.longitude - (-121.9)) < 0.001,
+              "lookup response parses lat/lon");
+        check(!l.sessionKey.isEmpty(), "lookup response retains session key");
+
+        // Session timeout: Error, no Key — must surface the error string.
+        const QByteArray expired =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+            "<QRZDatabase version=\"1.34\" xmlns=\"http://xmldata.qrz.com\">\n"
+            "  <Session>\n"
+            "    <Error>Session Timeout</Error>\n"
+            "  </Session>\n"
+            "</QRZDatabase>\n";
+        const auto e = QrzClient::parseXml(expired);
+        check(e.sessionKey.isEmpty() && e.sessionError == "Session Timeout",
+              "expired-session response surfaces the error");
     }
 
     // ── TTL staleness — the 7-day cache rule ────────────────────────────

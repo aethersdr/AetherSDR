@@ -2282,12 +2282,14 @@ target_link_libraries(display_inventory_policy_test PRIVATE Qt6::Core)
 add_test(NAME display_inventory_policy_test COMMAND display_inventory_policy_test)
 
 # QRZ callsign lookup — spotter stream detection, callsign regex,
-# CallsignInfo JSON round-trip, 7-day cache TTL rule.
+# CallsignInfo JSON round-trip, 7-day cache TTL rule, and the QRZ XML
+# response parser (QrzClient.cpp needs Qt6::Network for QNetworkReply).
 add_executable(qrz_callsign_test
     tests/qrz_callsign_test.cpp
     src/core/CwCallsignSpotter.cpp
     src/core/CallsignInfo.cpp
     src/core/CtyDatParser.cpp
+    src/core/QrzClient.cpp
     # LogManager provides lcQrz (spotter's qCDebug category); it drags
     # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
     src/core/LogManager.cpp
@@ -2295,7 +2297,7 @@ add_executable(qrz_callsign_test
     src/core/AppSettings.cpp
 )
 target_include_directories(qrz_callsign_test PRIVATE src)
-target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 
 add_executable(shortcut_manager_test

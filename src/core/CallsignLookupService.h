@@ -141,6 +141,11 @@ private:
     double m_ownLat{0.0};
     double m_ownLon{0.0};
     QString m_ownCallsign;
+    // Memory-only copy of the last password the operator typed, so lookups
+    // work this session even when the keychain can't store/return it
+    // (keychain-less build, locked keychain, ACL denial on an unsigned
+    // test binary).  Never written to disk.
+    QString m_sessionPassword;
     QHash<QString, CallsignInfo> m_cache;
     QSet<QString> m_inFlight;
     QSet<QString> m_fallbackShown;   // calls already given a prefix card this attempt
