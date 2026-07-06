@@ -48,7 +48,7 @@ black-box observations made in this thread.
   local "Not connected to KiwiSDR" overlay with the connection detail until the
   profile reconnects; Settings -> Antennas should show each Kiwi profile as a
   readable name/server entry; and the panadapter waterfall controls should map
-  to Kiwi W/F cell, floor, and rate while a Kiwi antenna is selected, then
+  to Kiwi W/F ceiling, floor, and rate while a Kiwi antenna is selected, then
   return to normal Flex waterfall behavior when it is not.
 - User-provided edge-case audit request from 2026-06-18: check muting,
   unmuting, volume control, band switching, and source switching behavior when
@@ -513,6 +513,26 @@ the applet-level Kiwi Audio toggle is enabled.
   queue vs camp/monitor wording and carries a KiwiSDR copyright notice; no
   JavaScript code was copied, translated, or used as an implementation source.
   No KiwiSDR code was copied, translated, or vendored.
+- The 2026-07-04 waterfall clarity/gain/black-level follow-up consulted the
+  current open-source KiwiSDR server repository
+  `https://github.com/jks-prv/KiwiSDR.git` at commit
+  `e48e74bce3e323e47fe2de3228ae7d43604238b0`. The protocol and display facts
+  used from license-compatible source files were: `rx/rx_waterfall.cpp` for
+  `MSG wf_cal=<dB>`, automatic `MSG maxdb=<dB>` / `MSG mindb=<dB>` updates, and
+  forwarding changed waterfall calibration; `rx/rx_waterfall_cmd.cpp` for the
+  `SET maxdb=<dB> mindb=<dB>` command shape; `rx/rx_util.cpp` for the
+  byte-to-dBm conversion and waterfall calibration offset; `rx/rx_waterfall.h`
+  for the 1024 W/F row width; and `rx/rx_init.cpp` for the default
+  `init.min_dB=-110` and `init.max_dB=-10` values. Those server files carry
+  GNU Library General Public
+  License version 2-or-later headers in that snapshot. The GPL-3.0-or-later
+  OpenWebRX browser file `web/openwebrx/openwebrx.js` was viewed only to verify
+  the browser's public waterfall-control semantics: the floor is zoom-corrected
+  by 3 dB per zoom level, auto mode applies ceiling/floor offsets to
+  `maxdb`/`mindb`, the browser supports a square-root weak-signal contrast
+  option, and the browser sends the same `SET maxdb=... mindb=...` command
+  shape. No KiwiSDR JavaScript, server code, assets, or comments were copied,
+  translated, vendored, or mechanically ported.
 - No WebSDR source code, prior WebSDR worktrees, PR #3612, prior WebSDR
   threads, contaminated temporary files, or rollout summaries were used.
 
@@ -606,7 +626,7 @@ IQ/GNSS streams, DX labels, extensions, or admin/config writes. Compressed SND
 support is limited to the source-attributed mono ADPCM layout and does not
 claim arbitrary compressed-audio layouts.
 The existing panadapter waterfall controls are source-aware: while a Kiwi
-profile is selected they update the selected profile's W/F cell, W/F floor, and
+profile is selected they update the selected profile's W/F ceiling, W/F floor, and
 W/F rate settings only; while a normal Flex antenna is selected they retain the
 radio waterfall gain, black-level, auto-black, and rate behavior.
 The requested W/F row must fully contain the current AetherSDR panadapter
@@ -820,10 +840,25 @@ Remaining uncertainties are deliberately conservative:
   slices currently assigned to a Kiwi virtual RX antenna, preventing local
   calibrated Flex dBm from racing the remote Kiwi meter state.
 - Direct uncompressed W/F row bytes are decoded as wrapped negative dB values
-  and color-mapped through a Kiwi-only automatic aperture with square-root
-  contrast stretch across the active waterfall color scheme. This is
-  client-side display normalization only: it does not synthesize waterfall data
-  from audio and does not claim Flex-calibrated RF power. Earlier black-box W/F
+  using the full byte-minus-255 range, then adjusted by the Kiwi-reported
+  waterfall calibration offset before local rendering and Auto range
+  calculation. After a 1024-bin direct row is available, the Kiwi display range
+  follows the maintainer-provided 2026-07-04 auto-scale specification: sort a
+  cloned row, use index 512 minus 10 dB as the waterfall minimum, and use index
+  1003 plus 30 dB as the waterfall maximum. To avoid one waterfall line or a
+  transient burst producing visibly different repeated Auto clicks, AetherSDR
+  first averages the latest 1024-bin calibrated rows by bin position, then
+  applies a 3-bin spatial boxcar across the averaged row before sorting and
+  extracting the percentile anchors. Once Auto has a valid range for the
+  current view, recalculated ranges within a small tolerance reuse the current
+  range to prevent repeated Auto clicks from making the sliders visibly churn
+  on normal noise-floor drift. Zoom normalization remains separate from those
+  Auto floor/ceiling values. Until then, the client uses the latest
+  Kiwi-reported display range or the default Kiwi range. The color index is the
+  clamped linear `(live_dBm - floor_dBm) / (ceiling_dBm - floor_dBm)` display
+  mapping. This is client-side display normalization only: it does not synthesize
+  waterfall data from audio and does not claim Flex-calibrated RF power.
+  Earlier black-box W/F
   captures showed both extended 16-byte-header direct rows and compact encoded
   rows. AetherSDR normally requests direct uncompressed W/F rows, but
   `AETHER_KIWI_WF_COMP=1` is a permanent diagnostic/automation launch flag for
@@ -834,13 +869,12 @@ Remaining uncertainties are deliberately conservative:
   through the same display-level conversion as direct rows. Malformed compact
   rows and unknown W/F payload lengths remain non-fatal and produce no bins,
   preventing stale or fake waterfall data.
-- The applet exposes Waterfall Cell and Waterfall Floor sliders using the
-  user-supplied -30 dB to +30 dB range. The corrected protocol draft maps
-  portable waterfall aperture control to `SET maxdb=... mindb=...`, so slider
-  changes bias the profile's max/min dB settings sent to the endpoint. The
-  same values are also applied as local display adjustments to the Kiwi
-  waterfall renderer so the controls provide immediate visible feedback even if
-  a public endpoint ignores or quantizes the setting command.
+- The applet exposes Kiwi W/F Floor and W/F Ceiling as absolute dBm display
+  boundaries. Auto mode fills those values from the maintainer-provided
+  percentile formula and sends them as `SET maxdb=... mindb=...`; manual slider
+  movement disables Auto and sends the explicit floor/ceiling range. The renderer uses
+  the same floor/ceiling range locally, so the visible waterfall follows the requested
+  values even if a public endpoint ignores or quantizes the setting command.
 - The applet exposes WF Rate as a compact 0..5 control. Value 0 preserves the
   existing default behavior: derive the remote W/F speed from the active Flex
   waterfall line duration. Values 1..5 are user-requested fixed speed values
@@ -848,8 +882,17 @@ Remaining uncertainties are deliberately conservative:
   changing the default automatic tracking path.
 - Kiwi RX antenna profile settings are stored as one
   `AppSettings["KiwiSdrRxAntennas"]` JSON object containing each profile's
-  id, required display label, normalized endpoint, Auto Connect flag, WF Cell,
-  WF Floor, and WF Rate.
+  id, required display label, normalized endpoint, Auto Connect flag, WF
+  auto-scale state, WF Floor, WF Ceiling, and WF Rate.
+- In Kiwi waterfall mode the Auto button requests an immediate client-side
+  auto-scale pass from the current recent calibrated-row window. The retained
+  window is capped at 20 rows, with initial connection/band-change Auto waiting
+  for the full 20 rows before choosing values. Auto also runs once on initial
+  connection and once after the tracked slice changes band. It does not
+  continuously chase incoming W/F rows. When the row window is available, the
+  overlay sliders update to the calculated WF Floor and WF Ceiling values;
+  moving either slider leaves Auto and makes the displayed floor/ceiling range
+  explicit.
 - If AetherSDR has owned slices but no active slice when KiwiSDR tracking is
   initialized, the applet selects the first owned slice as a tracking-only
   fallback. It emits that slice to the Kiwi client so receive data can start,

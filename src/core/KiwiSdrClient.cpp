@@ -44,6 +44,11 @@ constexpr int kSpecWaterfallHeaderBytes = 4;
 constexpr int kExtendedWaterfallHeaderBytes = 16;
 constexpr int kDefaultWaterfallZoomCap = 14;
 constexpr int kDefaultWaterfallFftBins = 1024;
+constexpr int kWaterfallMinDbmLimit = -260;
+constexpr int kWaterfallMaxDbmLimit = 30;
+constexpr int kWaterfallAutoHistoryRows = 20;
+constexpr int kWaterfallAutoMinRows = kWaterfallAutoHistoryRows;
+constexpr float kWaterfallAutoReuseToleranceDb = 5.0f;
 constexpr quint64 kMaxSequenceGapPaddingFrames = 8;
 constexpr int kWaterfallGuiMinIntervalMs = 33;
 constexpr double kWaterfallStartFixedPointScale = 16777216.0; // 2^24
@@ -54,6 +59,22 @@ constexpr const char* kWaterfallCompressionEnv = "AETHER_KIWI_WF_COMP";
 QString trKiwiSdrClient(const char* sourceText)
 {
     return QCoreApplication::translate("KiwiSdrClient", sourceText);
+}
+
+KiwiSdrProtocol::WaterfallDisplayRange clampedWaterfallDisplayRange(
+    KiwiSdrProtocol::WaterfallDisplayRange range)
+{
+    if (!range.valid) {
+        return range;
+    }
+
+    range.minDbm = std::clamp(range.minDbm,
+                              static_cast<float>(kWaterfallMinDbmLimit),
+                              static_cast<float>(kWaterfallMaxDbmLimit - 1));
+    range.maxDbm = std::clamp(range.maxDbm,
+                              range.minDbm + 1.0f,
+                              static_cast<float>(kWaterfallMaxDbmLimit));
+    return range;
 }
 
 QString statusPreflightFailureMessage(int firstHttpStatus,
@@ -465,10 +486,17 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_lastWaterfallIdentityCallsign.clear();
     m_lastDecodedSoundPcm.clear();
     m_lastWaterfallBins.clear();
+    m_waterfallAutoScaleRows.clear();
     m_lastWaterfallPanId.clear();
     m_lastWaterfallLowMhz = 0.0;
     m_lastWaterfallHighMhz = 0.0;
     m_lastWaterfallRowValid = false;
+    m_waterfallServerAutoMinValid = false;
+    m_waterfallServerAutoMaxValid = false;
+    m_waterfallServerAutoZoom = 0;
+    m_waterfallClientAutoRangeValid = false;
+    m_waterfallClientAutoZoom = 0;
+    m_waterfallAutoScalePending = true;
     m_waterfallRowPending = false;
     m_pendingWaterfallPanId.clear();
     m_pendingWaterfallBins.clear();
@@ -935,23 +963,33 @@ void KiwiSdrClient::disconnectFromEndpoint()
 
 void KiwiSdrClient::setTrackedSlice(int sliceId, double frequencyMhz,
                                     const QString& mode, int filterLowHz,
-                                    int filterHighHz, const QString& panId)
+                                    int filterHighHz, const QString& panId,
+                                    const QString& bandName)
 {
+    const QString normalizedBandName = bandName.trimmed();
     if (m_trackedSliceId == sliceId
         && qFuzzyCompare(m_trackedFrequencyMhz, frequencyMhz)
         && m_trackedMode == mode
         && m_trackedFilterLowHz == filterLowHz
         && m_trackedFilterHighHz == filterHighHz
-        && m_trackedPanId == panId) {
+        && m_trackedPanId == panId
+        && m_trackedBandName == normalizedBandName) {
         return;
     }
 
+    const bool bandChanged =
+        (!m_trackedBandName.isEmpty() || !normalizedBandName.isEmpty())
+        && m_trackedBandName != normalizedBandName;
     m_trackedSliceId = sliceId;
     m_trackedFrequencyMhz = frequencyMhz;
+    m_trackedBandName = normalizedBandName;
     m_trackedMode = mode;
     m_trackedFilterLowHz = filterLowHz;
     m_trackedFilterHighHz = filterHighHz;
     m_trackedPanId = panId;
+    if (bandChanged) {
+        resetWaterfallAutoScaleHistory();
+    }
 
     emit trackedSliceChanged(sliceId, frequencyMhz, mode,
                              filterLowHz, filterHighHz, panId);
@@ -989,18 +1027,49 @@ void KiwiSdrClient::setWaterfallLineDurationMs(int lineDurationMs)
     sendWaterfallRateToServer();
 }
 
-void KiwiSdrClient::setWaterfallDisplayAdjustments(int cellDb, int floorDb)
+void KiwiSdrClient::setWaterfallDisplayRange(int minDbm, int maxDbm,
+                                             bool autoScale)
 {
-    const int clampedCell = std::clamp(cellDb, -30, 30);
-    const int clampedFloor = std::clamp(floorDb, -30, 30);
-    if (m_waterfallCellDb == clampedCell
-        && m_waterfallFloorDb == clampedFloor) {
+    const int clampedMin = std::clamp(minDbm,
+                                      kWaterfallMinDbmLimit,
+                                      kWaterfallMaxDbmLimit - 1);
+    const int clampedMax = std::clamp(maxDbm,
+                                      clampedMin + 1,
+                                      kWaterfallMaxDbmLimit);
+    if (m_waterfallManualMinDbm == clampedMin
+        && m_waterfallManualMaxDbm == clampedMax
+        && m_waterfallAutoScaleEnabled == autoScale) {
         return;
     }
 
-    m_waterfallCellDb = clampedCell;
-    m_waterfallFloorDb = clampedFloor;
+    const bool autoEnabledChanged = m_waterfallAutoScaleEnabled != autoScale;
+    m_waterfallManualMinDbm = clampedMin;
+    m_waterfallManualMaxDbm = clampedMax;
+    m_waterfallAutoScaleEnabled = autoScale;
+    if (autoScale) {
+        if (autoEnabledChanged || !m_waterfallClientAutoRangeValid) {
+            m_waterfallAutoScalePending = true;
+        }
+    } else {
+        m_waterfallAutoScalePending = false;
+    }
     sendWaterfallDisplayAdjustmentsToServer();
+    emitWaterfallDisplayRangeChanged();
+}
+
+void KiwiSdrClient::requestWaterfallAutoScale()
+{
+    m_waterfallAutoScaleEnabled = true;
+    m_waterfallAutoScalePending = true;
+    if (!m_waterfallAutoScaleRows.isEmpty()) {
+        updateWaterfallAutoScale(true);
+        if (m_waterfallAutoScalePending) {
+            emitWaterfallDisplayRangeChanged(true);
+        }
+        return;
+    }
+
+    emitWaterfallDisplayRangeChanged(true);
 }
 
 void KiwiSdrClient::setWaterfallRateOverride(int rate)
@@ -1137,6 +1206,7 @@ void KiwiSdrClient::cleanupSockets()
     m_waterfallDiagFrames = 0;
     m_waterfallDiagBytes = 0;
     m_lastWaterfallBins.clear();
+    m_waterfallAutoScaleRows.clear();
     m_lastWaterfallPanId.clear();
     m_lastWaterfallLowMhz = 0.0;
     m_lastWaterfallHighMhz = 0.0;
@@ -1155,6 +1225,19 @@ void KiwiSdrClient::cleanupSockets()
     m_waterfallAvailabilityDetail.clear();
     m_waterfallRxChannel = -1;
     m_waterfallChannelCount = -1;
+    m_waterfallCalibrationDb = 0;
+    m_waterfallServerAutoMinDbm = 0.0f;
+    m_waterfallServerAutoMaxDbm = 0.0f;
+    m_waterfallServerAutoMinValid = false;
+    m_waterfallServerAutoMaxValid = false;
+    m_waterfallServerAutoZoom = 0;
+    m_waterfallClientAutoMinDbm = 0.0f;
+    m_waterfallClientAutoMaxDbm = 0.0f;
+    m_waterfallClientAutoRangeValid = false;
+    m_waterfallClientAutoZoom = 0;
+    m_waterfallAutoScalePending = true;
+    m_lastEmittedWaterfallRangeValid = false;
+    m_lastEmittedWaterfallAutoRange = false;
     emit waterfallAvailabilityChanged(true, QString());
 
 #ifdef HAVE_WEBSOCKETS
@@ -1430,6 +1513,7 @@ void KiwiSdrClient::sendWaterfallViewToServer()
     m_waterfallRequestLowMhz = requestLowMhz;
     m_waterfallRequestHighMhz = requestHighMhz;
     m_lastWaterfallBins.clear();
+    m_waterfallAutoScaleRows.clear();
     m_lastWaterfallPanId.clear();
     m_lastWaterfallLowMhz = 0.0;
     m_lastWaterfallHighMhz = 0.0;
@@ -1438,6 +1522,8 @@ void KiwiSdrClient::sendWaterfallViewToServer()
     sendWaterfallCommand(QStringLiteral("SET zoom=%1 start=%2")
         .arg(zoom)
         .arg(start));
+    sendWaterfallDisplayAdjustmentsToServer();
+    emitWaterfallDisplayRangeChanged();
 }
 
 void KiwiSdrClient::sendWaterfallDisplayAdjustmentsToServer()
@@ -1445,14 +1531,160 @@ void KiwiSdrClient::sendWaterfallDisplayAdjustmentsToServer()
     if (receiverControlSuppressed()) {
         return;
     }
-    const float maxDb = m_waterfallMaxDbm
-        + static_cast<float>(m_waterfallCellDb);
-    const float minDb = std::min(
-        maxDb - 1.0f,
-        m_waterfallMinDbm + static_cast<float>(m_waterfallFloorDb));
+    const KiwiSdrProtocol::WaterfallDisplayRange range =
+        currentWaterfallDisplayRange();
+    if (!range.valid) {
+        return;
+    }
     sendWaterfallCommand(QStringLiteral("SET maxdb=%1 mindb=%2")
-        .arg(static_cast<double>(maxDb), 0, 'f', 0)
-        .arg(static_cast<double>(minDb), 0, 'f', 0));
+        .arg(static_cast<double>(range.maxDbm), 0, 'f', 0)
+        .arg(static_cast<double>(range.minDbm), 0, 'f', 0));
+}
+
+KiwiSdrProtocol::WaterfallDisplayRange
+KiwiSdrClient::adjustedAutoWaterfallDisplayRange(float minDbm,
+                                                 float maxDbm,
+                                                 int sourceZoom) const
+{
+    return clampedWaterfallDisplayRange(
+        KiwiSdrProtocol::zoomAdjustedWaterfallDisplayRange(
+            minDbm, maxDbm, sourceZoom, m_waterfallRequestZoom));
+}
+
+KiwiSdrProtocol::WaterfallDisplayRange
+KiwiSdrClient::currentWaterfallDisplayRange() const
+{
+    if (!m_waterfallAutoScaleEnabled) {
+        return clampedWaterfallDisplayRange(
+            KiwiSdrProtocol::adjustedWaterfallDisplayRange(
+                static_cast<float>(m_waterfallManualMinDbm),
+                static_cast<float>(m_waterfallManualMaxDbm),
+                0,
+                0));
+    }
+
+    if (m_waterfallClientAutoRangeValid) {
+        return adjustedAutoWaterfallDisplayRange(
+            m_waterfallClientAutoMinDbm,
+            m_waterfallClientAutoMaxDbm,
+            m_waterfallClientAutoZoom);
+    }
+
+    if (m_waterfallServerAutoMinValid && m_waterfallServerAutoMaxValid) {
+        return adjustedAutoWaterfallDisplayRange(
+            m_waterfallServerAutoMinDbm,
+            m_waterfallServerAutoMaxDbm,
+            m_waterfallServerAutoZoom);
+    }
+
+    return clampedWaterfallDisplayRange(
+        KiwiSdrProtocol::adjustedWaterfallDisplayRange(
+            m_waterfallMinDbm
+                - KiwiSdrProtocol::waterfallZoomCorrectionDb(
+                    m_waterfallRequestZoom),
+            m_waterfallMaxDbm,
+            0,
+            0));
+}
+
+void KiwiSdrClient::emitWaterfallDisplayRangeChanged(bool force)
+{
+    const bool autoRange =
+        m_waterfallAutoScaleEnabled
+        && (m_waterfallClientAutoRangeValid
+            || (m_waterfallServerAutoMinValid && m_waterfallServerAutoMaxValid));
+    const KiwiSdrProtocol::WaterfallDisplayRange range =
+        currentWaterfallDisplayRange();
+    if (!range.valid) {
+        return;
+    }
+
+    if (!force && m_lastEmittedWaterfallRangeValid
+        && m_lastEmittedWaterfallAutoRange == autoRange
+        && std::abs(m_lastEmittedWaterfallMinDbm - range.minDbm) < 0.05f
+        && std::abs(m_lastEmittedWaterfallMaxDbm - range.maxDbm) < 0.05f) {
+        return;
+    }
+
+    m_lastEmittedWaterfallMinDbm = range.minDbm;
+    m_lastEmittedWaterfallMaxDbm = range.maxDbm;
+    m_lastEmittedWaterfallRangeValid = true;
+    m_lastEmittedWaterfallAutoRange = autoRange;
+    emit waterfallDisplayRangeChanged(range.minDbm, range.maxDbm, autoRange);
+}
+
+void KiwiSdrClient::recordWaterfallAutoScaleRow(const QVector<float>& binsDbm)
+{
+    if (binsDbm.size() != kDefaultWaterfallFftBins) {
+        return;
+    }
+
+    m_waterfallAutoScaleRows.append(binsDbm);
+    while (m_waterfallAutoScaleRows.size() > kWaterfallAutoHistoryRows) {
+        m_waterfallAutoScaleRows.remove(0);
+    }
+}
+
+void KiwiSdrClient::resetWaterfallAutoScaleHistory()
+{
+    m_waterfallAutoScaleRows.clear();
+    m_waterfallClientAutoRangeValid = false;
+    if (m_waterfallAutoScaleEnabled) {
+        m_waterfallAutoScalePending = true;
+    }
+}
+
+void KiwiSdrClient::updateWaterfallAutoScale(bool force)
+{
+    if (!m_waterfallAutoScaleEnabled) {
+        return;
+    }
+
+    if (!force && !m_waterfallAutoScalePending) {
+        return;
+    }
+
+    if (m_waterfallAutoScaleRows.isEmpty()) {
+        return;
+    }
+
+    if (m_waterfallAutoScaleRows.size() < kWaterfallAutoMinRows) {
+        return;
+    }
+
+    const KiwiSdrProtocol::WaterfallDisplayRange range =
+        clampedWaterfallDisplayRange(
+            KiwiSdrProtocol::autoWaterfallDisplayRangeFromRows(
+                m_waterfallAutoScaleRows));
+    if (!range.valid) {
+        return;
+    }
+
+    if (!force
+        && m_waterfallClientAutoRangeValid
+        && std::abs(m_waterfallClientAutoMinDbm - range.minDbm)
+            <= kWaterfallAutoReuseToleranceDb
+        && std::abs(m_waterfallClientAutoMaxDbm - range.maxDbm)
+            <= kWaterfallAutoReuseToleranceDb) {
+        m_waterfallAutoScalePending = false;
+        return;
+    }
+
+    if (!force
+        && m_waterfallClientAutoRangeValid
+        && std::abs(m_waterfallClientAutoMinDbm - range.minDbm) < 0.05f
+        && std::abs(m_waterfallClientAutoMaxDbm - range.maxDbm) < 0.05f) {
+        m_waterfallAutoScalePending = false;
+        return;
+    }
+
+    m_waterfallClientAutoMinDbm = range.minDbm;
+    m_waterfallClientAutoMaxDbm = range.maxDbm;
+    m_waterfallClientAutoRangeValid = true;
+    m_waterfallClientAutoZoom = m_waterfallRequestZoom;
+    m_waterfallAutoScalePending = false;
+    sendWaterfallDisplayAdjustmentsToServer();
+    emitWaterfallDisplayRangeChanged(force);
 }
 
 QString KiwiSdrClient::kiwiIdentityCallsign() const
@@ -1615,8 +1847,15 @@ bool KiwiSdrClient::parseWaterfallFrameHeader(const QByteArray& frame,
 
 QVector<float> KiwiSdrClient::decodeWaterfallFrame(const QByteArray& frame) const
 {
-    return KiwiSdrProtocol::decodeWaterfallFrame(
+    QVector<float> bins = KiwiSdrProtocol::decodeWaterfallFrame(
         frame, m_waterfallZoomCap).binsDbm;
+    if (m_waterfallCalibrationDb != 0) {
+        for (float& bin : bins) {
+            bin = KiwiSdrProtocol::calibratedWaterfallLevel(
+                bin, m_waterfallCalibrationDb);
+        }
+    }
+    return bins;
 }
 
 void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
@@ -1959,13 +2198,24 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
         return;
     }
 
-    const QVector<float> bins = decodeWaterfallFrame(frame);
-    if (bins.isEmpty()) {
+    const QVector<float> rawBins =
+        KiwiSdrProtocol::decodeWaterfallFrame(frame,
+                                              m_waterfallZoomCap).binsDbm;
+    if (rawBins.isEmpty()) {
         return;
     }
-    if (updateWaterfallFftBins(bins.size())) {
+    if (updateWaterfallFftBins(rawBins.size())) {
         return;
     }
+    QVector<float> bins = rawBins;
+    if (m_waterfallCalibrationDb != 0) {
+        for (float& bin : bins) {
+            bin = KiwiSdrProtocol::calibratedWaterfallLevel(
+                bin, m_waterfallCalibrationDb);
+        }
+    }
+    recordWaterfallAutoScaleRow(bins);
+    updateWaterfallAutoScale();
 
     const QString panId = !m_waterfallRequestPanId.isEmpty()
         ? m_waterfallRequestPanId
@@ -2066,6 +2316,7 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
         }
         return trKiwiSdrClient("KiwiSDR endpoint is disabled.");
     };
+    updateWaterfallDisplayMetadata(stream, msgTokens);
     for (const KiwiSdrProtocol::MsgToken& token : msgTokens) {
         const QString& key = token.key;
         const QString& valueText = token.value;
@@ -2333,6 +2584,65 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 emitTelemetryChanged();
             }
         }
+    }
+}
+
+void KiwiSdrClient::updateWaterfallDisplayMetadata(
+    StreamKind stream,
+    const QVector<KiwiSdrProtocol::MsgToken>& msgTokens)
+{
+    if (stream != StreamKind::Waterfall) {
+        return;
+    }
+
+    bool rangeChanged = false;
+    for (const KiwiSdrProtocol::MsgToken& token : msgTokens) {
+        if (!token.hasValue) {
+            continue;
+        }
+
+        bool ok = false;
+        const float value = token.value.trimmed().toFloat(&ok);
+        if (!ok || !std::isfinite(value)) {
+            continue;
+        }
+
+        if (token.key == QStringLiteral("wf_cal")) {
+            const int calibrationDb = std::clamp(static_cast<int>(std::lround(value)),
+                                                 -200,
+                                                 200);
+            if (m_waterfallCalibrationDb != calibrationDb) {
+                m_waterfallCalibrationDb = calibrationDb;
+                resetWaterfallAutoScaleHistory();
+                if (m_waterfallAutoScaleEnabled) {
+                    rangeChanged = true;
+                }
+            }
+        } else if (token.key == QStringLiteral("mindb")) {
+            const int sourceZoom = m_waterfallRequestZoom;
+            if (!m_waterfallServerAutoMinValid
+                || m_waterfallServerAutoZoom != sourceZoom
+                || std::abs(m_waterfallServerAutoMinDbm - value) > 0.05f) {
+                m_waterfallServerAutoMinDbm = value;
+                m_waterfallServerAutoMinValid = true;
+                m_waterfallServerAutoZoom = sourceZoom;
+                rangeChanged = true;
+            }
+        } else if (token.key == QStringLiteral("maxdb")) {
+            const int sourceZoom = m_waterfallRequestZoom;
+            if (!m_waterfallServerAutoMaxValid
+                || m_waterfallServerAutoZoom != sourceZoom
+                || std::abs(m_waterfallServerAutoMaxDbm - value) > 0.05f) {
+                m_waterfallServerAutoMaxDbm = value;
+                m_waterfallServerAutoMaxValid = true;
+                m_waterfallServerAutoZoom = sourceZoom;
+                rangeChanged = true;
+            }
+        }
+    }
+
+    if (rangeChanged) {
+        emitWaterfallDisplayRangeChanged();
     }
 }
 

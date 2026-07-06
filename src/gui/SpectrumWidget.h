@@ -163,7 +163,8 @@ public:
     void setKiwiSdrWaterfallProfile(const QString& profileId);
     void clearKiwiSdrWaterfallRows();
     void clearKiwiSdrWaterfallRowsForProfile(const QString& profileId);
-    void setKiwiSdrWaterfallAdjustments(int cellDb, int floorDb);
+    void setKiwiSdrWaterfallDisplayRange(float minDbm, float maxDbm,
+                                         bool autoRange);
     void updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
                                    double lowFreqMhz, double highFreqMhz,
                                    quint32 timecode = 0);
@@ -780,14 +781,16 @@ private:
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
         DssRenderer dss;
-        float kiwiAutoFloorDbm{-130.0f};
-        float kiwiAutoCeilDbm{-50.0f};
-        bool kiwiAutoRangeValid{false};
+        float kiwiDisplayFloorDbm{-110.0f};
+        float kiwiDisplayCeilDbm{-10.0f};
+        bool kiwiDisplayRangeValid{false};
+        bool kiwiDisplayRangeAutoRange{false};
         float kiwiFftTraceFloorDbm{-1000.0f};
         bool kiwiFftTraceFloorValid{false};
         bool valid{false};
     };
     void clearCurrentWaterfallRows();
+    void resetKiwiSdrWaterfallDisplayRange();
     void resetCurrentWaterfallRowsForSize(const QSize& waterfallSize,
                                           const QSize& historySize);
     void saveCurrentWaterfallStreamState();
@@ -873,7 +876,6 @@ private:
     void reprojectBinsToFrozenTxDbmRange(QVector<float>& bins) const;
     void clearWaterfallRows();
     QVector<float> smoothKiwiSdrWaterfallBins(const QVector<float>& bins);
-    void updateKiwiSdrAutoColorRange(const QVector<float>& bins);
     const QVector<float>& displaySpectrumBins() const;
     // Returns a reference into shared mutable scratch — valid only until the
     // next call. Consume the result before invoking again; never hold two live.
@@ -934,13 +936,12 @@ private:
     double m_kiwiSdrLastWaterfallCenterMhz{0.0};
     double m_kiwiSdrLastWaterfallBandwidthMhz{0.0};
     bool m_kiwiSdrLastWaterfallFrameValid{false};
-    float m_kiwiSdrAutoFloorDbm{-130.0f};
-    float m_kiwiSdrAutoCeilDbm{-50.0f};
-    bool m_kiwiSdrAutoRangeValid{false};
+    float m_kiwiSdrDisplayFloorDbm{-110.0f};
+    float m_kiwiSdrDisplayCeilDbm{-10.0f};
+    bool m_kiwiSdrDisplayRangeValid{false};
+    bool m_kiwiSdrDisplayRangeAutoRange{false};
     float m_kiwiSdrFftTraceFloorDbm{-1000.0f};
     bool m_kiwiSdrFftTraceFloorValid{false};
-    int m_kiwiSdrWaterfallCellDb{0};
-    int m_kiwiSdrWaterfallFloorDb{0};
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};

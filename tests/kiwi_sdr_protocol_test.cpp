@@ -119,11 +119,83 @@ int main()
         return fail("sequence gap accounting is wrong");
     }
 
-    if (!nearlyEqual(waterfallByteToDisplayLevel(0), -200.0f)
+    if (!nearlyEqual(waterfallByteToDbm(0), -255.0f)
+        || !nearlyEqual(waterfallByteToDbm(55), -200.0f)
+        || !nearlyEqual(waterfallByteToDbm(155), -100.0f)
+        || !nearlyEqual(waterfallByteToDbm(255), 0.0f)
+        || !nearlyEqual(waterfallByteToDisplayLevel(0), -255.0f)
         || !nearlyEqual(waterfallByteToDisplayLevel(55), -200.0f)
         || !nearlyEqual(waterfallByteToDisplayLevel(155), -100.0f)
         || !nearlyEqual(waterfallByteToDisplayLevel(255), 0.0f)) {
-        return fail("waterfall byte display-level conversion is wrong");
+        return fail("waterfall byte-to-dBm conversion is wrong");
+    }
+
+    if (!nearlyEqual(calibratedWaterfallLevel(-100.0f, 7), -93.0f)
+        || !nearlyEqual(calibratedWaterfallLevel(-100.0f, -3), -103.0f)) {
+        return fail("waterfall calibration offset is wrong");
+    }
+
+    if (!nearlyEqual(waterfallZoomCorrectionDb(-1), 0.0f)
+        || !nearlyEqual(waterfallZoomCorrectionDb(3), 9.0f)) {
+        return fail("waterfall zoom correction is wrong");
+    }
+
+    const WaterfallDisplayRange defaultRange =
+        defaultWaterfallDisplayRange(0, 0, 0);
+    if (!defaultRange.valid
+        || !nearlyEqual(defaultRange.minDbm, -110.0f)
+        || !nearlyEqual(defaultRange.maxDbm, -10.0f)) {
+        return fail("default waterfall display range is wrong");
+    }
+
+    const WaterfallDisplayRange zoomedRange =
+        defaultWaterfallDisplayRange(3, 5, -2);
+    if (!zoomedRange.valid
+        || !nearlyEqual(zoomedRange.minDbm, -121.0f)
+        || !nearlyEqual(zoomedRange.maxDbm, -5.0f)) {
+        return fail("zoomed waterfall display range is wrong");
+    }
+
+    const WaterfallDisplayRange adjustedRange =
+        adjustedWaterfallDisplayRange(-98.0f, -42.0f, 3, -4);
+    if (!adjustedRange.valid
+        || !nearlyEqual(adjustedRange.minDbm, -102.0f)
+        || !nearlyEqual(adjustedRange.maxDbm, -39.0f)) {
+        return fail("adjusted waterfall display range is wrong");
+    }
+
+    const WaterfallDisplayRange zoomAdjustedInRange =
+        zoomAdjustedWaterfallDisplayRange(-100.0f, -30.0f, 2, 5);
+    if (!zoomAdjustedInRange.valid
+        || !nearlyEqual(zoomAdjustedInRange.minDbm, -109.0f)
+        || !nearlyEqual(zoomAdjustedInRange.maxDbm, -30.0f)) {
+        return fail("stored auto waterfall range did not normalize zoom-in floor");
+    }
+
+    const WaterfallDisplayRange zoomAdjustedOutRange =
+        zoomAdjustedWaterfallDisplayRange(-100.0f, -30.0f, 5, 2);
+    if (!zoomAdjustedOutRange.valid
+        || !nearlyEqual(zoomAdjustedOutRange.minDbm, -91.0f)
+        || !nearlyEqual(zoomAdjustedOutRange.maxDbm, -30.0f)) {
+        return fail("stored auto waterfall range did not normalize zoom-out floor");
+    }
+
+    const WaterfallDisplayRange narrowRange =
+        adjustedWaterfallDisplayRange(-50.0f, -80.0f, 0, 0);
+    if (!narrowRange.valid
+        || !nearlyEqual(narrowRange.minDbm, -50.0f)
+        || !nearlyEqual(narrowRange.maxDbm, -49.0f)) {
+        return fail("waterfall display range span guard is wrong");
+    }
+
+    const QVector<MsgToken> waterfallDisplayTokens =
+        parseMsgTokens(QStringLiteral("MSG wf_cal=7 maxdb=-55 mindb=-116"));
+    if (waterfallDisplayTokens.size() != 3
+        || waterfallDisplayTokens[0].key != QStringLiteral("wf_cal")
+        || waterfallDisplayTokens[0].value != QStringLiteral("7")
+        || waterfallDisplayTokens[1].key != QStringLiteral("maxdb")
+        || waterfallDisplayTokens[2].key != QStringLiteral("mindb")) {
+        return fail("waterfall display metadata tokens do not parse");
     }
 
     const IpLimitNotice encodedIpLimit =
@@ -404,7 +476,7 @@ int main()
         decodeWaterfallFrame(compactWaterfallFrame);
     if (!compactWaterfallDecode.observation.supported
         || compactWaterfallDecode.binsDbm.size() != 1024
-        || !nearlyEqual(compactWaterfallDecode.binsDbm[0], -200.0f)
+        || !nearlyEqual(compactWaterfallDecode.binsDbm[0], -244.0f)
         || !nearlyEqual(compactWaterfallDecode.binsDbm[3], -157.0f)
         || !nearlyEqual(compactWaterfallDecode.binsDbm[5], -37.0f)) {
         return fail("compact W/F frame decode is wrong");
@@ -436,7 +508,7 @@ int main()
         decodeWaterfallFrame(capturedCompactWaterfallFrame);
     if (!capturedCompactWaterfallDecode.observation.supported
         || capturedCompactWaterfallDecode.binsDbm.size() != 1024
-        || !nearlyEqual(capturedCompactWaterfallDecode.binsDbm[0], -200.0f)
+        || !nearlyEqual(capturedCompactWaterfallDecode.binsDbm[0], -201.0f)
         || !nearlyEqual(capturedCompactWaterfallDecode.binsDbm[1], -176.0f)
         || !nearlyEqual(capturedCompactWaterfallDecode.binsDbm[2], -120.0f)
         || !nearlyEqual(capturedCompactWaterfallDecode.binsDbm[3], -96.0f)
@@ -761,9 +833,94 @@ int main()
         return fail("auto aperture does not follow median/98th percentile rule");
     }
 
+    const WaterfallDisplayRange autoScale =
+        autoWaterfallDisplayRange(row);
+    if (!autoScale.valid
+        || !nearlyEqual(autoScale.minDbm, -110.0f)
+        || !nearlyEqual(autoScale.maxDbm, -30.0f)) {
+        return fail("auto waterfall display range does not follow spec indices");
+    }
+
+    QVector<float> signalSignRow(1024, -100.0f);
+    for (int i = 1003; i < signalSignRow.size(); ++i) {
+        signalSignRow[i] = -70.0f;
+    }
+    const WaterfallDisplayRange signAutoScale =
+        autoWaterfallDisplayRange(signalSignRow);
+    if (!signAutoScale.valid
+        || !nearlyEqual(signAutoScale.minDbm, -110.0f)
+        || !nearlyEqual(signAutoScale.maxDbm, -40.0f)) {
+        return fail("auto waterfall signal headroom must add 30 dB algebraically");
+    }
+
+    QVector<float> percentileAnchorRow(1024, -100.0f);
+    for (int i = 1003; i < percentileAnchorRow.size() - 1; ++i) {
+        percentileAnchorRow[i] = -60.0f;
+    }
+    percentileAnchorRow[percentileAnchorRow.size() - 1] = -10.0f;
+    const WaterfallDisplayRange anchoredAutoScale =
+        autoWaterfallDisplayRange(percentileAnchorRow);
+    if (!anchoredAutoScale.valid
+        || !nearlyEqual(anchoredAutoScale.maxDbm, -30.0f)) {
+        return fail("auto waterfall signal percentile must stay anchored at index 1003");
+    }
+
+    QVector<float> wrongSizeRow(1023, -100.0f);
+    if (autoWaterfallDisplayRange(wrongSizeRow).valid) {
+        return fail("auto waterfall display range accepted a non-1024 row");
+    }
+
+    QVector<float> quietRow(1024, -255.0f);
+    for (int i = 512; i < quietRow.size(); ++i) {
+        quietRow[i] = -200.0f;
+    }
+    for (int i = 1003; i < quietRow.size(); ++i) {
+        quietRow[i] = -60.0f;
+    }
+    const WaterfallDisplayRange quietAutoScale =
+        autoWaterfallDisplayRange(quietRow);
+    if (!quietAutoScale.valid
+        || !nearlyEqual(quietAutoScale.minDbm, -210.0f)
+        || !nearlyEqual(quietAutoScale.maxDbm, -30.0f)) {
+        return fail("auto waterfall display range clipped quiet bins");
+    }
+
+    QVector<float> brighterRow(1024, -80.0f);
+    for (int i = 1000; i < brighterRow.size(); ++i) {
+        brighterRow[i] = -40.0f;
+    }
+    QVector<float> dimmerRow(1024, -100.0f);
+    for (int i = 1000; i < dimmerRow.size(); ++i) {
+        dimmerRow[i] = -60.0f;
+    }
+    const WaterfallDisplayRange averagedAutoScale =
+        autoWaterfallDisplayRangeFromRows({dimmerRow, brighterRow});
+    if (!averagedAutoScale.valid
+        || !nearlyEqual(averagedAutoScale.minDbm, -100.0f)
+        || !nearlyEqual(averagedAutoScale.maxDbm, -20.0f)) {
+        return fail("multi-row auto waterfall range did not average frames by bin");
+    }
+
+    QVector<float> edgeCarrierRow(1024, -100.0f);
+    for (int i = 1003; i < edgeCarrierRow.size(); ++i) {
+        edgeCarrierRow[i] = -60.0f;
+    }
+    const WaterfallDisplayRange spatialAutoScale =
+        autoWaterfallDisplayRangeFromRows({edgeCarrierRow});
+    if (!spatialAutoScale.valid
+        || !nearlyEqual(spatialAutoScale.minDbm, -110.0f)
+        || !nearlyEqual(spatialAutoScale.maxDbm, -43.333332f, 0.0002f)) {
+        return fail("multi-row auto waterfall range did not spatially smooth bins");
+    }
+
     const float index = waterfallColorIndex(-90.0f, -110.0f, -30.0f);
-    if (!nearlyEqual(index, 0.5f)) {
-        return fail("waterfall color index does not use sqrt contrast");
+    if (!nearlyEqual(index, 0.25f)) {
+        return fail("waterfall color index does not linearly normalize dBm range");
+    }
+    if (!nearlyEqual(waterfallColorIndex(-140.0f, -110.0f, -30.0f), 0.0f)
+        || !nearlyEqual(waterfallColorIndex(-5.0f, -110.0f, -30.0f), 1.0f)
+        || !nearlyEqual(waterfallColorIndex(-40.0f, -40.0f, -110.0f), 0.0f)) {
+        return fail("waterfall color index does not clamp normalized range");
     }
 
     QByteArray extendedSoundFrame(1034, '\0');

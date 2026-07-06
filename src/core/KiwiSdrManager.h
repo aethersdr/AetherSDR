@@ -19,9 +19,17 @@ struct KiwiSdrAntennaProfile {
     QString name;
     QString endpoint;
     bool autoConnect{false};
-    int waterfallCellDb{0};
-    int waterfallFloorDb{0};
+    bool waterfallAutoScale{true};
+    int waterfallMinDbm{-110};
+    int waterfallMaxDbm{-10};
     int waterfallRate{0};
+};
+
+struct KiwiSdrWaterfallDisplayRange {
+    float minDbm{0.0f};
+    float maxDbm{0.0f};
+    bool autoRange{false};
+    bool valid{false};
 };
 
 class KiwiSdrManager : public QObject {
@@ -47,6 +55,8 @@ public:
     KiwiSdrProtocol::ProtocolState protocolState(const QString& id) const;
     bool waterfallAvailable(const QString& id) const;
     QString waterfallDetail(const QString& id) const;
+    KiwiSdrWaterfallDisplayRange waterfallDisplayRange(
+        const QString& id) const;
     bool isConnected(const QString& id) const;
     bool reconnectRecommended(const QString& id) const;
 
@@ -66,22 +76,27 @@ public slots:
                               double frequencyMhz, const QString& mode,
                               int filterLowHz, int filterHighHz,
                               const QString& panId, double centerMhz,
-                              double bandwidthMhz, int lineDurationMs);
+                              double bandwidthMhz, int lineDurationMs,
+                              const QString& bandName);
     void assignSliceToProfile(int sliceId, const QString& profileId,
                               double frequencyMhz, const QString& mode,
                               int filterLowHz, int filterHighHz,
-                              const QString& panId);
+                              const QString& panId,
+                              const QString& bandName);
     void clearSliceAssignment(int sliceId);
     void updateSliceTracking(int sliceId, double frequencyMhz,
                              const QString& mode, int filterLowHz,
-                             int filterHighHz, const QString& panId);
+                             int filterHighHz, const QString& panId,
+                             const QString& bandName);
     void updateWaterfallView(int sliceId, const QString& panId,
                              double centerMhz, double bandwidthMhz,
                              int lineDurationMs);
     void setReceiverControlsForSlice(
         int sliceId, const KiwiSdrReceiverControls& controls);
-    void setProfileWaterfallSettings(const QString& id, int cellDb,
-                                     int floorDb, int rate);
+    void setProfileWaterfallDisplayRange(const QString& id, int minDbm,
+                                         int maxDbm, bool autoScale,
+                                         int rate);
+    void requestProfileWaterfallAutoScale(const QString& id);
 
 signals:
     void profilesChanged();
@@ -104,6 +119,8 @@ signals:
                            const QVector<float>& binsDbm,
                            double lowFreqMhz, double highFreqMhz,
                            quint32 timecode);
+    void waterfallDisplayRangeChanged(const QString& id, float minDbm,
+                                      float maxDbm, bool autoRange);
     void meterReadingReady(
         const QString& id,
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
@@ -133,6 +150,7 @@ private:
     QHash<QString, KiwiSdrReceiverTelemetry> m_telemetry;
     QHash<QString, bool> m_waterfallAvailable;
     QHash<QString, QString> m_waterfallDetails;
+    QHash<QString, KiwiSdrWaterfallDisplayRange> m_waterfallDisplayRanges;
     QHash<int, QString> m_sliceAssignments;
     QString m_operatorCallsign;
     QThread* m_clientThread{nullptr};

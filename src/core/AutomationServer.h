@@ -422,8 +422,10 @@ private:
     struct LogEvent;
     static QJsonObject logEventToJson(const LogEvent& e);  // redacts on egress
 
-    // Resolve a target string to a widget: exact objectName first, then
-    // class name (with or without namespace) or accessibleName.
+    // Resolve a target string to a widget, including pan-index scoped targets:
+    // exact objectName first, then class name (with or without namespace) or
+    // accessibleName. Within each match class, visible/enabled widgets win over
+    // hidden duplicates.
     static QWidget* resolveWidget(const QString& target);
 
     QLocalServer* m_server{nullptr};

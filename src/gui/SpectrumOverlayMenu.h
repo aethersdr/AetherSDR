@@ -59,7 +59,8 @@ public:
                              int dssFloorDepth = 6,
                              int dssGain = 70);
     void syncWfLineDuration(int rate);
-    void syncKiwiWaterfallSettings(int cellDb, int floorDb, int rate);
+    void syncKiwiWaterfallSettings(int minDbm, int maxDbm, bool autoScale,
+                                   int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                   int bgOpacity,
@@ -143,8 +144,9 @@ signals:
     // Auto-black source: false = client-side estimate (default), true = radio.
     void wfAutoBlackSourceChanged(bool radioSide);
     void wfLineDurationChanged(int ms);
-    void kiwiWaterfallCellChanged(int cellDb);
-    void kiwiWaterfallFloorChanged(int floorDb);
+    void kiwiWaterfallMaxChanged(int maxDbm);
+    void kiwiWaterfallMinChanged(int minDbm);
+    void kiwiWaterfallAutoRequested();
     void kiwiWaterfallRateChanged(int rate);
     void wfColorSchemeChanged(int scheme);
     void spectrumRenderModeChanged(int mode);
@@ -294,14 +296,17 @@ private:
     QLabel*      m_lineWidthLabel{nullptr};
     QPushButton* m_weightedAvgBtn{nullptr};
     QSlider*     m_gainSlider{nullptr};
+    QLabel*      m_gainTitleLabel{nullptr};
     QLabel*      m_gainLabel{nullptr};
     QSlider*     m_blackSlider{nullptr};
+    QLabel*      m_blackTitleLabel{nullptr};
     QLabel*      m_blackLabel{nullptr};
     QPushButton* m_autoBlackBtn{nullptr};
     // Auto-black is a 3-way cycle on one button: 0 = Off, 1 = Auto-C (client
     // noise-floor estimate), 2 = Auto-R (radio per-tile level).
     int m_autoBlackMode{1};
     void applyAutoBlackMode(int mode, bool emitSignals);
+    void clearKiwiWaterfallAutoButtonState();
     // Two values backing the single Black slider; the slider shows whichever
     // matches the current AUTO state.  Toggling AUTO swaps the displayed
     // value, edits route to the matching member + matching signal.

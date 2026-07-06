@@ -18,6 +18,8 @@ constexpr quint8 kSoundRestartFlag = 0x20;
 constexpr int kSpecWaterfallHeaderBytes = 4;
 constexpr int kExtendedWaterfallHeaderBytes = 16;
 constexpr int kDefaultWaterfallFftBins = 1024;
+constexpr int kWaterfallAutoNoiseIndex = 512;
+constexpr int kWaterfallAutoSignalIndex = 1003;
 constexpr int kZoomedWaterfallPrefixBytes = 5;
 constexpr int kWaterfallAdpcmPadSamples = 10;
 constexpr int kWaterfallCompactPayloadBytes =
@@ -27,6 +29,9 @@ constexpr quint32 kWaterfallCompressionFlag = 0x00010000u;
 constexpr int kObservedMeterOffset = 8;
 constexpr float kSndMeterDbmOffset = -127.0f;
 constexpr float kSndMeterDbPerRawUnit = 0.1f;
+constexpr float kDefaultWaterfallMinDbm = -110.0f;
+constexpr float kDefaultWaterfallMaxDbm = -10.0f;
+constexpr float kWaterfallZoomCorrectionDb = 3.0f;
 constexpr quint8 kSoundSquelchFlag = 0x40;
 constexpr quint8 kSoundLittleEndianFlag = 0x80;
 constexpr qsizetype kMaxStableStatusValueChars = 120;
@@ -81,6 +86,66 @@ float percentile(QVector<float> values, float fraction)
         lastIndex);
     std::nth_element(values.begin(), values.begin() + index, values.end());
     return values[index];
+}
+
+QVector<float> averageWaterfallRows(const QVector<QVector<float>>& rowsDbm)
+{
+    QVector<float> averaged(kDefaultWaterfallFftBins, 0.0f);
+    int validRows = 0;
+    for (const QVector<float>& row : rowsDbm) {
+        if (row.size() != kDefaultWaterfallFftBins) {
+            continue;
+        }
+
+        bool finite = true;
+        for (float dbm : row) {
+            if (!std::isfinite(dbm)) {
+                finite = false;
+                break;
+            }
+        }
+        if (!finite) {
+            continue;
+        }
+
+        for (int i = 0; i < row.size(); ++i) {
+            averaged[i] += row[i];
+        }
+        ++validRows;
+    }
+
+    if (validRows == 0) {
+        return {};
+    }
+
+    const float invRows = 1.0f / static_cast<float>(validRows);
+    for (float& dbm : averaged) {
+        dbm *= invRows;
+    }
+    return averaged;
+}
+
+QVector<float> spatiallySmoothedWaterfallRow(const QVector<float>& binsDbm)
+{
+    if (binsDbm.size() != kDefaultWaterfallFftBins) {
+        return {};
+    }
+
+    QVector<float> smoothed;
+    smoothed.resize(binsDbm.size());
+    const int binCount = static_cast<int>(binsDbm.size());
+    for (int i = 0; i < binCount; ++i) {
+        const int first = std::max(0, i - 1);
+        const int last = std::min(binCount - 1, i + 1);
+        float sum = 0.0f;
+        int count = 0;
+        for (int j = first; j <= last; ++j) {
+            sum += binsDbm[j];
+            ++count;
+        }
+        smoothed[i] = sum / static_cast<float>(count);
+    }
+    return smoothed;
 }
 
 qint16 readSignedBigEndian16(const QByteArray& bytes, int offset)
@@ -427,12 +492,23 @@ quint64 sequenceGapCount(int previousSequence, int currentSequence)
     return delta > 0 ? static_cast<quint64>(delta - 1) : 0;
 }
 
+float waterfallByteToDbm(unsigned char value)
+{
+    return static_cast<float>(value) - 255.0f;
+}
+
 float waterfallByteToDisplayLevel(unsigned char value)
 {
-    // Kiwi server W/F direct rows encode negative dB by decrementing the
-    // clamped bin dB and wrapping it into an unsigned byte. So 255 means
-    // 0 dB, 155 means -100 dB, and 55 means -200 dB.
-    return std::clamp(static_cast<float>(value) - 255.0f, -200.0f, 0.0f);
+    // Kiwi W/F rows encode dBm-like negative levels as unsigned bytes:
+    // 255 means 0 dB, 155 means -100 dB, and 0 means -255 dB.
+    return waterfallByteToDbm(value);
+}
+
+float calibratedWaterfallLevel(float dbm, int calibrationDb)
+{
+    return std::isfinite(dbm)
+        ? dbm + static_cast<float>(calibrationDb)
+        : dbm;
 }
 
 WaterfallAperture autoWaterfallAperture(const QVector<float>& binsDbm)
@@ -461,11 +537,101 @@ WaterfallAperture autoWaterfallAperture(const QVector<float>& binsDbm)
     return aperture;
 }
 
+WaterfallDisplayRange autoWaterfallDisplayRange(const QVector<float>& binsDbm)
+{
+    if (binsDbm.size() != kDefaultWaterfallFftBins) {
+        return {};
+    }
+
+    QVector<float> sorted = binsDbm;
+    for (float dbm : sorted) {
+        if (!std::isfinite(dbm)) {
+            return {};
+        }
+    }
+    std::sort(sorted.begin(), sorted.end());
+
+    WaterfallDisplayRange range;
+    range.minDbm = sorted[kWaterfallAutoNoiseIndex] - 10.0f;
+    range.maxDbm = sorted[kWaterfallAutoSignalIndex] + 30.0f;
+    if (range.maxDbm <= range.minDbm + 1.0f) {
+        range.maxDbm = range.minDbm + 1.0f;
+    }
+    range.valid = true;
+    return range;
+}
+
+WaterfallDisplayRange autoWaterfallDisplayRangeFromRows(
+    const QVector<QVector<float>>& rowsDbm)
+{
+    const QVector<float> averaged = averageWaterfallRows(rowsDbm);
+    if (averaged.isEmpty()) {
+        return {};
+    }
+
+    const QVector<float> smoothed =
+        spatiallySmoothedWaterfallRow(averaged);
+    if (smoothed.isEmpty()) {
+        return {};
+    }
+
+    return autoWaterfallDisplayRange(smoothed);
+}
+
+float waterfallZoomCorrectionDb(int zoom)
+{
+    return kWaterfallZoomCorrectionDb
+        * static_cast<float>(std::clamp(zoom, 0, 64));
+}
+
+WaterfallDisplayRange adjustedWaterfallDisplayRange(float minDbm,
+                                                    float maxDbm,
+                                                    int ceilingOffsetDb,
+                                                    int floorOffsetDb)
+{
+    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
+        return {};
+    }
+
+    WaterfallDisplayRange range;
+    range.minDbm = minDbm + static_cast<float>(floorOffsetDb);
+    range.maxDbm = maxDbm + static_cast<float>(ceilingOffsetDb);
+    if (range.maxDbm <= range.minDbm + 1.0f) {
+        range.maxDbm = range.minDbm + 1.0f;
+    }
+    range.valid = true;
+    return range;
+}
+
+WaterfallDisplayRange zoomAdjustedWaterfallDisplayRange(float minDbm,
+                                                        float maxDbm,
+                                                        int sourceZoom,
+                                                        int currentZoom)
+{
+    const float sourceCorrection = waterfallZoomCorrectionDb(sourceZoom);
+    const float currentCorrection = waterfallZoomCorrectionDb(currentZoom);
+    return adjustedWaterfallDisplayRange(
+        minDbm,
+        maxDbm,
+        0,
+        static_cast<int>(std::lround(sourceCorrection - currentCorrection)));
+}
+
+WaterfallDisplayRange defaultWaterfallDisplayRange(int zoom,
+                                                   int ceilingOffsetDb,
+                                                   int floorOffsetDb)
+{
+    return adjustedWaterfallDisplayRange(
+        kDefaultWaterfallMinDbm - waterfallZoomCorrectionDb(zoom),
+        kDefaultWaterfallMaxDbm,
+        ceilingOffsetDb,
+        floorOffsetDb);
+}
+
 float waterfallColorIndex(float dbm, float minDbm, float maxDbm)
 {
     const float span = std::max(1.0f, maxDbm - minDbm);
-    const float normalized = std::clamp((dbm - minDbm) / span, 0.0f, 1.0f);
-    return std::sqrt(normalized);
+    return std::clamp((dbm - minDbm) / span, 0.0f, 1.0f);
 }
 
 QVector<MsgToken> parseMsgTokens(const QString& message)

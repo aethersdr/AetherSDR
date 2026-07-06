@@ -15,6 +15,7 @@
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
+#include "models/BandSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -26,6 +27,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 namespace {
@@ -571,7 +573,8 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
 
     m_kiwiSdrManager->assignSliceToProfile(
         sliceId, profileId, slice->frequency(), slice->mode(),
-        slice->filterLow(), slice->filterHigh(), slice->panId());
+        slice->filterLow(), slice->filterHigh(), slice->panId(),
+        BandSettings::bandForFrequency(slice->frequency()));
     updateKiwiSdrVirtualTrackingForSlice(slice);
     updateKiwiSdrVirtualAudioControlsForSlice(slice);
     updateKiwiSdrVirtualReceiverControlsForSlice(slice);
@@ -867,7 +870,8 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
 
     m_kiwiSdrManager->updateSliceTracking(
         slice->sliceId(), slice->frequency(), slice->mode(),
-        slice->filterLow(), slice->filterHigh(), slice->panId());
+        slice->filterLow(), slice->filterHigh(), slice->panId(),
+        BandSettings::bandForFrequency(slice->frequency()));
     if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
         m_kiwiSdrManager->updateWaterfallView(
             slice->sliceId(), slice->panId(), spectrum->centerMhz(),
@@ -1144,8 +1148,19 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     spectrum->setKiwiSdrWaterfallAvailable(kiwiWaterfallChannelAvailable);
     spectrum->setKiwiSdrWaterfallProfile(profileId);
     spectrum->setKiwiSdrWaterfallActive(kiwiWaterfallActive);
-    spectrum->setKiwiSdrWaterfallAdjustments(profile.waterfallCellDb,
-                                             profile.waterfallFloorDb);
+    const KiwiSdrWaterfallDisplayRange displayRange =
+        m_kiwiSdrManager->waterfallDisplayRange(profileId);
+    if (displayRange.valid) {
+        spectrum->setKiwiSdrWaterfallDisplayRange(
+            displayRange.minDbm,
+            displayRange.maxDbm,
+            displayRange.autoRange);
+    } else {
+        spectrum->setKiwiSdrWaterfallDisplayRange(
+            static_cast<float>(profile.waterfallMinDbm),
+            static_cast<float>(profile.waterfallMaxDbm),
+            profile.waterfallAutoScale);
+    }
     const QString overlayDetail =
         !kiwiWaterfallChannelAvailable
             ? m_kiwiSdrManager->waterfallDetail(profileId)
@@ -1167,9 +1182,18 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         overlayDetail,
         overlayTitle);
     if (menu) {
-        menu->syncKiwiWaterfallSettings(profile.waterfallCellDb,
-                                        profile.waterfallFloorDb,
-                                        profile.waterfallRate);
+        if (displayRange.valid) {
+            menu->syncKiwiWaterfallSettings(
+                static_cast<int>(std::lround(displayRange.minDbm)),
+                static_cast<int>(std::lround(displayRange.maxDbm)),
+                profile.waterfallAutoScale || displayRange.autoRange,
+                profile.waterfallRate);
+        } else {
+            menu->syncKiwiWaterfallSettings(profile.waterfallMinDbm,
+                                            profile.waterfallMaxDbm,
+                                            profile.waterfallAutoScale,
+                                            profile.waterfallRate);
+        }
     }
 }
 
@@ -1416,7 +1440,8 @@ void MainWindow::wireKiwiSdr()
                 slice->filterLow(), slice->filterHigh(), slice->panId(),
                 spectrum ? spectrum->centerMhz() : slice->frequency(),
                 spectrum ? spectrum->bandwidthMhz() : 0.2,
-                spectrum ? spectrum->wfLineDuration() : 100);
+                spectrum ? spectrum->wfLineDuration() : 100,
+                BandSettings::bandForFrequency(slice->frequency()));
         });
         if (m_audio) {
             connect(m_kiwiSdrManager, &KiwiSdrManager::decodedAudioReady,
@@ -1488,6 +1513,36 @@ void MainWindow::wireKiwiSdr()
                     }
                 },
                 profileId);
+        });
+        connect(m_kiwiSdrManager, &KiwiSdrManager::waterfallDisplayRangeChanged,
+                this, [this](const QString& profileId, float minDbm,
+                             float maxDbm, bool autoRange) {
+            if (profileId.isEmpty() || !m_kiwiSdrManager) {
+                return;
+            }
+
+            const int sliceId =
+                m_kiwiSdrManager->assignedSliceForProfile(profileId);
+            SliceModel* slice = m_radioModel.slice(sliceId);
+            if (!slice || !m_radioModel.sliceMayBelongToUs(sliceId)
+                || kiwiSdrProfileForPan(slice->panId()) != profileId) {
+                return;
+            }
+
+            if (SpectrumWidget* sw = spectrumForSlice(slice)) {
+                sw->setKiwiSdrWaterfallProfile(profileId);
+                sw->setKiwiSdrWaterfallDisplayRange(minDbm, maxDbm,
+                                                    autoRange);
+                if (SpectrumOverlayMenu* menu = sw->overlayMenu()) {
+                    const KiwiSdrAntennaProfile profile =
+                        m_kiwiSdrManager->profile(profileId);
+                    menu->syncKiwiWaterfallSettings(
+                        static_cast<int>(std::lround(minDbm)),
+                        static_cast<int>(std::lround(maxDbm)),
+                        profile.waterfallAutoScale || autoRange,
+                        profile.waterfallRate);
+                }
+            }
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::meterReadingReady,
                 this, [this](const QString& profileId,

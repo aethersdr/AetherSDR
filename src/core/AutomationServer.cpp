@@ -463,57 +463,121 @@ QJsonObject describeHitWidget(const QWidget* w)
     return o;
 }
 
-// Depth-first match by class name (full or short) or accessibleName.
-// Prefers a VISIBLE match: class/accessibleName targets are often shared by
-// several instances where only one is on screen (e.g. every scroll area owns
-// hidden QScrollBars alongside the visible one), and drivers almost always
-// mean the visible control. Falls back to the first hidden match so hidden
-// widgets stay addressable (grab of a hidden container is a supported flow).
-QWidget* matchRecursiveImpl(QWidget* w, const QString& target, QWidget** firstAny)
+void collectIdentityMatches(QWidget* w, const QString& target,
+                            QList<QWidget*>& out)
 {
     const QString fullClass = QString::fromUtf8(w->metaObject()->className());
     if (fullClass == target
         || shortClassName(w) == target
         || w->accessibleName() == target) {
-        if (w->isVisible())
-            return w;
-        if (!*firstAny)
-            *firstAny = w;
+        out.append(w);
     }
     const QObjectList children = w->children();
     for (QObject* child : children) {
         if (auto* cw = qobject_cast<QWidget*>(child)) {
-            if (QWidget* m = matchRecursiveImpl(cw, target, firstAny))
-                return m;
+            collectIdentityMatches(cw, target, out);
         }
     }
-    return nullptr;
 }
 
-QWidget* matchRecursive(QWidget* w, const QString& target)
+void collectObjectNameMatches(QWidget* w, const QString& target,
+                              QList<QWidget*>& out)
 {
-    QWidget* firstAny = nullptr;
-    if (QWidget* visible = matchRecursiveImpl(w, target, &firstAny))
-        return visible;
-    return firstAny;
+    if (w->objectName() == target) {
+        out.append(w);
+    }
+    const QObjectList children = w->children();
+    for (QObject* child : children) {
+        if (auto* cw = qobject_cast<QWidget*>(child)) {
+            collectObjectNameMatches(cw, target, out);
+        }
+    }
 }
 
 // Last-resort match by a button's visible text — agents often know a control
 // only by its label ("Send", "Transmit"). Lowest priority so an objectName /
 // accessibleName / class always wins first.
-QWidget* matchByButtonText(QWidget* w, const QString& target)
+void collectButtonTextMatches(QWidget* w, const QString& target,
+                              QList<QWidget*>& out)
 {
-    if (auto* b = qobject_cast<QAbstractButton*>(w))
-        if (b->text() == target)
-            return w;
+    if (auto* b = qobject_cast<QAbstractButton*>(w)) {
+        if (b->text() == target) {
+            out.append(w);
+        }
+    }
     const QObjectList children = w->children();
     for (QObject* child : children) {
         if (auto* cw = qobject_cast<QWidget*>(child)) {
-            if (QWidget* m = matchByButtonText(cw, target))
-                return m;
+            collectButtonTextMatches(cw, target, out);
         }
     }
-    return nullptr;
+}
+
+int widgetResolutionRank(const QWidget* w)
+{
+    const bool visible = w->isVisible();
+    const bool enabled = w->isEnabled();
+    if (visible && enabled) {
+        return 0;
+    }
+    if (visible) {
+        return 1;
+    }
+    if (enabled) {
+        return 2;
+    }
+    return 3;
+}
+
+QList<QWidget*> preferredWidgetOrder(QList<QWidget*> widgets)
+{
+    std::stable_sort(widgets.begin(), widgets.end(),
+                     [](const QWidget* lhs, const QWidget* rhs) {
+                         return widgetResolutionRank(lhs)
+                             < widgetResolutionRank(rhs);
+                     });
+    return widgets;
+}
+
+QWidget* preferredWidget(const QList<QWidget*>& widgets)
+{
+    if (widgets.isEmpty()) {
+        return nullptr;
+    }
+
+    const auto it = std::min_element(
+        widgets.begin(), widgets.end(),
+        [](const QWidget* lhs, const QWidget* rhs) {
+            return widgetResolutionRank(lhs) < widgetResolutionRank(rhs);
+        });
+    return it == widgets.end() ? nullptr : *it;
+}
+
+QWidget* resolveWithinScopes(const QList<QWidget*>& scopes,
+                             const QString& target)
+{
+    const QList<QWidget*> orderedScopes = preferredWidgetOrder(scopes);
+    QList<QWidget*> matches;
+    for (QWidget* scope : orderedScopes) {
+        collectObjectNameMatches(scope, target, matches);
+    }
+    if (QWidget* m = preferredWidget(matches)) {
+        return m;
+    }
+
+    matches.clear();
+    for (QWidget* scope : orderedScopes) {
+        collectIdentityMatches(scope, target, matches);
+    }
+    if (QWidget* m = preferredWidget(matches)) {
+        return m;
+    }
+
+    matches.clear();
+    for (QWidget* scope : orderedScopes) {
+        collectButtonTextMatches(scope, target, matches);
+    }
+    return preferredWidget(matches);
 }
 
 // Collect every widget whose short class name matches `cls`, anywhere under
@@ -2369,6 +2433,26 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
         return vfo;
     }
 
+    static const QRegularExpression panScopeRe(
+        QStringLiteral("^pan(?:-visible)?(?:\\s+|:)(\\d+)/(.*)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch panScopeMatch =
+        panScopeRe.match(target.trimmed());
+    if (panScopeMatch.hasMatch()) {
+        bool okIndex = false;
+        const int panIndex = panScopeMatch.captured(1).toInt(&okIndex);
+        const QString inner = panScopeMatch.captured(2);
+        if (okIndex && !inner.isEmpty()) {
+            if (QWidget* spectrum = panSpectrumWidgetForIndex(panIndex)) {
+                if (QWidget* applet = panadapterAppletForSpectrum(spectrum)) {
+                    if (QWidget* m = resolveWithinScopes({applet}, inner)) {
+                        return m;
+                    }
+                }
+            }
+        }
+    }
+
     // 0. Scoped target "<scope>/<name>" disambiguates duplicate accessibleNames
     //    across applets — e.g. "RxApplet/AF gain" vs "PanadapterApplet/AF gain",
     //    which both exist and would otherwise both resolve to whichever comes
@@ -2380,43 +2464,42 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
     if (slash > 0) {
         const QString scope = target.left(slash);
         const QString inner = target.mid(slash + 1);
+        QList<QWidget*> scopes;
         for (QWidget* tlw : tops) {
-            QWidget* sc = (tlw->objectName() == scope) ? tlw
-                                                       : tlw->findChild<QWidget*>(scope);
-            if (!sc)
-                sc = matchRecursive(tlw, scope);
-            if (sc) {
-                if (QWidget* m = matchRecursive(sc, inner)) return m;
-                if (QWidget* m = matchByButtonText(sc, inner)) return m;
-            }
+            collectObjectNameMatches(tlw, scope, scopes);
+            collectIdentityMatches(tlw, scope, scopes);
+        }
+
+        if (QWidget* m = resolveWithinScopes(scopes, inner)) {
+            return m;
         }
     }
 
-    // 1. Exact objectName (cheap; visible instance preferred when several
-    //    widgets share a name, e.g. the strip's TX and RX waveform scopes).
-    QWidget* namedHidden = nullptr;
+    // 1. Exact objectName. Duplicate object names exist in hidden menus and
+    //    applet clones, so prefer visible/enabled matches but keep hidden
+    //    widgets addressable when no visible match exists.
+    QList<QWidget*> matches;
     for (QWidget* tlw : tops) {
-        if (tlw->objectName() == target)
-            return tlw;
-        const QList<QWidget*> named = tlw->findChildren<QWidget*>(target);
-        for (QWidget* c : named) {
-            if (c->isVisible())
-                return c;
-            if (!namedHidden)
-                namedHidden = c;
-        }
+        collectObjectNameMatches(tlw, target, matches);
     }
-    if (namedHidden)
-        return namedHidden;
+    if (QWidget* m = preferredWidget(matches)) {
+        return m;
+    }
     // 2. Class name or accessibleName (e.g. "SpectrumWidget" for the panadapter).
+    matches.clear();
     for (QWidget* tlw : tops) {
-        if (QWidget* m = matchRecursive(tlw, target))
-            return m;
+        collectIdentityMatches(tlw, target, matches);
+    }
+    if (QWidget* m = preferredWidget(matches)) {
+        return m;
     }
     // 3. Button visible text, last resort (e.g. "Send", "Transmit").
+    matches.clear();
     for (QWidget* tlw : tops) {
-        if (QWidget* m = matchByButtonText(tlw, target))
-            return m;
+        collectButtonTextMatches(tlw, target, matches);
+    }
+    if (QWidget* m = preferredWidget(matches)) {
+        return m;
     }
     return nullptr;
 }
@@ -2526,6 +2609,15 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             }
         }
         return r;
+    }
+
+    if (!w->isVisible()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: '") + target
+                                + QStringLiteral("' is not visible")},
+                           {QStringLiteral("hidden"), true},
+                           {QStringLiteral("class"), shortClassName(w)}};
     }
 
     // Refuse to drive a disabled control. Qt's setValue()/setChecked() still

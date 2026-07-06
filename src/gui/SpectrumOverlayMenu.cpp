@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include "core/ThemeManager.h"
 
@@ -81,9 +82,7 @@ static constexpr int kKiwiSdrWaterfallRateMax = 4;
 
 static QString kiwiWaterfallDbText(int db)
 {
-    return QStringLiteral("%1%2 dB")
-        .arg(db >= 0 ? QStringLiteral("+") : QString())
-        .arg(db);
+    return QStringLiteral("%1 dBm").arg(db);
 }
 
 static QString kiwiWaterfallRateText(int rate)
@@ -1265,9 +1264,13 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
     // Helper: label col 0, slider col 1-2, value col 3
     auto makeRow = [&](const QString& text, int lo, int hi, int def,
-                       QSlider*& slider, QLabel*& valLbl) {
+                       QSlider*& slider, QLabel*& valLbl,
+                       QLabel** titleLbl = nullptr) {
         auto* lbl = new QLabel(text);
         lbl->setStyleSheet(labelStyle);
+        if (titleLbl) {
+            *titleLbl = lbl;
+        }
         grid->addWidget(lbl, row, 0);
 
         slider = new GuardedSlider(Qt::Horizontal);
@@ -1287,9 +1290,13 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     // Helper: label col 0, button col 1, slider col 2, value col 3
     auto makeRowWithBtn = [&](const QString& text, int lo, int hi, int def,
                               QSlider*& slider, QLabel*& valLbl,
-                              QPushButton*& btn, const QString& btnText) {
+                              QPushButton*& btn, const QString& btnText,
+                              QLabel** titleLbl = nullptr) {
         auto* lbl = new QLabel(text);
         lbl->setStyleSheet(labelStyle);
+        if (titleLbl) {
+            *titleLbl = lbl;
+        }
         grid->addWidget(lbl, row, 0);
 
         btn = new QPushButton(btnText);
@@ -1529,7 +1536,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     //              persists in m_blackAutoOffsetValue and emits
     //              wfAutoBlackOffsetChanged.
     makeRowWithBtn("Black Level:", 0, 100, 50, m_blackSlider, m_blackLabel,
-                   m_autoBlackBtn, "SW");
+                   m_autoBlackBtn, "SW", &m_blackTitleLabel);
     m_blackSlider->setObjectName("displayBlackLevelSlider");
     m_autoBlackBtn->setObjectName("displayAutoBlackBtn");
     connect(m_blackSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1537,11 +1544,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             ? kiwiWaterfallDbText(v)
             : QString::number(v));
         if (m_kiwiWaterfallControlMode) {
-            if (m_autoBlackBtn && m_autoBlackBtn->isChecked() && v != 0) {
-                QSignalBlocker blocker(m_autoBlackBtn);
-                m_autoBlackBtn->setChecked(false);
-            }
-            emit kiwiWaterfallFloorChanged(v);
+            clearKiwiWaterfallAutoButtonState();
+            emit kiwiWaterfallMinChanged(v);
             return;
         }
         if (m_autoBlackMode != 0) {      // Auto-C / Auto-R → bias the offset
@@ -1553,22 +1557,14 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         }
     });
     // One click advances the 3-way mode: Off → Auto-C → Auto-R → Off.
-    // In Kiwi mode the same button resets the Kiwi waterfall floor to its
-    // automatic baseline instead of changing the Flex auto-black source.
+    // In Kiwi mode the same button requests the computed auto floor/ceiling scale.
     connect(m_autoBlackBtn, &QPushButton::clicked, this, [this]() {
         if (m_kiwiWaterfallControlMode) {
-            if (m_blackSlider) {
-                QSignalBlocker blocker(m_blackSlider);
-                m_blackSlider->setValue(0);
-                if (m_blackLabel) {
-                    m_blackLabel->setText(kiwiWaterfallDbText(0));
-                }
-                emit kiwiWaterfallFloorChanged(0);
-            }
             if (m_autoBlackBtn) {
                 QSignalBlocker blocker(m_autoBlackBtn);
                 m_autoBlackBtn->setChecked(true);
             }
+            emit kiwiWaterfallAutoRequested();
             return;
         }
 
@@ -1577,14 +1573,16 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);  // initial label/slider role
 
     // Gain
-    makeRow("WtrFall Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
+    makeRow("WtrFall Gain:", 0, 100, 50, m_gainSlider, m_gainLabel,
+            &m_gainTitleLabel);
     m_gainSlider->setObjectName("displayWfGainSlider");
     connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
         m_gainLabel->setText(m_kiwiWaterfallControlMode
             ? kiwiWaterfallDbText(v)
             : QString::number(v));
         if (m_kiwiWaterfallControlMode) {
-            emit kiwiWaterfallCellChanged(v);
+            clearKiwiWaterfallAutoButtonState();
+            emit kiwiWaterfallMaxChanged(v);
             return;
         }
         emit wfColorGainChanged(v);
@@ -2075,21 +2073,43 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
 
 void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
 {
-    if (m_kiwiWaterfallControlMode == kiwiMode) {
-        return;
-    }
-
     m_kiwiWaterfallControlMode = kiwiMode;
+    std::optional<QSignalBlocker> gainBlocker;
+    std::optional<QSignalBlocker> blackBlocker;
+    std::optional<QSignalBlocker> rateBlocker;
+    std::optional<QSignalBlocker> autoBlocker;
     if (m_gainSlider) {
-        m_gainSlider->setRange(kiwiMode ? -30 : 0, kiwiMode ? 30 : 100);
+        gainBlocker.emplace(m_gainSlider);
+    }
+    if (m_blackSlider) {
+        blackBlocker.emplace(m_blackSlider);
+    }
+    if (m_rateSlider) {
+        rateBlocker.emplace(m_rateSlider);
+    }
+    if (m_autoBlackBtn) {
+        autoBlocker.emplace(m_autoBlackBtn);
+    }
+    if (m_gainTitleLabel) {
+        m_gainTitleLabel->setText(kiwiMode
+            ? QStringLiteral("WF Ceiling:")
+            : QStringLiteral("WtrFall Gain:"));
+    }
+    if (m_blackTitleLabel) {
+        m_blackTitleLabel->setText(kiwiMode
+            ? QStringLiteral("WF Floor:")
+            : QStringLiteral("Black Level:"));
+    }
+    if (m_gainSlider) {
+        m_gainSlider->setRange(kiwiMode ? -259 : 0, kiwiMode ? 30 : 100);
         m_gainSlider->setToolTip(kiwiMode
-            ? "KiwiSDR waterfall cell adjustment, -30 to +30 dB."
+            ? "KiwiSDR waterfall ceiling dBm. Auto sets this from the row's 98th percentile plus 30 dB."
             : "Waterfall color gain.");
     }
     if (m_blackSlider) {
-        m_blackSlider->setRange(kiwiMode ? -30 : 0, kiwiMode ? 30 : 100);
+        m_blackSlider->setRange(kiwiMode ? -260 : 0, kiwiMode ? 29 : 100);
         m_blackSlider->setToolTip(kiwiMode
-            ? "KiwiSDR waterfall floor adjustment, -30 to +30 dB."
+            ? "KiwiSDR waterfall floor dBm. Auto sets this from the median row level minus 10 dB."
             : (m_autoBlackBtn && m_autoBlackBtn->isChecked()
                    ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
                    : "Waterfall black level. Decrease to darken the noise floor."));
@@ -2104,8 +2124,11 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
     }
     if (m_autoBlackBtn) {
         m_autoBlackBtn->setToolTip(kiwiMode
-            ? "Reset KiwiSDR waterfall floor to automatic baseline."
+            ? "Apply the KiwiSDR automatic waterfall floor and ceiling scale."
             : "Use the measured noise floor for waterfall black level.");
+        m_autoBlackBtn->setAccessibleDescription(kiwiMode
+            ? tr("Applies the computed KiwiSDR waterfall floor and ceiling levels.")
+            : tr("Use the measured noise floor for waterfall black level."));
         if (kiwiMode) {
             m_autoBlackBtn->setCheckable(true);
             m_autoBlackBtn->setText("Auto");
@@ -2115,28 +2138,38 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
     }
 }
 
-void SpectrumOverlayMenu::syncKiwiWaterfallSettings(int cellDb, int floorDb,
-                                                    int rate)
+void SpectrumOverlayMenu::syncKiwiWaterfallSettings(int minDbm, int maxDbm,
+                                                    bool autoScale, int rate)
 {
     if (!m_gainSlider || !m_blackSlider || !m_rateSlider) {
         return;
     }
 
-    const int clampedCell = std::clamp(cellDb, -30, 30);
-    const int clampedFloor = std::clamp(floorDb, -30, 30);
+    const int clampedMin = std::clamp(minDbm, -260, 29);
+    const int clampedMax = std::clamp(maxDbm, clampedMin + 1, 30);
     const int clampedRate = std::clamp(rate, 0, kKiwiSdrWaterfallRateMax);
     QSignalBlocker b1(m_gainSlider), b2(m_blackSlider),
                    b3(m_rateSlider), b4(m_autoBlackBtn);
 
     setKiwiWaterfallControlMode(true);
 
-    m_gainSlider->setValue(clampedCell);
-    m_gainLabel->setText(kiwiWaterfallDbText(clampedCell));
-    m_blackSlider->setValue(clampedFloor);
-    m_blackLabel->setText(kiwiWaterfallDbText(clampedFloor));
-    m_autoBlackBtn->setChecked(clampedFloor == 0);
+    m_gainSlider->setValue(clampedMax);
+    m_gainLabel->setText(kiwiWaterfallDbText(clampedMax));
+    m_blackSlider->setValue(clampedMin);
+    m_blackLabel->setText(kiwiWaterfallDbText(clampedMin));
+    m_autoBlackBtn->setChecked(autoScale);
     m_rateSlider->setValue(clampedRate);
     m_rateLabel->setText(kiwiWaterfallRateText(clampedRate));
+}
+
+void SpectrumOverlayMenu::clearKiwiWaterfallAutoButtonState()
+{
+    if (!m_kiwiWaterfallControlMode || !m_autoBlackBtn) {
+        return;
+    }
+
+    QSignalBlocker blocker(m_autoBlackBtn);
+    m_autoBlackBtn->setChecked(false);
 }
 
 void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)

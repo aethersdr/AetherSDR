@@ -47,6 +47,12 @@ struct WaterfallAperture {
     bool valid{false};
 };
 
+struct WaterfallDisplayRange {
+    float minDbm{0.0f};
+    float maxDbm{0.0f};
+    bool valid{false};
+};
+
 struct IpLimitNotice {
     int minutes{0};
     QString address;
@@ -262,8 +268,25 @@ struct MeterReading {
 SoundFrameHeader parseSoundFrameHeader(const QByteArray& frame);
 WaterfallLineHeader parseWaterfallLineHeader(const QByteArray& frame);
 quint64 sequenceGapCount(int previousSequence, int currentSequence);
+float waterfallByteToDbm(unsigned char value);
 float waterfallByteToDisplayLevel(unsigned char value);
+float calibratedWaterfallLevel(float dbm, int calibrationDb);
 WaterfallAperture autoWaterfallAperture(const QVector<float>& binsDbm);
+WaterfallDisplayRange autoWaterfallDisplayRange(const QVector<float>& binsDbm);
+WaterfallDisplayRange autoWaterfallDisplayRangeFromRows(
+    const QVector<QVector<float>>& rowsDbm);
+float waterfallZoomCorrectionDb(int zoom);
+WaterfallDisplayRange defaultWaterfallDisplayRange(int zoom,
+                                                   int ceilingOffsetDb,
+                                                   int floorOffsetDb);
+WaterfallDisplayRange adjustedWaterfallDisplayRange(float minDbm,
+                                                    float maxDbm,
+                                                    int ceilingOffsetDb,
+                                                    int floorOffsetDb);
+WaterfallDisplayRange zoomAdjustedWaterfallDisplayRange(float minDbm,
+                                                        float maxDbm,
+                                                        int sourceZoom,
+                                                        int currentZoom);
 float waterfallColorIndex(float dbm, float minDbm, float maxDbm);
 QVector<MsgToken> parseMsgTokens(const QString& message);
 IpLimitNotice parseIpLimitNotice(const QString& valueText);

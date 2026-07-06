@@ -23,6 +23,10 @@ constexpr const char* kVirtualAntennaPrefix = "KIWI:";
 constexpr int kRecoverableReconnectDelayMs = 3000;
 constexpr int kKiwiSdrProfileNameMaxChars = 16;
 constexpr int kKiwiSdrWaterfallRateMax = 4;
+constexpr int kKiwiSdrWaterfallMinDbmLimit = -260;
+constexpr int kKiwiSdrWaterfallMaxDbmLimit = 30;
+constexpr int kKiwiSdrDefaultWaterfallMinDbm = -110;
+constexpr int kKiwiSdrDefaultWaterfallMaxDbm = -10;
 
 QString normalizedProfileEndpoint(const QString& endpoint)
 {
@@ -159,6 +163,12 @@ QString KiwiSdrManager::waterfallDetail(const QString& id) const
     return m_waterfallDetails.value(id);
 }
 
+KiwiSdrWaterfallDisplayRange KiwiSdrManager::waterfallDisplayRange(
+    const QString& id) const
+{
+    return m_waterfallDisplayRanges.value(id);
+}
+
 bool KiwiSdrManager::isConnected(const QString& id) const
 {
     return KiwiSdrClient::stateHasReceiveAudio(state(id));
@@ -222,8 +232,12 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     KiwiSdrAntennaProfile updated = profile;
     updated.endpoint = normalizedProfileEndpoint(profile.endpoint);
     updated.name = sanitizedName(profile.name, updated.endpoint);
-    updated.waterfallCellDb = std::clamp(updated.waterfallCellDb, -30, 30);
-    updated.waterfallFloorDb = std::clamp(updated.waterfallFloorDb, -30, 30);
+    updated.waterfallMinDbm = std::clamp(updated.waterfallMinDbm,
+                                         kKiwiSdrWaterfallMinDbmLimit,
+                                         kKiwiSdrWaterfallMaxDbmLimit - 1);
+    updated.waterfallMaxDbm = std::clamp(updated.waterfallMaxDbm,
+                                         updated.waterfallMinDbm + 1,
+                                         kKiwiSdrWaterfallMaxDbmLimit);
     updated.waterfallRate =
         std::clamp(updated.waterfallRate, 0, kKiwiSdrWaterfallRateMax);
     const QString oldEndpoint = m_profiles[idx].endpoint;
@@ -233,20 +247,22 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     const bool endpointChanged = oldEndpoint != updated.endpoint;
     if (endpointChanged) {
         cancelReconnect(updated.id);
+        m_waterfallDisplayRanges.remove(updated.id);
         emit profileStreamReset(updated.id);
     }
 
     if (KiwiSdrClient* c = client(updated.id)) {
         Q_UNUSED(c);
-        invokeClient(updated.id, [cellDb = updated.waterfallCellDb,
-                                  floorDb = updated.waterfallFloorDb,
+        invokeClient(updated.id, [minDbm = updated.waterfallMinDbm,
+                                  maxDbm = updated.waterfallMaxDbm,
+                                  autoScale = updated.waterfallAutoScale,
                                   rate = updated.waterfallRate,
                                   endpointChanged,
                                   endpoint = updated.endpoint,
                                   reconnect = state(updated.id)
                                       != KiwiSdrClient::State::Disconnected](
                                      KiwiSdrClient* client) {
-            client->setWaterfallDisplayAdjustments(cellDb, floorDb);
+            client->setWaterfallDisplayRange(minDbm, maxDbm, autoScale);
             client->setWaterfallRateOverride(rate);
             if (endpointChanged && reconnect) {
                 client->disconnectFromEndpoint();
@@ -299,6 +315,7 @@ void KiwiSdrManager::removeProfile(const QString& id)
     m_telemetry.remove(id);
     m_waterfallAvailable.remove(id);
     m_waterfallDetails.remove(id);
+    m_waterfallDisplayRanges.remove(id);
     m_profiles.removeAt(idx);
     saveSettings();
     // The client deletion is already scheduled above, so no further audio will
@@ -328,18 +345,20 @@ void KiwiSdrManager::connectProfile(const QString& id)
         return;
     }
     invokeClient(id, [callsign = m_operatorCallsign,
-                      cellDb = m_profiles[idx].waterfallCellDb,
-                      floorDb = m_profiles[idx].waterfallFloorDb,
+                      minDbm = m_profiles[idx].waterfallMinDbm,
+                      maxDbm = m_profiles[idx].waterfallMaxDbm,
+                      autoScale = m_profiles[idx].waterfallAutoScale,
                       rate = m_profiles[idx].waterfallRate](
                          KiwiSdrClient* client) {
         client->setOperatorCallsign(callsign);
-        client->setWaterfallDisplayAdjustments(cellDb, floorDb);
+        client->setWaterfallDisplayRange(minDbm, maxDbm, autoScale);
         client->setWaterfallRateOverride(rate);
     });
     if (assignedSliceForProfile(id) < 0) {
         m_clientHasTrackedSlice.insert(id, false);
         invokeClient(id, [](KiwiSdrClient* client) {
-            client->setTrackedSlice(-1, 0.0, QString(), 0, 0, QString());
+            client->setTrackedSlice(-1, 0.0, QString(), 0, 0, QString(),
+                                    QString());
         });
         emit profileNeedsInitialTracking(id);
     }
@@ -409,7 +428,8 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
                                           const QString& panId,
                                           double centerMhz,
                                           double bandwidthMhz,
-                                          int lineDurationMs)
+                                          int lineDurationMs,
+                                          const QString& bandName)
 {
     if (!hasProfile(id) || sliceId < 0 || frequencyMhz <= 0.0) {
         return;
@@ -420,9 +440,10 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
         m_clientHasTrackedSlice.insert(id, true);
         invokeClient(id, [sliceId, frequencyMhz, mode, filterLowHz,
                           filterHighHz, panId, lineDurationMs,
-                          centerMhz, bandwidthMhz](KiwiSdrClient* client) {
+                          centerMhz, bandwidthMhz, bandName](
+                             KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                                    filterHighHz, panId);
+                                    filterHighHz, panId, bandName);
             client->setWaterfallLineDurationMs(lineDurationMs);
             if (!panId.isEmpty() && centerMhz > 0.0 && bandwidthMhz > 0.0) {
                 client->setWaterfallView(panId, centerMhz, bandwidthMhz);
@@ -435,7 +456,8 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
                                           double frequencyMhz,
                                           const QString& mode,
                                           int filterLowHz, int filterHighHz,
-                                          const QString& panId)
+                                          const QString& panId,
+                                          const QString& bandName)
 {
     if (sliceId < 0 || !hasProfile(profileId)) {
         clearSliceAssignment(sliceId);
@@ -483,10 +505,10 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
         const bool connected =
             KiwiSdrClient::stateHasReceiveAudio(state(profileId));
         invokeClient(profileId, [sliceId, frequencyMhz, mode, filterLowHz,
-                                 filterHighHz, panId, connected](
+                                 filterHighHz, panId, bandName, connected](
                                     KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                                    filterHighHz, panId);
+                                    filterHighHz, panId, bandName);
             client->setAudioActive(connected);
         });
     }
@@ -524,7 +546,8 @@ void KiwiSdrManager::clearSliceAssignment(int sliceId)
 void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,
                                          const QString& mode,
                                          int filterLowHz, int filterHighHz,
-                                         const QString& panId)
+                                         const QString& panId,
+                                         const QString& bandName)
 {
     const QString profileId = m_sliceAssignments.value(sliceId);
     if (profileId.isEmpty()) {
@@ -534,10 +557,11 @@ void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,
         Q_UNUSED(c);
         m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
         invokeClient(profileId, [sliceId, frequencyMhz, mode,
-                                 filterLowHz, filterHighHz, panId](
+                                 filterLowHz, filterHighHz, panId,
+                                 bandName](
                                     KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                                    filterHighHz, panId);
+                                    filterHighHz, panId, bandName);
         });
     }
 }
@@ -576,8 +600,11 @@ void KiwiSdrManager::setReceiverControlsForSlice(
     }
 }
 
-void KiwiSdrManager::setProfileWaterfallSettings(const QString& id, int cellDb,
-                                                 int floorDb, int rate)
+void KiwiSdrManager::setProfileWaterfallDisplayRange(const QString& id,
+                                                     int minDbm,
+                                                     int maxDbm,
+                                                     bool autoScale,
+                                                     int rate)
 {
     const int idx = profileIndex(id);
     if (idx < 0) {
@@ -585,10 +612,32 @@ void KiwiSdrManager::setProfileWaterfallSettings(const QString& id, int cellDb,
     }
 
     KiwiSdrAntennaProfile p = m_profiles[idx];
-    p.waterfallCellDb = std::clamp(cellDb, -30, 30);
-    p.waterfallFloorDb = std::clamp(floorDb, -30, 30);
+    p.waterfallMinDbm = std::clamp(minDbm,
+                                   kKiwiSdrWaterfallMinDbmLimit,
+                                   kKiwiSdrWaterfallMaxDbmLimit - 1);
+    p.waterfallMaxDbm = std::clamp(maxDbm,
+                                   p.waterfallMinDbm + 1,
+                                   kKiwiSdrWaterfallMaxDbmLimit);
+    p.waterfallAutoScale = autoScale;
     p.waterfallRate = std::clamp(rate, 0, kKiwiSdrWaterfallRateMax);
     updateProfile(p);
+    if (!p.waterfallAutoScale) {
+        KiwiSdrWaterfallDisplayRange range;
+        range.minDbm = static_cast<float>(p.waterfallMinDbm);
+        range.maxDbm = static_cast<float>(p.waterfallMaxDbm);
+        range.autoRange = false;
+        range.valid = true;
+        m_waterfallDisplayRanges.insert(id, range);
+        emit waterfallDisplayRangeChanged(id, range.minDbm, range.maxDbm,
+                                          range.autoRange);
+    }
+}
+
+void KiwiSdrManager::requestProfileWaterfallAutoScale(const QString& id)
+{
+    invokeClient(id, [](KiwiSdrClient* client) {
+        client->requestWaterfallAutoScale();
+    });
 }
 
 KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
@@ -631,16 +680,22 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
             const int idx = profileIndex(id);
             const bool hasAssignedSlice = assignedSliceForProfile(id) >= 0;
             if (idx >= 0 || hasAssignedSlice) {
-                const int cellDb = idx >= 0 ? m_profiles[idx].waterfallCellDb : 0;
-                const int floorDb = idx >= 0 ? m_profiles[idx].waterfallFloorDb : 0;
+                const int minDbm = idx >= 0
+                    ? m_profiles[idx].waterfallMinDbm
+                    : kKiwiSdrDefaultWaterfallMinDbm;
+                const int maxDbm = idx >= 0
+                    ? m_profiles[idx].waterfallMaxDbm
+                    : kKiwiSdrDefaultWaterfallMaxDbm;
+                const bool autoScale = idx < 0 || m_profiles[idx].waterfallAutoScale;
                 const int rate = idx >= 0 ? m_profiles[idx].waterfallRate : 0;
                 const bool normalReceiver =
                     KiwiSdrClient::stateAllowsReceiverControl(state);
-                invokeClient(id, [idx, cellDb, floorDb, rate, hasAssignedSlice,
+                invokeClient(id, [idx, minDbm, maxDbm, autoScale, rate, hasAssignedSlice,
                                   normalReceiver](
                                      KiwiSdrClient* client) {
                     if (idx >= 0 && normalReceiver) {
-                        client->setWaterfallDisplayAdjustments(cellDb, floorDb);
+                        client->setWaterfallDisplayRange(minDbm, maxDbm,
+                                                         autoScale);
                         client->setWaterfallRateOverride(rate);
                     }
                     if (hasAssignedSlice) {
@@ -708,6 +763,19 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
         emit waterfallRowReady(id, panId, binsDbm, lowFreqMhz, highFreqMhz,
                                timecode);
     }, Qt::QueuedConnection);
+    connect(c, &KiwiSdrClient::waterfallDisplayRangeChanged,
+            this, [this, id, c](float minDbm, float maxDbm, bool autoRange) {
+        if (client(id) != c) {
+            return;
+        }
+        KiwiSdrWaterfallDisplayRange range;
+        range.minDbm = minDbm;
+        range.maxDbm = maxDbm;
+        range.autoRange = autoRange;
+        range.valid = true;
+        m_waterfallDisplayRanges.insert(id, range);
+        emit waterfallDisplayRangeChanged(id, minDbm, maxDbm, autoRange);
+    }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::meterReadingReady,
             this, [this, id, c](const KiwiSdrProtocol::MeterReading& reading) {
         if (client(id) != c) {
@@ -762,6 +830,7 @@ void KiwiSdrManager::destroyClient(const QString& id, bool blocking)
     m_telemetry.remove(id);
     m_waterfallAvailable.remove(id);
     m_waterfallDetails.remove(id);
+    m_waterfallDisplayRanges.remove(id);
     const Qt::ConnectionType connectionType =
         blocking && c->thread() != QThread::currentThread()
             ? Qt::BlockingQueuedConnection
@@ -801,10 +870,28 @@ void KiwiSdrManager::loadSettings()
         p.name = sanitizedName(obj.value(QStringLiteral("name")).toString(),
                                p.endpoint);
         p.autoConnect = obj.value(QStringLiteral("autoConnect")).toBool(false);
-        p.waterfallCellDb = std::clamp(
-            obj.value(QStringLiteral("waterfallCellDb")).toInt(0), -30, 30);
-        p.waterfallFloorDb = std::clamp(
-            obj.value(QStringLiteral("waterfallFloorDb")).toInt(0), -30, 30);
+        if (obj.contains(QStringLiteral("waterfallMinDbm"))
+            || obj.contains(QStringLiteral("waterfallMaxDbm"))) {
+            p.waterfallMinDbm = std::clamp(
+                obj.value(QStringLiteral("waterfallMinDbm"))
+                    .toInt(kKiwiSdrDefaultWaterfallMinDbm),
+                kKiwiSdrWaterfallMinDbmLimit,
+                kKiwiSdrWaterfallMaxDbmLimit - 1);
+            p.waterfallMaxDbm = std::clamp(
+                obj.value(QStringLiteral("waterfallMaxDbm"))
+                    .toInt(kKiwiSdrDefaultWaterfallMaxDbm),
+                p.waterfallMinDbm + 1,
+                kKiwiSdrWaterfallMaxDbmLimit);
+            p.waterfallAutoScale =
+                obj.value(QStringLiteral("waterfallAutoScale")).toBool(true);
+        } else {
+            // Legacy profiles stored ±dB offsets against the previous
+            // continuously-running auto range. Those offsets do not map cleanly
+            // onto absolute WF Floor/Ceiling, so migrate them back to Auto.
+            p.waterfallMinDbm = kKiwiSdrDefaultWaterfallMinDbm;
+            p.waterfallMaxDbm = kKiwiSdrDefaultWaterfallMaxDbm;
+            p.waterfallAutoScale = true;
+        }
         p.waterfallRate = std::clamp(
             obj.value(QStringLiteral("waterfallRate")).toInt(0),
             0,
@@ -822,8 +909,17 @@ void KiwiSdrManager::saveSettings() const
         obj.insert(QStringLiteral("name"), p.name);
         obj.insert(QStringLiteral("endpoint"), normalizedProfileEndpoint(p.endpoint));
         obj.insert(QStringLiteral("autoConnect"), p.autoConnect);
-        obj.insert(QStringLiteral("waterfallCellDb"), std::clamp(p.waterfallCellDb, -30, 30));
-        obj.insert(QStringLiteral("waterfallFloorDb"), std::clamp(p.waterfallFloorDb, -30, 30));
+        obj.insert(QStringLiteral("waterfallAutoScale"), p.waterfallAutoScale);
+        const int waterfallMinDbm = std::clamp(
+            p.waterfallMinDbm,
+            kKiwiSdrWaterfallMinDbmLimit,
+            kKiwiSdrWaterfallMaxDbmLimit - 1);
+        const int waterfallMaxDbm = std::clamp(
+            p.waterfallMaxDbm,
+            waterfallMinDbm + 1,
+            kKiwiSdrWaterfallMaxDbmLimit);
+        obj.insert(QStringLiteral("waterfallMinDbm"), waterfallMinDbm);
+        obj.insert(QStringLiteral("waterfallMaxDbm"), waterfallMaxDbm);
         obj.insert(QStringLiteral("waterfallRate"),
                    std::clamp(p.waterfallRate, 0, kKiwiSdrWaterfallRateMax));
         profiles.append(obj);

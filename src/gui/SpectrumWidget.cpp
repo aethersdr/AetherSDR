@@ -3597,9 +3597,6 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_kiwiSdrLastWaterfallCenterMhz = 0.0;
     m_kiwiSdrLastWaterfallBandwidthMhz = 0.0;
     m_kiwiSdrLastWaterfallFrameValid = false;
-    m_kiwiSdrAutoFloorDbm = kKiwiSdrWaterfallMinDbm;
-    m_kiwiSdrAutoCeilDbm = kKiwiSdrWaterfallMaxDbm;
-    m_kiwiSdrAutoRangeValid = false;
     m_kiwiSdrFftTraceFloorDbm = -1000.0f;
     m_kiwiSdrFftTraceFloorValid = false;
     m_dss.clear();
@@ -3607,6 +3604,16 @@ void SpectrumWidget::clearCurrentWaterfallRows()
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
+}
+
+void SpectrumWidget::resetKiwiSdrWaterfallDisplayRange()
+{
+    const KiwiSdrProtocol::WaterfallDisplayRange range =
+        KiwiSdrProtocol::defaultWaterfallDisplayRange(0, 0, 0);
+    m_kiwiSdrDisplayFloorDbm = range.minDbm;
+    m_kiwiSdrDisplayCeilDbm = range.maxDbm;
+    m_kiwiSdrDisplayRangeValid = false;
+    m_kiwiSdrDisplayRangeAutoRange = false;
 }
 
 void SpectrumWidget::resetCurrentWaterfallRowsForSize(
@@ -3646,6 +3653,7 @@ void SpectrumWidget::resetCurrentWaterfallRowsForSize(
 void SpectrumWidget::clearWaterfallRows()
 {
     clearCurrentWaterfallRows();
+    resetKiwiSdrWaterfallDisplayRange();
     m_nativeWaterfallState = WaterfallStreamState{};
     m_kiwiWaterfallState = WaterfallStreamState{};
     m_kiwiProfileWaterfallStates.clear();
@@ -3695,9 +3703,10 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
     updated.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
     updated.dss = std::move(m_dss);
-    updated.kiwiAutoFloorDbm = m_kiwiSdrAutoFloorDbm;
-    updated.kiwiAutoCeilDbm = m_kiwiSdrAutoCeilDbm;
-    updated.kiwiAutoRangeValid = m_kiwiSdrAutoRangeValid;
+    updated.kiwiDisplayFloorDbm = m_kiwiSdrDisplayFloorDbm;
+    updated.kiwiDisplayCeilDbm = m_kiwiSdrDisplayCeilDbm;
+    updated.kiwiDisplayRangeValid = m_kiwiSdrDisplayRangeValid;
+    updated.kiwiDisplayRangeAutoRange = m_kiwiSdrDisplayRangeAutoRange;
     updated.kiwiFftTraceFloorDbm = m_kiwiSdrFftTraceFloorDbm;
     updated.kiwiFftTraceFloorValid = m_kiwiSdrFftTraceFloorValid;
     updated.valid = !updated.waterfall.isNull();
@@ -3725,8 +3734,24 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
         && (state.waterfallHistory.isNull()
             || state.waterfallHistory.size() != currentHistorySize);
     if (!state.valid || stateHasWrongWaterfall || stateHasWrongHistory) {
+        const bool restoreKiwiDisplayRange =
+            m_kiwiSdrWaterfallActive && state.kiwiDisplayRangeValid;
+        const float kiwiDisplayFloorDbm = state.kiwiDisplayFloorDbm;
+        const float kiwiDisplayCeilDbm = state.kiwiDisplayCeilDbm;
+        const bool kiwiDisplayRangeAutoRange =
+            state.kiwiDisplayRangeAutoRange;
         state = WaterfallStreamState{};
         resetCurrentWaterfallRowsForSize(currentSize, currentHistorySize);
+        if (m_kiwiSdrWaterfallActive) {
+            if (restoreKiwiDisplayRange) {
+                m_kiwiSdrDisplayFloorDbm = kiwiDisplayFloorDbm;
+                m_kiwiSdrDisplayCeilDbm = kiwiDisplayCeilDbm;
+                m_kiwiSdrDisplayRangeValid = true;
+                m_kiwiSdrDisplayRangeAutoRange = kiwiDisplayRangeAutoRange;
+            } else {
+                resetKiwiSdrWaterfallDisplayRange();
+            }
+        }
         return;
     }
 
@@ -3758,9 +3783,10 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_kiwiSdrLastWaterfallBandwidthMhz = restored.kiwiLastWaterfallBandwidthMhz;
     m_kiwiSdrLastWaterfallFrameValid = restored.kiwiLastWaterfallFrameValid;
     m_dss = std::move(restored.dss);
-    m_kiwiSdrAutoFloorDbm = restored.kiwiAutoFloorDbm;
-    m_kiwiSdrAutoCeilDbm = restored.kiwiAutoCeilDbm;
-    m_kiwiSdrAutoRangeValid = restored.kiwiAutoRangeValid;
+    m_kiwiSdrDisplayFloorDbm = restored.kiwiDisplayFloorDbm;
+    m_kiwiSdrDisplayCeilDbm = restored.kiwiDisplayCeilDbm;
+    m_kiwiSdrDisplayRangeValid = restored.kiwiDisplayRangeValid;
+    m_kiwiSdrDisplayRangeAutoRange = restored.kiwiDisplayRangeAutoRange;
     m_kiwiSdrFftTraceFloorDbm = restored.kiwiFftTraceFloorDbm;
     m_kiwiSdrFftTraceFloorValid = restored.kiwiFftTraceFloorValid;
     resetDssUploadState();
@@ -3824,57 +3850,6 @@ QVector<float> SpectrumWidget::smoothKiwiSdrWaterfallBins(const QVector<float>& 
     }
     m_kiwiSdrLastWaterfallBins = horizontal;
     return horizontal;
-}
-
-void SpectrumWidget::updateKiwiSdrAutoColorRange(const QVector<float>& bins)
-{
-    const KiwiSdrProtocol::WaterfallAperture aperture =
-        KiwiSdrProtocol::autoWaterfallAperture(bins);
-    if (!aperture.valid) {
-        return;
-    }
-
-    static constexpr float kMinSpanDb = 32.0f;
-    static constexpr float kMaxSpanDb = 120.0f;
-    static constexpr float kSmoothing = 0.10f;
-
-    float candidateFloor = qBound(
-        kKiwiSdrWaterfallMinDbm,
-        aperture.minDbm,
-        kKiwiSdrWaterfallMaxDbm - kMinSpanDb);
-    float candidateCeil = qBound(
-        candidateFloor + kMinSpanDb,
-        aperture.maxDbm,
-        kKiwiSdrWaterfallMaxDbm);
-
-    float candidateSpan = candidateCeil - candidateFloor;
-    if (candidateSpan > kMaxSpanDb) {
-        candidateCeil = candidateFloor + kMaxSpanDb;
-        candidateSpan = kMaxSpanDb;
-    }
-    if (candidateCeil > kKiwiSdrWaterfallMaxDbm) {
-        candidateCeil = kKiwiSdrWaterfallMaxDbm;
-    }
-    if (candidateCeil - candidateFloor < kMinSpanDb) {
-        candidateFloor = qMax(kKiwiSdrWaterfallMinDbm,
-                              candidateCeil - kMinSpanDb);
-    }
-
-    if (!m_kiwiSdrAutoRangeValid) {
-        m_kiwiSdrAutoFloorDbm = candidateFloor;
-        m_kiwiSdrAutoCeilDbm = candidateCeil;
-        m_kiwiSdrAutoRangeValid = true;
-        return;
-    }
-
-    m_kiwiSdrAutoFloorDbm += kSmoothing
-        * (candidateFloor - m_kiwiSdrAutoFloorDbm);
-    m_kiwiSdrAutoCeilDbm += kSmoothing
-        * (candidateCeil - m_kiwiSdrAutoCeilDbm);
-    if (m_kiwiSdrAutoCeilDbm - m_kiwiSdrAutoFloorDbm < kMinSpanDb) {
-        m_kiwiSdrAutoFloorDbm = qMax(kKiwiSdrWaterfallMinDbm,
-                                     m_kiwiSdrAutoCeilDbm - kMinSpanDb);
-    }
 }
 
 void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label)
@@ -5468,6 +5443,7 @@ void SpectrumWidget::clearKiwiSdrWaterfallRows()
 {
     m_kiwiWaterfallState = WaterfallStreamState{};
     m_kiwiProfileWaterfallStates.clear();
+    resetKiwiSdrWaterfallDisplayRange();
     m_kiwiSdrFftTrace.clear();
     m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrFftTraceFloorDbm = -1000.0f;
@@ -5488,6 +5464,7 @@ void SpectrumWidget::clearKiwiSdrWaterfallRowsForProfile(const QString& profileI
     m_kiwiProfileWaterfallStates.remove(normalized);
     if (m_kiwiSdrWaterfallActive
         && m_kiwiSdrWaterfallProfileId == normalized) {
+        resetKiwiSdrWaterfallDisplayRange();
         clearCurrentWaterfallRows();
         leanCappedUpdate();
     }
@@ -5582,17 +5559,27 @@ const QVector<float>& SpectrumWidget::noiseFloorAutoLevelBins() const
     return !m_smoothed.isEmpty() ? m_smoothed : m_bins;
 }
 
-void SpectrumWidget::setKiwiSdrWaterfallAdjustments(int cellDb, int floorDb)
+void SpectrumWidget::setKiwiSdrWaterfallDisplayRange(float minDbm,
+                                                     float maxDbm,
+                                                     bool autoRange)
 {
-    const int clampedCell = std::clamp(cellDb, -30, 30);
-    const int clampedFloor = std::clamp(floorDb, -30, 30);
-    if (m_kiwiSdrWaterfallCellDb == clampedCell
-        && m_kiwiSdrWaterfallFloorDb == clampedFloor) {
+    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
         return;
     }
 
-    m_kiwiSdrWaterfallCellDb = clampedCell;
-    m_kiwiSdrWaterfallFloorDb = clampedFloor;
+    const float clampedCeil = qMax(minDbm + 1.0f, maxDbm);
+    if (m_kiwiSdrDisplayRangeValid
+        && m_kiwiSdrDisplayRangeAutoRange == autoRange
+        && std::abs(m_kiwiSdrDisplayFloorDbm - minDbm) < 0.05f
+        && std::abs(m_kiwiSdrDisplayCeilDbm - clampedCeil) < 0.05f) {
+        return;
+    }
+
+    m_kiwiSdrDisplayFloorDbm = minDbm;
+    m_kiwiSdrDisplayCeilDbm = clampedCeil;
+    m_kiwiSdrDisplayRangeValid = true;
+    m_kiwiSdrDisplayRangeAutoRange = autoRange;
+    resetDssUploadState();
     if (m_kiwiSdrWaterfallActive) {
         leanCappedUpdate();
     }
@@ -7864,8 +7851,8 @@ float SpectrumWidget::dssFloorDbm() const
     // bottom only before a measurement exists. Quantise to 0.5 dB so per-frame
     // floor jitter doesn't force needless rebuilds/uploads.
     float floor;
-    if (m_kiwiSdrWaterfallActive && m_kiwiSdrAutoRangeValid) {
-        floor = m_kiwiSdrAutoFloorDbm;
+    if (m_kiwiSdrWaterfallActive && m_kiwiSdrDisplayRangeValid) {
+        floor = m_kiwiSdrDisplayFloorDbm;
     } else if (m_measuredNoiseFloorDbm > -500.0f) {
         floor = m_measuredNoiseFloorDbm;
     } else {
@@ -7914,19 +7901,20 @@ QRgb SpectrumWidget::kiwiSdrLevelToRgb(float level) const
 {
     // Kiwi direct W/F bytes are decoded to the server's wrapped negative dB
     // scale; color aperture is still Kiwi-only and independent of Flex.
-    const float floorDbm = m_kiwiSdrAutoRangeValid
-        ? m_kiwiSdrAutoFloorDbm
-        : kKiwiSdrWaterfallMinDbm;
-    const float ceilDbm = m_kiwiSdrAutoRangeValid
-        ? m_kiwiSdrAutoCeilDbm
-        : kKiwiSdrWaterfallMaxDbm;
-    const float adjustedFloorDbm = floorDbm
-        + static_cast<float>(m_kiwiSdrWaterfallFloorDb);
-    const float adjustedCeilDbm = qMax(
-        adjustedFloorDbm + 1.0f,
-        ceilDbm + static_cast<float>(m_kiwiSdrWaterfallCellDb));
+    const KiwiSdrProtocol::WaterfallDisplayRange defaultRange =
+        KiwiSdrProtocol::defaultWaterfallDisplayRange(
+            0,
+            0,
+            0);
+    const float floorDbm = m_kiwiSdrDisplayRangeValid
+        ? m_kiwiSdrDisplayFloorDbm
+        : defaultRange.minDbm;
+    const float ceilDbm = m_kiwiSdrDisplayRangeValid
+        ? m_kiwiSdrDisplayCeilDbm
+        : defaultRange.maxDbm;
+    const float adjustedCeilDbm = qMax(floorDbm + 1.0f, ceilDbm);
     const float t = KiwiSdrProtocol::waterfallColorIndex(
-        level, adjustedFloorDbm, adjustedCeilDbm);
+        level, floorDbm, adjustedCeilDbm);
 
     int n = 0;
     const auto* stops = wfSchemeStops(m_wfColorScheme, n);
@@ -8076,7 +8064,6 @@ void SpectrumWidget::pushKiwiSdrWaterfallRow(const QVector<float>& bins,
     }
 
     const int srcSize = bins.size();
-    updateKiwiSdrAutoColorRange(bins);
     if (rowCenterMhz <= 0.0 || rowBandwidthMhz <= 0.0) {
         rowCenterMhz = m_centerMhz;
         rowBandwidthMhz = m_bandwidthMhz;

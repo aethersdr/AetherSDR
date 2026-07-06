@@ -25,15 +25,21 @@ original AetherSDR code. The consulted facts are:
   - server MSG keys and numeric badp denial codes (error handling); and
   - the accepted `SET squelch=<offset> param=<float>` and
     `SET agc=… thresh=… decay=… manGain=…` command shapes, plus their numeric
-    ranges, for KiwiSDR replacement-receiver squelch/AGC control.
+    ranges, for KiwiSDR replacement-receiver squelch/AGC control; and
+  - waterfall wire/display facts including W/F row framing, `wf_cal`,
+    `maxdb`/`mindb` messages, `SET maxdb=... mindb=...`, default waterfall
+    min/max dB values, zoom-related floor correction, and the supported
+    square-root weak-signal color-index option.
 See docs/kiwisdr-cleanroom-design.md for the per-file, per-fact provenance.
 
-  KiwiSDR server source: Copyright (c) 2014-2024 John Seamons and contributors
-  License:               LGPL-2.0-or-later, per consulted file headers
-                         (rx/rx_cmd.{h,cpp}, rx/rx_sound.cpp, rx/rx_sound_cmd.cpp,
-                         rx/rx_server.cpp, rx/rx_util.cpp, support/stats.cpp)
-  Source:                https://github.com/jks-prv/Beagle_SDR_GPS
-  Reference:             commit efb38e2b25137029cb37a96a94e03366f8d2871e
+  KiwiSDR source: Copyright (c) 2014-2026 John Seamons and contributors
+  License:        LGPL-2.0-or-later for the consulted rx/* server files;
+                  GPL-3.0-or-later for the consulted OpenWebRX browser file
+                  used only as a behavioral reference
+  Source:         https://github.com/jks-prv/Beagle_SDR_GPS
+                  https://github.com/jks-prv/KiwiSDR
+  References:     commits efb38e2b25137029cb37a96a94e03366f8d2871e
+                  and e48e74bce3e323e47fe2de3228ae7d43604238b0
 
 The AGC/squelch numeric ranges (threshold -160..0 dB, manual gain 0..100 dB,
 decay 20..5000 ms, and NBFM squelch behavior) were verified against the CuteSDR

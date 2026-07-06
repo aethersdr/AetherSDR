@@ -1377,28 +1377,38 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 ## Targeting a widget
 
-`grab` and `invoke` resolve a `target` string in this order — first match wins:
+`grab` and `invoke` resolve a `target` string in this order. Within each match
+class, visible/enabled widgets win over hidden duplicate controls; hidden
+widgets are only a fallback when there is no visible candidate, and `invoke`
+will refuse to drive a hidden widget.
 
 0. **VFO shortcuts** — `"vfo slice 1"` or `"vfo:slice:1"` targets the VFO
    flag for slice 1. `"vfo 1"` or `"vfo:1"` targets the first VFO flag inside
    the `SpectrumWidget` whose `panIndex` is 1, mirroring `grab pan 1`.
    Prefer the slice form when a pan contains multiple VFOs.
-1. **Scoped `"<scope>/<name>"`** — disambiguates a control whose
+1. **Pan-scoped `"pan <index>/<name>"`** — targets a control inside the
+   `PanadapterApplet` whose `SpectrumWidget` has that `panIndex`, e.g.
+   `"pan 0/Display"` or `"pan 0/displayAutoBlackBtn"`. This is the preferred
+   form when multiple panadapters have the same side buttons or Display panel
+   object names.
+2. **Scoped `"<scope>/<name>"`** — disambiguates a control whose
    `accessibleName` appears in more than one applet (e.g. `"AF gain"` and
    `"Squelch threshold"` exist in **both** `RxApplet` and `PanadapterApplet`).
    `<scope>` matches an ancestor by objectName, class, or accessibleName;
-   `<name>` is resolved within that subtree. Use `"RxApplet/AF gain"` vs
-   `"PanadapterApplet/AF gain"`. Falls through to flat matching if it doesn't
-   resolve, so a literal `/` in a name still works.
-2. **Exact `objectName`** — the most stable handle. Prefer this.
-3. **Class name** — full (`AetherSDR::SpectrumWidget`) or short
+   `<name>` is resolved within that subtree by objectName, class,
+   accessibleName, then button text. Use `"RxApplet/AF gain"` vs
+   `"PanadapterApplet/AF gain"`, or target an objectName such as
+   `"PanadapterApplet/displayAutoBlackBtn"`. Falls through to flat matching if
+   it doesn't resolve, so a literal `/` in a name still works.
+3. **Exact `objectName`** — the most stable handle. Prefer this.
+4. **Class name** — full (`AetherSDR::SpectrumWidget`) or short
    (`SpectrumWidget`). Handy when a widget has no objectName (the panadapter is
    targeted as `SpectrumWidget`).
-4. **`accessibleName`** — e.g. `"Panadapter spectrum display"`,
+5. **`accessibleName`** — e.g. `"Panadapter spectrum display"`,
    `"Master volume"`.
-5. **Button text** — last resort, e.g. `"Send"`, `"Transmit"`. Lowest priority,
+6. **Button text** — last resort, e.g. `"Send"`, `"Transmit"`. Lowest priority,
    so a real objectName/accessibleName always wins; first match in tree order.
-6. **Visible popup-menu action** — exact `QAction` objectName, visible text,
+7. **Visible popup-menu action** — exact `QAction` objectName, visible text,
    tooltip, status tip, or data value. Use `invoke <label-or-data> trigger` to
    choose a menu item.
 
