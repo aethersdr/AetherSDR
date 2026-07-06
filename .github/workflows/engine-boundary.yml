@@ -1,15 +1,20 @@
 name: Engine Boundary Check
 
 # aetherd-migration ratchet (docs/aetherd-headless-engine-design.md §10):
-# the engine (src/core/ + src/models/) must never depend on the UI —
-# no gui/ header includes, no QtWidgets. Known legacy offenders are
-# tracked in tools/check_engine_boundary.py and warn without blocking;
-# NEW violations fail the job (--strict). The legacy lists only shrink.
+#   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on the
+#             UI: no gui/ header includes, no QtWidgets.
+#   EB3     — no file ABOVE the radio seam (src/gui/ + src/core/ + src/models/,
+#             excluding the backend tree) may include a VENDOR header; the
+#             wire is reached only through IRadioBackend (RFC step 2.4).
+# Known legacy offenders are tracked in tools/check_engine_boundary.py and warn
+# without blocking; NEW violations fail the job (--strict). The baselines only
+# shrink. src/gui/** is in the trigger set because EB3 guards it too.
 
 on:
   pull_request:
     branches: ["**"]
     paths:
+      - "src/gui/**"
       - "src/core/**"
       - "src/models/**"
       - "tools/check_engine_boundary.py"

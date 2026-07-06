@@ -183,4 +183,16 @@ the interface has no implementor.
 - **2.3 — split the five `mixed` models** (5 PRs); AGENTS.md gains the
   touchpoint-claim protocol + verification recipe + the autonomous-conversion
   carve-out.
-- **2.4 — move the remaining vendor headers behind the seam.**
+- **2.4 — vendor-header boundary (ratchet-first).** The literal end state
+  ("nothing above the seam includes a vendor header") cannot land in one move:
+  the GUI still drives Flex/Kiwi features directly because the verb/protocol
+  layer (step 3) doesn't exist yet, so the ~78 above-seam vendor includes can't
+  drop to zero without step-3 work. Decision (2026-07-06, KK7GWY): land the
+  **ratchet only** first — `check_engine_boundary.py` gains **EB3**, freezing
+  today's above-seam vendor coupling as a per-file, shrink-only baseline (no new
+  coupling; existing includers decoupled subsystem-by-subsystem, each routed
+  through `IRadioBackend`, driving its baseline to zero). The 26 vendor files
+  are **not** relocated in this step — EB3 enforces the boundary in place.
+  Physical relocation of a header into `src/core/backends/<family>/` happens
+  when its last above-seam includer is converted. Adoption guidance lives in
+  `AGENTS.md` ("Engine boundary ratchet — EB3").
