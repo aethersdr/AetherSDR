@@ -667,36 +667,154 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     // TNF/DAX-IQ sub-models, the change-gated emits) stays in applyRadioChanges.
     RadioDelta d;
     // Identity / capability
-    carryStr(kvs, "model", d.model);
-    carryInt(kvs, "slices", d.slicesAvailable);
-    carryStr(kvs, "callsign", d.callsign);
-    carryStr(kvs, "nickname", d.nickname);
-    carryStr(kvs, "region", d.region);
-    carryStr(kvs, "radio_options", d.radioOptions);
+    carry(kvs, "model", d.model);
+    carry(kvs, "slices", d.slicesAvailable);
+    carry(kvs, "callsign", d.callsign);
+    carry(kvs, "nickname", d.nickname);
+    carry(kvs, "region", d.region);
+    carry(kvs, "radio_options", d.radioOptions);
     // Global flags
-    carryBool(kvs, "remote_on_enabled", d.remoteOnEnabled);
-    carryBool(kvs, "mf_enable", d.multiFlexEnabled);
-    carryBool(kvs, "enforce_private_ip_connections", d.enforcePrivateIp);
-    carryBool(kvs, "binaural_rx", d.binauralRx);
-    carryBool(kvs, "full_duplex_enabled", d.fullDuplex);
-    carryBool(kvs, "mute_local_audio_when_remote", d.muteLocalWhenRemote);
-    carryBool(kvs, "auto_save", d.autoSave);
-    carryBool(kvs, "low_latency_digital_modes", d.lowLatencyDigital);
-    carryBool(kvs, "tnf_enabled", d.tnfEnabled);
+    carry(kvs, "remote_on_enabled", d.remoteOnEnabled);
+    carry(kvs, "mf_enable", d.multiFlexEnabled);
+    carry(kvs, "enforce_private_ip_connections", d.enforcePrivateIp);
+    carry(kvs, "binaural_rx", d.binauralRx);
+    carry(kvs, "full_duplex_enabled", d.fullDuplex);
+    carry(kvs, "mute_local_audio_when_remote", d.muteLocalWhenRemote);
+    carry(kvs, "auto_save", d.autoSave);
+    carry(kvs, "low_latency_digital_modes", d.lowLatencyDigital);
+    carry(kvs, "tnf_enabled", d.tnfEnabled);
     // Calibration / defaults
-    carryInt(kvs, "freq_error_ppb", d.freqErrorPpb);
-    carryReal(kvs, "cal_freq", d.calFreqMhz);
-    carryInt(kvs, "rtty_mark_default", d.rttyMarkDefault);
+    carry(kvs, "freq_error_ppb", d.freqErrorPpb);
+    carry(kvs, "cal_freq", d.calFreqMhz);
+    carry(kvs, "rtty_mark_default", d.rttyMarkDefault);
     // Audio outputs
-    carryInt(kvs, "lineout_gain", d.lineoutGain);
-    carryBool(kvs, "lineout_mute", d.lineoutMute);
-    carryInt(kvs, "headphone_gain", d.headphoneGain);
-    carryBool(kvs, "headphone_mute", d.headphoneMute);
-    carryBool(kvs, "front_speaker_mute", d.frontSpeakerMute);
+    carry(kvs, "lineout_gain", d.lineoutGain);
+    carry(kvs, "lineout_mute", d.lineoutMute);
+    carry(kvs, "headphone_gain", d.headphoneGain);
+    carry(kvs, "headphone_mute", d.headphoneMute);
+    carry(kvs, "front_speaker_mute", d.frontSpeakerMute);
     // DAX-IQ capacity
-    carryInt(kvs, "daxiq_capacity", d.daxiqCapacity);
-    carryInt(kvs, "daxiq_available", d.daxiqAvailable);
+    carry(kvs, "daxiq_capacity", d.daxiqCapacity);
+    carry(kvs, "daxiq_available", d.daxiqAvailable);
     emit radioChanged(d);
+}
+
+void FlexBackend::decodeGpsStatus(const QString& rawBody)
+{
+    // Flex GPS status: '#'-separated key=value tokens, keys case-insensitive.
+    //   "status=..#tracked=8#visible=11#grid=..#altitude=644 m#lat=..#lon=..
+    //    #time=..#speed=0 kts#freq_error=0 ppb"
+    // A token with no '=' (or an empty key, eq<1) is skipped, verbatim from the
+    // old RadioModel::handleGpsStatus. We map into a QMap and lean on the shared
+    // carriers so the numeric counts are ok-guarded present-only.
+    QMap<QString, QString> kvs;
+    const QStringList tokens = rawBody.split('#', Qt::SkipEmptyParts);
+    for (const QString& token : tokens) {
+        const int eq = token.indexOf('=');
+        if (eq < 1) continue;
+        kvs[token.left(eq).toLower()] = token.mid(eq + 1);
+    }
+
+    GpsDelta d;
+    carry(kvs, "status", d.status);
+    carry(kvs, "tracked", d.tracked);
+    carry(kvs, "visible", d.visible);
+    carry(kvs, "grid", d.grid);
+    carry(kvs, "altitude", d.altitude);
+    carry(kvs, "lat", d.lat);
+    carry(kvs, "lon", d.lon);
+    carry(kvs, "time", d.time);
+    carry(kvs, "speed", d.speed);
+    carry(kvs, "freq_error", d.freqError);
+    emit gpsChanged(d);
+}
+
+void FlexBackend::decodeMemoryStatus(int index, const QMap<QString, QString>& kvs)
+{
+    // Memory-slot status → typed MemoryDelta (aetherd RFC 2.3 — RadioModel
+    // residual). Removal: the radio sends "in_use=0" or a bare "removed".
+    MemoryDelta d;
+    d.index = index;
+    if (kvs.value(QStringLiteral("in_use")) == QLatin1String("0")
+        || kvs.contains(QStringLiteral("removed"))) {
+        d.removed = true;
+        emit memoryChanged(d);
+        return;
+    }
+
+    // Text fields ride raw — the protocol space-encoding (0x7f→' ') and the
+    // NUL/control-byte sanitisation (MemoryFields) are a model concern applied in
+    // RadioModel::applyMemoryChanges, so the backend keeps no models/ dependency.
+    carry(kvs, "group", d.group);
+    carry(kvs, "owner", d.owner);
+    carry(kvs, "name", d.name);
+    carry(kvs, "mode", d.mode);
+    carry(kvs, "repeater", d.offsetDir);
+    carry(kvs, "tone_mode", d.toneMode);
+    // Numeric fields — ok-guarded (a malformed *present* value is dropped, so the
+    // model keeps the slot's prior value rather than clobbering it with 0). The
+    // old handler applied an unguarded toInt/toDouble (→0); the carry() guard is
+    // the same fail-closed improvement made at the slice/transmit sites.
+    carry(kvs, "freq", d.freq);
+    carry(kvs, "repeater_offset", d.repeaterOffset);
+    carry(kvs, "tone_value", d.toneValue);
+    carry(kvs, "step", d.step);
+    carry(kvs, "squelch", d.squelch);
+    carry(kvs, "squelch_level", d.squelchLevel);
+    carry(kvs, "rx_filter_low", d.rxFilterLow);
+    carry(kvs, "rx_filter_high", d.rxFilterHigh);
+    carry(kvs, "rtty_mark", d.rttyMark);
+    carry(kvs, "rtty_shift", d.rttyShift);
+    carry(kvs, "digl_offset", d.diglOffset);
+    carry(kvs, "digu_offset", d.diguOffset);
+    emit memoryChanged(d);
+}
+
+void FlexBackend::decodeProfileStatus(const QString& profileType, const QString& rawBody)
+{
+    // rawBody is everything after "profile <type> ", e.g.
+    //   "list=Default^Default FHM-1^…"  |  "current=Default FHM-1"
+    // Values may contain spaces, so parse key=value by hand (verbatim from the
+    // old RadioModel::handleProfileStatusRaw). The database importing/exporting
+    // flags arrive on this same line regardless of type.
+    const int eq = rawBody.indexOf('=');
+    if (eq < 0) return;
+    const QString key = rawBody.left(eq).trimmed();
+    const QString val = rawBody.mid(eq + 1).trimmed();
+
+    ProfileDelta d;
+    if (key == QLatin1String("importing")) {
+        d.importing = val == QLatin1String("1");
+        emit profileChanged(d);
+        return;
+    }
+    if (key == QLatin1String("exporting")) {
+        d.exporting = val == QLatin1String("1");
+        emit profileChanged(d);
+        return;
+    }
+
+    d.type = profileType;
+    if (key == QLatin1String("list"))
+        d.list = val.split('^', Qt::SkipEmptyParts);
+    else if (key == QLatin1String("current"))
+        d.current = val;
+    else
+        return;   // unknown key for this type → nothing to apply
+    emit profileChanged(d);
+}
+
+void FlexBackend::decodeProfileFlags(const QMap<QString, QString>& kvs)
+{
+    // Fallback for profile status keys that arrive space-free through the normal
+    // kv-parser (e.g. "profile importing=1"). Only the database flags land here;
+    // list/current always route through decodeProfileStatus. Emit nothing when
+    // neither flag is present (matches the old handler's no-op path).
+    ProfileDelta d;
+    carry(kvs, "importing", d.importing);
+    carry(kvs, "exporting", d.exporting);
+    if (d.importing || d.exporting)
+        emit profileChanged(d);
 }
 
 void FlexBackend::send(const QString& cmd)

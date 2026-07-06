@@ -2581,6 +2581,12 @@ target_link_libraries(aetherd_radio_decode_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(aetherd_radio_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_radio_decode_test COMMAND aetherd_radio_decode_test)
 
+add_executable(aetherd_residual_decode_test tests/aetherd_residual_decode_test.cpp)
+target_include_directories(aetherd_residual_decode_test PRIVATE src)
+target_link_libraries(aetherd_residual_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(aetherd_residual_decode_test PROPERTIES AUTOMOC ON)
+add_test(NAME aetherd_residual_decode_test COMMAND aetherd_residual_decode_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
     src/models/UsbCableModel.cpp

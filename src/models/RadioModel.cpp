@@ -403,6 +403,9 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
     qRegisterMetaType<RadioDelta>();
+    qRegisterMetaType<GpsDelta>();
+    qRegisterMetaType<MemoryDelta>();
+    qRegisterMetaType<ProfileDelta>();
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
@@ -550,6 +553,15 @@ RadioModel::RadioModel(QObject* parent)
     // backend drives RadioModel's own state via applyRadioChanges.
     connect(m_backend.get(), &IRadioBackend::radioChanged, this,
             [this](const RadioDelta& delta) { applyRadioChanges(delta); });
+
+    // aetherd RFC 2.3 (RadioModel residual): GPS / memory-slot / profile status
+    // decoded in the backend drive RadioModel's own state via the apply* methods.
+    connect(m_backend.get(), &IRadioBackend::gpsChanged, this,
+            [this](const GpsDelta& delta) { applyGpsChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::memoryChanged, this,
+            [this](const MemoryDelta& delta) { applyMemoryChanges(delta); });
+    connect(m_backend.get(), &IRadioBackend::profileChanged, this,
+            [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
 
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
     // WHEN a dax_rx stream must exist (refcounted acquire/release from the
@@ -3614,47 +3626,56 @@ void RadioModel::resetAudioStreamDiagnostics()
 
 void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs)
 {
-    // Check for removal — radio sends either "in_use=0" or "removed" (no value)
-    if (kvs.value("in_use") == "0" || kvs.contains("removed")) {
-        m_memories.remove(index);
-        emit memoryRemoved(index);
+    // aetherd RFC 2.3 (RadioModel residual): the Flex memory-slot wire decode
+    // moved to FlexBackend::decodeMemoryStatus → memoryChanged → applyMemoryChanges
+    // (the model-side MemoryEntry update, text sanitisation, and emits). Thin
+    // forwarder behind the seam.
+    if (m_flexBackend) m_flexBackend->decodeMemoryStatus(index, kvs);
+}
+
+void RadioModel::applyMemoryChanges(const MemoryDelta& d)
+{
+    if (d.removed) {
+        m_memories.remove(d.index);
+        emit memoryRemoved(d.index);
         return;
     }
 
-    auto& m = m_memories[index];
-    m.index = index;
+    auto& m = m_memories[d.index];
+    m.index = d.index;
 
     // Decode the protocol space-encoding (0x7f -> ' ') for free-text fields,
     // then strip any NUL/control bytes so corrupt values from the radio (or a
     // previously corrupted memory) never reach the UI, CSV export, or a re-send.
+    // This sanitisation stays model-side (MemoryFields is a models/ concern); the
+    // backend carries the text raw. Present-only: absent keys keep the prior value.
     auto decodeText = [](const QString& v) {
         return AetherSDR::MemoryFields::sanitizeText(QString(v).replace('\x7f', ' '));
     };
+    auto sanitize = [](const QString& v) {
+        return AetherSDR::MemoryFields::sanitizeText(v);
+    };
 
-    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
-        const QString& k = it.key();
-        const QString& v = it.value();
-        if      (k == "group")           m.group = decodeText(v);
-        else if (k == "owner")           m.owner = decodeText(v);
-        else if (k == "freq")            m.freq = v.toDouble();
-        else if (k == "name")            m.name = decodeText(v);
-        else if (k == "mode")            m.mode = AetherSDR::MemoryFields::sanitizeText(v);
-        else if (k == "step")            m.step = v.toInt();
-        else if (k == "repeater")        m.offsetDir = AetherSDR::MemoryFields::sanitizeText(v);
-        else if (k == "repeater_offset") m.repeaterOffset = v.toDouble();
-        else if (k == "tone_mode")       m.toneMode = AetherSDR::MemoryFields::sanitizeText(v);
-        else if (k == "tone_value")      m.toneValue = v.toDouble();
-        else if (k == "squelch")         m.squelch = (v == "1");
-        else if (k == "squelch_level")   m.squelchLevel = v.toInt();
-        else if (k == "rx_filter_low")   m.rxFilterLow = v.toInt();
-        else if (k == "rx_filter_high")  m.rxFilterHigh = v.toInt();
-        else if (k == "rtty_mark")       m.rttyMark = v.toInt();
-        else if (k == "rtty_shift")      m.rttyShift = v.toInt();
-        else if (k == "digl_offset")     m.diglOffset = v.toInt();
-        else if (k == "digu_offset")     m.diguOffset = v.toInt();
-    }
+    if (d.group)          m.group          = decodeText(*d.group);
+    if (d.owner)          m.owner          = decodeText(*d.owner);
+    if (d.name)           m.name           = decodeText(*d.name);
+    if (d.mode)           m.mode           = sanitize(*d.mode);
+    if (d.offsetDir)      m.offsetDir      = sanitize(*d.offsetDir);
+    if (d.toneMode)       m.toneMode       = sanitize(*d.toneMode);
+    if (d.freq)           m.freq           = *d.freq;
+    if (d.repeaterOffset) m.repeaterOffset = *d.repeaterOffset;
+    if (d.toneValue)      m.toneValue      = *d.toneValue;
+    if (d.step)           m.step           = *d.step;
+    if (d.squelch)        m.squelch        = *d.squelch;
+    if (d.squelchLevel)   m.squelchLevel   = *d.squelchLevel;
+    if (d.rxFilterLow)    m.rxFilterLow    = *d.rxFilterLow;
+    if (d.rxFilterHigh)   m.rxFilterHigh   = *d.rxFilterHigh;
+    if (d.rttyMark)       m.rttyMark       = *d.rttyMark;
+    if (d.rttyShift)      m.rttyShift      = *d.rttyShift;
+    if (d.diglOffset)     m.diglOffset     = *d.diglOffset;
+    if (d.diguOffset)     m.diguOffset     = *d.diguOffset;
 
-    emit memoryChanged(index);
+    emit memoryChanged(d.index);
 }
 
 // ─── Raw message handler (for meter status with '#' separators) ──────────────
@@ -5882,27 +5903,26 @@ void RadioModel::handleMeterStatus(const QString& rawBody)
 
 void RadioModel::handleGpsStatus(const QString& rawBody)
 {
-    // GPS status uses '#' as separator, same as meter status.
-    // Example: "lat=48.27#lon=-116.56#grid=DN18rg#altitude=644 m#tracked=16#
-    //           visible=31#speed=0 kts#freq_error=0 ppb#status=Fine Lock#time=05:25:20Z"
-    const QStringList tokens = rawBody.split('#', Qt::SkipEmptyParts);
-    for (const QString& token : tokens) {
-        const int eq = token.indexOf('=');
-        if (eq < 1) continue;
-        const QString key   = token.left(eq).toLower();
-        const QString value = token.mid(eq + 1);
+    // aetherd RFC 2.3 (RadioModel residual): the Flex GPS wire decode moved to
+    // FlexBackend::decodeGpsStatus → gpsChanged → applyGpsChanges (the model-side
+    // member update + gpsStatusChanged emit). Thin forwarder behind the seam.
+    if (m_flexBackend) m_flexBackend->decodeGpsStatus(rawBody);
+}
 
-        if      (key == "status")   m_gpsStatus   = value;
-        else if (key == "tracked")  m_gpsTracked  = value.toInt();
-        else if (key == "visible")  m_gpsVisible  = value.toInt();
-        else if (key == "grid")     m_gpsGrid     = value;
-        else if (key == "altitude") m_gpsAltitude = value;
-        else if (key == "lat")      m_gpsLat      = value;
-        else if (key == "lon")      m_gpsLon      = value;
-        else if (key == "time")       m_gpsTime     = value;
-        else if (key == "speed")      m_gpsSpeed    = value;
-        else if (key == "freq_error") m_gpsFreqError = value;
-    }
+void RadioModel::applyGpsChanges(const GpsDelta& d)
+{
+    // Apply the present fields (absent keys keep their prior value) and always
+    // re-emit — the old handler emitted unconditionally on every GPS status.
+    if (d.status)    m_gpsStatus    = *d.status;
+    if (d.tracked)   m_gpsTracked   = *d.tracked;
+    if (d.visible)   m_gpsVisible   = *d.visible;
+    if (d.grid)      m_gpsGrid      = *d.grid;
+    if (d.altitude)  m_gpsAltitude  = *d.altitude;
+    if (d.lat)       m_gpsLat       = *d.lat;
+    if (d.lon)       m_gpsLon       = *d.lon;
+    if (d.time)      m_gpsTime      = *d.time;
+    if (d.speed)     m_gpsSpeed     = *d.speed;
+    if (d.freqError) m_gpsFreqError = *d.freqError;
 
     emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
                            m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
@@ -6162,79 +6182,70 @@ void RadioModel::handleProfileStatus(const QString& object,
     // handleProfileStatusRaw() via onMessageReceived().  This fallback
     // handles any remaining profile status keys that don't have spaces
     // (e.g. "profile importing=1", "profile exporting=0").
+    // aetherd RFC 2.3 (RadioModel residual): the space-free profile-flag decode
+    // moved to FlexBackend::decodeProfileFlags → profileChanged → applyProfileChanges.
     Q_UNUSED(object);
-    if (kvs.contains(QStringLiteral("importing"))) {
-        const bool importing = kvs.value(QStringLiteral("importing")) == QLatin1String("1");
-        if (m_profileDatabaseImporting != importing) {
-            m_profileDatabaseImporting = importing;
-            emit profileDatabaseImportingChanged(importing);
-        }
-    }
-    if (kvs.contains(QStringLiteral("exporting"))) {
-        const bool exporting = kvs.value(QStringLiteral("exporting")) == QLatin1String("1");
-        if (m_profileDatabaseExporting != exporting) {
-            m_profileDatabaseExporting = exporting;
-            emit profileDatabaseExportingChanged(exporting);
-        }
-    }
+    if (m_flexBackend) m_flexBackend->decodeProfileFlags(kvs);
 }
 
 void RadioModel::handleProfileStatusRaw(const QString& profileType,
                                          const QString& rawBody)
 {
-    // rawBody is everything after "profile tx " or "profile mic ", e.g.:
-    //   "list=Default^Default FHM-1^Default FHM-1 DX^..."
-    //   "current=Default FHM-1"
-    // We parse key=value ourselves to avoid splitting on spaces in values.
-    const int eq = rawBody.indexOf('=');
-    if (eq < 0) return;
+    // aetherd RFC 2.3 (RadioModel residual): the Flex "profile <type> …" wire
+    // decode (space-containing list/current values, importing/exporting flags)
+    // moved to FlexBackend::decodeProfileStatus → profileChanged →
+    // applyProfileChanges. Thin forwarder behind the seam.
+    if (m_flexBackend) m_flexBackend->decodeProfileStatus(profileType, rawBody);
+}
 
-    const QString key = rawBody.left(eq).trimmed();
-    const QString val = rawBody.mid(eq + 1).trimmed();
-
-    if (key == QLatin1String("importing")) {
-        const bool importing = val == QLatin1String("1");
-        if (m_profileDatabaseImporting != importing) {
-            m_profileDatabaseImporting = importing;
-            emit profileDatabaseImportingChanged(importing);
+void RadioModel::applyProfileChanges(const ProfileDelta& d)
+{
+    // Database import/export flags arrive without a profile type. They never
+    // co-occur with a list/current in one delta (the backend emits either a
+    // flags delta or a type/list-current delta), but a single flags kv-set may
+    // carry both — apply each independently (change-gated), matching the old
+    // handleProfileStatus's two separate ifs, then fall through to type routing.
+    bool flagHandled = false;
+    if (d.importing) {
+        if (m_profileDatabaseImporting != *d.importing) {
+            m_profileDatabaseImporting = *d.importing;
+            emit profileDatabaseImportingChanged(*d.importing);
         }
-        return;
+        flagHandled = true;
     }
-    if (key == QLatin1String("exporting")) {
-        const bool exporting = val == QLatin1String("1");
-        if (m_profileDatabaseExporting != exporting) {
-            m_profileDatabaseExporting = exporting;
-            emit profileDatabaseExportingChanged(exporting);
+    if (d.exporting) {
+        if (m_profileDatabaseExporting != *d.exporting) {
+            m_profileDatabaseExporting = *d.exporting;
+            emit profileDatabaseExportingChanged(*d.exporting);
         }
-        return;
+        flagHandled = true;
     }
+    if (flagHandled) return;
 
-    if (profileType == "tx") {
-        if (key == "list") {
-            QStringList profiles = val.split('^', Qt::SkipEmptyParts);
-            m_transmitModel.setProfileList(profiles);
-            qCDebug(lcProtocol) << "RadioModel: TX profiles:" << profiles;
-        } else if (key == "current") {
-            m_transmitModel.setActiveProfile(val);
-            qCDebug(lcProtocol) << "RadioModel: active TX profile:" << val;
+    if (d.type == QLatin1String("tx")) {
+        if (d.list) {
+            m_transmitModel.setProfileList(*d.list);
+            qCDebug(lcProtocol) << "RadioModel: TX profiles:" << *d.list;
+        } else if (d.current) {
+            m_transmitModel.setActiveProfile(*d.current);
+            qCDebug(lcProtocol) << "RadioModel: active TX profile:" << *d.current;
         }
-    } else if (profileType == "mic") {
-        if (key == "list") {
-            QStringList profiles = val.split('^', Qt::SkipEmptyParts);
-            m_transmitModel.setMicProfileList(profiles);
-            qCDebug(lcProtocol) << "RadioModel: mic profiles:" << profiles;
-        } else if (key == "current") {
-            m_transmitModel.setActiveMicProfile(val);
-            qCDebug(lcProtocol) << "RadioModel: active mic profile:" << val;
+    } else if (d.type == QLatin1String("mic")) {
+        if (d.list) {
+            m_transmitModel.setMicProfileList(*d.list);
+            qCDebug(lcProtocol) << "RadioModel: mic profiles:" << *d.list;
+        } else if (d.current) {
+            m_transmitModel.setActiveMicProfile(*d.current);
+            qCDebug(lcProtocol) << "RadioModel: active mic profile:" << *d.current;
         }
-    } else if (profileType == "global") {
-        if (key == "list") {
-            m_globalProfiles = val.split('^', Qt::SkipEmptyParts);
+    } else if (d.type == QLatin1String("global")) {
+        if (d.list) {
+            m_globalProfiles = *d.list;
             qCDebug(lcProtocol) << "RadioModel: global profiles:" << m_globalProfiles;
             emit globalProfilesChanged();
-        } else if (key == "current") {
-            m_activeGlobalProfile = val;
-            qCDebug(lcProtocol) << "RadioModel: active global profile:" << val;
+        } else if (d.current) {
+            m_activeGlobalProfile = *d.current;
+            qCDebug(lcProtocol) << "RadioModel: active global profile:" << *d.current;
             emit globalProfilesChanged();
         }
     }

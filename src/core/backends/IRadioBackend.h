@@ -7,7 +7,10 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include "core/backends/GpsDelta.h"
+#include "core/backends/MemoryDelta.h"
 #include "core/backends/MeterDef.h"
+#include "core/backends/ProfileDelta.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
@@ -126,6 +129,23 @@ signals:
     // residual). Typed + compiler-checked; the backend populates only the fields
     // the wire reported and RadioModel applies them + its own orchestration.
     void radioChanged(const RadioDelta& delta);
+
+    // Normalized GPS status delta (aetherd RFC 2.3 — RadioModel residual). The
+    // backend tokenizes the vendor GPS status line into a present-only GpsDelta;
+    // RadioModel applies it and emits gpsStatusChanged.
+    void gpsChanged(const GpsDelta& delta);
+
+    // Normalized memory-slot status (aetherd RFC 2.3 — RadioModel residual),
+    // keyed by slot index. The backend decodes the vendor memory-status kv-set;
+    // RadioModel applies it to MemoryEntry (text sanitisation is a model
+    // concern) or drops the slot when delta.removed is set.
+    void memoryChanged(const MemoryDelta& delta);
+
+    // Normalized profile status (aetherd RFC 2.3 — RadioModel residual). The
+    // backend parses the vendor "profile <type> …" status (list/current + the
+    // database importing/exporting flags); RadioModel routes it to TransmitModel
+    // tx/mic profiles, the global-profile list, or the import/export flags.
+    void profileChanged(const ProfileDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a typed MeterDef;

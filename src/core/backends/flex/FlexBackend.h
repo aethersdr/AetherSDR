@@ -124,6 +124,23 @@ public:
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
     void decodeApdSamplerStatus(const QMap<QString, QString>& kvs);
+    // Decode the Flex GPS-status line ("gps …", '#'-separated key=value tokens)
+    // into a present-only GpsDelta and emit gpsChanged (aetherd RFC 2.3 —
+    // RadioModel residual). Satellite counts are numeric; the rest keep the
+    // radio's string form (units included).
+    void decodeGpsStatus(const QString& rawBody);
+    // Decode a Flex memory-slot status kv-set (keyed by slot index) into a
+    // normalized MemoryDelta and emit memoryChanged (aetherd RFC 2.3 — RadioModel
+    // residual). Sets delta.removed for "in_use=0" / a bare "removed"; carries
+    // text fields raw (the model sanitises). Present-only, ok-guarded numerics.
+    void decodeMemoryStatus(int index, const QMap<QString, QString>& kvs);
+    // Parse a Flex "profile <type> …" status body into a ProfileDelta and emit
+    // profileChanged (aetherd RFC 2.3 — RadioModel residual). Handles the raw
+    // ('^'-list, space-containing values) list/current form and the plain
+    // importing/exporting flags. profileType is "tx"/"mic"/"global"; empty for a
+    // flags-only kv-set with no profile type.
+    void decodeProfileStatus(const QString& profileType, const QString& rawBody);
+    void decodeProfileFlags(const QMap<QString, QString>& kvs);
 
 private:
     void send(const QString& cmd);

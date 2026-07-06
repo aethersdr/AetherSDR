@@ -1,6 +1,9 @@
 #pragma once
 
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
+#include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
+#include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
+#include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
@@ -605,6 +608,12 @@ private:
     // Apply a normalized radio-global delta from the backend
     // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
     void applyRadioChanges(const RadioDelta& delta);
+    // Apply normalized GPS / memory-slot / profile deltas from the backend
+    // (IRadioBackend::gpsChanged / memoryChanged / profileChanged). aetherd RFC
+    // 2.3 — RadioModel residual.
+    void applyGpsChanges(const GpsDelta& delta);
+    void applyMemoryChanges(const MemoryDelta& delta);
+    void applyProfileChanges(const ProfileDelta& delta);
     void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
     void handleMeterStatus(const QString& rawBody);
     void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
