@@ -20,11 +20,17 @@ void report(const char* name, bool ok)
     if (!ok) ++g_failed;
 }
 
-QMap<QString, QString> kvs(std::initializer_list<std::pair<QString, QString>> pairs)
+// aetherd RFC 2.3: TransmitModel::applyChanges takes a typed TransmitDelta. The
+// Flex wire decode (valid_samplers split + INTERNAL prepend, "1"→bool) lives in
+// FlexBackend::decode*Status, covered by aetherd_transmit_decode_test; these
+// tests exercise the model's apply side (map insert, selected fallback,
+// idempotency, emits) via a pre-built delta.
+template <class F>
+TransmitDelta td(F&& build)
 {
-    QMap<QString, QString> m;
-    for (const auto& p : pairs) m.insert(p.first, p.second);
-    return m;
+    TransmitDelta d;
+    build(d);
+    return d;
 }
 
 void testSamplerStatusPopulatesAvailableAndSelected()
@@ -32,10 +38,10 @@ void testSamplerStatusPopulatesAvailableAndSelected()
     TransmitModel tx;
     QSignalSpy spy(&tx, &TransmitModel::apdSamplerChanged);
 
-    tx.applyApdSamplerStatus(kvs({
-        {"tx_ant", "ANT1"},
-        {"selected_sampler", "RX_A"},
-        {"valid_samplers", "RX_A,XVTA"},
+    tx.applyChanges(td([](TransmitDelta& d){
+        d.apdSamplerTxAnt = QStringLiteral("ANT1");
+        d.apdSamplerAvailable = QStringList{"INTERNAL", "RX_A", "XVTA"};
+        d.apdSamplerSelected = QStringLiteral("RX_A");
     }));
 
     const auto s = tx.apdSampler("ANT1");
@@ -53,10 +59,10 @@ void testSelectedFallbackWhenNotInValidList()
 
     // selected_sampler isn't present in valid_samplers — FlexLib falls back
     // to INTERNAL rather than displaying a value the user can't pick.
-    tx.applyApdSamplerStatus(kvs({
-        {"tx_ant", "ANT2"},
-        {"selected_sampler", "BOGUS"},
-        {"valid_samplers", "RX_B"},
+    tx.applyChanges(td([](TransmitDelta& d){
+        d.apdSamplerTxAnt = QStringLiteral("ANT2");
+        d.apdSamplerAvailable = QStringList{"INTERNAL", "RX_B"};
+        d.apdSamplerSelected = QStringLiteral("BOGUS");
     }));
 
     report("invalid selected_sampler falls back to INTERNAL",
@@ -100,7 +106,7 @@ void testEqualizerResetStatusFlagClearsActive()
 {
     TransmitModel tx;
     // Drive equalizer_active=1 first.
-    tx.applyApdStatus(kvs({{"equalizer_active", "1"}}));
+    tx.applyChanges(td([](TransmitDelta& d){ d.apdEqActive = true; }));
     report("equalizer_active goes true", tx.apdEqualizerActive());
 
     QSignalSpy resetSpy(&tx, &TransmitModel::apdEqualizerResetReceived);
@@ -108,7 +114,7 @@ void testEqualizerResetStatusFlagClearsActive()
 
     // Bare flag form: dispatcher merges "equalizer_reset" into kvs as
     // an empty-valued key.
-    tx.applyApdStatus(kvs({{"equalizer_reset", ""}}));
+    tx.applyChanges(td([](TransmitDelta& d){ d.apdEqualizerReset = true; }));
 
     report("apdEqualizerResetReceived emitted", resetSpy.count() == 1);
     report("equalizer_active clears on reset", !tx.apdEqualizerActive());
@@ -121,11 +127,11 @@ void testConfigurableEnablesUiVisibility()
     QSignalSpy spy(&tx, &TransmitModel::apdStateChanged);
 
     report("apdConfigurable starts false", !tx.apdConfigurable());
-    tx.applyApdStatus(kvs({{"configurable", "1"}}));
+    tx.applyChanges(td([](TransmitDelta& d){ d.apdConfigurable = true; }));
     report("configurable=1 flips apdConfigurable", tx.apdConfigurable());
     report("apdStateChanged emitted", spy.count() >= 1);
 
-    tx.applyApdStatus(kvs({{"configurable", "0"}}));
+    tx.applyChanges(td([](TransmitDelta& d){ d.apdConfigurable = false; }));
     report("configurable=0 turns it back off", !tx.apdConfigurable());
 }
 
@@ -133,18 +139,18 @@ void testSamplerStatusIdempotent()
 {
     TransmitModel tx;
 
-    tx.applyApdSamplerStatus(kvs({
-        {"tx_ant", "ANT1"},
-        {"selected_sampler", "RX_A"},
-        {"valid_samplers", "RX_A,XVTA"},
+    tx.applyChanges(td([](TransmitDelta& d){
+        d.apdSamplerTxAnt = QStringLiteral("ANT1");
+        d.apdSamplerAvailable = QStringList{"INTERNAL", "RX_A", "XVTA"};
+        d.apdSamplerSelected = QStringLiteral("RX_A");
     }));
 
     QSignalSpy spy(&tx, &TransmitModel::apdSamplerChanged);
     // Re-apply identical status — must not re-emit.
-    tx.applyApdSamplerStatus(kvs({
-        {"tx_ant", "ANT1"},
-        {"selected_sampler", "RX_A"},
-        {"valid_samplers", "RX_A,XVTA"},
+    tx.applyChanges(td([](TransmitDelta& d){
+        d.apdSamplerTxAnt = QStringLiteral("ANT1");
+        d.apdSamplerAvailable = QStringList{"INTERNAL", "RX_A", "XVTA"};
+        d.apdSamplerSelected = QStringLiteral("RX_A");
     }));
     report("identical sampler status is idempotent", spy.count() == 0);
 }
@@ -152,10 +158,10 @@ void testSamplerStatusIdempotent()
 void testResetStateClearsSamplers()
 {
     TransmitModel tx;
-    tx.applyApdSamplerStatus(kvs({
-        {"tx_ant", "ANT1"},
-        {"selected_sampler", "RX_A"},
-        {"valid_samplers", "RX_A"},
+    tx.applyChanges(td([](TransmitDelta& d){
+        d.apdSamplerTxAnt = QStringLiteral("ANT1");
+        d.apdSamplerAvailable = QStringList{"INTERNAL", "RX_A"};
+        d.apdSamplerSelected = QStringLiteral("RX_A");
     }));
     report("sampler set before reset", tx.apdSampler("ANT1").selected == "RX_A");
 

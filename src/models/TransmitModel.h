@@ -6,6 +6,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "core/backends/TransmitDelta.h"
+
 #include <functional>
 
 class QTimer;
@@ -130,12 +132,11 @@ public:
     QString     activeMicProfile()  const { return m_activeMicProfile; }
     QStringList micInputList()      const { return m_micInputList; }
 
-    // ── Status parsing (called from RadioModel) ─────────────────────────────
-    void applyTransmitStatus(const QMap<QString, QString>& kvs);
-    void applyInterlockStatus(const QMap<QString, QString>& kvs);
-    void applyAtuStatus(const QMap<QString, QString>& kvs);
-    void applyApdStatus(const QMap<QString, QString>& kvs);
-    void applyApdSamplerStatus(const QMap<QString, QString>& kvs);
+    // Apply a normalized, typed transmit delta from the backend
+    // (IRadioBackend::transmitChanged). Vendor-neutral fields only — the Flex
+    // wire decode for all five transmit-family status planes lives in
+    // FlexBackend::decode*Status. Present-only. (aetherd RFC 2.3.)
+    void applyChanges(const TransmitDelta& delta);
     void setProfileList(const QStringList& profiles);
     void setActiveProfile(const QString& profile);
     void setMicProfileList(const QStringList& profiles);

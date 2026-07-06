@@ -16,6 +16,17 @@ bool expect(bool condition, const char* label)
     return condition;
 }
 
+// aetherd RFC 2.3: TransmitModel::applyChanges takes a typed TransmitDelta (the
+// Flex wire decode + compander/dexp aliasing live in FlexBackend::decode*Status,
+// covered by aetherd_transmit_decode_test). This builds a delta from a setter.
+template <class F>
+TransmitDelta td(F&& build)
+{
+    TransmitDelta d;
+    build(d);
+    return d;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -39,7 +50,7 @@ int main(int argc, char** argv)
                  }),
                  "two-tone tune sets mode before starting tune");
 
-    tx.applyTransmitStatus({{"tune", "1"}});
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = true; }));
     commands.clear();
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
@@ -48,7 +59,7 @@ int main(int argc, char** argv)
                  }),
                  "two-tone tune toggle stops and restores single-tone mode");
 
-    tx.applyTransmitStatus({{"tune", "0"}});
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = false; }));
     commands.clear();
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
@@ -81,21 +92,21 @@ int main(int argc, char** argv)
                  && tx.companderLevel() == 42,
                  "DEXP level sends compander_level command and updates local state");
 
-    tx.applyTransmitStatus({{"compander", "0"}, {"compander_level", "17"}});
+    tx.applyChanges(td([](TransmitDelta& d){ d.compander = false; d.companderLevel = 17; }));
     ok &= expect(!tx.dexpOn()
                  && !tx.companderOn()
                  && tx.dexpLevel() == 17
                  && tx.companderLevel() == 17,
                  "compander status updates DEXP state");
 
-    tx.applyTransmitStatus({{"compander", "1"}, {"dexp", "0"}, {"compander_level", "33"}, {"noise_gate_level", "9"}});
+    tx.applyChanges(td([](TransmitDelta& d){ d.compander = true; d.companderLevel = 33; }));
     ok &= expect(tx.dexpOn()
                  && tx.companderOn()
                  && tx.dexpLevel() == 33
                  && tx.companderLevel() == 33,
                  "canonical compander status wins over legacy DEXP aliases");
 
-    tx.applyTransmitStatus({{"dexp", "0"}, {"noise_gate_level", "8"}});
+    tx.applyChanges(td([](TransmitDelta& d){ d.compander = false; d.companderLevel = 8; }));
     ok &= expect(!tx.dexpOn()
                  && !tx.companderOn()
                  && tx.dexpLevel() == 8

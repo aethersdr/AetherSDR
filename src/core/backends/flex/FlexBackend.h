@@ -110,6 +110,17 @@ public:
     // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
     void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
+    // Decode the five Flex transmit-family status planes into a normalized,
+    // typed TransmitDelta and emit transmitChanged (aetherd RFC 2.3 — TransmitModel
+    // touchpoint). Each owns its SmartSDR wire keys, "1"→bool, ok-guarded +
+    // clamped numeric parses, uppercase, and list split; the model applies the
+    // present fields. Called from the matching RadioModel status choke points.
+    void decodeTransmitStatus(const QMap<QString, QString>& kvs);
+    void decodeInterlockStatus(const QMap<QString, QString>& kvs);
+    void decodeAtuStatus(const QMap<QString, QString>& kvs);
+    void decodeApdStatus(const QMap<QString, QString>& kvs);
+    void decodeApdSamplerStatus(const QMap<QString, QString>& kvs);
+
 private:
     void send(const QString& cmd);
     void sendSlice(const QString& cmd);   // guarded slice path (§6)

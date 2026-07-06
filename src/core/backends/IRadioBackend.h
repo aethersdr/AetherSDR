@@ -9,6 +9,7 @@
 
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 
 namespace AetherSDR {
 
@@ -112,6 +113,12 @@ signals:
     void sliceChanged(int sliceId, const SliceDelta& delta);
     void sliceRemoved(int sliceId);
     void meterUpdate(const QString& meterId, double value);
+
+    // Normalized transmit-status delta (aetherd RFC 2.3 — TransmitModel
+    // touchpoint). Typed + compiler-checked; the backend populates only the
+    // fields the wire reported (across the transmit / interlock / ATU / APD /
+    // APD-sampler status planes) and RadioModel drives the TransmitModel.
+    void transmitChanged(const TransmitDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a normalized

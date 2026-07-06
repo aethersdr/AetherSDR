@@ -74,6 +74,20 @@ int main(int argc, char** argv)
         CHECK(def.count() == 0);
     }
 
+    // ---- malformed numeric fields dropped, not applied as 0 (#4066 guard) ----
+    {
+        FlexBackend backend;
+        QSignalSpy def(&backend, &IRadioBackend::meterDefined);
+        backend.decodeMeterStatus(QStringLiteral(
+            "3.nam=LEVEL#3.low=junk#3.hi=20.0#3.num=nope"));
+        CHECK(def.count() == 1);
+        const QVariantMap f = def.takeFirst().at(1).toMap();
+        CHECK(f.value(QStringLiteral("name")).toString() == QStringLiteral("LEVEL"));
+        CHECK(!f.contains(QStringLiteral("low")));         // malformed → dropped
+        CHECK(!f.contains(QStringLiteral("sourceIndex"))); // malformed num → dropped
+        CHECK(f.contains(QStringLiteral("high")));         // valid field still carried
+    }
+
     if (g_failures == 0) {
         std::printf("aetherd_meter_decode_test: all checks passed\n");
         return 0;

@@ -38,294 +38,145 @@ void TransmitModel::resetState()
 
 // ── Status parsing ──────────────────────────────────────────────────────────
 
-void TransmitModel::applyTransmitStatus(const QMap<QString, QString>& kvs)
+// aetherd RFC 2.3: the five Flex transmit-family status decoders
+// (applyTransmitStatus/Interlock/Atu/Apd/ApdSampler) moved to
+// FlexBackend::decode*Status, which translate the SmartSDR wire into a typed
+// TransmitDelta and emit transmitChanged. This applies the present fields —
+// no wire key names or "1"/clamp parsing remain here; only the model's business
+// logic (compander/dexp aliasing, the grouped emits, the ATU enum parse, the
+// per-antenna sampler map + selected-fallback) stays. Present-only: each field
+// is applied iff its optional is engaged.
+void TransmitModel::applyChanges(const TransmitDelta& d)
 {
     bool changed = false;
     bool tuneChanged_ = false;
-
-    if (kvs.contains("rfpower")) {
-        int v = qBound(0, kvs["rfpower"].toInt(), 100);
-        if (m_rfPower != v) { m_rfPower = v; changed = true; }
-    }
-    if (kvs.contains("tunepower")) {
-        int v = qBound(0, kvs["tunepower"].toInt(), 100);
-        if (m_tunePower != v) { m_tunePower = v; changed = true; }
-    }
-    if (kvs.contains("tune")) {
-        bool v = kvs["tune"] == "1";
-        if (m_tune != v) { m_tune = v; changed = true; tuneChanged_ = true; }
-    }
-    if (kvs.contains("mox")) {
-        bool v = kvs["mox"] == "1";
-        if (m_mox != v) { m_mox = v; changed = true; }
-    }
-    if (kvs.contains("freq")) {
-        double v = kvs["freq"].toDouble();
-        if (m_transmitFreq != v) { m_transmitFreq = v; changed = true; }
-    }
-
-    // ── Mic / monitor / processor keys ──────────────────────────────────────
     bool micChanged = false;
     bool phoneChanged = false;
-
-    if (kvs.contains("mic_selection")) {
-        QString v = kvs["mic_selection"].toUpper();
-        if (m_micSelection != v) { m_micSelection = v; micChanged = true; }
-    }
-    if (kvs.contains("mic_level")) {
-        int v = qBound(0, kvs["mic_level"].toInt(), 100);
-        if (m_micLevel != v) { m_micLevel = v; micChanged = true; }
-    }
-    if (kvs.contains("mic_acc")) {
-        bool v = kvs["mic_acc"] == "1";
-        if (m_micAcc != v) { m_micAcc = v; micChanged = true; }
-    }
-    if (kvs.contains("speech_processor_enable")) {
-        bool v = kvs["speech_processor_enable"] == "1";
-        if (m_speechProcEnable != v) { m_speechProcEnable = v; micChanged = true; }
-    }
-    if (kvs.contains("speech_processor_level")) {
-        int v = qBound(0, kvs["speech_processor_level"].toInt(), 100);
-        if (m_speechProcLevel != v) { m_speechProcLevel = v; micChanged = true; }
-    }
-    if (kvs.contains("compander")) {
-        bool v = kvs["compander"] == "1";
-        if (m_companderOn != v) { m_companderOn = v; micChanged = true; }
-        if (m_dexpOn != v) { m_dexpOn = v; phoneChanged = true; }
-    }
-    if (kvs.contains("compander_level")) {
-        int v = qBound(0, kvs["compander_level"].toInt(), 100);
-        if (m_companderLevel != v) { m_companderLevel = v; micChanged = true; }
-        if (m_dexpLevel != v) { m_dexpLevel = v; phoneChanged = true; }
-    }
-    if (kvs.contains("dax")) {
-        bool v = kvs["dax"] == "1";
-        if (m_daxOn != v) { m_daxOn = v; micChanged = true; }
-    }
-    if (kvs.contains("sb_monitor")) {
-        bool v = kvs["sb_monitor"] == "1";
-        if (m_sbMonitor != v) { m_sbMonitor = v; micChanged = true; }
-    }
-    if (kvs.contains("mon_gain_sb")) {
-        int v = qBound(0, kvs["mon_gain_sb"].toInt(), 100);
-        if (m_monGainSb != v) { m_monGainSb = v; micChanged = true; }
-    }
-
-    // ── VOX keys ───────────────────────────────────────────────────────────
-
-    if (kvs.contains("vox_enable")) {
-        bool v = kvs["vox_enable"] == "1";
-        if (m_voxEnable != v) { m_voxEnable = v; phoneChanged = true; }
-    }
-    if (kvs.contains("vox_level")) {
-        int v = qBound(0, kvs["vox_level"].toInt(), 100);
-        if (m_voxLevel != v) { m_voxLevel = v; phoneChanged = true; }
-    }
-    if (kvs.contains("vox_delay")) {
-        int v = qBound(0, kvs["vox_delay"].toInt(), 100);
-        if (m_voxDelay != v) { m_voxDelay = v; phoneChanged = true; }
-    }
-    if (kvs.contains("mic_boost")) {
-        bool v = kvs["mic_boost"] == "1";
-        if (m_micBoost != v) { m_micBoost = v; phoneChanged = true; }
-    }
-    if (kvs.contains("mic_bias")) {
-        bool v = kvs["mic_bias"] == "1";
-        if (m_micBias != v) { m_micBias = v; phoneChanged = true; }
-    }
-    if (kvs.contains("met_in_rx")) {
-        bool v = kvs["met_in_rx"] == "1";
-        if (m_metInRx != v) { m_metInRx = v; changed = true; }
-    }
-    if (kvs.contains("synccwx")) {
-        bool v = kvs["synccwx"] == "1";
-        if (m_syncCwx != v) { m_syncCwx = v; phoneChanged = true; }
-    }
-    if (kvs.contains("am_carrier_level")) {
-        int v = qBound(0, kvs["am_carrier_level"].toInt(), 100);
-        if (m_amCarrierLevel != v) { m_amCarrierLevel = v; phoneChanged = true; }
-    }
-    if (kvs.contains("dexp") && !kvs.contains("compander")) {
-        bool v = kvs["dexp"] == "1";
-        if (m_companderOn != v) { m_companderOn = v; micChanged = true; }
-        if (m_dexpOn != v) { m_dexpOn = v; phoneChanged = true; }
-    }
-    if (kvs.contains("noise_gate_level") && !kvs.contains("compander_level")) {
-        int v = qBound(0, kvs["noise_gate_level"].toInt(), 100);
-        if (m_companderLevel != v) { m_companderLevel = v; micChanged = true; }
-        if (m_dexpLevel != v) { m_dexpLevel = v; phoneChanged = true; }
-    }
     bool filterCutoffChanged = false;
-    if (kvs.contains("lo")) {
-        int v = qBound(0, kvs["lo"].toInt(), 10000);
-        if (m_txFilterLow != v) { m_txFilterLow = v; phoneChanged = true; filterCutoffChanged = true; }
-    }
-    if (kvs.contains("hi")) {
-        int v = qBound(0, kvs["hi"].toInt(), 10000);
-        if (m_txFilterHigh != v) { m_txFilterHigh = v; phoneChanged = true; filterCutoffChanged = true; }
-    }
 
-    // ── CW keys ──────────────────────────────────────────────────────────
-    if (kvs.contains("speed")) {
-        int v = qBound(5, kvs["speed"].toInt(), 100);
-        if (m_cwSpeed != v) { m_cwSpeed = v; phoneChanged = true; }
-    }
-    if (kvs.contains("pitch")) {
-        int v = qBound(100, kvs["pitch"].toInt(), 6000);
-        if (m_cwPitch != v) { m_cwPitch = v; phoneChanged = true; }
-    }
-    if (kvs.contains("break_in")) {
-        bool v = kvs["break_in"] == "1";
-        if (m_cwBreakIn != v) { m_cwBreakIn = v; phoneChanged = true; }
-    }
-    if (kvs.contains("break_in_delay")) {
-        int v = qBound(0, kvs["break_in_delay"].toInt(), 2000);
-        if (m_cwDelay != v) { m_cwDelay = v; phoneChanged = true; }
-    }
-    if (kvs.contains("sidetone")) {
-        bool v = kvs["sidetone"] == "1";
-        if (m_cwSidetone != v) { m_cwSidetone = v; phoneChanged = true; }
-    }
-    if (kvs.contains("iambic")) {
-        bool v = kvs["iambic"] == "1";
-        if (m_cwIambic != v) { m_cwIambic = v; phoneChanged = true; }
-    }
-    if (kvs.contains("iambic_mode")) {
-        int v = qBound(0, kvs["iambic_mode"].toInt(), 1);
-        if (m_cwIambicMode != v) { m_cwIambicMode = v; phoneChanged = true; }
-    }
-    if (kvs.contains("swap_paddles")) {
-        bool v = kvs["swap_paddles"] == "1";
-        if (m_cwSwapPaddles != v) { m_cwSwapPaddles = v; phoneChanged = true; }
-    }
-    if (kvs.contains("cwl_enabled")) {
-        bool v = kvs["cwl_enabled"] == "1";
-        if (m_cwlEnabled != v) { m_cwlEnabled = v; phoneChanged = true; }
-    }
-    if (kvs.contains("mon_gain_cw")) {
-        int v = qBound(0, kvs["mon_gain_cw"].toInt(), 100);
-        if (m_monGainCw != v) { m_monGainCw = v; phoneChanged = true; }
-    }
-    if (kvs.contains("mon_pan_cw")) {
-        int v = qBound(0, kvs["mon_pan_cw"].toInt(), 100);
-        if (m_monPanCw != v) { m_monPanCw = v; phoneChanged = true; }
-    }
+    // ── Core transmit ──
+    if (d.rfPower && m_rfPower != *d.rfPower)   { m_rfPower = *d.rfPower; changed = true; }
+    if (d.tunePower && m_tunePower != *d.tunePower) { m_tunePower = *d.tunePower; changed = true; }
+    if (d.tune && m_tune != *d.tune) { m_tune = *d.tune; changed = true; tuneChanged_ = true; }
+    if (d.mox && m_mox != *d.mox) { m_mox = *d.mox; changed = true; }
+    if (d.transmitFreq && m_transmitFreq != *d.transmitFreq) { m_transmitFreq = *d.transmitFreq; changed = true; }
 
-    if (kvs.contains("max_power_level")) {
-        int v = kvs["max_power_level"].toInt();
-        if (m_maxPowerLevel != v) { m_maxPowerLevel = v; changed = true; emit maxPowerLevelChanged(v); }
+    // ── Mic / monitor / processor ──
+    if (d.micSelection && m_micSelection != *d.micSelection) { m_micSelection = *d.micSelection; micChanged = true; }
+    if (d.micLevel && m_micLevel != *d.micLevel) { m_micLevel = *d.micLevel; micChanged = true; }
+    if (d.micAcc && m_micAcc != *d.micAcc) { m_micAcc = *d.micAcc; micChanged = true; }
+    if (d.speechProcEnable && m_speechProcEnable != *d.speechProcEnable) { m_speechProcEnable = *d.speechProcEnable; micChanged = true; }
+    if (d.speechProcLevel && m_speechProcLevel != *d.speechProcLevel) { m_speechProcLevel = *d.speechProcLevel; micChanged = true; }
+    // compander/dexp are aliased: one wire value drives BOTH member pairs (the
+    // compander → mic side and the dexp → phone side).
+    if (d.compander) {
+        const bool v = *d.compander;
+        if (m_companderOn != v) { m_companderOn = v; micChanged = true; }
+        if (m_dexpOn != v)      { m_dexpOn = v;      phoneChanged = true; }
     }
-    if (kvs.contains("tune_mode")) {
-        QString v = kvs["tune_mode"];
-        if (m_tuneMode != v) { m_tuneMode = v; changed = true; }
+    if (d.companderLevel) {
+        const int v = *d.companderLevel;
+        if (m_companderLevel != v) { m_companderLevel = v; micChanged = true; }
+        if (m_dexpLevel != v)      { m_dexpLevel = v;      phoneChanged = true; }
     }
-    if (kvs.contains("show_tx_in_waterfall")) {
-        bool v = kvs["show_tx_in_waterfall"] == "1";
-        if (m_showTxInWaterfall != v) { m_showTxInWaterfall = v; changed = true; }
-    }
-    if (kvs.contains("tx_slice_mode")) {
-        QString v = kvs["tx_slice_mode"];
-        if (m_txSliceMode != v) { m_txSliceMode = v; changed = true; emit txSliceModeChanged(v); }
-    }
+    if (d.dax && m_daxOn != *d.dax) { m_daxOn = *d.dax; micChanged = true; }
+    if (d.sbMonitor && m_sbMonitor != *d.sbMonitor) { m_sbMonitor = *d.sbMonitor; micChanged = true; }
+    if (d.monGainSb && m_monGainSb != *d.monGainSb) { m_monGainSb = *d.monGainSb; micChanged = true; }
 
+    // ── VOX / phone ──
+    if (d.voxEnable && m_voxEnable != *d.voxEnable) { m_voxEnable = *d.voxEnable; phoneChanged = true; }
+    if (d.voxLevel && m_voxLevel != *d.voxLevel) { m_voxLevel = *d.voxLevel; phoneChanged = true; }
+    if (d.voxDelay && m_voxDelay != *d.voxDelay) { m_voxDelay = *d.voxDelay; phoneChanged = true; }
+    if (d.micBoost && m_micBoost != *d.micBoost) { m_micBoost = *d.micBoost; phoneChanged = true; }
+    if (d.micBias && m_micBias != *d.micBias) { m_micBias = *d.micBias; phoneChanged = true; }
+    if (d.metInRx && m_metInRx != *d.metInRx) { m_metInRx = *d.metInRx; changed = true; }
+    if (d.syncCwx && m_syncCwx != *d.syncCwx) { m_syncCwx = *d.syncCwx; phoneChanged = true; }
+    if (d.amCarrierLevel && m_amCarrierLevel != *d.amCarrierLevel) { m_amCarrierLevel = *d.amCarrierLevel; phoneChanged = true; }
+    if (d.txFilterLow && m_txFilterLow != *d.txFilterLow) { m_txFilterLow = *d.txFilterLow; phoneChanged = true; filterCutoffChanged = true; }
+    if (d.txFilterHigh && m_txFilterHigh != *d.txFilterHigh) { m_txFilterHigh = *d.txFilterHigh; phoneChanged = true; filterCutoffChanged = true; }
+
+    // ── CW ──
+    if (d.cwSpeed && m_cwSpeed != *d.cwSpeed) { m_cwSpeed = *d.cwSpeed; phoneChanged = true; }
+    if (d.cwPitch && m_cwPitch != *d.cwPitch) { m_cwPitch = *d.cwPitch; phoneChanged = true; }
+    if (d.cwBreakIn && m_cwBreakIn != *d.cwBreakIn) { m_cwBreakIn = *d.cwBreakIn; phoneChanged = true; }
+    if (d.cwDelay && m_cwDelay != *d.cwDelay) { m_cwDelay = *d.cwDelay; phoneChanged = true; }
+    if (d.cwSidetone && m_cwSidetone != *d.cwSidetone) { m_cwSidetone = *d.cwSidetone; phoneChanged = true; }
+    if (d.cwIambic && m_cwIambic != *d.cwIambic) { m_cwIambic = *d.cwIambic; phoneChanged = true; }
+    if (d.cwIambicMode && m_cwIambicMode != *d.cwIambicMode) { m_cwIambicMode = *d.cwIambicMode; phoneChanged = true; }
+    if (d.cwSwapPaddles && m_cwSwapPaddles != *d.cwSwapPaddles) { m_cwSwapPaddles = *d.cwSwapPaddles; phoneChanged = true; }
+    if (d.cwlEnabled && m_cwlEnabled != *d.cwlEnabled) { m_cwlEnabled = *d.cwlEnabled; phoneChanged = true; }
+    if (d.monGainCw && m_monGainCw != *d.monGainCw) { m_monGainCw = *d.monGainCw; phoneChanged = true; }
+    if (d.monPanCw && m_monPanCw != *d.monPanCw) { m_monPanCw = *d.monPanCw; phoneChanged = true; }
+
+    // ── Misc TX (max_power_level / tx_slice_mode emit inline, like the old code) ──
+    if (d.maxPowerLevel && m_maxPowerLevel != *d.maxPowerLevel) { m_maxPowerLevel = *d.maxPowerLevel; changed = true; emit maxPowerLevelChanged(m_maxPowerLevel); }
+    if (d.tuneMode && m_tuneMode != *d.tuneMode) { m_tuneMode = *d.tuneMode; changed = true; }
+    if (d.showTxInWaterfall && m_showTxInWaterfall != *d.showTxInWaterfall) { m_showTxInWaterfall = *d.showTxInWaterfall; changed = true; }
+    if (d.txSliceMode && m_txSliceMode != *d.txSliceMode) { m_txSliceMode = *d.txSliceMode; changed = true; emit txSliceModeChanged(m_txSliceMode); }
+
+    // ── Interlock (no emit — plain state, matching applyInterlockStatus) ──
+    if (d.accTxDelay)       m_accTxDelay       = *d.accTxDelay;
+    if (d.tx1Delay)         m_tx1Delay         = *d.tx1Delay;
+    if (d.tx2Delay)         m_tx2Delay         = *d.tx2Delay;
+    if (d.tx3Delay)         m_tx3Delay         = *d.tx3Delay;
+    if (d.txDelay)          m_txDelay          = *d.txDelay;
+    if (d.interlockTimeout) m_interlockTimeout = *d.interlockTimeout;
+    if (d.accTxReqPolarity) m_accTxReqPolarity = *d.accTxReqPolarity;
+    if (d.rcaTxReqPolarity) m_rcaTxReqPolarity = *d.rcaTxReqPolarity;
+
+    // Core/mic/phone emits (same order the old applyTransmitStatus used).
     if (changed) emit stateChanged();
     if (tuneChanged_) emit tuneChanged(m_tune);
     if (micChanged) emit micStateChanged();
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
-}
 
-void TransmitModel::applyInterlockStatus(const QMap<QString, QString>& kvs)
-{
-    if (kvs.contains("acc_tx_delay"))      m_accTxDelay = kvs["acc_tx_delay"].toInt();
-    if (kvs.contains("tx1_delay"))         m_tx1Delay = kvs["tx1_delay"].toInt();
-    if (kvs.contains("tx2_delay"))         m_tx2Delay = kvs["tx2_delay"].toInt();
-    if (kvs.contains("tx3_delay"))         m_tx3Delay = kvs["tx3_delay"].toInt();
-    if (kvs.contains("tx_delay"))          m_txDelay = kvs["tx_delay"].toInt();
-    if (kvs.contains("timeout"))           m_interlockTimeout = kvs["timeout"].toInt();
-    if (kvs.contains("acc_txreq_polarity"))m_accTxReqPolarity = kvs["acc_txreq_polarity"].toInt();
-    if (kvs.contains("rca_txreq_polarity"))m_rcaTxReqPolarity = kvs["rca_txreq_polarity"].toInt();
-}
-
-void TransmitModel::applyAtuStatus(const QMap<QString, QString>& kvs)
-{
-    bool changed = false;
-
-    if (kvs.contains("status")) {
-        auto s = parseAtuTuneStatus(kvs["status"]);
-        if (m_atuStatus != s) { m_atuStatus = s; changed = true; }
-    }
-    if (kvs.contains("atu_enabled")) {
-        bool v = kvs["atu_enabled"] == "1";
-        if (m_atuEnabled != v) { m_atuEnabled = v; changed = true; }
-    }
-    if (kvs.contains("memories_enabled")) {
-        bool v = kvs["memories_enabled"] == "1";
-        if (m_memoriesEnabled != v) { m_memoriesEnabled = v; changed = true; }
-    }
-    if (kvs.contains("using_mem")) {
-        bool v = kvs["using_mem"] == "1";
-        if (m_usingMemory != v) { m_usingMemory = v; changed = true; }
-    }
-
-    if (changed) emit atuStateChanged();
-}
-
-void TransmitModel::applyApdStatus(const QMap<QString, QString>& kvs)
-{
-    bool changed = false;
-
-    if (kvs.contains("enable")) {
-        bool v = kvs["enable"] == "1";
-        if (m_apdEnabled != v) { m_apdEnabled = v; changed = true; }
-    }
-    if (kvs.contains("configurable")) {
-        bool v = kvs["configurable"] == "1";
-        if (m_apdConfigurable != v) { m_apdConfigurable = v; changed = true; }
-    }
-    if (kvs.contains("equalizer_active")) {
-        bool v = kvs["equalizer_active"] == "1";
-        if (m_apdEqActive != v) { m_apdEqActive = v; changed = true; }
-    }
-    // Bare flag (no `=`) — radio signals all per-antenna equalizers cleared.
-    if (kvs.contains("equalizer_reset")) {
-        if (m_apdEqActive) { m_apdEqActive = false; changed = true; }
-        emit apdEqualizerResetReceived();
-    }
-
-    if (changed) emit apdStateChanged();
-}
-
-// "apd sampler tx_ant=ANT1 selected_sampler=RX_A valid_samplers=RX_A,XVTA"
-void TransmitModel::applyApdSamplerStatus(const QMap<QString, QString>& kvs)
-{
-    const QString txAnt = kvs.value("tx_ant").toUpper();
-    if (txAnt.isEmpty()) return;
-
-    ApdSampler s = m_apdSamplers.value(txAnt);
-    bool changed = false;
-
-    if (kvs.contains("valid_samplers")) {
-        QStringList ports = kvs["valid_samplers"].split(',', Qt::SkipEmptyParts);
-        QStringList avail{"INTERNAL"};
-        for (const auto& p : ports) {
-            const QString u = p.trimmed().toUpper();
-            if (!u.isEmpty() && !avail.contains(u)) avail.append(u);
+    // ── ATU (own emit; model owns the enum parse) ──
+    {
+        bool atuChanged = false;
+        if (d.atuStatusRaw) {
+            const ATUStatus s = parseAtuTuneStatus(*d.atuStatusRaw);
+            if (m_atuStatus != s) { m_atuStatus = s; atuChanged = true; }
         }
-        if (s.available != avail) { s.available = avail; changed = true; }
+        if (d.atuEnabled && m_atuEnabled != *d.atuEnabled) { m_atuEnabled = *d.atuEnabled; atuChanged = true; }
+        if (d.memoriesEnabled && m_memoriesEnabled != *d.memoriesEnabled) { m_memoriesEnabled = *d.memoriesEnabled; atuChanged = true; }
+        if (d.usingMemory && m_usingMemory != *d.usingMemory) { m_usingMemory = *d.usingMemory; atuChanged = true; }
+        if (atuChanged) emit atuStateChanged();
     }
 
-    if (kvs.contains("selected_sampler")) {
-        QString sel = kvs["selected_sampler"].toUpper();
-        // Match FlexLib: if selected_sampler isn't in the available list,
-        // fall back to INTERNAL.
-        if (!s.available.contains(sel)) sel = "INTERNAL";
-        if (s.selected != sel) { s.selected = sel; changed = true; }
+    // ── APD (own emit) ──
+    {
+        bool apdChanged = false;
+        if (d.apdEnabled && m_apdEnabled != *d.apdEnabled) { m_apdEnabled = *d.apdEnabled; apdChanged = true; }
+        if (d.apdConfigurable && m_apdConfigurable != *d.apdConfigurable) { m_apdConfigurable = *d.apdConfigurable; apdChanged = true; }
+        if (d.apdEqActive && m_apdEqActive != *d.apdEqActive) { m_apdEqActive = *d.apdEqActive; apdChanged = true; }
+        // Bare equalizer_reset flag: clear active + emit the reset signal.
+        if (d.apdEqualizerReset) {
+            if (m_apdEqActive) { m_apdEqActive = false; apdChanged = true; }
+            emit apdEqualizerResetReceived();
+        }
+        if (apdChanged) emit apdStateChanged();
     }
 
-    if (changed) {
-        m_apdSamplers.insert(txAnt, s);
-        emit apdSamplerChanged(txAnt);
+    // ── APD sampler (per-TX-antenna map + selected fallback) ──
+    if (d.apdSamplerTxAnt) {
+        const QString txAnt = *d.apdSamplerTxAnt;
+        ApdSampler s = m_apdSamplers.value(txAnt);
+        bool samplerChanged = false;
+        if (d.apdSamplerAvailable && s.available != *d.apdSamplerAvailable) {
+            s.available = *d.apdSamplerAvailable;
+            samplerChanged = true;
+        }
+        if (d.apdSamplerSelected) {
+            QString sel = *d.apdSamplerSelected;
+            // Fall back to INTERNAL if the selected port isn't available (FlexLib).
+            if (!s.available.contains(sel)) sel = QStringLiteral("INTERNAL");
+            if (s.selected != sel) { s.selected = sel; samplerChanged = true; }
+        }
+        if (samplerChanged) {
+            m_apdSamplers.insert(txAnt, s);
+            emit apdSamplerChanged(txAnt);
+        }
     }
 }
 
