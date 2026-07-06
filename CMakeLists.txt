@@ -2560,6 +2560,13 @@ target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(aetherd_meter_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_meter_decode_test COMMAND aetherd_meter_decode_test)
 
+# aetherd RFC 2.3 — SliceModel touchpoint: slice-status wire → canonical decode.
+add_executable(aetherd_slice_decode_test tests/aetherd_slice_decode_test.cpp)
+target_include_directories(aetherd_slice_decode_test PRIVATE src)
+target_link_libraries(aetherd_slice_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(aetherd_slice_decode_test PROPERTIES AUTOMOC ON)
+add_test(NAME aetherd_slice_decode_test COMMAND aetherd_slice_decode_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
     src/models/UsbCableModel.cpp

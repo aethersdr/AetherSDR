@@ -76,17 +76,21 @@ int main(int argc, char** argv)
     QStringList commands;
     QObject::connect(&slice, &SliceModel::commandReady,
                      [&commands](const QString& cmd) { commands.append(cmd); });
-    slice.applyStatus({{QStringLiteral("tx_ant_list"), QStringLiteral("ANT1,ANT2,XVTR")}});
+    // aetherd RFC 2.3: antenna-list splitting moved to FlexBackend::decodeSliceStatus;
+    // the model now receives the already-split QStringList via applyChanges.
+    slice.applyChanges(QVariantMap{{QStringLiteral("txAntennaList"),
+        QStringList({QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("XVTR")})}});
     ok &= expect(slice.txAntennaList() == QStringList({QStringLiteral("ANT1"),
                                                        QStringLiteral("ANT2"),
                                                        QStringLiteral("XVTR")}),
-                 "slice parses tx_ant_list");
+                 "slice stores txAntennaList");
 
-    slice.applyStatus({{QStringLiteral("rx_ant_list"), QStringLiteral("ANT1,RX_A,RX_B")}});
+    slice.applyChanges(QVariantMap{{QStringLiteral("rxAntennaList"),
+        QStringList({QStringLiteral("ANT1"), QStringLiteral("RX_A"), QStringLiteral("RX_B")})}});
     ok &= expect(slice.rxAntennaList() == QStringList({QStringLiteral("ANT1"),
                                                        QStringLiteral("RX_A"),
                                                        QStringLiteral("RX_B")}),
-                 "slice parses rx_ant_list");
+                 "slice stores rxAntennaList");
 
     slice.setRxAntenna(QStringLiteral("RX_B"));
     ok &= expect(commands == QStringList({QStringLiteral("slice set 3 rxant=RX_B")}),

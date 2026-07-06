@@ -103,6 +103,12 @@ public:
     // line) and emit the normalized meterDefined/meterRemoved signals. Mirrors
     // FlexLib Radio.cs ParseMeterStatus. (aetherd RFC 2.3 — MeterModel touchpoint.)
     void decodeMeterStatus(const QString& rawBody);
+    // Decode a Flex slice-status kv-set into the normalized, canonically-named
+    // slice change map and emit sliceChanged(sliceId, changes). Owns all the
+    // Flex wire knowledge (key names like "RF_frequency"/"filter_lo", "1"→bool,
+    // comma-split lists); SliceModel::applyChanges consumes only canonical keys.
+    // (aetherd RFC 2.3 — SliceModel touchpoint, full canonical rename.)
+    void decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs);
 
 private:
     void send(const QString& cmd);

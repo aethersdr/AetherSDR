@@ -406,6 +406,148 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
     }
 }
 
+void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs)
+{
+    // Translate the Flex slice-status wire kv-set into the normalized, canonically
+    // named change map. This owns ALL the SmartSDR-specific knowledge — the wire
+    // key names, "1"→bool, comma-split lists, lowercase normalization — so
+    // SliceModel::applyChanges speaks only vendor-neutral keys. Present-only:
+    // each canonical key rides only when its wire key was reported.
+    QVariantMap c;
+    const auto str = [&](const char* wire, const char* canon) {
+        if (kvs.contains(QLatin1String(wire)))
+            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)));
+    };
+    const auto integer = [&](const char* wire, const char* canon) {
+        if (kvs.contains(QLatin1String(wire)))
+            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)).toInt());
+    };
+    const auto real = [&](const char* wire, const char* canon) {
+        if (kvs.contains(QLatin1String(wire)))
+            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)).toDouble());
+    };
+    const auto boolean = [&](const char* wire, const char* canon) {
+        if (kvs.contains(QLatin1String(wire)))
+            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)) == QLatin1String("1"));
+    };
+    const auto splitList = [](const QString& raw) {
+        QStringList out;
+        for (QString t : raw.split(',', Qt::SkipEmptyParts)) {
+            t = t.trimmed();
+            if (!t.isEmpty()) out.append(t);
+        }
+        return out;
+    };
+
+    // Identity / tuning
+    str("pan", "panId");
+    str("index_letter", "letter");
+    real("RF_frequency", "frequency");
+    str("mode", "mode");
+    integer("filter_lo", "filterLow");
+    integer("filter_hi", "filterHigh");
+    if (kvs.contains(QStringLiteral("mode_list")))
+        c.insert(QStringLiteral("modeList"),
+                 kvs.value(QStringLiteral("mode_list")).split(',', Qt::SkipEmptyParts));
+
+    // Core state
+    boolean("active", "active");
+    boolean("tx", "txSlice");
+    real("rfgain", "rfGain");
+    real("audio_level", "audioGain");
+    integer("audio_pan", "audioPan");
+    boolean("audio_mute", "audioMute");
+    boolean("in_use", "inUse");
+    boolean("lock", "locked");
+    boolean("qsk", "qsk");
+
+    // Diversity group
+    boolean("diversity_child", "diversityChild");
+    boolean("diversity_parent", "diversityParent");
+    boolean("diversity", "diversity");
+    integer("diversity_index", "diversityIndex");
+
+    // ESC (diversity beamforming)
+    if (kvs.contains(QStringLiteral("esc"))) {
+        const QString v = kvs.value(QStringLiteral("esc"));
+        c.insert(QStringLiteral("esc"), v == QLatin1String("1") || v == QLatin1String("on"));
+    }
+    real("esc_gain", "escGain");
+    real("esc_phase_shift", "escPhaseShift");
+
+    // Antennas (rx_ant_list takes precedence over ant_list, then split+trim)
+    if (kvs.contains(QStringLiteral("rx_ant_list")) || kvs.contains(QStringLiteral("ant_list")))
+        c.insert(QStringLiteral("rxAntennaList"),
+                 splitList(kvs.value(QStringLiteral("rx_ant_list"),
+                                     kvs.value(QStringLiteral("ant_list")))));
+    if (kvs.contains(QStringLiteral("tx_ant_list")))
+        c.insert(QStringLiteral("txAntennaList"),
+                 splitList(kvs.value(QStringLiteral("tx_ant_list"))));
+    str("rxant", "rxAntenna");
+    str("txant", "txAntenna");
+
+    // DSP toggles
+    boolean("nb", "nb");
+    boolean("nr", "nr");
+    boolean("anf", "anf");
+    boolean("nrl", "nrl");
+    boolean("nrs", "nrs");
+    boolean("rnn", "rnn");
+    boolean("nrf", "nrf");
+    boolean("anfl", "anfl");
+    boolean("anft", "anft");
+    boolean("apf", "apf");
+    // DSP levels
+    integer("apf_level", "apfLevel");
+    integer("nb_level", "nbLevel");
+    integer("nr_level", "nrLevel");
+    integer("anf_level", "anfLevel");
+    integer("lms_nr_level", "nrlLevel");
+    integer("speex_nr_level", "nrsLevel");
+    integer("nrf_level", "nrfLevel");
+    integer("lms_anf_level", "anflLevel");
+
+    // AGC / squelch / RIT / XIT
+    str("agc_mode", "agcMode");
+    integer("agc_threshold", "agcThreshold");
+    integer("agc_off_level", "agcOffLevel");
+    boolean("squelch", "squelchOn");
+    integer("squelch_level", "squelchLevel");
+    boolean("rit_on", "ritOn");
+    integer("rit_freq", "ritFreq");
+    boolean("xit_on", "xitOn");
+    integer("xit_freq", "xitFreq");
+
+    // DAX / RTTY / DIG offsets
+    integer("dax", "daxChannel");
+    integer("rtty_mark", "rttyMark");
+    integer("rtty_shift", "rttyShift");
+    integer("digl_offset", "diglOffset");
+    integer("digu_offset", "diguOffset");
+
+    // Record / playback (play is 3-state disabled/1/0 — carry raw, model interprets)
+    boolean("record", "recordOn");
+    str("play", "play");
+
+    // FM duplex/repeater (lowercase normalization stays wire-side)
+    if (kvs.contains(QStringLiteral("fm_tone_mode")))
+        c.insert(QStringLiteral("fmToneMode"),
+                 kvs.value(QStringLiteral("fm_tone_mode")).toLower());
+    real("fm_tone_value", "fmToneValue");  // model formats to 1 decimal
+    if (kvs.contains(QStringLiteral("repeater_offset_dir")))
+        c.insert(QStringLiteral("repeaterOffsetDir"),
+                 kvs.value(QStringLiteral("repeater_offset_dir")).toLower());
+    real("fm_repeater_offset_freq", "fmRepeaterOffsetFreq");
+    real("tx_offset_freq", "txOffsetFreq");
+    integer("fm_deviation", "fmDeviation");
+
+    // Step (step_list carried raw — model builds the QVector<int>)
+    integer("step", "step");
+    str("step_list", "stepList");
+
+    emit sliceChanged(sliceId, c);
+}
+
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {

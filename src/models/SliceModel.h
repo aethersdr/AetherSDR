@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QMap>
+#include <QVariantMap>
 #include <QTimer>
 
 namespace AetherSDR {
@@ -248,8 +249,10 @@ public:
     void setTxOffsetFreq(double mhz);
     void setFmDeviation(int hz);
 
-    // Apply a batch of KV pairs from a status message.
-    void applyStatus(const QMap<QString, QString>& kvs);
+    // Apply a normalized slice-change map from the backend
+    // (IRadioBackend::sliceChanged). Canonical keys only — the Flex wire decode
+    // lives in FlexBackend::decodeSliceStatus. (aetherd RFC 2.3.)
+    void applyChanges(const QVariantMap& changes);
 
     // Force a re-emit of letterChanged() with the current letter — used
     // when a global display preference (e.g. AppSettings

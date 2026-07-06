@@ -4,20 +4,8 @@
 
 namespace AetherSDR {
 
-namespace {
-
-QStringList splitAntennaList(const QString& value)
-{
-    QStringList result;
-    for (QString token : value.split(',', Qt::SkipEmptyParts)) {
-        token = token.trimmed();
-        if (!token.isEmpty())
-            result.append(token);
-    }
-    return result;
-}
-
-} // namespace
+// Note: antenna-list splitting now lives in FlexBackend::decodeSliceStatus
+// (aetherd RFC 2.3); SliceModel receives the already-split QStringList.
 
 SliceModel::SliceModel(int id, QObject* parent)
     : QObject(parent), m_id(id)
@@ -793,37 +781,39 @@ void SliceModel::emitLetterRefresh()
     emit letterChanged(letter());
 }
 
-void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
+void SliceModel::applyChanges(const QVariantMap& c)
 {
+    // aetherd RFC 2.3: the Flex slice-status wire decode moved to
+    // FlexBackend::decodeSliceStatus, which emits sliceChanged(sliceId, changes)
+    // with normalized, canonically-named typed values. This applies those
+    // canonical keys — no SmartSDR key names or "1"/string parsing remain here;
+    // only the model's business logic (filter-polarity normalization, the
+    // override re-pushes, change-gating, emit ordering) stays. Present-only:
+    // each key is applied iff the wire reported it.
     bool freqChanged   = false;
     bool modeChanged_  = false;
     bool filterChanged_= false;
 
-    // Panadapter assignment (e.g. "pan=0x40000000")
-    if (kvs.contains("pan")) {
-        const QString p = kvs["pan"];
+    // Panadapter assignment
+    if (c.contains(QStringLiteral("panId"))) {
+        const QString p = c.value(QStringLiteral("panId")).toString();
         if (m_panId != p) {
             m_panId = p;
             emit panIdChanged(m_panId);
         }
     }
 
-    // Per-client display letter.  Radio assigns this independently of the
-    // global slice index in Multi-Flex sessions — e.g. a second client's
-    // first slice is "A" even when sliceId is 2.  Emits letterChanged()
-    // with the resolved value (post-fallback) so UI bindings get the
-    // string they should actually display.
-    if (kvs.contains("index_letter")) {
-        const QString newLetter = kvs["index_letter"];
+    // Per-client display letter (Multi-Flex assigns independently of sliceId).
+    if (c.contains(QStringLiteral("letter"))) {
+        const QString newLetter = c.value(QStringLiteral("letter")).toString();
         if (newLetter != m_letter) {
             m_letter = newLetter;
             emit letterChanged(letter());
         }
     }
 
-    // The radio sends the frequency as "RF_frequency" in status messages.
-    if (kvs.contains("RF_frequency")) {
-        const double f = kvs["RF_frequency"].toDouble();
+    if (c.contains(QStringLiteral("frequency"))) {
+        const double f = c.value(QStringLiteral("frequency")).toDouble();
         // qFuzzyCompare fails when either value is 0.0 — use explicit epsilon
         if (std::abs(m_frequency - f) > 1e-9) {
             m_frequency = f;
@@ -833,16 +823,20 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
             m_rttyMarkUserOverride = false;
         }
     }
-    if (kvs.contains("mode")) {
-        const QString m = kvs["mode"];
+    if (c.contains(QStringLiteral("mode"))) {
+        const QString m = c.value(QStringLiteral("mode")).toString();
         if (m_mode != m) {
             m_mode = m;
             modeChanged_ = true;
         }
     }
-    if (kvs.contains("filter_lo") || kvs.contains("filter_hi")) {
-        m_filterLow  = kvs.value("filter_lo",  QString::number(m_filterLow)).toInt();
-        m_filterHigh = kvs.value("filter_hi", QString::number(m_filterHigh)).toInt();
+    if (c.contains(QStringLiteral("filterLow")) || c.contains(QStringLiteral("filterHigh"))) {
+        // The radio may report one edge without the other; keep the current
+        // value for the absent one (the old parse defaulted to the member).
+        m_filterLow  = c.contains(QStringLiteral("filterLow"))
+            ? c.value(QStringLiteral("filterLow")).toInt() : m_filterLow;
+        m_filterHigh = c.contains(QStringLiteral("filterHigh"))
+            ? c.value(QStringLiteral("filterHigh")).toInt() : m_filterHigh;
 
         // Radio sometimes sends wrong-polarity filter offsets after session
         // restore (e.g. negative offsets for USB/DIGU). Normalize based on mode.
@@ -869,33 +863,33 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         }
         filterChanged_ = true;
     }
-    if (kvs.contains("mode_list")) {
-        QStringList modes = kvs["mode_list"].split(',', Qt::SkipEmptyParts);
+    if (c.contains(QStringLiteral("modeList"))) {
+        const QStringList modes = c.value(QStringLiteral("modeList")).toStringList();
         if (modes != m_modeList) {
             m_modeList = modes;
             emit modeListChanged(modes);
         }
     }
-    if (kvs.contains("active")) {
-        bool a = kvs["active"] == "1";
+    if (c.contains(QStringLiteral("active"))) {
+        bool a = c.value(QStringLiteral("active")).toBool();
         if (a != m_active) {
             m_active = a;
             emit activeChanged(a);
         }
     }
-    if (kvs.contains("tx")) {
-        bool tx = kvs["tx"] == "1";
+    if (c.contains(QStringLiteral("txSlice"))) {
+        bool tx = c.value(QStringLiteral("txSlice")).toBool();
         if (tx != m_txSlice) {
             m_txSlice = tx;
             emit txSliceChanged(tx);
         }
     }
-    if (kvs.contains("rfgain")) {
-        float g = kvs["rfgain"].toFloat();
+    if (c.contains(QStringLiteral("rfGain"))) {
+        float g = c.value(QStringLiteral("rfGain")).toFloat();
         if (m_rfGain != g) { m_rfGain = g; emit rfGainChanged(g); }
     }
-    if (kvs.contains("audio_level")) {
-        float g = kvs["audio_level"].toFloat();
+    if (c.contains(QStringLiteral("audioGain"))) {
+        float g = c.value(QStringLiteral("audioGain")).toFloat();
         if (m_audioGain != g) {
             const float previousVisibleGain = audioGain();
             m_audioGain = g;
@@ -904,15 +898,15 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
             }
         }
     }
-    if (kvs.contains("audio_pan")) {
+    if (c.contains(QStringLiteral("audioPan"))) {
         const int previousVisiblePan = audioPan();
-        m_audioPan = kvs["audio_pan"].toInt();
+        m_audioPan = c.value(QStringLiteral("audioPan")).toInt();
         if (audioPan() != previousVisiblePan) {
             emit audioPanChanged(audioPan());
         }
     }
-    if (kvs.contains("audio_mute")) {
-        bool mute = kvs["audio_mute"] == "1";
+    if (c.contains(QStringLiteral("audioMute"))) {
+        bool mute = c.value(QStringLiteral("audioMute")).toBool();
         if (mute != m_audioMute) {
             const bool previousVisibleMute = audioMute();
             m_audioMute = mute;
@@ -924,7 +918,7 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
                 emit audioMuteChanged(audioMute());
             }
         }
-    } else if (kvs.value("in_use") == "1" && m_audioMute) {
+    } else if (c.value(QStringLiteral("inUse")).toBool() && m_audioMute) {
         // Full status w/o audio_mute key → radio reset to default (0)
         // on (re)connect. Resync so UI doesn't show a stale 🔇 while
         // audio is actually playing. Radio does not persist audio_mute
@@ -945,17 +939,17 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     const bool previousDiversityParent = m_diversityParent;
     const bool previousDiversity = m_diversity;
     const int previousDiversityIndex = m_diversityIndex;
-    if (kvs.contains("diversity_child")) {
-        m_diversityChild = kvs["diversity_child"] == "1";
+    if (c.contains(QStringLiteral("diversityChild"))) {
+        m_diversityChild = c.value(QStringLiteral("diversityChild")).toBool();
     }
-    if (kvs.contains("diversity_parent")) {
-        m_diversityParent = kvs["diversity_parent"] == "1";
+    if (c.contains(QStringLiteral("diversityParent"))) {
+        m_diversityParent = c.value(QStringLiteral("diversityParent")).toBool();
     }
-    if (kvs.contains("diversity")) {
-        m_diversity = kvs["diversity"] == "1";
+    if (c.contains(QStringLiteral("diversity"))) {
+        m_diversity = c.value(QStringLiteral("diversity")).toBool();
     }
-    if (kvs.contains("diversity_index")) {
-        m_diversityIndex = kvs["diversity_index"].toInt();
+    if (c.contains(QStringLiteral("diversityIndex"))) {
+        m_diversityIndex = c.value(QStringLiteral("diversityIndex")).toInt();
     }
     if (m_diversityChild != previousDiversityChild
         || m_diversityParent != previousDiversityParent
@@ -964,121 +958,119 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         emit diversityChanged(m_diversity);
     }
 
-    // ESC (Enhanced Signal Clarity) — diversity beamforming
-    if (kvs.contains("esc")) {
-        const QString& v = kvs["esc"];
-        bool on = (v == "1" || v == "on");
+    // ESC (Enhanced Signal Clarity) — diversity beamforming ("1"/"on" → bool
+    // is normalized in the backend decode).
+    if (c.contains(QStringLiteral("esc"))) {
+        bool on = c.value(QStringLiteral("esc")).toBool();
         if (on != m_escEnabled) { m_escEnabled = on; emit escEnabledChanged(on); }
     }
-    if (kvs.contains("esc_gain")) {
-        float g = kvs["esc_gain"].toFloat();
+    if (c.contains(QStringLiteral("escGain"))) {
+        float g = c.value(QStringLiteral("escGain")).toFloat();
         if (!qFuzzyCompare(m_escGain, g)) { m_escGain = g; emit escGainChanged(g); }
     }
-    if (kvs.contains("esc_phase_shift")) {
-        float p = kvs["esc_phase_shift"].toFloat();
+    if (c.contains(QStringLiteral("escPhaseShift"))) {
+        float p = c.value(QStringLiteral("escPhaseShift")).toFloat();
         if (!qFuzzyCompare(m_escPhaseShift, p)) { m_escPhaseShift = p; emit escPhaseShiftChanged(p); }
     }
 
-    // Slice control state
-    if (kvs.contains("ant_list") || kvs.contains("rx_ant_list")) {
-        const QString raw = kvs.value("rx_ant_list", kvs.value("ant_list"));
-        const QStringList ants = splitAntennaList(raw);
+    // Slice control state (antenna lists are split+trimmed in the backend)
+    if (c.contains(QStringLiteral("rxAntennaList"))) {
+        const QStringList ants = c.value(QStringLiteral("rxAntennaList")).toStringList();
         if (ants != m_rxAntennaList) {
             m_rxAntennaList = ants;
             emit rxAntennaListChanged(m_rxAntennaList);
         }
     }
-    if (kvs.contains("tx_ant_list")) {
-        const QStringList ants = splitAntennaList(kvs["tx_ant_list"]);
+    if (c.contains(QStringLiteral("txAntennaList"))) {
+        const QStringList ants = c.value(QStringLiteral("txAntennaList")).toStringList();
         if (ants != m_txAntennaList) {
             m_txAntennaList = ants;
             emit txAntennaListChanged(m_txAntennaList);
         }
     }
-    if (kvs.contains("rxant")) {
-        m_rxAntenna = kvs["rxant"];
+    if (c.contains(QStringLiteral("rxAntenna"))) {
+        m_rxAntenna = c.value(QStringLiteral("rxAntenna")).toString();
         emit rxAntennaChanged(m_rxAntenna);
     }
-    if (kvs.contains("txant")) {
-        m_txAntenna = kvs["txant"];
+    if (c.contains(QStringLiteral("txAntenna"))) {
+        m_txAntenna = c.value(QStringLiteral("txAntenna")).toString();
         emit txAntennaChanged(m_txAntenna);
     }
-    // Status key is "lock" (not "locked") per FlexAPI
-    if (kvs.contains("lock")) {
-        m_locked = kvs["lock"] == "1";
+    if (c.contains(QStringLiteral("locked"))) {
+        m_locked = c.value(QStringLiteral("locked")).toBool();
         if (!m_locked) {
             m_lockedFeedbackTimer.stop();
             setLockedFeedbackActive(false);
         }
         emit lockedChanged(m_locked);
     }
-    if (kvs.contains("qsk")) {
-        m_qsk = kvs["qsk"] == "1";
+    if (c.contains(QStringLiteral("qsk"))) {
+        m_qsk = c.value(QStringLiteral("qsk")).toBool();
         emit qskChanged(m_qsk);
     }
-    if (kvs.contains("nb")) {
-        m_nb = kvs["nb"] == "1";
+    if (c.contains(QStringLiteral("nb"))) {
+        m_nb = c.value(QStringLiteral("nb")).toBool();
         emit nbChanged(m_nb);
     }
-    if (kvs.contains("nr")) {
-        m_nr = kvs["nr"] == "1";
+    if (c.contains(QStringLiteral("nr"))) {
+        m_nr = c.value(QStringLiteral("nr")).toBool();
         emit nrChanged(m_nr);
     }
-    if (kvs.contains("anf")) {
-        m_anf = kvs["anf"] == "1";
+    if (c.contains(QStringLiteral("anf"))) {
+        m_anf = c.value(QStringLiteral("anf")).toBool();
         emit anfChanged(m_anf);
     }
-    if (kvs.contains("nrl")) {
-        m_nrl = kvs["nrl"] == "1";
+    if (c.contains(QStringLiteral("nrl"))) {
+        m_nrl = c.value(QStringLiteral("nrl")).toBool();
         emit nrlChanged(m_nrl);
     }
-    if (kvs.contains("nrs")) {
-        m_nrs = kvs["nrs"] == "1";
+    if (c.contains(QStringLiteral("nrs"))) {
+        m_nrs = c.value(QStringLiteral("nrs")).toBool();
         emit nrsChanged(m_nrs);
     }
-    if (kvs.contains("rnn")) {
-        m_rnn = kvs["rnn"] == "1";
+    if (c.contains(QStringLiteral("rnn"))) {
+        m_rnn = c.value(QStringLiteral("rnn")).toBool();
         emit rnnChanged(m_rnn);
     }
-    if (kvs.contains("nrf")) {
-        m_nrf = kvs["nrf"] == "1";
+    if (c.contains(QStringLiteral("nrf"))) {
+        m_nrf = c.value(QStringLiteral("nrf")).toBool();
         emit nrfChanged(m_nrf);
     }
-    if (kvs.contains("anfl")) {
-        m_anfl = kvs["anfl"] == "1";
+    if (c.contains(QStringLiteral("anfl"))) {
+        m_anfl = c.value(QStringLiteral("anfl")).toBool();
         emit anflChanged(m_anfl);
     }
-    if (kvs.contains("anft")) {
-        m_anft = kvs["anft"] == "1";
+    if (c.contains(QStringLiteral("anft"))) {
+        m_anft = c.value(QStringLiteral("anft")).toBool();
         emit anftChanged(m_anft);
     }
-    if (kvs.contains("apf")) {
-        bool v = kvs["apf"] == "1";
+    if (c.contains(QStringLiteral("apf"))) {
+        bool v = c.value(QStringLiteral("apf")).toBool();
         if (m_apf != v) { m_apf = v; emit apfChanged(v); }
     }
-    if (kvs.contains("apf_level")) {
-        int v = kvs["apf_level"].toInt();
+    if (c.contains(QStringLiteral("apfLevel"))) {
+        int v = c.value(QStringLiteral("apfLevel")).toInt();
         if (m_apfLevel != v) { m_apfLevel = v; emit apfLevelChanged(v); }
     }
-    // DSP level parsing
-    if (kvs.contains("nb_level")) {
-        int v = kvs["nb_level"].toInt();
+    // DSP levels
+    if (c.contains(QStringLiteral("nbLevel"))) {
+        int v = c.value(QStringLiteral("nbLevel")).toInt();
         if (m_nbLevel != v) { m_nbLevel = v; emit nbLevelChanged(v); }
     }
-    if (kvs.contains("nr_level")) {
-        int v = kvs["nr_level"].toInt();
+    if (c.contains(QStringLiteral("nrLevel"))) {
+        int v = c.value(QStringLiteral("nrLevel")).toInt();
         if (m_nrLevel != v) { m_nrLevel = v; emit nrLevelChanged(v); }
     }
-    if (kvs.contains("anf_level")) {
-        int v = kvs["anf_level"].toInt();
+    if (c.contains(QStringLiteral("anfLevel"))) {
+        int v = c.value(QStringLiteral("anfLevel")).toInt();
         if (m_anfLevel != v) { m_anfLevel = v; emit anfLevelChanged(v); }
     }
-    if (kvs.contains("lms_nr_level")) {
-        int v = kvs["lms_nr_level"].toInt();
+    if (c.contains(QStringLiteral("nrlLevel"))) {
+        int v = c.value(QStringLiteral("nrlLevel")).toInt();
         if (m_nrlLevel != v) { m_nrlLevel = v; emit nrlLevelChanged(v); }
     }
-    if (kvs.contains("speex_nr_level")) {
-        int v = kvs["speex_nr_level"].toInt();
+    if (c.contains(QStringLiteral("nrsLevel"))) {
+        int v = c.value(QStringLiteral("nrsLevel")).toInt();
         // The radio's `profile global` snapshot does not persist
         // speex_nr_level. On recall the firmware reports its default of 50
         // even when the user previously set a different value. If we have a
@@ -1090,47 +1082,49 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         }
         if (m_nrsLevel != v) { m_nrsLevel = v; emit nrsLevelChanged(v); }
     }
-    if (kvs.contains("nrf_level")) {
-        int v = kvs["nrf_level"].toInt();
+    if (c.contains(QStringLiteral("nrfLevel"))) {
+        int v = c.value(QStringLiteral("nrfLevel")).toInt();
         if (m_nrfLevel != v) { m_nrfLevel = v; emit nrfLevelChanged(v); }
     }
-    if (kvs.contains("lms_anf_level")) {
-        int v = kvs["lms_anf_level"].toInt();
+    if (c.contains(QStringLiteral("anflLevel"))) {
+        int v = c.value(QStringLiteral("anflLevel")).toInt();
         if (m_anflLevel != v) { m_anflLevel = v; emit anflLevelChanged(v); }
     }
-    if (kvs.contains("agc_mode")) {
-        m_agcMode = kvs["agc_mode"];
+    if (c.contains(QStringLiteral("agcMode"))) {
+        m_agcMode = c.value(QStringLiteral("agcMode")).toString();
         emit agcModeChanged(m_agcMode);
     }
-    if (kvs.contains("agc_threshold")) {
-        m_agcThreshold = kvs["agc_threshold"].toInt();
+    if (c.contains(QStringLiteral("agcThreshold"))) {
+        m_agcThreshold = c.value(QStringLiteral("agcThreshold")).toInt();
         emit agcThresholdChanged(m_agcThreshold);
     }
-    if (kvs.contains("agc_off_level")) {
-        m_agcOffLevel = kvs["agc_off_level"].toInt();
+    if (c.contains(QStringLiteral("agcOffLevel"))) {
+        m_agcOffLevel = c.value(QStringLiteral("agcOffLevel")).toInt();
         emit agcOffLevelChanged(m_agcOffLevel);
     }
-    if (kvs.contains("squelch") || kvs.contains("squelch_level")) {
-        if (kvs.contains("squelch"))       m_squelchOn    = kvs["squelch"] == "1";
-        if (kvs.contains("squelch_level")) m_squelchLevel = kvs["squelch_level"].toInt();
+    if (c.contains(QStringLiteral("squelchOn")) || c.contains(QStringLiteral("squelchLevel"))) {
+        if (c.contains(QStringLiteral("squelchOn")))
+            m_squelchOn = c.value(QStringLiteral("squelchOn")).toBool();
+        if (c.contains(QStringLiteral("squelchLevel")))
+            m_squelchLevel = c.value(QStringLiteral("squelchLevel")).toInt();
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
-    if (kvs.contains("rit_on") || kvs.contains("rit_freq")) {
-        if (kvs.contains("rit_on"))   m_ritOn   = kvs["rit_on"] == "1";
-        if (kvs.contains("rit_freq")) m_ritFreq = kvs["rit_freq"].toInt();
+    if (c.contains(QStringLiteral("ritOn")) || c.contains(QStringLiteral("ritFreq"))) {
+        if (c.contains(QStringLiteral("ritOn")))   m_ritOn   = c.value(QStringLiteral("ritOn")).toBool();
+        if (c.contains(QStringLiteral("ritFreq"))) m_ritFreq = c.value(QStringLiteral("ritFreq")).toInt();
         emit ritChanged(m_ritOn, m_ritFreq);
     }
-    if (kvs.contains("xit_on") || kvs.contains("xit_freq")) {
-        if (kvs.contains("xit_on"))   m_xitOn   = kvs["xit_on"] == "1";
-        if (kvs.contains("xit_freq")) m_xitFreq = kvs["xit_freq"].toInt();
+    if (c.contains(QStringLiteral("xitOn")) || c.contains(QStringLiteral("xitFreq"))) {
+        if (c.contains(QStringLiteral("xitOn")))   m_xitOn   = c.value(QStringLiteral("xitOn")).toBool();
+        if (c.contains(QStringLiteral("xitFreq"))) m_xitFreq = c.value(QStringLiteral("xitFreq")).toInt();
         emit xitChanged(m_xitOn, m_xitFreq);
     }
-    if (kvs.contains("dax")) {
-        int ch = kvs["dax"].toInt();
+    if (c.contains(QStringLiteral("daxChannel"))) {
+        int ch = c.value(QStringLiteral("daxChannel")).toInt();
         if (m_daxChannel != ch) { m_daxChannel = ch; emit daxChannelChanged(ch); }
     }
-    if (kvs.contains("rtty_mark")) {
-        int v = kvs["rtty_mark"].toInt();
+    if (c.contains(QStringLiteral("rttyMark"))) {
+        int v = c.value(QStringLiteral("rttyMark")).toInt();
         // The radio resets rtty_mark to 2125 on band changes regardless of the
         // configured rtty_mark_default. If we know the default differs and the
         // user has not explicitly chosen 2125, push the default back.
@@ -1140,26 +1134,26 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         }
         if (m_rttyMark != v) { m_rttyMark = v; emit rttyMarkChanged(v); }
     }
-    if (kvs.contains("rtty_shift")) {
-        int v = kvs["rtty_shift"].toInt();
+    if (c.contains(QStringLiteral("rttyShift"))) {
+        int v = c.value(QStringLiteral("rttyShift")).toInt();
         if (m_rttyShift != v) { m_rttyShift = v; emit rttyShiftChanged(v); }
     }
-    if (kvs.contains("digl_offset")) {
-        int v = kvs["digl_offset"].toInt();
+    if (c.contains(QStringLiteral("diglOffset"))) {
+        int v = c.value(QStringLiteral("diglOffset")).toInt();
         if (m_diglOffset != v) { m_diglOffset = v; emit diglOffsetChanged(v); }
     }
-    if (kvs.contains("digu_offset")) {
-        int v = kvs["digu_offset"].toInt();
+    if (c.contains(QStringLiteral("diguOffset"))) {
+        int v = c.value(QStringLiteral("diguOffset")).toInt();
         if (m_diguOffset != v) { m_diguOffset = v; emit diguOffsetChanged(v); }
     }
 
     // Record/playback status
-    if (kvs.contains("record")) {
-        bool on = kvs["record"] == "1";
+    if (c.contains(QStringLiteral("recordOn"))) {
+        bool on = c.value(QStringLiteral("recordOn")).toBool();
         if (m_recordOn != on) { m_recordOn = on; emit recordOnChanged(on); }
     }
-    if (kvs.contains("play")) {
-        const QString& v = kvs["play"];
+    if (c.contains(QStringLiteral("play"))) {
+        const QString v = c.value(QStringLiteral("play")).toString();
         if (v == "disabled") {
             if (m_playEnabled) { m_playEnabled = false; emit playEnabledChanged(false); }
             if (m_playOn) { m_playOn = false; emit playOnChanged(false); }
@@ -1170,43 +1164,42 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         }
     }
 
-    // FM duplex/repeater status
-    // Normalize to lowercase / fixed decimal format to match UI combo-box item data
-    if (kvs.contains("fm_tone_mode")) {
-        m_fmToneMode = kvs["fm_tone_mode"].toLower();
+    // FM duplex/repeater status (lowercase normalization done in the backend)
+    if (c.contains(QStringLiteral("fmToneMode"))) {
+        m_fmToneMode = c.value(QStringLiteral("fmToneMode")).toString();
         emit fmToneModeChanged(m_fmToneMode);
     }
-    if (kvs.contains("fm_tone_value")) {
-        double v = kvs["fm_tone_value"].toDouble();
+    if (c.contains(QStringLiteral("fmToneValue"))) {
+        double v = c.value(QStringLiteral("fmToneValue")).toDouble();
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);
     }
-    if (kvs.contains("repeater_offset_dir")) {
-        m_repeaterOffsetDir = kvs["repeater_offset_dir"].toLower();
+    if (c.contains(QStringLiteral("repeaterOffsetDir"))) {
+        m_repeaterOffsetDir = c.value(QStringLiteral("repeaterOffsetDir")).toString();
         emit repeaterOffsetDirChanged(m_repeaterOffsetDir);
     }
-    if (kvs.contains("fm_repeater_offset_freq")) {
-        m_fmRepeaterOffsetFreq = kvs["fm_repeater_offset_freq"].toDouble();
+    if (c.contains(QStringLiteral("fmRepeaterOffsetFreq"))) {
+        m_fmRepeaterOffsetFreq = c.value(QStringLiteral("fmRepeaterOffsetFreq")).toDouble();
         emit fmRepeaterOffsetFreqChanged(m_fmRepeaterOffsetFreq);
     }
-    if (kvs.contains("tx_offset_freq")) {
-        m_txOffsetFreq = kvs["tx_offset_freq"].toDouble();
+    if (c.contains(QStringLiteral("txOffsetFreq"))) {
+        m_txOffsetFreq = c.value(QStringLiteral("txOffsetFreq")).toDouble();
         emit txOffsetFreqChanged(m_txOffsetFreq);
     }
-    if (kvs.contains("fm_deviation")) {
-        m_fmDeviation = kvs["fm_deviation"].toInt();
+    if (c.contains(QStringLiteral("fmDeviation"))) {
+        m_fmDeviation = c.value(QStringLiteral("fmDeviation")).toInt();
         emit fmDeviationChanged(m_fmDeviation);
     }
 
-    if (kvs.contains("step") || kvs.contains("step_list")) {
+    if (c.contains(QStringLiteral("step")) || c.contains(QStringLiteral("stepList"))) {
         bool changed = false;
-        if (kvs.contains("step")) {
-            int s = kvs["step"].toInt();
+        if (c.contains(QStringLiteral("step"))) {
+            int s = c.value(QStringLiteral("step")).toInt();
             if (s != m_stepHz) { m_stepHz = s; changed = true; }
         }
-        if (kvs.contains("step_list")) {
+        if (c.contains(QStringLiteral("stepList"))) {
             QVector<int> list;
-            for (const auto& v : kvs["step_list"].split(','))
+            for (const auto& v : c.value(QStringLiteral("stepList")).toString().split(','))
                 if (!v.isEmpty()) list.append(v.toInt());
             if (list != m_stepList) { m_stepList = list; changed = true; }
         }

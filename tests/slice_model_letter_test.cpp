@@ -1,9 +1,10 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
-#include <QMap>
 #include <QSignalSpy>
 #include <QString>
+#include <QVariant>
+#include <QVariantMap>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -23,9 +24,12 @@ static int g_failures = 0;
     } \
 } while (0)
 
-static QMap<QString, QString> kv(std::initializer_list<std::pair<QString, QString>> pairs)
+// aetherd RFC 2.3: SliceModel::applyChanges now takes a normalized, canonically
+// named QVariantMap (the Flex wire decode lives in FlexBackend::decodeSliceStatus,
+// covered by aetherd_slice_decode_test). This helper builds that map.
+static QVariantMap kv(std::initializer_list<std::pair<QString, QVariant>> pairs)
 {
-    QMap<QString, QString> m;
+    QVariantMap m;
     for (const auto& p : pairs) m.insert(p.first, p.second);
     return m;
 }
@@ -46,7 +50,7 @@ int main(int argc, char** argv)
     {
         SliceModel s(3);
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyStatus(kv({{"index_letter", "A"}}));
+        s.applyChanges(kv({{"letter", "A"}}));
         EXPECT_EQ(s.letter(), QString("A"));
         EXPECT_EQ(spy.count(), 1);
         EXPECT_EQ(spy.takeFirst().at(0).toString(), QString("A"));
@@ -55,18 +59,18 @@ int main(int argc, char** argv)
     // ── Re-applying the same letter does NOT re-emit letterChanged.
     {
         SliceModel s(1);
-        s.applyStatus(kv({{"index_letter", "B"}}));
+        s.applyChanges(kv({{"letter", "B"}}));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyStatus(kv({{"index_letter", "B"}}));
+        s.applyChanges(kv({{"letter", "B"}}));
         EXPECT_EQ(spy.count(), 0);
     }
 
     // ── Letter change emits exactly once and the resolved value follows.
     {
         SliceModel s(2);
-        s.applyStatus(kv({{"index_letter", "A"}}));
+        s.applyChanges(kv({{"letter", "A"}}));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyStatus(kv({{"index_letter", "C"}}));
+        s.applyChanges(kv({{"letter", "C"}}));
         EXPECT_EQ(s.letter(), QString("C"));
         EXPECT_EQ(spy.count(), 1);
         EXPECT_EQ(spy.takeFirst().at(0).toString(), QString("C"));
@@ -76,7 +80,7 @@ int main(int argc, char** argv)
     // (used when a display preference changes).
     {
         SliceModel s(0);
-        s.applyStatus(kv({{"index_letter", "A"}}));
+        s.applyChanges(kv({{"letter", "A"}}));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
         s.emitLetterRefresh();
         EXPECT_EQ(spy.count(), 1);
@@ -87,9 +91,9 @@ int main(int argc, char** argv)
     // letter or emit on letterChanged.
     {
         SliceModel s(2);
-        s.applyStatus(kv({{"index_letter", "A"}}));
+        s.applyChanges(kv({{"letter", "A"}}));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyStatus(kv({{"in_use", "1"}, {"RF_frequency", "14.250"}}));
+        s.applyChanges(kv({{"inUse", true}, {"frequency", 14.250}}));
         EXPECT_EQ(s.letter(), QString("A"));
         EXPECT_EQ(spy.count(), 0);
     }
@@ -102,7 +106,7 @@ int main(int argc, char** argv)
         QStringList commands;
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
-        s.applyStatus(kv({{"audio_pan", "25"}}));
+        s.applyChanges(kv({{"audioPan", 25}}));
         EXPECT_EQ(s.audioPan(), 25);
         EXPECT_EQ(s.flexAudioPan(), 25);
 
@@ -122,7 +126,7 @@ int main(int argc, char** argv)
         EXPECT_EQ(panSpy.count(), 1);
         EXPECT_EQ(panSpy.takeFirst().at(0).toInt(), 80);
 
-        s.applyStatus(kv({{"audio_pan", "10"}}));
+        s.applyChanges(kv({{"audioPan", 10}}));
         EXPECT_EQ(s.audioPan(), 80);
         EXPECT_EQ(s.flexAudioPan(), 10);
         EXPECT_EQ(panSpy.count(), 0);
@@ -150,11 +154,11 @@ int main(int argc, char** argv)
         QStringList commands;
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
-        s.applyStatus(kv({{"agc_mode", "slow"},
-                          {"agc_threshold", "40"},
-                          {"agc_off_level", "12"},
-                          {"squelch", "1"},
-                          {"squelch_level", "35"}}));
+        s.applyChanges(kv({{"agcMode", "slow"},
+                           {"agcThreshold", 40},
+                           {"agcOffLevel", 12},
+                           {"squelchOn", true},
+                           {"squelchLevel", 35}}));
         EXPECT_EQ(s.agcMode(), QString("slow"));
         EXPECT_EQ(s.agcThreshold(), 40);
         EXPECT_EQ(s.agcOffLevel(), 12);
@@ -250,11 +254,11 @@ int main(int argc, char** argv)
         EXPECT_EQ(externalSquelchSpy.takeFirst().at(0).toBool(), false);
         commands.clear();
 
-        s.applyStatus(kv({{"agc_mode", "fast"},
-                          {"agc_threshold", "90"},
-                          {"agc_off_level", "8"},
-                          {"squelch", "1"},
-                          {"squelch_level", "12"}}));
+        s.applyChanges(kv({{"agcMode", "fast"},
+                           {"agcThreshold", 90},
+                           {"agcOffLevel", 8},
+                           {"squelchOn", true},
+                           {"squelchLevel", 12}}));
         EXPECT_EQ(s.agcMode(), QString("fast"));
         EXPECT_EQ(s.receiveAgcMode(), QString("off"));
         EXPECT_EQ(s.flexAgcMode(), QString("fast"));
