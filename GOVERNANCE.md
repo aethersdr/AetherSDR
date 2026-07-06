@@ -135,18 +135,26 @@ Do not open a PR until the RFC issue is approved.
 
 ## CODEOWNERS
 
-The following paths require maintainer review on every PR regardless of who
-else has approved:
+PR review is gated by [`.github/CODEOWNERS`](.github/CODEOWNERS), which is the
+authoritative source of who must approve what (last-match-wins). It defines
+three tiers, broadest → most restrictive:
 
-```
-src/gui/          @ten9876
-src/core/         @ten9876
-src/models/       @ten9876
-CMakeLists.txt    @ten9876
-```
+- **Tier 3 — source code** (`@aethersdr/reviewers`): all of `src/` — including
+  the whole of `MainWindow` — plus anything not enumerated below. The broad
+  reviewer roster; routine source review benefits from more eyes.
+- **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `docs/`, `*.md`,
+  `tests/`, `CMakeLists.txt`, and the routine CI workflows under
+  `.github/workflows/`.
+- **Tier 1 — governance / security** (`@aethersdr/maintainers`): the governance
+  and security/compliance docs, `.github/CODEOWNERS` itself, the CodeQL config,
+  the security-sensitive workflows (release signing/publish + the CodeQL scan
+  invocation), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`,
+  `GEMINI.md`, `.claude/commands/`).
 
-Domain Maintainers can approve and merge PRs in their own areas. The paths
-above are hard gates — no merge without maintainer sign-off.
+Self-approval is blocked by GitHub on every tier — your own PR always needs a
+review from someone else. The Tier-1 paths are hard gates: no merge without
+maintainer sign-off (an admin override is the only bypass). Team rosters live
+in the GitHub org; `.github/CODEOWNERS` carries the exact patterns.
 
 ---
 

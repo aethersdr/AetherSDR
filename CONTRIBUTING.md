@@ -252,27 +252,30 @@ GitHub on every tier — your own PR always needs review from someone else.
 
 | Tier | Paths | Who can approve |
 |---|---|---|
-| **Default** | Everything not listed below | @ten9876, @jensenpat |
-| **Mechanical / safe** | `tests/`, `docs/`, `*.md`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | @ten9876, @jensenpat, @AetherClaude |
-| **Maintainer-only** | `src/gui/MainWindow.{h,cpp}`, `src/core/RadioModel.{h,cpp}`, `src/core/AudioEngine.{h,cpp}`, `src/core/PanadapterStream.{h,cpp}`, `CMakeLists.txt`, `CLAUDE.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`, `.github/workflows/` | @ten9876 |
+| **Source (Tier 3)** | Everything not listed below — all of `src/`, **including the whole of `MainWindow`** | `@aethersdr/reviewers` (@ten9876, @jensenpat, @NF0T, @rfoust, @chibondking) |
+| **Infrastructure (Tier 2)** | `tests/`, `docs/`, `*.md`, `CMakeLists.txt`, the routine `.github/workflows/`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | `@aethersdr/infrastructure` (@ten9876, @jensenpat) |
+| **Maintainer-only (Tier 1)** | governance/security docs (`CONSTITUTION.md`, `GOVERNANCE.md`, `CONTRIBUTING.md`, `SECURITY*`, `LICENSE`, `ROADMAP.md`, `CODE_OF_CONDUCT.md`), `.github/CODEOWNERS`, `.github/codeql/`, the release signing/publish + CodeQL-scan workflows (`sign-release.yml`, `codeql.yml`, `macos-dmg.yml`, `windows-installer.yml`, `appimage.yml`, `docker-ci-image.yml`), and the AI-instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/commands/`) | `@aethersdr/maintainers` (@ten9876) |
 
-The maintainer-only tier covers *direction-impacting* paths: visual/UX,
-threading and central-state architecture, protocol bedrock, build
-configuration, and project policy. Per
+The maintainer-only tier covers *governance and security-critical* paths:
+project policy and governance docs, the CODEOWNERS file and CodeQL config, the
+release signing/publish pipeline, and the AI-instruction files. Per
 [CLAUDE.md](CLAUDE.md#autonomous-agent-boundaries), changes here need
-maintainer eyes regardless of who wrote them.
+maintainer eyes regardless of who wrote them. (The routine CI workflows and the
+build config sit at Tier 2 so day-to-day CI iteration isn't maintainer-gated;
+only the security-sensitive workflows are carved back to Tier 1.)
 
-Note the boundary inside `src/gui/`: only the core **`MainWindow.{h,cpp}`** is
-maintainer-only. The **`MainWindow_*.cpp` sibling TUs** from the #3351
-decomposition (`MainWindow_DigitalModes.cpp`, `MainWindow_Wiring.cpp`,
-`MainWindow_Controllers.cpp`, etc.) are **deliberately at the Default reviewer
-tier** — widening review/approval of extracted feature code to more of the team
-was a primary goal of the decomposition, so feature work that lands in a sibling
-TU does not bottleneck on a maintainer.
+`MainWindow` is **not** maintainer-gated. With the #3351 decomposition
+complete, the core **`MainWindow.{h,cpp}`** and its extracted **`MainWindow_*.cpp`
+sibling TUs** (`MainWindow_DigitalModes.cpp`, `MainWindow_Wiring.cpp`,
+`MainWindow_Controllers.cpp`, etc.) all sit at the Source (Tier 3) reviewer
+tier, so the whole MainWindow surface shares the broad reviewer roster — a
+primary goal of the decomposition was widening review of that code to the team.
 
-The mechanical tier exists so the @AetherClaude bot can land low-risk
-changes (test additions, documentation tweaks, dependency bumps,
-template updates) without queueing on human review.
+Bot-opened PRs (e.g. @AetherClaude's) still require a human reviewer regardless
+of tier — the bot is intentionally **not** a code owner. The Infrastructure
+tier simply means low-risk changes (test additions, documentation tweaks,
+dependency bumps, template updates) need an infrastructure owner rather than a
+maintainer.
 
 ### Draft PR conventions
 
