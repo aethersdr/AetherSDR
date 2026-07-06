@@ -1517,28 +1517,36 @@ void MainWindow::wireKiwiSdr()
         connect(m_kiwiSdrManager, &KiwiSdrManager::waterfallDisplayRangeChanged,
                 this, [this](const QString& profileId, float minDbm,
                              float maxDbm, bool autoRange) {
-            if (profileId.isEmpty() || !m_kiwiSdrManager) {
+            if (profileId.isEmpty() || !m_kiwiSdrManager || !m_panStack) {
                 return;
             }
 
-            const int sliceId =
-                m_kiwiSdrManager->assignedSliceForProfile(profileId);
-            SliceModel* slice = m_radioModel.slice(sliceId);
-            if (!slice || !m_radioModel.sliceMayBelongToUs(sliceId)
-                || kiwiSdrProfileForPan(slice->panId()) != profileId) {
-                return;
-            }
-
-            if (SpectrumWidget* sw = spectrumForSlice(slice)) {
+            // Resolve the target pan(s) the same way the display path does
+            // (kiwiSdrProfileForPan), instead of via assignedSliceForProfile:
+            // the profile→slice assignment can be absent, or point at a
+            // different slice than the one a pan is actually displaying
+            // (diversity / active-slice resolution, or the owned-but-unassigned
+            // tracking fallback), so the assigned-slice path could drop the
+            // computed range. Iterating panes also updates every pan when the
+            // same profile is shown on more than one. (#4069 review)
+            const KiwiSdrAntennaProfile profile =
+                m_kiwiSdrManager->profile(profileId);
+            const int minInt = static_cast<int>(std::lround(minDbm));
+            const int maxInt = static_cast<int>(std::lround(maxDbm));
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (!applet
+                    || kiwiSdrProfileForPan(applet->panId()) != profileId) {
+                    continue;
+                }
+                SpectrumWidget* sw = m_panStack->spectrum(applet->panId());
+                if (!sw) {
+                    continue;
+                }
                 sw->setKiwiSdrWaterfallProfile(profileId);
-                sw->setKiwiSdrWaterfallDisplayRange(minDbm, maxDbm,
-                                                    autoRange);
+                sw->setKiwiSdrWaterfallDisplayRange(minDbm, maxDbm, autoRange);
                 if (SpectrumOverlayMenu* menu = sw->overlayMenu()) {
-                    const KiwiSdrAntennaProfile profile =
-                        m_kiwiSdrManager->profile(profileId);
                     menu->syncKiwiWaterfallSettings(
-                        static_cast<int>(std::lround(minDbm)),
-                        static_cast<int>(std::lround(maxDbm)),
+                        minInt, maxInt,
                         profile.waterfallAutoScale || autoRange,
                         profile.waterfallRate);
                 }
