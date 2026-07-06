@@ -442,7 +442,7 @@ private:
     // Flex firmware's `profile global` snapshot does not persist
     // speex_nr_level — on recall the radio reports the firmware default of
     // 50, even when the user set a different value before saving. Cache the
-    // user's explicit choice so applyStatus() can re-push it when the radio
+    // user's explicit choice so applyChanges() can re-push it when the radio
     // comes back at 50 with no user-initiated change to that value.
     int     m_nrsLevelUser{50};
     bool    m_nrsLevelUserOverride{false};

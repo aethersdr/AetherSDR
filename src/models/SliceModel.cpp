@@ -330,7 +330,7 @@ void SliceModel::setNrsLevel(int v)
 {
     v = std::clamp(v, 0, 100);
     // Record any explicit user choice (including a deliberate 50) so the
-    // applyStatus() re-push won't fight a value the user picked themselves.
+    // applyChanges() re-push won't fight a value the user picked themselves.
     m_nrsLevelUser = v;
     m_nrsLevelUserOverride = true;
     if (m_nrsLevel == v) return;
@@ -489,7 +489,7 @@ void SliceModel::setDaxChannel(int ch)
 void SliceModel::setRttyMark(int hz)
 {
     if (m_rttyMark == hz) return;
-    // Track explicit user override so applyStatus() won't fight an intentional
+    // Track explicit user override so applyChanges() won't fight an intentional
     // choice of 2125 when rtty_mark_default is non-standard.
     m_rttyMarkUserOverride = (hz == 2125 && m_rttyMarkDefault != 2125);
     m_rttyMark = hz;
@@ -1199,8 +1199,14 @@ void SliceModel::applyChanges(const SliceDelta& d)
         }
         if (d.stepList.has_value()) {
             QVector<int> list;
-            for (const auto& v : (*d.stepList).split(QLatin1Char(',')))
-                if (!v.isEmpty()) list.append(v.toInt());
+            for (const auto& v : (*d.stepList).split(QLatin1Char(','))) {
+                if (v.isEmpty()) continue;
+                // Fail closed on a malformed step token: skip it rather than
+                // admit a bogus 0-Hz step into the tuning-step list (#4068 review).
+                bool ok = false;
+                const int n = v.toInt(&ok);
+                if (ok) list.append(n);
+            }
             if (list != m_stepList) { m_stepList = list; changed = true; }
         }
         if (changed) emit stepChanged(m_stepHz, m_stepList);

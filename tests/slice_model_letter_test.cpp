@@ -319,6 +319,18 @@ int main(int argc, char** argv)
                                  "slice set 5 squelch_level=22"));
     }
 
+    // ── step_list: a malformed token is dropped (fail-closed), not admitted as
+    // a bogus 0-Hz step. (#4068 review — rfoust.)
+    {
+        SliceModel s(6);
+        s.applyChanges(delta([](SliceDelta& d){ d.stepList = QStringLiteral("10,abc,1000"); }));
+        EXPECT_EQ(s.stepList().size(), 2);
+        if (s.stepList().size() == 2) {
+            EXPECT_EQ(s.stepList()[0], 10);
+            EXPECT_EQ(s.stepList()[1], 1000);
+        }
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");
         return 0;
