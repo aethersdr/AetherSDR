@@ -402,6 +402,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
+    qRegisterMetaType<RadioDelta>();
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
@@ -544,6 +545,11 @@ RadioModel::RadioModel(QObject* parent)
     // handlers (main-thread AutoConnection → DirectConnection).
     connect(m_backend.get(), &IRadioBackend::transmitChanged, this,
             [this](const TransmitDelta& delta) { m_transmitModel.applyChanges(delta); });
+
+    // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
+    // backend drives RadioModel's own state via applyRadioChanges.
+    connect(m_backend.get(), &IRadioBackend::radioChanged, this,
+            [this](const RadioDelta& delta) { applyRadioChanges(delta); });
 
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
     // WHEN a dax_rx stream must exist (refcounted acquire/release from the
@@ -5581,11 +5587,20 @@ void RadioModel::setMultiFlexEnabled(bool on)
 
 void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
 {
+    // aetherd RFC 2.3 (RadioModel residual): the radio-global wire decode moved
+    // to FlexBackend::decodeRadioStatus → radioChanged → applyRadioChanges (the
+    // ctor-wired handler). This choke point drives it so live + deferred status
+    // both convert.
+    if (m_flexBackend) m_flexBackend->decodeRadioStatus(kvs);
+}
+
+void RadioModel::applyRadioChanges(const RadioDelta& d)
+{
     bool changed = false;
-    if (kvs.contains("model"))    { m_model = kvs["model"]; m_maxSlices = maxSlicesForModel(m_model); changed = true; }
-    if (kvs.contains("slices")) {
+    if (d.model) { m_model = *d.model; m_maxSlices = maxSlicesForModel(m_model); changed = true; }
+    if (d.slicesAvailable) {
         // slices=N reports available (unused) slots; total capacity = open + available
-        const int available = kvs["slices"].toInt();
+        const int available = *d.slicesAvailable;
         const int currentSliceCount = static_cast<int>(m_slices.size());
         const int modelLimit = m_model.isEmpty() ? 0 : maxSlicesForModel(m_model);
         const int reportedTotal = currentSliceCount + available;
@@ -5606,95 +5621,51 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
         }
         changed = true;
     }
-    if (kvs.contains("callsign")) {
-        if (kvs["callsign"] != m_callsign) {
-            m_callsign = kvs["callsign"];
+    if (d.callsign) {
+        if (*d.callsign != m_callsign) {
+            m_callsign = *d.callsign;
             emit callsignChanged(m_callsign);
         }
         changed = true;
     }
-    if (kvs.contains("nickname")) { m_nickname = kvs["nickname"]; changed = true; }
-    if (kvs.contains("region"))   { m_region = kvs["region"]; changed = true; }
-    if (kvs.contains("radio_options")) { m_radioOptions = kvs["radio_options"]; changed = true; }
-    if (kvs.contains("remote_on_enabled")) {
-        m_remoteOnEnabled = kvs["remote_on_enabled"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("mf_enable")) {
-        m_multiFlexEnabled = kvs["mf_enable"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("enforce_private_ip_connections")) {
-        m_enforcePrivateIp = kvs["enforce_private_ip_connections"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("binaural_rx")) {
-        m_binauralRx = kvs["binaural_rx"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("full_duplex_enabled")) {
-        m_fullDuplex = kvs["full_duplex_enabled"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("mute_local_audio_when_remote")) {
-        m_muteLocalWhenRemote = kvs["mute_local_audio_when_remote"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("auto_save")) {
-        const bool newAutoSave = kvs["auto_save"] == "1";
+    if (d.nickname) { m_nickname = *d.nickname; changed = true; }
+    if (d.region)   { m_region = *d.region; changed = true; }
+    if (d.radioOptions) { m_radioOptions = *d.radioOptions; changed = true; }
+    if (d.remoteOnEnabled) { m_remoteOnEnabled = *d.remoteOnEnabled; changed = true; }
+    if (d.multiFlexEnabled) { m_multiFlexEnabled = *d.multiFlexEnabled; changed = true; }
+    if (d.enforcePrivateIp) { m_enforcePrivateIp = *d.enforcePrivateIp; changed = true; }
+    if (d.binauralRx) { m_binauralRx = *d.binauralRx; changed = true; }
+    if (d.fullDuplex) { m_fullDuplex = *d.fullDuplex; changed = true; }
+    if (d.muteLocalWhenRemote) { m_muteLocalWhenRemote = *d.muteLocalWhenRemote; changed = true; }
+    if (d.autoSave) {
+        const bool newAutoSave = *d.autoSave;
         if (m_autoSave != newAutoSave) {
             m_autoSave = newAutoSave;
             emit autoSaveChanged(newAutoSave);
             changed = true;
         }
     }
-    if (kvs.contains("freq_error_ppb")) {
-        m_freqErrorPpb = kvs["freq_error_ppb"].toInt();
-        changed = true;
-    }
-    if (kvs.contains("cal_freq")) {
-        m_calFreqMhz = kvs["cal_freq"].toDouble();
-        changed = true;
-    }
-    if (kvs.contains("low_latency_digital_modes")) {
-        m_lowLatencyDigital = kvs["low_latency_digital_modes"] == "1";
-        changed = true;
-    }
-    if (kvs.contains("rtty_mark_default")) {
-        m_rttyMarkDefault = kvs["rtty_mark_default"].toInt();
+    if (d.freqErrorPpb) { m_freqErrorPpb = *d.freqErrorPpb; changed = true; }
+    if (d.calFreqMhz) { m_calFreqMhz = *d.calFreqMhz; changed = true; }
+    if (d.lowLatencyDigital) { m_lowLatencyDigital = *d.lowLatencyDigital; changed = true; }
+    if (d.rttyMarkDefault) {
+        m_rttyMarkDefault = *d.rttyMarkDefault;
         for (SliceModel* s : m_slices)
             s->setRttyMarkDefault(m_rttyMarkDefault);
         changed = true;
     }
-    if (kvs.contains("tnf_enabled")) {
-        m_tnfModel.applyGlobalEnabled(kvs["tnf_enabled"] == "1");
+    if (d.tnfEnabled) {
+        m_tnfModel.applyGlobalEnabled(*d.tnfEnabled);
     }
     // Audio outputs
     bool audioChanged = false;
-    if (kvs.contains("lineout_gain")) {
-        m_lineoutGain = kvs["lineout_gain"].toInt();
-        audioChanged = true;
-    }
-    if (kvs.contains("lineout_mute")) {
-        m_lineoutMute = kvs["lineout_mute"] == "1";
-        audioChanged = true;
-    }
-    if (kvs.contains("headphone_gain")) {
-        m_headphoneGain = kvs["headphone_gain"].toInt();
-        audioChanged = true;
-    }
-    if (kvs.contains("headphone_mute")) {
-        m_headphoneMute = kvs["headphone_mute"] == "1";
-        audioChanged = true;
-    }
-    if (kvs.contains("front_speaker_mute")) {
-        m_frontSpeakerMute = kvs["front_speaker_mute"] == "1";
-        audioChanged = true;
-    }
-    if (kvs.contains("daxiq_capacity"))
-        m_daxIqModel.setCapacity(kvs["daxiq_capacity"].toInt());
-    if (kvs.contains("daxiq_available"))
-        m_daxIqModel.setAvailable(kvs["daxiq_available"].toInt());
+    if (d.lineoutGain) { m_lineoutGain = *d.lineoutGain; audioChanged = true; }
+    if (d.lineoutMute) { m_lineoutMute = *d.lineoutMute; audioChanged = true; }
+    if (d.headphoneGain) { m_headphoneGain = *d.headphoneGain; audioChanged = true; }
+    if (d.headphoneMute) { m_headphoneMute = *d.headphoneMute; audioChanged = true; }
+    if (d.frontSpeakerMute) { m_frontSpeakerMute = *d.frontSpeakerMute; audioChanged = true; }
+    if (d.daxiqCapacity)  m_daxIqModel.setCapacity(*d.daxiqCapacity);
+    if (d.daxiqAvailable) m_daxIqModel.setAvailable(*d.daxiqAvailable);
 
     if (audioChanged) emit audioOutputChanged();
     if (changed) emit infoChanged();

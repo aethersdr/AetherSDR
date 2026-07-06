@@ -659,6 +659,46 @@ void FlexBackend::decodeApdSamplerStatus(const QMap<QString, QString>& kvs)
     emit transmitChanged(d);
 }
 
+void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
+{
+    // Radio-global status → typed RadioDelta (aetherd RFC 2.3 — RadioModel
+    // residual). Present-only, ok-guarded via the shared flexkv carriers; the
+    // model-side orchestration (slice-capacity bounding, rtty→slices propagation,
+    // TNF/DAX-IQ sub-models, the change-gated emits) stays in applyRadioChanges.
+    RadioDelta d;
+    // Identity / capability
+    carryStr(kvs, "model", d.model);
+    carryInt(kvs, "slices", d.slicesAvailable);
+    carryStr(kvs, "callsign", d.callsign);
+    carryStr(kvs, "nickname", d.nickname);
+    carryStr(kvs, "region", d.region);
+    carryStr(kvs, "radio_options", d.radioOptions);
+    // Global flags
+    carryBool(kvs, "remote_on_enabled", d.remoteOnEnabled);
+    carryBool(kvs, "mf_enable", d.multiFlexEnabled);
+    carryBool(kvs, "enforce_private_ip_connections", d.enforcePrivateIp);
+    carryBool(kvs, "binaural_rx", d.binauralRx);
+    carryBool(kvs, "full_duplex_enabled", d.fullDuplex);
+    carryBool(kvs, "mute_local_audio_when_remote", d.muteLocalWhenRemote);
+    carryBool(kvs, "auto_save", d.autoSave);
+    carryBool(kvs, "low_latency_digital_modes", d.lowLatencyDigital);
+    carryBool(kvs, "tnf_enabled", d.tnfEnabled);
+    // Calibration / defaults
+    carryInt(kvs, "freq_error_ppb", d.freqErrorPpb);
+    carryReal(kvs, "cal_freq", d.calFreqMhz);
+    carryInt(kvs, "rtty_mark_default", d.rttyMarkDefault);
+    // Audio outputs
+    carryInt(kvs, "lineout_gain", d.lineoutGain);
+    carryBool(kvs, "lineout_mute", d.lineoutMute);
+    carryInt(kvs, "headphone_gain", d.headphoneGain);
+    carryBool(kvs, "headphone_mute", d.headphoneMute);
+    carryBool(kvs, "front_speaker_mute", d.frontSpeakerMute);
+    // DAX-IQ capacity
+    carryInt(kvs, "daxiq_capacity", d.daxiqCapacity);
+    carryInt(kvs, "daxiq_available", d.daxiqAvailable);
+    emit radioChanged(d);
+}
+
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {

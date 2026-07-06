@@ -9,6 +9,7 @@
 
 #include "core/backends/MeterDef.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
 
@@ -120,6 +121,11 @@ signals:
     // fields the wire reported (across the transmit / interlock / ATU / APD /
     // APD-sampler status planes) and RadioModel drives the TransmitModel.
     void transmitChanged(const TransmitDelta& delta);
+
+    // Normalized radio-global status delta (aetherd RFC 2.3 — RadioModel
+    // residual). Typed + compiler-checked; the backend populates only the fields
+    // the wire reported and RadioModel applies them + its own orchestration.
+    void radioChanged(const RadioDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
     // backend decodes the vendor meter-status wire format into a typed MeterDef;

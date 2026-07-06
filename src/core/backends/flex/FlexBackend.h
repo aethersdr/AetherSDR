@@ -116,6 +116,10 @@ public:
     // clamped numeric parses, uppercase, and list split; the model applies the
     // present fields. Called from the matching RadioModel status choke points.
     void decodeTransmitStatus(const QMap<QString, QString>& kvs);
+    // Decode radio-global status ("radio …" / "radio slices …" etc.) into the
+    // normalized RadioDelta and emit radioChanged (aetherd RFC 2.3 — RadioModel
+    // residual). Present-only, ok-guarded numeric parses.
+    void decodeRadioStatus(const QMap<QString, QString>& kvs);
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);

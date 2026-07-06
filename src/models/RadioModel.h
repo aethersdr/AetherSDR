@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
+#include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -601,6 +602,9 @@ private slots:
 
 private:
     void handleRadioStatus(const QMap<QString, QString>& kvs);
+    // Apply a normalized radio-global delta from the backend
+    // (IRadioBackend::radioChanged). aetherd RFC 2.3 — RadioModel residual.
+    void applyRadioChanges(const RadioDelta& delta);
     void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
     void handleMeterStatus(const QString& rawBody);
     void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);

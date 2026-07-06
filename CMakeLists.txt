@@ -2574,6 +2574,13 @@ target_link_libraries(aetherd_transmit_decode_test PRIVATE aethercore Qt6::Core 
 set_target_properties(aetherd_transmit_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_transmit_decode_test COMMAND aetherd_transmit_decode_test)
 
+# aetherd RFC 2.3 (RadioModel residual): radio-global wire → typed delta.
+add_executable(aetherd_radio_decode_test tests/aetherd_radio_decode_test.cpp)
+target_include_directories(aetherd_radio_decode_test PRIVATE src)
+target_link_libraries(aetherd_radio_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(aetherd_radio_decode_test PROPERTIES AUTOMOC ON)
+add_test(NAME aetherd_radio_decode_test COMMAND aetherd_radio_decode_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
     src/models/UsbCableModel.cpp
