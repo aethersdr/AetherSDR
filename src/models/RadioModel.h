@@ -318,6 +318,9 @@ public:
     void setActivePanId(const QString& id) { m_activePanId = id; }
     PanadapterModel* activePanadapter() const;
     PanadapterModel* panadapter(const QString& panId) const;
+    // Addressed pan, else active — the pan-addressing policy for the aetherd RFC
+    // 2.3 backend-signal handlers, single-sourced (#4065 review).
+    PanadapterModel* resolvePan(const QString& panId) const;
     QList<PanadapterModel*> panadapters() const { return m_panadapters.values(); }
 
     // Radio-authoritative display inventory vs what we own (#3856 Layer B).

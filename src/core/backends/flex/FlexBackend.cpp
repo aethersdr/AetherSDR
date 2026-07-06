@@ -222,10 +222,19 @@ void FlexBackend::decodePanRange(const QString& panId,
     // "absent" the way it does for center/bandwidth. Carry NaN for the field
     // the radio omitted; the model's setRange() treats NaN as "leave unchanged".
     const double nan = std::numeric_limits<double>::quiet_NaN();
+    // Guard the numeric parse: a malformed *present* field must be ignored
+    // (carry NaN = "unchanged"), not applied as 0.0 dBm — setRange() only skips
+    // NaN, so a bare 0 would collapse the vertical scale via setDbmRange. Matches
+    // decodeWaterfallLineDuration's ok-guard + FlexLib's TryParseDouble+continue.
+    const auto dbm = [nan](const QString& s) {
+        bool ok = false;
+        const double v = s.toDouble(&ok);
+        return ok ? v : nan;
+    };
     const double minDbm = kvs.contains(QStringLiteral("min_dbm"))
-        ? kvs.value(QStringLiteral("min_dbm")).toDouble() : nan;
+        ? dbm(kvs.value(QStringLiteral("min_dbm"))) : nan;
     const double maxDbm = kvs.contains(QStringLiteral("max_dbm"))
-        ? kvs.value(QStringLiteral("max_dbm")).toDouble() : nan;
+        ? dbm(kvs.value(QStringLiteral("max_dbm"))) : nan;
     emit panRangeChanged(panId, minDbm, maxDbm);
 }
 
@@ -235,7 +244,14 @@ void FlexBackend::decodePanRfGain(const QString& panId,
     if (!kvs.contains(QStringLiteral("rfgain"))) {
         return;
     }
-    emit panRfGainChanged(panId, kvs.value(QStringLiteral("rfgain")).toInt());
+    // Guard the parse — a malformed rfgain must be ignored, not emitted as 0
+    // (which setRfGain would apply as a real gain). Matches FlexLib's
+    // int.TryParse+continue and the sibling decoders' ok-guards.
+    bool ok = false;
+    const int gain = kvs.value(QStringLiteral("rfgain")).toInt(&ok);
+    if (ok) {
+        emit panRfGainChanged(panId, gain);
+    }
 }
 
 void FlexBackend::decodePanAntenna(const QString& panId,

@@ -426,8 +426,7 @@ RadioModel::RadioModel(QObject* parent)
     // remaining universal fields and the other mixed models.)
     connect(m_backend.get(), &IRadioBackend::panCenterBandwidthChanged, this,
             [this](const QString& panId, double centerMhz, double bandwidthMhz) {
-        auto* pan = m_panadapters.value(panId, nullptr);
-        if (!pan) pan = activePanadapter();
+        auto* pan = resolvePan(panId);
         if (!pan) return;
         pan->setCenterBandwidth(centerMhz, bandwidthMhz);
         // Legacy signal MainWindow still consumes (unchanged behavior).
@@ -436,13 +435,16 @@ RadioModel::RadioModel(QObject* parent)
 
     // aetherd RFC 2.3: min/max dBm — the second universal pan field. The backend
     // decodes the display level range; RadioModel applies it to the addressed
-    // pan and preserves the two side-effects the old inline block owned: the
-    // panStream setDbmRange (only when the range actually changed, to avoid a
-    // redundant GPU-scale reset) and the legacy panadapterLevelChanged signal.
+    // pan and preserves the two side-effects the old inline block owned (for the
+    // pan-resolved case): the panStream setDbmRange (only when the range actually
+    // changed, to avoid a redundant GPU-scale reset) and the legacy
+    // panadapterLevelChanged signal. (The old code also emitted a synthesized-
+    // default panadapterLevelChanged on the pan==null path; that signal now has
+    // no live consumer — per-pan levelChanged is used instead — so the no-pan
+    // emit is intentionally dropped rather than resurrected. #4065 review.)
     connect(m_backend.get(), &IRadioBackend::panRangeChanged, this,
             [this](const QString& panId, double minDbm, double maxDbm) {
-        auto* pan = m_panadapters.value(panId, nullptr);
-        if (!pan) pan = activePanadapter();
+        auto* pan = resolvePan(panId);
         if (!pan) return;
         if (pan->setRange(minDbm, maxDbm)) {
             m_panStream->setDbmRange(pan->panStreamId(), pan->minDbm(), pan->maxDbm());
@@ -457,22 +459,17 @@ RadioModel::RadioModel(QObject* parent)
     // parse of ant_list in handlePanadapterStatus onto this single source.
     connect(m_backend.get(), &IRadioBackend::panRfGainChanged, this,
             [this](const QString& panId, int gain) {
-        auto* pan = m_panadapters.value(panId, nullptr);
-        if (!pan) pan = activePanadapter();
-        if (pan) pan->setRfGain(gain);
+        if (auto* pan = resolvePan(panId)) pan->setRfGain(gain);
     });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
-        auto* pan = m_panadapters.value(panId, nullptr);
-        if (!pan) pan = activePanadapter();
-        if (pan) pan->setRxAntenna(ant);
+        if (auto* pan = resolvePan(panId)) pan->setRxAntenna(ant);
     });
     connect(m_backend.get(), &IRadioBackend::panAntennaListChanged, this,
             [this](const QString& panId, const QStringList& ants) {
-        auto* pan = m_panadapters.value(panId, nullptr);
-        if (!pan) pan = activePanadapter();
-        if (pan) pan->setAntList(ants);
+        if (auto* pan = resolvePan(panId)) pan->setAntList(ants);
         // Converged RadioModel-level antenna list (the old inline dual-parse).
+        // Not gated on a resolved pan — matches the old unconditional emit.
         if (ants != m_antList) {
             m_antList = ants;
             emit antListChanged(m_antList);
@@ -480,9 +477,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(m_backend.get(), &IRadioBackend::panWaterfallLineDurationChanged, this,
             [this](const QString& panId, int ms) {
-        auto* pan = m_panadapters.value(panId, nullptr);
-        if (!pan) pan = activePanadapter();
-        if (pan) pan->setWaterfallLineDuration(ms);
+        if (auto* pan = resolvePan(panId)) pan->setWaterfallLineDuration(ms);
     });
 
     // aetherd RFC 2.3 extension channel: Flex-specific pan fields ride the
@@ -498,8 +493,7 @@ RadioModel::RadioModel(QObject* parent)
         if (kind != QLatin1String("panWnb") && kind != QLatin1String("panState")) {
             return;
         }
-        auto* pan = m_panadapters.value(fields.value("panId").toString(), nullptr);
-        if (!pan) pan = activePanadapter();
+        auto* pan = resolvePan(fields.value("panId").toString());
         if (!pan) return;
         if (kind == QLatin1String("panWnb")) {
             pan->applyWnbExtension(fields);
@@ -735,9 +729,21 @@ RadioModel::~RadioModel()
 {
     // Disconnect RadioModel's own connections to the wire objects BEFORE they
     // are torn down, to prevent use-after-free (ASAN). (#502) The objects are
-    // still alive here — the backend owns them and destroys them next.
+    // still alive here — the backend owns them and destroys them next. The WAN
+    // connection also delivers statusReceived → handlePanadapterStatus / the
+    // waterfall handler, both of which now deref m_flexBackend — sever it too so
+    // a late WAN status can't reach a half-destroyed backend. (#4065 review)
     QObject::disconnect(m_connection, nullptr, this, nullptr);
     QObject::disconnect(m_panStream, nullptr, this, nullptr);
+    if (m_wanConn) {
+        QObject::disconnect(m_wanConn, nullptr, this, nullptr);
+    }
+
+    // Null the transitional alias BEFORE destroying the backend, so any status
+    // slot that runs during teardown finds the `if (m_flexBackend)` guards
+    // failing closed instead of dereferencing a backend mid-destruction. (#4063
+    // introduced the alias; #4065 review moved this null ahead of the reset.)
+    m_flexBackend = nullptr;
 
     // Destroy the backend, which owns the RadioConnection + PanadapterStream and
     // their worker threads: ~FlexBackend runs the exact #502 teardown ordering
@@ -746,12 +752,6 @@ RadioModel::~RadioModel()
     m_backend.reset();
     m_connection = nullptr;
     m_panStream = nullptr;
-    // The transitional alias points into the just-destroyed backend — null it so
-    // the many `if (m_flexBackend)` guards (decode calls in handlePanadapterStatus,
-    // the slice modeChangeRequested lambda) fail closed instead of dereferencing a
-    // dangling pointer. handlePanadapterStatus is also reachable via the WAN
-    // statusReceived connection, so this isn't purely theoretical. (#4063 review)
-    m_flexBackend = nullptr;
 }
 
 bool RadioModel::isConnected() const
@@ -1982,6 +1982,15 @@ PanadapterModel* RadioModel::activePanadapter() const
 PanadapterModel* RadioModel::panadapter(const QString& panId) const
 {
     return m_panadapters.value(panId, nullptr);
+}
+
+PanadapterModel* RadioModel::resolvePan(const QString& panId) const
+{
+    // Single source of the pan-addressing policy: the addressed pan, else the
+    // active one. Used by the aetherd RFC 2.3 backend-signal handlers so a future
+    // change (e.g. don't fall back for MultiFlex-owned pans) lands in one place.
+    auto* p = m_panadapters.value(panId, nullptr);
+    return p ? p : activePanadapter();
 }
 
 DisplayInventory::Report RadioModel::displayInventoryReport() const

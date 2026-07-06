@@ -96,6 +96,18 @@ int main(int argc, char** argv)
             CHECK(qFuzzyCompare(a.at(1).toDouble(), -125.0));
             CHECK(qFuzzyCompare(a.at(2).toDouble(), -40.0));
         }
+
+        // Malformed present min_dbm → carried as NaN (unchanged), NOT 0.0 dBm
+        // (which would collapse the scale). max still parses. (#4065 review)
+        backend.decodePanRange(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("min_dbm"), QStringLiteral("junk")},
+                                {QStringLiteral("max_dbm"), QStringLiteral("-40")}});
+        CHECK(spy.count() == 1);
+        {
+            const QList<QVariant> a = spy.takeFirst();
+            CHECK(std::isnan(a.at(1).toDouble()));
+            CHECK(qFuzzyCompare(a.at(2).toDouble(), -40.0));
+        }
     }
 
     // ---- Facet 2: EXTENSION (WNB) + the wnb_level guard ----
@@ -148,6 +160,11 @@ int main(int argc, char** argv)
                                 {{QStringLiteral("rfgain"), QStringLiteral("-8")}});
         CHECK(gain.count() == 1);
         CHECK(gain.takeFirst().at(1).toInt() == -8);   // signed gain preserved
+
+        // Malformed rfgain → dropped, not emitted as 0. (#4065 review)
+        backend.decodePanRfGain(QStringLiteral("0x40000000"),
+                                {{QStringLiteral("rfgain"), QStringLiteral("nope")}});
+        CHECK(gain.count() == 0);
 
         backend.decodePanAntenna(QStringLiteral("0x40000000"),
                                  {{QStringLiteral("rxant"), QStringLiteral("ANT2")},
