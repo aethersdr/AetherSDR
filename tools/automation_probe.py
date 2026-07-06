@@ -129,7 +129,9 @@ def main():
                          "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
                          "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
-                         "dss <snapshot|reset|inject|scrollback|live> [pan] [args] | "
+                         "dss <snapshot|reset|live> [pan] [args] | "
+                         "dss inject [pan] <count> <firstPeakBin> <stepBin> [native|kiwi] | "
+                         "dss scrollback [pan] <offsetRows> | "
                          "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
@@ -224,11 +226,31 @@ def main():
         elif args.command == "dss":
             if not args.rest:
                 sys.exit("error: dss needs <snapshot|reset|inject|scrollback|live> [pan] [args]")
-            req = {"cmd": "dss", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["target"] = args.rest[1]
-            if len(args.rest) > 2:
-                req["value"] = " ".join(args.rest[2:])
+            action = args.rest[0]
+            req = {"cmd": "dss", "action": action}
+            dss_args = args.rest[1:]
+            if action == "inject":
+                stream_names = {"native", "flex", "kiwi", "kiwisdr"}
+                if len(dss_args) < 3:
+                    sys.exit("error: dss inject needs [pan] <count> <firstPeakBin> <stepBin> [native|kiwi]")
+                if len(dss_args) == 3 or (len(dss_args) == 4 and dss_args[3].lower() in stream_names):
+                    req["value"] = " ".join(dss_args)
+                else:
+                    req["target"] = dss_args[0]
+                    req["value"] = " ".join(dss_args[1:])
+            elif action == "scrollback":
+                if not dss_args:
+                    sys.exit("error: dss scrollback needs [pan] <offsetRows>")
+                if len(dss_args) == 1:
+                    req["value"] = dss_args[0]
+                else:
+                    req["target"] = dss_args[0]
+                    req["value"] = " ".join(dss_args[1:])
+            else:
+                if dss_args:
+                    req["target"] = dss_args[0]
+                if len(dss_args) > 1:
+                    req["value"] = " ".join(dss_args[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "audioCapture":
