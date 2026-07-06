@@ -136,6 +136,48 @@ std::array<float, DssRenderer::kCols> reprojectRow(
     return remapped;
 }
 
+std::array<float, DssRenderer::kCols> resampledRow(
+    const QVector<float>& binsDbm,
+    float fallback)
+{
+    std::array<float, DssRenderer::kCols> row;
+    const int n = binsDbm.size();
+    if (n <= 0) {
+        row.fill(fallback);
+        return row;
+    }
+
+    if (n == DssRenderer::kCols) {
+        for (int c = 0; c < DssRenderer::kCols; ++c) {
+            row[c] = std::isfinite(binsDbm[c]) ? binsDbm[c] : fallback;
+        }
+    } else {
+        const double step = static_cast<double>(n) / DssRenderer::kCols;
+        for (int c = 0; c < DssRenderer::kCols; ++c) {
+            int i0 = static_cast<int>(std::floor(c * step));
+            int i1 = static_cast<int>(std::ceil((c + 1) * step));
+            i0 = std::clamp(i0, 0, n - 1);
+            i1 = std::clamp(i1, i0 + 1, n);
+            float mx = std::isfinite(binsDbm[i0]) ? binsDbm[i0] : fallback;
+            for (int i = i0 + 1; i < i1; ++i) {
+                if (std::isfinite(binsDbm[i])) {
+                    mx = std::max(mx, binsDbm[i]);
+                }
+            }
+            row[c] = mx;
+        }
+    }
+
+    std::array<float, DssRenderer::kCols> smoothed = row;
+    for (int c = 0; c < DssRenderer::kCols; ++c) {
+        const float a = row[std::max(0, c - 1)];
+        const float b = row[c];
+        const float d = row[std::min(DssRenderer::kCols - 1, c + 1)];
+        smoothed[c] = 0.25f * a + 0.5f * b + 0.25f * d;
+    }
+    return smoothed;
+}
+
 } // namespace
 
 void DssRenderer::clear()
@@ -144,6 +186,8 @@ void DssRenderer::clear()
     m_count = 0;
     m_dirty = true;
     m_rawHistCount = 0;
+    m_historyWriteRow = 0;
+    m_historyRowCount = 0;
 }
 
 const std::array<float, DssRenderer::kCols>&
@@ -227,6 +271,128 @@ void DssRenderer::pushRow(const QVector<float>& binsDbm)
     m_rows[m_head] = nr;
     m_count = std::min(m_count + 1, kRows);
     m_dirty = true;
+    ++m_rowGeneration;
+}
+
+void DssRenderer::setHistoryCapacityRows(int rows)
+{
+    rows = std::max(0, rows);
+    if (rows == m_historyCapacityRows && historyStorageMatchesCapacity()) {
+        return;
+    }
+
+    m_historyCapacityRows = rows;
+    const int expectedSampleCount = rows * kCols;
+    m_historyRows = QVector<qfloat16>(expectedSampleCount);
+    m_historyRowCenterMhz = QVector<double>(rows, 0.0);
+    m_historyRowBandwidthMhz = QVector<double>(rows, 0.0);
+    m_historyWriteRow = 0;
+    m_historyRowCount = 0;
+}
+
+bool DssRenderer::historyStorageMatchesCapacity() const
+{
+    const int expectedSampleCount = m_historyCapacityRows * kCols;
+    return m_historyRows.size() == expectedSampleCount
+        && m_historyRowCenterMhz.size() == m_historyCapacityRows
+        && m_historyRowBandwidthMhz.size() == m_historyCapacityRows;
+}
+
+void DssRenderer::appendCurrentRowToHistory(double centerMhz, double bandwidthMhz)
+{
+    if (m_historyCapacityRows <= 0 || m_count <= 0) {
+        return;
+    }
+    if (!historyStorageMatchesCapacity()) {
+        setHistoryCapacityRows(m_historyCapacityRows);
+    }
+
+    m_historyWriteRow =
+        (m_historyWriteRow - 1 + m_historyCapacityRows) % m_historyCapacityRows;
+    qfloat16* dst = m_historyRows.data() + m_historyWriteRow * kCols;
+    const auto& row = m_rows[m_head];
+    for (int c = 0; c < kCols; ++c) {
+        dst[c] = qfloat16(row[c]);
+    }
+    m_historyRowCenterMhz[m_historyWriteRow] = centerMhz;
+    m_historyRowBandwidthMhz[m_historyWriteRow] = bandwidthMhz;
+    m_historyRowCount = std::min(m_historyRowCount + 1, m_historyCapacityRows);
+}
+
+void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
+                                   double centerMhz, double bandwidthMhz,
+                                   float fallbackDbm)
+{
+    if (m_historyCapacityRows <= 0) {
+        return;
+    }
+    if (!historyStorageMatchesCapacity()) {
+        setHistoryCapacityRows(m_historyCapacityRows);
+    }
+
+    const std::array<float, kCols> row = resampledRow(binsDbm, fallbackDbm);
+    m_historyWriteRow =
+        (m_historyWriteRow - 1 + m_historyCapacityRows) % m_historyCapacityRows;
+    qfloat16* dst = m_historyRows.data() + m_historyWriteRow * kCols;
+    for (int c = 0; c < kCols; ++c) {
+        dst[c] = qfloat16(row[c]);
+    }
+    m_historyRowCenterMhz[m_historyWriteRow] = centerMhz;
+    m_historyRowBandwidthMhz[m_historyWriteRow] = bandwidthMhz;
+    m_historyRowCount = std::min(m_historyRowCount + 1, m_historyCapacityRows);
+}
+
+void DssRenderer::rebuildVisibleFromHistory(int offsetRows,
+                                            double centerMhz,
+                                            double bandwidthMhz,
+                                            float fallbackDbm)
+{
+    if (m_historyCapacityRows <= 0
+        || m_historyRowCount <= 0
+        || !historyStorageMatchesCapacity()) {
+        if (m_historyCapacityRows > 0 && !historyStorageMatchesCapacity()) {
+            setHistoryCapacityRows(m_historyCapacityRows);
+        }
+        m_head = 0;
+        m_count = 0;
+        m_dirty = true;
+        m_rawHistCount = 0;
+        ++m_rowGeneration;
+        return;
+    }
+
+    offsetRows = std::clamp(offsetRows, 0, m_historyRowCount - 1);
+    const int rowsToCopy = std::min(kRows, m_historyRowCount - offsetRows);
+    m_head = 0;
+    m_count = rowsToCopy;
+
+    for (int age = 0; age < rowsToCopy; ++age) {
+        const int historyAge = offsetRows + age;
+        const int historyRing =
+            (m_historyWriteRow + historyAge) % m_historyCapacityRows;
+        const qfloat16* src = m_historyRows.constData() + historyRing * kCols;
+        std::array<float, kCols> row;
+        for (int c = 0; c < kCols; ++c) {
+            row[c] = static_cast<float>(src[c]);
+        }
+
+        const double rowCenterMhz = m_historyRowCenterMhz.value(historyRing, 0.0);
+        const double rowBandwidthMhz =
+            m_historyRowBandwidthMhz.value(historyRing, 0.0);
+        if (rowCenterMhz > 0.0 && rowBandwidthMhz > 0.0
+            && centerMhz > 0.0 && bandwidthMhz > 0.0
+            && (rowCenterMhz != centerMhz || rowBandwidthMhz != bandwidthMhz)) {
+            row = reprojectRow(row,
+                               rowCenterMhz, rowBandwidthMhz,
+                               centerMhz, bandwidthMhz,
+                               fallbackDbm);
+        }
+
+        m_rows[age] = row;
+    }
+
+    m_dirty = true;
+    m_rawHistCount = 0;
     ++m_rowGeneration;
 }
 

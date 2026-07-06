@@ -1982,6 +1982,14 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("dss")) {
+            action = tok(1);                  // snapshot | reset | inject | scrollback | live
+            target = tok(2);                  // pan index, optional for snapshot
+            QStringList rest;
+            for (int i = 3; i < p.size(); ++i) {
+                rest << tok(i);
+            }
+            value = rest.join(QLatin1Char(' '));
         } else if (cmd == QLatin1String("qrz")) {
             action = tok(1);  // status | cached | lookup | spottext
             QStringList rest;
@@ -2191,6 +2199,12 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("panmessage requires an action (add|remove|clear|list)"));
         }
         return doPanMessage(action, target, id, title, detail, timeoutMs, tone);
+    }
+    if (cmd == QLatin1String("dss")) {
+        if (action.isEmpty()) {
+            return err(QStringLiteral("dss requires an action (snapshot|reset|inject|scrollback|live)"));
+        }
+        return doDss(action, target.isEmpty() ? selector : target, value);
     }
     if (cmd == QLatin1String("streams"))
         return doStreams(action);
@@ -4833,6 +4847,125 @@ QJsonObject AutomationServer::doPanMessage(const QString& action,
 
     return err(QStringLiteral("unknown panmessage action: ") + action
                + QStringLiteral(" (add|remove|clear|list)"));
+}
+
+QJsonObject AutomationServer::doDss(const QString& action,
+                                    const QString& target,
+                                    const QString& value) const
+{
+    QStringList args = value.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    bool okIndex = false;
+    int panIndex = target.isEmpty() ? 0 : target.toInt(&okIndex);
+    if (!target.isEmpty() && !okIndex) {
+        args.prepend(target);
+        panIndex = 0;
+    }
+
+    QJsonArray available;
+    QWidget* spectrum = panSpectrumWidgetForIndex(panIndex, &available);
+    if (!spectrum) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("no pan with index ") + QString::number(panIndex)},
+            {QStringLiteral("available"), available},
+        };
+    }
+
+    const auto parseStream = [](const QString& text, bool* ok) {
+        const QString s = text.trimmed().toLower();
+        if (s.isEmpty() || s == QLatin1String("native")
+            || s == QLatin1String("flex")) {
+            *ok = true;
+            return false;
+        }
+        if (s == QLatin1String("kiwi") || s == QLatin1String("kiwisdr")) {
+            *ok = true;
+            return true;
+        }
+        *ok = false;
+        return false;
+    };
+
+    QVariantMap out;
+    const QString lower = action.trimmed().toLower();
+    if (lower == QLatin1String("snapshot") || lower == QLatin1String("status")) {
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssSnapshot",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out))) {
+            return err(QStringLiteral("target pan does not expose automationDssSnapshot"));
+        }
+    } else if (lower == QLatin1String("reset") || lower == QLatin1String("clear")) {
+        bool okStream = false;
+        const bool kiwiStream = parseStream(args.value(0), &okStream);
+        if (!okStream) {
+            return err(QStringLiteral("dss reset stream must be native|kiwi"));
+        }
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssReset",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(bool, kiwiStream))) {
+            return err(QStringLiteral("target pan does not expose automationDssReset"));
+        }
+    } else if (lower == QLatin1String("inject")) {
+        if (args.size() < 3) {
+            return err(QStringLiteral(
+                "dss inject requires <pan> <count> <firstPeakBin> <stepBin> [native|kiwi]"));
+        }
+        bool okCount = false;
+        bool okPeak = false;
+        bool okStep = false;
+        const int count = args.value(0).toInt(&okCount);
+        const int firstPeakBin = args.value(1).toInt(&okPeak);
+        const int stepBin = args.value(2).toInt(&okStep);
+        if (!okCount || !okPeak || !okStep) {
+            return err(QStringLiteral("dss inject count/firstPeakBin/stepBin must be integers"));
+        }
+        bool okStream = false;
+        const bool kiwiStream = parseStream(args.value(3), &okStream);
+        if (!okStream) {
+            return err(QStringLiteral("dss inject stream must be native|kiwi"));
+        }
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssInjectRows",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(int, count),
+                                       Q_ARG(int, firstPeakBin),
+                                       Q_ARG(int, stepBin),
+                                       Q_ARG(bool, kiwiStream))) {
+            return err(QStringLiteral("target pan does not expose automationDssInjectRows"));
+        }
+    } else if (lower == QLatin1String("scrollback")
+               || lower == QLatin1String("pause")) {
+        bool okOffset = false;
+        const int offsetRows = args.value(0).toInt(&okOffset);
+        if (!okOffset) {
+            return err(QStringLiteral("dss scrollback requires an offset row count"));
+        }
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssSetScrollback",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(bool, false),
+                                       Q_ARG(int, offsetRows))) {
+            return err(QStringLiteral("target pan does not expose automationDssSetScrollback"));
+        }
+    } else if (lower == QLatin1String("live")) {
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssSetScrollback",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(bool, true),
+                                       Q_ARG(int, 0))) {
+            return err(QStringLiteral("target pan does not expose automationDssSetScrollback"));
+        }
+    } else {
+        return err(QStringLiteral("unknown dss action: ") + action);
+    }
+
+    QJsonObject response = QJsonObject::fromVariantMap(out);
+    response[QStringLiteral("cmd")] = QStringLiteral("dss");
+    response[QStringLiteral("action")] = action;
+    response[QStringLiteral("panIndex")] = panIndex;
+    return response;
 }
 
 // ── Radio-side display-stream inventory / leak detector (#3856) ──────────────

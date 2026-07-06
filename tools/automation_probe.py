@@ -111,6 +111,7 @@ def main():
                "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"
+               "  automation_probe.py dss inject 0 3 100 100 native\n"
                "  automation_probe.py panmessage add 0 kiwi 0 'Waiting|Queued'\n"
                "  automation_probe.py panmessage add 0 tx 10000 tone=warning 'Transmit disabled|TX blocked'",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -118,7 +119,7 @@ def main():
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect", "slice", "audioCapture",
                              "record", "testtone", "tci", "panmessage",
-                             "hitTest", "resize"],
+                             "hitTest", "resize", "dss"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
@@ -128,6 +129,7 @@ def main():
                          "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
                          "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
+                         "dss <snapshot|reset|inject|scrollback|live> [pan] [args] | "
                          "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
@@ -217,6 +219,16 @@ def main():
             req = {"cmd": "slice", "action": args.rest[0]}
             if len(args.rest) > 1:
                 req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "dss":
+            if not args.rest:
+                sys.exit("error: dss needs <snapshot|reset|inject|scrollback|live> [pan] [args]")
+            req = {"cmd": "dss", "action": args.rest[0]}
+            if len(args.rest) > 1:
+                req["target"] = args.rest[1]
+            if len(args.rest) > 2:
+                req["value"] = " ".join(args.rest[2:])
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "audioCapture":

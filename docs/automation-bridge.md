@@ -154,6 +154,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
+| | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
 | **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X-shaped). |
@@ -1158,6 +1159,52 @@ recovery (#3804) or that the waterfall auto-range settled.
 
 One entry per `SpectrumWidget` that has a real measurement; the same numbers
 appear per-node in `dumpTree` (`noiseFloorDbm`/`displayFloorDbm`/`panIndex`).
+
+### `dss`
+Automation-only 3D stacked-trace / waterfall scrollback proof surface. It finds
+a `SpectrumWidget` by `panIndex`, injects synthetic RX rows through the normal
+SpectrumWidget waterfall paths, and returns compact counters/peak-bin snapshots.
+It is RX-only: no radio commands and no transmit keying.
+
+```json
+→ {"cmd":"dss","action":"reset","target":"0","value":"native"}
+← {"ok":true,"panIndex":0,"live":true,"dssHistoryRows":0,...}
+
+→ {"cmd":"dss","action":"inject","target":"0","value":"3 100 100 native"}
+← {"ok":true,"dssHistoryRows":3,"waterfallHistoryRows":3,
+   "dssHistoryRowsAdded":3,"waterfallHistoryRowsAdded":3,
+   "dssVisiblePeakBin":300,...}
+
+→ {"cmd":"dss","action":"scrollback","target":"0","value":"1"}
+← {"ok":true,"live":false,"historyOffsetRows":1,"dssVisiblePeakBin":200,...}
+
+→ {"cmd":"dss","action":"inject","target":"0","value":"1 420 0 native"}
+← {"ok":true,"live":false,"dssHistoryRows":4,
+   "waterfallHistoryRows":4,"historyOffsetRows":2,
+   "dssHistoryRowsAdded":1,"waterfallHistoryRowsAdded":1,
+   "dssVisiblePeakBin":200,...}
+
+→ {"cmd":"dss","action":"scrollback","target":"0","value":"0"}
+← {"ok":true,"live":false,"historyOffsetRows":0,"dssVisiblePeakBin":420,...}
+```
+
+Actions:
+
+| action | value | effect |
+|---|---|---|
+| `snapshot` | optional pan target | Read `live`, waterfall/DSS history row counts, visible DSS row count, and the current front-row peak bin. |
+| `reset` | `native` or `kiwi` | Clear the selected stream's current/history rows and make that stream active for subsequent injection. |
+| `inject` | `<count> <firstPeakBin> <stepBin> [native\|kiwi]` | Add synthetic rows with one strong peak per row. `count` is capped at the retained waterfall history capacity. Native injection adds one fallback-style waterfall/DSS row per input row; Kiwi injection drives `updateKiwiSdrWaterfallRow()`. |
+| `scrollback` | `<offsetRows>` | Enter waterfall history mode and rebuild the 3D surface using the same offset. |
+| `live` | none | Return to live mode. |
+
+The paused/live-history assertion is: enter `scrollback`, inject another row,
+confirm both `waterfallHistoryRowsAdded` and `dssHistoryRowsAdded` match the
+injected count while `historyOffsetRows` advances and `dssVisiblePeakBin` stays
+on the same paused historical row, then set `scrollback 0` and confirm the newly
+injected peak becomes visible. The total row counts are still returned, but the
+`*RowsAdded` fields are the deterministic assertion surface if live data is also
+arriving between bridge requests.
 
 ### `whoami`
 Identify **this** bridge instance among concurrent bridges (each app process gets

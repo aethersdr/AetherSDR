@@ -170,6 +170,12 @@ class QsoRecorder;
 //                                     for deterministic UI screenshots; add
 //                                     accepts tone=info|warning, timed messages
 //                                     expose countdown in snapshots.
+//   dss snapshot|reset|inject|scrollback|live
+//                                  -> automation-only 3D stacked-trace /
+//                                     waterfall scrollback proof surface.
+//                                     Injects synthetic RX rows through the
+//                                     normal SpectrumWidget row paths and reads
+//                                     compact DSS/waterfall counters.
 //   dumpTree (extended)            -> nodes now carry toolTip, and QComboBox
 //                                     nodes carry items[]/currentIndex and pans
 //                                     carry panIndex, all assertable without
@@ -332,6 +338,9 @@ private:
                              const QString& detail,
                              int timeoutMs,
                              const QString& tone) const;
+    QJsonObject doDss(const QString& action,
+                      const QString& target,
+                      const QString& value) const;
     // Radio-side display-stream inventory / leak detector (#3856).
     //   streams        — Layer A: registered pan/wf streams + UDP "orphan"
     //                     streams the radio is still transmitting that we let go.

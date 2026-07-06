@@ -128,6 +128,14 @@ public:
     // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
     // counters after the read so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
+    Q_INVOKABLE QVariantMap automationDssSnapshot() const;
+    Q_INVOKABLE QVariantMap automationDssReset(bool kiwiStream);
+    Q_INVOKABLE QVariantMap automationDssInjectRows(int count,
+                                                    int firstPeakBin,
+                                                    int stepBin,
+                                                    bool kiwiStream);
+    Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
+                                                       int offsetRows);
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
@@ -750,6 +758,8 @@ private:
     void ensureWaterfallHistory();
     void rebuildWaterfallViewport();
     void rebuildWaterfallViewportForFrame(double centerMhz, double bandwidthMhz);
+    void rebuildDssViewportFromHistory();
+    void rebuildDssViewportFromHistoryForFrame(double centerMhz, double bandwidthMhz);
     void setWaterfallLive(bool live);
     void handleWaterfallFrequencyFrameChange(double oldCenterMhz,
                                              double oldBandwidthMhz,
@@ -801,6 +811,12 @@ private:
     void appendHistoryRow(const QRgb* rowData, qint64 timestampMs,
                           double frameCenterMhz = -1.0,
                           double frameBandwidthMhz = -1.0);
+    void appendDssHistoryRow(const QVector<float>& binsDbm,
+                             double frameCenterMhz = -1.0,
+                             double frameBandwidthMhz = -1.0);
+    void appendLatestDssRowToHistory(double frameCenterMhz = -1.0,
+                                     double frameBandwidthMhz = -1.0);
+    float dssHistoryFallbackDbm() const;
     void appendVisibleRow(const QRgb* rowData);
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
