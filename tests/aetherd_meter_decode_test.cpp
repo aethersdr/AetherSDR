@@ -74,15 +74,20 @@ int main(int argc, char** argv)
         CHECK(def.count() == 0);
     }
 
-    // ---- malformed numeric fields dropped → keep MeterDef default (guard) ----
+    // ---- malformed numerics leave the MeterDef default; valid fields carried.
+    //      NOTE: for a plain MeterDef field the default (0/0.0) equals what an
+    //      unguarded parse of a malformed value yields, so this does NOT pin the
+    //      carry() ok-guard — that contract is pinned where nullopt ≠ 0, at the
+    //      std::optional carry() sites (aetherd_slice_decode_test /
+    //      aetherd_transmit_decode_test malformed cases). (#4075 review.)
     {
         FlexBackend backend;
         const MeterDef d = decode1(backend, QStringLiteral(
             "3.nam=LEVEL#3.low=junk#3.hi=20.0#3.num=nope"));
         CHECK(d.name == QStringLiteral("LEVEL"));
         CHECK(qFuzzyCompare(d.high, 20.0));   // valid field carried
-        CHECK(d.low == 0.0);                  // malformed low dropped → default 0.0
-        CHECK(d.sourceIndex == 0);            // malformed num dropped → default 0
+        CHECK(d.low == 0.0);                  // malformed → MeterDef default 0.0
+        CHECK(d.sourceIndex == 0);            // malformed → MeterDef default 0
     }
 
     if (g_failures == 0) {
