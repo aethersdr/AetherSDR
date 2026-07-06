@@ -35,6 +35,26 @@ static int g_failures = 0;
 
 int main(int argc, char** argv)
 {
+    // Route every QStandardPaths writable location into Qt's test-mode
+    // sandbox (~/.qttest/...).  XDG_CONFIG_HOME alone isn't enough:
+    // macOS ignores it and resolves GenericConfigLocation to
+    // ~/Library/Preferences, so importThemeFromFile() would persist the
+    // probe themes into the developer's real themes dir — the leftover
+    // files then collide on the next run and the import de-duplicates
+    // the name to "... (2)", failing the EXPECT_EQ assertions below.
+    QStandardPaths::setTestModeEnabled(true);
+
+    // The sandbox itself persists across runs, so clear any probe
+    // themes a previous (possibly crashed) run left behind before the
+    // ThemeManager singleton scans the dir.
+    {
+        const QString sandboxAppDir =
+            QStandardPaths::writableLocation(
+                QStandardPaths::GenericConfigLocation)
+            + QStringLiteral("/AetherSDR");
+        QDir(sandboxAppDir).removeRecursively();
+    }
+
     // Route AppSettings + theme dirs into an isolated temp tree so the
     // test never pollutes the developer's real ~/.config/AetherSDR.
     QTemporaryDir tmp;
