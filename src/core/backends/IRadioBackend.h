@@ -8,6 +8,7 @@
 #include <QVariantMap>
 
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/SliceDelta.h"
 
 namespace AetherSDR {
 
@@ -105,7 +106,10 @@ signals:
 
     // ---- normalized model state UP (RadioModel connects these to its
     //      sub-models; Q2) — the key/value shape mirrors the models' fields ----
-    void sliceChanged(int sliceId, const QVariantMap& changes);
+    // Normalized slice-status delta (aetherd RFC 2.3). Typed + compiler-checked:
+    // the backend populates only the fields the wire reported, the model applies
+    // exactly those. Replaces the prior stringly-keyed QVariantMap payload.
+    void sliceChanged(int sliceId, const SliceDelta& delta);
     void sliceRemoved(int sliceId);
     void meterUpdate(const QString& meterId, double value);
 

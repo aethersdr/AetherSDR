@@ -1,14 +1,14 @@
 // aetherd RFC 2.3 — SliceModel touchpoint: FlexBackend::decodeSliceStatus.
-// Pins the Flex slice-status wire → canonical change-map translation that moved
-// out of SliceModel::applyStatus (key renames, "1"→bool, list split, lowercase,
-// present-only). The model's apply-side behavior is covered by
-// slice_model_letter_test / antenna_alias_test.
+// Pins the Flex slice-status wire → typed SliceDelta translation that moved out
+// of SliceModel::applyStatus (key renames, "1"→bool, list split, lowercase,
+// ok-guarded numeric parses, present-only). The model's apply-side behavior is
+// covered by slice_model_letter_test / antenna_alias_test.
 
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/SliceDelta.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
-#include <QVariantMap>
 #include <QString>
 #include <cstdio>
 
@@ -18,24 +18,24 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
-// Decode one kv-set and return the emitted canonical change map.
-static QVariantMap decode(FlexBackend& b, const QMap<QString, QString>& kvs)
+// Decode one kv-set and return the emitted typed delta.
+static SliceDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
 {
     QSignalSpy spy(&b, &IRadioBackend::sliceChanged);
     b.decodeSliceStatus(3, kvs);
     if (spy.count() != 1) return {};
-    const QList<QVariant> a = spy.takeFirst();
-    return a.at(1).toMap();
+    return spy.takeFirst().at(1).value<SliceDelta>();
 }
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    qRegisterMetaType<SliceDelta>();
     FlexBackend b;
 
     // ---- key renames + typed values ----
     {
-        const QVariantMap c = decode(b, {
+        const SliceDelta d = decode(b, {
             {QStringLiteral("RF_frequency"), QStringLiteral("14.25")},
             {QStringLiteral("mode"), QStringLiteral("USB")},
             {QStringLiteral("filter_lo"), QStringLiteral("-2700")},
@@ -45,64 +45,76 @@ int main(int argc, char** argv)
             {QStringLiteral("audio_level"), QStringLiteral("60")},
             {QStringLiteral("rfgain"), QStringLiteral("-5")},
         });
-        CHECK(qFuzzyCompare(c.value(QStringLiteral("frequency")).toDouble(), 14.25));
-        CHECK(c.value(QStringLiteral("mode")).toString() == QStringLiteral("USB"));
-        CHECK(c.value(QStringLiteral("filterLow")).toInt() == -2700);
-        CHECK(c.value(QStringLiteral("filterHigh")).toInt() == 0);
-        CHECK(c.value(QStringLiteral("letter")).toString() == QStringLiteral("A"));
-        CHECK(c.value(QStringLiteral("daxChannel")).toInt() == 2);
-        CHECK(qFuzzyCompare(c.value(QStringLiteral("audioGain")).toDouble(), 60.0));
-        CHECK(c.value(QStringLiteral("rfGain")).toInt() == -5);
-        // No RF_frequency (wire) key leaks through:
-        CHECK(!c.contains(QStringLiteral("RF_frequency")));
+        CHECK(d.frequency.has_value() && qFuzzyCompare(*d.frequency, 14.25));
+        CHECK(d.mode.has_value() && *d.mode == QStringLiteral("USB"));
+        CHECK(d.filterLow.has_value() && *d.filterLow == -2700);
+        CHECK(d.filterHigh.has_value() && *d.filterHigh == 0);
+        CHECK(d.letter.has_value() && *d.letter == QStringLiteral("A"));
+        CHECK(d.daxChannel.has_value() && *d.daxChannel == 2);
+        CHECK(d.audioGain.has_value() && qFuzzyCompare(*d.audioGain, 60.0));
+        CHECK(d.rfGain.has_value() && qFuzzyCompare(*d.rfGain, -5.0));
+        // Fields not on the wire stay disengaged:
+        CHECK(!d.qsk.has_value());
+        CHECK(!d.txSlice.has_value());
     }
 
-    // ---- "1"→bool, and absent keys not carried ----
+    // ---- "1"→bool; absent → disengaged ----
     {
-        const QVariantMap c = decode(b, {
+        const SliceDelta d = decode(b, {
             {QStringLiteral("active"), QStringLiteral("1")},
             {QStringLiteral("tx"), QStringLiteral("0")},
             {QStringLiteral("lock"), QStringLiteral("1")},
         });
-        CHECK(c.value(QStringLiteral("active")).toBool() == true);
-        CHECK(c.contains(QStringLiteral("txSlice")));
-        CHECK(c.value(QStringLiteral("txSlice")).toBool() == false);
-        CHECK(c.value(QStringLiteral("locked")).toBool() == true);
-        CHECK(!c.contains(QStringLiteral("qsk")));   // absent → not carried
+        CHECK(d.active.has_value() && *d.active == true);
+        CHECK(d.txSlice.has_value() && *d.txSlice == false);
+        CHECK(d.locked.has_value() && *d.locked == true);
+        CHECK(!d.qsk.has_value());
+    }
+
+    // ---- ok-guarded numeric parse: a malformed present field is DROPPED (#4068) ----
+    {
+        // A garbled RF_frequency must NOT retune to 0 Hz — the field is dropped.
+        const SliceDelta d = decode(b, {
+            {QStringLiteral("RF_frequency"), QStringLiteral("garbage")},
+            {QStringLiteral("filter_lo"), QStringLiteral("notanint")},
+            {QStringLiteral("mode"), QStringLiteral("LSB")},
+        });
+        CHECK(!d.frequency.has_value());   // dropped, not 0.0
+        CHECK(!d.filterLow.has_value());   // dropped, not 0
+        CHECK(d.mode.has_value() && *d.mode == QStringLiteral("LSB"));  // valid field still carried
     }
 
     // ---- esc "1"/"on" → true, "0" → false ----
     {
-        CHECK(decode(b, {{QStringLiteral("esc"), QStringLiteral("on")}})
-                  .value(QStringLiteral("esc")).toBool() == true);
-        CHECK(decode(b, {{QStringLiteral("esc"), QStringLiteral("1")}})
-                  .value(QStringLiteral("esc")).toBool() == true);
-        CHECK(decode(b, {{QStringLiteral("esc"), QStringLiteral("0")}})
-                  .value(QStringLiteral("esc")).toBool() == false);
+        CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("on")}}).esc == true);
+        CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("1")}}).esc == true);
+        CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("0")}}).esc == false);
     }
 
     // ---- antenna lists: rx_ant_list precedence, split+trim; mode_list split ----
     {
-        const QVariantMap c = decode(b, {
+        const SliceDelta d = decode(b, {
             {QStringLiteral("rx_ant_list"), QStringLiteral("ANT1, RX_A ,RX_B")},
             {QStringLiteral("ant_list"), QStringLiteral("SHOULD_BE_IGNORED")},
             {QStringLiteral("mode_list"), QStringLiteral("USB,LSB,CW")},
         });
-        CHECK(c.value(QStringLiteral("rxAntennaList")).toStringList()
-                  == QStringList({QStringLiteral("ANT1"), QStringLiteral("RX_A"), QStringLiteral("RX_B")}));
-        CHECK(c.value(QStringLiteral("modeList")).toStringList().size() == 3);
+        CHECK(d.rxAntennaList.has_value()
+              && *d.rxAntennaList == QStringList({QStringLiteral("ANT1"),
+                                                  QStringLiteral("RX_A"),
+                                                  QStringLiteral("RX_B")}));
+        CHECK(d.modeList.has_value() && d.modeList->size() == 3);
     }
 
     // ---- lowercase normalization; play/step_list carried raw ----
     {
-        const QVariantMap c = decode(b, {
+        const SliceDelta d = decode(b, {
             {QStringLiteral("fm_tone_mode"), QStringLiteral("CTCSS")},
             {QStringLiteral("play"), QStringLiteral("disabled")},
             {QStringLiteral("step_list"), QStringLiteral("10,100,1000")},
         });
-        CHECK(c.value(QStringLiteral("fmToneMode")).toString() == QStringLiteral("ctcss"));
-        CHECK(c.value(QStringLiteral("play")).toString() == QStringLiteral("disabled"));
-        CHECK(c.value(QStringLiteral("stepList")).toString() == QStringLiteral("10,100,1000"));
+        CHECK(d.fmToneMode.has_value() && *d.fmToneMode == QStringLiteral("ctcss"));
+        CHECK(d.play.has_value() && *d.play == QStringLiteral("disabled"));
+        CHECK(d.stepList.has_value() && *d.stepList == QStringLiteral("10,100,1000"));
     }
 
     if (g_failures == 0) {

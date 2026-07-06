@@ -4,8 +4,9 @@
 #include <QString>
 #include <QStringList>
 #include <QMap>
-#include <QVariantMap>
 #include <QTimer>
+
+#include "core/backends/SliceDelta.h"
 
 namespace AetherSDR {
 
@@ -249,10 +250,11 @@ public:
     void setTxOffsetFreq(double mhz);
     void setFmDeviation(int hz);
 
-    // Apply a normalized slice-change map from the backend
-    // (IRadioBackend::sliceChanged). Canonical keys only — the Flex wire decode
-    // lives in FlexBackend::decodeSliceStatus. (aetherd RFC 2.3.)
-    void applyChanges(const QVariantMap& changes);
+    // Apply a normalized, typed slice delta from the backend
+    // (IRadioBackend::sliceChanged). Vendor-neutral fields only — the Flex wire
+    // decode lives in FlexBackend::decodeSliceStatus. Applies only the fields the
+    // delta has engaged (present-only). (aetherd RFC 2.3.)
+    void applyChanges(const SliceDelta& delta);
 
     // Force a re-emit of letterChanged() with the current letter — used
     // when a global display preference (e.g. AppSettings

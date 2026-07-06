@@ -1,10 +1,9 @@
 #include "models/SliceModel.h"
+#include "core/backends/SliceDelta.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QString>
-#include <QVariant>
-#include <QVariantMap>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -24,14 +23,15 @@ static int g_failures = 0;
     } \
 } while (0)
 
-// aetherd RFC 2.3: SliceModel::applyChanges now takes a normalized, canonically
-// named QVariantMap (the Flex wire decode lives in FlexBackend::decodeSliceStatus,
-// covered by aetherd_slice_decode_test). This helper builds that map.
-static QVariantMap kv(std::initializer_list<std::pair<QString, QVariant>> pairs)
+// aetherd RFC 2.3: SliceModel::applyChanges now takes a typed SliceDelta (the Flex
+// wire decode lives in FlexBackend::decodeSliceStatus, covered by
+// aetherd_slice_decode_test). This helper builds a delta from a field-setter.
+template <class F>
+static SliceDelta delta(F&& build)
 {
-    QVariantMap m;
-    for (const auto& p : pairs) m.insert(p.first, p.second);
-    return m;
+    SliceDelta d;
+    build(d);
+    return d;
 }
 
 int main(int argc, char** argv)
@@ -50,7 +50,7 @@ int main(int argc, char** argv)
     {
         SliceModel s(3);
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyChanges(kv({{"letter", "A"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("A"); }));
         EXPECT_EQ(s.letter(), QString("A"));
         EXPECT_EQ(spy.count(), 1);
         EXPECT_EQ(spy.takeFirst().at(0).toString(), QString("A"));
@@ -59,18 +59,18 @@ int main(int argc, char** argv)
     // ── Re-applying the same letter does NOT re-emit letterChanged.
     {
         SliceModel s(1);
-        s.applyChanges(kv({{"letter", "B"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("B"); }));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyChanges(kv({{"letter", "B"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("B"); }));
         EXPECT_EQ(spy.count(), 0);
     }
 
     // ── Letter change emits exactly once and the resolved value follows.
     {
         SliceModel s(2);
-        s.applyChanges(kv({{"letter", "A"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("A"); }));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyChanges(kv({{"letter", "C"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("C"); }));
         EXPECT_EQ(s.letter(), QString("C"));
         EXPECT_EQ(spy.count(), 1);
         EXPECT_EQ(spy.takeFirst().at(0).toString(), QString("C"));
@@ -80,7 +80,7 @@ int main(int argc, char** argv)
     // (used when a display preference changes).
     {
         SliceModel s(0);
-        s.applyChanges(kv({{"letter", "A"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("A"); }));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
         s.emitLetterRefresh();
         EXPECT_EQ(spy.count(), 1);
@@ -91,9 +91,9 @@ int main(int argc, char** argv)
     // letter or emit on letterChanged.
     {
         SliceModel s(2);
-        s.applyChanges(kv({{"letter", "A"}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.letter = QStringLiteral("A"); }));
         QSignalSpy spy(&s, &SliceModel::letterChanged);
-        s.applyChanges(kv({{"inUse", true}, {"frequency", 14.250}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.inUse = true; d.frequency = 14.250; }));
         EXPECT_EQ(s.letter(), QString("A"));
         EXPECT_EQ(spy.count(), 0);
     }
@@ -106,7 +106,7 @@ int main(int argc, char** argv)
         QStringList commands;
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
-        s.applyChanges(kv({{"audioPan", 25}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.audioPan = 25; }));
         EXPECT_EQ(s.audioPan(), 25);
         EXPECT_EQ(s.flexAudioPan(), 25);
 
@@ -126,7 +126,7 @@ int main(int argc, char** argv)
         EXPECT_EQ(panSpy.count(), 1);
         EXPECT_EQ(panSpy.takeFirst().at(0).toInt(), 80);
 
-        s.applyChanges(kv({{"audioPan", 10}}));
+        s.applyChanges(delta([](SliceDelta& d){ d.audioPan = 10; }));
         EXPECT_EQ(s.audioPan(), 80);
         EXPECT_EQ(s.flexAudioPan(), 10);
         EXPECT_EQ(panSpy.count(), 0);
@@ -154,11 +154,9 @@ int main(int argc, char** argv)
         QStringList commands;
         QObject::connect(&s, &SliceModel::commandReady,
                          [&commands](const QString& cmd) { commands.append(cmd); });
-        s.applyChanges(kv({{"agcMode", "slow"},
-                           {"agcThreshold", 40},
-                           {"agcOffLevel", 12},
-                           {"squelchOn", true},
-                           {"squelchLevel", 35}}));
+        s.applyChanges(delta([](SliceDelta& d){
+            d.agcMode = QStringLiteral("slow"); d.agcThreshold = 40;
+            d.agcOffLevel = 12; d.squelchOn = true; d.squelchLevel = 35; }));
         EXPECT_EQ(s.agcMode(), QString("slow"));
         EXPECT_EQ(s.agcThreshold(), 40);
         EXPECT_EQ(s.agcOffLevel(), 12);
@@ -254,11 +252,9 @@ int main(int argc, char** argv)
         EXPECT_EQ(externalSquelchSpy.takeFirst().at(0).toBool(), false);
         commands.clear();
 
-        s.applyChanges(kv({{"agcMode", "fast"},
-                           {"agcThreshold", 90},
-                           {"agcOffLevel", 8},
-                           {"squelchOn", true},
-                           {"squelchLevel", 12}}));
+        s.applyChanges(delta([](SliceDelta& d){
+            d.agcMode = QStringLiteral("fast"); d.agcThreshold = 90;
+            d.agcOffLevel = 8; d.squelchOn = true; d.squelchLevel = 12; }));
         EXPECT_EQ(s.agcMode(), QString("fast"));
         EXPECT_EQ(s.receiveAgcMode(), QString("off"));
         EXPECT_EQ(s.flexAgcMode(), QString("fast"));

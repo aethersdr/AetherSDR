@@ -408,27 +408,36 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
 
 void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& kvs)
 {
-    // Translate the Flex slice-status wire kv-set into the normalized, canonically
-    // named change map. This owns ALL the SmartSDR-specific knowledge — the wire
-    // key names, "1"→bool, comma-split lists, lowercase normalization — so
-    // SliceModel::applyChanges speaks only vendor-neutral keys. Present-only:
-    // each canonical key rides only when its wire key was reported.
-    QVariantMap c;
-    const auto str = [&](const char* wire, const char* canon) {
-        if (kvs.contains(QLatin1String(wire)))
-            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)));
+    // Translate the Flex slice-status wire kv-set into the normalized, typed
+    // SliceDelta. This owns ALL the SmartSDR-specific knowledge — the wire key
+    // names, "1"→bool, comma-split lists, lowercase normalization — so
+    // SliceModel::applyChanges speaks only the vendor-neutral typed fields.
+    // Present-only: each delta field is engaged only when its wire key was
+    // reported. Numeric parses are ok-guarded (a malformed *present* field is
+    // dropped, not applied as 0/0.0 — this is the Flex slice validation boundary,
+    // where a garbled RF_frequency would otherwise retune to 0 Hz; FlexLib itself
+    // fails closed via TryParse+continue). #4068 review.
+    SliceDelta d;
+    const auto oStr = [&](const char* wire, std::optional<QString>& f) {
+        if (kvs.contains(QLatin1String(wire))) f = kvs.value(QLatin1String(wire));
     };
-    const auto integer = [&](const char* wire, const char* canon) {
-        if (kvs.contains(QLatin1String(wire)))
-            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)).toInt());
+    const auto oInt = [&](const char* wire, std::optional<int>& f) {
+        if (kvs.contains(QLatin1String(wire))) {
+            bool ok = false;
+            const int v = kvs.value(QLatin1String(wire)).toInt(&ok);
+            if (ok) f = v;
+        }
     };
-    const auto real = [&](const char* wire, const char* canon) {
-        if (kvs.contains(QLatin1String(wire)))
-            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)).toDouble());
+    const auto oReal = [&](const char* wire, std::optional<double>& f) {
+        if (kvs.contains(QLatin1String(wire))) {
+            bool ok = false;
+            const double v = kvs.value(QLatin1String(wire)).toDouble(&ok);
+            if (ok) f = v;
+        }
     };
-    const auto boolean = [&](const char* wire, const char* canon) {
+    const auto oBool = [&](const char* wire, std::optional<bool>& f) {
         if (kvs.contains(QLatin1String(wire)))
-            c.insert(QLatin1String(canon), kvs.value(QLatin1String(wire)) == QLatin1String("1"));
+            f = kvs.value(QLatin1String(wire)) == QLatin1String("1");
     };
     const auto splitList = [](const QString& raw) {
         QStringList out;
@@ -440,112 +449,107 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     };
 
     // Identity / tuning
-    str("pan", "panId");
-    str("index_letter", "letter");
-    real("RF_frequency", "frequency");
-    str("mode", "mode");
-    integer("filter_lo", "filterLow");
-    integer("filter_hi", "filterHigh");
+    oStr("pan", d.panId);
+    oStr("index_letter", d.letter);
+    oReal("RF_frequency", d.frequency);
+    oStr("mode", d.mode);
+    oInt("filter_lo", d.filterLow);
+    oInt("filter_hi", d.filterHigh);
     if (kvs.contains(QStringLiteral("mode_list")))
-        c.insert(QStringLiteral("modeList"),
-                 kvs.value(QStringLiteral("mode_list")).split(',', Qt::SkipEmptyParts));
+        d.modeList = kvs.value(QStringLiteral("mode_list")).split(',', Qt::SkipEmptyParts);
 
     // Core state
-    boolean("active", "active");
-    boolean("tx", "txSlice");
-    real("rfgain", "rfGain");
-    real("audio_level", "audioGain");
-    integer("audio_pan", "audioPan");
-    boolean("audio_mute", "audioMute");
-    boolean("in_use", "inUse");
-    boolean("lock", "locked");
-    boolean("qsk", "qsk");
+    oBool("active", d.active);
+    oBool("tx", d.txSlice);
+    oReal("rfgain", d.rfGain);
+    oReal("audio_level", d.audioGain);
+    oInt("audio_pan", d.audioPan);
+    oBool("audio_mute", d.audioMute);
+    oBool("in_use", d.inUse);
+    oBool("lock", d.locked);
+    oBool("qsk", d.qsk);
 
     // Diversity group
-    boolean("diversity_child", "diversityChild");
-    boolean("diversity_parent", "diversityParent");
-    boolean("diversity", "diversity");
-    integer("diversity_index", "diversityIndex");
+    oBool("diversity_child", d.diversityChild);
+    oBool("diversity_parent", d.diversityParent);
+    oBool("diversity", d.diversity);
+    oInt("diversity_index", d.diversityIndex);
 
-    // ESC (diversity beamforming)
+    // ESC (diversity beamforming — "1"/"on" → true)
     if (kvs.contains(QStringLiteral("esc"))) {
         const QString v = kvs.value(QStringLiteral("esc"));
-        c.insert(QStringLiteral("esc"), v == QLatin1String("1") || v == QLatin1String("on"));
+        d.esc = v == QLatin1String("1") || v == QLatin1String("on");
     }
-    real("esc_gain", "escGain");
-    real("esc_phase_shift", "escPhaseShift");
+    oReal("esc_gain", d.escGain);
+    oReal("esc_phase_shift", d.escPhaseShift);
 
     // Antennas (rx_ant_list takes precedence over ant_list, then split+trim)
     if (kvs.contains(QStringLiteral("rx_ant_list")) || kvs.contains(QStringLiteral("ant_list")))
-        c.insert(QStringLiteral("rxAntennaList"),
-                 splitList(kvs.value(QStringLiteral("rx_ant_list"),
-                                     kvs.value(QStringLiteral("ant_list")))));
+        d.rxAntennaList = splitList(kvs.value(QStringLiteral("rx_ant_list"),
+                                              kvs.value(QStringLiteral("ant_list"))));
     if (kvs.contains(QStringLiteral("tx_ant_list")))
-        c.insert(QStringLiteral("txAntennaList"),
-                 splitList(kvs.value(QStringLiteral("tx_ant_list"))));
-    str("rxant", "rxAntenna");
-    str("txant", "txAntenna");
+        d.txAntennaList = splitList(kvs.value(QStringLiteral("tx_ant_list")));
+    oStr("rxant", d.rxAntenna);
+    oStr("txant", d.txAntenna);
 
     // DSP toggles
-    boolean("nb", "nb");
-    boolean("nr", "nr");
-    boolean("anf", "anf");
-    boolean("nrl", "nrl");
-    boolean("nrs", "nrs");
-    boolean("rnn", "rnn");
-    boolean("nrf", "nrf");
-    boolean("anfl", "anfl");
-    boolean("anft", "anft");
-    boolean("apf", "apf");
+    oBool("nb", d.nb);
+    oBool("nr", d.nr);
+    oBool("anf", d.anf);
+    oBool("nrl", d.nrl);
+    oBool("nrs", d.nrs);
+    oBool("rnn", d.rnn);
+    oBool("nrf", d.nrf);
+    oBool("anfl", d.anfl);
+    oBool("anft", d.anft);
+    oBool("apf", d.apf);
     // DSP levels
-    integer("apf_level", "apfLevel");
-    integer("nb_level", "nbLevel");
-    integer("nr_level", "nrLevel");
-    integer("anf_level", "anfLevel");
-    integer("lms_nr_level", "nrlLevel");
-    integer("speex_nr_level", "nrsLevel");
-    integer("nrf_level", "nrfLevel");
-    integer("lms_anf_level", "anflLevel");
+    oInt("apf_level", d.apfLevel);
+    oInt("nb_level", d.nbLevel);
+    oInt("nr_level", d.nrLevel);
+    oInt("anf_level", d.anfLevel);
+    oInt("lms_nr_level", d.nrlLevel);
+    oInt("speex_nr_level", d.nrsLevel);
+    oInt("nrf_level", d.nrfLevel);
+    oInt("lms_anf_level", d.anflLevel);
 
     // AGC / squelch / RIT / XIT
-    str("agc_mode", "agcMode");
-    integer("agc_threshold", "agcThreshold");
-    integer("agc_off_level", "agcOffLevel");
-    boolean("squelch", "squelchOn");
-    integer("squelch_level", "squelchLevel");
-    boolean("rit_on", "ritOn");
-    integer("rit_freq", "ritFreq");
-    boolean("xit_on", "xitOn");
-    integer("xit_freq", "xitFreq");
+    oStr("agc_mode", d.agcMode);
+    oInt("agc_threshold", d.agcThreshold);
+    oInt("agc_off_level", d.agcOffLevel);
+    oBool("squelch", d.squelchOn);
+    oInt("squelch_level", d.squelchLevel);
+    oBool("rit_on", d.ritOn);
+    oInt("rit_freq", d.ritFreq);
+    oBool("xit_on", d.xitOn);
+    oInt("xit_freq", d.xitFreq);
 
     // DAX / RTTY / DIG offsets
-    integer("dax", "daxChannel");
-    integer("rtty_mark", "rttyMark");
-    integer("rtty_shift", "rttyShift");
-    integer("digl_offset", "diglOffset");
-    integer("digu_offset", "diguOffset");
+    oInt("dax", d.daxChannel);
+    oInt("rtty_mark", d.rttyMark);
+    oInt("rtty_shift", d.rttyShift);
+    oInt("digl_offset", d.diglOffset);
+    oInt("digu_offset", d.diguOffset);
 
     // Record / playback (play is 3-state disabled/1/0 — carry raw, model interprets)
-    boolean("record", "recordOn");
-    str("play", "play");
+    oBool("record", d.recordOn);
+    oStr("play", d.play);
 
     // FM duplex/repeater (lowercase normalization stays wire-side)
     if (kvs.contains(QStringLiteral("fm_tone_mode")))
-        c.insert(QStringLiteral("fmToneMode"),
-                 kvs.value(QStringLiteral("fm_tone_mode")).toLower());
-    real("fm_tone_value", "fmToneValue");  // model formats to 1 decimal
+        d.fmToneMode = kvs.value(QStringLiteral("fm_tone_mode")).toLower();
+    oReal("fm_tone_value", d.fmToneValue);  // model formats to 1 decimal
     if (kvs.contains(QStringLiteral("repeater_offset_dir")))
-        c.insert(QStringLiteral("repeaterOffsetDir"),
-                 kvs.value(QStringLiteral("repeater_offset_dir")).toLower());
-    real("fm_repeater_offset_freq", "fmRepeaterOffsetFreq");
-    real("tx_offset_freq", "txOffsetFreq");
-    integer("fm_deviation", "fmDeviation");
+        d.repeaterOffsetDir = kvs.value(QStringLiteral("repeater_offset_dir")).toLower();
+    oReal("fm_repeater_offset_freq", d.fmRepeaterOffsetFreq);
+    oReal("tx_offset_freq", d.txOffsetFreq);
+    oInt("fm_deviation", d.fmDeviation);
 
     // Step (step_list carried raw — model builds the QVector<int>)
-    integer("step", "step");
-    str("step_list", "stepList");
+    oInt("step", d.step);
+    oStr("step_list", d.stepList);
 
-    emit sliceChanged(sliceId, c);
+    emit sliceChanged(sliceId, d);
 }
 
 void FlexBackend::send(const QString& cmd)
