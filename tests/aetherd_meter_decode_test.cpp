@@ -1,12 +1,12 @@
 // aetherd RFC 2.3 — MeterModel touchpoint: FlexBackend::decodeMeterStatus.
 // Pins the SmartSDR meter-status wire decode (definitions + removal) that moved
-// out of RadioModel::handleMeterStatus.
+// out of RadioModel::handleMeterStatus. (#4070: typed MeterDef payload.)
 
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/MeterDef.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
-#include <QVariantMap>
 #include <QString>
 #include <cstdio>
 
@@ -16,29 +16,32 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
+static MeterDef decode1(FlexBackend& b, const QString& body)
+{
+    QSignalSpy def(&b, &IRadioBackend::meterDefined);
+    b.decodeMeterStatus(body);
+    if (def.count() != 1) return {};
+    return def.takeFirst().at(0).value<MeterDef>();
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    qRegisterMetaType<MeterDef>();
 
     // ---- full definition ----
     {
         FlexBackend backend;
-        QSignalSpy def(&backend, &IRadioBackend::meterDefined);
-        backend.decodeMeterStatus(QStringLiteral(
+        const MeterDef d = decode1(backend, QStringLiteral(
             "7.src=SLC#7.num=0#7.nam=LEVEL#7.unit=dBm#7.low=-150.0#7.hi=20.0"));
-        CHECK(def.count() == 1);
-        {
-            const QList<QVariant> a = def.takeFirst();
-            CHECK(a.at(0).toInt() == 7);
-            const QVariantMap f = a.at(1).toMap();
-            CHECK(f.value(QStringLiteral("source")).toString() == QStringLiteral("SLC"));
-            CHECK(f.value(QStringLiteral("sourceIndex")).toInt() == 0);
-            CHECK(f.value(QStringLiteral("name")).toString() == QStringLiteral("LEVEL"));
-            CHECK(f.value(QStringLiteral("unit")).toString() == QStringLiteral("dBm"));
-            CHECK(qFuzzyCompare(f.value(QStringLiteral("low")).toDouble(), -150.0));
-            CHECK(qFuzzyCompare(f.value(QStringLiteral("high")).toDouble(), 20.0));
-            CHECK(!f.contains(QStringLiteral("description")));  // absent key not carried
-        }
+        CHECK(d.index == 7);
+        CHECK(d.source == QStringLiteral("SLC"));
+        CHECK(d.sourceIndex == 0);
+        CHECK(d.name == QStringLiteral("LEVEL"));
+        CHECK(d.unit == QStringLiteral("dBm"));
+        CHECK(qFuzzyCompare(d.low, -150.0));
+        CHECK(qFuzzyCompare(d.high, 20.0));
+        CHECK(d.description.isEmpty());   // absent key → MeterDef default
     }
 
     // ---- removal ----
@@ -50,20 +53,17 @@ int main(int argc, char** argv)
         CHECK(rem.takeFirst().at(0).toInt() == 7);
     }
 
-    // ---- multiple meters in one body, grouped by index ----
+    // ---- multiple meters in one body, grouped by index (ascending) ----
     {
         FlexBackend backend;
         QSignalSpy def(&backend, &IRadioBackend::meterDefined);
         backend.decodeMeterStatus(QStringLiteral(
             "1.src=TX#1.nam=FWDPWR#1.unit=Watts#2.src=TX#2.nam=SWR#2.unit=SWR"));
         CHECK(def.count() == 2);
-        // QMap groups by ascending index → meter 1 first.
-        const QList<QVariant> a = def.takeFirst();
-        CHECK(a.at(0).toInt() == 1);
-        CHECK(a.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("FWDPWR"));
-        const QList<QVariant> b = def.takeFirst();
-        CHECK(b.at(0).toInt() == 2);
-        CHECK(b.at(1).toMap().value(QStringLiteral("name")).toString() == QStringLiteral("SWR"));
+        const MeterDef a = def.takeFirst().at(0).value<MeterDef>();
+        CHECK(a.index == 1 && a.name == QStringLiteral("FWDPWR"));
+        const MeterDef b = def.takeFirst().at(0).value<MeterDef>();
+        CHECK(b.index == 2 && b.name == QStringLiteral("SWR"));
     }
 
     // ---- malformed index token skipped, no emission ----
@@ -74,18 +74,15 @@ int main(int argc, char** argv)
         CHECK(def.count() == 0);
     }
 
-    // ---- malformed numeric fields dropped, not applied as 0 (#4066 guard) ----
+    // ---- malformed numeric fields dropped → keep MeterDef default (guard) ----
     {
         FlexBackend backend;
-        QSignalSpy def(&backend, &IRadioBackend::meterDefined);
-        backend.decodeMeterStatus(QStringLiteral(
+        const MeterDef d = decode1(backend, QStringLiteral(
             "3.nam=LEVEL#3.low=junk#3.hi=20.0#3.num=nope"));
-        CHECK(def.count() == 1);
-        const QVariantMap f = def.takeFirst().at(1).toMap();
-        CHECK(f.value(QStringLiteral("name")).toString() == QStringLiteral("LEVEL"));
-        CHECK(!f.contains(QStringLiteral("low")));         // malformed → dropped
-        CHECK(!f.contains(QStringLiteral("sourceIndex"))); // malformed num → dropped
-        CHECK(f.contains(QStringLiteral("high")));         // valid field still carried
+        CHECK(d.name == QStringLiteral("LEVEL"));
+        CHECK(qFuzzyCompare(d.high, 20.0));   // valid field carried
+        CHECK(d.low == 0.0);                  // malformed low dropped → default 0.0
+        CHECK(d.sourceIndex == 0);            // malformed num dropped → default 0
     }
 
     if (g_failures == 0) {

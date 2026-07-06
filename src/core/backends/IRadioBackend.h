@@ -7,6 +7,7 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include "core/backends/MeterDef.h"
 #include "core/backends/RadioCapabilities.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -121,12 +122,12 @@ signals:
     void transmitChanged(const TransmitDelta& delta);
 
     // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
-    // backend decodes the vendor meter-status wire format into a normalized
-    // definition; RadioModel drives the MeterModel. `fields` carries only the
-    // keys the wire reported (source, sourceIndex, name, unit, low, high,
-    // description) — the same present-only shape the old inline parse produced.
-    // The meter *values* stream on the data plane (VITA-49), separate from this.
-    void meterDefined(int index, const QVariantMap& fields);
+    // backend decodes the vendor meter-status wire format into a typed MeterDef;
+    // RadioModel hands it straight to MeterModel::defineMeter(). Fields the wire
+    // did not report keep their MeterDef defaults (present-only on the decode
+    // side). The meter *values* stream on the data plane (VITA-49), separate.
+    // (#4070: typed payload — replaces the prior stringly-keyed QVariantMap.)
+    void meterDefined(const MeterDef& def);
     void meterRemoved(int index);
     // Panadapter core display state (universal — every family has a pan center
     // and span). The backend decodes it from vendor status; RadioModel drives

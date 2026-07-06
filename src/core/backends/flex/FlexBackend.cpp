@@ -6,9 +6,14 @@
 
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
+#include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
 
 namespace AetherSDR {
+
+// Shared present-only + ok-guarded Flex status carriers (#4070), used by the
+// slice/transmit/meter decoders below.
+using namespace flexkv;
 
 FlexBackend::FlexBackend(QObject* parent)
     : IRadioBackend(parent)
@@ -383,38 +388,22 @@ void FlexBackend::decodeMeterStatus(const QString& rawBody)
 
     for (auto it = grouped.constBegin(); it != grouped.constEnd(); ++it) {
         const QMap<QString, QString>& f = it.value();
-        // Carry only the keys the wire reported, normalized to the MeterDef
-        // field names RadioModel reconstructs (present-only — the old parse
-        // set MeterDef fields conditionally the same way).
-        // Numeric fields are ok-guarded: a malformed present value is dropped,
-        // not applied as 0/0.0 (a bad low/hi would otherwise collapse a meter's
-        // scale). Consistent with the slice/pan/transmit boundary decoders and
-        // FlexLib's TryParse+continue. (#4066 deferred, folded into #PR D.)
-        QVariantMap def;
-        if (f.contains(QStringLiteral("src")))
-            def.insert(QStringLiteral("source"), f.value(QStringLiteral("src")));
-        if (f.contains(QStringLiteral("num"))) {
-            bool ok = false;
-            const int v = f.value(QStringLiteral("num")).toInt(&ok, 0);  // base 0
-            if (ok) def.insert(QStringLiteral("sourceIndex"), v);
-        }
-        if (f.contains(QStringLiteral("nam")))
-            def.insert(QStringLiteral("name"), f.value(QStringLiteral("nam")));
-        if (f.contains(QStringLiteral("unit")))
-            def.insert(QStringLiteral("unit"), f.value(QStringLiteral("unit")));
-        if (f.contains(QStringLiteral("low"))) {
-            bool ok = false;
-            const double v = f.value(QStringLiteral("low")).toDouble(&ok);
-            if (ok) def.insert(QStringLiteral("low"), v);
-        }
-        if (f.contains(QStringLiteral("hi"))) {
-            bool ok = false;
-            const double v = f.value(QStringLiteral("hi")).toDouble(&ok);
-            if (ok) def.insert(QStringLiteral("high"), v);
-        }
-        if (f.contains(QStringLiteral("desc")))
-            def.insert(QStringLiteral("description"), f.value(QStringLiteral("desc")));
-        emit meterDefined(it.key(), def);
+        // Build the typed MeterDef directly (#4070). Present-only: a field the
+        // wire didn't report keeps its MeterDef default. Numeric fields are
+        // ok-guarded — a malformed present value is dropped, not applied as
+        // 0/0.0 (a bad low/hi would otherwise collapse a meter's scale).
+        // Consistent with the slice/pan/transmit boundary decoders and FlexLib's
+        // TryParse+continue.
+        MeterDef def;
+        def.index = it.key();
+        flexkv::carryInto(f, "src", def.source);
+        flexkv::carryIntInto(f, "num", def.sourceIndex, /*base=*/0);
+        flexkv::carryInto(f, "nam", def.name);
+        flexkv::carryInto(f, "unit", def.unit);
+        flexkv::carryRealInto(f, "low", def.low);
+        flexkv::carryRealInto(f, "hi", def.high);
+        flexkv::carryInto(f, "desc", def.description);
+        emit meterDefined(def);
     }
 }
 
@@ -430,35 +419,13 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     // where a garbled RF_frequency would otherwise retune to 0 Hz; FlexLib itself
     // fails closed via TryParse+continue). #4068 review.
     SliceDelta d;
-    const auto oStr = [&](const char* wire, std::optional<QString>& f) {
-        if (kvs.contains(QLatin1String(wire))) f = kvs.value(QLatin1String(wire));
-    };
-    const auto oInt = [&](const char* wire, std::optional<int>& f) {
-        if (kvs.contains(QLatin1String(wire))) {
-            bool ok = false;
-            const int v = kvs.value(QLatin1String(wire)).toInt(&ok);
-            if (ok) f = v;
-        }
-    };
-    const auto oReal = [&](const char* wire, std::optional<double>& f) {
-        if (kvs.contains(QLatin1String(wire))) {
-            bool ok = false;
-            const double v = kvs.value(QLatin1String(wire)).toDouble(&ok);
-            if (ok) f = v;
-        }
-    };
-    const auto oBool = [&](const char* wire, std::optional<bool>& f) {
-        if (kvs.contains(QLatin1String(wire)))
-            f = kvs.value(QLatin1String(wire)) == QLatin1String("1");
-    };
-    const auto splitList = [](const QString& raw) {
-        QStringList out;
-        for (QString t : raw.split(',', Qt::SkipEmptyParts)) {
-            t = t.trimmed();
-            if (!t.isEmpty()) out.append(t);
-        }
-        return out;
-    };
+    // Thin forwarders to the shared flexkv carriers — the present-only + ok-guard
+    // logic lives once in FlexKvCarry.h (#4070), not re-rolled here.
+    const auto oStr  = [&](const char* w, std::optional<QString>& f) { flexkv::carryStr(kvs, w, f); };
+    const auto oInt  = [&](const char* w, std::optional<int>& f)     { flexkv::carryInt(kvs, w, f); };
+    const auto oReal = [&](const char* w, std::optional<double>& f)  { flexkv::carryReal(kvs, w, f); };
+    const auto oBool = [&](const char* w, std::optional<bool>& f)    { flexkv::carryBool(kvs, w, f); };
+    const auto splitList = [](const QString& raw) { return flexkv::splitList(raw); };
 
     // Identity / tuning
     oStr("pan", d.panId);
@@ -569,71 +536,38 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
 // transmitChanged. Numeric parses are ok-guarded (malformed present field is
 // dropped, not applied as 0) and clamped to the model's ranges — the wire
 // normalization the old TransmitModel decoders did inline.
-namespace {
-// present-only, ok-guarded carriers over a Flex kv-set.
-inline void tBool(const QMap<QString, QString>& kvs, const char* wire,
-                  std::optional<bool>& f) {
-    if (kvs.contains(QLatin1String(wire)))
-        f = kvs.value(QLatin1String(wire)) == QLatin1String("1");
-}
-inline void tInt(const QMap<QString, QString>& kvs, const char* wire,
-                 std::optional<int>& f) {
-    if (kvs.contains(QLatin1String(wire))) {
-        bool ok = false;
-        const int v = kvs.value(QLatin1String(wire)).toInt(&ok);
-        if (ok) f = v;
-    }
-}
-inline void tClamp(const QMap<QString, QString>& kvs, const char* wire,
-                   std::optional<int>& f, int lo, int hi) {
-    if (kvs.contains(QLatin1String(wire))) {
-        bool ok = false;
-        const int v = kvs.value(QLatin1String(wire)).toInt(&ok);
-        if (ok) f = qBound(lo, v, hi);
-    }
-}
-inline void tReal(const QMap<QString, QString>& kvs, const char* wire,
-                  std::optional<double>& f) {
-    if (kvs.contains(QLatin1String(wire))) {
-        bool ok = false;
-        const double v = kvs.value(QLatin1String(wire)).toDouble(&ok);
-        if (ok) f = v;
-    }
-}
-}  // namespace
-
 void FlexBackend::decodeTransmitStatus(const QMap<QString, QString>& kvs)
 {
     TransmitDelta d;
     // Core transmit
-    tClamp(kvs, "rfpower", d.rfPower, 0, 100);
-    tClamp(kvs, "tunepower", d.tunePower, 0, 100);
-    tBool(kvs, "tune", d.tune);
-    tBool(kvs, "mox", d.mox);
-    tReal(kvs, "freq", d.transmitFreq);
+    carryClamp(kvs, "rfpower", d.rfPower, 0, 100);
+    carryClamp(kvs, "tunepower", d.tunePower, 0, 100);
+    carryBool(kvs, "tune", d.tune);
+    carryBool(kvs, "mox", d.mox);
+    carryReal(kvs, "freq", d.transmitFreq);
 
     // Mic / monitor / processor
     if (kvs.contains(QStringLiteral("mic_selection")))
         d.micSelection = kvs.value(QStringLiteral("mic_selection")).toUpper();
-    tClamp(kvs, "mic_level", d.micLevel, 0, 100);
-    tBool(kvs, "mic_acc", d.micAcc);
-    tBool(kvs, "speech_processor_enable", d.speechProcEnable);
-    tClamp(kvs, "speech_processor_level", d.speechProcLevel, 0, 100);
-    tBool(kvs, "compander", d.compander);
-    tClamp(kvs, "compander_level", d.companderLevel, 0, 100);
-    tBool(kvs, "dax", d.dax);
-    tBool(kvs, "sb_monitor", d.sbMonitor);
-    tClamp(kvs, "mon_gain_sb", d.monGainSb, 0, 100);
+    carryClamp(kvs, "mic_level", d.micLevel, 0, 100);
+    carryBool(kvs, "mic_acc", d.micAcc);
+    carryBool(kvs, "speech_processor_enable", d.speechProcEnable);
+    carryClamp(kvs, "speech_processor_level", d.speechProcLevel, 0, 100);
+    carryBool(kvs, "compander", d.compander);
+    carryClamp(kvs, "compander_level", d.companderLevel, 0, 100);
+    carryBool(kvs, "dax", d.dax);
+    carryBool(kvs, "sb_monitor", d.sbMonitor);
+    carryClamp(kvs, "mon_gain_sb", d.monGainSb, 0, 100);
 
     // VOX / phone
-    tBool(kvs, "vox_enable", d.voxEnable);
-    tClamp(kvs, "vox_level", d.voxLevel, 0, 100);
-    tClamp(kvs, "vox_delay", d.voxDelay, 0, 100);
-    tBool(kvs, "mic_boost", d.micBoost);
-    tBool(kvs, "mic_bias", d.micBias);
-    tBool(kvs, "met_in_rx", d.metInRx);
-    tBool(kvs, "synccwx", d.syncCwx);
-    tClamp(kvs, "am_carrier_level", d.amCarrierLevel, 0, 100);
+    carryBool(kvs, "vox_enable", d.voxEnable);
+    carryClamp(kvs, "vox_level", d.voxLevel, 0, 100);
+    carryClamp(kvs, "vox_delay", d.voxDelay, 0, 100);
+    carryBool(kvs, "mic_boost", d.micBoost);
+    carryBool(kvs, "mic_bias", d.micBias);
+    carryBool(kvs, "met_in_rx", d.metInRx);
+    carryBool(kvs, "synccwx", d.syncCwx);
+    carryClamp(kvs, "am_carrier_level", d.amCarrierLevel, 0, 100);
     // dexp / noise_gate_level alias compander / compander_level, but only when
     // the compander key itself is absent (the wire sends one or the other).
     if (kvs.contains(QStringLiteral("dexp")) && !kvs.contains(QStringLiteral("compander")))
@@ -644,27 +578,27 @@ void FlexBackend::decodeTransmitStatus(const QMap<QString, QString>& kvs)
         const int v = kvs.value(QStringLiteral("noise_gate_level")).toInt(&ok);
         if (ok) d.companderLevel = qBound(0, v, 100);
     }
-    tClamp(kvs, "lo", d.txFilterLow, 0, 10000);
-    tClamp(kvs, "hi", d.txFilterHigh, 0, 10000);
+    carryClamp(kvs, "lo", d.txFilterLow, 0, 10000);
+    carryClamp(kvs, "hi", d.txFilterHigh, 0, 10000);
 
     // CW
-    tClamp(kvs, "speed", d.cwSpeed, 5, 100);
-    tClamp(kvs, "pitch", d.cwPitch, 100, 6000);
-    tBool(kvs, "break_in", d.cwBreakIn);
-    tClamp(kvs, "break_in_delay", d.cwDelay, 0, 2000);
-    tBool(kvs, "sidetone", d.cwSidetone);
-    tBool(kvs, "iambic", d.cwIambic);
-    tClamp(kvs, "iambic_mode", d.cwIambicMode, 0, 1);
-    tBool(kvs, "swap_paddles", d.cwSwapPaddles);
-    tBool(kvs, "cwl_enabled", d.cwlEnabled);
-    tClamp(kvs, "mon_gain_cw", d.monGainCw, 0, 100);
-    tClamp(kvs, "mon_pan_cw", d.monPanCw, 0, 100);
+    carryClamp(kvs, "speed", d.cwSpeed, 5, 100);
+    carryClamp(kvs, "pitch", d.cwPitch, 100, 6000);
+    carryBool(kvs, "break_in", d.cwBreakIn);
+    carryClamp(kvs, "break_in_delay", d.cwDelay, 0, 2000);
+    carryBool(kvs, "sidetone", d.cwSidetone);
+    carryBool(kvs, "iambic", d.cwIambic);
+    carryClamp(kvs, "iambic_mode", d.cwIambicMode, 0, 1);
+    carryBool(kvs, "swap_paddles", d.cwSwapPaddles);
+    carryBool(kvs, "cwl_enabled", d.cwlEnabled);
+    carryClamp(kvs, "mon_gain_cw", d.monGainCw, 0, 100);
+    carryClamp(kvs, "mon_pan_cw", d.monPanCw, 0, 100);
 
     // Misc TX
-    tInt(kvs, "max_power_level", d.maxPowerLevel);
+    carryInt(kvs, "max_power_level", d.maxPowerLevel);
     if (kvs.contains(QStringLiteral("tune_mode")))
         d.tuneMode = kvs.value(QStringLiteral("tune_mode"));
-    tBool(kvs, "show_tx_in_waterfall", d.showTxInWaterfall);
+    carryBool(kvs, "show_tx_in_waterfall", d.showTxInWaterfall);
     if (kvs.contains(QStringLiteral("tx_slice_mode")))
         d.txSliceMode = kvs.value(QStringLiteral("tx_slice_mode"));
 
@@ -674,14 +608,14 @@ void FlexBackend::decodeTransmitStatus(const QMap<QString, QString>& kvs)
 void FlexBackend::decodeInterlockStatus(const QMap<QString, QString>& kvs)
 {
     TransmitDelta d;
-    tInt(kvs, "acc_tx_delay", d.accTxDelay);
-    tInt(kvs, "tx1_delay", d.tx1Delay);
-    tInt(kvs, "tx2_delay", d.tx2Delay);
-    tInt(kvs, "tx3_delay", d.tx3Delay);
-    tInt(kvs, "tx_delay", d.txDelay);
-    tInt(kvs, "timeout", d.interlockTimeout);
-    tInt(kvs, "acc_txreq_polarity", d.accTxReqPolarity);
-    tInt(kvs, "rca_txreq_polarity", d.rcaTxReqPolarity);
+    carryInt(kvs, "acc_tx_delay", d.accTxDelay);
+    carryInt(kvs, "tx1_delay", d.tx1Delay);
+    carryInt(kvs, "tx2_delay", d.tx2Delay);
+    carryInt(kvs, "tx3_delay", d.tx3Delay);
+    carryInt(kvs, "tx_delay", d.txDelay);
+    carryInt(kvs, "timeout", d.interlockTimeout);
+    carryInt(kvs, "acc_txreq_polarity", d.accTxReqPolarity);
+    carryInt(kvs, "rca_txreq_polarity", d.rcaTxReqPolarity);
     emit transmitChanged(d);
 }
 
@@ -691,18 +625,18 @@ void FlexBackend::decodeAtuStatus(const QMap<QString, QString>& kvs)
     // Raw ATU status token — the model owns the ATUStatus enum + parse.
     if (kvs.contains(QStringLiteral("status")))
         d.atuStatusRaw = kvs.value(QStringLiteral("status"));
-    tBool(kvs, "atu_enabled", d.atuEnabled);
-    tBool(kvs, "memories_enabled", d.memoriesEnabled);
-    tBool(kvs, "using_mem", d.usingMemory);
+    carryBool(kvs, "atu_enabled", d.atuEnabled);
+    carryBool(kvs, "memories_enabled", d.memoriesEnabled);
+    carryBool(kvs, "using_mem", d.usingMemory);
     emit transmitChanged(d);
 }
 
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
 {
     TransmitDelta d;
-    tBool(kvs, "enable", d.apdEnabled);
-    tBool(kvs, "configurable", d.apdConfigurable);
-    tBool(kvs, "equalizer_active", d.apdEqActive);
+    carryBool(kvs, "enable", d.apdEnabled);
+    carryBool(kvs, "configurable", d.apdConfigurable);
+    carryBool(kvs, "equalizer_active", d.apdEqActive);
     // Bare flag (no `=`): the model clears apdEqActive + emits the reset signal.
     if (kvs.contains(QStringLiteral("equalizer_reset")))
         d.apdEqualizerReset = true;

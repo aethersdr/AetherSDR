@@ -5,20 +5,12 @@
 #include <QJsonArray>
 #include <QString>
 
-namespace AetherSDR {
+// MeterDef moved to the core backend layer (aetherd RFC 2.3 / #4070) so the
+// vendor-neutral IRadioBackend can carry it on meterDefined() without a
+// model dependency. Re-exported here for the model's existing users.
+#include "core/backends/MeterDef.h"
 
-// Describes a single meter definition received from the radio via TCP status.
-// Format: "meter N N.src=SLC N.num=0 N.nam=LEVEL N.unit=dBm N.low=-150 N.hi=20"
-struct MeterDef {
-    int     index{-1};
-    QString source;       // "SLC", "RAD", "AMP", "TX", ...
-    int     sourceIndex{0};
-    QString name;         // "LEVEL", "FWDPWR", "SWR", "PATEMP", ...
-    QString unit;         // "dBm", "dB", "dBFS", "SWR", "Volts", "Amps", "degC", "degF", "Watts", "Percent"
-    double  low{0.0};
-    double  high{0.0};
-    QString description;
-};
+namespace AetherSDR {
 
 // Central meter value store.
 //

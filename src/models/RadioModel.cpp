@@ -401,6 +401,7 @@ RadioModel::RadioModel(QObject* parent)
     // silently drop the emit. Idempotent + cheap. (#4071 review.)
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
+    qRegisterMetaType<MeterDef>();
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
@@ -515,26 +516,9 @@ RadioModel::RadioModel(QObject* parent)
     // meter-status wire format; RadioModel reconstructs the MeterDef (present-
     // only, exactly as the old inline handleMeterStatus parse did) and drives the
     // MeterModel. Meter *values* stay on the VITA-49 data plane (below).
+    // #4070: the backend now emits a typed MeterDef — no key-string reconstruction.
     connect(m_backend.get(), &IRadioBackend::meterDefined, this,
-            [this](int index, const QVariantMap& f) {
-        MeterDef def;
-        def.index = index;
-        if (f.contains(QStringLiteral("source")))
-            def.source = f.value(QStringLiteral("source")).toString();
-        if (f.contains(QStringLiteral("sourceIndex")))
-            def.sourceIndex = f.value(QStringLiteral("sourceIndex")).toInt();
-        if (f.contains(QStringLiteral("name")))
-            def.name = f.value(QStringLiteral("name")).toString();
-        if (f.contains(QStringLiteral("unit")))
-            def.unit = f.value(QStringLiteral("unit")).toString();
-        if (f.contains(QStringLiteral("low")))
-            def.low = f.value(QStringLiteral("low")).toDouble();
-        if (f.contains(QStringLiteral("high")))
-            def.high = f.value(QStringLiteral("high")).toDouble();
-        if (f.contains(QStringLiteral("description")))
-            def.description = f.value(QStringLiteral("description")).toString();
-        m_meterModel.defineMeter(def);
-    });
+            [this](const MeterDef& def) { m_meterModel.defineMeter(def); });
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
             [this](int index) { m_meterModel.removeMeter(index); });
 
