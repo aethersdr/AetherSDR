@@ -291,13 +291,18 @@ you:
   headers stay where they are (`src/core/…`, `src/models/…`) for now. EB3
   just makes the existing boundary enforceable *in place*, so the
   decoupling can proceed without new coupling piling up behind it.
-- **The rule.** Adding a vendor `#include` (e.g. `KiwiSdrManager.h`,
-  `RadioConnection.h`, `TunerModel.h`) to a `gui/`, `core/`, or `models/`
-  file that isn't already tracked — or adding one to a tracked file beyond
-  its baseline count — fails the check. The full vendor list and the
-  frozen per-file baseline live at the top of
-  `tools/check_engine_boundary.py`
-  (`VENDOR_HEADERS` / `KNOWN_VENDOR_INCLUDE_BASELINE`).
+- **The rule.** Each tracked file's baseline row is the exact **set** of
+  vendor headers it may include. Adding a vendor `#include` (e.g.
+  `KiwiSdrManager.h`, `RadioConnection.h`, `TunerModel.h`) to a `gui/`,
+  `core/`, or `models/` file that isn't tracked — or adding a header not
+  in a tracked file's set, *including a lateral swap that keeps the count
+  flat* (drop `RadioConnection.h`, add `KiwiSdrManager.h`) — fails the
+  check. The per-file baseline (`KNOWN_VENDOR_INCLUDE_BASELINE`) lives at
+  the top of `tools/check_engine_boundary.py`; the vendor vocabulary is
+  **derived at runtime from the touchpoint audit**
+  (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
+  truth), so a header newly tagged `vendor` there is enforced without
+  editing the checker.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -307,12 +312,11 @@ you:
   `src/core/backends/`) and the vendor translation units themselves may
   include vendor headers freely — they're below the seam.
 - **Removing coupling (the goal).** When you convert a file's radio access
-  to the seam and drop a vendor include, **lower that file's baseline**
-  in `KNOWN_VENDOR_INCLUDE_BASELINE` to match (delete the row when it hits
-  0). The baseline only shrinks — never raise a count or add a row to make
-  a build pass. If EB3 blocks you and the include is genuinely
-  unavoidable, that's a design conversation for a maintainer, not a
-  baseline bump.
+  to the seam and drop a vendor include, **remove that stem from the
+  file's row** in `KNOWN_VENDOR_INCLUDE_BASELINE` (delete the row when it
+  empties). The set only shrinks — never add a stem or a row to make a
+  build pass. If EB3 blocks you and the include is genuinely unavoidable,
+  that's a design conversation for a maintainer, not a baseline edit.
 - **`src/gui/**` is in the CI trigger** for `engine-boundary.yml` now
   (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
   still caught.
