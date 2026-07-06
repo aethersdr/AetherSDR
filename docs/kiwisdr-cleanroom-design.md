@@ -875,9 +875,9 @@ Remaining uncertainties are deliberately conservative:
   movement disables Auto and sends the explicit floor/ceiling range. The renderer uses
   the same floor/ceiling range locally, so the visible waterfall follows the requested
   values even if a public endpoint ignores or quantizes the setting command.
-- The applet exposes WF Rate as a compact 0..5 control. Value 0 preserves the
+- The applet exposes WF Rate as a compact 0..4 control. Value 0 preserves the
   existing default behavior: derive the remote W/F speed from the active Flex
-  waterfall line duration. Values 1..5 are user-requested fixed speed values
+  waterfall line duration. Values 1..4 are user-requested fixed speed values
   sent as `SET wf_speed=<n>` so endpoint behavior can be tested without
   changing the default automatic tracking path.
 - Kiwi RX antenna profile settings are stored as one

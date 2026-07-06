@@ -28,6 +28,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStyle>
+#include <QFontMetrics>
 #include <QColorDialog>
 #include <QRegularExpression>
 #include <QColorDialog>
@@ -83,6 +84,22 @@ static constexpr int kKiwiSdrWaterfallRateMax = 4;
 static QString kiwiWaterfallDbText(int db)
 {
     return QStringLiteral("%1 dBm").arg(db);
+}
+
+static int reserveValueLabelText(QLabel* label, const QString& text,
+                                 int minimumWidth)
+{
+    if (!label) {
+        return minimumWidth;
+    }
+
+    constexpr int kHorizontalPadding = 6;
+    const QFontMetrics metrics(label->font());
+    const int width = std::max(minimumWidth,
+                               metrics.horizontalAdvance(text)
+                                   + kHorizontalPadding);
+    label->setFixedWidth(width);
+    return width;
 }
 
 static QString kiwiWaterfallRateText(int rate)
@@ -1261,6 +1278,14 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
     int row = 0;
     // Grid columns: 0=label, 1=button (optional), 2=slider, 3=value
+    const QString widestValueText = QStringLiteral("-260 dBm");
+    int valueColumnWidth = 28;
+    auto reserveValueColumnLabel = [&](QLabel* label) {
+        valueColumnWidth = std::max(valueColumnWidth,
+                                    reserveValueLabelText(label, widestValueText,
+                                                          valueColumnWidth));
+        grid->setColumnMinimumWidth(3, valueColumnWidth);
+    };
 
     // Helper: label col 0, slider col 1-2, value col 3
     auto makeRow = [&](const QString& text, int lo, int hi, int def,
@@ -1281,7 +1306,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
         valLbl = new QLabel(QString::number(def));
         valLbl->setStyleSheet(valStyle);
-        valLbl->setFixedWidth(28);
+        reserveValueColumnLabel(valLbl);
         valLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(valLbl, row, 3);
         ++row;
@@ -1313,7 +1338,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
         valLbl = new QLabel(QString::number(def));
         valLbl->setStyleSheet(valStyle);
-        valLbl->setFixedWidth(28);
+        reserveValueColumnLabel(valLbl);
         valLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(valLbl, row, 3);
         ++row;
@@ -1436,7 +1461,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
         m_lineWidthLabel = new QLabel("2.0");
         m_lineWidthLabel->setStyleSheet(valStyle);
-        m_lineWidthLabel->setFixedWidth(28);
+        reserveValueColumnLabel(m_lineWidthLabel);
         m_lineWidthLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(m_lineWidthLabel, row, 3);
         ++row;
@@ -1473,7 +1498,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
         m_fillLabel = new QLabel("70");
         m_fillLabel->setStyleSheet(valStyle);
-        m_fillLabel->setFixedWidth(28);
+        reserveValueColumnLabel(m_fillLabel);
         m_fillLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(m_fillLabel, row, 3);
         ++row;
@@ -1603,7 +1628,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
         m_rateLabel = new QLabel(rateSliderLabelText(m_rateSlider->value()));
         m_rateLabel->setStyleSheet(valStyle);
-        m_rateLabel->setFixedWidth(34);
+        reserveValueColumnLabel(m_rateLabel);
         m_rateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(m_rateLabel, row, 3);
         ++row;
@@ -1681,7 +1706,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         grid->addWidget(m_bgOpacitySlider, row, 1, 1, 2);
         m_bgOpacityLabel = new QLabel("80");
         m_bgOpacityLabel->setStyleSheet(valStyle);
-        m_bgOpacityLabel->setFixedWidth(28);
+        reserveValueColumnLabel(m_bgOpacityLabel);
         m_bgOpacityLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         grid->addWidget(m_bgOpacityLabel, row, 3);
         connect(m_bgOpacitySlider, &QSlider::valueChanged, this, [this](int v) {
