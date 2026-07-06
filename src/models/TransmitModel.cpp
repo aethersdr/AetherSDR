@@ -46,6 +46,19 @@ void TransmitModel::resetState()
 // logic (compander/dexp aliasing, the grouped emits, the ATU enum parse, the
 // per-antenna sampler map + selected-fallback) stays. Present-only: each field
 // is applied iff its optional is engaged.
+namespace {
+// Present-only change-apply: writes *src into dst iff engaged AND different,
+// returning whether it changed. Collapses the ~50 field-apply lines and names
+// the emit-flag exactly once per call site (#4071 review). The compander/dexp
+// alias, ATU parse, and sampler map stay bespoke below.
+template <class T>
+bool assign(const std::optional<T>& src, T& dst)
+{
+    if (src && dst != *src) { dst = *src; return true; }
+    return false;
+}
+}  // namespace
+
 void TransmitModel::applyChanges(const TransmitDelta& d)
 {
     bool changed = false;
@@ -55,20 +68,21 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool filterCutoffChanged = false;
 
     // ── Core transmit ──
-    if (d.rfPower && m_rfPower != *d.rfPower)   { m_rfPower = *d.rfPower; changed = true; }
-    if (d.tunePower && m_tunePower != *d.tunePower) { m_tunePower = *d.tunePower; changed = true; }
-    if (d.tune && m_tune != *d.tune) { m_tune = *d.tune; changed = true; tuneChanged_ = true; }
-    if (d.mox && m_mox != *d.mox) { m_mox = *d.mox; changed = true; }
-    if (d.transmitFreq && m_transmitFreq != *d.transmitFreq) { m_transmitFreq = *d.transmitFreq; changed = true; }
+    changed |= assign(d.rfPower, m_rfPower);
+    changed |= assign(d.tunePower, m_tunePower);
+    if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
+    changed |= assign(d.mox, m_mox);
+    changed |= assign(d.transmitFreq, m_transmitFreq);
 
     // ── Mic / monitor / processor ──
-    if (d.micSelection && m_micSelection != *d.micSelection) { m_micSelection = *d.micSelection; micChanged = true; }
-    if (d.micLevel && m_micLevel != *d.micLevel) { m_micLevel = *d.micLevel; micChanged = true; }
-    if (d.micAcc && m_micAcc != *d.micAcc) { m_micAcc = *d.micAcc; micChanged = true; }
-    if (d.speechProcEnable && m_speechProcEnable != *d.speechProcEnable) { m_speechProcEnable = *d.speechProcEnable; micChanged = true; }
-    if (d.speechProcLevel && m_speechProcLevel != *d.speechProcLevel) { m_speechProcLevel = *d.speechProcLevel; micChanged = true; }
+    micChanged |= assign(d.micSelection, m_micSelection);
+    micChanged |= assign(d.micLevel, m_micLevel);
+    micChanged |= assign(d.micAcc, m_micAcc);
+    micChanged |= assign(d.speechProcEnable, m_speechProcEnable);
+    micChanged |= assign(d.speechProcLevel, m_speechProcLevel);
     // compander/dexp are aliased: one wire value drives BOTH member pairs (the
-    // compander → mic side and the dexp → phone side).
+    // compander → mic side and the dexp → phone side). Bespoke — one optional,
+    // two members, two flags.
     if (d.compander) {
         const bool v = *d.compander;
         if (m_companderOn != v) { m_companderOn = v; micChanged = true; }
@@ -79,40 +93,40 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
         if (m_companderLevel != v) { m_companderLevel = v; micChanged = true; }
         if (m_dexpLevel != v)      { m_dexpLevel = v;      phoneChanged = true; }
     }
-    if (d.dax && m_daxOn != *d.dax) { m_daxOn = *d.dax; micChanged = true; }
-    if (d.sbMonitor && m_sbMonitor != *d.sbMonitor) { m_sbMonitor = *d.sbMonitor; micChanged = true; }
-    if (d.monGainSb && m_monGainSb != *d.monGainSb) { m_monGainSb = *d.monGainSb; micChanged = true; }
+    micChanged |= assign(d.dax, m_daxOn);
+    micChanged |= assign(d.sbMonitor, m_sbMonitor);
+    micChanged |= assign(d.monGainSb, m_monGainSb);
 
     // ── VOX / phone ──
-    if (d.voxEnable && m_voxEnable != *d.voxEnable) { m_voxEnable = *d.voxEnable; phoneChanged = true; }
-    if (d.voxLevel && m_voxLevel != *d.voxLevel) { m_voxLevel = *d.voxLevel; phoneChanged = true; }
-    if (d.voxDelay && m_voxDelay != *d.voxDelay) { m_voxDelay = *d.voxDelay; phoneChanged = true; }
-    if (d.micBoost && m_micBoost != *d.micBoost) { m_micBoost = *d.micBoost; phoneChanged = true; }
-    if (d.micBias && m_micBias != *d.micBias) { m_micBias = *d.micBias; phoneChanged = true; }
-    if (d.metInRx && m_metInRx != *d.metInRx) { m_metInRx = *d.metInRx; changed = true; }
-    if (d.syncCwx && m_syncCwx != *d.syncCwx) { m_syncCwx = *d.syncCwx; phoneChanged = true; }
-    if (d.amCarrierLevel && m_amCarrierLevel != *d.amCarrierLevel) { m_amCarrierLevel = *d.amCarrierLevel; phoneChanged = true; }
-    if (d.txFilterLow && m_txFilterLow != *d.txFilterLow) { m_txFilterLow = *d.txFilterLow; phoneChanged = true; filterCutoffChanged = true; }
-    if (d.txFilterHigh && m_txFilterHigh != *d.txFilterHigh) { m_txFilterHigh = *d.txFilterHigh; phoneChanged = true; filterCutoffChanged = true; }
+    phoneChanged |= assign(d.voxEnable, m_voxEnable);
+    phoneChanged |= assign(d.voxLevel, m_voxLevel);
+    phoneChanged |= assign(d.voxDelay, m_voxDelay);
+    phoneChanged |= assign(d.micBoost, m_micBoost);
+    phoneChanged |= assign(d.micBias, m_micBias);
+    changed      |= assign(d.metInRx, m_metInRx);   // met_in_rx → stateChanged, not phone
+    phoneChanged |= assign(d.syncCwx, m_syncCwx);
+    phoneChanged |= assign(d.amCarrierLevel, m_amCarrierLevel);
+    if (assign(d.txFilterLow, m_txFilterLow))   { phoneChanged = true; filterCutoffChanged = true; }
+    if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    if (d.cwSpeed && m_cwSpeed != *d.cwSpeed) { m_cwSpeed = *d.cwSpeed; phoneChanged = true; }
-    if (d.cwPitch && m_cwPitch != *d.cwPitch) { m_cwPitch = *d.cwPitch; phoneChanged = true; }
-    if (d.cwBreakIn && m_cwBreakIn != *d.cwBreakIn) { m_cwBreakIn = *d.cwBreakIn; phoneChanged = true; }
-    if (d.cwDelay && m_cwDelay != *d.cwDelay) { m_cwDelay = *d.cwDelay; phoneChanged = true; }
-    if (d.cwSidetone && m_cwSidetone != *d.cwSidetone) { m_cwSidetone = *d.cwSidetone; phoneChanged = true; }
-    if (d.cwIambic && m_cwIambic != *d.cwIambic) { m_cwIambic = *d.cwIambic; phoneChanged = true; }
-    if (d.cwIambicMode && m_cwIambicMode != *d.cwIambicMode) { m_cwIambicMode = *d.cwIambicMode; phoneChanged = true; }
-    if (d.cwSwapPaddles && m_cwSwapPaddles != *d.cwSwapPaddles) { m_cwSwapPaddles = *d.cwSwapPaddles; phoneChanged = true; }
-    if (d.cwlEnabled && m_cwlEnabled != *d.cwlEnabled) { m_cwlEnabled = *d.cwlEnabled; phoneChanged = true; }
-    if (d.monGainCw && m_monGainCw != *d.monGainCw) { m_monGainCw = *d.monGainCw; phoneChanged = true; }
-    if (d.monPanCw && m_monPanCw != *d.monPanCw) { m_monPanCw = *d.monPanCw; phoneChanged = true; }
+    phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
+    phoneChanged |= assign(d.cwPitch, m_cwPitch);
+    phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
+    phoneChanged |= assign(d.cwDelay, m_cwDelay);
+    phoneChanged |= assign(d.cwSidetone, m_cwSidetone);
+    phoneChanged |= assign(d.cwIambic, m_cwIambic);
+    phoneChanged |= assign(d.cwIambicMode, m_cwIambicMode);
+    phoneChanged |= assign(d.cwSwapPaddles, m_cwSwapPaddles);
+    phoneChanged |= assign(d.cwlEnabled, m_cwlEnabled);
+    phoneChanged |= assign(d.monGainCw, m_monGainCw);
+    phoneChanged |= assign(d.monPanCw, m_monPanCw);
 
     // ── Misc TX (max_power_level / tx_slice_mode emit inline, like the old code) ──
-    if (d.maxPowerLevel && m_maxPowerLevel != *d.maxPowerLevel) { m_maxPowerLevel = *d.maxPowerLevel; changed = true; emit maxPowerLevelChanged(m_maxPowerLevel); }
-    if (d.tuneMode && m_tuneMode != *d.tuneMode) { m_tuneMode = *d.tuneMode; changed = true; }
-    if (d.showTxInWaterfall && m_showTxInWaterfall != *d.showTxInWaterfall) { m_showTxInWaterfall = *d.showTxInWaterfall; changed = true; }
-    if (d.txSliceMode && m_txSliceMode != *d.txSliceMode) { m_txSliceMode = *d.txSliceMode; changed = true; emit txSliceModeChanged(m_txSliceMode); }
+    if (assign(d.maxPowerLevel, m_maxPowerLevel)) { changed = true; emit maxPowerLevelChanged(m_maxPowerLevel); }
+    changed |= assign(d.tuneMode, m_tuneMode);
+    changed |= assign(d.showTxInWaterfall, m_showTxInWaterfall);
+    if (assign(d.txSliceMode, m_txSliceMode)) { changed = true; emit txSliceModeChanged(m_txSliceMode); }
 
     // ── Interlock (no emit — plain state, matching applyInterlockStatus) ──
     if (d.accTxDelay)       m_accTxDelay       = *d.accTxDelay;
@@ -138,18 +152,18 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
             const ATUStatus s = parseAtuTuneStatus(*d.atuStatusRaw);
             if (m_atuStatus != s) { m_atuStatus = s; atuChanged = true; }
         }
-        if (d.atuEnabled && m_atuEnabled != *d.atuEnabled) { m_atuEnabled = *d.atuEnabled; atuChanged = true; }
-        if (d.memoriesEnabled && m_memoriesEnabled != *d.memoriesEnabled) { m_memoriesEnabled = *d.memoriesEnabled; atuChanged = true; }
-        if (d.usingMemory && m_usingMemory != *d.usingMemory) { m_usingMemory = *d.usingMemory; atuChanged = true; }
+        atuChanged |= assign(d.atuEnabled, m_atuEnabled);
+        atuChanged |= assign(d.memoriesEnabled, m_memoriesEnabled);
+        atuChanged |= assign(d.usingMemory, m_usingMemory);
         if (atuChanged) emit atuStateChanged();
     }
 
     // ── APD (own emit) ──
     {
         bool apdChanged = false;
-        if (d.apdEnabled && m_apdEnabled != *d.apdEnabled) { m_apdEnabled = *d.apdEnabled; apdChanged = true; }
-        if (d.apdConfigurable && m_apdConfigurable != *d.apdConfigurable) { m_apdConfigurable = *d.apdConfigurable; apdChanged = true; }
-        if (d.apdEqActive && m_apdEqActive != *d.apdEqActive) { m_apdEqActive = *d.apdEqActive; apdChanged = true; }
+        apdChanged |= assign(d.apdEnabled, m_apdEnabled);
+        apdChanged |= assign(d.apdConfigurable, m_apdConfigurable);
+        apdChanged |= assign(d.apdEqActive, m_apdEqActive);
         // Bare equalizer_reset flag: clear active + emit the reset signal.
         if (d.apdEqualizerReset) {
             if (m_apdEqActive) { m_apdEqActive = false; apdChanged = true; }
