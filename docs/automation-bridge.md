@@ -147,6 +147,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
+| | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
 | | [`get clients`](#get-clients) | Radio client roster + foreign-pan-write forensics (#3977). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
@@ -444,8 +445,9 @@ connects).
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
-| `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
+| `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
+| `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
@@ -523,6 +525,43 @@ cost a few integer adds per frame.
 `selector` filters by pan index (`get panstats 0`) or objectName. `property`
 `reset` zeroes the counters after the read so successive reads measure
 disjoint intervals: `get panstats 0 reset`.
+
+### `get tracedebug`
+Per-panadapter `SpectrumWidget` trace diagnostics for proving Flex/Kiwi display
+source behavior without screenshots. This is intentionally diagnostic rather
+than user-facing state: use it to compare the currently displayed source, hidden
+background histories, separate 2D/3D trace positions, and the 3D floor anchor
+used by the stacked trace renderer.
+
+```json
+→ {"cmd":"get","model":"tracedebug","selector":"0"}
+← {"ok":true,"model":"tracedebug","pans":[{
+   "panIndex":0,"name":"SpectrumWidget","renderMode":"3D",
+   "kiwiWaterfallActive":false,
+   "noiseFloorPosition":75,
+   "flexNoiseFloorPosition":75,"kiwiNoiseFloorPosition":68,
+   "dssFloorDepth":6,
+   "flexDssFloorDepth":6,"kiwiDssFloorDepth":10,
+   "dssFloorDbm":-120.5,"dssSpanDb":90.0,
+   "flexDssRows":96,"kiwiDssRows":96,
+   "kiwiFftTraceFloorDbm":-124.0,
+   "kiwiDisplayFloorDbm":-110.0,
+   "flexBins":{"count":768,"finiteCount":768},
+   "kiwiBins":{"count":768,"finiteCount":768}}]}
+```
+
+`selector` filters by pan index (`get tracedebug 0`) or objectName. Key fields:
+
+- `kiwiWaterfallActive` — whether this pan is displaying Kiwi spectrum/waterfall
+  (`false` means Flex is displayed; audio and meters are separate concerns).
+- `flexNoiseFloorPosition` / `kiwiNoiseFloorPosition` — the source-specific 2D
+  trace position values restored when toggling displays.
+- `flexDssFloorDepth` / `kiwiDssFloorDepth` — the source-specific 3D floor-depth
+  values restored when toggling displays.
+- `flexDssRows` / `kiwiDssRows` — rolling 3D history row counts for both display
+  sources; useful for checking that hidden histories continue updating.
+- `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
+  trace floor used by 3D placement from the waterfall color floor.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,

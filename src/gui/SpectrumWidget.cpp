@@ -25,6 +25,9 @@
 #include <QToolTip>
 #include <QDialog>
 #include <QFormLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QCheckBox>
@@ -32,6 +35,7 @@
 #include <QFrame>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <QApplication>
@@ -59,6 +63,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include "core/ThemeManager.h"
 
@@ -1074,6 +1079,101 @@ QVariantMap SpectrumWidget::automationDssSetScrollback(bool live,
     return snap;
 }
 
+QVariantMap SpectrumWidget::traceDebugSnapshot()
+{
+    const auto vectorStats = [this](const QVector<float>& bins) {
+        QVariantMap stats;
+        stats[QStringLiteral("count")] = bins.size();
+        if (bins.isEmpty()) {
+            stats[QStringLiteral("finiteCount")] = 0;
+            stats[QStringLiteral("minDbm")] = -1000.0;
+            stats[QStringLiteral("maxDbm")] = -1000.0;
+            stats[QStringLiteral("noiseFloorDbm")] = -1000.0;
+            return stats;
+        }
+
+        float minDbm = std::numeric_limits<float>::infinity();
+        float maxDbm = -std::numeric_limits<float>::infinity();
+        int finiteCount = 0;
+        for (float v : bins) {
+            if (!std::isfinite(v)) {
+                continue;
+            }
+            minDbm = std::min(minDbm, v);
+            maxDbm = std::max(maxDbm, v);
+            ++finiteCount;
+        }
+        stats[QStringLiteral("finiteCount")] = finiteCount;
+        stats[QStringLiteral("minDbm")] = finiteCount > 0 ? minDbm : -1000.0f;
+        stats[QStringLiteral("maxDbm")] = finiteCount > 0 ? maxDbm : -1000.0f;
+        stats[QStringLiteral("noiseFloorDbm")] =
+            finiteCount > 0 ? estimateNoiseFloorDbm(bins) : -1000.0f;
+        return stats;
+    };
+
+    const QVector<float>& flexTrace =
+        !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+
+    QVariantMap m;
+    m[QStringLiteral("panIndex")] = m_panIndex;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("visible")] = isVisible();
+    m[QStringLiteral("widthPx")] = width();
+    m[QStringLiteral("heightPx")] = height();
+    m[QStringLiteral("renderMode")] =
+        m_spectrumRenderMode == SpectrumRenderMode::Mode3D
+            ? QStringLiteral("3D") : QStringLiteral("2D");
+    m[QStringLiteral("kiwiWaterfallAvailable")] = m_kiwiSdrWaterfallAvailable;
+    m[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
+    m[QStringLiteral("centerMhz")] = m_centerMhz;
+    m[QStringLiteral("bandwidthMhz")] = m_bandwidthMhz;
+    m[QStringLiteral("refLevelDbm")] = m_refLevel;
+    m[QStringLiteral("dynamicRangeDb")] = m_dynamicRange;
+
+    m[QStringLiteral("noiseFloorPosition")] = m_noiseFloorPosition;
+    m[QStringLiteral("flexNoiseFloorPosition")] = m_flexNoiseFloorPosition;
+    m[QStringLiteral("kiwiNoiseFloorPosition")] = m_kiwiNoiseFloorPosition;
+    m[QStringLiteral("noiseFloorEnabled")] = m_noiseFloorEnable;
+    m[QStringLiteral("measuredNoiseFloorDbm")] = m_measuredNoiseFloorDbm;
+    m[QStringLiteral("displayFloorDbm")] = displayFloorDbm();
+
+    m[QStringLiteral("dssFloorDepth")] = dssFloorDepth();
+    m[QStringLiteral("flexDssFloorDepth")] = m_flexDssFloorDepth;
+    m[QStringLiteral("kiwiDssFloorDepth")] = m_kiwiDssFloorDepth;
+    m[QStringLiteral("dssFloorOffsetDb")] = m_dssFloorOffsetDb;
+    m[QStringLiteral("dssFloorDbm")] = peekDssFloorDbm();
+    m[QStringLiteral("dssSpanDb")] = dssSpanDb();
+    m[QStringLiteral("dssFloorAnchorDbm")] = m_dssFloorAnchorDbm;
+    m[QStringLiteral("dssFloorAnchorValid")] = m_dssFloorAnchorValid;
+    m[QStringLiteral("dssRows")] = m_dss.rowCount();
+    m[QStringLiteral("dssCapacityRows")] = m_dss.rows();
+    const DssRenderer& flexDss =
+        m_kiwiSdrWaterfallActive ? m_nativeWaterfallState.dss : m_dss;
+    m[QStringLiteral("flexDssRows")] = flexDss.rowCount();
+    const WaterfallStreamState* kiwiState = activeKiwiWaterfallStateConst();
+    m[QStringLiteral("kiwiDssRows")] = m_kiwiSdrWaterfallActive
+        ? m_dss.rowCount()
+        : (kiwiState ? kiwiState->dss.rowCount() : 0);
+
+    m[QStringLiteral("kiwiDisplayRangeValid")] = m_kiwiSdrDisplayRangeValid;
+    m[QStringLiteral("kiwiDisplayRangeAutoRange")] =
+        m_kiwiSdrDisplayRangeAutoRange;
+    m[QStringLiteral("kiwiDisplayFloorDbm")] = m_kiwiSdrDisplayFloorDbm;
+    m[QStringLiteral("kiwiDisplayCeilDbm")] = m_kiwiSdrDisplayCeilDbm;
+    m[QStringLiteral("kiwiFftTraceFloorDbm")] = m_kiwiSdrFftTraceFloorDbm;
+    m[QStringLiteral("kiwiFftTraceFloorValid")] =
+        m_kiwiSdrFftTraceFloorValid;
+    m[QStringLiteral("kiwiFftTraceEstimatedFloorDbm")] =
+        m_kiwiSdrFftTrace.isEmpty()
+            ? -1000.0f
+            : estimateKiwiSdrTraceFloorDbm(m_kiwiSdrFftTrace);
+
+    m[QStringLiteral("activeBins")] = vectorStats(noiseFloorAutoLevelBins());
+    m[QStringLiteral("flexBins")] = vectorStats(flexTrace);
+    m[QStringLiteral("kiwiBins")] = vectorStats(m_kiwiSdrFftTrace);
+    return m;
+}
+
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SPECTRUM_BASE_CLASS(parent)
 {
@@ -1256,6 +1356,23 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         btn->setCursor(Qt::PointingHandCursor);
         return btn;
     };
+    m_kiwiSdrDisplaySourceBtn = new QPushButton(QStringLiteral("Flex"), this);
+    m_kiwiSdrDisplaySourceBtn->setObjectName(QStringLiteral("panDisplaySourceBtn"));
+    m_kiwiSdrDisplaySourceBtn->setAccessibleName(tr("Panadapter spectrum and waterfall source"));
+    m_kiwiSdrDisplaySourceBtn->setAccessibleDescription(
+        tr("Switches the displayed spectrum and waterfall between Flex and KiwiSDR. Audio and meters are unchanged."));
+    m_kiwiSdrDisplaySourceBtn->setCheckable(true);
+    m_kiwiSdrDisplaySourceBtn->setFixedSize(46, 22);
+    m_kiwiSdrDisplaySourceBtn->setStyleSheet(kZoomBtnStyle);
+    m_kiwiSdrDisplaySourceBtn->setCursor(Qt::PointingHandCursor);
+    m_kiwiSdrDisplaySourceBtn->setToolTip(
+        tr("Show Flex or KiwiSDR spectrum/waterfall. Audio and meters are unchanged."));
+    m_kiwiSdrDisplaySourceBtn->hide();
+    connect(m_kiwiSdrDisplaySourceBtn, &QPushButton::clicked,
+            this, [this](bool checked) {
+        emit kiwiSdrDisplaySourceRequested(checked);
+    });
+
     m_zoomSegBtn  = makeBtn("S", QStringLiteral("panZoomSegBtn"),  QStringLiteral("Zoom to segment"));
     m_zoomBandBtn = makeBtn("B", QStringLiteral("panZoomBandBtn"), QStringLiteral("Zoom to band"));
     m_zoomOutBtn  = makeBtn("\u2212", QStringLiteral("panZoomOutBtn"), QStringLiteral("Zoom out"));  // minus sign U+2212
@@ -1521,9 +1638,16 @@ void SpectrumWidget::loadSettings()
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
     m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
-    m_noiseFloorEnable   = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
-    m_noiseFloorPosition = std::clamp(
+    m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
+    const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
+    const int legacyDssFloorDepth = std::clamp(
+        s.value(settingsKey("Display3DFloorDepth"), "6").toInt(), 0, 24);
+    loadDisplaySourceTraceSettings(legacyNoiseFloorPosition,
+                                   legacyDssFloorDepth);
+    m_noiseFloorPosition = m_kiwiSdrWaterfallActive
+        ? m_kiwiNoiseFloorPosition
+        : m_flexNoiseFloorPosition;
     // Match the enable-time fresh-frame seed used by setNoiseFloorEnable so a
     // restored Floor=on locks onto the current floor without smoothing from a
     // stale value.
@@ -1539,7 +1663,7 @@ void SpectrumWidget::loadSettings()
         std::clamp(s.value(settingsKey("DisplaySpectrumRenderMode"), "0").toInt(),
                    0, static_cast<int>(SpectrumRenderMode::Count) - 1));
     m_dssFloorOffsetDb = -static_cast<float>(
-        std::clamp(s.value(settingsKey("Display3DFloorDepth"), "6").toInt(), 0, 24));
+        m_kiwiSdrWaterfallActive ? m_kiwiDssFloorDepth : m_flexDssFloorDepth);
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
@@ -1697,8 +1821,116 @@ void SpectrumWidget::setFftAverage(int frames) {
     s.setValue(settingsKey("DisplayFftAverage"), QString::number(frames));
     s.save();
 }
+
+QString SpectrumWidget::displaySourceTraceSettingsKey() const
+{
+    return settingsKey(QStringLiteral("DisplaySourceTraceSettings"));
+}
+
+void SpectrumWidget::loadDisplaySourceTraceSettings(int legacyNoiseFloorPosition,
+                                                    int legacyDssFloorDepth)
+{
+    m_flexNoiseFloorPosition = std::clamp(legacyNoiseFloorPosition, 1, 99);
+    m_kiwiNoiseFloorPosition = m_flexNoiseFloorPosition;
+    m_flexDssFloorDepth = std::clamp(legacyDssFloorDepth, 0, 24);
+    m_kiwiDssFloorDepth = m_flexDssFloorDepth;
+
+    const QString raw = AppSettings::instance()
+        .value(displaySourceTraceSettingsKey(), QString()).toString();
+    if (raw.trimmed().isEmpty()) {
+        return;
+    }
+
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+        qCWarning(lcGui).noquote()
+            << "SpectrumWidget: ignoring invalid DisplaySourceTraceSettings"
+            << displaySourceTraceSettingsKey() << error.errorString();
+        return;
+    }
+
+    const auto applySource = [](const QJsonObject& source,
+                                int& noiseFloorPosition,
+                                int& dssFloorDepth) {
+        if (source.contains(QStringLiteral("noiseFloorPosition"))) {
+            noiseFloorPosition = std::clamp(
+                source.value(QStringLiteral("noiseFloorPosition")).toInt(
+                    noiseFloorPosition),
+                1, 99);
+        }
+        if (source.contains(QStringLiteral("dssFloorDepth"))) {
+            dssFloorDepth = std::clamp(
+                source.value(QStringLiteral("dssFloorDepth")).toInt(
+                    dssFloorDepth),
+                0, 24);
+        }
+    };
+
+    const QJsonObject obj = doc.object();
+    applySource(obj.value(QStringLiteral("flex")).toObject(),
+                m_flexNoiseFloorPosition, m_flexDssFloorDepth);
+    applySource(obj.value(QStringLiteral("kiwi")).toObject(),
+                m_kiwiNoiseFloorPosition, m_kiwiDssFloorDepth);
+}
+
+void SpectrumWidget::saveDisplaySourceTraceSettings()
+{
+    auto sourceObject = [](int noiseFloorPosition, int dssFloorDepth) {
+        QJsonObject source;
+        source.insert(QStringLiteral("noiseFloorPosition"),
+                      std::clamp(noiseFloorPosition, 1, 99));
+        source.insert(QStringLiteral("dssFloorDepth"),
+                      std::clamp(dssFloorDepth, 0, 24));
+        return source;
+    };
+
+    QJsonObject obj;
+    obj.insert(QStringLiteral("version"), 1);
+    obj.insert(QStringLiteral("flex"),
+               sourceObject(m_flexNoiseFloorPosition, m_flexDssFloorDepth));
+    obj.insert(QStringLiteral("kiwi"),
+               sourceObject(m_kiwiNoiseFloorPosition, m_kiwiDssFloorDepth));
+
+    auto& s = AppSettings::instance();
+    s.setValue(displaySourceTraceSettingsKey(), QString::fromUtf8(
+        QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
+}
+
+void SpectrumWidget::setNoiseFloorPositionForSource(bool kiwiSource,
+                                                    int pos,
+                                                    bool persist)
+{
+    const int clampedPosition = std::clamp(pos, 1, 99);
+    if (kiwiSource) {
+        m_kiwiNoiseFloorPosition = clampedPosition;
+    } else {
+        m_flexNoiseFloorPosition = clampedPosition;
+    }
+
+    if (kiwiSource == m_kiwiSdrWaterfallActive) {
+        m_noiseFloorPosition = clampedPosition;
+    }
+
+    if (persist) {
+        saveDisplaySourceTraceSettings();
+    }
+}
+
+void SpectrumWidget::restoreNoiseFloorPositionForCurrentSource(bool syncMenu)
+{
+    m_noiseFloorPosition = m_kiwiSdrWaterfallActive
+        ? m_kiwiNoiseFloorPosition
+        : m_flexNoiseFloorPosition;
+    refreshNoiseFloorTarget();
+    if (syncMenu) {
+        emit noiseFloorPositionResolved(m_noiseFloorPosition);
+    }
+}
+
 void SpectrumWidget::setNoiseFloorPosition(int pos) {
-    m_noiseFloorPosition = std::clamp(pos, 1, 99);
+    setNoiseFloorPositionForSource(m_kiwiSdrWaterfallActive, pos, true);
     m_pendingDbmRangeEcho = false;
     m_pendingDbmRangeEchoFromAutoFloor = false;
     m_pendingDbmRangeEchoStartMs = 0;
@@ -1717,9 +1949,6 @@ void SpectrumWidget::setNoiseFloorPosition(int pos) {
         }
         applyNoiseFloorAutoAdjust(QDateTime::currentMSecsSinceEpoch());
     }
-    auto& s = AppSettings::instance();
-    s.setValue(settingsKey("DisplayNoiseFloorPosition"), QString::number(m_noiseFloorPosition));
-    s.save();
 }
 void SpectrumWidget::setNoiseFloorEnable(bool on) {
     m_pendingDbmRangeEcho = false;
@@ -1740,6 +1969,8 @@ void SpectrumWidget::setNoiseFloorEnable(bool on) {
     s.save();
 }
 void SpectrumWidget::reacquireNoiseFloorLock() {
+    m_dssFloorAnchorDbm = -1000.0f;
+    m_dssFloorAnchorValid = false;
     if (!m_noiseFloorEnable) return;
     m_pendingDbmRangeEcho = false;
     m_pendingDbmRangeEchoFromAutoFloor = false;
@@ -1755,12 +1986,15 @@ void SpectrumWidget::reacquireNoiseFloorLock() {
 
 void SpectrumWidget::reacquireNoiseFloorLockFromVisibleSource()
 {
-    reacquireNoiseFloorLock();
-    if (!m_noiseFloorEnable) {
-        return;
+    const QVector<float>& bins = noiseFloorAutoLevelBins();
+    if (m_noiseFloorEnable) {
+        reacquireNoiseFloorLock();
+    } else {
+        m_measuredNoiseFloorDbm = -1000.0f;
+        m_dssFloorAnchorDbm = -1000.0f;
+        m_dssFloorAnchorValid = false;
     }
 
-    const QVector<float>& bins = noiseFloorAutoLevelBins();
     if (bins.isEmpty()) {
         return;
     }
@@ -1768,7 +2002,15 @@ void SpectrumWidget::reacquireNoiseFloorLockFromVisibleSource()
     const float frameFloor = estimateNoiseFloorDbm(bins);
     if (frameFloor > -500.0f) {
         m_measuredNoiseFloorDbm = frameFloor;
+        if (!m_kiwiSdrWaterfallActive) {
+            m_dssFloorAnchorDbm = frameFloor;
+            m_dssFloorAnchorValid = true;
+        }
     }
+    if (!m_noiseFloorEnable) {
+        return;
+    }
+
     updateNoiseFloorBaseline(bins, true);
     if (m_noiseFloorFreshFrameCount > 0) {
         --m_noiseFloorFreshFrameCount;
@@ -2365,12 +2607,7 @@ bool SpectrumWidget::captureNoiseFloorTargetFromCurrentScale(bool notify, bool p
         99);
 
     m_noiseFloorTargetFrac = targetFrac;
-    m_noiseFloorPosition = newPosition;
-    if (persist) {
-        auto& s = AppSettings::instance();
-        s.setValue(settingsKey("DisplayNoiseFloorPosition"), QString::number(m_noiseFloorPosition));
-        s.save();
-    }
+    setNoiseFloorPositionForSource(m_kiwiSdrWaterfallActive, newPosition, persist);
     if (notify) {
         emit noiseFloorPositionResolved(newPosition);
     }
@@ -3064,21 +3301,54 @@ void SpectrumWidget::setWfColorScheme(int scheme) {
     update();
 }
 
-void SpectrumWidget::setDssFloorDepth(int dB) {
-    dB = std::clamp(dB, 0, 24);
-    const float off = -static_cast<float>(dB);
-    if (off != m_dssFloorOffsetDb) {
-        m_dssFloorOffsetDb = off;
-        auto& s = AppSettings::instance();
-        s.setValue(settingsKey("Display3DFloorDepth"), QString::number(dB));
-        s.save();
+void SpectrumWidget::setDssFloorDepthForSource(bool kiwiSource, int dB, bool persist)
+{
+    const int clampedDepth = std::clamp(dB, 0, 24);
+    if (kiwiSource) {
+        m_kiwiDssFloorDepth = clampedDepth;
+    } else {
+        m_flexDssFloorDepth = clampedDepth;
+    }
+
+    if (persist) {
+        saveDisplaySourceTraceSettings();
+    }
+
+    if (kiwiSource != m_kiwiSdrWaterfallActive) {
+        return;
+    }
+
+    const float offsetDb = -static_cast<float>(clampedDepth);
+    if (offsetDb != m_dssFloorOffsetDb) {
+        m_dssFloorOffsetDb = offsetDb;
         m_dss.invalidate();   // CPU fallback cache; mesh re-reads each frame
         // In 3D mode the visible dBm markings are anchored to this floor, so the
         // cached overlay must redraw even when the span is stable.
         markOverlayDirty();
-        emit dssFloorDepthResolved(dB);
+        emit dssFloorDepthResolved(clampedDepth);
     }
     update();
+}
+
+void SpectrumWidget::restoreDssFloorDepthForCurrentSource(bool syncMenu)
+{
+    const int depth = m_kiwiSdrWaterfallActive
+        ? m_kiwiDssFloorDepth
+        : m_flexDssFloorDepth;
+    const float offsetDb = -static_cast<float>(depth);
+    if (offsetDb != m_dssFloorOffsetDb) {
+        m_dssFloorOffsetDb = offsetDb;
+        m_dss.invalidate();
+        markOverlayDirty();
+    }
+    if (syncMenu) {
+        emit dssFloorDepthResolved(depth);
+    }
+    update();
+}
+
+void SpectrumWidget::setDssFloorDepth(int dB) {
+    setDssFloorDepthForSource(m_kiwiSdrWaterfallActive, dB, true);
 }
 
 void SpectrumWidget::setDssGain(int pct) {
@@ -3940,6 +4210,19 @@ SpectrumWidget::WaterfallStreamState& SpectrumWidget::activeKiwiWaterfallState()
     return m_kiwiWaterfallState;
 }
 
+const SpectrumWidget::WaterfallStreamState*
+SpectrumWidget::activeKiwiWaterfallStateConst() const
+{
+    if (!m_kiwiSdrWaterfallProfileId.isEmpty()) {
+        auto it = m_kiwiProfileWaterfallStates.constFind(
+            m_kiwiSdrWaterfallProfileId);
+        return it == m_kiwiProfileWaterfallStates.constEnd()
+            ? nullptr
+            : &it.value();
+    }
+    return &m_kiwiWaterfallState;
+}
+
 void SpectrumWidget::saveCurrentWaterfallStreamState()
 {
     WaterfallStreamState& state = m_kiwiSdrWaterfallActive
@@ -3983,6 +4266,14 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiFftTraceFloorDbm = m_kiwiSdrFftTraceFloorDbm;
     updated.kiwiFftTraceFloorValid = m_kiwiSdrFftTraceFloorValid;
     updated.valid = !updated.waterfall.isNull();
+#ifdef AETHER_GPU_SPECTRUM
+    updated.wfTexFullUpload = m_wfTexFullUpload;
+    updated.wfLastUploadedRow = m_wfLastUploadedRow;
+    updated.dssTexNeedsUpload = m_dssTexNeedsUpload;
+    updated.dssLastUploadedGen = m_dssLastUploadedGen;
+    updated.dssMeshHeadUploaded = m_dssMeshHeadUploaded;
+    updated.dssMeshRowGenUploaded = m_dssMeshRowGenUploaded;
+#endif
 
     state = std::move(updated);
 }
@@ -4062,9 +4353,13 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_kiwiSdrDisplayRangeAutoRange = restored.kiwiDisplayRangeAutoRange;
     m_kiwiSdrFftTraceFloorDbm = restored.kiwiFftTraceFloorDbm;
     m_kiwiSdrFftTraceFloorValid = restored.kiwiFftTraceFloorValid;
-    resetDssUploadState();
 #ifdef AETHER_GPU_SPECTRUM
-    m_wfTexFullUpload = true;
+    m_wfTexFullUpload = restored.wfTexFullUpload;
+    m_wfLastUploadedRow = restored.wfLastUploadedRow;
+    m_dssTexNeedsUpload = restored.dssTexNeedsUpload;
+    m_dssLastUploadedGen = restored.dssLastUploadedGen;
+    m_dssMeshHeadUploaded = restored.dssMeshHeadUploaded;
+    m_dssMeshRowGenUploaded = restored.dssMeshRowGenUploaded;
 #endif
 }
 
@@ -5361,6 +5656,12 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     }
     m_bins = *spectrumBins;
 
+    // Feed the Flex rolling history every frame (not only in 3D and not only
+    // while Flex is visible) so switching back from Kiwi shows current Flex
+    // 3D history instead of an old surface that refills over ~96 frames.
+    // Raw bins: the renderer does its own spatial/temporal smoothing.
+    pushDssRowForWaterfallStream(false, m_bins);
+
     if (!m_kiwiSdrWaterfallActive) {
         // ── Live noise floor measurement (two-pass trimmed mean) ─────────
         // Same technique as the waterfall auto-black: compute the mean of ALL
@@ -5643,6 +5944,12 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
         return;
     }
 
+    setNoiseFloorPositionForSource(m_kiwiSdrWaterfallActive,
+                                   m_noiseFloorPosition,
+                                   false);
+    setDssFloorDepthForSource(m_kiwiSdrWaterfallActive,
+                              dssFloorDepth(),
+                              false);
     saveCurrentWaterfallStreamState();
     m_kiwiSdrWaterfallActive = active;
     m_lastAutoSquelchLevel = -1;
@@ -5650,6 +5957,9 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
         m_sqlNoiseFloorDbm = -999.0f;
     }
     restoreCurrentWaterfallStreamState();
+    resetDssUploadState();
+    restoreNoiseFloorPositionForCurrentSource(true);
+    restoreDssFloorDepthForCurrentSource(true);
     // The newly-active stream is no longer reprojected on every pan step
     // (handleWaterfallFrequencyFrameChange now touches only the active stream),
     // so its restored viewport can lag the current frequency frame. Remap it now
@@ -5657,14 +5967,14 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
     // frame (#3578). This is the lazy counterpart to the per-pan reproject the
     // inactive stream used to receive.
     rebuildWaterfallViewportForFrame(m_centerMhz, m_bandwidthMhz);
+    m_pendingDbmRangeEcho = false;
+    m_pendingDbmRangeEchoFromAutoFloor = false;
+    m_pendingDbmRangeEchoStartMs = 0;
+    clearDbmReleaseRebase();
+    resetNoiseFloorBaseline();
     if (!active) {
         clearKiwiSdrSquelchLine();
-        m_pendingDbmRangeEcho = false;
-        m_pendingDbmRangeEchoFromAutoFloor = false;
-        m_pendingDbmRangeEchoStartMs = 0;
-        clearDbmReleaseRebase();
         m_resetFftSmoothingOnNextFrame = true;
-        resetNoiseFloorBaseline();
     }
     reacquireNoiseFloorLockFromVisibleSource();
     updateFpsMeterLabels();
@@ -5672,6 +5982,34 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
     m_wfTexFullUpload = true;
 #endif
     leanCappedUpdate();
+}
+
+void SpectrumWidget::setKiwiSdrDisplaySourceControlVisible(bool visible)
+{
+    if (!m_kiwiSdrDisplaySourceBtn
+        || m_kiwiSdrDisplaySourceBtn->isHidden() != visible) {
+        return;
+    }
+
+    m_kiwiSdrDisplaySourceBtn->setVisible(visible);
+    if (visible) {
+        m_kiwiSdrDisplaySourceBtn->raise();
+    }
+}
+
+void SpectrumWidget::setKiwiSdrDisplaySourceKiwi(bool kiwi)
+{
+    m_kiwiSdrDisplaySourceKiwi = kiwi;
+    if (m_kiwiSdrDisplaySourceBtn) {
+        const QSignalBlocker blocker(m_kiwiSdrDisplaySourceBtn);
+        m_kiwiSdrDisplaySourceBtn->setChecked(kiwi);
+        m_kiwiSdrDisplaySourceBtn->setText(
+            kiwi ? QStringLiteral("Kiwi") : QStringLiteral("Flex"));
+        m_kiwiSdrDisplaySourceBtn->setToolTip(
+            kiwi
+                ? tr("Showing KiwiSDR spectrum/waterfall. Audio and meters are unchanged.")
+                : tr("Showing Flex spectrum/waterfall. Audio and meters are unchanged."));
+    }
 }
 
 void SpectrumWidget::setKiwiSdrWaterfallAvailable(bool available)
@@ -5699,6 +6037,10 @@ void SpectrumWidget::setKiwiSdrWaterfallProfile(const QString& profileId)
     m_kiwiSdrWaterfallProfileId = normalized;
     if (m_kiwiSdrWaterfallActive) {
         restoreCurrentWaterfallStreamState();
+        resetDssUploadState();
+#ifdef AETHER_GPU_SPECTRUM
+        m_wfTexFullUpload = true;
+#endif
         reacquireNoiseFloorLockFromVisibleSource();
         leanCappedUpdate();
     }
@@ -5916,8 +6258,8 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
     // Keep the trace/3DSS smoothing local to those consumers; the scrolling
     // waterfall below uses decoded bins so narrow Kiwi carriers stay sharp.
     const QVector<float> smoothedBins = smoothKiwiSdrWaterfallBins(binsDbm);
-    bool appendedKiwiDssHistory = false;
-    if (m_kiwiSdrWaterfallActive) {
+    bool pushedKiwiDssHistory = false;
+    if (rowHasUsableTraceCoverage) {
         // 3DSS rows must be in the visible panadapter frequency frame. Raw Kiwi
         // rows often span a wider quantized server window, so feeding them
         // directly makes the stacked trace drift away from the remapped waterfall.
@@ -5925,12 +6267,11 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             smoothedBins, DssRenderer::kCols, rowCenterMhz, rowBandwidthMhz,
             m_centerMhz, m_bandwidthMhz, kKiwiSdrWaterfallMinDbm);
         if (!kiwiDssTrace.isEmpty()) {
-            appendDssWaterfallRow(kiwiDssTrace, -1.0, -1.0,
-                                  rowHasUsableTraceCoverage);
-            appendedKiwiDssHistory = true;
+            pushDssRowForWaterfallStream(true, kiwiDssTrace);
+            pushedKiwiDssHistory = true;
         }
     }
-    if (m_kiwiSdrWaterfallActive && destWidth > 0 && rowHasUsableTraceCoverage) {
+    if (destWidth > 0 && rowHasUsableTraceCoverage) {
         // The waterfall preserves narrow peaks, but the FFT line must not rise
         // just because a pan/zoom step changes the sampled row window. Average
         // the covered bins and normalize the row below.
@@ -5984,7 +6325,7 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
                 m_kiwiSdrFftFallbackSeedMask.clear();
             }
         }
-        if (!m_kiwiSdrFftTrace.isEmpty()) {
+        if (visibleStream && !m_kiwiSdrFftTrace.isEmpty()) {
             if (rowCanDriveAutoLevel) {
                 const float previousMeasuredNoiseFloorDbm = m_measuredNoiseFloorDbm;
                 const float frameFloor = estimateNoiseFloorDbm(m_kiwiSdrFftTrace);
@@ -6013,8 +6354,8 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             }
         }
     }
-    if (m_kiwiSdrWaterfallActive && !appendedKiwiDssHistory) {
-        appendDssWaterfallRow(QVector<float>{}, -1.0, -1.0, false);
+    if (!pushedKiwiDssHistory) {
+        pushDssRowForWaterfallStream(true, QVector<float>{}, -1.0, -1.0, false);
     }
     pushKiwiSdrWaterfallRow(binsDbm, destWidth,
                             rowCenterMhz, rowBandwidthMhz);
@@ -8057,6 +8398,11 @@ void SpectrumWidget::positionZoomButtons()
     // Row 0 (above): S | B (segment/band zoom)
     m_zoomSegBtn->move(pad, botY - sz - sz - 2);
     m_zoomBandBtn->move(pad + sz + 2, botY - sz - sz - 2);
+    if (m_kiwiSdrDisplaySourceBtn) {
+        const int sourceY = botY - (sz * 2)
+            - m_kiwiSdrDisplaySourceBtn->height() - 4;
+        m_kiwiSdrDisplaySourceBtn->move(pad, sourceY);
+    }
 }
 
 void SpectrumWidget::positionPanadapterMessageOverlay()
@@ -8122,19 +8468,122 @@ quint64 SpectrumWidget::dssPaletteToken() const
     return t;
 }
 
-float SpectrumWidget::dssFloorDbm() const
+float SpectrumWidget::dssFloorDbm()
 {
-    // Pick the measured noise floor for whichever source is live so the 3D-Floor
-    // slider behaves the same on Flex and KiwiSDR; fall back to the Ref window
-    // bottom only before a measurement exists. Quantise to 0.5 dB so per-frame
-    // floor jitter doesn't force needless rebuilds/uploads.
+    // 3D uses the FFT trace floor, not the waterfall colour aperture. Some
+    // KiwiSDRs publish a manual display range whose floor is well above the
+    // actual trace floor; using that colour floor collapses the 3D ridge to the
+    // baseline. The Kiwi trace floor is stabilized by stabilizeKiwiSdrFftTrace().
+    // Flex FFT floor estimates vary slightly frame-to-frame, so Flex follows a
+    // smoothed anchor instead of re-anchoring the surface to every raw frame.
     float floor;
-    if (m_kiwiSdrWaterfallActive && m_kiwiSdrDisplayRangeValid) {
-        floor = m_kiwiSdrDisplayFloorDbm;
-    } else if (m_measuredNoiseFloorDbm > -500.0f) {
-        floor = m_measuredNoiseFloorDbm;
+    if (m_kiwiSdrWaterfallActive) {
+        if (m_kiwiSdrFftTraceFloorValid && m_kiwiSdrFftTraceFloorDbm > -500.0f) {
+            floor = m_kiwiSdrFftTraceFloorDbm;
+        } else if (!m_kiwiSdrFftTrace.isEmpty()) {
+            const float frameFloor = estimateKiwiSdrTraceFloorDbm(m_kiwiSdrFftTrace);
+            floor = frameFloor > -500.0f
+                ? frameFloor
+                : (m_kiwiSdrDisplayRangeValid
+                    ? m_kiwiSdrDisplayFloorDbm
+                    : m_refLevel - m_dynamicRange);
+        } else {
+            floor = m_kiwiSdrDisplayRangeValid
+                ? m_kiwiSdrDisplayFloorDbm
+                : m_refLevel - m_dynamicRange;
+        }
     } else {
-        floor = m_refLevel - m_dynamicRange;
+        auto updateAnchor = [this](float targetFloor) {
+            if (!std::isfinite(targetFloor) || targetFloor <= -500.0f) {
+                return;
+            }
+            if (!m_dssFloorAnchorValid || m_dssFloorAnchorDbm <= -500.0f
+                || std::abs(targetFloor - m_dssFloorAnchorDbm) > 18.0f) {
+                m_dssFloorAnchorDbm = targetFloor;
+                m_dssFloorAnchorValid = true;
+                return;
+            }
+            constexpr float kAnchorAlpha = 0.04f;
+            m_dssFloorAnchorDbm =
+                (1.0f - kAnchorAlpha) * m_dssFloorAnchorDbm
+                + kAnchorAlpha * targetFloor;
+        };
+
+        if (m_noiseFloorEnable && m_noiseFloorBaselineValid) {
+            updateAnchor(m_noiseFloorBaselineDbm);
+        } else if (m_measuredNoiseFloorDbm > -500.0f) {
+            updateAnchor(m_measuredNoiseFloorDbm);
+        } else if (m_noiseFloorBaselineValid) {
+            updateAnchor(m_noiseFloorBaselineDbm);
+        }
+
+        if (!m_dssFloorAnchorValid) {
+            const QVector<float>& bins = noiseFloorAutoLevelBins();
+            if (!bins.isEmpty()) {
+                const float frameFloor = estimateNoiseFloorDbm(bins);
+                if (frameFloor > -500.0f) {
+                    m_dssFloorAnchorDbm = frameFloor;
+                    m_dssFloorAnchorValid = true;
+                }
+            }
+            if (!m_dssFloorAnchorValid && m_noiseFloorBaselineValid) {
+                m_dssFloorAnchorDbm = m_noiseFloorBaselineDbm;
+                m_dssFloorAnchorValid = true;
+            }
+            if (!m_dssFloorAnchorValid && m_measuredNoiseFloorDbm > -500.0f) {
+                m_dssFloorAnchorDbm = m_measuredNoiseFloorDbm;
+                m_dssFloorAnchorValid = true;
+            }
+        }
+        floor = m_dssFloorAnchorValid
+            ? m_dssFloorAnchorDbm
+            : m_refLevel - m_dynamicRange;
+    }
+    floor += m_dssFloorOffsetDb;
+    return std::round(floor * 2.0f) / 2.0f;
+}
+
+float SpectrumWidget::peekDssFloorDbm() const
+{
+    float floor;
+    if (m_kiwiSdrWaterfallActive) {
+        if (m_kiwiSdrFftTraceFloorValid
+            && m_kiwiSdrFftTraceFloorDbm > -500.0f) {
+            floor = m_kiwiSdrFftTraceFloorDbm;
+        } else if (!m_kiwiSdrFftTrace.isEmpty()) {
+            const float frameFloor =
+                estimateKiwiSdrTraceFloorDbm(m_kiwiSdrFftTrace);
+            floor = frameFloor > -500.0f
+                ? frameFloor
+                : (m_kiwiSdrDisplayRangeValid
+                    ? m_kiwiSdrDisplayFloorDbm
+                    : m_refLevel - m_dynamicRange);
+        } else {
+            floor = m_kiwiSdrDisplayRangeValid
+                ? m_kiwiSdrDisplayFloorDbm
+                : m_refLevel - m_dynamicRange;
+        }
+    } else {
+        if (m_dssFloorAnchorValid && m_dssFloorAnchorDbm > -500.0f) {
+            floor = m_dssFloorAnchorDbm;
+        } else if (m_noiseFloorEnable && m_noiseFloorBaselineValid
+                   && m_noiseFloorBaselineDbm > -500.0f) {
+            floor = m_noiseFloorBaselineDbm;
+        } else if (m_measuredNoiseFloorDbm > -500.0f) {
+            floor = m_measuredNoiseFloorDbm;
+        } else if (m_noiseFloorBaselineValid
+                   && m_noiseFloorBaselineDbm > -500.0f) {
+            floor = m_noiseFloorBaselineDbm;
+        } else {
+            floor = m_refLevel - m_dynamicRange;
+            const QVector<float>& bins = noiseFloorAutoLevelBins();
+            if (!bins.isEmpty()) {
+                const float frameFloor = estimateNoiseFloorDbm(bins);
+                if (frameFloor > -500.0f) {
+                    floor = frameFloor;
+                }
+            }
+        }
     }
     floor += m_dssFloorOffsetDb;
     return std::round(floor * 2.0f) / 2.0f;
@@ -8149,9 +8598,10 @@ float SpectrumWidget::dssSpanDb() const
     return std::clamp(span, 45.0f, 120.0f);
 }
 
-const QImage& SpectrumWidget::buildDssImage(const QSize& px, int scaleStripPx)
+const QImage& SpectrumWidget::buildDssImage(const QSize& px,
+                                            int scaleStripPx,
+                                            float floorDbm)
 {
-    const float floorDbm = dssFloorDbm();
     const float rangeDb  = std::round(dssSpanDb() * 2.0f) / 2.0f;
 
     // Same mapping as the GPU mesh: full colormap over the strength axis, gamma-
@@ -8162,6 +8612,42 @@ const QImage& SpectrumWidget::buildDssImage(const QSize& px, int scaleStripPx)
     };
     return m_dss.image(px, scaleStripPx, floorDbm, rangeDb, m_dssZCurve,
                        palette, dssPaletteToken(), m_bgFillColor);
+}
+
+void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
+                                                  const QVector<float>& binsDbm,
+                                                  double frameCenterMhz,
+                                                  double frameBandwidthMhz,
+                                                  bool updateLiveSurface)
+{
+    if (m_kiwiSdrWaterfallActive == kiwiStream) {
+        appendDssWaterfallRow(binsDbm, frameCenterMhz, frameBandwidthMhz,
+                              updateLiveSurface);
+        return;
+    }
+
+    DssRenderer& dss = kiwiStream
+        ? activeKiwiWaterfallState().dss
+        : m_nativeWaterfallState.dss;
+    const bool live = kiwiStream
+        ? activeKiwiWaterfallState().live
+        : m_nativeWaterfallState.live;
+    if (live && updateLiveSurface) {
+        dss.pushRow(binsDbm);
+    }
+
+    const double stampCenterMhz =
+        (frameCenterMhz > 0.0 && frameBandwidthMhz > 0.0)
+            ? frameCenterMhz
+            : m_centerMhz;
+    const double stampBandwidthMhz = frameBandwidthMhz > 0.0
+        ? frameBandwidthMhz
+        : m_bandwidthMhz;
+    const float fallbackDbm = kiwiStream
+        ? kKiwiSdrWaterfallMinDbm
+        : m_refLevel - m_dynamicRange;
+    dss.appendHistoryRow(binsDbm, stampCenterMhz, stampBandwidthMhz,
+                         fallbackDbm);
 }
 
 void SpectrumWidget::resetDssUploadState()
@@ -8919,15 +9405,18 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     // positions. Everything below is identical to 2D except the FFT trace is
     // swapped for the 3DSS surface quad inside specRect.
     const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
+    const float dssFrameFloorDbm = is3D
+        ? dssFloorDbm()
+        : m_lastDetectDssFloor;
 
     // Detect display state changes that may bypass markOverlayDirty()
     {
         // In 3D the dBm scale is anchored to the noise floor, which drifts every
         // FFT frame (dssFloorDbm() reads the measured floor, quantised to 0.5 dB).
-        // The surface UBO re-reads it per frame, so without this the surface
-        // would shift while the cached scale labels stay stale (#3937). In 2D the
+        // The surface UBO and cached scale labels consume the same per-frame
+        // floor, so a changed anchor invalidates both together (#3937). In 2D the
         // scale is Ref-anchored, so the floor is left out of the check there.
-        const float dssFloor = is3D ? dssFloorDbm() : m_lastDetectDssFloor;
+        const float dssFloor = dssFrameFloorDbm;
         if (m_centerMhz != m_lastDetectCenter || m_bandwidthMhz != m_lastDetectBw ||
             m_refLevel != m_lastDetectRef || m_dynamicRange != m_lastDetectDyn ||
             m_spectrumFrac != m_lastDetectFrac ||
@@ -9273,7 +9762,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // dBm strip: both render modes use a readable full-height amplitude
             // reference; the 3D surface itself is perspective-foreshortened.
             if (is3D) {
-                drawDbmScale3D(p, specRect);
+                drawDbmScale3D(p, specRect, dssFrameFloorDbm);
             } else {
                 drawDbmScale(p, specRect);
             }
@@ -9317,7 +9806,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // GPU mesh path: keep the palette LUT current, upload every height
             // row pushed since the last frame into the ring texture, and refresh
             // the uniforms. Geometry is static — pan/zoom rebuild nothing.
-            const float floorDbm = dssFloorDbm();
+            const float floorDbm = dssFrameFloorDbm;
             const float rangeDb  = std::round(dssSpanDb() * 2.0f) / 2.0f;
             uploadDssPaletteLut(batch, floorDbm, rangeDb);
 
@@ -9422,7 +9911,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                                              double(kDssMaxH) / specPhDev));
             const int dssW = qMax(2, static_cast<int>(specPwDev * sc));
             const int dssH = qMax(2, static_cast<int>(specPhDev * sc));
-            const QImage& surf = buildDssImage(QSize(dssW, dssH), 0);
+            const QImage& surf = buildDssImage(QSize(dssW, dssH), 0,
+                                               dssFrameFloorDbm);
             // m_dssGpuTex/m_dssSrb/m_ovSampler come from initOverlayPipeline();
             // guard against a partial GPU init (OOM / device loss) so the
             // fallback never dereferences a null resource.
@@ -9843,6 +10333,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     const QRect wfRect   (0, wfY,     width(), wfH);
 
     const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
+    const float dssFrameFloorDbm = is3D
+        ? dssFloorDbm()
+        : m_lastDetectDssFloor;
 
     // Spectrum region: the 3DSS surface, or the classic bg + grid + FFT trace.
     // 3DSS replaces ONLY the spectrum trace — the divider, freq scale, waterfall,
@@ -9852,7 +10345,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         // window doesn't rebuild a multi-megapixel QImage every frame; the
         // surface is intrinsically low-res, so stretch it on draw.
         const QImage& surf =
-            buildDssImage(specRect.size().boundedTo(QSize(kDssMaxW, kDssMaxH)), 0);
+            buildDssImage(specRect.size().boundedTo(QSize(kDssMaxW, kDssMaxH)),
+                          0, dssFrameFloorDbm);
         if (!surf.isNull()) {
             p.drawImage(specRect, surf);
         } else {
@@ -10097,7 +10591,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     // dBm strip: 2D draws a linear dBm axis; 3D maps the ticks onto the front
     // (live) trace's ridge band. Same strip chrome and click targets either way.
     if (is3D) {
-        drawDbmScale3D(p, specRect);
+        drawDbmScale3D(p, specRect, dssFrameFloorDbm);
     } else {
         drawDbmScale(p, specRect);
     }
@@ -11789,10 +12283,10 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
 // perspective row. Keep it as a full-height amplitude reference anchored to the
 // 3D floor, so plain drag visibly shifts the dBm numbers and Ctrl/Meta-drag
 // changes the span.
-void SpectrumWidget::drawDbmScale3D(QPainter& p, const QRect& specRect)
+void SpectrumWidget::drawDbmScale3D(QPainter& p, const QRect& specRect,
+                                    float floorDbm)
 {
     drawDbmScaleChrome(p, specRect);
-    const float floorDbm = dssFloorDbm();
     // Round the span the same way the mesh/CPU surface do (buildDssImage /
     // renderGpuFrame use std::round(span*2)/2) so labels and surface agree to
     // the pixel instead of a sub-dB top/bottom skew (#3937).

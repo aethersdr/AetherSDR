@@ -423,6 +423,10 @@ private:
     SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
+    bool kiwiSdrPanDisplaysKiwi(const QString& panId) const;
+    void setKiwiSdrPanDisplaySource(const QString& panId, bool kiwi);
+    void clearKiwiSdrPanDisplaySourceOverride(const QString& panId);
+    void clearKiwiSdrPanDisplaySourceOverrides();
     void syncKiwiSdrPanadapterTxInhibit(const QString& panId,
                                         const QString& profileId);
     void syncKiwiSdrDiversityEscControls();
@@ -925,6 +929,7 @@ private:
     bool             m_kiwiSdrAudioTransmitMuted{false};
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
+    QSet<QString>    m_kiwiSdrFlexDisplayPans;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;

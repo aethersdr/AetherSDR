@@ -985,6 +985,7 @@ void MainWindow::onSliceRemoved(int id)
     if (m_kiwiSdrManager) {
         m_kiwiSdrManager->clearSliceAssignment(id);
     }
+    syncKiwiSdrPanadapterUiStates();
 
     // Drop the adaptive-filter engine's per-slice smoothing/baseline state.
     // processFrame() only self-clears state for slices it still sees; a deleted
@@ -1609,7 +1610,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     KiwiSdrClient::stateAllowsReceiverControl(
                         m_kiwiSdrManager->state(profileId))
                     && m_kiwiSdrManager->waterfallAvailable(profileId);
-                if (profileId == displayProfileId && profileCanDriveWaterfall) {
+                if (profileId == displayProfileId
+                    && kiwiSdrPanDisplaysKiwi(applet->panId())
+                    && profileCanDriveWaterfall) {
                     sw->setKiwiSdrWaterfallAvailable(
                         m_kiwiSdrManager->waterfallAvailable(profileId));
                     sw->setKiwiSdrWaterfallProfile(profileId);
@@ -1684,6 +1687,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 updateKiwiWaterfallView(centerMhz, bandwidthMhz);
                 kiwiGestureLastViewUpdate->invalidate();
             });
+    connect(sw, &SpectrumWidget::kiwiSdrDisplaySourceRequested,
+            this, [this, applet](bool kiwi) {
+        setKiwiSdrPanDisplaySource(applet->panId(), kiwi);
+    });
 
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
@@ -1837,7 +1844,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::bandwidthChangeRequested,
             this, [this, applet](double bw) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         m_radioModel.sendCommand(
@@ -1845,7 +1852,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::centerChangeRequested,
             this, [this, applet](double center) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         if (const auto* pan = m_radioModel.panadapter(applet->panId()))
@@ -2258,7 +2265,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setDssGain);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,
             this, [this, applet, sw](int v) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfColorGain(v);
@@ -2269,7 +2276,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfBlackLevelChanged,
             this, [this, applet, sw](int v) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfBlackLevel(v);
@@ -2280,7 +2287,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackChanged,
             this, [this, applet, sw](bool on) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfAutoBlack(on);
@@ -2290,13 +2297,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackOffsetChanged,
             this, [this, applet, sw](int offset) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfAutoBlackOffset(offset);
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackSourceChanged,
-            this, [this, sw](bool radioSide) {
+            this, [this, applet, sw](bool radioSide) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
+            return;
+        }
         sw->setWfAutoBlackRadioSide(radioSide);
         // Radio-side → tell the radio to compute its per-tile auto-black level;
         // client-side → stop it (auto_black=0) and use our own estimate.
@@ -2305,7 +2315,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
         const int clampedMs = std::clamp(ms, 1, 100);
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (!profileId.isEmpty()) {
+        if (!profileId.isEmpty() && kiwiSdrPanDisplaysKiwi(applet->panId())) {
             const KiwiSdrAntennaProfile profile =
                 m_kiwiSdrManager ? m_kiwiSdrManager->profile(profileId)
                                  : KiwiSdrAntennaProfile{};
@@ -2340,7 +2350,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty() || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2365,7 +2375,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty() || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2390,7 +2400,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty()
+            || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2407,7 +2418,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty() || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2546,6 +2557,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
         s.setValue(sw->settingsKey("DisplayNoiseFloorEnable"),    "False");
         s.setValue(sw->settingsKey("DisplayNoiseFloorPosition"),  "75");
+        s.setValue(sw->settingsKey("DisplaySourceTraceSettings"),
+                   QStringLiteral(
+                       "{\"flex\":{\"dssFloorDepth\":6,\"noiseFloorPosition\":75},"
+                       "\"kiwi\":{\"dssFloorDepth\":6,\"noiseFloorPosition\":75},"
+                       "\"version\":1}"));
         s.setValue(sw->settingsKey("DisplaySpectrumRenderMode"),  "0");
         s.setValue(sw->settingsKey("Display3DFloorDepth"),        "6");
         s.setValue(sw->settingsKey("Display3DGain"),        "70");

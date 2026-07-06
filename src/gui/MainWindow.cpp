@@ -5148,6 +5148,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
         m_suppressStartupPanLayoutRearrange = false;
         m_layoutRestoreUntilMs = 0;
+        clearKiwiSdrPanDisplaySourceOverrides();
         if (m_appletPanel) {
             m_appletPanel->clearSliceButtons();
         }
@@ -5928,7 +5929,7 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
 
     centerMhz = std::max(centerMhz, bandwidthMhz / 2.0);
 
-    if (!kiwiSdrProfileForPan(panId).isEmpty()) {
+    if (kiwiSdrPanDisplaysKiwi(panId)) {
         return;
     }
 

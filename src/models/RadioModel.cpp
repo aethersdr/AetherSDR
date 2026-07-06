@@ -1058,12 +1058,41 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
 
     if (!inhibited) {
         m_panTransmitInhibitReasons.remove(trimmedPanId);
+        const bool hadRestoreSlice =
+            m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
+        const int restoreSliceId = hadRestoreSlice
+            ? m_panTransmitInhibitedTxSlices.take(trimmedPanId)
+            : -1;
+        if (hadRestoreSlice) {
+            SliceModel* restoreSlice = slice(restoreSliceId);
+            SliceModel* currentTxSlice = txSlice();
+            const int currentTxSliceId = currentTxSlice
+                ? currentTxSlice->sliceId()
+                : -1;
+            if (restoreSlice
+                && TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                    trimmedPanId, restoreSlice->panId(),
+                    sliceMayBelongToUs(restoreSliceId), restoreSliceId,
+                    currentTxSliceId)) {
+                sendSliceCommand(restoreSlice,
+                                 QStringLiteral("slice set %1 tx=1")
+                                     .arg(restoreSliceId));
+            }
+        }
         return;
     }
 
     const QString trimmedReason = reason.trimmed().isEmpty()
         ? QStringLiteral("Transmit is disabled because this panadapter is displaying receive-only data.")
         : reason.trimmed();
+    if (!m_panTransmitInhibitedTxSlices.contains(trimmedPanId)) {
+        if (SliceModel* currentTxSlice = txSlice();
+            currentTxSlice && currentTxSlice->panId() == trimmedPanId
+            && sliceMayBelongToUs(currentTxSlice->sliceId())) {
+            m_panTransmitInhibitedTxSlices.insert(
+                trimmedPanId, currentTxSlice->sliceId());
+        }
+    }
     if (m_panTransmitInhibitReasons.value(trimmedPanId) == trimmedReason) {
         return;
     }
@@ -1148,6 +1177,23 @@ bool RadioModel::transmitStartBlockedByInhibit(const QString& key)
     return true;
 }
 
+void RadioModel::noteLocalTxSliceEnableIntent(int sliceId)
+{
+    if (sliceId < 0) {
+        return;
+    }
+
+    for (auto it = m_panTransmitInhibitedTxSlices.begin();
+         it != m_panTransmitInhibitedTxSlices.end();) {
+        if (it.value() == sliceId) {
+            ++it;
+            continue;
+        }
+
+        it = m_panTransmitInhibitedTxSlices.erase(it);
+    }
+}
+
 void RadioModel::sendSliceCommand(SliceModel* slice, const QString& cmd)
 {
     const TransmitInhibitPolicy::SliceTxCommand txCommand =
@@ -1164,6 +1210,7 @@ void RadioModel::sendSliceCommand(SliceModel* slice, const QString& cmd)
                 target->panId());
             return;
         }
+        noteLocalTxSliceEnableIntent(txCommand.sliceId);
     }
 
     sendCmd(cmd);
@@ -2369,6 +2416,7 @@ void RadioModel::stageSessionModelsForReconnect()
     m_foreignSliceOwners.clear();
     m_pendingPanStatuses.clear();
     m_panTransmitInhibitReasons.clear();
+    m_panTransmitInhibitedTxSlices.clear();
     m_activePanId.clear();
 
     if (!m_staleSlices.isEmpty() || !m_stalePanadapters.isEmpty()) {
@@ -4986,6 +5034,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_radioDisplayPans.remove(normalizePanadapterId(panId));   // #3856 Layer B inventory
                 m_pendingPanStatuses.remove(panId);
                 m_panTransmitInhibitReasons.remove(panId);
+                m_panTransmitInhibitedTxSlices.remove(panId);
                 auto* pan = m_panadapters.take(panId);
                 if (!pan) {
                     pan = m_stalePanadapters.take(panId);
@@ -5077,6 +5126,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 }
                 if (rejectedPan) {
                     m_panTransmitInhibitReasons.remove(panId);
+                    m_panTransmitInhibitedTxSlices.remove(panId);
                     m_panStream->unregisterPanStream(rejectedPan->panStreamId());
                     m_panStream->unregisterWfStream(rejectedPan->wfStreamId());
                     qCDebug(lcProtocol) << "RadioModel: panadapter" << panId
@@ -5106,6 +5156,8 @@ void RadioModel::onStatusReceived(const QString& object,
                             << "reassigned to client" << newOwner
                             << "— going quiet on it (#3977)";
                     }
+                    m_panTransmitInhibitReasons.remove(panId);
+                    m_panTransmitInhibitedTxSlices.remove(panId);
                     heldPan->setClientHandle(newOwner);
                 }
                 return;  // not our panadapter, ignore

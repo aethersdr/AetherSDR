@@ -588,6 +588,7 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
                 m_kiwiSdrManager->waterfallAvailable(profileId));
             spectrum->setKiwiSdrWaterfallProfile(profileId);
             spectrum->setKiwiSdrWaterfallActive(
+                kiwiSdrPanDisplaysKiwi(slice->panId()) &&
                 kiwiProfileCanDriveWaterfall(m_kiwiSdrManager, profileId));
         }
         if (VfoWidget* vfo = spectrum->vfoWidget(slice->sliceId())) {
@@ -633,6 +634,9 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
         }
     }
 
+    if (!panId.isEmpty()) {
+        m_kiwiSdrFlexDisplayPans.remove(panId);
+    }
     if (m_kiwiSdrManager) {
         m_kiwiSdrManager->clearSliceAssignment(sliceId);
     }
@@ -751,6 +755,12 @@ QJsonObject MainWindow::automationSetSliceReceiveSource(const QString& arg)
 QJsonObject MainWindow::automationKiwiSdrSnapshot() const
 {
     QJsonArray profiles;
+    QJsonArray flexDisplayPans;
+    QStringList flexDisplayPanIds = m_kiwiSdrFlexDisplayPans.values();
+    std::sort(flexDisplayPanIds.begin(), flexDisplayPanIds.end());
+    for (const QString& panId : flexDisplayPanIds) {
+        flexDisplayPans.append(panId);
+    }
     if (m_kiwiSdrManager) {
         for (const KiwiSdrAntennaProfile& profile :
              m_kiwiSdrManager->profiles()) {
@@ -795,6 +805,7 @@ QJsonObject MainWindow::automationKiwiSdrSnapshot() const
             KiwiSdrClient::diagnosticWaterfallCompressionRequested()},
         {QStringLiteral("profiles"), profiles},
         {QStringLiteral("profileCount"), profiles.size()},
+        {QStringLiteral("flexDisplayPans"), flexDisplayPans},
     };
 }
 
@@ -877,6 +888,7 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
             slice->sliceId(), slice->panId(), spectrum->centerMhz(),
             spectrum->bandwidthMhz(), spectrum->wfLineDuration());
         if (profileId == kiwiSdrProfileForPan(slice->panId())
+            && kiwiSdrPanDisplaysKiwi(slice->panId())
             && kiwiProfileCanDriveWaterfall(m_kiwiSdrManager, profileId)) {
             spectrum->setKiwiSdrWaterfallAvailable(
                 m_kiwiSdrManager->waterfallAvailable(profileId));
@@ -956,6 +968,46 @@ QString MainWindow::kiwiSdrProfileForPan(const QString& panId) const
         return QString();
     }
     return m_kiwiSdrManager->assignedProfileForSlice(displaySlice->sliceId());
+}
+
+bool MainWindow::kiwiSdrPanDisplaysKiwi(const QString& panId) const
+{
+    const QString trimmedPanId = panId.trimmed();
+    return !trimmedPanId.isEmpty()
+        && !kiwiSdrProfileForPan(trimmedPanId).isEmpty()
+        && !m_kiwiSdrFlexDisplayPans.contains(trimmedPanId);
+}
+
+void MainWindow::setKiwiSdrPanDisplaySource(const QString& panId, bool kiwi)
+{
+    const QString trimmedPanId = panId.trimmed();
+    if (trimmedPanId.isEmpty()) {
+        return;
+    }
+
+    if (kiwiSdrProfileForPan(trimmedPanId).isEmpty() || kiwi) {
+        m_kiwiSdrFlexDisplayPans.remove(trimmedPanId);
+    } else {
+        m_kiwiSdrFlexDisplayPans.insert(trimmedPanId);
+    }
+
+    syncKiwiSdrPanadapterUiState(trimmedPanId);
+    syncKiwiSdrAppletWaterfallState();
+}
+
+void MainWindow::clearKiwiSdrPanDisplaySourceOverride(const QString& panId)
+{
+    const QString trimmedPanId = panId.trimmed();
+    if (trimmedPanId.isEmpty()) {
+        return;
+    }
+
+    m_kiwiSdrFlexDisplayPans.remove(trimmedPanId);
+}
+
+void MainWindow::clearKiwiSdrPanDisplaySourceOverrides()
+{
+    m_kiwiSdrFlexDisplayPans.clear();
 }
 
 QString MainWindow::kiwiSdrOverlayProfileForPan(const QString& panId) const
@@ -1091,7 +1143,10 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     }
 
     const QString profileId = kiwiSdrProfileForPan(panId);
-    syncKiwiSdrPanadapterTxInhibit(panId, profileId);
+    const bool hasKiwiSource = !profileId.isEmpty();
+    const bool displayKiwi = kiwiSdrPanDisplaysKiwi(panId);
+    syncKiwiSdrPanadapterTxInhibit(
+        panId, displayKiwi ? profileId : QString());
 
     SpectrumWidget* spectrum = m_panStack->spectrum(panId);
     if (!spectrum) {
@@ -1099,7 +1154,29 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     }
 
     SpectrumOverlayMenu* menu = spectrum->overlayMenu();
+    auto syncFlexDisplaySettings = [spectrum, menu]() {
+        if (!menu) {
+            return;
+        }
+        menu->syncDisplaySettings(
+            spectrum->fftAverage(), spectrum->fftFps(),
+            static_cast<int>(spectrum->fftFillAlpha() * 100.0f),
+            spectrum->fftWeightedAvg(), spectrum->fftFillColor(),
+            spectrum->wfColorGain(), spectrum->wfBlackLevel(),
+            spectrum->wfAutoBlack(), spectrum->wfAutoBlackOffset(),
+            spectrum->wfLineDuration(), spectrum->noiseFloorPosition(),
+            spectrum->noiseFloorEnabled(), spectrum->fftHeatMap(),
+            spectrum->wfColorScheme(), spectrum->showGrid(),
+            spectrum->fftLineWidth(), spectrum->wfAutoBlackRadioSide(),
+            spectrum->spectrumRenderMode(), spectrum->dssFloorDepth(),
+            spectrum->dssGain());
+    };
+
+    spectrum->setKiwiSdrDisplaySourceKiwi(displayKiwi);
+    spectrum->setKiwiSdrDisplaySourceControlVisible(hasKiwiSource);
+
     if (profileId.isEmpty()) {
+        m_kiwiSdrFlexDisplayPans.remove(panId);
         spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
                                      m_radioModel.maxPanBandwidthMhz());
         const QString overlayProfileId = kiwiSdrOverlayProfileForPan(panId);
@@ -1116,20 +1193,19 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         setKiwiSdrWaterfallActive(m_radioModel, panId, spectrum, false);
         spectrum->setKiwiSdrWaterfallAvailable(false);
         spectrum->setKiwiSdrWaterfallProfile(QString());
-        if (menu) {
-            menu->syncDisplaySettings(
-                spectrum->fftAverage(), spectrum->fftFps(),
-                static_cast<int>(spectrum->fftFillAlpha() * 100.0f),
-                spectrum->fftWeightedAvg(), spectrum->fftFillColor(),
-                spectrum->wfColorGain(), spectrum->wfBlackLevel(),
-                spectrum->wfAutoBlack(), spectrum->wfAutoBlackOffset(),
-                spectrum->wfLineDuration(), spectrum->noiseFloorPosition(),
-                spectrum->noiseFloorEnabled(), spectrum->fftHeatMap(),
-                spectrum->wfColorScheme(), spectrum->showGrid(),
-                spectrum->fftLineWidth(), spectrum->wfAutoBlackRadioSide(),
-                spectrum->spectrumRenderMode(), spectrum->dssFloorDepth(),
-                spectrum->dssGain());
-        }
+        syncFlexDisplaySettings();
+        return;
+    }
+
+    if (!displayKiwi) {
+        spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
+                                     m_radioModel.maxPanBandwidthMhz());
+        spectrum->setKiwiSdrConnectionOverlay(false);
+        setKiwiSdrWaterfallActive(m_radioModel, panId, spectrum, false);
+        spectrum->setKiwiSdrWaterfallAvailable(
+            m_kiwiSdrManager->waterfallAvailable(profileId));
+        spectrum->setKiwiSdrWaterfallProfile(profileId);
+        syncFlexDisplaySettings();
         return;
     }
 

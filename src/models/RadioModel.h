@@ -858,6 +858,7 @@ private:
     };
     QMap<int, TxBandInfo> m_txBandSettings;
     QHash<QString, QString> m_panTransmitInhibitReasons;
+    QHash<QString, int> m_panTransmitInhibitedTxSlices;
     int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
     bool m_tuneInhibitActive{false};
 
@@ -870,6 +871,7 @@ private:
     void enforceTransmitInhibitForPan(const QString& panId);
     void enforceTransmitInhibitForSlice(SliceModel* slice);
     bool transmitStartBlockedByInhibit(const QString& key);
+    void noteLocalTxSliceEnableIntent(int sliceId);
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;

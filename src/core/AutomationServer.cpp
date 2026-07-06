@@ -1212,10 +1212,12 @@ QJsonObject sliceSnapshot(const SliceModel* s)
     };
 }
 
-QJsonObject panSnapshot(const PanadapterModel* p, quint32 ourHandle)
+QJsonObject panSnapshot(const PanadapterModel* p, const RadioModel* radio)
 {
+    const quint32 ourHandle = radio ? radio->ourClientHandle() : 0;
+    const QString panId = p->panId();
     return QJsonObject{
-        {QStringLiteral("panId"),        p->panId()},
+        {QStringLiteral("panId"),        panId},
         // #3977: radio-authoritative owner of this pan; assertions on
         // multi-session tests key off these two fields. Empty string (not
         // "0x") when the radio has not yet attributed the pan.
@@ -1231,6 +1233,10 @@ QJsonObject panSnapshot(const PanadapterModel* p, quint32 ourHandle)
         {QStringLiteral("rfGain"),       p->rfGain()},
         {QStringLiteral("wide"),         p->wideActive()},
         {QStringLiteral("fps"),          p->fps()},
+        {QStringLiteral("transmitInhibited"),
+         radio && radio->panTransmitInhibited(panId)},
+        {QStringLiteral("transmitInhibitReason"),
+         radio ? radio->panTransmitInhibitReason(panId) : QString()},
     };
 }
 
@@ -2172,7 +2178,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("get")) {
         if (model.isEmpty())
-            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans|kiwi)"));
+            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans|panstats|tracedebug|kiwi)"));
         return doGet(model, selector, property);
     }
     if (cmd == QLatin1String("connect")) {
@@ -3082,6 +3088,42 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("pans"), pans}};
     }
+    if (model == QLatin1String("tracedebug")) {
+        // Per-panadapter trace/floor state from SpectrumWidget. This keeps the
+        // bridge GUI-header-free while exposing enough state to compare Flex
+        // and Kiwi 2D/3D display sources deterministically.
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        QJsonArray pans;
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector) {
+                continue;
+            }
+
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "traceDebugSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap))) {
+                continue;
+            }
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
+                continue;
+            }
+            pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("pans"), pans}};
+    }
     if (model == QLatin1String("wavestats")) {
         // Per-scope paint/append counters from every WaveformWidget
         // instance (sidebar WAVE applet + Aetherial strip panels), for
@@ -3171,7 +3213,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
         for (const PanadapterModel* p : radio->panadapters()) {
-            arr.append(panSnapshot(p, radio->ourClientHandle()));
+            arr.append(panSnapshot(p, radio));
         }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pans"), arr}};
     } else if (model == QLatin1String("slice")) {
@@ -3197,10 +3239,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             p = radio->panadapter(selector);   // by panId, e.g. "0x40000000"
         if (!p)
             return err(QStringLiteral("no panadapter for selector '") + selector + QStringLiteral("'"));
-        data = panSnapshot(p, radio->ourClientHandle());
+        data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi|wavestats)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|panstats|tracedebug|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {

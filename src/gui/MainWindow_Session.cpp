@@ -1104,13 +1104,11 @@ void MainWindow::wirePanLifecycle()
                                   "#0a0a14").toString());
             if (bgFill.isValid())
                 sw->setBackgroundFillColor(bgFill);
-            // Restore the spectrum render mode (2D / 3D stacked trace) + 3D floor
-            // depth per pan, like the other Display settings above, so a pan set
-            // to 3D survives a restart / pan re-attach.
+            // Restore the spectrum render mode per pan. Source-specific trace
+            // positions/depths are loaded by SpectrumWidget from
+            // DisplaySourceTraceSettings; do not reapply legacy flat keys here.
             sw->setSpectrumRenderMode(
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
-            sw->setDssFloorDepth(
-                s.value(sw->settingsKey("Display3DFloorDepth"), "6").toInt());
             sw->setDssGain(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
             // Nudge rate to force waterfall tile re-sync
@@ -1337,6 +1335,7 @@ void MainWindow::wirePanLifecycle()
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
+        clearKiwiSdrPanDisplaySourceOverride(panId);
         if (m_shuttingDown || !m_panStack) {
             return;
         }
