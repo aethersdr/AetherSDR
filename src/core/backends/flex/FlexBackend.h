@@ -99,6 +99,10 @@ public:
     // stream-id — bundled onto the namespaced extensionStatus("flex","panState")
     // channel. Present-only (each key rides only when the wire reported it).
     void decodePanState(const QString& panId, const QMap<QString, QString>& kvs);
+    // Decode the SmartSDR meter-status wire body (definitions or a "N removed"
+    // line) and emit the normalized meterDefined/meterRemoved signals. Mirrors
+    // FlexLib Radio.cs ParseMeterStatus. (aetherd RFC 2.3 — MeterModel touchpoint.)
+    void decodeMeterStatus(const QString& rawBody);
 
 private:
     void send(const QString& cmd);

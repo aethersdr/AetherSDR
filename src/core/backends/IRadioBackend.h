@@ -108,6 +108,15 @@ signals:
     void sliceChanged(int sliceId, const QVariantMap& changes);
     void sliceRemoved(int sliceId);
     void meterUpdate(const QString& meterId, double value);
+
+    // Meter definition catalog (aetherd RFC 2.3 — MeterModel touchpoint). The
+    // backend decodes the vendor meter-status wire format into a normalized
+    // definition; RadioModel drives the MeterModel. `fields` carries only the
+    // keys the wire reported (source, sourceIndex, name, unit, low, high,
+    // description) — the same present-only shape the old inline parse produced.
+    // The meter *values* stream on the data plane (VITA-49), separate from this.
+    void meterDefined(int index, const QVariantMap& fields);
+    void meterRemoved(int index);
     // Panadapter core display state (universal — every family has a pan center
     // and span). The backend decodes it from vendor status; RadioModel drives
     // the PanadapterModel. panId is the pan's identifier (opaque to the model).

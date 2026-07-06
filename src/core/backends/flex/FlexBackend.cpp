@@ -349,6 +349,63 @@ void FlexBackend::decodePanExtensions(const QString& panId,
     }
 }
 
+void FlexBackend::decodeMeterStatus(const QString& rawBody)
+{
+    // Meter status body (FlexLib Radio.cs ParseMeterStatus):
+    //   Tokens separated by '#', each token is "index.key=value".
+    //   e.g. "7.src=SLC#7.num=0#7.nam=LEVEL#7.unit=dBm#7.low=-150.0#7.hi=20.0"
+    // Removal: "7 removed". Parsing verbatim from the old RadioModel path.
+    if (rawBody.contains(QStringLiteral("removed"))) {
+        const QStringList words = rawBody.split(' ', Qt::SkipEmptyParts);
+        if (!words.isEmpty()) {
+            bool ok = false;
+            const int idx = words[0].toInt(&ok);
+            if (ok) {
+                emit meterRemoved(idx);
+            }
+        }
+        return;
+    }
+
+    // Group tokens by meter index.
+    QMap<int, QMap<QString, QString>> grouped;
+    const QStringList tokens = rawBody.split('#', Qt::SkipEmptyParts);
+    for (const QString& token : tokens) {
+        const int dot = token.indexOf('.');
+        if (dot < 0) continue;
+        const int eq = token.indexOf('=', dot);
+        if (eq < 0) continue;
+        bool ok = false;
+        const int idx = token.left(dot).toInt(&ok);
+        if (!ok) continue;
+        grouped[idx][token.mid(dot + 1, eq - dot - 1)] = token.mid(eq + 1);
+    }
+
+    for (auto it = grouped.constBegin(); it != grouped.constEnd(); ++it) {
+        const QMap<QString, QString>& f = it.value();
+        // Carry only the keys the wire reported, normalized to the MeterDef
+        // field names RadioModel reconstructs (present-only — the old parse
+        // set MeterDef fields conditionally the same way).
+        QVariantMap def;
+        if (f.contains(QStringLiteral("src")))
+            def.insert(QStringLiteral("source"), f.value(QStringLiteral("src")));
+        if (f.contains(QStringLiteral("num")))
+            def.insert(QStringLiteral("sourceIndex"),
+                       f.value(QStringLiteral("num")).toInt(nullptr, 0));
+        if (f.contains(QStringLiteral("nam")))
+            def.insert(QStringLiteral("name"), f.value(QStringLiteral("nam")));
+        if (f.contains(QStringLiteral("unit")))
+            def.insert(QStringLiteral("unit"), f.value(QStringLiteral("unit")));
+        if (f.contains(QStringLiteral("low")))
+            def.insert(QStringLiteral("low"), f.value(QStringLiteral("low")).toDouble());
+        if (f.contains(QStringLiteral("hi")))
+            def.insert(QStringLiteral("high"), f.value(QStringLiteral("hi")).toDouble());
+        if (f.contains(QStringLiteral("desc")))
+            def.insert(QStringLiteral("description"), f.value(QStringLiteral("desc")));
+        emit meterDefined(it.key(), def);
+    }
+}
+
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {

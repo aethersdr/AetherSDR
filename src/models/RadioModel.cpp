@@ -502,6 +502,33 @@ RadioModel::RadioModel(QObject* parent)
         }
     });
 
+    // aetherd RFC 2.3: MeterModel touchpoint. The backend decodes the SmartSDR
+    // meter-status wire format; RadioModel reconstructs the MeterDef (present-
+    // only, exactly as the old inline handleMeterStatus parse did) and drives the
+    // MeterModel. Meter *values* stay on the VITA-49 data plane (below).
+    connect(m_backend.get(), &IRadioBackend::meterDefined, this,
+            [this](int index, const QVariantMap& f) {
+        MeterDef def;
+        def.index = index;
+        if (f.contains(QStringLiteral("source")))
+            def.source = f.value(QStringLiteral("source")).toString();
+        if (f.contains(QStringLiteral("sourceIndex")))
+            def.sourceIndex = f.value(QStringLiteral("sourceIndex")).toInt();
+        if (f.contains(QStringLiteral("name")))
+            def.name = f.value(QStringLiteral("name")).toString();
+        if (f.contains(QStringLiteral("unit")))
+            def.unit = f.value(QStringLiteral("unit")).toString();
+        if (f.contains(QStringLiteral("low")))
+            def.low = f.value(QStringLiteral("low")).toDouble();
+        if (f.contains(QStringLiteral("high")))
+            def.high = f.value(QStringLiteral("high")).toDouble();
+        if (f.contains(QStringLiteral("description")))
+            def.description = f.value(QStringLiteral("description")).toString();
+        m_meterModel.defineMeter(def);
+    });
+    connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
+            [this](int index) { m_meterModel.removeMeter(index); });
+
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
     // WHEN a dax_rx stream must exist (refcounted acquire/release from the
     // bridge/TCI/RADE); RadioModel is the command plane that makes it so.
@@ -5849,55 +5876,14 @@ void RadioModel::handleSliceStatus(int id,
 
 void RadioModel::handleMeterStatus(const QString& rawBody)
 {
-    // Meter status body format (from FlexLib Radio.cs ParseMeterStatus):
-    //   Tokens separated by '#', each token is "index.key=value".
-    //   Example: "7.src=SLC#7.num=0#7.nam=LEVEL#7.unit=dBm#7.low=-150.0#7.hi=20.0"
-    //
-    // Removal format: "7 removed"
-
-    if (rawBody.contains("removed")) {
-        const QStringList words = rawBody.split(' ', Qt::SkipEmptyParts);
-        if (words.size() >= 1) {
-            bool ok = false;
-            const int idx = words[0].toInt(&ok);
-            if (ok) m_meterModel.removeMeter(idx);
-        }
-        return;
-    }
-
-    // Group tokens by meter index
-    QMap<int, QMap<QString, QString>> grouped;
-    const QStringList tokens = rawBody.split('#', Qt::SkipEmptyParts);
-
-    for (const QString& token : tokens) {
-        const int dot = token.indexOf('.');
-        if (dot < 0) continue;
-        const int eq = token.indexOf('=', dot);
-        if (eq < 0) continue;
-
-        bool ok = false;
-        const int idx = token.left(dot).toInt(&ok);
-        if (!ok) continue;
-
-        const QString key   = token.mid(dot + 1, eq - dot - 1);
-        const QString value = token.mid(eq + 1);
-        grouped[idx][key] = value;
-    }
-
-    for (auto it = grouped.constBegin(); it != grouped.constEnd(); ++it) {
-        const auto& fields = it.value();
-
-        MeterDef def;
-        def.index = it.key();
-        if (fields.contains("src"))  def.source      = fields["src"];
-        if (fields.contains("num"))  def.sourceIndex  = fields["num"].toInt(nullptr, 0);
-        if (fields.contains("nam"))  def.name         = fields["nam"];
-        if (fields.contains("unit")) def.unit         = fields["unit"];
-        if (fields.contains("low"))  def.low          = fields["low"].toDouble();
-        if (fields.contains("hi"))   def.high         = fields["hi"].toDouble();
-        if (fields.contains("desc")) def.description  = fields["desc"];
-
-        m_meterModel.defineMeter(def);
+    // aetherd RFC 2.3: the SmartSDR meter-status wire decode moved to
+    // FlexBackend::decodeMeterStatus, which emits meterDefined/meterRemoved →
+    // the ctor-wired handlers drive the MeterModel. Driving it from this choke
+    // point keeps both live and deferred/replayed meter status on the converted
+    // path. (MeterModel already held only core state; this removes the last Flex
+    // meter wire-decode from RadioModel.)
+    if (m_flexBackend) {
+        m_flexBackend->decodeMeterStatus(rawBody);
     }
 }
 
