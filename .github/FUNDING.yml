@@ -1,0 +1,4 @@
+# Renders the "Sponsor" button on the GitHub repo page.
+# Site funding story: https://www.aethersdr.com/#sponsor (add as `custom:`
+# once the domain cutover is live — it currently redirects back to GitHub).
+open_collective: aethersdr
