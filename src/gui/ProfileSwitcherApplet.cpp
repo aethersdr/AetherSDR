@@ -25,11 +25,16 @@ void rebuildCombo(QComboBox* combo, const QStringList& profiles, const QString& 
     combo->clear();
     combo->addItems(profiles);
     const int idx = combo->findText(active);
-    // If the radio hasn't reported an active profile yet (or it isn't in the
-    // list), fall back to index 0 so the control isn't blank.  This is purely
-    // cosmetic — the set is signal-blocked, so it never issues a load, and the
-    // next *Changed/state signal corrects the highlight once active arrives.
-    combo->setCurrentIndex(idx >= 0 ? idx : (profiles.isEmpty() ? -1 : 0));
+    // Highlight the radio's authoritative active profile.  When the radio
+    // reports an EMPTY active (findText returns -1) leave the combo with no
+    // selection (index -1) so the placeholder shows — do NOT fall back to
+    // index 0.  Global profiles legitimately report an empty "current" until
+    // one is explicitly loaded (unlike TX/Mic, which always name a current), so
+    // falling back to index 0 would falsely display the first profile as the
+    // active one.  The real active is restored the moment the radio
+    // names it via the next *Changed/state signal.  The set is signal-blocked,
+    // so it never issues a load either way.
+    combo->setCurrentIndex(idx);
     combo->setEnabled(!profiles.isEmpty());
 }
 
@@ -70,6 +75,9 @@ ProfileSwitcherApplet::ProfileSwitcherApplet(QWidget* parent)
         combo->setAccessibleName(accessible);
         combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
         combo->setMinimumContentsLength(8);
+        // Shown when the radio reports no active profile (currentIndex == -1);
+        // e.g. a global profile that has never been loaded this session.
+        combo->setPlaceholderText(tr("— none —"));
         combo->setEnabled(false);  // until a model + profiles arrive
         grid->addWidget(lbl, row, 0);
         grid->addWidget(combo, row, 1);

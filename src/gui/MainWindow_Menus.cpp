@@ -723,20 +723,28 @@ void MainWindow::buildMenuBar()
     });
     m_profilesMenu->addSeparator();
 
-    // Global profile list (populated on connect)
+    // Global profile list (populated on connect).  Rebuilt on every
+    // globalProfilesChanged() — the radio emits that for both the list and the
+    // active-selection ("current") status, so the checkmark tracks the radio's
+    // authoritative selection live on all platforms.
     connect(&m_radioModel, &RadioModel::globalProfilesChanged, this, [this] {
-        // Remove old profile actions (after the separator)
+        // Delete the old profile actions (after the separator).  Deleting —
+        // rather than removeAction() — frees them; removeAction() leaves each
+        // QAction parented to the menu, so a session's worth of rebuilds would
+        // otherwise accumulate detached actions.
         const auto actions = m_profilesMenu->actions();
         for (int i = 3; i < actions.size(); ++i)  // skip Manager, Import/Export, separator
-            m_profilesMenu->removeAction(actions[i]);
+            delete actions[i];
 
-        // Add current global profiles
+        // Add the current global profiles.  The radio reports an empty active
+        // ("current") until a global profile is explicitly loaded, in which
+        // case no item is checked — that is the honest state, not a bug.
         const auto profiles = m_radioModel.globalProfiles();
         const auto active = m_radioModel.activeGlobalProfile();
         for (const auto& name : profiles) {
             auto* act = m_profilesMenu->addAction(name);
             act->setCheckable(true);
-            act->setChecked(name == active);
+            act->setChecked(!active.isEmpty() && name == active);
             connect(act, &QAction::triggered, this, [this, name] {
                 m_radioModel.loadGlobalProfile(name);
             });
