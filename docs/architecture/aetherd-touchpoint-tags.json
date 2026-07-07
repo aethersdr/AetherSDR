@@ -707,6 +707,12 @@
   "split": "",
   "confidence": "medium"
  },
+ "models/AmpModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Power-amplifier state model (PGXL / any non-TGXL amp the radio proxies), extracted from RadioModel (#4094). Like TunerModel: universal amp state (presence/operate/telemetry) fused with a Flex relay — the radio-proxied 'amplifier set … operate=' command (the only path that works remote/SmartLink; the direct PgxlConnection is telemetry-only).",
+  "split": "Core (stays the model the UI/3rd-party amp sees): presence, operate/standby, telemetry (power/SWR/current/temp/voltage/band). Flex extension (move behind FlexBackend as an IRadioBackend extension verb): the 'amplifier' relay — commandReady 'amplifier set operate' + amplifier-status decode. 2.3-style split; see #4094.",
+  "confidence": "high"
+ },
  "models/AntennaGeniusModel.h": {
   "tag": "peripheral(4o3a)",
   "note": "4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up).",

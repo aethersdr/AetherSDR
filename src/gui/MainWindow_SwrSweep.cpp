@@ -302,7 +302,7 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts,
                              tr("Stop transmit or tune before starting an SWR sweep."));
         return;
     }
-    if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate()) {
+    if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) {
         QMessageBox::warning(this, tr("SWR Sweep"),
                              tr("Put the Power Genius XL amplifier in STANDBY before running an SWR sweep."));
         return;

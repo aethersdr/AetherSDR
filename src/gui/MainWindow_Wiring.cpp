@@ -3576,7 +3576,7 @@ void MainWindow::wireMeters()
     // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
             this, [this](float fwd, float swr) {
-        if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate())
+        if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
         m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
 #ifdef HAVE_HIDAPI
@@ -3639,9 +3639,9 @@ void MainWindow::wireMeters()
     });
 
     // Auto-connect to PGXL when detected
-    connect(&m_radioModel, &RadioModel::amplifierChanged, this, [this](bool present) {
-        if (present && !m_radioModel.ampIp().isEmpty() && !m_pgxlConn.isConnected()) {
-            m_pgxlConn.connectToPgxl(m_radioModel.ampIp());
+    connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, [this](bool present) {
+        if (present && !m_radioModel.amplifier().ip().isEmpty() && !m_pgxlConn.isConnected()) {
+            m_pgxlConn.connectToPgxl(m_radioModel.amplifier().ip());
         } else if (!present) {
             m_pgxlConn.disconnect();
         }
@@ -3681,8 +3681,8 @@ void MainWindow::wireMeters()
         // Use peakfwd (actual peak power) not fwd (floor/minimum).
         // Skip when amp is STANDBY — peakfwd reads ~0 dBm in standby and would
         // stomp on the exciter feed that should drive the barefoot scale.
-        if (kvs.contains("peakfwd") && m_radioModel.hasAmplifier()
-                && m_radioModel.ampOperate()) {
+        if (kvs.contains("peakfwd") && m_radioModel.amplifier().present()
+                && m_radioModel.amplifier().operate()) {
             float dbm = kvs["peakfwd"].toFloat();
             float watts = std::pow(10.0f, (dbm - 30.0f) / 10.0f);
             qCDebug(lcTuner) << "PGXL→SMeter: peakfwd=" << dbm << "dBm =" << watts << "W";
@@ -3721,7 +3721,7 @@ void MainWindow::wireMeters()
     // path is faster and higher-precision (the radio rebroadcast may round/lag),
     // so we skip the radio fallback to avoid display jitter from two paths
     // alternately writing slightly-different values.
-    connect(&m_radioModel, &RadioModel::ampTelemetryUpdated,
+    connect(&m_radioModel.amplifier(), &AmpModel::telemetryUpdated,
             this, [this](const QMap<QString, QString>& kvs) {
         if (m_pgxlConn.isConnected()) return;
         auto* amp = m_appletPanel->ampApplet();
@@ -3752,11 +3752,10 @@ void MainWindow::wireMeters()
     connect(m_appletPanel->ampApplet(), &AmpApplet::fanModeChanged, this, [this](const QString& mode) {
         m_pgxlConn.sendCommand(QString("setup fanmode=%1").arg(mode));
     });
-    // OPERATE button → PGXL standby/operate command via radio amplifier API
+    // OPERATE button → PGXL standby/operate command (relayed via the radio's
+    // amplifier API by AmpModel::setOperate; no-op if no amp handle). #4094.
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
-        if (!m_radioModel.ampHandle().isEmpty())
-            m_radioModel.sendCommand(
-                QString("amplifier set %1 operate=%2").arg(m_radioModel.ampHandle()).arg(on ? 1 : 0));
+        m_radioModel.amplifier().setOperate(on);
     });
 
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.
@@ -3773,15 +3772,15 @@ void MainWindow::wireMeters()
         if (model.startsWith("AU-") && maxW <= 100) {
             maxW = 500;
         }
-        const bool ampActive = m_radioModel.hasAmplifier()
-                            && m_radioModel.ampOperate();
+        const bool ampActive = m_radioModel.amplifier().present()
+                            && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->sMeterWidget()->setPowerScale(maxW, ampActive);
         m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
     };
-    connect(&m_radioModel, &RadioModel::amplifierChanged, this, updatePowerScale);
-    connect(&m_radioModel, &RadioModel::ampStateChanged, this, updatePowerScale);
+    connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
+    connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, updatePowerScale);
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
     // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
@@ -3807,21 +3806,21 @@ void MainWindow::wireMeters()
 
     // PGXL indicator: OPERATE (green) or STANDBY (grey) — no bypass for PGXL
     auto updatePgxlStyle = [this, setIndicatorHtml]() {
-        if (m_radioModel.ampOperate())
+        if (m_radioModel.amplifier().operate())
             setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE", "#00e060");
         else
             setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY", "#404858");
     };
-    connect(&m_radioModel, &RadioModel::ampStateChanged, this, [this, updatePgxlStyle]() {
+    connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, [this, updatePgxlStyle]() {
         updatePgxlStyle();
         // Sync the AmpApplet button — the direct PGXL TCP path may not deliver
         // a state update fast enough, leaving the button stuck on the old state.
         // RadioModel is authoritative; use it to keep the button consistent.
         m_appletPanel->ampApplet()->setState(
-            m_radioModel.ampOperate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+            m_radioModel.amplifier().operate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
     });
 
-    connect(&m_radioModel, &RadioModel::amplifierChanged, this, [this, updatePgxlStyle](bool present) {
+    connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, [this, updatePgxlStyle](bool present) {
         m_pgxlContainer->setVisible(present);
         m_pgxlSeparator->setVisible(present);
         m_appletPanel->setAmpVisible(present);
@@ -3829,7 +3828,7 @@ void MainWindow::wireMeters()
         if (present) {
             updatePgxlStyle();
             m_appletPanel->ampApplet()->setState(
-                m_radioModel.ampOperate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+                m_radioModel.amplifier().operate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
         }
     });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
@@ -3840,7 +3839,7 @@ void MainWindow::wireMeters()
         // S-Meter TX power follows the scale: amp output when PGXL is OPERATE,
         // exciter output when it's STANDBY (txMetersChanged already handles that
         // path, so we just stop overriding it here).
-        if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate()) {
+        if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) {
             m_appletPanel->sMeterWidget()->setTxMeters(fwdPwr, swr);
 #ifdef HAVE_HIDAPI
             m_tmate2TxWatts = fwdPwr;

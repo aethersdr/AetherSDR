@@ -300,7 +300,7 @@ static QString radioOptionsText(const RadioModel* model)
     if (!model->radioOptions().isEmpty()) {
         return model->radioOptions();
     }
-    return model->hasAmplifier() ? QStringLiteral("GPS, PGXL") : QStringLiteral("GPS");
+    return model->amplifier().present() ? QStringLiteral("GPS, PGXL") : QStringLiteral("GPS");
 }
 
 static void showCopiedPopup(QWidget* anchor);

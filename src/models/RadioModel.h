@@ -15,6 +15,7 @@
 #include "MeterModel.h"
 #include "PanadapterModel.h"
 #include "TunerModel.h"
+#include "AmpModel.h"
 #include "TransmitModel.h"
 #include "EqualizerModel.h"
 #include "TnfModel.h"
@@ -81,11 +82,10 @@ public:
     UsbCableModel&    usbCableModel()    { return m_usbCableModel; }
     DaxIqModel&       daxIqModel()       { return m_daxIqModel; }
     FlexWaveformModel& flexWaveformModel() { return m_flexWaveformModel; }
-    bool              hasAmplifier() const { return m_hasAmplifier; }
-    bool              ampOperate()   const { return m_ampOperate; }
-    QString           ampHandle()    const { return m_ampHandle; }
-    QString           ampIp()        const { return m_ampIp; }
-    QString           ampModel()     const { return m_ampModel; }
+    // Power amplifier (PGXL / any non-TGXL amp the radio proxies). Extracted
+    // from RadioModel (#4094); consumers bind it like the other sub-models.
+    AmpModel&         amplifier()        { return m_amplifier; }
+    const AmpModel&   amplifier() const  { return m_amplifier; }
 
     // Getters
     QString name()    const { return m_name; }
@@ -94,7 +94,6 @@ public:
     bool isConnected() const;
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
-    void setAmpOperate(bool on);
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
@@ -476,12 +475,8 @@ signals:
     void antListChanged(QStringList ants);
     // Local AetherSDR display aliases changed. The radio still uses canonical tokens.
     void antennaAliasesChanged();
-    // Emitted when a power amplifier (e.g. PGXL) is detected or lost.
-    void amplifierChanged(bool present);
-    void ampStateChanged();   // amplifier operate/bypass changed
-    // Raw KVS from the radio's amplifier status message (id, vac, meffa, temp, state, …).
-    // Emitted on every update so the GUI can refresh telemetry without a direct PGXL connection.
-    void ampTelemetryUpdated(const QMap<QString, QString>& kvs);
+    // (Amplifier presence/state/telemetry signals moved to AmpModel — bind
+    //  m_radioModel.amplifier() directly. #4094.)
     void memoryChanged(int index);
     void memoryRemoved(int index);
     void memoriesCleared();
@@ -832,11 +827,7 @@ private:
     // emit "removed").
     QMap<QString, QPair<qint64, QMap<QString, QString>>> m_pendingPanStatuses;
 
-    bool    m_hasAmplifier{false};  // true if a power amp (PGXL) is detected
-    QString m_ampHandle;             // amplifier handle for commands
-    QString m_ampIp;                 // amplifier IP for direct connection
-    QString m_ampModel;              // "PowerGeniusXL"
-    bool    m_ampOperate{false};
+    AmpModel m_amplifier;            // power amp (PGXL) state + relay (#4094)
 
     // GPS state
     QString m_gpsStatus;           // "Locked", "Present", "Not Present"

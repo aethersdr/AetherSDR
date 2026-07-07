@@ -848,7 +848,7 @@ void MainWindow::updateTMate2Indicators()
     const float dbm   = m_tmate2SmeterDbm;
     const float txPowerWatts = m_tmate2TxWatts;
     const float txPowerFullScaleWatts =
-        (m_radioModel.hasAmplifier() && m_radioModel.ampOperate()) ? 2000.0f : 100.0f;
+        (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) ? 2000.0f : 100.0f;
     auto& settings = AppSettings::instance();
     // TMate 2 settings list the main tuning encoder first, then the two
     // auxiliary encoders. The LCD labels those auxiliaries in the opposite

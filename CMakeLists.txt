@@ -650,6 +650,7 @@ set(MODEL_SOURCES
     src/models/PanadapterModel.cpp
     src/models/MeterModel.cpp
     src/models/TunerModel.cpp
+    src/models/AmpModel.cpp
     src/models/TransmitModel.cpp
     src/models/EqualizerModel.cpp
     src/models/TnfModel.cpp
@@ -2615,6 +2616,12 @@ target_include_directories(aetherd_residual_decode_test PRIVATE src)
 target_link_libraries(aetherd_residual_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherd_residual_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_residual_decode_test COMMAND aetherd_residual_decode_test)
+
+add_executable(amp_model_test tests/amp_model_test.cpp)
+target_include_directories(amp_model_test PRIVATE src)
+target_link_libraries(amp_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(amp_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME amp_model_test COMMAND amp_model_test)
 
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp

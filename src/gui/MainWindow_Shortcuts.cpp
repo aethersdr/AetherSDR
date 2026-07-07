@@ -640,7 +640,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_pgxlContainer && event->type() == QEvent::MouseButtonPress) {
         // Simple toggle: OPERATE ↔ STANDBY (PGXL has no BYPASS)
-        m_radioModel.setAmpOperate(!m_radioModel.ampOperate());
+        m_radioModel.amplifier().setOperate(!m_radioModel.amplifier().operate());
         return true;
     }
     if (obj == m_txIndicator && event->type() == QEvent::MouseButtonPress) {

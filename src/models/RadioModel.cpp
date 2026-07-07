@@ -647,6 +647,12 @@ RadioModel::RadioModel(QObject* parent)
         sendCmd(cmd);
     });
 
+    // Forward amplifier (PGXL) commands to the radio — the radio relays "amplifier
+    // set … operate=" to the amp (the path that works remote/SmartLink). #4094.
+    connect(&m_amplifier, &AmpModel::commandReady, this, [this](const QString& cmd){
+        sendCmd(cmd);
+    });
+
     m_transmitModel.setPttPreflight([this](TransmitModel::PttSource source) {
         m_pendingTransmitPreflightSource = source;
         return localPttInterlockMessage(source);
@@ -3090,9 +3096,7 @@ void RadioModel::onDisconnected()
     // Must re-derive everything from the new radio's status on next connect. (#359)
     m_tunerModel.setHandle({});       // clear TGXL presence
     m_xvtrList.clear();
-    m_hasAmplifier = false;
-    m_ampHandle.clear();
-    m_ampOperate = false;
+    m_amplifier.reset();              // clear PGXL presence/operate (#4094)
     m_fullDuplex = false;
     // Reset to false so the next connect's skip-peek fast path requires the
     // radio's mf_enable status to actually arrive before treating multiFLEX
@@ -3883,12 +3887,6 @@ void RadioModel::requestLocalPtt()
     });
 }
 
-void RadioModel::setAmpOperate(bool on)
-{
-    if (m_ampHandle.isEmpty()) return;
-    // FlexLib API: "amplifier set <handle> operate=0|1"
-    sendCmd(QString("amplifier set %1 operate=%2").arg(m_ampHandle).arg(on ? 1 : 0));
-}
 
 void RadioModel::createRxAudioStream()
 {
@@ -5255,18 +5253,16 @@ void RadioModel::onStatusReceived(const QString& object,
     static const QRegularExpression ampRe(R"(^amplifier\s+(\S+)$)");
     static const QRegularExpression ampRemovedRe(R"(^amplifier\s+(\S+)\s+removed$)");
     if (object.startsWith("amplifier")) {
+        // The radio reports both TGXL and PGXL via the "amplifier" API; route
+        // TunerGeniusXL to TunerModel and every other (power) amp to AmpModel.
+        // (#4094: amp state extracted from RadioModel into AmpModel.)
         const auto rm = ampRemovedRe.match(object);
         if (rm.hasMatch()) {
             const QString handle = rm.captured(1);
             qCDebug(lcProtocol) << "RadioModel: amplifier removed (bare) handle=" << handle;
             if (handle == m_tunerModel.handle())
                 m_tunerModel.setHandle({});
-            if (handle == m_ampHandle) {
-                m_ampHandle.clear();
-                m_hasAmplifier = false;
-                m_ampModel.clear();
-                emit amplifierChanged(false);
-            }
+            m_amplifier.handleRemoval(handle);
             return;
         }
         const auto m = ampRe.match(object);
@@ -5279,12 +5275,7 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("removed")) {
                 if (handle == m_tunerModel.handle())
                     m_tunerModel.setHandle({});
-                if (handle == m_ampHandle) {
-                    m_ampHandle.clear();
-                    m_hasAmplifier = false;
-                    m_ampModel.clear();
-                    emit amplifierChanged(false);
-                }
+                m_amplifier.handleRemoval(handle);
                 return;
             }
 
@@ -5302,35 +5293,8 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_tunerModel.applyStatus(kvs);
             }
 
-            // Track power amplifier state (PGXL or any non-TGXL amp).
-            // PGXL uses "state=OPERATE|IDLE|BYPASS|..." (not operate=/bypass= like TGXL)
-            if (!model.isEmpty() && model != "TunerGeniusXL") {
-                m_ampHandle = handle;
-                if (!m_hasAmplifier) {
-                    m_hasAmplifier = true;
-                    m_ampIp = kvs.value("ip");
-                    m_ampModel = model;
-                    qCDebug(lcProtocol) << "RadioModel: power amplifier detected, model=" << model
-                                       << "ip=" << m_ampIp;
-                    emit amplifierChanged(true);
-                }
-            }
-            if (!m_ampHandle.isEmpty() && handle == m_ampHandle) {
-                const QString state = kvs.value("state").toUpper();
-                if (!state.isEmpty()) {
-                    // PGXL states: IDLE = on/ready, STANDBY = off, POWERUP = transitioning
-                    bool op = (state == "IDLE" || state == "OPERATE"
-                               || state.startsWith("TRANSMIT"));
-                    if (m_ampOperate != op) {
-                        m_ampOperate = op;
-                        emit ampStateChanged();
-                    }
-                }
-                // Forward the full KVS so the GUI can update telemetry fields
-                // (id/drain current, vac/mains voltage, meffa, temp) without
-                // requiring a direct PGXL TCP connection.
-                emit ampTelemetryUpdated(kvs);
-            }
+            // Power amplifier (PGXL / any non-TGXL amp) → AmpModel.
+            m_amplifier.applyStatus(handle, model, kvs);
         }
         return;
     }
@@ -6467,10 +6431,10 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     radio["filter_sharpness"] = filterSharpness;
 
     QJsonObject amplifier;
-    amplifier["present"] = m_hasAmplifier;
-    amplifier["handle"] = m_ampHandle;
-    amplifier["model"] = m_ampModel;
-    amplifier["operate"] = m_ampOperate;
+    amplifier["present"] = m_amplifier.present();
+    amplifier["handle"] = m_amplifier.handle();
+    amplifier["model"] = m_amplifier.modelName();
+    amplifier["operate"] = m_amplifier.operate();
     radio["amplifier"] = amplifier;
 
     QJsonObject ownership;
