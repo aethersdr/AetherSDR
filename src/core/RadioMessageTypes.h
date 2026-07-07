@@ -22,9 +22,13 @@ enum class MessageType {
 };
 
 // Severity of an informational/warning/error/fatal ("M") radio message. Info is
-// logged silently; Warning and above surface to the user. (SmartSDR encodes
-// this in bits 24-25 of the message number per FlexLib `(num >> 24) & 0x3`; the
-// values are the generic severity ladder, independent of that encoding.)
+// logged silently; Warning and above surface to the user. NOTE: these integer
+// values are LOAD-BEARING wire values — CommandParser.cpp casts
+// `(msg.handle >> 24) & 0x3` (bits 24-25 of the message number) straight to this
+// enum, per FlexLib Radio.cs:4498-4516, so Info=0/Warning=1/Error=2/Fatal=3 MUST
+// match the wire encoding. Do not reorder or renumber without changing that
+// decode (an inserted/renumbered value would silently mis-map wire bits — e.g.
+// an Error logged as Info and never surfaced, with no compile error).
 enum class MessageSeverity {
     Info    = 0,
     Warning = 1,

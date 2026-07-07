@@ -17,13 +17,11 @@ namespace AetherSDR {
 //   S<handle>|<status>     – status update (radio → client)
 //   M<8-hex-digits>|<text> – informational/warning/error/fatal message
 //                            (high 2 bits of the hex number encode severity —
-//                             see MessageSeverity; per FlexLib
-//                             Radio.cs:4498-4516)
+//                             see MessageSeverity in core/RadioMessageTypes.h)
 //
-// The MessageType / MessageSeverity enums moved to core/RadioMessageTypes.h
-// (included above) so above-seam consumers of the generic enums don't pull in
-// this vendor wire parser (aetherd RFC step 2.4 / EB3). CommandParser.h
-// re-includes them, so ParsedMessage and existing includers are unchanged.
+// MessageType / MessageSeverity live in core/RadioMessageTypes.h (included
+// above); see there for the vendor-free-split rationale. Re-included here so
+// ParsedMessage and existing includers are unchanged.
 
 struct ParsedMessage {
     MessageType type{MessageType::Unknown};

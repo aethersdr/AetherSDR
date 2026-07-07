@@ -140,7 +140,7 @@
  "core/CommandParser.h": {
   "tag": "vendor(flex)",
   "note": "Stateless parser/builder for SmartSDR TCP wire lines (V/H/C/R/S/M, FlexLib semantics) \u2014 pure Flex protocol.",
-  "split": "",
+  "split": "Generic MessageType/MessageSeverity enums extracted to core/RadioMessageTypes.h (vendor-free) so above-seam enum-only consumers decouple (EB3, #4087); the parser + ParsedMessage stay vendor(flex).",
   "confidence": "high"
  },
  "core/CwCallsignSpotter.h": {
@@ -465,6 +465,12 @@
   "tag": "mixed(flex)",
   "note": "Device-discovery list/events are core-profile; SmartSDR UDP:4992 parsing + Multi-Flex/license fields are flex",
   "split": "Discovered-device list surface (name/model/serial/address/status, discovered/updated/lost events) is core-profile; SmartSDR UDP 4992 broadcast parsing, multi-Flex/GUI-client fields (guiClient*, mf_enable), maxLicensedVersion/turfRegion, and bind/re-bind churn tied to SmartSDR discovery are flex vendor extension.",
+  "confidence": "high"
+ },
+ "core/RadioMessageTypes.h": {
+  "tag": "universal",
+  "note": "Generic radio-message classification enums (MessageType/MessageSeverity) — no vendor ties. Extracted from vendor(flex) core/CommandParser.h so above-seam consumers of just the enums decouple from the SmartSDR wire parser (EB3 decouple, #4087). MessageSeverity values are load-bearing wire values (see the header).",
+  "split": "",
   "confidence": "high"
  },
  "core/ReceivePresentationSync.h": {
