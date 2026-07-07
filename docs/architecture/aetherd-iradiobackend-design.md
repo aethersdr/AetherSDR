@@ -27,7 +27,7 @@ header. Two tag classes define step 2's work:
   load-bearing ones: `RadioConnection` (SmartSDR TCP text), `PanadapterStream`
   (VITA-49), `SmartLinkClient`/`WanConnection` (SmartLink WAN), `CommandParser`,
   `StreamStatus`, `RadioStatusOwnership`, plus the firmware/waveform/DAX-IQ family.
-- **16 `mixed` headers** — canonical state fused with Flex specifics. These do
+- **17 `mixed` headers** — canonical state fused with Flex specifics. These do
   *not* move; they get **split**: the core-profile part stays as the model the
   UI/protocol sees, the Flex part becomes backend-provided. The hard five are
   `RadioModel`, `SliceModel`, `TransmitModel`, `PanadapterModel`, `MeterModel`.

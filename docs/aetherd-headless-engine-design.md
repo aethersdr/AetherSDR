@@ -142,8 +142,9 @@ half the raw touchpoint count.
 > `vendor` set to **21** (17 flex, 4 kiwi). Five headers were found to be
 > not-radio-wire and moved out: the 4O3A Tgxl/Pgxl/AntennaGenius transports →
 > `peripheral(4o3a)` (a new tag for standalone accessory devices, not behind the
-> radio seam), the FlexControl USB knob → `ui-support`, and `TunerModel` →
-> `mixed(flex)`. `aetherd-touchpoint-tags.json` is the source of truth.
+> radio seam, now **3**), the FlexControl USB knob → `ui-support`, and
+> `TunerModel` → `mixed(flex)` (so `mixed` is now **17**).
+> `aetherd-touchpoint-tags.json` is the source of truth.
 
 ---
 
