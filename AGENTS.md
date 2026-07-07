@@ -259,8 +259,10 @@ The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
   `src/core/`, `src/models/` **except** the backend tree
   `src/core/backends/`) may include a **vendor header** — the
   family-specific wire classes the RFC keeps behind `IRadioBackend`
-  (SmartSDR/FlexLib + KiwiSDR; the 26 headers tagged `vendor` in
-  `docs/architecture/aetherd-touchpoint-tags.json`). Today's coupling is
+  (SmartSDR/FlexLib + KiwiSDR; the headers tagged `vendor(...)` in
+  `docs/architecture/aetherd-touchpoint-tags.json` — standalone *accessory*
+  devices like the 4O3A tuner/switch/amp are tagged `peripheral(...)`, not
+  `vendor`, so they are NOT gated by EB3). Today's coupling is
   frozen as a per-file, shrink-only baseline; a **new** above-seam vendor
   include, or an **increase** in a tracked file, errors. (RFC step 2.4;
   see "Engine boundary ratchet — EB3" below.)
@@ -287,7 +289,7 @@ for new violations).
 reaches around `IRadioBackend` to a vendor wire class. What this means for
 you:
 
-- **Nothing was relocated.** Step 2.4 is *ratchet-only*: the 26 vendor
+- **Nothing was relocated.** Step 2.4 is *ratchet-only*: the vendor
   headers stay where they are (`src/core/…`, `src/models/…`) for now. EB3
   just makes the existing boundary enforceable *in place*, so the
   decoupling can proceed without new coupling piling up behind it.

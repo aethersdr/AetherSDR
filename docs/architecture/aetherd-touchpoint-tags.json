@@ -402,8 +402,8 @@
   "confidence": "high"
  },
  "core/PgxlConnection.h": {
-  "tag": "vendor(flex)",
-  "note": "Direct TCP client (port 9008) for 4O3A Power Genius XL amp telemetry \u2014 Flex-ecosystem accessory protocol.",
+  "tag": "peripheral(4o3a)",
+  "note": "Direct TCP client (port 9008) for the 4O3A Power Genius XL amplifier \u2014 a standalone accessory device with its own protocol, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up).",
   "split": "",
   "confidence": "high"
  },
@@ -558,8 +558,8 @@
   "confidence": "high"
  },
  "core/TgxlConnection.h": {
-  "tag": "vendor(flex)",
-  "note": "Direct TCP client for 4O3A Tuner Genius XL port-9010 protocol (relay/autotune); Flex-ecosystem accessory.",
+  "tag": "peripheral(4o3a)",
+  "note": "Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up).",
   "split": "",
   "confidence": "high"
  },
@@ -708,8 +708,8 @@
   "confidence": "medium"
  },
  "models/AntennaGeniusModel.h": {
-  "tag": "vendor(flex)",
-  "note": "4O3A Antenna Genius switch client: UDP discovery + SmartSDR-like TCP protocol; Flex-ecosystem accessory",
+  "tag": "peripheral(4o3a)",
+  "note": "4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up).",
   "split": "",
   "confidence": "high"
  },
@@ -834,8 +834,8 @@
   "confidence": "high"
  },
  "models/TunerModel.h": {
-  "tag": "vendor(flex)",
-  "note": "4o3a TGXL tuner state/commands via SmartSDR 'atu'/'tgxl' TCP verbs + direct port-9010 relay control",
+  "tag": "peripheral(4o3a)",
+  "note": "4O3A Tuner Genius XL client — a standalone accessory with its own UDP-broadcast discovery + direct port-9010 TCP (reverse-engineered from the 4O3A app), works with any radio. The SmartSDR 'atu'/'tgxl' verbs are one OPTIONAL radio-relayed control path, not the device's identity. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up).",
   "split": "",
   "confidence": "high"
  },
