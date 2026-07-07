@@ -331,6 +331,62 @@ int main(int argc, char** argv)
         }
     }
 
+    // ── Filter polarity mirror (#3434). FlexLib reports FDV passbands as
+    // USB-form (positive lo/hi) for BOTH sidebands; FDVL is lower-sideband and
+    // must be mirrored to negative offsets so the overlay draws below the
+    // carrier. The mirror is asymmetric-safe (lo,hi)→(-hi,-lo), so the FreeDV
+    // low cut is preserved rather than collapsed (the regression #3092 hit).
+    {
+        // FDVL: asymmetric positive echo → mirrored, both edges kept.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = 95; d.filterHigh = 2000;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2000);   // was 95 → -hi
+        EXPECT_EQ(s.filterHigh(),  -95);    // was 2000 → -lo (low cut preserved)
+    }
+    {
+        // FDVU: upper-sideband FreeDV stays positive (mode-aware).
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVU");
+            d.filterLow = 95; d.filterHigh = 2000;
+        }));
+        EXPECT_EQ(s.filterLow(),  95);
+        EXPECT_EQ(s.filterHigh(), 2000);
+    }
+    {
+        // LSB: symmetric positive echo → historical (-2700,0) result unchanged.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("LSB");
+            d.filterLow = 0; d.filterHigh = 2700;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2700);
+        EXPECT_EQ(s.filterHigh(), 0);
+    }
+    {
+        // USB: wrong-polarity negative echo after restore → mirrored positive.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("USB");
+            d.filterLow = -2700; d.filterHigh = 0;
+        }));
+        EXPECT_EQ(s.filterLow(),  0);
+        EXPECT_EQ(s.filterHigh(), 2700);
+    }
+    {
+        // FDVL already correct (negative) → left untouched, no double-flip.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = -2000; d.filterHigh = -95;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2000);
+        EXPECT_EQ(s.filterHigh(), -95);
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");
         return 0;

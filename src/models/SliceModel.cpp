@@ -841,25 +841,33 @@ void SliceModel::applyChanges(const SliceDelta& d)
         // Radio sometimes sends wrong-polarity filter offsets after session
         // restore (e.g. negative offsets for USB/DIGU). Normalize based on mode.
         //
-        // FDV/FDVU/FDVL are excluded: FreeDV passbands are asymmetric
-        // (e.g. 95..widthHz for FDVU; -widthHz..-95 for FDVL — see
-        // VfoWidget.cpp:3773-3777) and FlexLib only knows "FDV" as a
-        // USB-family mode (Slice.cs:545-550). When the radio echoes an
-        // asymmetric FDVL filter as USB-form (positive lo/hi), the
-        // anchored flip discards one edge and offsets the overlay (#3092).
+        // FlexLib only knows "FDV" as a USB-family mode (Slice.cs:545-550), so
+        // the radio echoes BOTH FDVU and FDVL passbands as USB-form (positive
+        // lo/hi). FDVL is lower-sideband: its overlay, hit-testing and the
+        // client's own preset math all expect NEGATIVE offsets (see
+        // VfoWidget::applyFilterPreset / RxApplet::applyFilterPreset:
+        // lo=-widthHz, hi=-95). Left positive, an FDVL passband is shaded on
+        // the wrong (upper) side of the carrier (#3434). PR #3092 excluded FDV
+        // from the flip because the old anchored flip discarded one edge of the
+        // asymmetric FreeDV passband; the mirror below preserves both edges, so
+        // FDV is normalized safely here again.
         const bool isUsbFamily = (m_mode == "USB" || m_mode == "DIGU"
+                                  || m_mode == "FDVU"
                                   || m_mode == "NT");  // NAVTEX: USB-family digital (v4.2.18)
-        const bool isLsbFamily = (m_mode == "LSB" || m_mode == "DIGL");
+        const bool isLsbFamily = (m_mode == "LSB" || m_mode == "DIGL"
+                                  || m_mode == "FDVL");
+        // Mirror across the carrier, preserving BOTH edges (asymmetric-safe):
+        // (lo,hi) → (-hi,-lo). For symmetric SSB this matches the historical
+        // flip (0,2700 → -2700,0); for asymmetric FDVL it keeps the low cut
+        // (95,2000 → -2000,-95) instead of collapsing it to (-2000,0).
         if (isUsbFamily && m_filterLow < 0 && m_filterHigh <= 0) {
-            // Flip: -2700,0 → 0,2700
-            int w = std::abs(m_filterLow);
-            m_filterLow = 0;
-            m_filterHigh = w;
+            const int lo = m_filterLow, hi = m_filterHigh;
+            m_filterLow  = -hi;
+            m_filterHigh = -lo;
         } else if (isLsbFamily && m_filterLow >= 0 && m_filterHigh > 0) {
-            // Flip: 0,2700 → -2700,0
-            int w = m_filterHigh;
-            m_filterLow = -w;
-            m_filterHigh = 0;
+            const int lo = m_filterLow, hi = m_filterHigh;
+            m_filterLow  = -hi;
+            m_filterHigh = -lo;
         }
         filterChanged_ = true;
     }
