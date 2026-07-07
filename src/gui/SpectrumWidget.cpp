@@ -6371,11 +6371,21 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
 
 // ─── Layout helpers ────────────────────────────────────────────────────────────
 
+int SpectrumWidget::contentWidth() const
+{
+    // The right DBM_STRIP_W pixels are covered by the dBm scale (spectrum) and
+    // the waterfall time-scale (both DBM_STRIP_W wide while live), so the usable
+    // frequency canvas ends there.  Mapping frequency across this width — and
+    // painting the trace/waterfall into it — keeps the band from hiding under
+    // the tape and makes the pan-follow trigger symmetric in pixels (#3482).
+    return std::max(1, width() - DBM_STRIP_W);
+}
+
 int SpectrumWidget::mhzToX(double mhz) const
 {
     if (m_bandwidthMhz <= 0.0) return -1;
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-    const double px = (mhz - startMhz) / m_bandwidthMhz * width();
+    const double px = (mhz - startMhz) / m_bandwidthMhz * contentWidth();
     if (std::isnan(px) || std::isinf(px)) return -1;
     // Round to nearest pixel so all vertical markers (VFO, TNF, filter edges) are
     // centred on the true frequency.  Truncation caused ±1 px jitter during
@@ -6387,7 +6397,7 @@ int SpectrumWidget::mhzToX(double mhz) const
 double SpectrumWidget::xToMhz(int x) const
 {
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-    return startMhz + (static_cast<double>(x) / width()) * m_bandwidthMhz;
+    return startMhz + (static_cast<double>(x) / contentWidth()) * m_bandwidthMhz;
 }
 
 void SpectrumWidget::updateTrackedCursorState(const QPoint& localPos, bool insideWidget)
@@ -6651,7 +6661,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_draggingBandwidth = true;
         m_bwDragStartX = static_cast<int>(ev->position().x());
         m_bwDragStartBw = m_bandwidthMhz;
-        const double mouseXFrac = ev->position().x() / width() - 0.5;
+        const double mouseXFrac = ev->position().x() / contentWidth() - 0.5;
         m_bwDragAnchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
         setSpectrumCursor(Qt::SizeHorCursor);
         ev->accept();
@@ -7525,7 +7535,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // 4x multiplier: dragging 1/4 of widget width doubles/halves bandwidth
         const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
         const double newBw = std::clamp(m_bwDragStartBw * scale, m_minBwMhz, m_maxBwMhz);
-        const double mouseXFrac = static_cast<double>(m_bwDragStartX) / width() - 0.5;
+        const double mouseXFrac = static_cast<double>(m_bwDragStartX) / contentWidth() - 0.5;
         const double zoomCenter = std::max(m_bwDragAnchorMhz - mouseXFrac * newBw,
                                            newBw / 2.0);
         handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
@@ -7553,7 +7563,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         if (!ao) { m_draggingFilter = FilterEdge::None; return; }
         const int mx = static_cast<int>(ev->position().x());
         // Compute Hz delta from pixel delta — immune to freq/overlay changes (#764)
-        const double hzPerPx = (m_bandwidthMhz * 1.0e6) / width();
+        const double hzPerPx = (m_bandwidthMhz * 1.0e6) / contentWidth();
         int hz = m_filterDragStartHz + static_cast<int>(std::round((mx - m_filterDragStartX) * hzPerPx));
 
         if (m_draggingFilter == FilterEdge::Low) {
@@ -7583,7 +7593,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     if (m_draggingPan) {
         const int dx = static_cast<int>(ev->position().x()) - m_panDragStartX;
         // Dragging right moves the view right → center shifts left
-        const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
+        const double deltaMhz = -(static_cast<double>(dx) / contentWidth()) * m_bandwidthMhz;
         const double newCenter = std::max(m_panDragStartCenter + deltaMhz,
                                           m_bandwidthMhz / 2.0);
         m_panDragPendingCenterMhz = newCenter;
@@ -8033,7 +8043,7 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
     // Double-click in FFT or waterfall → tune to clicked frequency
     if (y < specH || y >= wfY) {
         const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-        double rawMhz = startMhz + (ev->position().x() / width()) * m_bandwidthMhz;
+        double rawMhz = startMhz + (ev->position().x() / contentWidth()) * m_bandwidthMhz;
 
         emit frequencyClicked(snapToStep(rawMhz, m_stepHz));
         ev->accept();
@@ -8138,7 +8148,7 @@ bool SpectrumWidget::event(QEvent* ev)
             const double newBw = m_bandwidthMhz * factor;
             if (newBw < m_minBwMhz || newBw > m_maxBwMhz) { return true; }  // at limit
             // Anchor: keep the frequency under the cursor at the same pixel.
-            const double mouseXFrac = ge->position().x() / width() - 0.5;
+            const double mouseXFrac = ge->position().x() / contentWidth() - 0.5;
             const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
             const double newCenter = std::max(anchorMhz - mouseXFrac * newBw,
                                               newBw / 2.0);
@@ -8308,7 +8318,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         const double factor  = (steps > 0) ? (1.0 / 1.5) : 1.5;
         const double newBw   = std::clamp(m_bandwidthMhz * factor, m_minBwMhz, m_maxBwMhz);
         if (qFuzzyCompare(newBw, m_bandwidthMhz)) { ev->accept(); return; }
-        const double mouseXFrac = ev->position().x() / width() - 0.5;
+        const double mouseXFrac = ev->position().x() / contentWidth() - 0.5;
         const double anchorMhz  = m_centerMhz + mouseXFrac * m_bandwidthMhz;
         const double newCenter  = std::max(anchorMhz - mouseXFrac * newBw, newBw / 2.0);
         handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
@@ -9427,6 +9437,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const int wfH = h - wfY;
     const QRect specRect(0, 0, w, specH);
     const QRect wfRect(0, wfY, w, wfH);
+    // The FFT trace, 3DSS surface, and waterfall render into the frequency
+    // canvas only (width minus the right dBm / time strip) so they end at the
+    // tape, matching the contentWidth() mapping used by every marker (#3482).
+    const int specContentW = std::max(1, specRect.width() - DBM_STRIP_W);
+    const int wfContentW    = std::max(1, wfRect.width() - DBM_STRIP_W);
     int fftTracePointCount = 0;
 
     // 3DSS replaces only the spectrum trace: the surface fills specRect and the
@@ -9934,7 +9949,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // resolution and stretched to the specRect viewport.
             const float fbDpr = static_cast<float>(renderTarget()->pixelSize().width())
                               / static_cast<float>(qMax(1, w));
-            const int specPwDev = qMax(1, qRound(specRect.width() * fbDpr));
+            const int specPwDev = qMax(1, qRound(specContentW * fbDpr));
             const int specPhDev = qMax(1, qRound(specH * fbDpr));
             const double sc = qMin(1.0, qMin(double(kDssMaxW) / specPwDev,
                                              double(kDssMaxH) / specPhDev));
@@ -9988,7 +10003,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             const float fbDpr = static_cast<float>(renderTarget()->pixelSize().width())
                               / static_cast<float>(qMax(1, w));
             const int cols = std::clamp(
-                static_cast<int>(std::lround(specRect.width() * fbDpr)),
+                static_cast<int>(std::lround(specContentW * fbDpr)),
                 2, kMaxFftDisplayTracePoints);
             const QVector<float>& trace =
                 buildFftDisplayTrace(displaySpectrumBins(), cols);
@@ -10035,7 +10050,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 const QColor dk = m_fftFillColor.darker(300);
                 const float fa = m_fftFillAlpha;
                 const float ubo[20] = {
-                    static_cast<float>(specRect.width()) * fbDpr,   // plot: wPx
+                    static_cast<float>(specContentW) * fbDpr,       // plot: wPx
                     static_cast<float>(specH) * fbDpr,              // hPx
                     static_cast<float>(n),                          // columnCount
                     1.0f,                                           // hasData
@@ -10083,7 +10098,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         // QRhiViewport: (x, y, width, height) — y is bottom-up in GL convention
         float vpX = static_cast<float>(wfRect.x()) * dpr;
         float vpY = static_cast<float>(h - wfRect.bottom() - 1) * dpr;
-        float vpW = static_cast<float>(wfRect.width()) * dpr;
+        float vpW = static_cast<float>(wfContentW) * dpr;
         float vpH = static_cast<float>(wfRect.height()) * dpr;
 
         cb->setViewport({vpX, vpY, vpW, vpH});
@@ -10113,7 +10128,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         // GPU height-map mesh: static grid, height from the ring texture.
         const QRhiViewport vp(static_cast<float>(specRect.x()) * dpr,
                               static_cast<float>(h - specRect.bottom() - 1) * dpr,
-                              static_cast<float>(specRect.width()) * dpr,
+                              static_cast<float>(specContentW) * dpr,
                               static_cast<float>(specRect.height()) * dpr);
         const int drawnRows = m_dss.rowCount();
 
@@ -10148,7 +10163,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         cb->setShaderResources(m_dssSrb);
         cb->setViewport({static_cast<float>(specRect.x()) * dpr,
                          static_cast<float>(h - specRect.bottom() - 1) * dpr,
-                         static_cast<float>(specRect.width()) * dpr,
+                         static_cast<float>(specContentW) * dpr,
                          static_cast<float>(specRect.height()) * dpr});
         const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
         cb->setVertexInput(0, 1, &vbuf);
@@ -10161,7 +10176,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     if (!is3D && m_fftScopePipeline && m_ovVbo && fftTracePointCount > 0) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
-        float specVpW = static_cast<float>(specRect.width()) * dpr;
+        float specVpW = static_cast<float>(specContentW) * dpr;
         float specVpH = static_cast<float>(specRect.height()) * dpr;
         cb->setGraphicsPipeline(m_fftScopePipeline);
         cb->setShaderResources(m_fftScopeSrb);
@@ -10220,7 +10235,10 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
     });
 
     const int panelW = vfos.isEmpty() ? 0 : vfos[0].w->width();
-    const int specW  = specRect.width();
+    // Flip flags against the content edge (width minus the right strip), not the
+    // raw widget edge — a right-facing flag at the true right edge slides under
+    // the dBm tape (#3482).
+    const int specW  = contentWidth();
 
     QMap<int, VfoWidget::FlagDir> dirMap;
     assignDiversityPairDirections(vfos, dirMap);
@@ -10361,6 +10379,12 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     const QRect scaleRect(0, scaleY,  width(), freqScaleH());
     const QRect wfRect   (0, wfY,     width(), wfH);
 
+    // The FFT trace and waterfall span only the frequency canvas (width minus
+    // the right dBm / time strip) so they end at the tape rather than painting
+    // under it, matching the contentWidth() mapping used by mhzToX (#3482).
+    const QRect specContentRect = specRect.adjusted(0, 0, -DBM_STRIP_W, 0);
+    const QRect wfContentRect    = wfRect.adjusted(0, 0, -DBM_STRIP_W, 0);
+
     const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
     const float dssFrameFloorDbm = is3D
         ? dssFloorDbm()
@@ -10376,10 +10400,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         const QImage& surf =
             buildDssImage(specRect.size().boundedTo(QSize(kDssMaxW, kDssMaxH)),
                           0, dssFrameFloorDbm);
+        p.fillRect(specRect, m_bgFillColor);
         if (!surf.isNull()) {
-            p.drawImage(specRect, surf);
-        } else {
-            p.fillRect(specRect, m_bgFillColor);
+            p.drawImage(specContentRect, surf);
         }
     } else {
         // Composition z-order: bg fill → bg image → grid → FFT trace.
@@ -10398,7 +10421,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             p.setOpacity(1.0);
         }
         drawGrid(p, specRect);
-        drawSpectrum(p, specRect);
+        drawSpectrum(p, specContentRect);
     }
 
     if (m_bandPlanFontSize > 0) drawBandPlan(p, specRect);
@@ -10408,7 +10431,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     p.drawLine(divRect.left(), divRect.center().y(), divRect.right(), divRect.center().y());
 
     drawFreqScale(p, scaleRect);
-    drawWaterfall(p, wfRect);
+    p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
+    drawWaterfall(p, wfContentRect);
     drawTnfMarkers(p, specRect);
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
@@ -10446,7 +10470,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         });
 
         const int panelW = vfos.isEmpty() ? 0 : vfos[0].w->width();
-        const int specW = specRect.width();
+        const int specW = contentWidth();  // flip against the tape edge (#3482)
 
         // First pass: assign directions for role-locked pairs
         QMap<int, VfoWidget::FlagDir> dirMap;  // sliceId → direction

@@ -253,6 +253,12 @@ public:
     bool noiseFloorAutoAdjustEnabled() const { return m_noiseFloorEnable; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
+    // Width of the frequency canvas, in logical pixels: the widget width minus
+    // the right-edge dBm / waterfall-time strip that is painted on top of it.
+    // The spectrum, waterfall, and every mhzToX/xToMhz mapping span this width
+    // so the trace ends at the tape (not under it) and Pan-Follows-VFO margins
+    // are symmetric in pixels, not just in frequency (#3482).
+    int contentWidth() const;
 
     // Set the FFT/waterfall split ratio programmatically.
     void setSpectrumFrac(float f);

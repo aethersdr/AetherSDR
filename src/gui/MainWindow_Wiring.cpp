@@ -3169,7 +3169,11 @@ MainWindow::TuneCenteringResult MainWindow::panFollowVfo(
     if (auto* sw = spectrumForSlice(s)) {
         if (auto* vfo = sw->vfoWidget(s->sliceId())) {
             const double bw = sw->bandwidthMhz();
-            const int specW = sw->width();
+            // Frequency maps across the content canvas (width minus the right
+            // dBm / time strip), so convert the flag's pixel width to MHz with
+            // the same denominator mhzToX uses — otherwise the flag-edge trigger
+            // drifts from the rendered flag position by the strip ratio (#3482).
+            const int specW = sw->contentWidth();
             if (bw > 0.0 && specW > 0 && !vfo->isCollapsed()) {
                 const double mhzPerPixel = bw / static_cast<double>(specW);
                 const double flagWidthMhz =
