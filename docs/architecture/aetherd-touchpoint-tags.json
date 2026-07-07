@@ -216,8 +216,8 @@
   "confidence": "high"
  },
  "core/FlexControlManager.h": {
-  "tag": "vendor(flex)",
-  "note": "FlexControl USB knob serial driver (VID 0x2192); Flex ecosystem hardware but client-side input, home=gui shell",
+  "tag": "ui-support",
+  "note": "FlexControl USB knob serial driver (VID 0x2192) — a desktop input-surface driver, the same class as HidEncoderManager (RC-28/TMate)/UlanziDialBackend/SerialPortController, all ui-support. Flex-branded hardware but client-side input, not radio-family wire; NOT behind the radio seam (reclassified from vendor(flex), #4089).",
   "split": "",
   "confidence": "high"
  },
