@@ -403,7 +403,7 @@
  },
  "core/PgxlConnection.h": {
   "tag": "peripheral(4o3a)",
-  "note": "Direct TCP client (port 9008) for the external 4O3A Power Genius XL (PGXL) amplifier peripheral \u2014 a standalone device with its own protocol (same C/R/S/V framing as TgxlConnection). Like the TGXL, the PGXL can be proxied through the radio's SmartSDR 'amplifier' API (RadioModel handles amplifier status/operate for both), but that path is fragile \u2014 the project deliberately prefers this direct connection so a firmware change can't break amp control/telemetry. Peripheral(4o3a), not radio-family wire; NOT behind the IRadioBackend radio seam.",
+  "note": "Direct TCP client (port 9008) for the external 4O3A Power Genius XL (PGXL) amplifier \u2014 TELEMETRY-ONLY (statusUpdated: state/power/SWR/current/temp/\u2026); it has no operate/standby command. PGXL operate/standby is relayed through the radio (RadioModel::setAmpOperate \u2192 'amplifier set <handle> operate=\u2026'), which is also the only path for remote/SmartLink. So this header is a genuine local direct-transport peripheral(4o3a); the amp's radio-relay control lives in RadioModel (radio-side) and should split into a generic AmpModel + Flex relay behind FlexBackend \u2014 see the AmpModel-extraction issue.",
   "split": "",
   "confidence": "high"
  },
@@ -834,9 +834,9 @@
   "confidence": "high"
  },
  "models/TunerModel.h": {
-  "tag": "peripheral(4o3a)",
-  "note": "External 4O3A Tuner Genius XL (TGXL) peripheral — a standalone device with its own direct port-9010 protocol (core/TgxlConnection.h). Flex can proxy TGXL control through the radio's SmartSDR atu/tgxl passthrough (still used for operate/bypass today), but that path is fragile — Flex firmware 4.2.18 broke it, which is why the direct connection was added (#469). The project deliberately avoids depending on the radio proxy (a firmware change can break it), so the TGXL is peripheral(4o3a), not radio-family wire; the remaining atu/tgxl passthrough is legacy to migrate onto the direct path, NOT radio functionality behind the IRadioBackend seam. Distinct from the radio's own built-in ATU.",
-  "split": "",
+  "tag": "mixed(flex)",
+  "note": "External-tuner state model, intended to become vendor-neutral (usable by any 3rd-party tuner). Fuses universal tuner state with Flex-specific TGXL wiring, so it's mixed — NOT peripheral (that's the transport TgxlConnection) and NOT pure vendor. Distinct from the radio's own built-in ATU (TransmitModel).",
+  "split": "Core (universal, stays the model the UI/3rd-party sees): operate/bypass/tuning state, SWR/fwd-power, antenna-switch selection, presence. Flex extension (move behind FlexBackend as an IRadioBackend extension verb): the TGXL radio-relay — SmartSDR atu/tgxl/amplifier passthrough (commandReady, atu-status decode), which is the ONLY control path for remote/SmartLink operation and is TGXL-specific (the radio relays only the TGXL). A direct TgxlConnection (peripheral, port 9010) is the local fast-path. 2.3-style split; see #4092.",
   "confidence": "high"
  },
  "models/XvtrPolicy.h": {

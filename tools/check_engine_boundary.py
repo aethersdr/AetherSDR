@@ -95,12 +95,13 @@ KNOWN_WIDGETS_LEGACY = {
 # grows a vendor family but this checker keeps permitting it.
 VENDOR_TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.json"
 # Sanity floor: the audit currently tags 21 radio-family vendor headers (the
-# original 26 minus reclassified peripherals not behind the radio seam — the
-# 4O3A accessory family TunerModel/AntennaGeniusModel/Tgxl/Pgxl → peripheral(4o3a),
-# and the FlexControl USB knob → ui-support). This floor only guards against the
-# audit being moved/gutted (a parse yielding near zero), NOT the exact count —
-# deliberate reclassifications lower it over time, so keep the floor well below
-# the live count.
+# original 26 minus 5 that aren't radio-family wire — the direct 4O3A transports
+# TgxlConnection/PgxlConnection + the AntennaGenius switch → peripheral(4o3a);
+# the FlexControl USB knob → ui-support; and TunerModel → mixed(flex), a
+# generic-tuner model with a Flex TGXL relay to split, not vendor). This floor
+# only guards against the audit being moved/gutted (a parse yielding near zero),
+# NOT the exact count — deliberate reclassifications lower it over time, so keep
+# the floor well below the live count.
 VENDOR_STEMS_FLOOR = 15
 
 
