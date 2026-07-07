@@ -1532,11 +1532,6 @@ MainWindow::MainWindow(QWidget* parent)
     // Overlay-menu antenna wiring is now per-pan in wirePanadapter() (#1260).
     // Antenna list and S-meter are now wired per-widget in onSliceAdded.
 
-    // ── Title bar: Pan Follow ────────────────────────────────────────────────
-    connect(m_titleBar, &TitleBar::panFollowToggled,
-            this, &MainWindow::setPanFollow);
-    if (m_titleBar->isPanFollowChecked()) setPanFollow(true);
-
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
@@ -5709,8 +5704,17 @@ void MainWindow::applyMasterVolume(int pct)
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 SliceModel* MainWindow::activeSlice() const
 {
-    if (m_activeSliceId < 0) return nullptr;
-    return m_radioModel.slice(m_activeSliceId);
+    if (m_activeSliceId >= 0) {
+        if (SliceModel* slice = m_radioModel.slice(m_activeSliceId)) {
+            return slice;
+        }
+    }
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (slice && slice->isActive()) {
+            return slice;
+        }
+    }
+    return nullptr;
 }
 
 void MainWindow::pushRxFilterCutoffsToEq()
@@ -5777,6 +5781,8 @@ void MainWindow::pushSliceFrequencyToOverlays(SliceModel* slice, double mhz)
     if (!slice) {
         return;
     }
+
+    snapCenterLockForSlice(slice, mhz, true);
 
     const QString freqStr = vfoFrequencyText(mhz);
     auto pushOne = [this, mhz, &freqStr](SliceModel* s) {
@@ -8703,79 +8709,6 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
             PerfTelemetry::instance().recordSHistorySkipped();
         }
     }
-}
-
-// ─── Pan Follow ───────────────────────────────────────────────────────────────
-
-void MainWindow::setPanFollow(bool on)
-{
-    disconnect(m_panFollowConn);
-    disconnect(m_panFollowSliceConn);
-    m_panFollowActive = on;
-    // Toggling Pan Lock clears any drag-suppress state — a defensive reset in
-    // case a slice drag was ever abandoned without a mouse-release (e.g. the pane
-    // was removed mid-drag), which would otherwise leave Pan Follow suppressed.
-    m_sliceDragInProgress = false;
-
-    if (!on) return;
-
-    // Re-attach helper: wires frequency tracking to whichever slice 0
-    // is currently live. Called on activation and whenever slice 0 is
-    // recreated (radio reconnect, slice re-assignment, etc.).
-    auto attachToSlice0 = [this]() {
-        disconnect(m_panFollowConn);
-
-        auto* s = m_radioModel.slice(0);
-        if (!s) {
-            // No slice yet — uncheck the button so UI matches reality.
-            if (m_titleBar) m_titleBar->setPanFollowChecked(false);
-            return;
-        }
-
-        recenterPanFollowOnSlice0();
-        m_panFollowConn = connect(s, &SliceModel::frequencyChanged,
-                                  this, [this](double) { recenterPanFollowOnSlice0(); });
-    };
-
-    attachToSlice0();
-
-    // Re-attach whenever a new slice 0 appears (reconnect / re-assignment).
-    m_panFollowSliceConn = connect(&m_radioModel, &RadioModel::sliceAdded,
-        this, [this, attachToSlice0](SliceModel* s) {
-            if (s && s->sliceId() == 0) attachToSlice0();
-        });
-}
-
-// Pan Follow ("Pan Lock"): recenter the panadapter on Slice A (slice 0). Called
-// on enable, on every slice-0 frequency change, and once when a slice drag ends.
-void MainWindow::recenterPanFollowOnSlice0()
-{
-    if (!m_panFollowActive) return;   // Pan Lock off — never move the pan
-    // A slice is being dragged (in-window tune or edge auto-pan): the drag owns
-    // the pan center, so stand down rather than fight it with a per-tick recenter
-    // (that conflict caused ~0.33 MHz pan lurches + jumping). The drag-end handler
-    // calls this once with the flag cleared, so Pan Lock re-asserts on release.
-    // (user-reported)
-    if (m_sliceDragInProgress) return;
-    auto* s = m_radioModel.slice(0);
-    if (!s) return;
-    const QString panId = s->panId();
-    if (panId.isEmpty()) return;
-    // WFM holds its pan fixed: Doppler rides the demodulator's NCO, and
-    // recentring underneath it would desync the NCO offset until the next slice
-    // retune. While WFM is active on this pan, WFM wins and Pan Follow stands
-    // down. (Precedence is a UX call — flagged for maintainer review in the WFM PR.)
-    if (m_wfmSliceId >= 0) {
-        auto* wfmSlice = m_radioModel.slice(m_wfmSliceId);
-        if (wfmSlice && wfmSlice->panId() == panId) return;
-    }
-    const double freq = s->frequency();
-    auto* pan = m_radioModel.panadapter(panId);
-    if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
-    const QString freqStr = QString::number(freq, 'f', 6);
-    if (pan) pan->setCenterBandwidth(freq, -1.0);  // aetherd RFC 2.3
-    m_radioModel.sendCommand(
-        QString("display pan set %1 center=%2").arg(panId, freqStr));
 }
 
 } // namespace AetherSDR

@@ -71,6 +71,8 @@ class QsoRecorder;
 //                                     QTreeWidget / QListWidget) so the dialog's
 //                                     row-scoped buttons (Tune/Edit/Remove/Disable)
 //                                     become drivable; echoes selectedRow[Text].
+//   shortcut <id>                  -> invoke a registered ShortcutManager action
+//                                     by id, without requiring a physical key binding.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
@@ -158,6 +160,8 @@ class QsoRecorder;
 //                                     contextMenuEvent) via a synthesized
 //                                     QContextMenuEvent; deferred, then dumpTree
 //                                     to read it and invoke to drive it.
+//   rightClick <target> [x y]      -> send a real right-button mouse gesture for
+//                                     widgets that build menus in mousePressEvent.
 //   hitTest <target> [x y]         -> report Qt's widgetAt()/childAt() owner for
 //                                     a target-local point. Read-only proof for
 //                                     transparent overlays and input masks.
@@ -250,7 +254,6 @@ public:
     {
         m_kiwiSdrSnapshotHandler = std::move(handler);
     }
-
 private slots:
     void onNewConnection();
     void onReadyRead();
@@ -324,6 +327,10 @@ private:
     // handler pops a QMenu that runs its own event loop. The popped menu is read
     // via dumpTree and driven via invoke, no extra inspection code needed. (#3858)
     QJsonObject doContextMenu(const QString& target, const QString& value) const;
+    // rightClick <target> [x y]: synthesize a real right-button mouse gesture for
+    // widgets that build context menus from mousePressEvent instead of
+    // contextMenuEvent. Posted for the same native-popup safety as contextMenu.
+    QJsonObject doRightClick(const QString& target, const QString& value) const;
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
@@ -490,7 +497,6 @@ private:
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
-
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on
     // stop, so other MultiFlex clients can see an agent is driving.

@@ -58,6 +58,7 @@
 #include <QFileDialog>
 #include <QPointer>
 #include <QSet>
+#include <QStringList>
 #include <QTimer>
 
 #include <algorithm>
@@ -170,6 +171,180 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 }
 
 } // namespace
+
+int MainWindow::centerLockSliceForPan(const QString& panId) const
+{
+    return m_centerLockSliceByPan.value(panId, -1);
+}
+
+bool MainWindow::centerLockActiveForSlice(const SliceModel* slice) const
+{
+    return slice
+        && !slice->panId().isEmpty()
+        && centerLockSliceForPan(slice->panId()) == slice->sliceId();
+}
+
+void MainWindow::setCenterLockForSlice(SliceModel* slice, bool on)
+{
+    if (!slice || slice->panId().isEmpty()) {
+        return;
+    }
+
+    setCenterLockForPan(slice->panId(), slice->sliceId(), on);
+}
+
+void MainWindow::setCenterLockForPan(const QString& panId, int sliceId, bool on)
+{
+    if (panId.isEmpty()) {
+        return;
+    }
+
+    if (!on) {
+        if (sliceId < 0 || centerLockSliceForPan(panId) == sliceId) {
+            clearCenterLockForPan(panId);
+        }
+        return;
+    }
+
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice || slice->panId() != panId) {
+        return;
+    }
+
+    if (QMetaObject::Connection oldConn = m_centerLockFrequencyConnByPan.take(panId)) {
+        disconnect(oldConn);
+    }
+
+    m_centerLockSliceByPan.insert(panId, sliceId);
+    m_centerLockFrequencyConnByPan.insert(
+        panId,
+        connect(slice, &SliceModel::frequencyChanged,
+                this, [this, panId, sliceId](double) {
+            if (centerLockSliceForPan(panId) == sliceId) {
+                recenterCenterLockForPan(panId);
+            }
+        }));
+
+    syncCenterLockUi(panId);
+    recenterCenterLockForPan(panId);
+}
+
+void MainWindow::clearCenterLockForPan(const QString& panId)
+{
+    if (panId.isEmpty()) {
+        return;
+    }
+
+    if (QMetaObject::Connection oldConn = m_centerLockFrequencyConnByPan.take(panId)) {
+        disconnect(oldConn);
+    }
+    m_centerLockSliceByPan.remove(panId);
+    syncCenterLockUi(panId);
+}
+
+void MainWindow::clearCenterLockForSlice(int sliceId)
+{
+    QStringList pansToClear;
+    for (auto it = m_centerLockSliceByPan.cbegin();
+         it != m_centerLockSliceByPan.cend(); ++it) {
+        if (it.value() == sliceId) {
+            pansToClear.append(it.key());
+        }
+    }
+    for (const QString& panId : pansToClear) {
+        clearCenterLockForPan(panId);
+    }
+}
+
+void MainWindow::syncCenterLockUi(const QString& panId)
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return;
+    }
+
+    if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
+        sw->setCenterLockSliceId(centerLockSliceForPan(panId));
+    }
+}
+
+bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool sendCommand)
+{
+    if (!centerLockActiveForSlice(slice) || m_sliceDragInProgress) {
+        return false;
+    }
+
+    const QString panId = slice->panId();
+    const bool kiwiDisplayActive = kiwiSdrPanDisplaysKiwi(panId);
+
+    if (m_wfmSliceId >= 0) {
+        SliceModel* wfmSlice = m_radioModel.slice(m_wfmSliceId);
+        if (wfmSlice && wfmSlice->panId() == panId) {
+            return false;
+        }
+    }
+
+    PanadapterModel* pan = m_radioModel.panadapter(panId);
+    if (!pan) {
+        return false;
+    }
+
+    SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(panId) : nullptr;
+    const double bandwidthMhz = kiwiDisplayActive && sw && sw->bandwidthMhz() > 0.0
+        ? sw->bandwidthMhz()
+        : (pan->bandwidthMhz() > 0.0
+            ? pan->bandwidthMhz()
+            : (sw ? sw->bandwidthMhz() : 0.0));
+    bool changed = false;
+
+    if (sw && bandwidthMhz > 0.0
+        && (!qFuzzyCompare(sw->centerMhz(), mhz)
+            || !qFuzzyCompare(sw->bandwidthMhz(), bandwidthMhz))) {
+        sw->setFrequencyRangeImmediate(mhz, bandwidthMhz);
+        changed = true;
+    }
+
+    const bool modelNeedsCenter = !qFuzzyCompare(pan->centerMhz(), mhz);
+    if (!kiwiDisplayActive && modelNeedsCenter) {
+        pan->setCenterBandwidth(mhz, -1.0);  // aetherd RFC 2.3
+        changed = true;
+    }
+
+    if (sendCommand && !kiwiDisplayActive && modelNeedsCenter) {
+        m_radioModel.sendCommand(
+            QStringLiteral("display pan set %1 center=%2")
+                .arg(panId, QString::number(mhz, 'f', 6)));
+    }
+
+    return changed;
+}
+
+void MainWindow::recenterCenterLockForPan(const QString& panId)
+{
+    if (m_sliceDragInProgress) {
+        return;
+    }
+
+    const int sliceId = centerLockSliceForPan(panId);
+    if (sliceId < 0) {
+        return;
+    }
+
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice || slice->panId() != panId) {
+        clearCenterLockForPan(panId);
+        return;
+    }
+
+    snapCenterLockForSlice(slice, slice->frequency(), true);
+}
+
+void MainWindow::recenterCenterLocks()
+{
+    const QStringList panIds = m_centerLockSliceByPan.keys();
+    for (const QString& panId : panIds) {
+        recenterCenterLockForPan(panId);
+    }
+}
 
 void MainWindow::syncActiveSliceSquelchLineToSpectrums()
 {
@@ -957,6 +1132,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
+        // Center Lock clears before the visuals move — the old pan's lock
+        // must not survive the migration (#3854). The remove/re-add body this
+        // branch originally carried is superseded by #4037's reattach.
+        clearCenterLockForSlice(s->sliceId());
         reattachSliceVisualsToPanadapter(s);
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
@@ -1084,6 +1263,8 @@ void MainWindow::onSliceRemoved(int id)
     if (m_applyingLayout) return;
 
     qDebug() << "MainWindow: slice removed" << id;
+
+    clearCenterLockForSlice(id);
 
     m_kiwiSdrVirtualPreviousMute.remove(id);
     if (m_kiwiSdrManager) {
@@ -2771,9 +2952,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         pushSliceFrequencyToOverlays(target, sliceFreqMhz);
         target->setFrequency(sliceFreqMhz);
     });
-    // Pan Follow ("Pan Lock") stands down for the whole duration of a slice drag
-    // so it doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
-    // recenters; on release it recenters once so Pan Lock re-asserts. (user-reported)
+    // Center Lock stands down for the whole duration of a slice drag so it
+    // doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
+    // recenters; on release it recenters once so the locked pan re-asserts.
     connect(sw, &SpectrumWidget::sliceDragActiveChanged, this, [this](bool active) {
         m_sliceDragInProgress = active;
         if (active) {
@@ -2790,9 +2971,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 }
                 m_sliceDragEchoHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 350;
             }
-            recenterPanFollowOnSlice0();   // re-assert Pan Lock on release (self-guards if off)
+            recenterCenterLocks();
         }
     });
+
+    connect(sw, &SpectrumWidget::centerLockRequested,
+            this, [this, applet](int sliceId, bool locked) {
+        if (!applet)
+            return;
+
+        const QString panId = applet->panId();
+        if (panId.isEmpty())
+            return;
+
+        if (!locked) {
+            setCenterLockForPan(panId, sliceId, false);
+            return;
+        }
+
+        SliceModel* slice = m_radioModel.slice(sliceId);
+        if (!slice || slice->panId() != panId)
+            return;
+
+        setCenterLockForPan(panId, sliceId, true);
+    });
+    sw->setCenterLockSliceId(centerLockSliceForPan(applet->panId()));
 
     // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
     connect(sw, &SpectrumWidget::spotTriggered, this, [this, applet](int spotIndex) {

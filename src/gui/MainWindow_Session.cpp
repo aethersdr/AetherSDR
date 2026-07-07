@@ -1351,6 +1351,7 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
         clearKiwiSdrPanDisplaySourceOverride(panId);
+        clearCenterLockForPan(panId);
         if (m_shuttingDown || !m_panStack) {
             return;
         }

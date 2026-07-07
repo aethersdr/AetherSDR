@@ -1749,6 +1749,17 @@ void MainWindow::registerMidiParams()
         [this](float v) { if (auto* s = activeSlice()) s->setLocked(v > 0.5f); },
         [this]() -> float { auto* s = activeSlice(); return s && s->isLocked() ? 1 : 0; });
 
+    reg("rx.centerLock", "Center Lock", "RX", P::Toggle, 0, 1,
+        [this](float v) {
+            if (SliceModel* slice = activeSlice()) {
+                setCenterLockForSlice(slice, v > 0.5f);
+            }
+        },
+        [this]() -> float {
+            SliceModel* slice = activeSlice();
+            return centerLockActiveForSlice(slice) ? 1 : 0;
+        });
+
     reg("rx.ritEnable", "RIT Enable", "RX", P::Toggle, 0, 1,
         [this](float v) { if (auto* s = activeSlice()) s->setRit(v > 0.5f, s->ritFreq()); },
         [this]() -> float { auto* s = activeSlice(); return s && s->ritOn() ? 1 : 0; });

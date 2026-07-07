@@ -1287,21 +1287,27 @@ private:
     void onFdvMetersChanged();
 #endif
 
-    // Pan Follow — keeps the panadapter centered on Slice A frequency
-    QMetaObject::Connection m_panFollowConn;
-    QMetaObject::Connection m_panFollowSliceConn;
-    bool m_panFollowActive{false};   // Pan Lock / Pan-Follows-VFO toggle state
-    // While a slice is being dragged (in-window tune OR edge auto-pan) Pan Follow
-    // stands down so it doesn't fight the drag with per-tick recenters — that
-    // conflict caused ~0.33 MHz pan lurches/jumping, and suppressing it only
-    // mid-tick made Pan Lock appear to "fall out" after the drag. The drag-end
-    // handler recenters once so Pan Lock re-asserts. (user-reported)
+    // Center Lock — per-pan mode that keeps a selected slice centered while
+    // tuning, so the pan/waterfall scrolls underneath it.
+    QHash<QString, int> m_centerLockSliceByPan;  // panId -> sliceId
+    QHash<QString, QMetaObject::Connection> m_centerLockFrequencyConnByPan;
+    // While a slice is being dragged (in-window tune OR edge auto-pan) Center Lock
+    // stands down so it doesn't fight the drag with per-tick recenters. The
+    // drag-end handler recenters once so the locked pan re-asserts.
     bool m_sliceDragInProgress{false};
     int m_sliceDragTargetSliceId{-1};
     double m_sliceDragTargetMhz{0.0};
     qint64 m_sliceDragEchoHoldUntilMs{0};
-    void setPanFollow(bool on);
-    void recenterPanFollowOnSlice0();
+    int centerLockSliceForPan(const QString& panId) const;
+    bool centerLockActiveForSlice(const SliceModel* slice) const;
+    void setCenterLockForSlice(SliceModel* slice, bool on);
+    void setCenterLockForPan(const QString& panId, int sliceId, bool on);
+    void clearCenterLockForPan(const QString& panId);
+    void clearCenterLockForSlice(int sliceId);
+    void syncCenterLockUi(const QString& panId);
+    bool snapCenterLockForSlice(SliceModel* slice, double mhz, bool sendCommand);
+    void recenterCenterLockForPan(const QString& panId);
+    void recenterCenterLocks();
 
     WfmDemodulator* m_wfmDemod{nullptr};
     int             m_wfmSliceId{-1};

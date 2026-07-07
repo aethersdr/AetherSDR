@@ -110,6 +110,9 @@ public:
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
+    // Same range update, but snaps instead of using the small pan-follow
+    // animation. Center Lock uses this so the locked slice stays pinned.
+    void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
@@ -508,6 +511,8 @@ public:
     void setSliceOverlayAdaptive(int sliceId, bool enabled);
     // Status of the adaptive fit (green/red ball after the high-cut label)
     void setSliceOverlayAdaptiveActive(int sliceId, bool active);
+    void setCenterLockSliceId(int sliceId);
+    int centerLockSliceId() const { return m_centerLockSliceId; }
     // Remove a slice overlay.
     void removeSliceOverlay(int sliceId);
 
@@ -670,6 +675,7 @@ signals:
     void sliceTuneRequested(int sliceId, double freqMhz);
     void popOutRequested(bool popOut);  // true=float, false=dock
     void sliceTxRequested(int sliceId);
+    void centerLockRequested(int sliceId, bool locked);
     // Emitted when FFT bin-mapping dimensions change so MainWindow can re-push
     // xpixels/ypixels to the radio (#1511).
     void dimensionsChanged(int w, int h);
@@ -1008,6 +1014,7 @@ private:
 
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
+    int m_centerLockSliceId{-1};
 
     int    m_filterMinHz{-12000};  // per-mode lower bound (active slice)
     int    m_filterMaxHz{12000};   // per-mode upper bound (active slice)

@@ -5177,6 +5177,45 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     emit frequencyRangeChanged(centerMhz, m_bandwidthMhz);
 }
 
+void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
+{
+    if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz) {
+        return;
+    }
+
+    const double oldCenterMhz = m_centerMhz;
+    const double oldBandwidthMhz = m_bandwidthMhz;
+
+    if (m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
+        m_panCenterAnim->stop();
+    }
+
+    if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
+        handleWaterfallFrequencyFrameChange(oldCenterMhz,
+                                            oldBandwidthMhz,
+                                            centerMhz,
+                                            bandwidthMhz);
+    }
+    const bool keptSpectrum = reprojectSpectrum(oldCenterMhz, oldBandwidthMhz,
+                                                centerMhz, bandwidthMhz);
+    if (!keptSpectrum) {
+        m_bins.clear();
+        m_smoothed.clear();
+        m_resetFftSmoothingOnNextFrame = true;
+        if (bandwidthMhz == oldBandwidthMhz) {
+            m_wfWriteRow = 0;
+        }
+    }
+
+    m_centerMhz = centerMhz;
+    m_bandwidthMhz = bandwidthMhz;
+    m_panCenterStart = centerMhz;
+    m_panCenterTarget = centerMhz;
+    resetNoiseFloorBaseline();
+    markOverlayDirty();
+    emit frequencyRangeChanged(m_centerMhz, m_bandwidthMhz);
+}
+
 void SpectrumWidget::setSpectrumFrac(float f)
 {
     m_spectrumFrac = std::clamp(f, 0.10f, 0.90f);
@@ -5581,6 +5620,11 @@ void SpectrumWidget::setSliceOverlayAdaptiveActive(int sliceId, bool active)
     if (o.adaptiveActive == active) return;
     o.adaptiveActive = active;
     markOverlayDirty();
+}
+
+void SpectrumWidget::setCenterLockSliceId(int sliceId)
+{
+    m_centerLockSliceId = sliceId;
 }
 
 void SpectrumWidget::setSliceOverlayFreq(int sliceId, double freqMhz)
@@ -6900,6 +6944,48 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_draggingTnfId = -1;
         const int mx = static_cast<int>(ev->position().x());
 
+        auto sliceDisplayName = [](const SliceOverlay& so) {
+            return SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
+        };
+        auto addCenterLockAction =
+            [this, sliceDisplayName](QMenu* targetMenu, const SliceOverlay& so,
+                                     bool includeCommandName) {
+            const QString sliceName = QStringLiteral("Slice %1").arg(sliceDisplayName(so));
+            QAction* action = targetMenu->addAction(
+                includeCommandName
+                    ? QStringLiteral("Center Lock %1").arg(sliceName)
+                    : sliceName);
+            action->setCheckable(true);
+            action->setChecked(m_centerLockSliceId == so.sliceId);
+            connect(action, &QAction::toggled, this,
+                    [this, sliceId = so.sliceId](bool checked) {
+                emit centerLockRequested(sliceId, checked);
+            });
+        };
+        auto addCenterLockControls = [this, addCenterLockAction](QMenu& targetMenu) {
+            if (m_sliceOverlays.isEmpty()) {
+                return;
+            }
+
+            targetMenu.addSeparator();
+            if (m_sliceOverlays.size() == 1) {
+                addCenterLockAction(&targetMenu, m_sliceOverlays.first(), true);
+                return;
+            }
+
+            QMenu* centerLockMenu = targetMenu.addMenu(QStringLiteral("Center Lock"));
+            const SliceOverlay* active = activeOverlay();
+            if (active) {
+                addCenterLockAction(centerLockMenu, *active, false);
+            }
+            for (const SliceOverlay& so : m_sliceOverlays) {
+                if (active && so.sliceId == active->sliceId) {
+                    continue;
+                }
+                addCenterLockAction(centerLockMenu, so, false);
+            }
+        };
+
         // Right-click on off-screen slice indicator → slice context menu
         for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
             if (!m_offScreenRects[oi].isNull() &&
@@ -6919,6 +7005,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                         markOverlayDirty();
                         emit centerChangeRequested(m_centerMhz);
                     });
+                menu.addSeparator();
+                addCenterLockAction(&menu, so, true);
                 menu.exec(ev->globalPosition().toPoint());
                 ev->accept();
                 return;
@@ -7045,6 +7133,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
 
         if (hitTnf < 0) {
+            addCenterLockControls(menu);
+
             // Close Slice option (only when multiple slices exist)
             if (m_sliceOverlays.size() > 1) {
                 menu.addSeparator();

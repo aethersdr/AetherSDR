@@ -44,7 +44,7 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | A stateless formatter/helper with no `MainWindow` dependency | `MainWindowHelpers.{h,cpp}` |
 | A whole new subsystem with no existing TU home | A **new** `MainWindow_<Subsystem>.cpp` sibling (copy the header-comment style) — not `MainWindow.cpp` |
 | A member field/declaration a sibling method needs | `MainWindow.h` (unavoidable — C++ requires members on the class), kept minimal |
-| A small guard/condition inside a function that itself lives in `MainWindow.cpp` and can't move | Stays inline in `MainWindow.cpp` (e.g. the WFM guard inside `setPanFollow()`) |
+| A small guard/condition inside a function that itself lives in `MainWindow.cpp` and can't move | Stays inline in `MainWindow.cpp` (e.g. the startup-geometry reapply guard inside `showEvent()`) |
 
 ## When a new TU is warranted
 
