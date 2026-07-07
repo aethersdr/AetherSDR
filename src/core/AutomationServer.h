@@ -321,6 +321,12 @@ private:
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
+    // clickAt [<target>] <x> <y>: synthesize a real left-click at a point. With no
+    // target, x/y are GLOBAL screen coordinates (matching dumpTree geometry); with
+    // a target they are LOCAL to that widget. Generic fallback for when name/text
+    // matching is ambiguous (e.g. several tiles share accessibleName
+    // "containerClose" and only the first is reachable by invoke). TX-gated.
+    QJsonObject doClickAt(const QString& target, const QString& value) const;
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The

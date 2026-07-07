@@ -1742,7 +1742,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, shortcut, whoami, log, mark)";
+        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, clickAt, shortcut, whoami, log, mark)";
     return true;
 }
 
@@ -1957,6 +1957,15 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         detail   = obj.value(QStringLiteral("detail")).toString();
         tone     = obj.value(QStringLiteral("tone")).toString();
         timeoutMs = obj.value(QStringLiteral("timeoutMs")).toInt(0);
+        // clickAt accepts numeric x/y fields directly (dumpTree geometry is
+        // global), folded into `value` as "x y" so both request forms share one
+        // code path. Explicit `value` still wins if supplied.
+        if (cmd == QLatin1String("clickAt") && value.isEmpty()
+            && (obj.contains(QStringLiteral("x")) || obj.contains(QStringLiteral("y")))) {
+            value = QString::number(obj.value(QStringLiteral("x")).toInt())
+                    + QLatin1Char(' ')
+                    + QString::number(obj.value(QStringLiteral("y")).toInt());
+        }
     } else {
         // Bare line. Positional by verb:
         //   grab   <target> [path]
@@ -2107,6 +2116,18 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                    || cmd == QLatin1String("hittest")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "hitTest SpectrumWidget [x y]"
+        } else if (cmd == QLatin1String("clickAt")
+                   || cmd == QLatin1String("clickat")) {
+            // Overloaded: "clickAt <x> <y>" (global) vs "clickAt <target> <x> <y>"
+            // (target-local). Disambiguate on whether the first token is numeric.
+            bool firstIsNumber = false;
+            tok(1).toInt(&firstIsNumber);
+            if (firstIsNumber) {
+                value = tok(1) + QLatin1Char(' ') + tok(2);  // "clickAt 1301 200"
+            } else {
+                target = tok(1);
+                value = tok(2) + QLatin1Char(' ') + tok(3);  // "clickAt AppletPanel 10 20"
+            }
         } else if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "drag sizeGrip 80 60"
@@ -2178,6 +2199,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (target.isEmpty())
             return err(QStringLiteral("hitTest requires a target widget"));
         return doHitTest(target, value);
+    }
+    if (cmd == QLatin1String("clickAt") || cmd == QLatin1String("clickat")) {
+        return doClickAt(target, value);
     }
     if (cmd == QLatin1String("invoke")) {
         if (target.isEmpty() || action.isEmpty())
@@ -4736,6 +4760,101 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
         {QStringLiteral("insideTarget"), w->rect().contains(local)},
         {QStringLiteral("childAt"), describeHitWidget(child)},
         {QStringLiteral("widgetAt"), describeHitWidget(globalHit)},
+    };
+}
+
+// ── clickAt: synthesize a real mouse click at a point (#3461 follow-up) ───────
+// Generic fallback for when name/text matching can't reach the widget you want —
+// most commonly because several widgets share an accessibleName (e.g. every
+// tile's close button is "containerClose") so `invoke` can only ever hit the
+// first match. dumpTree reports widget geometry in GLOBAL (screen) coordinates,
+// so `clickAt <x> <y>` clicks whatever lives at that global point — pass the
+// centre of the target's dumpTree rect and you click exactly that widget. With a
+// target, x/y are interpreted LOCAL to that widget instead (like hitTest).
+//
+// Safety: the click is routed to the deepest child under the point and passed
+// through the SAME TX-keying guard as invoke() — a coordinate click must never
+// be a hole around AETHER_AUTOMATION_ALLOW_TX. Delivery (press+release) is
+// deferred to a clean main-loop turn so any popup menu/dialog the click raises
+// runs on a normal stack, mirroring the invoke() re-entrancy fix.
+QJsonObject AutomationServer::doClickAt(const QString& target,
+                                        const QString& value) const
+{
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 2)
+        return err(QStringLiteral("clickAt needs both x and y"));
+    bool okx = false;
+    bool oky = false;
+    const int x = parts.at(0).toInt(&okx);
+    const int y = parts.at(1).toInt(&oky);
+    if (!okx || !oky)
+        return err(QStringLiteral("clickAt x/y must be integers"));
+
+    QPoint global;
+    QWidget* w = nullptr;
+    if (target.isEmpty()) {
+        // Global-coordinate form: resolve the widget under the screen point.
+        global = QPoint(x, y);
+        w = QApplication::widgetAt(global);
+        if (!w)
+            return err(QStringLiteral("clickAt: no widget at global (")
+                       + QString::number(x) + QStringLiteral(", ")
+                       + QString::number(y) + QStringLiteral(")"));
+    } else {
+        // Target-local form: x/y are offsets inside the resolved widget.
+        w = resolveWidget(target);
+        if (!w)
+            return err(QStringLiteral("widget not found: ") + target);
+        if (!w->isVisible())
+            return err(QStringLiteral("refused: '") + target
+                       + QStringLiteral("' is not visible"));
+        const QPoint local(x, y);
+        global = w->mapToGlobal(local);
+        if (QWidget* child = w->childAt(local))
+            w = child;  // route to the deepest child for a faithful click
+    }
+
+    // TX-safety guard — a raw coordinate click must honor the same opt-in as
+    // invoke(), or it becomes a bypass around the keying gate. (#3646 safety.)
+    if (isTransmitControl(w)
+        && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-related clickAt on" << shortClassName(w)
+            << "at global" << global;
+        return err(QStringLiteral("blocked: point resolves to '")
+                   + shortClassName(w)
+                   + QStringLiteral("', a transmit-keying control (TX-safety "
+                                    "guard). Set AETHER_AUTOMATION_ALLOW_TX=1 "
+                                    "to override."));
+    }
+
+    const QPoint local = w->mapFromGlobal(global);
+    QPointer<QWidget> wp = w;
+    QPointer<QWidget> win = w->window();
+    QTimer::singleShot(0, qApp, [wp, win, local, global]() {
+        if (!wp)
+            return;
+        raiseWindowForPopup(win);  // valid active window for any popup it raises
+        const QPointF lf(local);
+        const QPointF gf(global);
+        QMouseEvent press(QEvent::MouseButtonPress, lf, lf, gf,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &press);
+        if (!wp)
+            return;
+        QMouseEvent release(QEvent::MouseButtonRelease, lf, lf, gf,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &release);
+    });
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("clicked"), describeHitWidget(w)},
+        {QStringLiteral("globalX"), global.x()},
+        {QStringLiteral("globalY"), global.y()},
+        {QStringLiteral("localX"), local.x()},
+        {QStringLiteral("localY"), local.y()},
+        {QStringLiteral("deferred"), true},   // press/release run next main-loop turn
     };
 }
 
