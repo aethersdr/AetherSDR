@@ -109,12 +109,25 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 # scan (which is NOT a required status check, so a Tier-2 edit could disable it
 # undetected). Routine CI workflows stay Tier 2. Keep these two lists in sync
 # with .github/workflows/ as workflows are added/renamed.
-.github/workflows/codeql.yml            @aethersdr/maintainers
-.github/workflows/sign-release.yml      @aethersdr/maintainers
-.github/workflows/macos-dmg.yml         @aethersdr/maintainers
-.github/workflows/windows-installer.yml @aethersdr/maintainers
-.github/workflows/appimage.yml          @aethersdr/maintainers
-.github/workflows/docker-ci-image.yml   @aethersdr/maintainers
+#
+# The criterion is "produces or feeds a signed/official release artifact." That
+# includes producer workflows whose output a Tier-1 release step consumes, even
+# if the producer itself doesn't hold a secret — poisoning the input defeats the
+# consumer's gate. Specifically:
+#   - build-macos-qt.yml publishes the Qt tarball (deps-qt-* release) that the
+#     Tier-1 macos-dmg.yml downloads and bakes into the *signed* DMG.
+#   - streamdeck-plugins.yml uploads *.zip artifacts onto the v* release, which
+#     sign-release.yml (Tier 1) then GPG-signs with the release key.
+# Both were left at Tier 2 in the initial carve-out; a Tier-2 edit to either
+# reaches around the release gate, so they are carved to Tier 1 as well.
+.github/workflows/codeql.yml             @aethersdr/maintainers
+.github/workflows/sign-release.yml       @aethersdr/maintainers
+.github/workflows/macos-dmg.yml          @aethersdr/maintainers
+.github/workflows/build-macos-qt.yml     @aethersdr/maintainers
+.github/workflows/windows-installer.yml  @aethersdr/maintainers
+.github/workflows/appimage.yml           @aethersdr/maintainers
+.github/workflows/docker-ci-image.yml    @aethersdr/maintainers
+.github/workflows/streamdeck-plugins.yml @aethersdr/maintainers
 
 # Bot / agent instruction (source of truth for AI tool behaviour)
 .claude/commands/            @aethersdr/maintainers
