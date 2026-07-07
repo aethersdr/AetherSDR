@@ -28,7 +28,7 @@
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "PanLayoutDialog.h"
-#include "core/CommandParser.h"
+#include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
 #include "core/PerfTelemetry.h"
 #include "core/PeripheralSettings.h"

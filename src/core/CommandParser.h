@@ -5,6 +5,8 @@
 #include <QVariant>
 #include <optional>
 
+#include "core/RadioMessageTypes.h"   // MessageType / MessageSeverity (vendor-free)
+
 namespace AetherSDR {
 
 // Message types in the SmartSDR TCP protocol:
@@ -15,28 +17,13 @@ namespace AetherSDR {
 //   S<handle>|<status>     – status update (radio → client)
 //   M<8-hex-digits>|<text> – informational/warning/error/fatal message
 //                            (high 2 bits of the hex number encode severity —
-//                             see MessageSeverity below; per FlexLib
+//                             see MessageSeverity; per FlexLib
 //                             Radio.cs:4498-4516)
-
-enum class MessageType {
-    Version,
-    Handle,
-    Response,
-    Status,
-    Message,
-    Unknown
-};
-
-// M-prefix severity, extracted from bits 24-25 of the message number per
-// FlexLib's `(num >> 24) & 0x3`.  Info messages (e.g. "Client connected
-// from IP …") are expected to be logged silently; Warning and above
-// surface to the user.
-enum class MessageSeverity {
-    Info    = 0,
-    Warning = 1,
-    Error   = 2,
-    Fatal   = 3
-};
+//
+// The MessageType / MessageSeverity enums moved to core/RadioMessageTypes.h
+// (included above) so above-seam consumers of the generic enums don't pull in
+// this vendor wire parser (aetherd RFC step 2.4 / EB3). CommandParser.h
+// re-includes them, so ParsedMessage and existing includers are unchanged.
 
 struct ParsedMessage {
     MessageType type{MessageType::Unknown};

@@ -12,7 +12,7 @@
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
 #include "core/AppSettings.h"
-#include "core/CommandParser.h"   // MessageSeverity for onRadioMessage slot
+#include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
