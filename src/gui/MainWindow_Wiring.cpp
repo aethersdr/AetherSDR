@@ -68,8 +68,17 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr double kIncrementalTriggerEdgeMarginFrac = 0.05;
-constexpr double kIncrementalSettleEdgeMarginFrac = 0.06;
+// Pan-Follows-VFO edge margins, as a fraction of the visible span. Because
+// frequency now maps linearly across contentWidth() (#3482), these are a
+// constant fraction of the panadapter *width* in pixels at every zoom — trigger
+// is the gap between the VFO flag's outer edge and the pan edge at which the pan
+// starts to scroll; settle is where the flag lands after it does. settle >
+// trigger by ~1.5% supplies the hysteresis that stops a held arrow-key tune from
+// re-firing every step. Tightened from 0.05/0.06 so the signal can tune much
+// closer to the edge before the pan shifts (#3482 follow-up); the flag flips
+// inward at the content edge so it never clips the tape at this margin.
+constexpr double kIncrementalTriggerEdgeMarginFrac = 0.02;
+constexpr double kIncrementalSettleEdgeMarginFrac = 0.035;
 constexpr double kRevealComfortEdgeMarginFrac = 0.18;
 constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 

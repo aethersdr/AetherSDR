@@ -12241,8 +12241,11 @@ void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
     const int stripX = specRect.right() - DBM_STRIP_W + 1;
     const QRect strip(stripX, specRect.top(), DBM_STRIP_W, specRect.height());
 
-    // Semi-opaque background
-    p.fillRect(strip, AetherSDR::theme::withAlpha("color.background.0", 220));
+    // Opaque background: since #3482 the FFT trace/waterfall end at the strip's
+    // left edge, so nothing meaningful renders beneath it — a solid fill gives a
+    // crisp right edge instead of letting the bg/grid bleed through and read as
+    // right-side asymmetry against the hard left window border.
+    p.fillRect(strip, AetherSDR::ThemeManager::instance().color("color.background.0"));
 
     // Left border line
     p.setPen(AetherSDR::ThemeManager::instance().color("color.background.2"));
@@ -12354,8 +12357,10 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
     const QRect strip = waterfallTimeScaleRect(wfRect);
     const int stripX = strip.x();
 
-    // Semi-opaque background
-    p.fillRect(strip, AetherSDR::theme::withAlpha("color.background.0", 220));
+    // Opaque background — matches the dBm strip (#3482); the waterfall ends at
+    // the strip edge so a solid fill keeps the right edge crisp and symmetric
+    // with the left window border.
+    p.fillRect(strip, AetherSDR::ThemeManager::instance().color("color.background.0"));
 
     // Left border line
     p.setPen(AetherSDR::ThemeManager::instance().color("color.background.2"));
