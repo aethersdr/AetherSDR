@@ -298,7 +298,7 @@ you:
   decoupling can proceed without new coupling piling up behind it.
 - **The rule.** Each tracked file's baseline row is the exact **set** of
   vendor headers it may include. Adding a vendor `#include` (e.g.
-  `KiwiSdrManager.h`, `RadioConnection.h`, `TunerModel.h`) to a `gui/`,
+  `KiwiSdrManager.h`, `RadioConnection.h`, `StreamStatus.h`) to a `gui/`,
   `core/`, or `models/` file that isn't tracked — or adding a header not
   in a tracked file's set, *including a lateral swap that keeps the count
   flat* (drop `RadioConnection.h`, add `KiwiSdrManager.h`) — fails the

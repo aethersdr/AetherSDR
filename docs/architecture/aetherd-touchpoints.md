@@ -44,7 +44,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/DxccColorProvider.h` | 2 | universal — DXCC worked-status from ADIF log, colors cluster spots by call/freq/mode; radio-agnostic spot/logging feature | unconverted |
 | `core/FirmwareStager.h` | 1 | vendor(flex) — Downloads SmartSDR installers from flexradio.com, extracts .ssdr firmware for 6x00/9600 upload — pure Flex | unconverted |
 | `core/FirmwareUploader.h` | 1 | vendor(flex) — SmartSDR firmware upload: 'file upload' cmd, .ssdr files, Flex TCP ports 4995/42607 — pure Flex protocol | unconverted |
-| `core/FlexControlManager.h` | 2 | vendor(flex) — FlexControl USB knob serial driver (VID 0x2192); Flex ecosystem hardware but client-side input, home=gui shell | unconverted |
+| `core/FlexControlManager.h` | 2 | ui-support — FlexControl USB knob serial driver (VID 0x2192); client-side input surface like RC-28/TMate, not radio-family wire | reclassified (#4089) |
 | `core/FreeDvClient.h` | 4 | universal — FreeDV Reporter spot client (qso.freedv.org); radio-agnostic spotting fed by canonical freq/TX + RADE SNR | unconverted |
 | `core/GpuSelector.h` | 2 | ui-support — GPU enumeration + persisted QRhi render-adapter choice applied at app startup; pure client rendering plumbing | unconverted |
 | `core/HidEncoderManager.h` | 2 | ui-support — USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state | unconverted |
@@ -75,7 +75,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/PanadapterStream.h` | 4 | vendor(flex) — SmartSDR VITA-49 UDP receiver (FlexLib PCCs, DAX/IQ routing, SmartLink WAN reg); emits core-profile data | unconverted |
 | `core/PerfTelemetry.h` | 3 | ui-support — Singleton perf-instrumentation logger for client render/UDP/input timing; diagnostics, not radio state. | unconverted |
 | `core/PeripheralSettings.h` | 3 | ui-support — Client settings blob (AutoReconnect + legacy-key migration) for peripheral devices atop AppSettings; no radio state. | unconverted |
-| `core/PgxlConnection.h` | 2 | vendor(flex) — Direct TCP client (port 9008) for 4O3A Power Genius XL amp telemetry — Flex-ecosystem accessory protocol. | unconverted |
+| `core/PgxlConnection.h` | 2 | peripheral(4o3a) — direct TCP telemetry client (port 9008) for the 4O3A Power Genius XL; standalone accessory transport, not radio wire (amp operate is radio-proxied in RadioModel — see #4094) | reclassified (#4089) |
 | `core/PipeWireAudioBridge.h` | 3 | mixed(flex) — Linux virtual-audio bridge to WSJT-X etc.; audio routing is core, DAX channel model/rates are flex | unconverted |
 | `core/PotaClient.h` | 2 | universal — POTA spot poller (api.pota.app) emitting DxSpot frequency/mode spots; radio-agnostic spot feature, no vendor ties. | unconverted |
 | `core/ProfileTransfer.h` | 1 | vendor(flex) — SmartSDR .ssdr_cfg database import/export over Flex TCP transfer protocol (meta_subset, ports 4995/42607) | unconverted |
@@ -100,7 +100,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/StreamStatus.h` | 1 | vendor(flex) — SmartSDR stream-status parsing: client_handle ownership, DAX RX/TX orphan-stream firmware quirks — pure Flex wire logic | unconverted |
 | `core/SupportBundle.h` | 1 | ui-support — Diagnostics bundle: archives logs/sysinfo and opens email client; client-side support tooling, not radio state | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
-| `core/TgxlConnection.h` | 2 | vendor(flex) — Direct TCP client for 4O3A Tuner Genius XL port-9010 protocol (relay/autotune); Flex-ecosystem accessory. | unconverted |
+| `core/TgxlConnection.h` | 2 | peripheral(4o3a) — direct TCP client (port 9010) for the 4O3A Tuner Genius XL; standalone accessory transport, not radio wire | reclassified (#4089) |
 | `core/ThemeManager.h` | 119 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/TxKeyingMarker.h` | 4 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
 | `core/UlanziDialBackend.h` | 3 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
@@ -125,7 +125,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/tnc/HeardList.h` | 1 | universal — Heard-station list for the packet monitor; radio-agnostic. | unconverted |
 | `core/tnc/KissTncServer.h` | 1 | ui-support — KISS-over-TCP server exposing the TNC to external apps; external integration, needs a home (cf CatPort/TciServer). | unconverted |
 | `core/tnc/TncTerminal.h` | 1 | universal — Packet terminal session model (command/monitor); radio-agnostic operating feature. | unconverted |
-| `models/AntennaGeniusModel.h` | 4 | vendor(flex) — 4O3A Antenna Genius switch client: UDP discovery + SmartSDR-like TCP protocol; Flex-ecosystem accessory | unconverted |
+| `models/AntennaGeniusModel.h` | 4 | peripheral(4o3a) — 4O3A Antenna Genius switch client (own UDP discovery + direct TCP); standalone accessory, not radio wire | reclassified (#4089) |
 | `models/BandDefs.h` | 4 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 7 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 4 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
@@ -146,7 +146,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/SpotModel.h` | 1 | universal — Panadapter spot store (callsign/freq/mode/lifetime/priority) on canonical state; kv ingest is trivially generic | unconverted |
 | `models/TnfModel.h` | 1 | universal — Tracking notch filter state (freq/width/depth/permanent, global enable) — generic DSP notch surface; kv parse is transport detail | unconverted |
 | `models/TransmitModel.h` | 14 | mixed(flex) — TX state model: power/MOX/VOX/CW/filter are core-profile; ATU, DAX, APD, profiles, interlock are Flex. | unconverted |
-| `models/TunerModel.h` | 3 | vendor(flex) — 4o3a TGXL tuner state/commands via SmartSDR 'atu'/'tgxl' TCP verbs + direct port-9010 relay control | unconverted |
+| `models/TunerModel.h` | 3 | mixed(flex) — generic external-tuner model (state) fused with a Flex TGXL radio-relay; core stays, relay splits behind the seam | split pending (#4092) |
 | `models/XvtrPolicy.h` | 5 | mixed(flex) — XVTR policy: transverter list/freq translation is core; waterfall-tile offset + FLEX model power clamps are flex | unconverted |
 
-**Tag legend:** `universal` = core-profile surface every radio family has; `vendor` = FlexRadio/SmartSDR-specific, becomes a namespaced extension; `mixed` = header carries both (split candidates noted); `ui-support` = not radio state at all (settings, theming, app plumbing) — needs a home decision, not a protocol message.
+**Tag legend:** `universal` = core-profile surface every radio family has; `vendor` = FlexRadio/SmartSDR-specific, becomes a namespaced extension (the EB3-gated set); `mixed` = header carries both (split candidates noted); `peripheral(<vendor>)` = a standalone accessory device's own transport/protocol (e.g. 4O3A Tgxl/Pgxl/AntennaGenius) — not the radio, not behind the radio seam; `ui-support` = not radio state at all (settings, theming, app plumbing, input surfaces) — needs a home decision, not a protocol message.

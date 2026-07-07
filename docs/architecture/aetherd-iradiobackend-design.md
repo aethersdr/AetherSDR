@@ -19,12 +19,14 @@ The touchpoint audit
 ([`aetherd-touchpoints.md`](aetherd-touchpoints.md)) tags every gui→engine
 header. Two tag classes define step 2's work:
 
-- **26 `vendor` headers** — SmartSDR/FlexLib/Flex-ecosystem wire code. These
-  move *behind* the seam into `src/core/backends/flex/`; nothing above the
-  seam includes them. The load-bearing ones: `RadioConnection` (SmartSDR TCP
-  text), `PanadapterStream` (VITA-49), `SmartLinkClient`/`WanConnection`
-  (SmartLink WAN), `CommandParser`, `StreamStatus`, `RadioStatusOwnership`,
-  plus the 4O3A/amp/tuner/firmware/waveform/DAX-IQ family.
+- **21 `vendor` headers** — SmartSDR/FlexLib wire code (originally 26; 5 were
+  reclassified as not-radio-wire — the 4O3A Tgxl/Pgxl/AntennaGenius transports →
+  `peripheral(4o3a)`, the FlexControl USB knob → `ui-support`, and `TunerModel` →
+  `mixed(flex)`; see `aetherd-touchpoint-tags.json`). These move *behind* the
+  seam into `src/core/backends/flex/`; nothing above the seam includes them. The
+  load-bearing ones: `RadioConnection` (SmartSDR TCP text), `PanadapterStream`
+  (VITA-49), `SmartLinkClient`/`WanConnection` (SmartLink WAN), `CommandParser`,
+  `StreamStatus`, `RadioStatusOwnership`, plus the firmware/waveform/DAX-IQ family.
 - **16 `mixed` headers** — canonical state fused with Flex specifics. These do
   *not* move; they get **split**: the core-profile part stays as the model the
   UI/protocol sees, the Flex part becomes backend-provided. The hard five are
@@ -191,7 +193,7 @@ the interface has no implementor.
   **ratchet only** first — `check_engine_boundary.py` gains **EB3**, freezing
   today's above-seam vendor coupling as a per-file, shrink-only baseline (no new
   coupling; existing includers decoupled subsystem-by-subsystem, each routed
-  through `IRadioBackend`, driving its baseline to zero). The 26 vendor files
+  through `IRadioBackend`, driving its baseline to zero). The vendor files
   are **not** relocated in this step — EB3 enforces the boundary in place.
   Physical relocation of a header into `src/core/backends/<family>/` happens
   when its last above-seam includer is converted. Adoption guidance lives in
