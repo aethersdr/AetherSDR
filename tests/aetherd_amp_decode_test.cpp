@@ -57,7 +57,8 @@ int main(int argc, char** argv)
         CHECK(*decode(b, "0x1", "PowerGeniusXL", {{"state", "OPERATE"}}, false).operate == true);
         CHECK(*decode(b, "0x1", "PowerGeniusXL", {{"state", "TRANSMIT_A"}}, false).operate == true);
         CHECK(*decode(b, "0x1", "PowerGeniusXL", {{"state", "STANDBY"}}, false).operate == false);
-        CHECK(!decode(b, "0x1", "PowerGeniusXL", {{"ip", "x"}}, false).operate.has_value()); // no state
+        CHECK(!decode(b, "0x1", "PowerGeniusXL", {{"ip", "x"}}, false).operate.has_value());   // no state key
+        CHECK(!decode(b, "0x1", "PowerGeniusXL", {{"state", ""}}, false).operate.has_value()); // bare state= → skipped
     }
 
     // ---- ip only latched when present ----

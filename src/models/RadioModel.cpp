@@ -5304,9 +5304,12 @@ void RadioModel::onStatusReceived(const QString& object,
                 }
                 m_tunerModel.applyStatus(kvs);
             }
-
-            // Power amplifier (PGXL / any non-TGXL amp) → AmpModel.
-            if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, model, kvs, /*removed=*/false);
+            // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
+            // tuner branch: a TGXL status is already routed above and would only
+            // no-op the amp decode — skip it to avoid the per-status AmpDelta copy.
+            else if (m_flexBackend) {
+                m_flexBackend->decodeAmplifierStatus(handle, model, kvs, /*removed=*/false);
+            }
         }
         return;
     }

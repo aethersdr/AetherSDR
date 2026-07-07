@@ -647,8 +647,10 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
             d.ip = kvs.value(QStringLiteral("ip"));
     }
     // Operate/standby from the wire "state": IDLE/OPERATE/TRANSMIT* → on, else off.
-    if (kvs.contains(QStringLiteral("state"))) {
-        const QString state = kvs.value(QStringLiteral("state")).toUpper();
+    // Gate on non-empty VALUE (not just key presence) to match the prior
+    // AmpModel::applyStatus exactly — a bare "state=" must not flip operate.
+    const QString state = kvs.value(QStringLiteral("state")).toUpper();
+    if (!state.isEmpty()) {
         d.operate = (state == QLatin1String("IDLE")
                      || state == QLatin1String("OPERATE")
                      || state.startsWith(QLatin1String("TRANSMIT")));

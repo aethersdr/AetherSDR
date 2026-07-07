@@ -21,7 +21,9 @@ void AmpModel::applyChanges(const AmpDelta& d)
         m_handle = d.handle;
         if (!m_present) {
             m_present = true;
-            if (d.ip) m_ip = *d.ip;
+            // Strict parity with the prior applyStatus (m_ip = kvs.value("ip"),
+            // which blanked to "" when absent) — keeps this a behavior-neutral move.
+            m_ip = d.ip.value_or(QString());
             m_model = *d.detectedModel;
             emit presenceChanged(true);
         }
