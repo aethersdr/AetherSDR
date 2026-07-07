@@ -241,6 +241,9 @@ void MainWindow::wireDiscovery()
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected) return;
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT")) {
+            return;
+        }
         if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()

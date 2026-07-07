@@ -51,7 +51,6 @@ public:
     void appendHistoryRow(const QVector<float>& binsDbm,
                           double centerMhz, double bandwidthMhz,
                           float fallbackDbm);
-    void appendCurrentRowToHistory(double centerMhz, double bandwidthMhz);
     void rebuildVisibleFromHistory(int offsetRows,
                                    double centerMhz, double bandwidthMhz,
                                    float fallbackDbm);
@@ -98,6 +97,7 @@ public:
 
 private:
     bool historyStorageMatchesCapacity() const;
+    void resetHistorySmoothing();
     void rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                  float rangeDb, float zCurve, const PaletteFn& palette,
                  const QColor& bgFill);
@@ -128,6 +128,9 @@ private:
     int m_historyCapacityRows = 0;
     int m_historyWriteRow = 0;            // ring index of newest retained row
     int m_historyRowCount = 0;
+    std::array<float, kCols> m_historyRawPrev1{};
+    std::array<float, kCols> m_historyRawPrev2{};
+    int m_historyRawHistCount = 0;
 
     // Cache + the parameters it was built for (rebuild on any change).
     QImage  m_cache;

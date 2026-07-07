@@ -40,8 +40,8 @@ production; it only exists when you ask for it via an env var.
 cmake --build build --parallel
 
 # 2. Launch the app with the bridge enabled.
-AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
-#   AETHER_AUTOMATION=1 ./build/AetherSDR &                            # Linux/Windows
+AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
+#   AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR &                            # Linux/Windows
 
 # 3. Drive it. The dependency-free probe needs no Qt:
 python3 tools/automation_probe.py ping
@@ -53,6 +53,8 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
+`AETHER_AUTOMATION_NO_AUTOCONNECT=1` suppresses saved-radio autoconnect during
+bridge runs; use the `connect` verb when a test intentionally needs a radio.
 
 KiwiSDR compression can be forced for diagnostic runs by adding
 `AETHER_KIWI_SND_COMP=1` and/or `AETHER_KIWI_WF_COMP=1` at launch. These are
@@ -77,7 +79,7 @@ HIServices are unavailable, before AetherSDR reaches the automation bridge; with
 socket the bridge needs. Launch outside the command sandbox instead:
 
 ```bash
-QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
+QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
 ```
 
 ---
@@ -1168,43 +1170,56 @@ It is RX-only: no radio commands and no transmit keying.
 
 ```json
 → {"cmd":"dss","action":"reset","target":"0","value":"native"}
-← {"ok":true,"panIndex":0,"live":true,"dssHistoryRows":0,...}
+← {"ok":true,"panIndex":0,"live":true,"waterfallRows":96,
+   "centerMhz":14.1,"bandwidthMhz":0.192,"dssHistoryRows":0,...}
 
-→ {"cmd":"dss","action":"inject","target":"0","value":"3 100 100 native"}
-← {"ok":true,"dssHistoryRows":3,"waterfallHistoryRows":3,
-   "dssHistoryRowsAdded":3,"waterfallHistoryRowsAdded":3,
-   "dssVisiblePeakBin":300,...}
+→ {"cmd":"dss","action":"inject","target":"0","value":"99 100 1 native"}
+← {"ok":true,"dssHistoryRows":99,"waterfallHistoryRows":99,
+   "maxHistoryOffsetRows":3,
+   "dssHistoryRowsAdded":99,"waterfallHistoryRowsAdded":99,...}
 
 → {"cmd":"dss","action":"scrollback","target":"0","value":"1"}
-← {"ok":true,"live":false,"historyOffsetRows":1,"dssVisiblePeakBin":200,...}
+← {"ok":true,"live":false,"historyOffsetRows":1,
+   "maxHistoryOffsetRows":3,...}
 
-→ {"cmd":"dss","action":"inject","target":"0","value":"1 420 0 native"}
-← {"ok":true,"live":false,"dssHistoryRows":4,
-   "waterfallHistoryRows":4,"historyOffsetRows":2,
-   "dssHistoryRowsAdded":1,"waterfallHistoryRowsAdded":1,
-   "dssVisiblePeakBin":200,...}
+→ {"cmd":"dss","action":"inject","target":"0","value":"3 420 0 native"}
+← {"ok":true,"live":false,"dssHistoryRows":102,
+   "waterfallHistoryRows":102,"historyOffsetRows":4,
+   "dssHistoryRowsAdded":3,"waterfallHistoryRowsAdded":3,
+   ...}
 
 → {"cmd":"dss","action":"scrollback","target":"0","value":"0"}
 ← {"ok":true,"live":false,"historyOffsetRows":0,"dssVisiblePeakBin":420,...}
 ```
 
+This example assumes the reset response reports `waterfallRows:96`; for a
+different widget height, inject at least `waterfallRows + 3` rows before asking
+for `scrollback 1`.
+
 Actions:
 
 | action | value | effect |
 |---|---|---|
-| `snapshot` | optional pan target | Read `live`, waterfall/DSS history row counts, visible DSS row count, and the current front-row peak bin. |
+| `snapshot` | optional pan target | Read `live`, current center/bandwidth MHz, waterfall/DSS history row counts, visible DSS row count, and the current front-row peak bin. |
 | `reset` | `native` or `kiwi` | Clear the selected stream's current/history rows and make that stream active for subsequent injection. |
-| `inject` | `<count> <firstPeakBin> <stepBin> [native\|kiwi]` | Add synthetic rows with one strong peak per row. `count` is capped at the retained waterfall history capacity. Native injection adds one fallback-style waterfall/DSS row per input row; Kiwi injection drives `updateKiwiSdrWaterfallRow()`. |
+| `inject` | `<count> <firstPeakBin> <stepBin> [native\|kiwi [rowLowMhz rowHighMhz]]` | Add synthetic rows with one strong peak per row. `count` is rejected if it exceeds the retained waterfall history capacity. Native injection adds one fallback-style waterfall/DSS row per input row; Kiwi injection drives `updateKiwiSdrWaterfallRow()`. Kiwi frame arguments override the source row's frequency span, so tests can cover partial-overlap rows. |
 | `scrollback` | `<offsetRows>` | Enter waterfall history mode and rebuild the 3D surface using the same offset. |
 | `live` | none | Return to live mode. |
 
-The paused/live-history assertion is: enter `scrollback`, inject another row,
+The paused/live-history assertion is: enter `scrollback`, inject more rows,
 confirm both `waterfallHistoryRowsAdded` and `dssHistoryRowsAdded` match the
 injected count while `historyOffsetRows` advances and `dssVisiblePeakBin` stays
 on the same paused historical row, then set `scrollback 0` and confirm the newly
 injected peak becomes visible. The total row counts are still returned, but the
 `*RowsAdded` fields are the deterministic assertion surface if live data is also
 arriving between bridge requests.
+
+To reproduce a low-coverage Kiwi row, read `centerMhz` and `bandwidthMhz` from
+`dss snapshot`, then inject a Kiwi source row whose span overlaps less than 5%
+of the current view. For example, with `viewHigh = centerMhz + bandwidthMhz/2`,
+`dss inject 3 120 0 kiwi <viewHigh - 0.03*bandwidthMhz> <viewHigh + 0.97*bandwidthMhz>`
+keeps row counts aligned while proving the DSS history stores the partial row
+content instead of a flat fallback row.
 
 ### `whoami`
 Identify **this** bridge instance among concurrent bridges (each app process gets

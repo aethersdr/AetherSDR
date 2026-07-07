@@ -34,6 +34,13 @@ QVector<float> rowWithPeak(int bin)
     return bins;
 }
 
+void appendStableHistoryPeak(DssRenderer& renderer, int bin, int count = 3)
+{
+    for (int i = 0; i < count; ++i) {
+        renderer.appendHistoryRow(rowWithPeak(bin), 14.0, 1.0, -200.0f);
+    }
+}
+
 int testFrequencyReprojection()
 {
     DssRenderer renderer;
@@ -67,12 +74,12 @@ int testFrequencyReprojection()
 int testRetainedHistoryOffset()
 {
     DssRenderer renderer;
-    renderer.setHistoryCapacityRows(8);
-    renderer.appendHistoryRow(rowWithPeak(100), 14.0, 1.0, -200.0f);
-    renderer.appendHistoryRow(rowWithPeak(220), 14.0, 1.0, -200.0f);
-    renderer.appendHistoryRow(rowWithPeak(340), 14.0, 1.0, -200.0f);
+    renderer.setHistoryCapacityRows(12);
+    appendStableHistoryPeak(renderer, 100);
+    appendStableHistoryPeak(renderer, 220);
+    appendStableHistoryPeak(renderer, 340);
 
-    if (renderer.historyCapacityRows() != 8 || renderer.historyRowCount() != 3) {
+    if (renderer.historyCapacityRows() != 12 || renderer.historyRowCount() != 9) {
         return fail("retained DSS history count/capacity is wrong");
     }
 
@@ -81,9 +88,9 @@ int testRetainedHistoryOffset()
         return fail("offset 0 should rebuild the newest retained DSS row");
     }
 
-    renderer.rebuildVisibleFromHistory(1, 14.0, 1.0, -200.0f);
+    renderer.rebuildVisibleFromHistory(3, 14.0, 1.0, -200.0f);
     if (std::abs(strongestBin(renderer) - 220) > 2) {
-        return fail("offset 1 should scroll DSS back with the waterfall");
+        return fail("offset 3 should scroll DSS back with the waterfall");
     }
 
     return 0;
@@ -92,16 +99,16 @@ int testRetainedHistoryOffset()
 int testRetainedHistoryCapacity()
 {
     DssRenderer renderer;
-    renderer.setHistoryCapacityRows(2);
-    renderer.appendHistoryRow(rowWithPeak(80), 14.0, 1.0, -200.0f);
-    renderer.appendHistoryRow(rowWithPeak(180), 14.0, 1.0, -200.0f);
-    renderer.appendHistoryRow(rowWithPeak(280), 14.0, 1.0, -200.0f);
+    renderer.setHistoryCapacityRows(6);
+    appendStableHistoryPeak(renderer, 80);
+    appendStableHistoryPeak(renderer, 180);
+    appendStableHistoryPeak(renderer, 280);
 
-    if (renderer.historyRowCount() != 2) {
+    if (renderer.historyRowCount() != 6) {
         return fail("retained DSS history must stay bounded by capacity");
     }
 
-    renderer.rebuildVisibleFromHistory(1, 14.0, 1.0, -200.0f);
+    renderer.rebuildVisibleFromHistory(3, 14.0, 1.0, -200.0f);
     if (std::abs(strongestBin(renderer) - 180) > 2) {
         return fail("retained DSS history should evict rows beyond capacity");
     }
@@ -152,8 +159,7 @@ int testMovedFromHistoryCapacityRebuild()
     (void)saved;
 
     renderer.setHistoryCapacityRows(4);
-    renderer.pushRow(rowWithPeak(128));
-    renderer.appendCurrentRowToHistory(14.0, 1.0);
+    renderer.appendHistoryRow(rowWithPeak(128), 14.0, 1.0, -200.0f);
 
     if (renderer.historyCapacityRows() != 4 || renderer.historyRowCount() != 1) {
         return fail("moved-from DSS history storage should rebuild at the same capacity");

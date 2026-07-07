@@ -112,6 +112,7 @@ def main():
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"
                "  automation_probe.py dss inject 0 3 100 100 native\n"
+               "  automation_probe.py dss inject 0 3 100 0 kiwi 14.000 14.010\n"
                "  automation_probe.py panmessage add 0 kiwi 0 'Waiting|Queued'\n"
                "  automation_probe.py panmessage add 0 tx 10000 tone=warning 'Transmit disabled|TX blocked'",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -130,7 +131,8 @@ def main():
                          "connect <list|show|hide|local|ip|wait> [args] | "
                          "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
                          "dss <snapshot|reset|live> [pan] [args] | "
-                         "dss inject [pan] <count> <firstPeakBin> <stepBin> [native|kiwi] | "
+                         "dss inject [pan] <count> <firstPeakBin> <stepBin> "
+                         "[native|kiwi [rowLowMhz rowHighMhz]] | "
                          "dss scrollback [pan] <offsetRows> | "
                          "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
@@ -232,8 +234,11 @@ def main():
             if action == "inject":
                 stream_names = {"native", "flex", "kiwi", "kiwisdr"}
                 if len(dss_args) < 3:
-                    sys.exit("error: dss inject needs [pan] <count> <firstPeakBin> <stepBin> [native|kiwi]")
-                if len(dss_args) == 3 or (len(dss_args) == 4 and dss_args[3].lower() in stream_names):
+                    sys.exit("error: dss inject needs [pan] <count> <firstPeakBin> <stepBin> "
+                             "[native|kiwi [rowLowMhz rowHighMhz]]")
+                if (len(dss_args) == 3
+                        or (len(dss_args) == 4 and dss_args[3].lower() in stream_names)
+                        or (len(dss_args) == 6 and dss_args[3].lower() in stream_names)):
                     req["value"] = " ".join(dss_args)
                 else:
                     req["target"] = dss_args[0]

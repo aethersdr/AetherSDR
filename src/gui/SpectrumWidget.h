@@ -133,7 +133,9 @@ public:
     Q_INVOKABLE QVariantMap automationDssInjectRows(int count,
                                                     int firstPeakBin,
                                                     int stepBin,
-                                                    bool kiwiStream);
+                                                    bool kiwiStream,
+                                                    double rowLowMhz = -1.0,
+                                                    double rowHighMhz = -1.0);
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
     void setConnectionAnimationVisible(bool on, const QString& label = {});
@@ -814,7 +816,11 @@ private:
     void appendDssHistoryRow(const QVector<float>& binsDbm,
                              double frameCenterMhz = -1.0,
                              double frameBandwidthMhz = -1.0);
-    void appendLatestDssRowToHistory(double frameCenterMhz = -1.0,
+    void appendDssWaterfallRow(const QVector<float>& binsDbm,
+                               double frameCenterMhz = -1.0,
+                               double frameBandwidthMhz = -1.0,
+                               bool updateLiveSurface = true);
+    void appendLatestDssWaterfallRow(double frameCenterMhz = -1.0,
                                      double frameBandwidthMhz = -1.0);
     float dssHistoryFallbackDbm() const;
     void appendVisibleRow(const QRgb* rowData);

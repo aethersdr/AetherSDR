@@ -4853,11 +4853,40 @@ QJsonObject AutomationServer::doDss(const QString& action,
                                     const QString& target,
                                     const QString& value) const
 {
+    const QString lower = action.trimmed().toLower();
     QStringList args = value.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    bool okIndex = false;
-    int panIndex = target.isEmpty() ? 0 : target.toInt(&okIndex);
-    if (!target.isEmpty() && !okIndex) {
+    QString panTarget = target;
+
+    const auto isStreamToken = [](const QString& text) {
+        const QString s = text.trimmed().toLower();
+        return s == QLatin1String("native")
+            || s == QLatin1String("flex")
+            || s == QLatin1String("kiwi")
+            || s == QLatin1String("kiwisdr");
+    };
+
+    bool targetIsInt = false;
+    if (!target.isEmpty()) {
+        (void)target.toInt(&targetIsInt);
+    }
+    if (targetIsInt && lower == QLatin1String("inject")
+        && (args.size() == 2
+            || (args.size() == 3 && isStreamToken(args.value(2)))
+            || (args.size() == 5 && isStreamToken(args.value(2))))) {
         args.prepend(target);
+        panTarget.clear();
+    } else if (targetIsInt
+               && (lower == QLatin1String("scrollback")
+                   || lower == QLatin1String("pause"))
+               && args.isEmpty()) {
+        args.prepend(target);
+        panTarget.clear();
+    }
+
+    bool okIndex = false;
+    int panIndex = panTarget.isEmpty() ? 0 : panTarget.toInt(&okIndex);
+    if (!panTarget.isEmpty() && !okIndex) {
+        args.prepend(panTarget);
         panIndex = 0;
     }
 
@@ -4888,7 +4917,6 @@ QJsonObject AutomationServer::doDss(const QString& action,
     };
 
     QVariantMap out;
-    const QString lower = action.trimmed().toLower();
     if (lower == QLatin1String("snapshot") || lower == QLatin1String("status")) {
         if (!QMetaObject::invokeMethod(spectrum, "automationDssSnapshot",
                                        Qt::DirectConnection,
@@ -4910,7 +4938,12 @@ QJsonObject AutomationServer::doDss(const QString& action,
     } else if (lower == QLatin1String("inject")) {
         if (args.size() < 3) {
             return err(QStringLiteral(
-                "dss inject requires <pan> <count> <firstPeakBin> <stepBin> [native|kiwi]"));
+                "dss inject requires [pan] <count> <firstPeakBin> <stepBin> "
+                "[native|kiwi [rowLowMhz rowHighMhz]]"));
+        }
+        if (args.size() == 5 || args.size() > 6) {
+            return err(QStringLiteral(
+                "dss inject frame override requires stream plus rowLowMhz rowHighMhz"));
         }
         bool okCount = false;
         bool okPeak = false;
@@ -4926,13 +4959,30 @@ QJsonObject AutomationServer::doDss(const QString& action,
         if (!okStream) {
             return err(QStringLiteral("dss inject stream must be native|kiwi"));
         }
+        double rowLowMhz = -1.0;
+        double rowHighMhz = -1.0;
+        if (args.size() == 6) {
+            if (!kiwiStream) {
+                return err(QStringLiteral("dss inject frame override is only valid for kiwi"));
+            }
+            bool okLow = false;
+            bool okHigh = false;
+            rowLowMhz = args.value(4).toDouble(&okLow);
+            rowHighMhz = args.value(5).toDouble(&okHigh);
+            if (!okLow || !okHigh || rowHighMhz <= rowLowMhz) {
+                return err(QStringLiteral(
+                    "dss inject rowLowMhz/rowHighMhz must be ascending numbers"));
+            }
+        }
         if (!QMetaObject::invokeMethod(spectrum, "automationDssInjectRows",
                                        Qt::DirectConnection,
                                        Q_RETURN_ARG(QVariantMap, out),
                                        Q_ARG(int, count),
                                        Q_ARG(int, firstPeakBin),
                                        Q_ARG(int, stepBin),
-                                       Q_ARG(bool, kiwiStream))) {
+                                       Q_ARG(bool, kiwiStream),
+                                       Q_ARG(double, rowLowMhz),
+                                       Q_ARG(double, rowHighMhz))) {
             return err(QStringLiteral("target pan does not expose automationDssInjectRows"));
         }
     } else if (lower == QLatin1String("scrollback")
