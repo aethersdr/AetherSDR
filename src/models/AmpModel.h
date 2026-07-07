@@ -4,6 +4,8 @@
 #include <QMap>
 #include <QString>
 
+#include "core/backends/AmpDelta.h"
+
 namespace AetherSDR {
 
 // State model for a power amplifier the radio reports through its "amplifier"
@@ -30,13 +32,10 @@ public:
     QString ip()        const { return m_ip; }      // for the direct PGXL connection
     QString modelName() const { return m_model; }   // e.g. "PowerGeniusXL"
 
-    // Apply a decoded (non-removal) "amplifier <handle> model=… state=… …"
-    // status. `model` is the wire "model" key; a non-empty, non-TGXL model marks
-    // a power amp present. Present-only telemetry rides on telemetryUpdated.
-    void applyStatus(const QString& handle, const QString& model,
-                     const QMap<QString, QString>& kvs);
-    // Handle an "amplifier <handle> removed" — clears state if it's our amp.
-    void handleRemoval(const QString& handle);
+    // Apply a normalized amplifier delta from the backend
+    // (IRadioBackend::amplifierChanged, decoded by FlexBackend). Owns the state
+    // machine: presence latch, operate change-gating, handle matching, removal.
+    void applyChanges(const AmpDelta& delta);
     // Bulk clear on radio disconnect/teardown (matches RadioModel's prior reset).
     void reset();
 

@@ -123,6 +123,13 @@ public:
     void decodeInterlockStatus(const QMap<QString, QString>& kvs);
     void decodeAtuStatus(const QMap<QString, QString>& kvs);
     void decodeApdStatus(const QMap<QString, QString>& kvs);
+    // Translate a SmartSDR "amplifier <handle> …" status into a typed AmpDelta
+    // and emit amplifierChanged (aetherd 2.4 — AmpModel decode split, #4094).
+    // `model` is the wire "model" key (TunerGeniusXL routes to the tuner, not
+    // here); `removed` marks an "amplifier <handle> removed". Stateless — the
+    // presence latch / operate change-gating live in AmpModel::applyChanges.
+    void decodeAmplifierStatus(const QString& handle, const QString& model,
+                               const QMap<QString, QString>& kvs, bool removed);
     void decodeApdSamplerStatus(const QMap<QString, QString>& kvs);
     // Decode the Flex GPS-status line ("gps …", '#'-separated key=value tokens)
     // into a present-only GpsDelta and emit gpsChanged (aetherd RFC 2.3 —

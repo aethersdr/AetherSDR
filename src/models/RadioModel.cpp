@@ -406,6 +406,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<GpsDelta>();
     qRegisterMetaType<MemoryDelta>();
     qRegisterMetaType<ProfileDelta>();
+    qRegisterMetaType<AmpDelta>();
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
@@ -548,6 +549,10 @@ RadioModel::RadioModel(QObject* parent)
     // handlers (main-thread AutoConnection → DirectConnection).
     connect(m_backend.get(), &IRadioBackend::transmitChanged, this,
             [this](const TransmitDelta& delta) { m_transmitModel.applyChanges(delta); });
+
+    // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
+    connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
+            [this](const AmpDelta& delta) { m_amplifier.applyChanges(delta); });
 
     // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
     // backend drives RadioModel's own state via applyRadioChanges.
@@ -5269,7 +5274,7 @@ void RadioModel::onStatusReceived(const QString& object,
             qCDebug(lcProtocol) << "RadioModel: amplifier removed (bare) handle=" << handle;
             if (handle == m_tunerModel.handle())
                 m_tunerModel.setHandle({});
-            m_amplifier.handleRemoval(handle);
+            if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
             return;
         }
         const auto m = ampRe.match(object);
@@ -5282,7 +5287,7 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("removed")) {
                 if (handle == m_tunerModel.handle())
                     m_tunerModel.setHandle({});
-                m_amplifier.handleRemoval(handle);
+                if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
                 return;
             }
 
@@ -5301,7 +5306,7 @@ void RadioModel::onStatusReceived(const QString& object,
             }
 
             // Power amplifier (PGXL / any non-TGXL amp) → AmpModel.
-            m_amplifier.applyStatus(handle, model, kvs);
+            if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, model, kvs, /*removed=*/false);
         }
         return;
     }

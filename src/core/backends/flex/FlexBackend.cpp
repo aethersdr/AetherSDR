@@ -625,6 +625,38 @@ void FlexBackend::decodeAtuStatus(const QMap<QString, QString>& kvs)
     emit transmitChanged(d);
 }
 
+void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& model,
+                                        const QMap<QString, QString>& kvs, bool removed)
+{
+    // Stateless translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
+    // (#4094). The presence latch, operate change-gating, and handle matching are
+    // the model's job (AmpModel::applyChanges) — this only reports what the wire
+    // said. Command/encode is not here (stays AmpModel::commandReady, step 3).
+    AmpDelta d;
+    d.handle = handle;
+    if (removed) {
+        d.removed = true;
+        emit amplifierChanged(d);
+        return;
+    }
+    // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
+    // the tuner and routes to TunerModel, not here.
+    if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
+        d.detectedModel = model;
+        if (kvs.contains(QStringLiteral("ip")))
+            d.ip = kvs.value(QStringLiteral("ip"));
+    }
+    // Operate/standby from the wire "state": IDLE/OPERATE/TRANSMIT* → on, else off.
+    if (kvs.contains(QStringLiteral("state"))) {
+        const QString state = kvs.value(QStringLiteral("state")).toUpper();
+        d.operate = (state == QLatin1String("IDLE")
+                     || state == QLatin1String("OPERATE")
+                     || state.startsWith(QLatin1String("TRANSMIT")));
+    }
+    d.telemetry = kvs;
+    emit amplifierChanged(d);
+}
+
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
 {
     TransmitDelta d;
