@@ -16,6 +16,7 @@
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
+#include "core/backends/TunerDelta.h"
 
 namespace AetherSDR {
 
@@ -131,6 +132,12 @@ signals:
     // "amplifier" wire and AmpModel applies the state machine. Command/encode
     // stays AmpModel::commandReady until the seam gains an encode path (step 3).
     void amplifierChanged(const AmpDelta& delta);
+
+    // Normalized antenna-tuner status delta (aetherd 2.4 — TunerModel decode
+    // split, #4092). Typed + present-only; the backend translates the SmartSDR
+    // "atu"/"amplifier"(TunerGeniusXL) wire, TunerModel applies the change-gated
+    // state. Command/encode stays TunerModel::commandReady until step 3.
+    void tunerChanged(const TunerDelta& delta);
 
     // Normalized radio-global status delta (aetherd RFC 2.3 — RadioModel
     // residual). Typed + compiler-checked; the backend populates only the fields

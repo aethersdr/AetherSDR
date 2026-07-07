@@ -407,6 +407,7 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<MemoryDelta>();
     qRegisterMetaType<ProfileDelta>();
     qRegisterMetaType<AmpDelta>();
+    qRegisterMetaType<TunerDelta>();
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
@@ -553,6 +554,10 @@ RadioModel::RadioModel(QObject* parent)
     // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
     connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
             [this](const AmpDelta& delta) { m_amplifier.applyChanges(delta); });
+
+    // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
+    connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
+            [this](const TunerDelta& delta) { m_tunerModel.applyChanges(delta); });
 
     // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
     // backend drives RadioModel's own state via applyRadioChanges.
@@ -5222,9 +5227,9 @@ void RadioModel::onStatusReceived(const QString& object,
         const auto m = atuRe.match(object);
         if (m.hasMatch() && m_tunerModel.handle().isEmpty())
             m_tunerModel.setHandle(m.captured(1));
-        if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);
-        if (m_tunerModel.isPresent())
-            m_tunerModel.applyStatus(kvs);
+        if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);   // radio's own ATU → TransmitModel
+        if (m_tunerModel.isPresent() && m_flexBackend)
+            m_flexBackend->decodeTunerStatus(kvs);                // external TGXL → TunerModel (#4092)
         return;
     }
 
@@ -5302,7 +5307,7 @@ void RadioModel::onStatusReceived(const QString& object,
                     m_tunerModel.setHandle(handle);
                     m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
                 }
-                m_tunerModel.applyStatus(kvs);
+                if (m_flexBackend) m_flexBackend->decodeTunerStatus(kvs);   // #4092
             }
             // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
             // tuner branch: a TGXL status is already routed above and would only

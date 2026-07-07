@@ -659,6 +659,37 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
     emit amplifierChanged(d);
 }
 
+void FlexBackend::decodeTunerStatus(const QMap<QString, QString>& kvs)
+{
+    // Present-only, strict parity with the prior TunerModel::applyStatus: bools
+    // are "1"-equality, ints are unguarded toInt() (matching val.toInt()), text
+    // is verbatim. The change-gating / edge signals live in TunerModel::applyChanges.
+    TunerDelta d;
+    if (kvs.contains(QStringLiteral("serial_num")))
+        d.serialNum = kvs.value(QStringLiteral("serial_num"));
+    if (kvs.contains(QStringLiteral("model")))
+        d.model = kvs.value(QStringLiteral("model"));
+    if (kvs.contains(QStringLiteral("ip")))
+        d.ip = kvs.value(QStringLiteral("ip"));
+    if (kvs.contains(QStringLiteral("operate")))
+        d.operate = (kvs.value(QStringLiteral("operate")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("bypass")))
+        d.bypass = (kvs.value(QStringLiteral("bypass")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("tuning")))
+        d.tuning = (kvs.value(QStringLiteral("tuning")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("relayC1")))
+        d.relayC1 = kvs.value(QStringLiteral("relayC1")).toInt();
+    if (kvs.contains(QStringLiteral("relayC2")))
+        d.relayC2 = kvs.value(QStringLiteral("relayC2")).toInt();
+    if (kvs.contains(QStringLiteral("relayL")))
+        d.relayL = kvs.value(QStringLiteral("relayL")).toInt();
+    if (kvs.contains(QStringLiteral("antA")))
+        d.antennaA = kvs.value(QStringLiteral("antA")).toInt();
+    if (kvs.contains(QStringLiteral("one_by_three")))
+        d.oneByThree = (kvs.value(QStringLiteral("one_by_three")) == QLatin1String("1"));
+    emit tunerChanged(d);
+}
+
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
 {
     TransmitDelta d;
