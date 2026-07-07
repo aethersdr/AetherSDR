@@ -1230,15 +1230,27 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
             auto* s = activeSlice();
-            if (s) m_radioModel.sendCommand(
-                QString("slice set %1 band_zoom=1").arg(s->sliceId()));
+            if (!s) return;
+            const QString panId = !s->panId().isEmpty()
+                ? s->panId()
+                : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+            if (panId.isEmpty()) return;
+            m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
+            m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
+                .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
         });
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
             auto* s = activeSlice();
-            if (s) m_radioModel.sendCommand(
-                QString("slice set %1 segment_zoom=1").arg(s->sliceId()));
+            if (!s) return;
+            const QString panId = !s->panId().isEmpty()
+                ? s->panId()
+                : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+            if (panId.isEmpty()) return;
+            m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
+            m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
+                .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
         });
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
         QKeySequence(Qt::Key_Equal), [zoomActivePanadapter]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
