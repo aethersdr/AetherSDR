@@ -652,6 +652,13 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_amplifier, &AmpModel::commandReady, this, [this](const QString& cmd){
         sendCmd(cmd);
     });
+    // Protocol-log breadcrumb on amp detection, symmetric with the "amplifier
+    // removed" log — kept here so AmpModel stays logging-category-free. #4099.
+    connect(&m_amplifier, &AmpModel::presenceChanged, this, [this](bool present){
+        if (present)
+            qCDebug(lcProtocol) << "RadioModel: power amplifier detected, model="
+                                << m_amplifier.modelName() << "ip=" << m_amplifier.ip();
+    });
 
     m_transmitModel.setPttPreflight([this](TransmitModel::PttSource source) {
         m_pendingTransmitPreflightSource = source;
