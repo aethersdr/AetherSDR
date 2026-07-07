@@ -2658,9 +2658,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         pushSliceFrequencyToOverlays(target, sliceFreqMhz);
         target->setFrequency(sliceFreqMhz);
     });
-    // Pan Follow ("Pan Lock") stands down for the whole duration of a slice drag
-    // so it doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
-    // recenters; on release it recenters once so Pan Lock re-asserts. (user-reported)
+    // Track slice-drag state so drag-sensitive logic can stand down while the
+    // drag owns the pan center; on release, replay the final slice frequency to
+    // the overlays and hold the echo briefly to absorb the radio's status echo.
     connect(sw, &SpectrumWidget::sliceDragActiveChanged, this, [this](bool active) {
         m_sliceDragInProgress = active;
         if (active) {
@@ -2677,7 +2677,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 }
                 m_sliceDragEchoHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 350;
             }
-            recenterPanFollowOnSlice0();   // re-assert Pan Lock on release (self-guards if off)
         }
     });
 
