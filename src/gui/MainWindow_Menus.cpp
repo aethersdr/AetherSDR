@@ -1120,10 +1120,13 @@ void MainWindow::buildMenuBar()
     helpMenu->addSeparator();
 
     // ── Community & feedback ──────────────────────────────────────────────
-    // Outward-facing links: the website, feature ideas, bug reports, and how
-    // to contribute back.
+    // Outward-facing links: the website, donations, feature ideas, bug
+    // reports, and how to contribute back.
     helpMenu->addAction("AetherSDR Website", this, []() {
         QDesktopServices::openUrl(QUrl("https://www.aethersdr.com"));
+    });
+    helpMenu->addAction("Donate to AetherSDR", this, []() {
+        QDesktopServices::openUrl(QUrl("https://opencollective.com/aethersdr"));
     });
     helpMenu->addAction(QString::fromUtf8("Submit your Idea... \xF0\x9F\x92\xA1"),
                         this, [this]() {
