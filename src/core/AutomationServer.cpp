@@ -2082,6 +2082,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("window")) {
             action = tok(1);  // maximize | restore | minimize | fullscreen
             target = tok(2);  // optional window target
+        } else if (cmd == QLatin1String("shortcut")) {
+            target = tok(1);  // shortcut/MIDI action id → "shortcut band_zoom"
         } else if (cmd == QLatin1String("menu")) {
             action = tok(1);  // list | open
             QStringList rest;
@@ -2281,6 +2283,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         return doResize(value, target);
     if (cmd == QLatin1String("window"))
         return doWindow(action, target);
+    if (cmd == QLatin1String("shortcut"))
+        return doShortcut(target.isEmpty() ? id : target);
     if (cmd == QLatin1String("menu"))
         return doMenu(action.isEmpty() ? QStringLiteral("list") : action, value);
     if (cmd == QLatin1String("whoami"))
@@ -4176,6 +4180,55 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
         {QStringLiteral("windowState"), QLatin1String(ws)},
         {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("w"), win->width()},
                                                  {QStringLiteral("h"), win->height()}}},
+    };
+}
+
+// ── Fire a ShortcutManager action by id (MIDI/shortcut path) ────────────────
+// MIDI controller mappings dispatch by calling the registered ShortcutManager
+// action's handler (fireShortcut in MainWindow_Controllers.cpp). Actions with no
+// default key sequence and no menu entry — Band Zoom, Segment Zoom, and every
+// other MIDI-only trigger — are otherwise unreachable by the bridge, so this
+// verb exercises exactly that path. The handler runs synchronously; the zoom
+// handlers only sendCommand(), so no nested event loop (unlike menu triggers).
+QJsonObject AutomationServer::doShortcut(const QString& id) const
+{
+    if (id.isEmpty())
+        return err(QStringLiteral("shortcut requires an action id, e.g. 'band_zoom'"));
+
+    // TX-safety: the handful of shortcut ids that key the transmitter stay behind
+    // the same AETHER_AUTOMATION_ALLOW_TX gate as the keying verbs.
+    static const QSet<QString> kTxKeyingShortcuts = {
+        QStringLiteral("mox_toggle"),
+        QStringLiteral("tune_toggle"),
+        QStringLiteral("two_tone_tune"),
+    };
+    if (kTxKeyingShortcuts.contains(id)
+        && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-keying shortcut" << id;
+        return err(QStringLiteral("blocked: '") + id
+                   + QStringLiteral("' is a transmit-keying shortcut (TX-safety guard). "
+                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    }
+
+    QWidget* mw = primaryTopLevelWindow();
+    if (!mw)
+        return err(QStringLiteral("no main window to dispatch shortcut"));
+
+    bool fired = false;
+    const bool invoked = QMetaObject::invokeMethod(
+        mw, "fireShortcutAction", Qt::DirectConnection,
+        Q_RETURN_ARG(bool, fired), Q_ARG(QString, id));
+    if (!invoked)
+        return err(QStringLiteral("fireShortcutAction not invokable on main window"));
+    if (!fired)
+        return err(QStringLiteral("unknown shortcut action id: ") + id);
+
+    qCInfo(lcAutomation).noquote() << "shortcut fired:" << id;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("shortcut"), id},
+        {QStringLiteral("fired"), true},
     };
 }
 

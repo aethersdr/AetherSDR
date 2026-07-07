@@ -1293,5 +1293,20 @@ void MainWindow::registerShortcutActions()
     });
 }
 
+bool MainWindow::fireShortcutAction(const QString& id)
+{
+    // Mirrors the MIDI dispatch path (fireShortcut in MainWindow_Controllers.cpp):
+    // look up the registered action and run its handler directly. Actions with
+    // no key sequence and no menu entry — e.g. Band Zoom / Segment Zoom — are
+    // only reachable this way, so this is how the bridge exercises them.
+    if (auto* a = m_shortcutManager.action(id)) {
+        if (a->handler) {
+            a->handler();
+            return true;
+        }
+    }
+    return false;
+}
+
 
 } // namespace AetherSDR

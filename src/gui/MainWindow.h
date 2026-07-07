@@ -191,6 +191,12 @@ public:
     QsoRecorder* qsoRecorder() const { return m_qsoRecorder; }  // automation bridge
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
+    // Fire a registered ShortcutManager action by id — the exact path a MIDI
+    // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
+    // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
+    // that carry no default key sequence and no menu entry. Returns true if the
+    // action id existed and its handler ran.
+    Q_INVOKABLE bool fireShortcutAction(const QString& id);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;

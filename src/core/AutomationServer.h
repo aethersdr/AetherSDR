@@ -414,6 +414,10 @@ private:
     // window's state (resize only ever set explicit geometry, so an un-maximize
     // was unverifiable). dumpTree now also carries `windowState`. (#3918)
     QJsonObject doWindow(const QString& action, const QString& target) const;
+    // Fire a ShortcutManager action by id — the MIDI-controller dispatch path —
+    // for actions with no key sequence and no menu entry (Band Zoom, Segment
+    // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
+    QJsonObject doShortcut(const QString& id) const;
     // Resolve the top-level window a window-scoped verb (resize/window) acts on:
     // the target's window() if given, else the QMainWindow (or first visible real
     // top-level). Shared by doResize and doWindow.
