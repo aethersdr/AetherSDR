@@ -270,17 +270,6 @@ public:
     // Set the current demod mode (for zoom centering behavior).
     void setMode(const QString& mode) { m_mode = mode; }
 
-    // Lean render mode (#3283): skip the wallpaper layer (render an opaque
-    // single layer), drop the translucent FFT fill, and cap the spectrum and
-    // waterfall data-driven repaints to ~30 Hz (kLeanFrameMs = 33). The cap is
-    // applied via leanCappedUpdate() only on the two high-frequency entry
-    // points (updateSpectrum, updateWaterfallRow); interactive paths (cursor
-    // moves, marker drags, etc.) keep their immediate update() calls so input
-    // feels snappy. Reversible — no persisted state is destroyed.
-    void setLeanMode(bool on);
-    bool leanMode() const { return m_leanMode; }
-
-
     // Access the floating overlay menu (for wiring signals).
     SpectrumOverlayMenu* overlayMenu() const { return m_overlayMenu; }
 
@@ -1234,15 +1223,8 @@ private:
     FilterEdge m_draggingFilter{FilterEdge::None};
     int m_filterDragStartX{0};      // pixel X at grab time (#764)
     int m_filterDragStartHz{0};     // filter edge Hz at grab time (#764)
-    // Lean render mode state (#3283).
-    bool m_leanMode{false};
-    QElapsedTimer m_leanRepaintClock;       // data-repaint coalescing clock
-    // Each panadapter present forces a full-window backing-store→GPU texture
-    // re-upload (the dominant pooled cost on large/5K windows — #3283), so the
-    // present rate ~= the flush rate. 33 ms (~30 Hz) roughly halves that upload
-    // load vs 60 Hz while staying visually smooth for a low-overhead mode.
-    static constexpr int kLeanFrameMs = 33;
-    // Normal-mode coalescing window: FFT frames and waterfall rows arrive as
+    QElapsedTimer m_presentCoalesceClock;   // data-repaint coalescing clock
+    // Coalescing window: FFT frames and waterfall rows arrive as
     // separate UDP events, so without coalescing a narrow pan schedules up to
     // ~56 window flushes/s (30 fps FFT + 26 rows/s WF) — over the display's
     // 60 Hz budget once WAVE/meters add theirs, which starves the swapchain
@@ -1251,7 +1233,7 @@ private:
     // fires at the slot edge) while capping flushes at ~60/s.
     static constexpr int kPresentCoalesceMs = 16;
     bool m_presentPending{false};           // trailing update scheduled
-    void leanCappedUpdate();                // update(), coalesced / lean-capped
+    void coalescedUpdate();                 // update(), coalesced into one present per slot
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)

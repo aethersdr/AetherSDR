@@ -43,7 +43,6 @@
 #endif
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
-#include "MeterSmoother.h"  // global lean-mode meter repaint throttle (#3283)
 #include "AppletPanel.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
@@ -991,16 +990,6 @@ MainWindow::MainWindow(QWidget* parent)
     // Audio worker thread (#502) — AudioEngine runs on its own thread so
     // audio processing never competes with paintEvent for main thread CPU.
     m_audioThread = new QThread(this);
-    // Lean render mode (#3283): read persisted state early so panadapters
-    // created during startup seed their Lean button/widget correctly, then
-    // apply once after construction to cover VFOs + the WAVE applet.
-    // Persistence is the nested "Display" blob (Principle V); the legacy
-    // flat "LeanMode" key is migrated into it on first read.
-    DisplaySettings::migrateLegacy();
-    m_leanMode = DisplaySettings::leanMode();
-    if (m_leanMode) {
-        QTimer::singleShot(0, this, [this]() { applyLeanMode(true); });
-    }
     initReceivePresentationSync();
 
     m_audioThread->setObjectName("AudioEngine");
@@ -4829,46 +4818,6 @@ void MainWindow::applyDarkTheme()
 }
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
-
-void MainWindow::applyLeanMode(bool on)
-{
-    m_leanMode = on;
-
-    // Panadapters: opaque single layer (no wallpaper / fill) + ~30 Hz cap.
-    // Also keep every pan's Lean button in sync (the toggle is global).
-    for (auto* sw : findChildren<SpectrumWidget*>()) {
-        sw->setLeanMode(on);
-        if (auto* menu = sw->overlayMenu())
-            menu->setLeanChecked(on);
-    }
-
-    // VFO panels: opaque, cacheable layer (kills the translucent re-composite).
-    for (auto* vfo : findChildren<VfoWidget*>())
-        vfo->setOpaqueMode(on);
-
-    // WAVE scope: hidden + feed dropped. Round-trip respects the user's
-    // pre-Lean choice (if they had the scope hidden before enabling Lean,
-    // disabling Lean must not silently re-show it).
-    if (m_appletPanel) {
-        if (auto* wave = m_appletPanel->waveApplet()) {
-            if (on) {
-                m_preLeanWaveActive = wave->isActive();
-                wave->setActive(false);
-            } else {
-                wave->setActive(m_preLeanWaveActive);
-            }
-        }
-    }
-
-    // Meters: throttle their animation repaint so they stop dirtying the shared
-    // backing store every frame (which forces a full-window texture re-upload to
-    // recomposite with the GPU panadapter — the dominant pooled cost on large/5K
-    // windows; see #3283). Native-layering the panel was tried and did not
-    // isolate them under Qt 6.11/macOS, so we cap the repaint rate instead.
-    MeterSmoother::setLeanThrottle(on);
-
-    DisplaySettings::setLeanMode(on);
-}
 
 void MainWindow::onConnectionStateChanged(bool connected)
 {

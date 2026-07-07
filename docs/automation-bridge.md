@@ -508,7 +508,7 @@ cost a few integer adds per frame.
 → {"cmd":"get","model":"panstats"}
 ← {"ok":true,"model":"panstats","pans":[{
    "panIndex":0,"renderMode":"2D","renderer":"GPU QRhi (Metal; Apple M1 Ultra)",
-   "widthPx":2280,"heightPx":1302,"dpr":2.0,"leanMode":false,"sinceMs":60012,
+   "widthPx":2280,"heightPx":1302,"dpr":2.0,"sinceMs":60012,
    "fftFramesPerSec":29.6,"ingestMsPerSec":8.1,
    "gpuFramesPerSec":29.6,"gpuFrameMsPerSec":97.4,"avgGpuFrameUs":3290.0,
    "fftBuildMsPerSec":64.2,"fftVboBytesPerSec":42049536.0,

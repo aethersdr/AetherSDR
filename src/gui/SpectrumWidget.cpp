@@ -837,7 +837,6 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         m_spectrumRenderMode == SpectrumRenderMode::Mode3D
             ? QStringLiteral("3D") : QStringLiteral("2D");
     m[QStringLiteral("renderer")] = rendererDescription();
-    m[QStringLiteral("leanMode")] = m_leanMode;
     m[QStringLiteral("sinceMs")] = static_cast<qlonglong>(m_panStats.sinceMs());
 
     m[QStringLiteral("fftFramesPerSec")] = m_panStats.updateSpectrumCalls / secs;
@@ -5754,7 +5753,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         }
     }
 
-    leanCappedUpdate();
+    coalescedUpdate();
 }
 
 void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
@@ -5940,7 +5939,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
 
     if (visibleStream) {
-        leanCappedUpdate();
+        coalescedUpdate();
     }
 }
 
@@ -5987,7 +5986,7 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
-    leanCappedUpdate();
+    coalescedUpdate();
 }
 
 void SpectrumWidget::setKiwiSdrDisplaySourceControlVisible(bool visible)
@@ -6048,7 +6047,7 @@ void SpectrumWidget::setKiwiSdrWaterfallProfile(const QString& profileId)
         m_wfTexFullUpload = true;
 #endif
         reacquireNoiseFloorLockFromVisibleSource();
-        leanCappedUpdate();
+        coalescedUpdate();
     }
 }
 
@@ -6063,7 +6062,7 @@ void SpectrumWidget::clearKiwiSdrWaterfallRows()
     m_kiwiSdrFftTraceFloorValid = false;
     if (m_kiwiSdrWaterfallActive) {
         clearCurrentWaterfallRows();
-        leanCappedUpdate();
+        coalescedUpdate();
     }
 }
 
@@ -6079,7 +6078,7 @@ void SpectrumWidget::clearKiwiSdrWaterfallRowsForProfile(const QString& profileI
         && m_kiwiSdrWaterfallProfileId == normalized) {
         resetKiwiSdrWaterfallDisplayRange();
         clearCurrentWaterfallRows();
-        leanCappedUpdate();
+        coalescedUpdate();
     }
 }
 
@@ -6194,7 +6193,7 @@ void SpectrumWidget::setKiwiSdrWaterfallDisplayRange(float minDbm,
     m_kiwiSdrDisplayRangeAutoRange = autoRange;
     resetDssUploadState();
     if (m_kiwiSdrWaterfallActive) {
-        leanCappedUpdate();
+        coalescedUpdate();
     }
 }
 
@@ -6366,7 +6365,7 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
     pushKiwiSdrWaterfallRow(binsDbm, destWidth,
                             rowCenterMhz, rowBandwidthMhz);
     if (visibleStream) {
-        leanCappedUpdate();
+        coalescedUpdate();
     }
 }
 
@@ -8053,42 +8052,29 @@ void SpectrumWidget::leaveEvent(QEvent* event)
     updateTrackedCursorState(QPoint(-1, -1), false);
 }
 
-void SpectrumWidget::setLeanMode(bool on)
-{
-    if (m_leanMode == on)
-        return;
-    m_leanMode = on;
-    m_leanRepaintClock.invalidate();
-    markOverlayDirty();  // re-render with/without wallpaper + fill
-}
-
-void SpectrumWidget::leanCappedUpdate()
+void SpectrumWidget::coalescedUpdate()
 {
     // Data-driven repaints (FFT frames, waterfall rows) coalesce into one
     // present per slot; interactive paths still call update() directly so
-    // input latency is unaffected. Lean mode drops excess frames outright
-    // (~30 Hz cap); normal mode never drops — a trailing update presents
-    // whatever arrived inside the slot.
-    const int slotMs = m_leanMode ? kLeanFrameMs : kPresentCoalesceMs;
-    if (!m_leanRepaintClock.isValid()) {
-        m_leanRepaintClock.start();
+    // input latency is unaffected. No frame is dropped — a trailing update
+    // presents whatever arrived inside the slot.
+    const int slotMs = kPresentCoalesceMs;
+    if (!m_presentCoalesceClock.isValid()) {
+        m_presentCoalesceClock.start();
         update();
         return;
     }
-    const qint64 sinceMs = m_leanRepaintClock.elapsed();
+    const qint64 sinceMs = m_presentCoalesceClock.elapsed();
     if (sinceMs >= slotMs) {
-        m_leanRepaintClock.restart();
+        m_presentCoalesceClock.restart();
         update();
         return;
-    }
-    if (m_leanMode) {
-        return;  // drop frames above ~30 Hz (kLeanFrameMs = 33)
     }
     if (!m_presentPending) {
         m_presentPending = true;
         QTimer::singleShot(static_cast<int>(slotMs - sinceMs), this, [this]() {
             m_presentPending = false;
-            m_leanRepaintClock.restart();
+            m_presentCoalesceClock.restart();
             update();
         });
     }
@@ -9606,7 +9592,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QPainter bp(&m_overlayBg);
             bp.setRenderHint(QPainter::Antialiasing, false);
             bp.fillRect(specRect, m_bgFillColor);
-            if (!m_leanMode && !m_bgImage.isNull()) {
+            if (!m_bgImage.isNull()) {
                 if (m_bgScaledSize != specRect.size()) {
                     QImage expanded = m_bgImage.scaled(specRect.size(),
                         Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
@@ -10061,7 +10047,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     kFftLineFeatherAlpha,
                     fa,                                             // fillAlpha
                     m_fftHeatMap ? 1.0f : 0.0f,
-                    m_leanMode ? 1.0f : 0.0f,
+                    0.0f,                                           // fillP.z — unused (pad)
                     0.0f,
                     static_cast<float>(m_fftFillColor.redF()),
                     static_cast<float>(m_fftFillColor.greenF()),
@@ -10398,7 +10384,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     } else {
         // Composition z-order: bg fill → bg image → grid → FFT trace.
         p.fillRect(specRect, m_bgFillColor);
-        if (!m_leanMode && !m_bgImage.isNull()) {
+        if (!m_bgImage.isNull()) {
             if (m_bgScaledSize != specRect.size()) {
                 QImage expanded = m_bgImage.scaled(specRect.size(),
                     Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
@@ -10780,7 +10766,7 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 
             float avgT = (pts[i].t + pts[i + 1].t) * 0.5f;
             QColor top = heatColor(avgT);
-            const float swFillAlpha = m_leanMode ? 0.0f : m_fftFillAlpha;
+            const float swFillAlpha = m_fftFillAlpha;
             top.setAlphaF(swFillAlpha * 0.3f);
             QColor bot(0, 0, 77, static_cast<int>(255 * swFillAlpha));
             QLinearGradient grad(0, std::min(pts[i].y, pts[i + 1].y), 0, bottom);

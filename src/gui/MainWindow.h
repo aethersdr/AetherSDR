@@ -210,11 +210,6 @@ protected:
 #endif
 
 private slots:
-    // Global lean render mode (#3283): opaque pan + VFO, ~30 Hz repaint cap
-    // (kLeanFrameMs = 33), WAVE scope off, meters throttled to ~12 Hz per
-    // instance. Applied across all panes/VFOs, persisted, reversible.
-    void applyLeanMode(bool on);
-
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
     void adjustCatPortCounts(bool connected);  // called from onConnectionStateChanged
@@ -1053,11 +1048,6 @@ private:
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
     bool m_splitActive{false};
-    bool m_leanMode{false};  // global lean render mode state (#3283)
-    // Pre-lean WaveApplet active state, captured on Lean activation so the
-    // round-trip restores whatever the user had before instead of silently
-    // re-showing the scope. Only meaningful while m_leanMode is true.
-    bool m_preLeanWaveActive{true};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     int  m_pendingMemoryRevealSliceId{-1};

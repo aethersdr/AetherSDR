@@ -2070,12 +2070,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     }
 
     // ── Per-pan display controls (client-side) ───────────────────────────
-    // Global lean render mode — every pan's Lean button drives the same
-    // app-wide toggle; seed this new pan's button + widget with current state.
-    connect(menu, &SpectrumOverlayMenu::leanModeToggled,
-            this, &MainWindow::applyLeanMode);
-    menu->setLeanChecked(m_leanMode);
-    sw->setLeanMode(m_leanMode);
     connect(menu, &SpectrumOverlayMenu::fftFillAlphaChanged,
             sw, &SpectrumWidget::setFftFillAlpha);
     connect(menu, &SpectrumOverlayMenu::fftFillColorChanged,

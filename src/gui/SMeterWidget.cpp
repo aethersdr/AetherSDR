@@ -1,5 +1,4 @@
 #include "SMeterWidget.h"
-#include "MeterSmoother.h"  // shared lean-mode repaint gate (#3283)
 #include "core/ThemeManager.h"
 
 #include <QAccessible>
@@ -282,11 +281,7 @@ void SMeterWidget::animateNeedle()
         m_needleAnimation.stop();
     }
 
-    // Gate the needle repaint in lean mode so it stops dirtying the shared
-    // backing store ~120×/sec (#3283); always paint the settled frame.
-    if (settled || m_smooth.shouldRepaint()) {
-        update();
-    }
+    update();
 }
 
 bool SMeterWidget::usesUnavailableRxMeter() const
