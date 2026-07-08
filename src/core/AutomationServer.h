@@ -262,6 +262,13 @@ public:
     {
         m_kiwiSdrSnapshotHandler = std::move(handler);
     }
+    // Status-bar TX-timer state provider (the `txtimer` verb). Supplied by
+    // MainWindow, which reads it off the TitleBar widget on the GUI thread.
+    void setTxTimerSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_txTimerSnapshotHandler = std::move(handler);
+    }
+
 private slots:
     void onNewConnection();
     void onReadyRead();
@@ -507,6 +514,8 @@ private:
     std::function<QJsonObject(double)> m_tuneHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
+    std::function<QJsonObject()> m_txTimerSnapshotHandler;
+
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on
     // stop, so other MultiFlex clients can see an agent is driving.

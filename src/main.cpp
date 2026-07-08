@@ -475,6 +475,10 @@ int main(int argc, char* argv[])
                 [&window]() {
                     return window.automationKiwiSdrSnapshot();
                 });
+            automation->setTxTimerSnapshotHandler(
+                [&window]() {
+                    return window.automationTxTimerSnapshot();
+                });
             if (!automation->start(sockName))
                 automation.reset();
         }

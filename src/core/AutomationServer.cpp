@@ -3429,6 +3429,25 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("kiwi"), data}};
     }
+    if (model == QLatin1String("txtimer")) {
+        // Status-bar transmit-timer state (visible/running/holding/fading/
+        // elapsedMs/text/opacity). Read off the TitleBar on the GUI thread.
+        if (!m_txTimerSnapshotHandler)
+            return err(QStringLiteral("tx timer snapshot unavailable"));
+        QJsonObject data = m_txTimerSnapshotHandler();
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for txtimer"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        data[QStringLiteral("ok")] = true;
+        data[QStringLiteral("model")] = model;
+        return data;
+    }
 
     RadioModel* radio = m_radioModel;
     if (!radio)

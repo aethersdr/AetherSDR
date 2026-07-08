@@ -756,6 +756,10 @@ void TransmitModel::requestPttOn(PttSource source)
     if (!runPttPreflight(source))
         return;
 
+    // Remember who asked to key so the status-bar TX timer can exclude
+    // TCI-hardware and DAX transmits (both surface as source=SW at the radio).
+    m_activePttSource = source;
+
     // If Quindar is enabled + phone mode + we have an engine, start
     // the intro tone alongside MOX so the radio keys up while the
     // tone plays (the tone gets transmitted as part of the audio).

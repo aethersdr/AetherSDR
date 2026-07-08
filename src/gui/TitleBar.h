@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QString>
+#include <QVariantMap>
 #include <QWidget>
 
 class QPushButton;
@@ -10,6 +12,8 @@ class QFrame;
 class QMenuBar;
 class QHBoxLayout;
 class QTimer;
+class QGraphicsOpacityEffect;
+class QPropertyAnimation;
 
 namespace AetherSDR {
 
@@ -28,6 +32,15 @@ public:
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
     void setOtherClientTx(bool transmitting, const QString& station);
+
+    // Status-bar transmit timer (left of the PC Audio button). Driven by
+    // RadioModel::operatorTransmitChanged — runs only for operator MOX/PTT/VOX
+    // transmits, never TCI/DAX. Hidden when idle; on unkey it holds the final
+    // elapsed time for 15 s then fades out.
+    void setOperatorTransmitting(bool active);
+    // Introspection for the automation bridge (`txtimer` verb): visible /
+    // running / holding / fading / elapsedMs / text / opacity.
+    QVariantMap txTimerState() const;
     void setMultiFlexStatus(int clientCount, const QStringList& names);
     void onHeartbeat();       // Call when a discovery packet arrives
     void onHeartbeatLost();   // Call when radio lost from discovery
@@ -121,6 +134,18 @@ private:
     QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;
     QString      m_pcAudioOutputDevice;
+
+    // ── Transmit timer ──────────────────────────────────────────────────────
+    void         updateTxTimerText();          // repaint MM:SS / H:MM:SS from elapsed
+    QString      formatTxElapsed(qint64 ms) const;
+    QLabel*      m_txTimerLabel{nullptr};
+    QTimer*      m_txTimerTick{nullptr};        // 1s cadence while running
+    QTimer*      m_txTimerHoldTimer{nullptr};   // 15s post-unkey hold, then fade
+    QGraphicsOpacityEffect* m_txTimerOpacity{nullptr};
+    QPropertyAnimation*     m_txTimerFade{nullptr};
+    QElapsedTimer m_txElapsed;                  // wall-clock since this key-up
+    qint64        m_txFrozenMs{0};              // elapsed frozen at unkey (hold/fade)
+    bool          m_txTimerRunning{false};      // true between key-up and unkey
 
 protected:
     // Drag-to-move + double-click-to-maximize for frameless main window.

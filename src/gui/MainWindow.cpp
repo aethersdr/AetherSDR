@@ -1586,6 +1586,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel, &RadioModel::txOwnerChanged,
             m_titleBar, &TitleBar::setOtherClientTx);
 
+    // Status-bar transmit timer — runs only for operator MOX/PTT/VOX, never
+    // TCI/DAX (the model gates the source). Hidden idle; 15s hold + fade on
+    // unkey is handled inside TitleBar.
+    connect(&m_radioModel, &RadioModel::operatorTransmitChanged,
+            m_titleBar, &TitleBar::setOperatorTransmitting);
+
     // Multi-Flex: title bar indicator when other clients are connected
     connect(&m_radioModel, &RadioModel::otherClientsChanged,
             m_titleBar, &TitleBar::setMultiFlexStatus);
@@ -3334,6 +3340,14 @@ void MainWindow::toggleConnectionDialog()
     }
 
     showConnectionDialog();
+}
+
+QJsonObject MainWindow::automationTxTimerSnapshot() const
+{
+    if (!m_titleBar)
+        return QJsonObject{{QStringLiteral("visible"), false},
+                           {QStringLiteral("running"), false}};
+    return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
 }
 
 void MainWindow::showConnectionDialog()

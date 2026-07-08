@@ -21,6 +21,9 @@
 #include <QClipboard>
 #include <QApplication>
 #include <QTimer>
+#include <QAbstractAnimation>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
 #include <QWindow>
 #include <QMenu>
 #include <QNetworkAccessManager>
@@ -219,6 +222,61 @@ TitleBar::TitleBar(QWidget* parent)
 
     // ── PC Audio + Master Vol + HP Vol ──────────────────────────────────────
     auto& s = AppSettings::instance();
+
+    // ── Transmit timer ──────────────────────────────────────────────────────
+    // (The Pan Lock button that used to sit here was removed with #4116's
+    // per-pan Center Lock.)
+    // Bright-green (network-status green), square-outlined elapsed timer that
+    // runs while the operator is keyed (MOX/PTT/VOX — never TCI/DAX). Hidden
+    // when idle; setOperatorTransmitting() drives show/hold/fade. Sits to the
+    // left of the PC Audio button.
+    m_txTimerLabel = new QLabel(QStringLiteral("0:00"));
+    m_txTimerLabel->setObjectName(QStringLiteral("txTimerLabel"));
+    m_txTimerLabel->setFixedHeight(22);
+    m_txTimerLabel->setMinimumWidth(52);
+    m_txTimerLabel->setAlignment(Qt::AlignCenter);
+    m_txTimerLabel->setStyleSheet(
+        "QLabel { color: #20c060; border: 1px solid #20c060; border-radius: 3px; "
+        "background: transparent; font-size: 11px; font-weight: bold; "
+        "padding: 0px 4px; }");
+    m_txTimerLabel->setToolTip(QStringLiteral("Transmit timer — elapsed key-down time"));
+    m_txTimerLabel->setAccessibleName(QStringLiteral("Transmit timer"));
+    m_txTimerLabel->setAccessibleDescription(
+        QStringLiteral("Elapsed transmit time while keyed (MOX/PTT/VOX)"));
+    markDragHandle(m_txTimerLabel);
+    // Opacity effect powers the 15s-hold → fade-out on unkey.
+    m_txTimerOpacity = new QGraphicsOpacityEffect(m_txTimerLabel);
+    m_txTimerOpacity->setOpacity(1.0);
+    m_txTimerLabel->setGraphicsEffect(m_txTimerOpacity);
+    m_txTimerLabel->setVisible(false);   // idle: not displayed
+    m_hbox->addWidget(m_txTimerLabel);
+    m_hbox->addSpacing(6);
+
+    // 1s tick that repaints the elapsed time while keyed.
+    m_txTimerTick = new QTimer(this);
+    m_txTimerTick->setInterval(200);   // 5Hz so the displayed second tracks the
+                                       // true elapsed time within ~200ms
+    connect(m_txTimerTick, &QTimer::timeout, this, [this]() { updateTxTimerText(); });
+
+    // 15s post-unkey hold, then fade the label out.
+    m_txTimerHoldTimer = new QTimer(this);
+    m_txTimerHoldTimer->setSingleShot(true);
+    m_txTimerHoldTimer->setInterval(15'000);
+    connect(m_txTimerHoldTimer, &QTimer::timeout, this, [this]() {
+        m_txTimerFade->stop();
+        m_txTimerOpacity->setOpacity(1.0);
+        m_txTimerFade->setStartValue(1.0);
+        m_txTimerFade->setEndValue(0.0);
+        m_txTimerFade->start();
+    });
+
+    // Fade-out animation; hides the label once fully transparent.
+    m_txTimerFade = new QPropertyAnimation(m_txTimerOpacity, "opacity", this);
+    m_txTimerFade->setDuration(800);
+    connect(m_txTimerFade, &QPropertyAnimation::finished, this, [this]() {
+        if (m_txTimerOpacity->opacity() <= 0.01)
+            m_txTimerLabel->setVisible(false);
+    });
 
     // PC Audio toggle
     m_pcBtn = new QPushButton("PC Audio");
@@ -826,6 +884,73 @@ void TitleBar::setOtherClientTx(bool transmitting, const QString& station)
     } else {
         m_otherTxLabel->setVisible(false);
     }
+}
+
+QString TitleBar::formatTxElapsed(qint64 ms) const
+{
+    const qint64 totalSec = ms / 1000;
+    const qint64 h = totalSec / 3600;
+    const qint64 m = (totalSec % 3600) / 60;
+    const qint64 s = totalSec % 60;
+    if (h > 0) {
+        return QStringLiteral("%1:%2:%3")
+            .arg(h)
+            .arg(m, 2, 10, QLatin1Char('0'))
+            .arg(s, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2").arg(m).arg(s, 2, 10, QLatin1Char('0'));
+}
+
+void TitleBar::updateTxTimerText()
+{
+    const qint64 ms = m_txTimerRunning ? m_txElapsed.elapsed() : m_txFrozenMs;
+    m_txTimerLabel->setText(formatTxElapsed(ms));
+}
+
+void TitleBar::setOperatorTransmitting(bool active)
+{
+    if (active) {
+        // Key-up: cancel any pending hold/fade, restart from 0:00 (each
+        // transmission is its own timer), and show at full opacity.
+        m_txTimerHoldTimer->stop();
+        m_txTimerFade->stop();
+        m_txTimerOpacity->setOpacity(1.0);
+        m_txTimerRunning = true;
+        m_txFrozenMs = 0;
+        m_txElapsed.restart();
+        updateTxTimerText();
+        m_txTimerLabel->setVisible(true);
+        m_txTimerTick->start();
+        return;
+    }
+
+    if (!m_txTimerRunning)
+        return;   // spurious/duplicate unkey — nothing to freeze
+
+    // Unkey: freeze the final elapsed time, stop ticking, and hold the reading
+    // on-screen for 15s before fading out.
+    m_txFrozenMs = m_txElapsed.elapsed();
+    m_txTimerRunning = false;
+    m_txTimerTick->stop();
+    updateTxTimerText();
+    m_txTimerOpacity->setOpacity(1.0);
+    m_txTimerLabel->setVisible(true);
+    m_txTimerHoldTimer->start();
+}
+
+QVariantMap TitleBar::txTimerState() const
+{
+    const qint64 ms = m_txTimerRunning ? m_txElapsed.elapsed() : m_txFrozenMs;
+    return QVariantMap{
+        {QStringLiteral("visible"), m_txTimerLabel && m_txTimerLabel->isVisible()},
+        {QStringLiteral("running"), m_txTimerRunning},
+        {QStringLiteral("holding"), m_txTimerHoldTimer && m_txTimerHoldTimer->isActive()},
+        {QStringLiteral("fading"),
+            m_txTimerFade && m_txTimerFade->state() == QAbstractAnimation::Running},
+        {QStringLiteral("elapsedMs"), ms},
+        {QStringLiteral("text"), m_txTimerLabel ? m_txTimerLabel->text() : QString()},
+        {QStringLiteral("opacity"), m_txTimerOpacity ? m_txTimerOpacity->opacity() : 0.0},
+    };
 }
 
 void TitleBar::showFeatureRequestDialog()

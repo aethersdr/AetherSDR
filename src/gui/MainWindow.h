@@ -209,6 +209,8 @@ public:
     QJsonObject automationTune(double mhz);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;
+    // Status-bar TX-timer state for the bridge `get txtimer` verb.
+    QJsonObject automationTxTimerSnapshot() const;
 
 protected:
     void showEvent(QShowEvent* event) override;

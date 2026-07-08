@@ -111,6 +111,22 @@ inline bool interlockKeepsLocalTxOn(bool txOwnedByUs, bool txRequested,
            || hardwarePtt || voxEnabled;
 }
 
+// Whether the *local operator* is the one keying the transmitter — mic/PTT,
+// MOX, VOX, CW, footswitch, tune — as opposed to a TCI-hardware or DAX
+// (external-app) transmit. Drives the status-bar TX timer.
+//
+// `transmitting` is TransmitModel::isTransmitting(), which the interlock handler
+// already forces false for DAX and other-client TX, so it captures every owned
+// mic/manual path. The two owned software paths the radio interlock can't tell
+// apart (it reports both as source=SW) are TCI-hardware PTT and DAX; the caller
+// disambiguates them from the remembered PTT source and passes the flags here.
+// `daxTxActive` is a belt-and-suspenders guard for the optimistic DAX key edge.
+inline bool operatorTransmitActive(bool transmitting, bool daxTxActive,
+                                   bool sourceIsTciHardware, bool sourceIsDax)
+{
+    return transmitting && !daxTxActive && !sourceIsTciHardware && !sourceIsDax;
+}
+
 enum class OwnedStatusAction {
     Defer,
     Claim,
