@@ -947,9 +947,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
-        if (!reattachSliceVisualsToPanadapter(s)) {
-            return;
-        }
+        reattachSliceVisualsToPanadapter(s);
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
