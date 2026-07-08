@@ -105,3 +105,26 @@ on multi-pan layout, wirePanadapter(), or slice routing.
     from the old applet and reconnect to the new one. The CW decoder is
     a singleton — its output must follow the active pan.
 
+21. **Never reparent a *live* `SpectrumWidget` through a parentless
+    (transient top-level) splitter.** Under `AETHER_GPU_SPECTRUM`,
+    `SpectrumWidget` is a `QRhiWidget`; the moment it changes top-level
+    window its backing-store QRhi changes, and on Windows/D3D11 that
+    reconfigures the composited swapchain. Doing so while the pan is
+    actively rendering can null-deref inside the GPU driver
+    (#4091 — Intel HD Graphics `igd10iumd64.dll`, AV read at `[rcx+0x310]`,
+    via `SpectrumWidget::resizeEvent` → `QRhiWidget::resizeEvent` → D3D11).
+    In `PanadapterStack::rearrangeLayout()` / `rebuildDockedSplitter()`,
+    the **nested** layouts (`2h1`/`12h`/`2x2`/`3h2`/`2x3`/`4h3`/`2x4`) build
+    a sub-`QSplitter` — if it is created parentless, filled with existing
+    live pans, *then* attached, each pan briefly lands in a transient
+    top-level. **Attach the sub-splitter to the in-window parent BEFORE
+    reparenting any pan into it** (the `addRow()` helper does `addWidget(sub)`
+    first; pans are added after). The flat layouts (`1`/`2v`/`2h`/`3v`/`4v`)
+    reparent straight into the already-in-window `m_splitter`, so they were
+    never affected. Tell-tale of this class: it crashes on a *live* add but
+    a restart that rebuilds the same layout from scratch is fine (a
+    freshly-created pan has no initialized QRhi to corrupt yet). Docked pans
+    reparented within the *same* top-level window need no GPU teardown — see
+    `prepareForTopLevelChange()`, which is only for genuine top-level changes
+    (float/dock).
+
