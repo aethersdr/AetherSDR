@@ -657,6 +657,41 @@ QWidget* panadapterAppletForSpectrum(QWidget* spectrum)
     return nullptr;
 }
 
+QWidget* spectrumForVfoWidget(QWidget* vfo)
+{
+    for (QWidget* a = vfo; a; a = a->parentWidget()) {
+        if (shortClassName(a) == QLatin1String("SpectrumWidget")) {
+            return a;
+        }
+    }
+    return nullptr;
+}
+
+QString panIdForSpectrumWidget(QWidget* spectrum)
+{
+    if (QWidget* applet = panadapterAppletForSpectrum(spectrum)) {
+        const QVariant pid = applet->property("panId");
+        if (pid.isValid()) {
+            return pid.toString();
+        }
+    }
+    return QString();
+}
+
+QJsonObject widgetGeometryJson(const QWidget* widget)
+{
+    if (!widget) {
+        return QJsonObject{};
+    }
+    const QPoint global = widget->mapToGlobal(QPoint(0, 0));
+    return QJsonObject{
+        {QStringLiteral("x"), global.x()},
+        {QStringLiteral("y"), global.y()},
+        {QStringLiteral("w"), widget->width()},
+        {QStringLiteral("h"), widget->height()},
+    };
+}
+
 QWidget* vfoWidgetForPanIndex(int index)
 {
     const QList<QWidget*> vfos = findWidgetsByClass(QStringLiteral("VfoWidget"));
@@ -1240,6 +1275,40 @@ QJsonObject panSnapshot(const PanadapterModel* p, const RadioModel* radio)
         {QStringLiteral("transmitInhibitReason"),
          radio ? radio->panTransmitInhibitReason(panId) : QString()},
     };
+}
+
+QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
+{
+    const int sliceId = vfo->property("sliceId").toInt();
+    const SliceModel* slice = radio ? radio->slice(sliceId) : nullptr;
+    QWidget* spectrum = spectrumForVfoWidget(vfo);
+    const QString attachedPanId = panIdForSpectrumWidget(spectrum);
+    const QString expectedPanId = slice ? slice->panId() : QString();
+
+    QJsonObject flag{
+        {QStringLiteral("sliceId"), sliceId},
+        {QStringLiteral("expectedPanId"), expectedPanId},
+        {QStringLiteral("attachedPanId"), attachedPanId},
+        {QStringLiteral("attachedToExpectedPan"),
+         !expectedPanId.isEmpty() && attachedPanId == expectedPanId},
+        {QStringLiteral("visible"), vfo->isVisible()},
+        {QStringLiteral("enabled"), vfo->isEnabled()},
+        {QStringLiteral("geometry"), widgetGeometryJson(vfo)},
+    };
+    if (slice) {
+        flag[QStringLiteral("letter")] = slice->letter();
+    }
+    if (spectrum) {
+        flag[QStringLiteral("spectrumObjectName")] = spectrum->objectName();
+        const QVariant panIndex = spectrum->property("panIndex");
+        if (panIndex.isValid()) {
+            flag[QStringLiteral("attachedPanIndex")] = panIndex.toInt();
+        }
+    }
+    if (!vfo->objectName().isEmpty()) {
+        flag[QStringLiteral("objectName")] = vfo->objectName();
+    }
+    return flag;
 }
 
 QJsonObject radioSnapshot(const RadioModel* r)
@@ -3306,6 +3375,65 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             arr.append(panSnapshot(p, radio));
         }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pans"), arr}};
+    } else if (model == QLatin1String("flags")
+               || model == QLatin1String("vfoFlags")) {
+        if (!property.isEmpty()) {
+            return err(QStringLiteral("get flags does not support property narrowing"));
+        }
+        const QString trimmedSelector = selector.trimmed();
+        bool filterBySliceId = false;
+        int wantedSliceId = -1;
+        if (!trimmedSelector.isEmpty()
+            && trimmedSelector != QLatin1String("all")) {
+            bool okId = false;
+            wantedSliceId = trimmedSelector.toInt(&okId);
+            if (!okId) {
+                return err(QStringLiteral("flags selector must be a slice id or 'all'"));
+            }
+            filterBySliceId = true;
+        }
+        auto selectorMatches = [filterBySliceId, wantedSliceId](int sliceId) {
+            return !filterBySliceId || sliceId == wantedSliceId;
+        };
+
+        QJsonArray flags;
+        QSet<QWidget*> seenWidgets;
+        QSet<int> seenSliceIds;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("VfoWidget"));
+        for (QWidget* vfo : widgets) {
+            if (!vfo || seenWidgets.contains(vfo)) {
+                continue;
+            }
+            seenWidgets.insert(vfo);
+            const QVariant sid = vfo->property("sliceId");
+            if (!sid.isValid()) {
+                continue;
+            }
+            const int sliceId = sid.toInt();
+            if (!selectorMatches(sliceId)) {
+                continue;
+            }
+            seenSliceIds.insert(sliceId);
+            flags.append(vfoFlagSnapshot(vfo, radio));
+        }
+
+        QJsonArray missing;
+        for (const SliceModel* s : radio->slices()) {
+            if (!s || !selectorMatches(s->sliceId())
+                || seenSliceIds.contains(s->sliceId())) {
+                continue;
+            }
+            missing.append(QJsonObject{
+                {QStringLiteral("sliceId"), s->sliceId()},
+                {QStringLiteral("letter"), s->letter()},
+                {QStringLiteral("expectedPanId"), s->panId()},
+            });
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("flags"), flags},
+                           {QStringLiteral("missingSlices"), missing}};
     } else if (model == QLatin1String("slice")) {
         const SliceModel* s = nullptr;
         const QList<SliceModel*> slices = radio->slices();
@@ -3332,7 +3460,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|panstats|tracedebug|clients|kiwi|wavestats)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|tracedebug|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {

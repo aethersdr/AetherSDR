@@ -287,6 +287,8 @@ public:
     VfoWidget* vfoWidget() const { return m_vfoWidget; }  // active slice (compat)
     VfoWidget* vfoWidget(int sliceId) const;
     VfoWidget* addVfoWidget(int sliceId);
+    VfoWidget* takeVfoWidget(int sliceId);
+    void       adoptVfoWidget(int sliceId, VfoWidget* widget);
     void       removeVfoWidget(int sliceId);
     void       setActiveVfoWidget(int sliceId);
     bool vfoFlagOnLeftForSlice(int sliceId, double freqMhz,

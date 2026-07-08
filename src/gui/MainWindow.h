@@ -327,6 +327,7 @@ private:
     void updateFilterLimitsForMode(const QString& mode);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
+    bool reattachSliceVisualsToPanadapter(SliceModel* s);
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
@@ -470,6 +471,7 @@ private:
     void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
+    void wireVfoTelemetry(VfoWidget* vfo, SliceModel* s);
     // Push the active RX slice's filter passband (converted from
     // protocol offsets to audio-domain low/high) to the RX EQ canvases.
     void pushRxFilterCutoffsToEq();

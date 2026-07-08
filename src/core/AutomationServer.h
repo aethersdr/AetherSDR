@@ -75,7 +75,8 @@ class QsoRecorder;
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
 //                                     pan <panId|active> | pans |
-//                                     kiwi. With a trailing property name,
+//                                     flags [sliceId|all] | kiwi.
+//                                     With a trailing property name,
 //                                     returns just that field.
 //                                     Assert on state without screenshots.
 //                                     `dsp` is the client-side AetherDSP state:

@@ -372,6 +372,155 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
 }
 
 
+void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
+{
+    if (!vfo || !s) {
+        return;
+    }
+
+    // Feed S-meter per-slice — only this VFO's slice level
+    const int sid = s->sliceId();
+    const QPointer<VfoWidget> vfoPtr(vfo);
+    connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
+            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
+        if (sliceIndex == sid
+            && (!m_kiwiSdrManager
+                || m_kiwiSdrManager->assignedProfileForSlice(sid).isEmpty())) {
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [this, vfoPtr, sid, dbm]() {
+                    if (!vfoPtr
+                        || (m_kiwiSdrManager
+                            && !m_kiwiSdrManager
+                                    ->assignedProfileForSlice(sid).isEmpty())) {
+                        return;
+                    }
+                    vfoPtr->setSignalLevel(dbm);
+                },
+                QString::number(sid));
+        }
+    });
+    // Feed ESC meter per-slice — signal strength after ESC processing
+    connect(&m_radioModel.meterModel(), &MeterModel::escLevelChanged,
+            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
+        if (sliceIndex == sid) {
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [vfoPtr, dbm]() {
+                    if (vfoPtr) {
+                        vfoPtr->setEscLevel(dbm);
+                    }
+                },
+                QString::number(sid));
+        }
+    });
+    // Feed the SmartMTR TX scales: mic level + compression (dBFS / dB) from
+    // micMetersChanged, and forward power + SWR from txMetersChanged. The VFO
+    // shows the operator-selected meter only on its own TX slice while
+    // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
+    // meter reports the truth of whatever the operator selected.
+    connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
+            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
+        vfo->setMicLevel(micLevel, micPeak);
+        vfo->setTxCompression(compPeak);
+    });
+    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
+            vfo, [vfo](float fwd, float swr) {
+        vfo->setTxPower(fwd);
+        vfo->setTxSwr(swr);
+    });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            vfo, &VfoWidget::setTransmitting);
+    connect(&m_radioModel, &RadioModel::antListChanged,
+            vfo, &VfoWidget::setAntennaList);
+}
+
+
+bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
+{
+    if (!s || m_applyingLayout) {
+        return false;
+    }
+
+    SpectrumWidget* target = nullptr;
+    if (m_panStack && !s->panId().isEmpty()) {
+        target = m_panStack->spectrum(s->panId());
+    } else {
+        target = spectrum();
+    }
+    if (!target) {
+        return false;
+    }
+
+    const int sliceId = s->sliceId();
+    VfoWidget* targetVfo = target->vfoWidget(sliceId);
+
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (!applet) {
+                continue;
+            }
+            SpectrumWidget* sw = applet->spectrumWidget();
+            if (!sw || sw == target) {
+                continue;
+            }
+            sw->removeSliceOverlay(sliceId);
+            if (!sw->vfoWidget(sliceId)) {
+                continue;
+            }
+            if (!targetVfo) {
+                targetVfo = sw->takeVfoWidget(sliceId);
+                if (targetVfo) {
+                    target->adoptVfoWidget(sliceId, targetVfo);
+                }
+            } else {
+                sw->removeVfoWidget(sliceId);
+            }
+        }
+    }
+
+    if (!targetVfo) {
+        targetVfo = target->addVfoWidget(sliceId);
+        if (targetVfo) {
+            const QString& sub = m_radioModel.licenseSubscription();
+            targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
+            targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
+            wireVfoWidget(targetVfo, s);
+            targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
+            wireVfoTelemetry(targetVfo, s);
+        }
+    }
+
+    if (targetVfo && sliceId == m_activeSliceId) {
+        target->setActiveVfoWidget(sliceId);
+    }
+    if (m_panStack && !s->panId().isEmpty()) {
+        if (PanadapterApplet* applet = m_panStack->panadapter(s->panId())) {
+            applet->setSliceId(sliceId, s->letter());
+        }
+    }
+
+    pushSliceOverlay(s);
+    target->setSliceOverlayLetter(sliceId, s->letter());
+    if (s->isTxSlice()) {
+        if (m_panStack) {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (applet && applet->spectrumWidget()) {
+                    applet->spectrumWidget()->setHasTxSlice(
+                        applet->spectrumWidget() == target);
+                }
+            }
+        } else if (m_panApplet && m_panApplet->spectrumWidget()) {
+            m_panApplet->spectrumWidget()->setHasTxSlice(true);
+        }
+        syncTxWaterfallSliceToSpectrums();
+    }
+    return true;
+}
+
+
 void MainWindow::onSliceAdded(SliceModel* s)
 {
     // During layout transition, spectrums are being destroyed/recreated — skip
@@ -798,23 +947,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
-        // Remove overlay/VFO from all spectrums
-        if (m_panStack) {
-            for (auto* pan : m_radioModel.panadapters()) {
-                if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    sw->removeSliceOverlay(s->sliceId());
-                    sw->removeVfoWidget(s->sliceId());
-                }
-            }
+        if (!reattachSliceVisualsToPanadapter(s)) {
+            return;
         }
-        // Re-add on the new pan
-        auto* sw = spectrumForSlice(s);
-        if (!sw) return;
-        auto* vfo = sw->addVfoWidget(s->sliceId());
-        wireVfoWidget(vfo, s);
-        pushSliceOverlay(s);
-        if (s->isTxSlice())
-            syncTxWaterfallSliceToSpectrums();
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
@@ -852,63 +987,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
     vfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
 
-    // Feed S-meter per-slice — only this VFO's slice level
-    const int sid = s->sliceId();
-    const QPointer<VfoWidget> vfoPtr(vfo);
-    connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
-            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
-        if (sliceIndex == sid
-            && (!m_kiwiSdrManager
-                || m_kiwiSdrManager->assignedProfileForSlice(sid).isEmpty())) {
-            deferReceivePresentation(
-                ReceivePresentationSource::Flex,
-                ReceivePresentationSurface::Meter,
-                [this, vfoPtr, sid, dbm]() {
-                    if (!vfoPtr
-                        || (m_kiwiSdrManager
-                            && !m_kiwiSdrManager
-                                    ->assignedProfileForSlice(sid).isEmpty())) {
-                        return;
-                    }
-                    vfoPtr->setSignalLevel(dbm);
-                },
-                QString::number(sid));
-        }
-    });
-    // Feed ESC meter per-slice — signal strength after ESC processing
-    connect(&m_radioModel.meterModel(), &MeterModel::escLevelChanged,
-            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
-        if (sliceIndex == sid) {
-            deferReceivePresentation(
-                ReceivePresentationSource::Flex,
-                ReceivePresentationSurface::Meter,
-                [vfoPtr, dbm]() {
-                    if (vfoPtr) {
-                        vfoPtr->setEscLevel(dbm);
-                    }
-                },
-                QString::number(sid));
-        }
-    });
-    // Feed the SmartMTR TX scales: mic level + compression (dBFS / dB) from
-    // micMetersChanged, and forward power + SWR from txMetersChanged. The VFO
-    // shows the operator-selected meter only on its own TX slice while
-    // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
-    // meter reports the truth of whatever the operator selected.
-    connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
-        vfo->setMicLevel(micLevel, micPeak);
-        vfo->setTxCompression(compPeak);
-    });
-    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            vfo, [vfo](float fwd, float swr) {
-        vfo->setTxPower(fwd);
-        vfo->setTxSwr(swr);
-    });
-    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            vfo, &VfoWidget::setTransmitting);
-    connect(&m_radioModel, &RadioModel::antListChanged,
-            vfo, &VfoWidget::setAntennaList);
+    wireVfoTelemetry(vfo, s);
 
     // Refresh the split-pair visualization whenever this slice's TX role changes,
     // so an externally-initiated split (rigctld / CAT / TCI / front panel) is

@@ -1170,6 +1170,11 @@ void MainWindow::wirePanLifecycle()
                 // position. (#3034)
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
+            for (SliceModel* slice : m_radioModel.slices()) {
+                if (slice && slice->panId() == pan->panId()) {
+                    reattachSliceVisualsToPanadapter(slice);
+                }
+            }
             return;
         }
 
@@ -1214,6 +1219,11 @@ void MainWindow::wirePanLifecycle()
         requestPanDimensionsForRadio(pan->panId(), sw, true);
 
         qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice && slice->panId() == pan->panId()) {
+                reattachSliceVisualsToPanadapter(slice);
+            }
+        }
 
         // Debounced layout restore: after all pans are added on connect,
         // rearrange to the saved layout (e.g. 2h instead of default vertical).
@@ -1283,6 +1293,11 @@ void MainWindow::wirePanLifecycle()
             return;
         }
         wirePanReconcilers(applet, pan);
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice && slice->panId() == pan->panId()) {
+                reattachSliceVisualsToPanadapter(slice);
+            }
+        }
     });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,
