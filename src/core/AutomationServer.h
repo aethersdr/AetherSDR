@@ -407,6 +407,12 @@ private:
     // text as if the decoder produced it — end-to-end card-pop proof with
     // no radio or live CW required. No keying.
     QJsonObject doQrz(const QString& action, const QString& value);
+    // csv parse <path>: read a memory CSV off disk, run it through the same
+    // MemoryCsvCompat::parse the Import dialog uses, and return the detected
+    // dialect (SmartSDR vs CHIRP) plus each record's field-mapped/unit-scaled
+    // MemoryEntry — a radio-free proof that CHIRP import maps and scales
+    // correctly. Read-only; no radio, no keying.
+    QJsonObject doCsv(const QString& action, const QString& value) const;
     // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
     // width) propagates to a realistic value for headless render-size fidelity.
     QJsonObject doResize(const QString& value, const QString& target) const;

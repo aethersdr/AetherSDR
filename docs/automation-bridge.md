@@ -167,6 +167,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`record <action>`](#record) | Drive the client QSO WAV recorder. |
 | **Identity** | [`station <name>`](#station) | Set this client's MultiFlex station name. |
 | **QRZ lookup** | [`qrz <action>`](#qrz) | Callsign-lookup status / cache probe / lookup / CW-spot simulation. |
+| **Memory CSV** | [`csv parse <path>`](#csv) | Parse a SmartSDR/CHIRP memory CSV and echo detected dialect + mapped records. |
 | **Transmit ⚠️** | [`key ptt on\|off` / `key mox`](#key) | Key/unkey via PTT / MOX. |
 | | [`cwx send <text> \| speed <wpm> \| stop`](#cwx) | Drive the CWX CW keyer. |
 | | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
@@ -1382,6 +1383,33 @@ Lookup). Four actions; none touch the radio and none key TX.
 
 Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
 `qrz spottext CQ CQ DE KI6BCJ KI6BCJ K`.
+
+### `csv`
+Parse a memory CSV **off disk** through the exact `MemoryCsvCompat::parse` path
+the **Import Memories** dialog uses, and echo back the detected dialect plus each
+record's field-mapped, unit-scaled `MemoryEntry`. Read-only — nothing touches the
+radio, so it proves the CHIRP importer's field mapping and digit scaling with no
+connection.
+
+The parser auto-detects the dialect from the header row:
+- **SmartSDR** — AetherSDR's own export (leading empty `OWNER` column).
+- **CHIRP** — a CHIRP-next *generic CSV* export (leading `Location` column). CHIRP
+  frequencies/offsets are MHz (kept as-is), `TStep` is kHz (scaled ×1000 → Hz),
+  `Duplex` `+`/`-`/blank → `up`/`down`/`simplex`, and `Tone`/`TSQL` map onto the
+  Flex single TX CTCSS tone (`rToneFreq`/`cToneFreq` respectively). DTCS and
+  D-STAR/cross tone systems the FlexRadio can't reproduce degrade to `off`.
+
+```json
+→ {"cmd":"csv","action":"parse","value":"docs/automation/sample-chirp-memories.csv"}
+← {"ok":true,"format":"CHIRP","count":6,"errors":[],
+   "records":[
+     {"name":"W1AW Rptr","freqMHz":146.94,"mode":"FM","stepHz":5000,
+      "offsetDir":"down","repeaterOffsetMHz":0.6,"toneMode":"ctcss_tx","toneValue":100.0},
+     …]}
+```
+
+Bare-line form: `csv parse <path>` (the path may contain spaces). A repo sample
+lives at [`docs/automation/sample-chirp-memories.csv`](automation/sample-chirp-memories.csv).
 
 ---
 
