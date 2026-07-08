@@ -7784,6 +7784,14 @@ bool SpectrumWidget::event(QEvent* ev)
         setMouseTracking(true);
     }
 
+#ifdef AETHER_GPU_SPECTRUM
+    // Moving between monitors changes the DPR without a resize event; keep
+    // the pinned color-buffer size in device pixels current (#4091).
+    if (ev->type() == QEvent::DevicePixelRatioChange) {
+        updateFixedColorBufferSize();
+    }
+#endif
+
     if (ev->type() == QEvent::NativeGesture) {
         auto* ge = static_cast<QNativeGestureEvent*>(ev);
         if (ge->gestureType() == Qt::ZoomNativeGesture) {
@@ -8005,9 +8013,38 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
 
 // ─── Resize ───────────────────────────────────────────────────────────────────
 
+#ifdef AETHER_GPU_SPECTRUM
+void SpectrumWidget::updateFixedColorBufferSize()
+{
+    // QRhiWidget's automatic color buffer is widget-size × dpr. A fractional
+    // QT_SCALE_FACTOR (UiScalePercent ≠ 100, e.g. 0.85) turns that into
+    // odd-sized texture extents on most resizes, and the 2016-era Intel HD
+    // Graphics D3D11 UMD (igd10iumd64.dll 21.20.16.x) null-derefs recreating
+    // such textures during the add-pan resize (#4091). Pin the buffer to the
+    // ceil'd, even-aligned device-pixel size instead. The render path derives
+    // its scale from renderTarget()->pixelSize(), not width()×dpr, so the
+    // ≤1 px overshoot is invisible.
+    const qreal dpr = devicePixelRatioF();
+    QSize devicePx(static_cast<int>(std::ceil(width() * dpr)),
+                   static_cast<int>(std::ceil(height() * dpr)));
+    if (devicePx.isEmpty()) {
+        return;
+    }
+    devicePx.rwidth()  += devicePx.width()  & 1;
+    devicePx.rheight() += devicePx.height() & 1;
+    if (fixedColorBufferSize() != devicePx) {
+        setFixedColorBufferSize(devicePx);
+    }
+}
+#endif
+
 void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 {
     SPECTRUM_BASE_CLASS::resizeEvent(ev);
+
+#ifdef AETHER_GPU_SPECTRUM
+    updateFixedColorBufferSize();
+#endif
 
     // Re-assert mouse tracking — on macOS with WA_NativeWindow, reparenting
     // into a QSplitter can reset native window properties.

@@ -677,6 +677,10 @@ protected:
     void initialize(QRhiCommandBuffer* cb) override;
     void render(QRhiCommandBuffer* cb) override;
     void releaseResources() override;
+    // Keep the RHI color buffer at an even-aligned device-pixel size so a
+    // fractional QT_SCALE_FACTOR (UiScalePercent ≠ 100) never hands the GPU
+    // driver odd texture extents on resize (#4091).
+    void updateFixedColorBufferSize();
 #else
     void paintEvent(QPaintEvent* event) override;
 #endif

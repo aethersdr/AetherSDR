@@ -273,23 +273,19 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     QList<PanadapterApplet*> applets = m_pans.values();
     if (applets.isEmpty()) return;
 
-    // Remove all applets from current splitter (don't delete them).  setParent()
-    // can temporarily change the QRhiWidget's top-level window, so give Qt a
-    // chance to unregister the old backing-store callback before the move.
-    for (auto* a : applets) {
-        if (auto* sw = a ? a->spectrumWidget() : nullptr) {
-            sw->hide();
-            sw->prepareForTopLevelChange();
-            sw->resetGpuResources();
-            appendRebound(sw);
-        }
-        a->setParent(nullptr);
-    }
-
-    // Hide + remove old splitter from layout, defer deletion
-    m_splitter->hide();
-    layout()->removeWidget(m_splitter);
-    m_splitter->deleteLater();
+    // Build the new splitter first, then move applets straight into it below.
+    // addWidget() reparents splitter→splitter within the same top-level window
+    // in one step — the same pattern rebuildDockedSplitter() and
+    // dockPanadapter() already use — so the QRhiWidget's backing-store QRhi
+    // and cleanup-callback registration never change and no GPU teardown is
+    // needed for pans that stay docked. The old code detoured every applet
+    // through setParent(nullptr), which puts the QRhiWidget in a transient
+    // top-level state and forces the full hide/prepare/reset/rebuild dance;
+    // that destroy→recreate→resize storm is what the 2016-era Intel D3D11
+    // UMD (igd10iumd64.dll) null-derefed on when adding a 2nd pan (#4091).
+    // Only pans returning from floating windows (handled above) change
+    // top-level windows and need the reset.
+    QSplitter* oldSplitter = m_splitter;
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
@@ -410,10 +406,35 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
             m_splitter->addWidget(a);
     }
 
-    // Defer equalize until the new splitter has been laid out by Qt.
-    // Re-show + refresh GPU surfaces for any spectrum widgets that came
-    // out of a floating window, so they bind to the new top-level window
-    // before the first render (mirrors the dockPanadapter() refresh dance).
+    // Safety sweep: layout branches only place the applets their layout id
+    // calls for (e.g. "2h" places two). If the count ever mismatches the id,
+    // any leftover would still be a child of oldSplitter and die with its
+    // deleteLater() below, leaving dangling pointers in m_pans — fold
+    // stragglers into the new splitter instead.
+    for (auto* a : applets) {
+        if (a && !m_splitter->isAncestorOf(a))
+            m_splitter->addWidget(a);
+    }
+
+    // All applets have moved to the new splitter — retire the old one.
+    layout()->removeWidget(oldSplitter);
+    oldSplitter->hide();
+    oldSplitter->deleteLater();
+
+    // Equalize immediately so each pan's first layout pass in the new
+    // splitter already lands at final geometry. The new splitter hasn't had
+    // its layout pass yet, so the absolute values are provisional — but
+    // QSplitter redistributes proportionally on resize, so equal stays
+    // equal. This collapses the old default-sizes-then-deferred-equalize
+    // two-step into a single resize per pan; every avoided resize is one
+    // fewer swapchain rebuild for marginal GPU drivers to survive (#4091).
+    equalizeSizes();
+
+    // Deferred pass: re-show + refresh GPU surfaces for any spectrum widgets
+    // that came out of a floating window, so they bind to the new top-level
+    // window before the first render (mirrors the dockPanadapter() refresh
+    // dance). The trailing equalize is a no-op when sizes are already equal;
+    // it only settles integer-rounding drift after the real layout pass.
     QTimer::singleShot(0, this, [this, rebound]() {
         for (SpectrumWidget* sw : rebound) {
             if (!sw) continue;
