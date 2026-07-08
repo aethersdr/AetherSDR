@@ -434,7 +434,7 @@ connects).
 
 | `model` | `selector` | returns |
 |---|---|---|
-| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate) |
+| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
@@ -452,6 +452,12 @@ connects).
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
+
+For `get audio`, `receivePresentationOutputSignalEmitCount` counts output
+chunks dispatched to Receive Presentation Sync analysis, while
+`receivePresentationOutputSignalSuppressedCount` counts non-empty output chunks
+that were captured for automation but skipped because no KiwiSDR audio source
+was active.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies

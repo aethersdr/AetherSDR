@@ -1377,6 +1377,12 @@ QJsonObject audioSnapshot(const AudioEngine* audio)
             static_cast<double>(audio->rxBufferUnderrunCount())},
         {QStringLiteral("rxBufferSampleRate"),
             audio->rxBufferSampleRate()},
+        {QStringLiteral("receivePresentationOutputSignalEmitCount"),
+            static_cast<double>(
+                audio->receivePresentationOutputSignalEmitCount())},
+        {QStringLiteral("receivePresentationOutputSignalSuppressedCount"),
+            static_cast<double>(
+                audio->receivePresentationOutputSignalSuppressedCount())},
         {QStringLiteral("endpoints"),
             audio->audioEndpointDiagnostics()},
     };
