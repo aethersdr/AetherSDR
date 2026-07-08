@@ -291,6 +291,26 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     m_splitter->setChildrenCollapsible(false);
     layout()->addWidget(m_splitter);
 
+    // Create a horizontal sub-splitter already attached to the (in-window)
+    // m_splitter, so pans reparented into it never transit a parentless,
+    // transient top-level window. A *live* QRhiWidget that changes top-level
+    // window mid-rearrange changes its backing-store QRhi; since this path
+    // deliberately skips the teardown dance (docked pans keep their QRhi —
+    // see above), that would leave a stale cleanup callback / reconfigure the
+    // swapchain mid-render → Intel D3D11 null-deref. This only bit the nested
+    // layouts (3+ pans): the flat 2v/2h/3v/4v cases reparent straight into the
+    // already-in-window m_splitter and were fixed already; the sub-splitters
+    // were still built parentless-then-filled, so the 3rd-pan add kept
+    // crashing (#4091, follow-up). Sub-splitter must join the window BEFORE it
+    // is filled — hence addWidget(sub) here, addWidget(pan) at the call site.
+    auto addRow = [this]() {
+        auto* s = new QSplitter(Qt::Horizontal);
+        s->setHandleWidth(3);
+        s->setChildrenCollapsible(false);
+        m_splitter->addWidget(s);
+        return s;
+    };
+
     if (layoutId == "2h" && applets.size() >= 2) {
         m_splitter->setOrientation(Qt::Horizontal);
         m_splitter->addWidget(applets[0]);
@@ -298,23 +318,17 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     else if (layoutId == "2h1" && applets.size() >= 3) {
         // A|B on top, C on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
-        m_splitter->addWidget(topSplit);
         m_splitter->addWidget(applets[2]);
     }
     else if (layoutId == "12h" && applets.size() >= 3) {
         // A on top, B|C on bottom
         m_splitter->addWidget(applets[0]);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[1]);
         botSplit->addWidget(applets[2]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "3v" && applets.size() >= 3) {
         // A / B / C vertical stack
@@ -324,18 +338,12 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     else if (layoutId == "2x2" && applets.size() >= 4) {
         // A|B on top, C|D on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
-        m_splitter->addWidget(topSplit);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[2]);
         botSplit->addWidget(applets[3]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "4v" && applets.size() >= 4) {
         // A / B / C / D vertical stack
@@ -346,58 +354,40 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     else if (layoutId == "3h2" && applets.size() >= 5) {
         // A|B|C on top, D|E on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
         topSplit->addWidget(applets[2]);
-        m_splitter->addWidget(topSplit);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[3]);
         botSplit->addWidget(applets[4]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "2x3" && applets.size() >= 6) {
         // A|B / C|D / E|F — three rows of two
         for (int r = 0; r < 3; ++r) {
-            auto* rowSplit = new QSplitter(Qt::Horizontal);
-            rowSplit->setHandleWidth(3);
-            rowSplit->setChildrenCollapsible(false);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(applets[r * 2]);
             rowSplit->addWidget(applets[r * 2 + 1]);
-            m_splitter->addWidget(rowSplit);
         }
     }
     else if (layoutId == "4h3" && applets.size() >= 7) {
         // A|B|C|D on top, E|F|G on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
         topSplit->addWidget(applets[2]);
         topSplit->addWidget(applets[3]);
-        m_splitter->addWidget(topSplit);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[4]);
         botSplit->addWidget(applets[5]);
         botSplit->addWidget(applets[6]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "2x4" && applets.size() >= 8) {
         // A|B / C|D / E|F / G|H — four rows of two
         for (int r = 0; r < 4; ++r) {
-            auto* rowSplit = new QSplitter(Qt::Horizontal);
-            rowSplit->setHandleWidth(3);
-            rowSplit->setChildrenCollapsible(false);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(applets[r * 2]);
             rowSplit->addWidget(applets[r * 2 + 1]);
-            m_splitter->addWidget(rowSplit);
         }
     }
     else {
@@ -486,11 +476,16 @@ void PanadapterStack::rebuildDockedSplitter()
         layoutId = defaultDockedLayoutForCount(docked.size());
     }
 
-    auto makeSplitter = [](Qt::Orientation orientation) {
-        auto* splitter = new QSplitter(orientation);
-        splitter->setHandleWidth(3);
-        splitter->setChildrenCollapsible(false);
-        return splitter;
+    // Same transient-top-level hazard as rearrangeLayout(): attach each
+    // horizontal sub-splitter to the in-window newSplitter BEFORE filling it,
+    // so a live QRhiWidget never transits a parentless top-level on dock/float
+    // (#4091). Fill happens at the call site, after addRow().
+    auto addRow = [&]() {
+        auto* s = new QSplitter(Qt::Horizontal);
+        s->setHandleWidth(3);
+        s->setChildrenCollapsible(false);
+        newSplitter->addWidget(s);
+        return s;
     };
 
     auto addVertical = [&]() {
@@ -506,61 +501,51 @@ void PanadapterStack::rebuildDockedSplitter()
         newSplitter->addWidget(docked[0]);
         newSplitter->addWidget(docked[1]);
     } else if (layoutId == "2h1" && docked.size() >= 3) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
-        newSplitter->addWidget(topSplit);
         newSplitter->addWidget(docked[2]);
     } else if (layoutId == "12h" && docked.size() >= 3) {
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        newSplitter->addWidget(docked[0]);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[1]);
         botSplit->addWidget(docked[2]);
-        newSplitter->addWidget(docked[0]);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "2x2" && docked.size() >= 4) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[2]);
         botSplit->addWidget(docked[3]);
-        newSplitter->addWidget(topSplit);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "3h2" && docked.size() >= 5) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
         topSplit->addWidget(docked[2]);
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[3]);
         botSplit->addWidget(docked[4]);
-        newSplitter->addWidget(topSplit);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "2x3" && docked.size() >= 6) {
         for (int r = 0; r < 3; ++r) {
-            auto* rowSplit = makeSplitter(Qt::Horizontal);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(docked[r * 2]);
             rowSplit->addWidget(docked[r * 2 + 1]);
-            newSplitter->addWidget(rowSplit);
         }
     } else if (layoutId == "4h3" && docked.size() >= 7) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
         topSplit->addWidget(docked[2]);
         topSplit->addWidget(docked[3]);
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[4]);
         botSplit->addWidget(docked[5]);
         botSplit->addWidget(docked[6]);
-        newSplitter->addWidget(topSplit);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "2x4" && docked.size() >= 8) {
         for (int r = 0; r < 4; ++r) {
-            auto* rowSplit = makeSplitter(Qt::Horizontal);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(docked[r * 2]);
             rowSplit->addWidget(docked[r * 2 + 1]);
-            newSplitter->addWidget(rowSplit);
         }
     } else {
         addVertical();
