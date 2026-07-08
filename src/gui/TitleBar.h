@@ -139,7 +139,7 @@ private:
     void         updateTxTimerText();          // repaint MM:SS / H:MM:SS from elapsed
     QString      formatTxElapsed(qint64 ms) const;
     QLabel*      m_txTimerLabel{nullptr};
-    QTimer*      m_txTimerTick{nullptr};        // 1s cadence while running
+    QTimer*      m_txTimerTick{nullptr};        // 5 Hz cadence while running
     QTimer*      m_txTimerHoldTimer{nullptr};   // 15s post-unkey hold, then fade
     QGraphicsOpacityEffect* m_txTimerOpacity{nullptr};
     QPropertyAnimation*     m_txTimerFade{nullptr};

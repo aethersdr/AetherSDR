@@ -1953,11 +1953,19 @@ void RadioModel::updateOperatorTransmit()
     // interlock level; the remembered source disambiguates it. m_daxTxActive is
     // a belt-and-suspenders guard for the optimistic DAX key edge.
     const TransmitModel::PttSource src = m_transmitModel.activePttSource();
+    // CW (incl. any CWU/CWL variant) is excluded — see operatorTransmitActive.
+    // Prefer the TX slice's live mode; fall back to the mode the radio echoes in
+    // its transmit status when there is no resolvable TX slice.
+    const SliceModel* ts = txSlice();
+    const QString txMode = (ts ? ts->mode() : m_transmitModel.txSliceMode())
+                               .trimmed().toUpper();
+    const bool modeIsCw = txMode.startsWith(QStringLiteral("CW"));
     const bool op = RadioStatusOwnership::operatorTransmitActive(
         m_transmitModel.isTransmitting(),
         m_daxTxActive,
         src == TransmitModel::PttSource::TciHardware,
-        src == TransmitModel::PttSource::Dax);
+        src == TransmitModel::PttSource::Dax,
+        modeIsCw);
 
     if (op == m_operatorTransmitting)
         return;

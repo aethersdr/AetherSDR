@@ -252,7 +252,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_hbox->addWidget(m_txTimerLabel);
     m_hbox->addSpacing(6);
 
-    // 1s tick that repaints the elapsed time while keyed.
+    // 5 Hz tick that repaints the elapsed time while keyed.
     m_txTimerTick = new QTimer(this);
     m_txTimerTick->setInterval(200);   // 5Hz so the displayed second tracks the
                                        // true elapsed time within ~200ms

@@ -1413,11 +1413,13 @@ proves the co-hold path.
 
 ### `get txtimer`
 Read the status-bar transmit timer's state. The timer sits just left of the
-**PC Audio** button and runs **only** for operator-driven transmits — MOX,
-local/hardware PTT, footswitch, VOX — and deliberately **not** for TCI-hardware
-or DAX transmits (those are external-app keying paths, gated out in
-`RadioModel::operatorTransmitChanged`). It is hidden when idle; on unkey it
-holds the final elapsed reading for 15 s, then fades out.
+**PC Audio** button and runs **only** for operator-driven phone/data transmits
+— MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
+TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
+QSK toggles the interlock per element, which would thrash a wall-clock timer).
+All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
+hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
+fades out.
 
 ```json
 → {"cmd":"get","model":"txtimer"}
@@ -1432,7 +1434,8 @@ flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
 it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
 dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
-`visible=false`. A DAX/TCI transmit must leave `visible=false` throughout.
+`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
+throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server

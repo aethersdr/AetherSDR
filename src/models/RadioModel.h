@@ -97,8 +97,9 @@ public:
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
-    // True while the local operator is keying (MOX/PTT/VOX/CW/tune), false for
-    // TCI-hardware and DAX transmits. See operatorTransmitChanged().
+    // True while the local operator is keying a phone/data mode (MOX/PTT/VOX/
+    // tune), false for TCI-hardware, DAX, and CW transmits. See
+    // operatorTransmitChanged().
     bool  isOperatorTransmitting() const { return m_operatorTransmitting; }
     QStringList antennaList() const { return m_antList; }
     QString antennaAlias(const QString& token) const;
@@ -530,10 +531,11 @@ signals:
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
-    // operator (MOX, local/hardware PTT, footswitch, VOX, CW, tune) and false
-    // otherwise. Deliberately excludes TCI-hardware and DAX transmits — those
-    // are external-app keying paths, not the operator on the mic. Drives the
-    // status-bar TX timer.
+    // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX,
+    // tune) and false otherwise. Deliberately excludes TCI-hardware and DAX
+    // transmits (external-app keying paths, not the operator on the mic) and CW
+    // (break-in/QSK per-element keying would thrash a wall-clock timer). Drives
+    // the status-bar TX timer.
     void operatorTransmitChanged(bool active);
     // Short operator-facing interlock warnings for the panadapter overlay.
     // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",

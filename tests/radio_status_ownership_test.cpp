@@ -88,30 +88,36 @@ void testInterlockTxGate()
 
 void testOperatorTransmitGate()
 {
-    // args: (transmitting, daxTxActive, sourceIsTciHardware, sourceIsDax)
+    // args: (transmitting, daxTxActive, sourceIsTciHardware, sourceIsDax, modeIsCw)
 
-    // Operator MOX/PTT/VOX/CW/tune: transmitting, no DAX, source not TCI/DAX.
-    check(operatorTransmitActive(true, false, false, false),
+    // Operator MOX/PTT/VOX/tune in a phone mode: transmitting, no DAX,
+    // source not TCI/DAX, not CW.
+    check(operatorTransmitActive(true, false, false, false, false),
           "operator MOX/PTT keying runs the TX timer");
 
     // Idle: never active.
-    check(!operatorTransmitActive(false, false, false, false),
+    check(!operatorTransmitActive(false, false, false, false, false),
           "no transmit -> timer off");
 
     // TCI-hardware PTT is excluded even though it is an owned SW transmit.
-    check(!operatorTransmitActive(true, false, true, false),
+    check(!operatorTransmitActive(true, false, true, false, false),
           "TCI-hardware PTT does NOT run the timer");
 
     // DAX is excluded — both by the source flag and the daxTxActive guard.
-    check(!operatorTransmitActive(true, false, false, true),
+    check(!operatorTransmitActive(true, false, false, true, false),
           "DAX transmit (source) does NOT run the timer");
-    check(!operatorTransmitActive(true, true, false, false),
+    check(!operatorTransmitActive(true, true, false, false, false),
           "DAX transmit (active guard) does NOT run the timer");
 
     // Belt-and-suspenders: an in-flight DAX key that momentarily shows
     // transmitting must still be excluded.
-    check(!operatorTransmitActive(true, true, false, true),
+    check(!operatorTransmitActive(true, true, false, true, false),
           "optimistic DAX key edge stays excluded");
+
+    // CW is excluded entirely — break-in/QSK per-element keying would thrash the
+    // wall-clock timer, so it never displays for CW even on an owned MOX key.
+    check(!operatorTransmitActive(true, false, false, false, true),
+          "CW mode does NOT run the timer");
 }
 
 void testRemoteAudioRxTracking()
