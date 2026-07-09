@@ -171,6 +171,7 @@
 #include <QImage>
 #include <QBuffer>
 #include <QFont>
+#include <QFontMetrics>
 #include <QWidgetAction>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -291,15 +292,46 @@ void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color)
     AetherSDR::ThemeManager::instance().applyStyleSheet(label, statusBarCompactLabelStyle(color));
 }
 
-void setStatusBarStationText(QLabel* label, const QString& text)
+int statusBarCompactTextWidth(const QStringList& samples, int horizontalPadding)
 {
-    if (!label) {
+    QFont font = QApplication::font();
+    font.setPixelSize(12);
+    const QFontMetrics metrics(font);
+
+    int width = 0;
+    for (const QString& sample : samples) {
+        width = qMax(width, metrics.horizontalAdvance(sample));
+    }
+    return width + horizontalPadding;
+}
+
+void reserveStatusBarStackWidth(QWidget* stack, const QStringList& samples, int minimumWidth)
+{
+    if (!stack) {
         return;
     }
 
-    label->setText(text);
+    stack->setMinimumWidth(qMax(minimumWidth, statusBarCompactTextWidth(samples, 16)));
+}
+
+bool setStatusBarStationText(QLabel* label, const QString& text)
+{
+    if (!label) {
+        return false;
+    }
+
+    bool changed = false;
+    if (label->text() != text) {
+        label->setText(text);
+        changed = true;
+    }
     label->ensurePolished();
-    label->setMinimumWidth(label->sizeHint().width() + 2);
+    const int minimumWidth = label->sizeHint().width() + 2;
+    if (label->minimumWidth() != minimumWidth) {
+        label->setMinimumWidth(minimumWidth);
+        changed = true;
+    }
+    return changed;
 }
 
 QString vfoFrequencyText(double mhz)
@@ -1769,8 +1801,7 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Update station label (nickname arrives via status after connect)
         const QString nick = m_radioModel.nickname();
-        if (!nick.isEmpty()) {
-            setStatusBarStationText(m_stationLabel, nick);
+        if (!nick.isEmpty() && setStatusBarStationText(m_stationLabel, nick)) {
             updateStatusBarMinimumWidth();
         }
     });
@@ -4389,10 +4420,18 @@ void MainWindow::buildUI()
     // Reserve consistent width for the compact telemetry stacks so updates
     // do not cause the status bar to reshuffle as values change.
     constexpr int kTelemetryStackMinWidth = 84;
+    auto reserveTelemetryStack = [](QWidget* stack, const QStringList& samples) {
+        reserveStatusBarStackWidth(stack, samples, kTelemetryStackMinWidth);
+    };
 
     // GPS satellites (top) + lock status (bottom) stacked
     auto* gpsStack = new QWidget;
-    gpsStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(gpsStack, {
+        QStringLiteral("GPS: 12/12"),
+        QStringLiteral("Ref: Ext 10M"),
+        QStringLiteral("[Unlocked]"),
+        QStringLiteral("[No 10M]")
+    });
     auto* gpsVbox = new QVBoxLayout(gpsStack);
     gpsVbox->setContentsMargins(0, 0, 0, 0);
     gpsVbox->setSpacing(0);
@@ -4412,7 +4451,10 @@ void MainWindow::buildUI()
     // CPU (top) + Memory (bottom) stacked
     {
         auto* cpuStack = new QWidget;
-        cpuStack->setMinimumWidth(kTelemetryStackMinWidth);
+        reserveTelemetryStack(cpuStack, {
+            QStringLiteral("CPU: 100.0%"),
+            QStringLiteral("Mem: 99999 MB")
+        });
         auto* cpuVbox = new QVBoxLayout(cpuStack);
         cpuVbox->setContentsMargins(0, 0, 0, 0);
         cpuVbox->setSpacing(0);
@@ -4531,7 +4573,11 @@ void MainWindow::buildUI()
 
     // PA temp (top) + supply voltage (bottom) stacked
     auto* paStack = new QWidget;
-    paStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(paStack, {
+        QStringLiteral("PA 248.0°F"),
+        QStringLiteral("PA 120.0°C"),
+        QStringLiteral("99.99 V")
+    });
     auto* paVbox = new QVBoxLayout(paStack);
     paVbox->setContentsMargins(0, 0, 0, 0);
     paVbox->setSpacing(0);
@@ -4553,7 +4599,10 @@ void MainWindow::buildUI()
 
     // Network label (top) + quality (bottom) stacked
     auto* netStack = new QWidget;
-    netStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(netStack, {
+        QStringLiteral("Network:"),
+        QStringLiteral("[Excellent · 120 fps cap (restoring)]")
+    });
     netStack->setCursor(Qt::PointingHandCursor);
     auto* netVbox = new QVBoxLayout(netStack);
     netVbox->setContentsMargins(0, 0, 0, 0);
@@ -4674,7 +4723,11 @@ void MainWindow::buildUI()
     // UTC date (top) + UTC time (bottom) stacked, right-aligned. Two-row
     // layout matches all other telemetry stacks in the status bar (#1583).
     auto* timeStack = new QWidget;
-    timeStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(timeStack, {
+        QStringLiteral("12/31/2026"),
+        QStringLiteral("31/12/2026"),
+        QStringLiteral("HH:mm:ssZ")
+    });
     auto* timeVbox = new QVBoxLayout(timeStack);
     timeVbox->setContentsMargins(0, 0, 0, 0);
     timeVbox->setSpacing(0);
