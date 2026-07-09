@@ -1742,7 +1742,7 @@ bool AutomationServer::start(const QString& serverName)
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
-        << "txtest, atu, slice, tune, pan, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
+        << "txtest, atu, slice, tune, pan, layout, scale, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
         << "menu, close, drag, hover, showMenu, contextMenu, hitTest, clickAt, shortcut, whoami, log, mark)";
     return true;
 }
@@ -2266,12 +2266,14 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         return doPan(action, value);
     }
     if (cmd == QLatin1String("layout")) {
-        if (action.isEmpty())
+        if (action.isEmpty()) {
             return err(QStringLiteral("layout requires an action (rearrange|get)"));
+        }
         return doLayout(action, value);
     }
-    if (cmd == QLatin1String("scale"))
+    if (cmd == QLatin1String("scale")) {
         return doScale(value);
+    }
     if (cmd == QLatin1String("panmessage")) {
         if (action.isEmpty()) {
             return err(QStringLiteral("panmessage requires an action (add|remove|clear|list)"));
@@ -5086,15 +5088,17 @@ QJsonObject AutomationServer::doLayout(const QString& action, const QString& arg
 {
     const QList<QWidget*> stacks =
         findWidgetsByClass(QStringLiteral("PanadapterStack"));
-    if (stacks.isEmpty())
+    if (stacks.isEmpty()) {
         return err(QStringLiteral("no PanadapterStack found (connect a radio first)"));
+    }
 
     QString layoutId;   // empty → query-only (the "get" action)
     if (action == QLatin1String("rearrange")) {
         layoutId = arg.trimmed();
-        if (layoutId.isEmpty())
+        if (layoutId.isEmpty()) {
             return err(QStringLiteral("layout rearrange requires a layout id "
                                       "(1|2v|2h|2h1|12h|3v|2x2|4v|3h2|2x3|4h3|2x4)"));
+        }
     } else if (action != QLatin1String("get")) {
         return err(QStringLiteral("unknown layout action: ") + action
                    + QStringLiteral(" (rearrange|get)"));
@@ -5104,8 +5108,14 @@ QJsonObject AutomationServer::doLayout(const QString& action, const QString& arg
     if (!QMetaObject::invokeMethod(stacks.first(), "automationRearrange",
                                    Qt::DirectConnection,
                                    Q_RETURN_ARG(QVariantMap, snap),
-                                   Q_ARG(QString, layoutId)))
+                                   Q_ARG(QString, layoutId))) {
         return err(QStringLiteral("PanadapterStack::automationRearrange failed"));
+    }
+    // An unknown layout id comes back as an error map — pass it through
+    // instead of stamping ok:true over it (#4091 test honesty).
+    if (snap.contains(QStringLiteral("error"))) {
+        return err(snap.value(QStringLiteral("error")).toString());
+    }
 
     QJsonObject out = QJsonObject::fromVariantMap(snap);
     out[QStringLiteral("ok")] = true;
@@ -5131,18 +5141,23 @@ QJsonObject AutomationServer::doScale(const QString& arg)
         env.isEmpty() ? QJsonValue() : QJsonValue(QString::fromUtf8(env));
     out[QStringLiteral("uiScalePercentSaved")] =
         s.value(QStringLiteral("UiScalePercent"), QStringLiteral("100")).toInt();
-    if (QScreen* scr = QApplication::primaryScreen())
+    if (QScreen* scr = QApplication::primaryScreen()) {
         out[QStringLiteral("primaryScreenDpr")] = scr->devicePixelRatio();
+    }
 
     const QString a = arg.trimmed();
     if (!a.isEmpty()) {
-        // Canonical steps mirror MainWindow's kScaleSteps / the UI Scale menu.
+        // Canonical steps duplicate MainWindow.cpp's TU-static kScaleSteps /
+        // the View → UI Scale menu (the bridge must not include GUI headers —
+        // Engine/UI dependency direction). If the menu grows a step, add it
+        // here too; MainWindow.cpp carries the reciprocal note.
         static const QList<int> kScaleSteps = {75, 85, 100, 110, 125, 150, 175, 200};
         bool okI = false;
         const int pct = a.toInt(&okI);
-        if (!okI || !kScaleSteps.contains(pct))
+        if (!okI || !kScaleSteps.contains(pct)) {
             return err(QStringLiteral("scale pct must be one of "
                                       "75|85|100|110|125|150|175|200"));
+        }
         s.setValue(QStringLiteral("UiScalePercent"), QString::number(pct));
         s.save();
         out[QStringLiteral("uiScalePercentSet")] = pct;

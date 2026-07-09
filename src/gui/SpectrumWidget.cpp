@@ -835,7 +835,9 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("gpu")] = true;
     m[QStringLiteral("renderer")] = rendererDescription();
     const QSize fixed = fixedColorBufferSize();
-    const bool autoSized = fixed.isEmpty();  // (0,0) → QRhiWidget auto-sizes
+    // Unset fixedColorBufferSize() is the null QSize(-1,-1) — isEmpty()
+    // covers it (and any degenerate size) → QRhiWidget auto-sizes.
+    const bool autoSized = fixed.isEmpty();
     m[QStringLiteral("colorBufferAutoSized")] = autoSized;
     m[QStringLiteral("colorBufferW")] = fixed.width();
     m[QStringLiteral("colorBufferH")] = fixed.height();

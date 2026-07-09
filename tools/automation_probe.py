@@ -138,6 +138,8 @@ def main():
                          "dss inject [pan] <count> <firstPeakBin> <stepBin> "
                          "[native|kiwi [rowLowMhz rowHighMhz]] | "
                          "dss scrollback [pan] <offsetRows> | "
+                         "pan <create|add|center|close|remove> [value] | "
+                         "layout <rearrange <id>|get> | scale [pct] | "
                          "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")

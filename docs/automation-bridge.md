@@ -1066,6 +1066,7 @@ panadapters the radio has granted.
 ```json
 → {"cmd":"layout","action":"rearrange","value":"2v"}
 ← {"ok":true,"layout":"rearrange","requested":"2v","applied":true,
+   "fellBack":false,"effectiveLayout":"2v","settlesNextTurn":true,
    "panCount":2,"dockedCount":2,"floatingCount":0,"savedLayout":"1"}
 
 → {"cmd":"layout","action":"get"}
@@ -1082,8 +1083,16 @@ Why it exists: on a shared radio, MultiFlex caps how many panadapters a client
 can open, so the add-2nd-pan resize path (the #4091 crash) can be unreachable
 from the bridge. `layout rearrange` forces the splitter machinery to run
 regardless. It is a **transient exerciser** — it does *not* persist
-`PanadapterLayout`, and a layout id needing more applets than exist falls back
-to a vertical stack (same as production). RX/config only; never keys TX.
+`PanadapterLayout`. RX/config only; never keys TX.
+
+Honesty of the reply: an **unknown id is rejected** (`ok:false`) rather than
+silently building the trivial fallback; an id needing **more applets than
+exist** runs the production vertical-stack fallback and reports
+`fellBack:true` + `effectiveLayout:"vstack"` — a test that meant to exercise a
+*nested* layout (the #4091 reparent path) must assert `fellBack:false`, or the
+green result proves nothing. Geometry **settles on the next event-loop turn**
+(`settlesNextTurn:true` — ex-floating pans re-show and sizes equalize
+deferred), so don't pipeline `get rhi`/`grab` in the same write; re-poll after.
 
 ### `scale`
 Report — and optionally persist — the UI scale factor, so scale-dependent
@@ -1107,6 +1116,10 @@ change **only applies on the next launch** — this verb never mutates the runni
 process. To actually run under a fractional scale in one shot, launch with the
 env directly: `QT_SCALE_FACTOR=0.85 AETHER_AUTOMATION=1 …`. Pair with `get rhi`
 to assert the resulting swapchain dimensions. Never keys TX.
+
+Note: the running session's **View → UI Scale menu checkmark is built once at
+startup and will not reflect a bridge write** — the persisted value is applied
+(and the menu re-seeded) on the next launch.
 
 ### `panmessage`
 Manual test hook for panadapter overlay popup messages. This is UI-only: it

@@ -6902,6 +6902,8 @@ SpectrumWidget* MainWindow::spectrum() const
 }
 
 // ── UI Scale helpers ────────────────────────────────────────────────────
+// Duplicated in AutomationServer::doScale (bridge can't include GUI
+// headers) — if a step is added here, add it there too.
 static constexpr int kScaleSteps[] = {75, 85, 100, 110, 125, 150, 175, 200};
 static constexpr int kScaleStepCount = sizeof(kScaleSteps) / sizeof(kScaleSteps[0]);
 
