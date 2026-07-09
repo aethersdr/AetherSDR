@@ -49,6 +49,11 @@ public:
     void equalizeSizes();
     void rearrangeLayout(const QString& layoutId);
 
+    // Automation bridge hook: drive rearrangeLayout directly (or, with an empty
+    // id, just report) so tests can exercise the splitter reparent path without
+    // the radio granting extra panadapters. Returns saved layout id + counts.
+    Q_INVOKABLE QVariantMap automationRearrange(const QString& layoutId);
+
     // Float/dock panadapters
     void floatPanadapter(const QString& panId);
     void dockPanadapter(const QString& panId);

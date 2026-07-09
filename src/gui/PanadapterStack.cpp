@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLayout>
 #include <QStringList>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QPointer>
 #include <QTimer>
@@ -221,6 +222,26 @@ static void equalizeSplitter(QSplitter* splitter)
 void PanadapterStack::equalizeSizes()
 {
     equalizeSplitter(m_splitter);
+}
+
+QVariantMap PanadapterStack::automationRearrange(const QString& layoutId)
+{
+    // Non-empty id drives the real production rearrange (exercising the
+    // splitter teardown/reparent path); empty id is a query-only report.
+    if (!layoutId.isEmpty())
+        rearrangeLayout(layoutId);
+
+    const int floating = m_floatingWindows.size();
+    return QVariantMap{
+        {QStringLiteral("requested"), layoutId},
+        {QStringLiteral("applied"), !layoutId.isEmpty()},
+        {QStringLiteral("panCount"), m_pans.size()},
+        {QStringLiteral("dockedCount"), m_pans.size() - floating},
+        {QStringLiteral("floatingCount"), floating},
+        {QStringLiteral("savedLayout"),
+         AppSettings::instance().value(QStringLiteral("PanadapterLayout"),
+                                       QStringLiteral("1")).toString()},
+    };
 }
 
 void PanadapterStack::rearrangeLayout(const QString& layoutId)

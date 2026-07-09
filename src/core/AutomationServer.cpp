@@ -15,6 +15,7 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QApplication>
+#include <QScreen>
 #include <QWidget>
 #include <QMainWindow>
 #include <QMenu>
@@ -2031,6 +2032,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("layout")) {
+            action = tok(1); value = tok(2);  // "layout rearrange 2v", "layout get"
+        } else if (cmd == QLatin1String("scale")) {
+            value = tok(1);                   // "scale" (report), "scale 85" (persist)
         } else if (cmd == QLatin1String("dss")) {
             action = tok(1);                  // snapshot | reset | inject | scrollback | live
             target = tok(2);                  // pan index, optional for snapshot
@@ -2260,6 +2265,13 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("pan requires an action (create|add|remove|close|center)"));
         return doPan(action, value);
     }
+    if (cmd == QLatin1String("layout")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("layout requires an action (rearrange|get)"));
+        return doLayout(action, value);
+    }
+    if (cmd == QLatin1String("scale"))
+        return doScale(value);
     if (cmd == QLatin1String("panmessage")) {
         if (action.isEmpty()) {
             return err(QStringLiteral("panmessage requires an action (add|remove|clear|list)"));
@@ -3151,6 +3163,39 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
 
             QVariantMap snap;
             if (!QMetaObject::invokeMethod(w, "traceDebugSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap))) {
+                continue;
+            }
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
+                continue;
+            }
+            pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("pans"), pans}};
+    }
+    if (model == QLatin1String("rhi")) {
+        // Per-panadapter QRhiWidget surface geometry from every SpectrumWidget,
+        // so automation can assert the swapchain/color-buffer sizing that the
+        // #4091 fix controls (fixedColorBufferSize kept even-aligned vs a
+        // fractional QT_SCALE_FACTOR). selector filters by pan index or
+        // objectName. GUI-header-free: found by class name, snapshotted via
+        // meta-call. Reports gpu:false per pan on non-GPU builds.
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        QJsonArray pans;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector) {
+                continue;
+            }
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "automationRhiSnapshot",
                                            Qt::DirectConnection,
                                            Q_RETURN_ARG(QVariantMap, snap))) {
                 continue;
@@ -5026,6 +5071,84 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 
     return err(QStringLiteral("unknown pan action: ") + action
                + QStringLiteral(" (create|add|remove|close|center)"));
+}
+
+// ── Panadapter layout (bridge test hook) ────────────────────────────────────
+// `layout rearrange <id>` drives PanadapterStack::rearrangeLayout directly, so
+// the splitter reparent / GPU-surface path is exercisable regardless of how
+// many panadapters the radio has actually granted (MultiFlex capacity caps
+// live multi-pan on shared radios, which otherwise makes the add-2nd-pan
+// crash path — #4091 — unreachable from the bridge). `layout get` reports the
+// saved layout id and current pan counts without changing anything. This does
+// NOT persist PanadapterLayout — it is a transient exerciser, not the
+// production layout-change path.
+QJsonObject AutomationServer::doLayout(const QString& action, const QString& arg)
+{
+    const QList<QWidget*> stacks =
+        findWidgetsByClass(QStringLiteral("PanadapterStack"));
+    if (stacks.isEmpty())
+        return err(QStringLiteral("no PanadapterStack found (connect a radio first)"));
+
+    QString layoutId;   // empty → query-only (the "get" action)
+    if (action == QLatin1String("rearrange")) {
+        layoutId = arg.trimmed();
+        if (layoutId.isEmpty())
+            return err(QStringLiteral("layout rearrange requires a layout id "
+                                      "(1|2v|2h|2h1|12h|3v|2x2|4v|3h2|2x3|4h3|2x4)"));
+    } else if (action != QLatin1String("get")) {
+        return err(QStringLiteral("unknown layout action: ") + action
+                   + QStringLiteral(" (rearrange|get)"));
+    }
+
+    QVariantMap snap;
+    if (!QMetaObject::invokeMethod(stacks.first(), "automationRearrange",
+                                   Qt::DirectConnection,
+                                   Q_RETURN_ARG(QVariantMap, snap),
+                                   Q_ARG(QString, layoutId)))
+        return err(QStringLiteral("PanadapterStack::automationRearrange failed"));
+
+    QJsonObject out = QJsonObject::fromVariantMap(snap);
+    out[QStringLiteral("ok")] = true;
+    out[QStringLiteral("layout")] = action;
+    return out;
+}
+
+// ── UI scale (report / persist for next launch) ─────────────────────────────
+// `scale` reports the effective UI scale so automation can assert the process
+// launched at the intended fractional QT_SCALE_FACTOR (pairs with `get rhi`
+// to prove the #4091 even-alignment fix). `scale <pct>` persists UiScalePercent
+// so a subsequent relaunch reproduces that configuration — QT_SCALE_FACTOR must
+// be set before QApplication (main.cpp), so it can only apply on next launch;
+// this never mutates the running process's scale. Values match the View → UI
+// Scale menu steps.
+QJsonObject AutomationServer::doScale(const QString& arg)
+{
+    AppSettings& s = AppSettings::instance();
+    QJsonObject out{{QStringLiteral("ok"), true}, {QStringLiteral("scale"), true}};
+
+    const QByteArray env = qgetenv("QT_SCALE_FACTOR");
+    out[QStringLiteral("qtScaleFactorEnv")] =
+        env.isEmpty() ? QJsonValue() : QJsonValue(QString::fromUtf8(env));
+    out[QStringLiteral("uiScalePercentSaved")] =
+        s.value(QStringLiteral("UiScalePercent"), QStringLiteral("100")).toInt();
+    if (QScreen* scr = QApplication::primaryScreen())
+        out[QStringLiteral("primaryScreenDpr")] = scr->devicePixelRatio();
+
+    const QString a = arg.trimmed();
+    if (!a.isEmpty()) {
+        // Canonical steps mirror MainWindow's kScaleSteps / the UI Scale menu.
+        static const QList<int> kScaleSteps = {75, 85, 100, 110, 125, 150, 175, 200};
+        bool okI = false;
+        const int pct = a.toInt(&okI);
+        if (!okI || !kScaleSteps.contains(pct))
+            return err(QStringLiteral("scale pct must be one of "
+                                      "75|85|100|110|125|150|175|200"));
+        s.setValue(QStringLiteral("UiScalePercent"), QString::number(pct));
+        s.save();
+        out[QStringLiteral("uiScalePercentSet")] = pct;
+        out[QStringLiteral("appliesOnNextLaunch")] = true;
+    }
+    return out;
 }
 
 QJsonObject AutomationServer::doPanMessage(const QString& action,

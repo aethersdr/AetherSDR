@@ -821,6 +821,38 @@ QString SpectrumWidget::rendererDescription() const
 #endif
 }
 
+QVariantMap SpectrumWidget::automationRhiSnapshot() const
+{
+    QVariantMap m;
+    m[QStringLiteral("panIndex")] = m_panIndex;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("visible")] = isVisible();
+    const qreal dpr = devicePixelRatioF();
+    m[QStringLiteral("widthPx")] = width();
+    m[QStringLiteral("heightPx")] = height();
+    m[QStringLiteral("dpr")] = dpr;
+#ifdef AETHER_GPU_SPECTRUM
+    m[QStringLiteral("gpu")] = true;
+    m[QStringLiteral("renderer")] = rendererDescription();
+    const QSize fixed = fixedColorBufferSize();
+    const bool autoSized = fixed.isEmpty();  // (0,0) → QRhiWidget auto-sizes
+    m[QStringLiteral("colorBufferAutoSized")] = autoSized;
+    m[QStringLiteral("colorBufferW")] = fixed.width();
+    m[QStringLiteral("colorBufferH")] = fixed.height();
+    // What an even-aligned pin *should* be for the current size — lets a test
+    // assert the #4091 alignment without recomputing the formula itself.
+    const int expW = static_cast<int>(std::ceil(width() * dpr));
+    const int expH = static_cast<int>(std::ceil(height() * dpr));
+    m[QStringLiteral("expectedEvenW")] = expW + (expW & 1);
+    m[QStringLiteral("expectedEvenH")] = expH + (expH & 1);
+    m[QStringLiteral("evenAligned")] =
+        !autoSized && (fixed.width() % 2 == 0) && (fixed.height() % 2 == 0);
+#else
+    m[QStringLiteral("gpu")] = false;
+#endif
+    return m;
+}
+
 QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
 {
     const double secs = std::max(0.001, m_panStats.sinceMs() / 1000.0);

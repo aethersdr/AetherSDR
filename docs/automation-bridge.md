@@ -575,6 +575,32 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+### `get rhi`
+Per-panadapter `QRhiWidget` **surface geometry** — the widget size,
+devicePixelRatio, and pinned color-buffer extents — so automation can assert
+the swapchain sizing that the #4091 fix controls (the color buffer stays
+even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
+
+```json
+→ {"cmd":"get","model":"rhi"}
+← {"ok":true,"model":"rhi","pans":[{
+   "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
+   "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
+   "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
+   "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true}]}
+```
+
+| field | meaning |
+|---|---|
+| `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
+| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
+| `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
+| `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
+| `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+
+`selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
+each entry reports `gpu:false` and omits the buffer fields.
+
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
 which of them have written **our** pans' dBm range, and which stale
@@ -1032,6 +1058,55 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
 action is RX/config only; none keys the transmitter.
+
+### `layout`
+Drive the panadapter **splitter layout** directly, decoupled from how many
+panadapters the radio has granted.
+
+```json
+→ {"cmd":"layout","action":"rearrange","value":"2v"}
+← {"ok":true,"layout":"rearrange","requested":"2v","applied":true,
+   "panCount":2,"dockedCount":2,"floatingCount":0,"savedLayout":"1"}
+
+→ {"cmd":"layout","action":"get"}
+← {"ok":true,"layout":"get","requested":"","applied":false,
+   "panCount":1,"dockedCount":1,"floatingCount":0,"savedLayout":"1"}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `rearrange` | layout id (`1`/`2v`/`2h`/`2h1`/`12h`/`3v`/`2x2`/`4v`/`3h2`/`2x3`/`4h3`/`2x4`) | rebuild the splitter for that id via the production `PanadapterStack::rearrangeLayout`, exercising the full teardown/reparent/GPU-surface path on whatever pans exist. |
+| `get` | — | report the saved `PanadapterLayout` + live pan/docked/floating counts without changing anything. |
+
+Why it exists: on a shared radio, MultiFlex caps how many panadapters a client
+can open, so the add-2nd-pan resize path (the #4091 crash) can be unreachable
+from the bridge. `layout rearrange` forces the splitter machinery to run
+regardless. It is a **transient exerciser** — it does *not* persist
+`PanadapterLayout`, and a layout id needing more applets than exist falls back
+to a vertical stack (same as production). RX/config only; never keys TX.
+
+### `scale`
+Report — and optionally persist — the UI scale factor, so scale-dependent
+rendering bugs (fractional `QT_SCALE_FACTOR`, e.g. #4091) are reproducible and
+assertable.
+
+```json
+→ {"cmd":"scale"}
+← {"ok":true,"scale":true,"qtScaleFactorEnv":"0.85",
+   "uiScalePercentSaved":85,"primaryScreenDpr":2.0}
+
+→ {"cmd":"scale","value":"85"}
+← {"ok":true,"scale":true,"qtScaleFactorEnv":null,"uiScalePercentSaved":100,
+   "primaryScreenDpr":2.0,"uiScalePercentSet":85,"appliesOnNextLaunch":true}
+```
+
+Bare `scale` reports only. `scale <pct>` (one of `75|85|100|110|125|150|175|200`,
+matching the **View → UI Scale** menu) persists `UiScalePercent`. Because
+`QT_SCALE_FACTOR` must be set before `QApplication` (see `main.cpp`), a scale
+change **only applies on the next launch** — this verb never mutates the running
+process. To actually run under a fractional scale in one shot, launch with the
+env directly: `QT_SCALE_FACTOR=0.85 AETHER_AUTOMATION=1 …`. Pair with `get rhi`
+to assert the resulting swapchain dimensions. Never keys TX.
 
 ### `panmessage`
 Manual test hook for panadapter overlay popup messages. This is UI-only: it

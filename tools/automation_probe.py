@@ -122,7 +122,8 @@ def main():
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect", "slice", "audioCapture",
                              "record", "testtone", "tci", "panmessage",
-                             "hitTest", "clickAt", "resize", "dss"],
+                             "hitTest", "clickAt", "resize", "dss",
+                             "pan", "layout", "scale"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
@@ -224,6 +225,27 @@ def main():
                        "value": f"{args.rest[1]} {args.rest[2]}"}
             else:
                 sys.exit("error: clickAt needs <x> <y> or <target> <x> <y>")
+
+        elif args.command == "pan":
+            if not args.rest:
+                sys.exit("error: pan needs <create|add|center|close|remove> [value]")
+            req = {"cmd": "pan", "action": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "layout":
+            if not args.rest:
+                sys.exit("error: layout needs <rearrange <id> | get>")
+            req = {"cmd": "layout", "action": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "scale":
+            req = {"cmd": "scale"}
+            if args.rest:
+                req["value"] = args.rest[0]
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "resize":

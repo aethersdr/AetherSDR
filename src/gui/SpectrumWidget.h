@@ -128,6 +128,10 @@ public:
     // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
     // counters after the read so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
+    // QRhiWidget surface geometry for `get rhi`: widget size, devicePixelRatio,
+    // and (on GPU builds) the pinned fixedColorBufferSize so automation can
+    // assert it stays even-aligned under a fractional QT_SCALE_FACTOR (#4091).
+    Q_INVOKABLE QVariantMap automationRhiSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssReset(bool kiwiStream);
     Q_INVOKABLE QVariantMap automationDssInjectRows(int count,

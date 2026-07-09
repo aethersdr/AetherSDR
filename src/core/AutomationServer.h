@@ -335,6 +335,17 @@ private:
     // production GUI close path now does the same via RadioModel::removePanadapter
     // (#3843). (#3646)
     QJsonObject doPan(const QString& action, const QString& arg);
+    // layout rearrange <id> | get: drive PanadapterStack::rearrangeLayout
+    // directly (decoupled from radio-granted pans) so the splitter
+    // reparent/GPU-reset path is exercisable on any host regardless of
+    // MultiFlex panadapter capacity; `get` reports the saved layout + counts.
+    QJsonObject doLayout(const QString& action, const QString& arg);
+    // scale [pct]: report the effective UI scale (QT_SCALE_FACTOR env,
+    // UiScalePercent setting, primary-screen devicePixelRatio); with a pct
+    // arg, persist UiScalePercent so a subsequent relaunch reproduces a
+    // fractional-DPI configuration (env must precede QApplication, so it
+    // applies on next launch — never mutates the running process).
+    QJsonObject doScale(const QString& arg);
     // panmessage add|remove|clear|list <pan-index|active>: inject/read
     // panadapter overlay messages for deterministic UI verification. UI-only;
     // never sends radio commands and never keys TX. `add` accepts optional
