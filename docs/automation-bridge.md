@@ -205,6 +205,7 @@ Each `<node>`:
   "toolTip": "Clear the displayed SWR sweep trace.",  // present only if set
   "enabled": true,
   "visible": true,
+  "cursor": "pointinghand",                // present only if the widget owns a cursor (WA_SetCursor); shape name — see below
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "windowState": "maximized",              // top-level windows only: normal|maximized|minimized|fullscreen
   "value": "42",                           // best-effort; see below
@@ -283,6 +284,14 @@ present.
   switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
   (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
   screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
+- `cursor` — the widget's mouse-cursor **shape name**, reported only when the
+  widget explicitly owns a cursor (`WA_SetCursor`); inheriting widgets omit it.
+  Lets a driver assert **hover affordance** — a clickable control carries
+  `pointinghand`, a text field `ibeam` — without observing the live OS cursor,
+  which no `grab`/screenshot captures. Shape names: `arrow`, `pointinghand`,
+  `ibeam`, `splith`, `splitv`, `sizehor`, `sizever`, `openhand`, `forbidden`,
+  `wait`, `busy`, `cross`, `blank`, … (`other` for anything unmapped). Used to
+  prove every interactive slice-flag field now signals clickability (#4036).
 
 ### `grab`
 PNG capture of a single widget.

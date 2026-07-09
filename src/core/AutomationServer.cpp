@@ -256,6 +256,38 @@ QString shortClassName(const QObject* o)
         .section(QStringLiteral("::"), -1);
 }
 
+// Human-readable name for a Qt::CursorShape.  Lets a driver assert hover
+// affordance (a clickable field carries PointingHandCursor, a text field an
+// IBeam) without observing the live OS cursor, which no widget grab captures.
+const char* cursorShapeName(Qt::CursorShape shape)
+{
+    switch (shape) {
+        case Qt::ArrowCursor:        return "arrow";
+        case Qt::UpArrowCursor:      return "uparrow";
+        case Qt::CrossCursor:        return "cross";
+        case Qt::WaitCursor:         return "wait";
+        case Qt::IBeamCursor:        return "ibeam";
+        case Qt::SizeVerCursor:      return "sizever";
+        case Qt::SizeHorCursor:      return "sizehor";
+        case Qt::SizeBDiagCursor:    return "sizebdiag";
+        case Qt::SizeFDiagCursor:    return "sizefdiag";
+        case Qt::SizeAllCursor:      return "sizeall";
+        case Qt::BlankCursor:        return "blank";
+        case Qt::SplitVCursor:       return "splitv";
+        case Qt::SplitHCursor:       return "splith";
+        case Qt::PointingHandCursor: return "pointinghand";
+        case Qt::ForbiddenCursor:    return "forbidden";
+        case Qt::OpenHandCursor:     return "openhand";
+        case Qt::ClosedHandCursor:   return "closedhand";
+        case Qt::WhatsThisCursor:    return "whatsthis";
+        case Qt::BusyCursor:         return "busy";
+        case Qt::DragMoveCursor:     return "dragmove";
+        case Qt::DragCopyCursor:     return "dragcopy";
+        case Qt::DragLinkCursor:     return "draglink";
+        default:                     return "other";
+    }
+}
+
 QJsonObject describeWidget(const QWidget* w)
 {
     QJsonObject o;
@@ -274,6 +306,13 @@ QJsonObject describeWidget(const QWidget* w)
         o[QStringLiteral("toolTip")] = w->toolTip();
     o[QStringLiteral("enabled")] = w->isEnabled();
     o[QStringLiteral("visible")] = w->isVisible();
+
+    // Explicitly-set mouse cursor shape — only reported when this widget owns a
+    // cursor (WA_SetCursor), so a driver can prove hover affordance (clickable
+    // flag fields carry "pointinghand") without observing the live OS cursor,
+    // which no screenshot/grab captures (#4036).
+    if (w->testAttribute(Qt::WA_SetCursor))
+        o[QStringLiteral("cursor")] = QLatin1String(cursorShapeName(w->cursor().shape()));
 
     // Geometry in global screen coordinates so a driver can correlate with
     // computer-use / screenshots if it ever needs to.
