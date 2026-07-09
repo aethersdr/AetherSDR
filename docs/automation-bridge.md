@@ -163,7 +163,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X-shaped). |
+| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X audio or SDC IQ-skimmer profile). |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -1257,30 +1257,42 @@ proves the co-hold path.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
-over loopback and speaks the WSJT-X dialect: drain the init burst until
-`ready;`, then send `audio_samplerate:48000;` + `audio_start:0;`, then count
-the binary audio frames the server pushes. Removes the external-WebSocket
-dependency for TCI/DAX lifecycle testing. Requires the TCI server to be
-running (toggle via `invoke tciEnable click` if needed).
+over loopback and offers two profiles after draining the init burst through
+`ready;`:
+
+- Default/WSJT-X: sends `audio_samplerate:48000;` + `audio_start:0;` and counts
+  binary RX-audio frames.
+- SDC: sends `iq_samplerate:96000;`, `audio_samplerate:24000;`, and
+  `iq_start:0;`, then separately counts type-0 IQ frames. This reproduces the
+  CW-skimmer initialization path and proves the DAX IQ stream is live.
+
+Removes the external-WebSocket dependency for TCI/DAX lifecycle testing.
+Requires the TCI server to be running (toggle via `invoke tciEnable click` if
+needed).
 
 ```json
 → {"cmd":"tci","action":"start"}            // optional value = port
-← {"ok":true,"action":"start","port":50001} // default = the TciPort setting (50001 unless changed)
+← {"ok":true,"action":"start","profile":"wsjtx","port":50001}
+
+→ {"cmd":"tci","action":"start","value":"sdc"} // optional: "sdc 50001"
+← {"ok":true,"action":"start","profile":"sdc","port":50001}
 
 → {"cmd":"tci","action":"status"}
-← {"ok":true,"running":true,"connected":true,"ready":true,"audioStarted":true,
-   "binaryFrames":412,"binaryBytes":1687552,"textMessages":37,"msSinceLastFrame":18}
+← {"ok":true,"running":true,"connected":true,"ready":true,"profile":"sdc",
+   "iqStarted":true,"iqFrames":412,"binaryFrames":412,"binaryBytes":3375104,
+   "textMessages":37,"msSinceLastFrame":18}
 
 → {"cmd":"tci","action":"stop","value":"abrupt"}   // omit value for graceful audio_stop + close
 ← {"ok":true,"action":"stop","abrupt":true,"binaryFrames":412, …}
 ```
 
-`stop abrupt` closes the socket without `audio_stop` — the WSJT-X
-watchdog-reconnect shape — so a test can assert the server's debounced DAX
-release and the manager's grace-window `stream remove` (watch with `get dax`).
-`binaryFrames` climbing at a steady rate (~47/s at 48 kHz) is the "audio is
-actually flowing" assertion; `msSinceLastFrame` spiking while `audioStarted`
-is true means the stream went silent.
+`stop abrupt` closes the socket without `audio_stop` or `iq_stop`; graceful
+stop sends the command matching the selected profile. This lets tests assert
+the relevant DAX cleanup. For the SDC profile, `iqFrames` climbing is the
+"skimmer IQ is actually flowing" assertion. For the default profile,
+`binaryFrames` climbing at a steady rate (~47/s at 48 kHz) proves RX audio is
+flowing. `msSinceLastFrame` spiking while the selected stream is started means
+that stream went silent.
 
 ### `get sync`
 Read the Receive Sync state used by the spectrum overlay and Auto Assist

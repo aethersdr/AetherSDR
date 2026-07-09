@@ -482,17 +482,20 @@ private:
 
 #ifdef HAVE_WEBSOCKETS
     // In-process TCI client simulator (`tci start|status|stop`, #3305/#4009).
-    // Connects to the app's own TCI server over loopback exactly like WSJT-X
-    // (init burst → ready → audio_samplerate + audio_start) so agents can
-    // exercise the TCI/DAX lifecycle — including abrupt-disconnect reaping —
-    // without an external WebSocket client.
+    // Connects to the app's own TCI server over loopback with either a WSJT-X
+    // audio profile or an SDC IQ-skimmer profile so agents can exercise both
+    // TCI/DAX lifecycles — including abrupt-disconnect reaping — without an
+    // external WebSocket client.
     QWebSocket* m_tciSim{nullptr};
     bool    m_tciSimReady{false};
     bool    m_tciSimAudioStarted{false};
+    bool    m_tciSimIqStarted{false};
     qint64  m_tciSimBinaryFrames{0};
+    qint64  m_tciSimIqFrames{0};
     qint64  m_tciSimBinaryBytes{0};
     qint64  m_tciSimTextMsgs{0};
     qint64  m_tciSimLastFrameMs{-1};
+    QString m_tciSimProfile{QStringLiteral("wsjtx")};
     QString m_tciSimCloseReason;
     QElapsedTimer m_tciSimTimer;
 #endif

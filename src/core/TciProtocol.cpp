@@ -280,9 +280,12 @@ QString TciProtocol::generateInitBurst()
     // the initialization commands").  Reported by Yuri UT4LW.
     burst += QStringLiteral("ready;");
 
-    // audio_start primes WSJT-X's TCI audio state machine so it sends
-    // audio_start:0 back to request RX audio streaming.
-    burst += QStringLiteral("audio_start;");
+    // START is a bidirectional device-state notification. Stream lifecycle
+    // commands are client-owned: AUDIO_START and IQ_START require a receiver
+    // argument and are sent by the client after READY. Emitting the old
+    // argument-less audio_start primer here wedged SDC before it processed
+    // START, so its TCI connection never became active and it never requested
+    // the IQ stream used by the CW skimmer (#3913 test-build finding).
     burst += QStringLiteral("start;");
 
     return burst;

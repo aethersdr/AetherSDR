@@ -46,6 +46,7 @@
 #include <QTime>
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 
 // Best-effort value extraction for common control types.
@@ -2276,7 +2277,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         return doStreams(action);
     if (cmd == QLatin1String("tci")) {
         if (action.isEmpty())
-            return err(QStringLiteral("tci requires an action (start [port] | status | stop [abrupt])"));
+            return err(QStringLiteral(
+                "tci requires an action (start [port|sdc [port]] | status | stop [abrupt])"));
         return doTci(action, value);
     }
     if (cmd == QLatin1String("audioCapture"))
@@ -5364,12 +5366,11 @@ QJsonObject AutomationServer::doDss(const QString& action,
 //                              with leaked waterfalls (parent pan gone) — catches
 //                              resource-level lingering that emits no UDP (#3843).
 // `streams reset` clears the Layer-A orphan tally to re-baseline a before/after.
-// `tci start [port] | status | stop [abrupt]` — in-process TCI client
-// simulator (#3305/#4009). Speaks the same WebSocket dialect as WSJT-X: drain
-// the init burst until `ready;`, then `audio_samplerate` + `audio_start`, then
-// count the binary audio frames the server pushes back. `stop abrupt` closes
-// the socket without `audio_stop` (the WSJT-X watchdog-reconnect shape) so
-// tests can assert the debounced release + grace-window stream removal.
+// `tci start [port|sdc [port]] | status | stop [abrupt]` — in-process TCI
+// client simulator (#3305/#4009/#3913). The default WSJT-X profile negotiates
+// RX audio; the SDC profile negotiates 96 kHz IQ and sends `iq_start:0` for a
+// CW-skimmer-shaped end-to-end test. `stop abrupt` closes without the matching
+// stream-stop command so tests can assert disconnect cleanup.
 QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
 {
 #ifndef HAVE_WEBSOCKETS
@@ -5384,8 +5385,11 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
             o[QStringLiteral("connected")]    = m_tciSim->state() == QAbstractSocket::ConnectedState;
             o[QStringLiteral("ready")]        = m_tciSimReady;
             o[QStringLiteral("audioStarted")] = m_tciSimAudioStarted;
+            o[QStringLiteral("iqStarted")]    = m_tciSimIqStarted;
+            o[QStringLiteral("profile")]      = m_tciSimProfile;
         }
         o[QStringLiteral("binaryFrames")] = m_tciSimBinaryFrames;
+        o[QStringLiteral("iqFrames")]     = m_tciSimIqFrames;
         o[QStringLiteral("binaryBytes")]  = m_tciSimBinaryBytes;
         o[QStringLiteral("textMessages")] = m_tciSimTextMsgs;
         o[QStringLiteral("msSinceLastFrame")] =
@@ -5402,13 +5406,23 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     if (action == QLatin1String("start")) {
         if (m_tciSim)
             return err(QStringLiteral("tci sim already running — `tci stop` first"));
+        const QStringList options = value.simplified().split(
+            QLatin1Char(' '), Qt::SkipEmptyParts);
+        const bool sdcProfile = !options.isEmpty()
+            && options.first().compare(QLatin1String("sdc"), Qt::CaseInsensitive) == 0;
+        const QString portText = sdcProfile
+            ? (options.size() >= 2 ? options.at(1) : QString())
+            : (options.isEmpty() ? QString() : options.first());
         bool okPort = false;
-        int port = value.trimmed().toInt(&okPort);
+        int port = portText.toInt(&okPort);
         if (!okPort || port <= 0)
             port = AppSettings::instance().value("TciPort", "50001").toInt();
+        m_tciSimProfile = sdcProfile ? QStringLiteral("sdc") : QStringLiteral("wsjtx");
         m_tciSimReady = false;
         m_tciSimAudioStarted = false;
+        m_tciSimIqStarted = false;
         m_tciSimBinaryFrames = 0;
+        m_tciSimIqFrames = 0;
         m_tciSimBinaryBytes = 0;
         m_tciSimTextMsgs = 0;
         m_tciSimLastFrameMs = -1;
@@ -5424,10 +5438,20 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
             for (const QString& c : cmds) {
                 if (c.trimmed() == QLatin1String("ready")) {
                     m_tciSimReady = true;
-                    m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:48000;"));
-                    m_tciSim->sendTextMessage(QStringLiteral("audio_start:0;"));
-                    m_tciSimAudioStarted = true;
-                    qCInfo(lcAutomation) << "tci sim: ready received — audio_start sent";
+                    if (m_tciSimProfile == QLatin1String("sdc")) {
+                        m_tciSim->sendTextMessage(QStringLiteral("iq_samplerate:96000;"));
+                        m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:24000;"));
+                        m_tciSim->sendTextMessage(QStringLiteral("iq_start:0;"));
+                        m_tciSimIqStarted = true;
+                        qCInfo(lcAutomation)
+                            << "tci sim: ready received — SDC IQ negotiation sent";
+                    } else {
+                        m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:48000;"));
+                        m_tciSim->sendTextMessage(QStringLiteral("audio_start:0;"));
+                        m_tciSimAudioStarted = true;
+                        qCInfo(lcAutomation)
+                            << "tci sim: ready received — WSJT-X audio_start sent";
+                    }
                     break;
                 }
             }
@@ -5437,6 +5461,14 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
             ++m_tciSimBinaryFrames;
             m_tciSimBinaryBytes += b.size();
             m_tciSimLastFrameMs = m_tciSimTimer.elapsed();
+            constexpr int kTciTypeOffset = 6 * static_cast<int>(sizeof(quint32));
+            if (b.size() >= kTciTypeOffset + static_cast<int>(sizeof(quint32))) {
+                quint32 type = 0;
+                std::memcpy(&type, b.constData() + kTciTypeOffset, sizeof(type));
+                if (type == 0) {
+                    ++m_tciSimIqFrames;
+                }
+            }
         });
         connect(m_tciSim, &QWebSocket::disconnected, this, [this]() {
             if (m_tciSimCloseReason.isEmpty())
@@ -5452,6 +5484,7 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
                 m_tciSim = nullptr;
                 m_tciSimReady = false;
                 m_tciSimAudioStarted = false;
+                m_tciSimIqStarted = false;
                 qCInfo(lcAutomation) << "tci sim: torn down after server-side close"
                                      << m_tciSimCloseReason;
             }
@@ -5460,6 +5493,7 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         qCInfo(lcAutomation) << "tci sim: connecting to ws://127.0.0.1:" << port;
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("action"), QStringLiteral("start")},
+                           {QStringLiteral("profile"), m_tciSimProfile},
                            {QStringLiteral("port"), port}};
     }
 
@@ -5479,14 +5513,18 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         // guard fail so it no-ops, and we own the teardown here (#4017).
         QWebSocket* sim = m_tciSim;
         const bool wasAudioStarted = m_tciSimAudioStarted;
+        const bool wasIqStarted = m_tciSimIqStarted;
         m_tciSim = nullptr;
         m_tciSimReady = false;
         m_tciSimAudioStarted = false;
+        m_tciSimIqStarted = false;
         if (abrupt) {
             sim->abort();
         } else {
             if (wasAudioStarted)
                 sim->sendTextMessage(QStringLiteral("audio_stop:0;"));
+            if (wasIqStarted)
+                sim->sendTextMessage(QStringLiteral("iq_stop:0;"));
             sim->close();
         }
         sim->deleteLater();
@@ -5496,7 +5534,8 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         return o;
     }
 
-    return err(QStringLiteral("tci requires an action (start [port] | status | stop [abrupt])"));
+    return err(QStringLiteral(
+        "tci requires an action (start [port|sdc [port]] | status | stop [abrupt])"));
 #endif
 }
 
