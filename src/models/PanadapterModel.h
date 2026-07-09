@@ -101,6 +101,14 @@ public:
     }
     int daxiqChannel() const { return m_daxiqChannel; }
 
+    // Band / segment zoom — radio-owned per-pan flags (FlexLib Panadapter.cs
+    // IsBandZoomOn/IsSegmentZoomOn). The radio clears them itself on a manual
+    // pan/zoom (and clears the sibling when the other engages) and broadcasts
+    // both transitions in pan status; this model state is the single truth the
+    // zoom toggles read (#4057).
+    bool bandZoomOn() const { return m_bandZoomOn; }
+    bool segmentZoomOn() const { return m_segmentZoomOn; }
+
     // Configuration flags
     bool isResized() const { return m_resized; }
     void setResized(bool r) { m_resized = r; }
@@ -132,6 +140,8 @@ signals:
     void waterfallLineDurationReported(int ms);
     void waterfallIdChanged(const QString& wfId);
     void daxiqChannelChanged(int channel);
+    void bandZoomChanged(bool on);
+    void segmentZoomChanged(bool on);
 
 private:
     QString     m_panId;
@@ -159,6 +169,8 @@ private:
     int         m_fftYPixels{-1};
     QString     m_preamp;
     int         m_daxiqChannel{0};
+    bool        m_bandZoomOn{false};
+    bool        m_segmentZoomOn{false};
     bool        m_resized{false};
     bool        m_wfConfigured{false};
 };

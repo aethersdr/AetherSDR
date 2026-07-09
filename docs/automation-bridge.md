@@ -927,13 +927,29 @@ registration id (as in the Configure Shortcuts list / MIDI mapping short id), e.
 ← {"ok":true,"shortcut":"band_zoom","fired":true}
 ```
 
-The handler runs synchronously on the GUI thread. An unknown id replies
-`{"ok":false,"error":"unknown shortcut action id: …"}`.
+(JSON form: the id rides the `target` field; a `target` present alongside other
+fields wins.) The handler runs synchronously on the GUI thread. An unknown id
+replies `{"ok":false,"error":"unknown shortcut action id: …"}`.
 
-**TX-safety:** the handful of shortcut ids that key the transmitter —
-`mox_toggle`, `tune_toggle`, `two_tone_tune` — are refused unless
-`AETHER_AUTOMATION_ALLOW_TX=1`, mirroring the [`invoke`](#invoke) / [`key`](#key)
-TX guard. RX-only actions (the zoom shortcuts included) need no flag.
+**`fired:true` means the handler ran, not that anything happened.** Handlers
+validate their own preconditions exactly like a physical MIDI press — no radio
+connection, no active slice, or no resolvable pan is a silent no-op. Assert
+effects through `get`/`dumpTree` (e.g. `get pans` for the zoom actions), not
+from the reply.
+
+**Momentary key actions can't be fired by id.** `ptt_hold` and the CW
+straight-key/paddle ids appear in the Configure Shortcuts list but register
+null handlers on purpose — they're driven by the app-level event filter, which
+needs key **release** edges. The bridge replies with a distinct
+`event-filter-driven` error for these, not `unknown id`.
+
+**TX-safety:** actions registered as transmit-keying (`keysTx` at their
+`registerAction` site — `mox_toggle`, `tune_toggle`, `two_tone_tune`,
+`atu_start`, `ptt_hold`, and the CW key ids) are refused unless
+`AETHER_AUTOMATION_ALLOW_TX=1`, mirroring the [`invoke`](#invoke) /
+[`key`](#key) TX guard. The gate reads the registration flag — one source of
+truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
+included) need no flag.
 
 ### `pan`
 Panadapter lifecycle — create or tear down a pan regardless of how it was opened.

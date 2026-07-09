@@ -219,6 +219,33 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
             emit daxiqChannelChanged(ch);
         }
     }
+    // Band / segment zoom (#4057). Mirror FlexLib's parse exactly (Panadapter.cs
+    // 933-947/1159-1173): uint parse, values > 1 invalid → skip, no local mutual
+    // exclusion — the radio clears the sibling flag itself and broadcasts both
+    // transitions. Malformed values are ignored, not applied as 0, matching the
+    // wnb_level guard above (Principle VII).
+    if (fields.contains(QStringLiteral("band_zoom"))) {
+        bool ok = false;
+        const uint v = fields.value(QStringLiteral("band_zoom")).toString().toUInt(&ok);
+        if (ok && v <= 1) {
+            const bool on = (v == 1);
+            if (on != m_bandZoomOn) {
+                m_bandZoomOn = on;
+                emit bandZoomChanged(on);
+            }
+        }
+    }
+    if (fields.contains(QStringLiteral("segment_zoom"))) {
+        bool ok = false;
+        const uint v = fields.value(QStringLiteral("segment_zoom")).toString().toUInt(&ok);
+        if (ok && v <= 1) {
+            const bool on = (v == 1);
+            if (on != m_segmentZoomOn) {
+                m_segmentZoomOn = on;
+                emit segmentZoomChanged(on);
+            }
+        }
+    }
     // #3977: ownership is radio-authoritative. When another session reclaims
     // this pan (MultiFlex reconnect), the radio broadcasts the new
     // client_handle; tracking it lets a superseded session stop adjusting a pan

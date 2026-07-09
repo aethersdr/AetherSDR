@@ -1860,25 +1860,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         m_radioModel.sendCommand(
             QString("display pan set %1 center=%2").arg(applet->panId()).arg(center, 0, 'f', 6));
     });
-    // Band/Segment Zoom share ONE client-side toggle (m_flexVirtualBandZoomOn /
-    // m_flexVirtualSegmentZoomOn) across every entry point — this right-click
-    // menu, the keyboard/MIDI shortcuts (MainWindow_Shortcuts.cpp), and the
-    // RC28/FlexControl paths (MainWindow_Controllers.cpp). A per-connection local
-    // bool here would drift out of sync with those, so a menu zoom then a MIDI
-    // zoom could both send band_zoom=1 (no toggle-off). (#4057)
+    // Band/Segment Zoom toggle off the pan's radio-authoritative model state
+    // (togglePanZoomModeForPan) — shared with the keyboard/MIDI shortcuts
+    // (MainWindow_Shortcuts.cpp) and the RC28/FlexControl paths
+    // (MainWindow_Controllers.cpp), and per-pan by construction. This right-click
+    // menu targets THIS applet's pan, not the active slice's. (#4057)
     connect(sw, &SpectrumWidget::bandZoomRequested,
             this, [this, applet]() {
-        m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 band_zoom=%2")
-                .arg(applet->panId()).arg(m_flexVirtualBandZoomOn ? 1 : 0));
+        togglePanZoomModeForPan(applet->panId(), /*segmentZoom=*/false);
     });
     connect(sw, &SpectrumWidget::segmentZoomRequested,
             this, [this, applet]() {
-        m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 segment_zoom=%2")
-                .arg(applet->panId()).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
+        togglePanZoomModeForPan(applet->panId(), /*segmentZoom=*/true);
     });
     connect(sw, &SpectrumWidget::filterChangeRequested,
             this, [this](int lo, int hi) {

@@ -307,6 +307,10 @@ void FlexBackend::decodePanState(const QString& panId,
     carry(kvs, "daxiq_channel", st);
     carry(kvs, "client_handle", st);
     carry(kvs, "waterfall", st);
+    // Radio-owned zoom-mode flags (#4057); the model mirrors FlexLib's
+    // uint-parse + >1-invalid semantics (Panadapter.cs 933/1159).
+    carry(kvs, "band_zoom", st);
+    carry(kvs, "segment_zoom", st);
     if (!st.isEmpty()) {
         st.insert(QStringLiteral("panId"), panId);
         emit extensionStatus(QStringLiteral("flex"),

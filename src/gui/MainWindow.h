@@ -191,12 +191,19 @@ public:
     QsoRecorder* qsoRecorder() const { return m_qsoRecorder; }  // automation bridge
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
+    // fireShortcutAction result codes. Plain ints (not enum class) because the
+    // value crosses QMetaObject::invokeMethod as an int return.
+    static constexpr int ShortcutFireOk              = 0;
+    static constexpr int ShortcutFireUnknownId       = 1;
+    static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
+    static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
     // Fire a registered ShortcutManager action by id — the exact path a MIDI
     // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
     // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
-    // that carry no default key sequence and no menu entry. Returns true if the
-    // action id existed and its handler ran.
-    Q_INVOKABLE bool fireShortcutAction(const QString& id);
+    // that carry no default key sequence and no menu entry. allowTx gates
+    // actions registered keysTx (the caller decides policy; the registration
+    // site declares the data). Returns a ShortcutFire* code.
+    Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;
@@ -821,8 +828,10 @@ private:
     double               m_flexTargetMhz{-1.0};
     FlexWheelMode        m_flexWheelMode{FlexWheelMode::Frequency};
     int                  m_flexActiveLedButton{0};
-    bool                 m_flexVirtualBandZoomOn{false};
-    bool                 m_flexVirtualSegmentZoomOn{false};
+    // (No client-side band/segment zoom bools: the toggles read the pan's
+    // radio-authoritative model state — togglePanZoomModeForPan, #4057.)
+    void togglePanZoomMode(bool segmentZoom);
+    void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);

@@ -1742,7 +1742,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, whoami, log, mark)";
+        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, shortcut, whoami, log, mark)";
     return true;
 }
 
@@ -4188,41 +4188,59 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
 // action's handler (fireShortcut in MainWindow_Controllers.cpp). Actions with no
 // default key sequence and no menu entry — Band Zoom, Segment Zoom, and every
 // other MIDI-only trigger — are otherwise unreachable by the bridge, so this
-// verb exercises exactly that path. The handler runs synchronously; the zoom
-// handlers only sendCommand(), so no nested event loop (unlike menu triggers).
+// verb exercises exactly that path.
+//
+// TX-safety: actions registered keysTx (MOX/TUNE/two-tone/ATU start/PTT hold/CW
+// keys — declared at each registerAction site, the same single-source pattern
+// as markTxKeying for widgets) are refused unless AETHER_AUTOMATION_ALLOW_TX is
+// set. The gate reads the registration flag, not a bridge-side id list that
+// can drift (#4057 review: a hand-kept list here missed atu_start on day one).
+//
+// The handler runs synchronously in the socket callback; today's handlers only
+// sendCommand()/toggle model state or defer UI work themselves (go_to_freq
+// single-shots into the VFO entry), so no nested event loop. fired:true means
+// the handler RAN — handlers validate preconditions (connected, active slice)
+// and may no-op; verify effects via get/dumpTree, exactly like a MIDI press.
 QJsonObject AutomationServer::doShortcut(const QString& id) const
 {
-    if (id.isEmpty())
+    if (id.isEmpty()) {
         return err(QStringLiteral("shortcut requires an action id, e.g. 'band_zoom'"));
-
-    // TX-safety: the handful of shortcut ids that key the transmitter stay behind
-    // the same AETHER_AUTOMATION_ALLOW_TX gate as the keying verbs.
-    static const QSet<QString> kTxKeyingShortcuts = {
-        QStringLiteral("mox_toggle"),
-        QStringLiteral("tune_toggle"),
-        QStringLiteral("two_tone_tune"),
-    };
-    if (kTxKeyingShortcuts.contains(id)
-        && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
-        qCWarning(lcAutomation).noquote()
-            << "BLOCKED transmit-keying shortcut" << id;
-        return err(QStringLiteral("blocked: '") + id
-                   + QStringLiteral("' is a transmit-keying shortcut (TX-safety guard). "
-                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     }
 
     QWidget* mw = primaryTopLevelWindow();
-    if (!mw)
+    if (!mw) {
         return err(QStringLiteral("no main window to dispatch shortcut"));
+    }
 
-    bool fired = false;
+    const bool allowTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+    int result = -1;
     const bool invoked = QMetaObject::invokeMethod(
         mw, "fireShortcutAction", Qt::DirectConnection,
-        Q_RETURN_ARG(bool, fired), Q_ARG(QString, id));
-    if (!invoked)
+        Q_RETURN_ARG(int, result), Q_ARG(QString, id), Q_ARG(bool, allowTx));
+    if (!invoked) {
         return err(QStringLiteral("fireShortcutAction not invokable on main window"));
-    if (!fired)
+    }
+
+    switch (result) {
+    case 0:  // MainWindow::ShortcutFireOk
+        break;
+    case 1:  // ShortcutFireUnknownId
         return err(QStringLiteral("unknown shortcut action id: ") + id);
+    case 2:  // ShortcutFireNoDirectHandler
+        return err(QStringLiteral("'") + id
+                   + QStringLiteral("' exists but is event-filter-driven (momentary "
+                                    "key action) — it has no direct handler the "
+                                    "bridge can fire"));
+    case 3:  // ShortcutFireTxBlocked
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-keying shortcut" << id;
+        return err(QStringLiteral("blocked: '") + id
+                   + QStringLiteral("' keys the transmitter (TX-safety guard). "
+                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    default:
+        return err(QStringLiteral("unexpected fireShortcutAction result for '")
+                   + id + QStringLiteral("'"));
+    }
 
     qCInfo(lcAutomation).noquote() << "shortcut fired:" << id;
     return QJsonObject{

@@ -433,25 +433,10 @@ void MainWindow::handleFlexControlButton(int button, int action)
     } else if (actionName == "ToggleApf") {
         if (auto* s = activeSlice()) s->setApf(!s->apfOn());
     } else if (actionName == "BandZoom") {
-        auto* s = activeSlice();
-        if (!s) return;
-        const QString panId = !s->panId().isEmpty()
-            ? s->panId()
-            : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-        if (panId.isEmpty()) return;
-        m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
-        m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
-            .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
+        // Radio-authoritative per-pan toggle shared by all entry points (#4057).
+        togglePanZoomMode(/*segmentZoom=*/false);
     } else if (actionName == "SegmentZoom") {
-        auto* s = activeSlice();
-        if (!s) return;
-        const QString panId = !s->panId().isEmpty()
-            ? s->panId()
-            : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-        if (panId.isEmpty()) return;
-        m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
-        m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
-            .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
+        togglePanZoomMode(/*segmentZoom=*/true);
     } else if (actionName == "NextSlice") {
         const auto& slices = m_radioModel.slices();
         if (slices.size() > 1) {
@@ -975,27 +960,10 @@ void MainWindow::dispatchHidAction(const QString& actionName,
 #endif
         }
     } else if (actionName == "BandZoom") {
-        auto* s = activeSlice();
-        if (s) {
-            const QString panId = !s->panId().isEmpty() ? s->panId()
-                : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-            if (!panId.isEmpty()) {
-                m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
-                m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
-                    .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
-            }
-        }
+        // Radio-authoritative per-pan toggle shared by all entry points (#4057).
+        togglePanZoomMode(/*segmentZoom=*/false);
     } else if (actionName == "SegmentZoom") {
-        auto* s = activeSlice();
-        if (s) {
-            const QString panId = !s->panId().isEmpty() ? s->panId()
-                : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-            if (!panId.isEmpty()) {
-                m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
-                m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
-                    .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
-            }
-        }
+        togglePanZoomMode(/*segmentZoom=*/true);
     } else if (actionName == "NextSlice") {
         const auto& slices = m_radioModel.slices();
         if (slices.size() > 1) {
