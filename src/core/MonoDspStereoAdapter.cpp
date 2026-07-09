@@ -9,6 +9,9 @@ namespace {
 constexpr int kChannels = 2;
 constexpr int kSampleRate = 24000;
 constexpr int kMaxBufferedFrames = kSampleRate * 5;
+constexpr int kFrameBytes = kChannels * static_cast<int>(sizeof(float));
+constexpr int kMaxBufferedBytes = kMaxBufferedFrames * kFrameBytes;
+constexpr int kCompactThresholdBytes = kSampleRate * kFrameBytes;
 constexpr float kEnvelopeCoeff = 0.006f;
 constexpr float kAttackCoeff = 0.22f;
 constexpr float kReleaseCoeff = 0.035f;
@@ -27,10 +30,36 @@ float clampSample(float sample)
 void MonoDspStereoAdapter::reset()
 {
     m_dryStereoFifo.clear();
+    m_dryStereoReadOffset = 0;
     m_dryMonoPower = 0.0f;
     m_dryStereoPower = 0.0f;
     m_processedPower = 0.0f;
     m_gain = 1.0f;
+}
+
+int MonoDspStereoAdapter::readableDryStereoBytes() const
+{
+    const qsizetype readableBytes =
+        m_dryStereoFifo.size() - static_cast<qsizetype>(m_dryStereoReadOffset);
+    return readableBytes > 0 ? static_cast<int>(readableBytes) : 0;
+}
+
+void MonoDspStereoAdapter::compactDryStereoFifoIfNeeded()
+{
+    if (m_dryStereoReadOffset <= 0) {
+        return;
+    }
+
+    if (m_dryStereoReadOffset >= m_dryStereoFifo.size()) {
+        m_dryStereoFifo.clear();
+        m_dryStereoReadOffset = 0;
+        return;
+    }
+
+    if (m_dryStereoReadOffset >= kCompactThresholdBytes) {
+        m_dryStereoFifo.remove(0, m_dryStereoReadOffset);
+        m_dryStereoReadOffset = 0;
+    }
 }
 
 void MonoDspStereoAdapter::pushDryStereo(const QByteArray& stereoPcm)
@@ -41,15 +70,16 @@ void MonoDspStereoAdapter::pushDryStereo(const QByteArray& stereoPcm)
 
     m_dryStereoFifo.append(stereoPcm);
 
-    const int maxBytes = kMaxBufferedFrames * kChannels * static_cast<int>(sizeof(float));
-    if (m_dryStereoFifo.size() > maxBytes) {
-        const int extraBytes = m_dryStereoFifo.size() - maxBytes;
-        const int alignedExtraBytes =
-            extraBytes - (extraBytes % (kChannels * static_cast<int>(sizeof(float))));
+    const int readableBytes = readableDryStereoBytes();
+    if (readableBytes > kMaxBufferedBytes) {
+        const int extraBytes = readableBytes - kMaxBufferedBytes;
+        const int alignedExtraBytes = extraBytes - (extraBytes % kFrameBytes);
         if (alignedExtraBytes > 0) {
-            m_dryStereoFifo.remove(0, alignedExtraBytes);
+            m_dryStereoReadOffset += alignedExtraBytes;
         }
     }
+
+    compactDryStereoFifoIfNeeded();
 }
 
 QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, int frames)
@@ -58,14 +88,14 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         return {};
     }
 
-    const int outputBytes = frames * kChannels * static_cast<int>(sizeof(float));
+    const int outputBytes = frames * kFrameBytes;
     QByteArray output(outputBytes, Qt::Uninitialized);
     auto* dst = reinterpret_cast<float*>(output.data());
 
-    const int availableFrames =
-        m_dryStereoFifo.size() / (kChannels * static_cast<int>(sizeof(float)));
+    const int availableFrames = readableDryStereoBytes() / kFrameBytes;
     const int dryFrames = std::min(frames, availableFrames);
-    const auto* dry = reinterpret_cast<const float*>(m_dryStereoFifo.constData());
+    const auto* dry = reinterpret_cast<const float*>(
+        m_dryStereoFifo.constData() + m_dryStereoReadOffset);
 
     for (int i = 0; i < dryFrames; ++i) {
         const float left = dry[i * kChannels];
@@ -102,8 +132,8 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
     }
 
     if (dryFrames > 0) {
-        m_dryStereoFifo.remove(
-            0, dryFrames * kChannels * static_cast<int>(sizeof(float)));
+        m_dryStereoReadOffset += dryFrames * kFrameBytes;
+        compactDryStereoFifoIfNeeded();
     }
 
     return output;
@@ -111,7 +141,7 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
 
 int MonoDspStereoAdapter::bufferedFrames() const
 {
-    return m_dryStereoFifo.size() / (kChannels * static_cast<int>(sizeof(float)));
+    return readableDryStereoBytes() / kFrameBytes;
 }
 
 } // namespace AetherSDR

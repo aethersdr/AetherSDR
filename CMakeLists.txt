@@ -1960,6 +1960,7 @@ if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCES
     add_executable(nvidia_afx_filter_test
         tests/nvidia_afx_filter_test.cpp
         src/core/NvidiaAfxFilter.cpp
+        src/core/MonoDspStereoAdapter.cpp
         src/core/Resampler.cpp
     )
     target_compile_definitions(nvidia_afx_filter_test PRIVATE HAVE_NVIDIA_AFX)

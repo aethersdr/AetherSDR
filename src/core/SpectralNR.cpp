@@ -435,6 +435,11 @@ void SpectralNR::process(const float* input, float* output, int numSamples)
         return;
     }
 
+    if (hasPlanFailed()) {
+        std::memmove(output, input, numSamples * sizeof(float));
+        return;
+    }
+
     // The overlap-add rings are sized for streaming at the native hop cadence.
     // Larger packet-sized calls can wrap the output ring before the call reads
     // its output, aliasing future synthesis data into the returned samples.
@@ -491,6 +496,11 @@ void SpectralNR::process(const float* input, float* output, int numSamples)
 void SpectralNR::processStereoSharedMask(const float* input, float* output, int numFrames)
 {
     if (numFrames <= 0) {
+        return;
+    }
+
+    if (hasPlanFailed()) {
+        std::memmove(output, input, numFrames * 2 * sizeof(float));
         return;
     }
 

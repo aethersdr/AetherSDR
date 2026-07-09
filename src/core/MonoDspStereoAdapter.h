@@ -16,7 +16,11 @@ public:
     int bufferedFrames() const;
 
 private:
+    int readableDryStereoBytes() const;
+    void compactDryStereoFifoIfNeeded();
+
     QByteArray m_dryStereoFifo;
+    int m_dryStereoReadOffset{0};
     float m_dryMonoPower{0.0f};
     float m_dryStereoPower{0.0f};
     float m_processedPower{0.0f};
