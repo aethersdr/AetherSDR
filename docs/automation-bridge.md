@@ -160,7 +160,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
-| | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/diversity/centerlock/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -741,9 +741,10 @@ recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
 ### `slice`
-Slice lifecycle, TX assignment, antennas, and receive source. All actions are
-RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
-(radio-authoritative); re-poll `get slices`.
+Slice lifecycle, diversity, Center Lock, TX assignment, antennas, and receive
+source. All actions are RX/config — none keys the transmitter.
+`add`/`remove`/`tx`/`diversity` are async (radio-authoritative); re-poll
+`get slices`.
 
 ```json
 → {"cmd":"slice","action":"add","value":"14.074"}
@@ -759,6 +760,8 @@ RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
+| `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
+| `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
