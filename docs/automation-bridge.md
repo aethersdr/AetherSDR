@@ -873,13 +873,28 @@ Two forms:
   clicks whatever `QApplication::widgetAt(x, y)` resolves (the topmost widget at
   that point).
 - **`clickAt <target> <x> <y>`** — `x y` are **local** to `<target>` (like
-  `hitTest`); the click is routed to the deepest `childAt` that point.
+  `hitTest`); the point must lie inside the target's rect, and the click is
+  routed to the deepest `childAt` that point.
 
-The click is **TX-guarded** exactly like `invoke`: if the resolved widget is a
-transmit-keying control it is refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — a
-coordinate click is never a hole around the keying gate. Delivery is deferred one
-main-loop turn (`"deferred":true`), so any popup/dialog it raises runs on a clean
-stack; follow with `dumpTree`/`grab` to read the result.
+The click is **TX-guarded** like `invoke`, but stricter: the guard walks the
+**whole ancestor chain** of the widget under the point (Qt propagates an
+unaccepted press to parents, so a click on a passive child of a keying control
+must be refused too) and is refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — a
+coordinate click is never a hole around the keying gate. Clicks on the RF/Tune
+power sliders are refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a
+groove click can't be clamped — use `invoke … setValue`, which is). A disabled
+widget under the point is refused (`"disabled":true`), same as `invoke`.
+
+Delivery is deferred one main-loop turn (`"deferred":true`), so any popup/dialog
+it raises runs on a clean stack; follow with `dumpTree`/`grab` to read the
+result. Because the reply is sent **before** delivery, anything already queued
+(a relayout, a pan re-center) can change what that pixel means by the time the
+press lands — re-`dumpTree` right before `clickAt` and don't interleave other
+mutating verbs in between.
+
+In the reply, `localX`/`localY` are local to the widget the click was **routed
+to** (`clicked`) — the deepest child — not to the named `<target>`, so for the
+target-local form they generally differ from the `x y` you sent.
 
 ```json
 → {"cmd":"clickAt","x":1420,"y":210}          // global point (or "value":"1420 210")
@@ -888,8 +903,12 @@ stack; follow with `dumpTree`/`grab` to read the result.
 
 → {"cmd":"clickAt","target":"AppletPanel","value":"12 34"}   // point local to a widget
 ← {"ok":true,"clicked":{"class":"…"},"globalX":1318,"globalY":97,
-   "localX":12,"localY":34,"deferred":true}
+   "localX":5,"localY":3,"deferred":true}     // local to `clicked`, not to AppletPanel
 ```
+
+The JSON `x`/`y` fields must both be present and JSON-numeric; a missing or
+string-typed coordinate is rejected rather than coerced to 0 (which would click
+the screen edge).
 
 Recipe — close a **specific** side-panel tile (not just the first `containerClose`):
 read the target tile's `containerClose` rect from `dumpTree`, compute its centre in

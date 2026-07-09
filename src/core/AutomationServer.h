@@ -325,7 +325,9 @@ private:
     // target, x/y are GLOBAL screen coordinates (matching dumpTree geometry); with
     // a target they are LOCAL to that widget. Generic fallback for when name/text
     // matching is ambiguous (e.g. several tiles share accessibleName
-    // "containerClose" and only the first is reachable by invoke). TX-gated.
+    // "containerClose" and only the first is reachable by invoke). TX-gated on the
+    // whole ancestor chain; disabled widgets and (with the power ceiling armed)
+    // the RF/Tune power sliders are refused.
     QJsonObject doClickAt(const QString& target, const QString& value) const;
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`

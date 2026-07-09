@@ -1959,9 +1959,16 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         timeoutMs = obj.value(QStringLiteral("timeoutMs")).toInt(0);
         // clickAt accepts numeric x/y fields directly (dumpTree geometry is
         // global), folded into `value` as "x y" so both request forms share one
-        // code path. Explicit `value` still wins if supplied.
-        if (cmd == QLatin1String("clickAt") && value.isEmpty()
-            && (obj.contains(QStringLiteral("x")) || obj.contains(QStringLiteral("y")))) {
+        // code path. Explicit `value` still wins if supplied. Fold ONLY when
+        // both fields are present and JSON-numeric: toInt() coerces a missing
+        // field or a string-typed number to 0, which would turn a malformed
+        // request into a real click at the screen edge (or (0,0)) instead of
+        // an error — leave value empty so doClickAt rejects it. Match the verb
+        // case-insensitively like the dispatcher does.
+        if ((cmd == QLatin1String("clickAt") || cmd == QLatin1String("clickat"))
+            && value.isEmpty()
+            && obj.value(QStringLiteral("x")).isDouble()
+            && obj.value(QStringLiteral("y")).isDouble()) {
             value = QString::number(obj.value(QStringLiteral("x")).toInt())
                     + QLatin1Char(' ')
                     + QString::number(obj.value(QStringLiteral("y")).toInt());
@@ -4772,11 +4779,21 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
 // centre of the target's dumpTree rect and you click exactly that widget. With a
 // target, x/y are interpreted LOCAL to that widget instead (like hitTest).
 //
-// Safety: the click is routed to the deepest child under the point and passed
-// through the SAME TX-keying guard as invoke() — a coordinate click must never
-// be a hole around AETHER_AUTOMATION_ALLOW_TX. Delivery (press+release) is
-// deferred to a clean main-loop turn so any popup menu/dialog the click raises
-// runs on a normal stack, mirroring the invoke() re-entrancy fix.
+// Safety: the click is routed to the deepest child under the point, but the
+// TX-keying guard walks the WHOLE ancestor chain from that child to its window.
+// Qt re-delivers an unaccepted press to parentWidget() until some ancestor
+// accepts it, so guarding only the hit widget would let a click on a passive
+// child (a QLabel inside a composite button — see PanLayoutDialog for the live
+// pattern) propagate into an unguarded keying parent. Guarding the chain makes
+// the check match Qt's delivery semantics — safe by construction, not by the
+// accident that today's keying buttons happen to be childless. A coordinate
+// click must never be a hole around AETHER_AUTOMATION_ALLOW_TX. (#3646 safety.)
+// For the same propagation reason a disabled hit widget is refused outright:
+// Qt drops input to disabled widgets, so the click would either silently no-op
+// (while we report ok:true) or fall through to an unvetted ancestor.
+// Delivery (press+release) is deferred to a clean main-loop turn so any popup
+// menu/dialog the click raises runs on a normal stack, mirroring the invoke()
+// re-entrancy fix.
 QJsonObject AutomationServer::doClickAt(const QString& target,
                                         const QString& value) const
 {
@@ -4809,23 +4826,79 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
             return err(QStringLiteral("refused: '") + target
                        + QStringLiteral("' is not visible"));
         const QPoint local(x, y);
+        // Out-of-bounds local points must not click at all: Qt would translate
+        // the press up the parent chain and land it on an ancestor the caller
+        // never named (and the TX guard below never saw the reply claim for).
+        if (!w->rect().contains(local)) {
+            return err(QStringLiteral("clickAt: (") + QString::number(x)
+                       + QStringLiteral(", ") + QString::number(y)
+                       + QStringLiteral(") is outside '") + target
+                       + QStringLiteral("' (") + QString::number(w->width())
+                       + QStringLiteral("x") + QString::number(w->height())
+                       + QStringLiteral(")"));
+        }
         global = w->mapToGlobal(local);
         if (QWidget* child = w->childAt(local))
             w = child;  // route to the deepest child for a faithful click
     }
 
+    // Refuse a disabled hit widget, exactly like invoke(): Qt drops input
+    // events to disabled widgets, so the click is a silent no-op that we would
+    // otherwise report as ok:true — the control is greyed out for a reason.
+    // isEnabled() is effective (false if any ancestor is disabled). (#3646)
+    if (!w->isEnabled()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: '") + shortClassName(w)
+                                + QStringLiteral("' at the point is disabled — "
+                                                 "the click would be dropped")},
+                           {QStringLiteral("disabled"), true},
+                           {QStringLiteral("class"), shortClassName(w)}};
+    }
+
     // TX-safety guard — a raw coordinate click must honor the same opt-in as
-    // invoke(), or it becomes a bypass around the keying gate. (#3646 safety.)
-    if (isTransmitControl(w)
-        && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
-        qCWarning(lcAutomation).noquote()
-            << "BLOCKED transmit-related clickAt on" << shortClassName(w)
-            << "at global" << global;
-        return err(QStringLiteral("blocked: point resolves to '")
-                   + shortClassName(w)
-                   + QStringLiteral("', a transmit-keying control (TX-safety "
-                                    "guard). Set AETHER_AUTOMATION_ALLOW_TX=1 "
-                                    "to override."));
+    // invoke(), or it becomes a bypass around the keying gate. Walk the whole
+    // ancestor chain (see the function comment): an unaccepted press propagates
+    // to parents, so every widget Qt could deliver this click to must pass.
+    // (#3646 safety.)
+    if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+        for (const QWidget* p = w; p; p = p->parentWidget()) {
+            if (!isTransmitControl(p)) {
+                continue;
+            }
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED transmit-related clickAt on" << shortClassName(w)
+                << "(keying control in chain:" << shortClassName(p)
+                << ") at global" << global;
+            return err(QStringLiteral("blocked: point resolves into '")
+                       + shortClassName(p)
+                       + QStringLiteral("', a transmit-keying control (TX-safety "
+                                        "guard). Set AETHER_AUTOMATION_ALLOW_TX=1 "
+                                        "to override."));
+        }
+    }
+
+    // Power-ceiling rail (#3646): invoke() clamps RF/Tune power setValue to
+    // AETHER_AUTOMATION_TX_MAX_POWER, but a groove click on the slider pages
+    // the setpoint to an arbitrary value we cannot clamp after the fact. When
+    // the rail is armed, refuse the click and point at the clamped path instead
+    // of letting a coordinate click walk power past the configured ceiling.
+    if (m_txMaxPower >= 0) {
+        for (const QWidget* p = w; p; p = p->parentWidget()) {
+            const QString an = p->accessibleName();
+            if (an == QLatin1String("RF power")
+                || an == QLatin1String("Tune power")) {
+                qCWarning(lcAutomation).noquote()
+                    << "BLOCKED clickAt on power slider" << an
+                    << "— power ceiling" << m_txMaxPower
+                    << "is armed; use invoke setValue (clamped)";
+                return err(QStringLiteral("blocked: '") + an
+                           + QStringLiteral("' click would bypass the power "
+                                            "ceiling (AETHER_AUTOMATION_TX_MAX_"
+                                            "POWER). Use `invoke '") + an
+                           + QStringLiteral("' setValue <n>`, which clamps."));
+            }
+        }
     }
 
     const QPoint local = w->mapFromGlobal(global);

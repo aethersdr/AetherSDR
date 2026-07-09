@@ -204,14 +204,26 @@ def main():
         elif args.command == "clickAt":
             # clickAt <x> <y>            -> global screen coords (dumpTree geometry)
             # clickAt <target> <x> <y>  -> coords local to <target>
-            if len(args.rest) < 2:
-                sys.exit("error: clickAt needs <x> <y> or <target> <x> <y>")
-            req = {"cmd": "clickAt"}
-            if args.rest[0].lstrip("-").isdigit():
-                req["value"] = f"{args.rest[0]} {args.rest[1]}"
+            # Disambiguate like the server: first token numeric => global form.
+            # int() (not isdigit) so a float like 1420.5 errors loudly instead
+            # of being reclassified as a widget NAME ("widget not found: 1420.5").
+            def _as_int(tok):
+                try:
+                    return int(tok)
+                except ValueError:
+                    return None
+
+            if len(args.rest) >= 2 and _as_int(args.rest[0]) is not None:
+                if _as_int(args.rest[1]) is None:
+                    sys.exit(f"error: clickAt y must be an integer, got {args.rest[1]!r}")
+                req = {"cmd": "clickAt", "value": f"{args.rest[0]} {args.rest[1]}"}
+            elif len(args.rest) >= 3 and _as_int(args.rest[0]) is None:
+                if _as_int(args.rest[1]) is None or _as_int(args.rest[2]) is None:
+                    sys.exit("error: clickAt <target> <x> <y> — x and y must be integers")
+                req = {"cmd": "clickAt", "target": args.rest[0],
+                       "value": f"{args.rest[1]} {args.rest[2]}"}
             else:
-                req["target"] = args.rest[0]
-                req["value"] = " ".join(args.rest[1:3])
+                sys.exit("error: clickAt needs <x> <y> or <target> <x> <y>")
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "resize":
