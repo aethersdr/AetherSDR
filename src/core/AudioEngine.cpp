@@ -1592,13 +1592,21 @@ AudioEngine::AudioEngine(QObject* parent)
         if (len > 0)
         {
             QByteArray chunk;
-            auto emitOutputSource = [this, sampleRate](
+            auto emitOutputSource = [this, sampleRate, anyKiwiAudio](
                                         const QString& source,
                                         const QString& sourceId,
                                         const QByteArray& pcm) {
                 if (!pcm.isEmpty()) {
                     captureAutomationAudio(QStringLiteral("output"), source,
                                            sourceId, pcm, sampleRate, 2);
+                    if (!anyKiwiAudio) {
+                        m_receivePresentationOutputSignalSuppressedCount
+                            .fetch_add(1, std::memory_order_relaxed);
+                        return;
+                    }
+
+                    m_receivePresentationOutputSignalEmitCount.fetch_add(
+                        1, std::memory_order_relaxed);
                     emit receivePresentationOutputAudioReady(
                         source, sourceId, pcm, sampleRate);
                 }

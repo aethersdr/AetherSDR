@@ -115,6 +115,38 @@ automated draft-staging flow below) is the only "publish" step needed —
 Partner Center decodes future crash stacks against the bundled `.appxsym`
 automatically, with no further action required.
 
+### Symbolizing a crash dump (macOS / Linux)
+
+You don't need Windows or WinDbg to symbolize a reporter's crash. The
+[`rust-minidump`](https://github.com/rust-minidump/rust-minidump) toolchain
+works cross-platform against the same PDB:
+
+1. **Get the reporter's dump.** A Windows Error Reporting minidump lives in
+   `%LOCALAPPDATA%\CrashDumps\AetherSDR.exe.<pid>.dmp` (enable full dumps via
+   the `HKLM\...\Windows Error Reporting\LocalDumps` key, `DumpType=2`). Store
+   Partner Center TSVs are unsymbolized — always request the `.dmp`.
+2. **Get the matching PDB** — it must be the *exact* build that crashed or the
+   debug-id won't match. Pull the `Windows-Symbols` artifact from the
+   `windows-installer.yml` CI run for that tag/branch:
+   `gh run download <run-id> -R aethersdr/AetherSDR -n Windows-Symbols`.
+3. **Convert + walk.** [`dump_syms`](https://github.com/mozilla/dump_syms)
+   turns the PDB into a Breakpad `.sym`; `minidump-stackwalk` walks the dump
+   and matches modules by debug-id:
+   ```sh
+   dump_syms --store ./symbols AetherSDR.pdb          # → symbols/AetherSDR.pdb/<id>/AetherSDR.sym
+   minidump-stackwalk --human --symbols-path ./symbols \
+     --symbols-url https://msdl.microsoft.com/download/symbols \
+     AetherSDR.exe.<pid>.dmp
+   ```
+   Our frames symbolize from the `.sym`; the `--symbols-url` resolves Windows
+   system DLLs. Third-party GPU/driver frames (e.g. Intel `igd10iumd64.dll`)
+   stay as `module+offset` — usually enough, since the value is in *our*
+   caller frames leading into the driver. If the crashing thread won't unwind
+   past a driver frame (no CFI), fall back to a manual stack scan: parse the
+   dump's `Memory64ListStream`, find the region containing the thread's `rsp`,
+   and scan 8-byte-aligned values for pointers into `AetherSDR.exe` (resolve
+   offsets against the `.sym` `FUNC` table).
+
 ## Known WACK Follow-Ups
 
 The Windows App Certification Kit currently gives useful Store-readiness

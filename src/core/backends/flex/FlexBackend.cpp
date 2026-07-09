@@ -303,10 +303,16 @@ void FlexBackend::decodePanState(const QString& panId,
     carry(kvs, "loopa", st);
     carry(kvs, "loopb", st);
     carry(kvs, "fps", st);
+    carry(kvs, "average", st);
+    carry(kvs, "weighted_average", st);
     carry(kvs, "pre", st);
     carry(kvs, "daxiq_channel", st);
     carry(kvs, "client_handle", st);
     carry(kvs, "waterfall", st);
+    // Radio-owned zoom-mode flags (#4057); the model mirrors FlexLib's
+    // uint-parse + >1-invalid semantics (Panadapter.cs 933/1159).
+    carry(kvs, "band_zoom", st);
+    carry(kvs, "segment_zoom", st);
     if (!st.isEmpty()) {
         st.insert(QStringLiteral("panId"), panId);
         emit extensionStatus(QStringLiteral("flex"),
@@ -623,6 +629,71 @@ void FlexBackend::decodeAtuStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "memories_enabled", d.memoriesEnabled);
     carry(kvs, "using_mem", d.usingMemory);
     emit transmitChanged(d);
+}
+
+void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& model,
+                                        const QMap<QString, QString>& kvs, bool removed)
+{
+    // Stateless translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
+    // (#4094). The presence latch, operate change-gating, and handle matching are
+    // the model's job (AmpModel::applyChanges) — this only reports what the wire
+    // said. Command/encode is not here (stays AmpModel::commandReady, step 3).
+    AmpDelta d;
+    d.handle = handle;
+    if (removed) {
+        d.removed = true;
+        emit amplifierChanged(d);
+        return;
+    }
+    // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
+    // the tuner and routes to TunerModel, not here.
+    if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
+        d.detectedModel = model;
+        if (kvs.contains(QStringLiteral("ip")))
+            d.ip = kvs.value(QStringLiteral("ip"));
+    }
+    // Operate/standby from the wire "state": IDLE/OPERATE/TRANSMIT* → on, else off.
+    // Gate on non-empty VALUE (not just key presence) to match the prior
+    // AmpModel::applyStatus exactly — a bare "state=" must not flip operate.
+    const QString state = kvs.value(QStringLiteral("state")).toUpper();
+    if (!state.isEmpty()) {
+        d.operate = (state == QLatin1String("IDLE")
+                     || state == QLatin1String("OPERATE")
+                     || state.startsWith(QLatin1String("TRANSMIT")));
+    }
+    d.telemetry = kvs;
+    emit amplifierChanged(d);
+}
+
+void FlexBackend::decodeTunerStatus(const QMap<QString, QString>& kvs)
+{
+    // Present-only, strict parity with the prior TunerModel::applyStatus: bools
+    // are "1"-equality, ints are unguarded toInt() (matching val.toInt()), text
+    // is verbatim. The change-gating / edge signals live in TunerModel::applyChanges.
+    TunerDelta d;
+    if (kvs.contains(QStringLiteral("serial_num")))
+        d.serialNum = kvs.value(QStringLiteral("serial_num"));
+    if (kvs.contains(QStringLiteral("model")))
+        d.model = kvs.value(QStringLiteral("model"));
+    if (kvs.contains(QStringLiteral("ip")))
+        d.ip = kvs.value(QStringLiteral("ip"));
+    if (kvs.contains(QStringLiteral("operate")))
+        d.operate = (kvs.value(QStringLiteral("operate")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("bypass")))
+        d.bypass = (kvs.value(QStringLiteral("bypass")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("tuning")))
+        d.tuning = (kvs.value(QStringLiteral("tuning")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("relayC1")))
+        d.relayC1 = kvs.value(QStringLiteral("relayC1")).toInt();
+    if (kvs.contains(QStringLiteral("relayC2")))
+        d.relayC2 = kvs.value(QStringLiteral("relayC2")).toInt();
+    if (kvs.contains(QStringLiteral("relayL")))
+        d.relayL = kvs.value(QStringLiteral("relayL")).toInt();
+    if (kvs.contains(QStringLiteral("antA")))
+        d.antennaA = kvs.value(QStringLiteral("antA")).toInt();
+    if (kvs.contains(QStringLiteral("one_by_three")))
+        d.oneByThree = (kvs.value(QStringLiteral("one_by_three")) == QLatin1String("1"));
+    emit tunerChanged(d);
 }
 
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)

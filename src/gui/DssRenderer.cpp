@@ -136,6 +136,75 @@ std::array<float, DssRenderer::kCols> reprojectRow(
     return remapped;
 }
 
+std::array<float, DssRenderer::kCols> resampledRawRow(
+    const QVector<float>& binsDbm,
+    float fallback)
+{
+    std::array<float, DssRenderer::kCols> row;
+    const int n = binsDbm.size();
+    if (n <= 0) {
+        row.fill(fallback);
+        return row;
+    }
+
+    if (n == DssRenderer::kCols) {
+        for (int c = 0; c < DssRenderer::kCols; ++c) {
+            row[c] = std::isfinite(binsDbm[c]) ? binsDbm[c] : fallback;
+        }
+    } else {
+        const double step = static_cast<double>(n) / DssRenderer::kCols;
+        for (int c = 0; c < DssRenderer::kCols; ++c) {
+            int i0 = static_cast<int>(std::floor(c * step));
+            int i1 = static_cast<int>(std::ceil((c + 1) * step));
+            i0 = std::clamp(i0, 0, n - 1);
+            i1 = std::clamp(i1, i0 + 1, n);
+            float mx = std::isfinite(binsDbm[i0]) ? binsDbm[i0] : fallback;
+            for (int i = i0 + 1; i < i1; ++i) {
+                if (std::isfinite(binsDbm[i])) {
+                    mx = std::max(mx, binsDbm[i]);
+                }
+            }
+            row[c] = mx;
+        }
+    }
+
+    return row;
+}
+
+std::array<float, DssRenderer::kCols> smoothDssRow(
+    const std::array<float, DssRenderer::kCols>& raw,
+    std::array<float, DssRenderer::kCols>& rawPrev1,
+    std::array<float, DssRenderer::kCols>& rawPrev2,
+    int& rawHistCount,
+    const std::array<float, DssRenderer::kCols>* previousSmoothed)
+{
+    std::array<float, DssRenderer::kCols> row = raw;
+    if (rawHistCount >= 2) {
+        for (int c = 0; c < DssRenderer::kCols; ++c) {
+            row[c] = median3(raw[c], rawPrev1[c], rawPrev2[c]);
+        }
+    }
+
+    rawPrev2 = rawPrev1;
+    rawPrev1 = raw;
+    rawHistCount = std::min(rawHistCount + 1, 2);
+
+    std::array<float, DssRenderer::kCols> smoothed = row;
+    for (int c = 0; c < DssRenderer::kCols; ++c) {
+        const float a = row[std::max(0, c - 1)];
+        const float b = row[c];
+        const float d = row[std::min(DssRenderer::kCols - 1, c + 1)];
+        smoothed[c] = 0.25f * a + 0.5f * b + 0.25f * d;
+    }
+    if (previousSmoothed != nullptr) {
+        for (int c = 0; c < DssRenderer::kCols; ++c) {
+            smoothed[c] = kTemporalAlpha * smoothed[c]
+                + (1.0f - kTemporalAlpha) * (*previousSmoothed)[c];
+        }
+    }
+    return smoothed;
+}
+
 } // namespace
 
 void DssRenderer::clear()
@@ -144,6 +213,9 @@ void DssRenderer::clear()
     m_count = 0;
     m_dirty = true;
     m_rawHistCount = 0;
+    m_historyWriteRow = 0;
+    m_historyRowCount = 0;
+    resetHistorySmoothing();
 }
 
 const std::array<float, DssRenderer::kCols>&
@@ -155,78 +227,138 @@ DssRenderer::rowAt(int age) const
 
 void DssRenderer::pushRow(const QVector<float>& binsDbm)
 {
-    const int n = binsDbm.size();
-    std::array<float, kCols> nr;
-
-    if (n <= 0) {
-        nr.fill(-200.0f);
-    } else {
-        std::array<float, kCols> raw;
-        if (n == kCols) {
-            for (int c = 0; c < kCols; ++c) {
-                raw[c] = binsDbm[c];
-            }
-        } else {
-            const double step = static_cast<double>(n) / kCols;
-            for (int c = 0; c < kCols; ++c) {
-                // Peak-preserving downsample: take the strongest bin in the source
-                // span so signals survive as ridges. Upsampling (n < kCols)
-                // collapses the span to a single source bin.
-                int i0 = static_cast<int>(std::floor(c * step));
-                int i1 = static_cast<int>(std::ceil((c + 1) * step));
-                i0 = std::clamp(i0, 0, n - 1);
-                i1 = std::clamp(i1, i0 + 1, n);
-                float mx = binsDbm[i0];
-                for (int i = i0 + 1; i < i1; ++i) {
-                    mx = std::max(mx, binsDbm[i]);
-                }
-                raw[c] = mx;
-            }
-        }
-
-        // Temporal median-of-3 impulse rejection. A strong broadband
-        // interference burst lasts only ~1 FFT frame but, once stored, becomes a
-        // full-height "wall" that recedes (and flickers) across the whole
-        // surface. As the outlier of {this, prev, prev2}, such a 1-frame spike
-        // is discarded here before it ever enters the height history. Steady
-        // signals are the median of ~equal values, so they pass through
-        // unchanged (this is an outlier rejector, not a low-pass).
-        if (m_rawHistCount >= 2) {
-            for (int c = 0; c < kCols; ++c) {
-                nr[c] = median3(raw[c], m_rawPrev1[c], m_rawPrev2[c]);
-            }
-        } else {
-            nr = raw;
-        }
-        // Shift the raw history (store the ORIGINAL raw row, not the median).
-        m_rawPrev2 = m_rawPrev1;
-        m_rawPrev1 = raw;
-        m_rawHistCount = std::min(m_rawHistCount + 1, 2);
-
-        // Spatial 3-tap low-pass — the textbook cure for the peak-detector
-        // "comb" striping (a video-bandwidth analogue).
-        std::array<float, kCols> sm = nr;
-        for (int c = 0; c < kCols; ++c) {
-            const float a = nr[std::max(0, c - 1)];
-            const float b = nr[c];
-            const float d = nr[std::min(kCols - 1, c + 1)];
-            sm[c] = 0.25f * a + 0.5f * b + 0.25f * d;
-        }
-        nr = sm;
-    }
-
-    // Temporal IIR against the current newest row → fluid scroll + denoise.
-    if (m_count > 0) {
-        const auto& prev = m_rows[m_head];
-        for (int c = 0; c < kCols; ++c) {
-            nr[c] = kTemporalAlpha * nr[c] + (1.0f - kTemporalAlpha) * prev[c];
-        }
-    }
+    const std::array<float, kCols> raw = resampledRawRow(binsDbm, -200.0f);
+    const std::array<float, kCols>* previous = m_count > 0
+        ? &m_rows[m_head]
+        : nullptr;
+    const std::array<float, kCols> nr =
+        smoothDssRow(raw, m_rawPrev1, m_rawPrev2, m_rawHistCount, previous);
 
     m_head = (m_head - 1 + kRows) % kRows;
     m_rows[m_head] = nr;
     m_count = std::min(m_count + 1, kRows);
     m_dirty = true;
+    ++m_rowGeneration;
+}
+
+void DssRenderer::setHistoryCapacityRows(int rows)
+{
+    rows = std::max(0, rows);
+    if (rows == m_historyCapacityRows && historyStorageMatchesCapacity()) {
+        return;
+    }
+
+    m_historyCapacityRows = rows;
+    const int expectedSampleCount = rows * kCols;
+    m_historyRows = QVector<qfloat16>(expectedSampleCount);
+    m_historyRowCenterMhz = QVector<double>(rows, 0.0);
+    m_historyRowBandwidthMhz = QVector<double>(rows, 0.0);
+    m_historyWriteRow = 0;
+    m_historyRowCount = 0;
+    resetHistorySmoothing();
+}
+
+bool DssRenderer::historyStorageMatchesCapacity() const
+{
+    const int expectedSampleCount = m_historyCapacityRows * kCols;
+    return m_historyRows.size() == expectedSampleCount
+        && m_historyRowCenterMhz.size() == m_historyCapacityRows
+        && m_historyRowBandwidthMhz.size() == m_historyCapacityRows;
+}
+
+void DssRenderer::resetHistorySmoothing()
+{
+    m_historyRawPrev1 = {};
+    m_historyRawPrev2 = {};
+    m_historyRawHistCount = 0;
+}
+
+void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
+                                   double centerMhz, double bandwidthMhz,
+                                   float fallbackDbm)
+{
+    if (m_historyCapacityRows <= 0) {
+        return;
+    }
+    if (!historyStorageMatchesCapacity()) {
+        setHistoryCapacityRows(m_historyCapacityRows);
+    }
+
+    const std::array<float, kCols> raw = resampledRawRow(binsDbm, fallbackDbm);
+    std::array<float, kCols> previousRow;
+    const std::array<float, kCols>* previous = nullptr;
+    if (m_historyRowCount > 0) {
+        const qfloat16* src = m_historyRows.constData() + m_historyWriteRow * kCols;
+        for (int c = 0; c < kCols; ++c) {
+            previousRow[c] = static_cast<float>(src[c]);
+        }
+        previous = &previousRow;
+    }
+    const std::array<float, kCols> row =
+        smoothDssRow(raw, m_historyRawPrev1, m_historyRawPrev2,
+                     m_historyRawHistCount, previous);
+    m_historyWriteRow =
+        (m_historyWriteRow - 1 + m_historyCapacityRows) % m_historyCapacityRows;
+    qfloat16* dst = m_historyRows.data() + m_historyWriteRow * kCols;
+    for (int c = 0; c < kCols; ++c) {
+        dst[c] = qfloat16(row[c]);
+    }
+    m_historyRowCenterMhz[m_historyWriteRow] = centerMhz;
+    m_historyRowBandwidthMhz[m_historyWriteRow] = bandwidthMhz;
+    m_historyRowCount = std::min(m_historyRowCount + 1, m_historyCapacityRows);
+}
+
+void DssRenderer::rebuildVisibleFromHistory(int offsetRows,
+                                            double centerMhz,
+                                            double bandwidthMhz,
+                                            float fallbackDbm)
+{
+    if (m_historyCapacityRows <= 0
+        || m_historyRowCount <= 0
+        || !historyStorageMatchesCapacity()) {
+        if (m_historyCapacityRows > 0 && !historyStorageMatchesCapacity()) {
+            setHistoryCapacityRows(m_historyCapacityRows);
+        }
+        m_head = 0;
+        m_count = 0;
+        m_dirty = true;
+        m_rawHistCount = 0;
+        ++m_rowGeneration;
+        return;
+    }
+
+    offsetRows = std::clamp(offsetRows, 0, m_historyRowCount - 1);
+    const int rowsToCopy = std::min(kRows, m_historyRowCount - offsetRows);
+    m_head = 0;
+    m_count = rowsToCopy;
+
+    for (int age = 0; age < rowsToCopy; ++age) {
+        const int historyAge = offsetRows + age;
+        const int historyRing =
+            (m_historyWriteRow + historyAge) % m_historyCapacityRows;
+        const qfloat16* src = m_historyRows.constData() + historyRing * kCols;
+        std::array<float, kCols> row;
+        for (int c = 0; c < kCols; ++c) {
+            row[c] = static_cast<float>(src[c]);
+        }
+
+        const double rowCenterMhz = m_historyRowCenterMhz.value(historyRing, 0.0);
+        const double rowBandwidthMhz =
+            m_historyRowBandwidthMhz.value(historyRing, 0.0);
+        if (rowCenterMhz > 0.0 && rowBandwidthMhz > 0.0
+            && centerMhz > 0.0 && bandwidthMhz > 0.0
+            && (rowCenterMhz != centerMhz || rowBandwidthMhz != bandwidthMhz)) {
+            row = reprojectRow(row,
+                               rowCenterMhz, rowBandwidthMhz,
+                               centerMhz, bandwidthMhz,
+                               fallbackDbm);
+        }
+
+        m_rows[age] = row;
+    }
+
+    m_dirty = true;
+    m_rawHistCount = 0;
     ++m_rowGeneration;
 }
 

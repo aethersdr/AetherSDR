@@ -1212,10 +1212,12 @@ QJsonObject sliceSnapshot(const SliceModel* s)
     };
 }
 
-QJsonObject panSnapshot(const PanadapterModel* p, quint32 ourHandle)
+QJsonObject panSnapshot(const PanadapterModel* p, const RadioModel* radio)
 {
+    const quint32 ourHandle = radio ? radio->ourClientHandle() : 0;
+    const QString panId = p->panId();
     return QJsonObject{
-        {QStringLiteral("panId"),        p->panId()},
+        {QStringLiteral("panId"),        panId},
         // #3977: radio-authoritative owner of this pan; assertions on
         // multi-session tests key off these two fields. Empty string (not
         // "0x") when the radio has not yet attributed the pan.
@@ -1231,6 +1233,10 @@ QJsonObject panSnapshot(const PanadapterModel* p, quint32 ourHandle)
         {QStringLiteral("rfGain"),       p->rfGain()},
         {QStringLiteral("wide"),         p->wideActive()},
         {QStringLiteral("fps"),          p->fps()},
+        {QStringLiteral("transmitInhibited"),
+         radio && radio->panTransmitInhibited(panId)},
+        {QStringLiteral("transmitInhibitReason"),
+         radio ? radio->panTransmitInhibitReason(panId) : QString()},
     };
 }
 
@@ -1377,6 +1383,12 @@ QJsonObject audioSnapshot(const AudioEngine* audio)
             static_cast<double>(audio->rxBufferUnderrunCount())},
         {QStringLiteral("rxBufferSampleRate"),
             audio->rxBufferSampleRate()},
+        {QStringLiteral("receivePresentationOutputSignalEmitCount"),
+            static_cast<double>(
+                audio->receivePresentationOutputSignalEmitCount())},
+        {QStringLiteral("receivePresentationOutputSignalSuppressedCount"),
+            static_cast<double>(
+                audio->receivePresentationOutputSignalSuppressedCount())},
         {QStringLiteral("endpoints"),
             audio->audioEndpointDiagnostics()},
     };
@@ -1730,7 +1742,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, whoami, log, mark)";
+        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, clickAt, shortcut, whoami, log, mark)";
     return true;
 }
 
@@ -1945,6 +1957,22 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         detail   = obj.value(QStringLiteral("detail")).toString();
         tone     = obj.value(QStringLiteral("tone")).toString();
         timeoutMs = obj.value(QStringLiteral("timeoutMs")).toInt(0);
+        // clickAt accepts numeric x/y fields directly (dumpTree geometry is
+        // global), folded into `value` as "x y" so both request forms share one
+        // code path. Explicit `value` still wins if supplied. Fold ONLY when
+        // both fields are present and JSON-numeric: toInt() coerces a missing
+        // field or a string-typed number to 0, which would turn a malformed
+        // request into a real click at the screen edge (or (0,0)) instead of
+        // an error — leave value empty so doClickAt rejects it. Match the verb
+        // case-insensitively like the dispatcher does.
+        if ((cmd == QLatin1String("clickAt") || cmd == QLatin1String("clickat"))
+            && value.isEmpty()
+            && obj.value(QStringLiteral("x")).isDouble()
+            && obj.value(QStringLiteral("y")).isDouble()) {
+            value = QString::number(obj.value(QStringLiteral("x")).toInt())
+                    + QLatin1Char(' ')
+                    + QString::number(obj.value(QStringLiteral("y")).toInt());
+        }
     } else {
         // Bare line. Positional by verb:
         //   grab   <target> [path]
@@ -2003,6 +2031,14 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("dss")) {
+            action = tok(1);                  // snapshot | reset | inject | scrollback | live
+            target = tok(2);                  // pan index, optional for snapshot
+            QStringList rest;
+            for (int i = 3; i < p.size(); ++i) {
+                rest << tok(i);
+            }
+            value = rest.join(QLatin1Char(' '));
         } else if (cmd == QLatin1String("qrz")) {
             action = tok(1);  // status | cached | lookup | spottext
             QStringList rest;
@@ -2062,6 +2098,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("window")) {
             action = tok(1);  // maximize | restore | minimize | fullscreen
             target = tok(2);  // optional window target
+        } else if (cmd == QLatin1String("shortcut")) {
+            target = tok(1);  // shortcut/MIDI action id → "shortcut band_zoom"
         } else if (cmd == QLatin1String("menu")) {
             action = tok(1);  // list | open
             QStringList rest;
@@ -2085,6 +2123,18 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                    || cmd == QLatin1String("hittest")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "hitTest SpectrumWidget [x y]"
+        } else if (cmd == QLatin1String("clickAt")
+                   || cmd == QLatin1String("clickat")) {
+            // Overloaded: "clickAt <x> <y>" (global) vs "clickAt <target> <x> <y>"
+            // (target-local). Disambiguate on whether the first token is numeric.
+            bool firstIsNumber = false;
+            tok(1).toInt(&firstIsNumber);
+            if (firstIsNumber) {
+                value = tok(1) + QLatin1Char(' ') + tok(2);  // "clickAt 1301 200"
+            } else {
+                target = tok(1);
+                value = tok(2) + QLatin1Char(' ') + tok(3);  // "clickAt AppletPanel 10 20"
+            }
         } else if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "drag sizeGrip 80 60"
@@ -2157,6 +2207,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("hitTest requires a target widget"));
         return doHitTest(target, value);
     }
+    if (cmd == QLatin1String("clickAt") || cmd == QLatin1String("clickat")) {
+        return doClickAt(target, value);
+    }
     if (cmd == QLatin1String("invoke")) {
         if (target.isEmpty() || action.isEmpty())
             return err(QStringLiteral("invoke requires a target and an action"));
@@ -2164,7 +2217,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("get")) {
         if (model.isEmpty())
-            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans|kiwi)"));
+            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans|panstats|tracedebug|kiwi)"));
         return doGet(model, selector, property);
     }
     if (cmd == QLatin1String("connect")) {
@@ -2213,6 +2266,12 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         }
         return doPanMessage(action, target, id, title, detail, timeoutMs, tone);
     }
+    if (cmd == QLatin1String("dss")) {
+        if (action.isEmpty()) {
+            return err(QStringLiteral("dss requires an action (snapshot|reset|inject|scrollback|live)"));
+        }
+        return doDss(action, target.isEmpty() ? selector : target, value);
+    }
     if (cmd == QLatin1String("streams"))
         return doStreams(action);
     if (cmd == QLatin1String("tci")) {
@@ -2255,6 +2314,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         return doResize(value, target);
     if (cmd == QLatin1String("window"))
         return doWindow(action, target);
+    if (cmd == QLatin1String("shortcut"))
+        return doShortcut(target.isEmpty() ? id : target);
     if (cmd == QLatin1String("menu"))
         return doMenu(action.isEmpty() ? QStringLiteral("list") : action, value);
     if (cmd == QLatin1String("whoami"))
@@ -3068,6 +3129,42 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("pans"), pans}};
     }
+    if (model == QLatin1String("tracedebug")) {
+        // Per-panadapter trace/floor state from SpectrumWidget. This keeps the
+        // bridge GUI-header-free while exposing enough state to compare Flex
+        // and Kiwi 2D/3D display sources deterministically.
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        QJsonArray pans;
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector) {
+                continue;
+            }
+
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "traceDebugSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap))) {
+                continue;
+            }
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex) {
+                continue;
+            }
+            pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("pans"), pans}};
+    }
     if (model == QLatin1String("wavestats")) {
         // Per-scope paint/append counters from every WaveformWidget
         // instance (sidebar WAVE applet + Aetherial strip panels), for
@@ -3157,7 +3254,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("pans")) {
         QJsonArray arr;
         for (const PanadapterModel* p : radio->panadapters()) {
-            arr.append(panSnapshot(p, radio->ourClientHandle()));
+            arr.append(panSnapshot(p, radio));
         }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pans"), arr}};
     } else if (model == QLatin1String("slice")) {
@@ -3183,10 +3280,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             p = radio->panadapter(selector);   // by panId, e.g. "0x40000000"
         if (!p)
             return err(QStringLiteral("no panadapter for selector '") + selector + QStringLiteral("'"));
-        data = panSnapshot(p, radio->ourClientHandle());
+        data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi|wavestats)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|panstats|tracedebug|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {
@@ -4117,6 +4214,73 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
     };
 }
 
+// ── Fire a ShortcutManager action by id (MIDI/shortcut path) ────────────────
+// MIDI controller mappings dispatch by calling the registered ShortcutManager
+// action's handler (fireShortcut in MainWindow_Controllers.cpp). Actions with no
+// default key sequence and no menu entry — Band Zoom, Segment Zoom, and every
+// other MIDI-only trigger — are otherwise unreachable by the bridge, so this
+// verb exercises exactly that path.
+//
+// TX-safety: actions registered keysTx (MOX/TUNE/two-tone/ATU start/PTT hold/CW
+// keys — declared at each registerAction site, the same single-source pattern
+// as markTxKeying for widgets) are refused unless AETHER_AUTOMATION_ALLOW_TX is
+// set. The gate reads the registration flag, not a bridge-side id list that
+// can drift (#4057 review: a hand-kept list here missed atu_start on day one).
+//
+// The handler runs synchronously in the socket callback; today's handlers only
+// sendCommand()/toggle model state or defer UI work themselves (go_to_freq
+// single-shots into the VFO entry), so no nested event loop. fired:true means
+// the handler RAN — handlers validate preconditions (connected, active slice)
+// and may no-op; verify effects via get/dumpTree, exactly like a MIDI press.
+QJsonObject AutomationServer::doShortcut(const QString& id) const
+{
+    if (id.isEmpty()) {
+        return err(QStringLiteral("shortcut requires an action id, e.g. 'band_zoom'"));
+    }
+
+    QWidget* mw = primaryTopLevelWindow();
+    if (!mw) {
+        return err(QStringLiteral("no main window to dispatch shortcut"));
+    }
+
+    const bool allowTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+    int result = -1;
+    const bool invoked = QMetaObject::invokeMethod(
+        mw, "fireShortcutAction", Qt::DirectConnection,
+        Q_RETURN_ARG(int, result), Q_ARG(QString, id), Q_ARG(bool, allowTx));
+    if (!invoked) {
+        return err(QStringLiteral("fireShortcutAction not invokable on main window"));
+    }
+
+    switch (result) {
+    case 0:  // MainWindow::ShortcutFireOk
+        break;
+    case 1:  // ShortcutFireUnknownId
+        return err(QStringLiteral("unknown shortcut action id: ") + id);
+    case 2:  // ShortcutFireNoDirectHandler
+        return err(QStringLiteral("'") + id
+                   + QStringLiteral("' exists but is event-filter-driven (momentary "
+                                    "key action) — it has no direct handler the "
+                                    "bridge can fire"));
+    case 3:  // ShortcutFireTxBlocked
+        qCWarning(lcAutomation).noquote()
+            << "BLOCKED transmit-keying shortcut" << id;
+        return err(QStringLiteral("blocked: '") + id
+                   + QStringLiteral("' keys the transmitter (TX-safety guard). "
+                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+    default:
+        return err(QStringLiteral("unexpected fireShortcutAction result for '")
+                   + id + QStringLiteral("'"));
+    }
+
+    qCInfo(lcAutomation).noquote() << "shortcut fired:" << id;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("shortcut"), id},
+        {QStringLiteral("fired"), true},
+    };
+}
+
 // ── Headless render size (#3646 fidelity — item 8) ──────────────────────────
 // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
 // width) propagates to a realistic value — under QT_QPA_PLATFORM=offscreen the
@@ -4606,6 +4770,167 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
     };
 }
 
+// ── clickAt: synthesize a real mouse click at a point (#3461 follow-up) ───────
+// Generic fallback for when name/text matching can't reach the widget you want —
+// most commonly because several widgets share an accessibleName (e.g. every
+// tile's close button is "containerClose") so `invoke` can only ever hit the
+// first match. dumpTree reports widget geometry in GLOBAL (screen) coordinates,
+// so `clickAt <x> <y>` clicks whatever lives at that global point — pass the
+// centre of the target's dumpTree rect and you click exactly that widget. With a
+// target, x/y are interpreted LOCAL to that widget instead (like hitTest).
+//
+// Safety: the click is routed to the deepest child under the point, but the
+// TX-keying guard walks the WHOLE ancestor chain from that child to its window.
+// Qt re-delivers an unaccepted press to parentWidget() until some ancestor
+// accepts it, so guarding only the hit widget would let a click on a passive
+// child (a QLabel inside a composite button — see PanLayoutDialog for the live
+// pattern) propagate into an unguarded keying parent. Guarding the chain makes
+// the check match Qt's delivery semantics — safe by construction, not by the
+// accident that today's keying buttons happen to be childless. A coordinate
+// click must never be a hole around AETHER_AUTOMATION_ALLOW_TX. (#3646 safety.)
+// For the same propagation reason a disabled hit widget is refused outright:
+// Qt drops input to disabled widgets, so the click would either silently no-op
+// (while we report ok:true) or fall through to an unvetted ancestor.
+// Delivery (press+release) is deferred to a clean main-loop turn so any popup
+// menu/dialog the click raises runs on a normal stack, mirroring the invoke()
+// re-entrancy fix.
+QJsonObject AutomationServer::doClickAt(const QString& target,
+                                        const QString& value) const
+{
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 2)
+        return err(QStringLiteral("clickAt needs both x and y"));
+    bool okx = false;
+    bool oky = false;
+    const int x = parts.at(0).toInt(&okx);
+    const int y = parts.at(1).toInt(&oky);
+    if (!okx || !oky)
+        return err(QStringLiteral("clickAt x/y must be integers"));
+
+    QPoint global;
+    QWidget* w = nullptr;
+    if (target.isEmpty()) {
+        // Global-coordinate form: resolve the widget under the screen point.
+        global = QPoint(x, y);
+        w = QApplication::widgetAt(global);
+        if (!w)
+            return err(QStringLiteral("clickAt: no widget at global (")
+                       + QString::number(x) + QStringLiteral(", ")
+                       + QString::number(y) + QStringLiteral(")"));
+    } else {
+        // Target-local form: x/y are offsets inside the resolved widget.
+        w = resolveWidget(target);
+        if (!w)
+            return err(QStringLiteral("widget not found: ") + target);
+        if (!w->isVisible())
+            return err(QStringLiteral("refused: '") + target
+                       + QStringLiteral("' is not visible"));
+        const QPoint local(x, y);
+        // Out-of-bounds local points must not click at all: Qt would translate
+        // the press up the parent chain and land it on an ancestor the caller
+        // never named (and the TX guard below never saw the reply claim for).
+        if (!w->rect().contains(local)) {
+            return err(QStringLiteral("clickAt: (") + QString::number(x)
+                       + QStringLiteral(", ") + QString::number(y)
+                       + QStringLiteral(") is outside '") + target
+                       + QStringLiteral("' (") + QString::number(w->width())
+                       + QStringLiteral("x") + QString::number(w->height())
+                       + QStringLiteral(")"));
+        }
+        global = w->mapToGlobal(local);
+        if (QWidget* child = w->childAt(local))
+            w = child;  // route to the deepest child for a faithful click
+    }
+
+    // Refuse a disabled hit widget, exactly like invoke(): Qt drops input
+    // events to disabled widgets, so the click is a silent no-op that we would
+    // otherwise report as ok:true — the control is greyed out for a reason.
+    // isEnabled() is effective (false if any ancestor is disabled). (#3646)
+    if (!w->isEnabled()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: '") + shortClassName(w)
+                                + QStringLiteral("' at the point is disabled — "
+                                                 "the click would be dropped")},
+                           {QStringLiteral("disabled"), true},
+                           {QStringLiteral("class"), shortClassName(w)}};
+    }
+
+    // TX-safety guard — a raw coordinate click must honor the same opt-in as
+    // invoke(), or it becomes a bypass around the keying gate. Walk the whole
+    // ancestor chain (see the function comment): an unaccepted press propagates
+    // to parents, so every widget Qt could deliver this click to must pass.
+    // (#3646 safety.)
+    if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+        for (const QWidget* p = w; p; p = p->parentWidget()) {
+            if (!isTransmitControl(p)) {
+                continue;
+            }
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED transmit-related clickAt on" << shortClassName(w)
+                << "(keying control in chain:" << shortClassName(p)
+                << ") at global" << global;
+            return err(QStringLiteral("blocked: point resolves into '")
+                       + shortClassName(p)
+                       + QStringLiteral("', a transmit-keying control (TX-safety "
+                                        "guard). Set AETHER_AUTOMATION_ALLOW_TX=1 "
+                                        "to override."));
+        }
+    }
+
+    // Power-ceiling rail (#3646): invoke() clamps RF/Tune power setValue to
+    // AETHER_AUTOMATION_TX_MAX_POWER, but a groove click on the slider pages
+    // the setpoint to an arbitrary value we cannot clamp after the fact. When
+    // the rail is armed, refuse the click and point at the clamped path instead
+    // of letting a coordinate click walk power past the configured ceiling.
+    if (m_txMaxPower >= 0) {
+        for (const QWidget* p = w; p; p = p->parentWidget()) {
+            const QString an = p->accessibleName();
+            if (an == QLatin1String("RF power")
+                || an == QLatin1String("Tune power")) {
+                qCWarning(lcAutomation).noquote()
+                    << "BLOCKED clickAt on power slider" << an
+                    << "— power ceiling" << m_txMaxPower
+                    << "is armed; use invoke setValue (clamped)";
+                return err(QStringLiteral("blocked: '") + an
+                           + QStringLiteral("' click would bypass the power "
+                                            "ceiling (AETHER_AUTOMATION_TX_MAX_"
+                                            "POWER). Use `invoke '") + an
+                           + QStringLiteral("' setValue <n>`, which clamps."));
+            }
+        }
+    }
+
+    const QPoint local = w->mapFromGlobal(global);
+    QPointer<QWidget> wp = w;
+    QPointer<QWidget> win = w->window();
+    QTimer::singleShot(0, qApp, [wp, win, local, global]() {
+        if (!wp)
+            return;
+        raiseWindowForPopup(win);  // valid active window for any popup it raises
+        const QPointF lf(local);
+        const QPointF gf(global);
+        QMouseEvent press(QEvent::MouseButtonPress, lf, lf, gf,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &press);
+        if (!wp)
+            return;
+        QMouseEvent release(QEvent::MouseButtonRelease, lf, lf, gf,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &release);
+    });
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("clicked"), describeHitWidget(w)},
+        {QStringLiteral("globalX"), global.x()},
+        {QStringLiteral("globalY"), global.y()},
+        {QStringLiteral("localX"), local.x()},
+        {QStringLiteral("localY"), local.y()},
+        {QStringLiteral("deferred"), true},   // press/release run next main-loop turn
+    };
+}
+
 // ── Panadapter lifecycle (#3646) ────────────────────────────────────────────
 // `pan create|add` opens an independent panadapter; `pan center <mhz>` recenters
 // the active pan (the band-change lever — a plain `tune` only moves the slice and
@@ -4856,6 +5181,175 @@ QJsonObject AutomationServer::doPanMessage(const QString& action,
 
     return err(QStringLiteral("unknown panmessage action: ") + action
                + QStringLiteral(" (add|remove|clear|list)"));
+}
+
+QJsonObject AutomationServer::doDss(const QString& action,
+                                    const QString& target,
+                                    const QString& value) const
+{
+    const QString lower = action.trimmed().toLower();
+    QStringList args = value.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    QString panTarget = target;
+
+    const auto isStreamToken = [](const QString& text) {
+        const QString s = text.trimmed().toLower();
+        return s == QLatin1String("native")
+            || s == QLatin1String("flex")
+            || s == QLatin1String("kiwi")
+            || s == QLatin1String("kiwisdr");
+    };
+
+    bool targetIsInt = false;
+    if (!target.isEmpty()) {
+        (void)target.toInt(&targetIsInt);
+    }
+    if (targetIsInt && lower == QLatin1String("inject")
+        && (args.size() == 2
+            || (args.size() == 3 && isStreamToken(args.value(2)))
+            || (args.size() == 5 && isStreamToken(args.value(2))))) {
+        args.prepend(target);
+        panTarget.clear();
+    } else if (targetIsInt
+               && (lower == QLatin1String("scrollback")
+                   || lower == QLatin1String("pause"))
+               && args.isEmpty()) {
+        args.prepend(target);
+        panTarget.clear();
+    }
+
+    bool okIndex = false;
+    int panIndex = panTarget.isEmpty() ? 0 : panTarget.toInt(&okIndex);
+    if (!panTarget.isEmpty() && !okIndex) {
+        args.prepend(panTarget);
+        panIndex = 0;
+    }
+
+    QJsonArray available;
+    QWidget* spectrum = panSpectrumWidgetForIndex(panIndex, &available);
+    if (!spectrum) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("no pan with index ") + QString::number(panIndex)},
+            {QStringLiteral("available"), available},
+        };
+    }
+
+    const auto parseStream = [](const QString& text, bool* ok) {
+        const QString s = text.trimmed().toLower();
+        if (s.isEmpty() || s == QLatin1String("native")
+            || s == QLatin1String("flex")) {
+            *ok = true;
+            return false;
+        }
+        if (s == QLatin1String("kiwi") || s == QLatin1String("kiwisdr")) {
+            *ok = true;
+            return true;
+        }
+        *ok = false;
+        return false;
+    };
+
+    QVariantMap out;
+    if (lower == QLatin1String("snapshot") || lower == QLatin1String("status")) {
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssSnapshot",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out))) {
+            return err(QStringLiteral("target pan does not expose automationDssSnapshot"));
+        }
+    } else if (lower == QLatin1String("reset") || lower == QLatin1String("clear")) {
+        bool okStream = false;
+        const bool kiwiStream = parseStream(args.value(0), &okStream);
+        if (!okStream) {
+            return err(QStringLiteral("dss reset stream must be native|kiwi"));
+        }
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssReset",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(bool, kiwiStream))) {
+            return err(QStringLiteral("target pan does not expose automationDssReset"));
+        }
+    } else if (lower == QLatin1String("inject")) {
+        if (args.size() < 3) {
+            return err(QStringLiteral(
+                "dss inject requires [pan] <count> <firstPeakBin> <stepBin> "
+                "[native|kiwi [rowLowMhz rowHighMhz]]"));
+        }
+        if (args.size() == 5 || args.size() > 6) {
+            return err(QStringLiteral(
+                "dss inject frame override requires stream plus rowLowMhz rowHighMhz"));
+        }
+        bool okCount = false;
+        bool okPeak = false;
+        bool okStep = false;
+        const int count = args.value(0).toInt(&okCount);
+        const int firstPeakBin = args.value(1).toInt(&okPeak);
+        const int stepBin = args.value(2).toInt(&okStep);
+        if (!okCount || !okPeak || !okStep) {
+            return err(QStringLiteral("dss inject count/firstPeakBin/stepBin must be integers"));
+        }
+        bool okStream = false;
+        const bool kiwiStream = parseStream(args.value(3), &okStream);
+        if (!okStream) {
+            return err(QStringLiteral("dss inject stream must be native|kiwi"));
+        }
+        double rowLowMhz = -1.0;
+        double rowHighMhz = -1.0;
+        if (args.size() == 6) {
+            if (!kiwiStream) {
+                return err(QStringLiteral("dss inject frame override is only valid for kiwi"));
+            }
+            bool okLow = false;
+            bool okHigh = false;
+            rowLowMhz = args.value(4).toDouble(&okLow);
+            rowHighMhz = args.value(5).toDouble(&okHigh);
+            if (!okLow || !okHigh || rowHighMhz <= rowLowMhz) {
+                return err(QStringLiteral(
+                    "dss inject rowLowMhz/rowHighMhz must be ascending numbers"));
+            }
+        }
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssInjectRows",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(int, count),
+                                       Q_ARG(int, firstPeakBin),
+                                       Q_ARG(int, stepBin),
+                                       Q_ARG(bool, kiwiStream),
+                                       Q_ARG(double, rowLowMhz),
+                                       Q_ARG(double, rowHighMhz))) {
+            return err(QStringLiteral("target pan does not expose automationDssInjectRows"));
+        }
+    } else if (lower == QLatin1String("scrollback")
+               || lower == QLatin1String("pause")) {
+        bool okOffset = false;
+        const int offsetRows = args.value(0).toInt(&okOffset);
+        if (!okOffset) {
+            return err(QStringLiteral("dss scrollback requires an offset row count"));
+        }
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssSetScrollback",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(bool, false),
+                                       Q_ARG(int, offsetRows))) {
+            return err(QStringLiteral("target pan does not expose automationDssSetScrollback"));
+        }
+    } else if (lower == QLatin1String("live")) {
+        if (!QMetaObject::invokeMethod(spectrum, "automationDssSetScrollback",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, out),
+                                       Q_ARG(bool, true),
+                                       Q_ARG(int, 0))) {
+            return err(QStringLiteral("target pan does not expose automationDssSetScrollback"));
+        }
+    } else {
+        return err(QStringLiteral("unknown dss action: ") + action);
+    }
+
+    QJsonObject response = QJsonObject::fromVariantMap(out);
+    response[QStringLiteral("cmd")] = QStringLiteral("dss");
+    response[QStringLiteral("action")] = action;
+    response[QStringLiteral("panIndex")] = panIndex;
+    return response;
 }
 
 // ── Radio-side display-stream inventory / leak detector (#3856) ──────────────

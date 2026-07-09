@@ -1,7 +1,7 @@
-// AmpModel unit test — pins the power-amplifier (PGXL) state machine extracted
-// from RadioModel (#4094): presence/operate derivation, telemetry forwarding,
-// removal, reset, and the operate-command relay. Guards the behavior-neutral
-// extraction (the 73 model tests didn't cover amp state directly).
+// AmpModel unit test — the power-amplifier state machine (#4094). Exercises
+// AmpModel::applyChanges(AmpDelta): presence latch, operate change-gating,
+// telemetry/handle matching, removal, reset, and the operate-command relay.
+// The wire→AmpDelta translation is covered separately by aetherd_amp_decode_test.
 
 #include "models/AmpModel.h"
 
@@ -17,74 +17,99 @@ static int g_failures = 0;
 #define CHECK(cond) do { if (!(cond)) { \
     std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_failures; } } while (0)
 
-static QMap<QString, QString> kv(std::initializer_list<std::pair<QString, QString>> l)
+// A "detected power amp" status delta (as FlexBackend would decode it).
+static AmpDelta detected(const QString& handle, const QString& model,
+                         const QString& ip, std::optional<bool> operate,
+                         QMap<QString, QString> telem = {})
 {
-    QMap<QString, QString> m;
-    for (const auto& p : l) m.insert(p.first, p.second);
-    return m;
+    AmpDelta d;
+    d.handle = handle;
+    d.detectedModel = model;
+    if (!ip.isEmpty()) d.ip = ip;
+    d.operate = operate;
+    d.telemetry = std::move(telem);
+    return d;
+}
+
+// A follow-up status for an already-detected amp (no model, same handle).
+static AmpDelta update(const QString& handle, std::optional<bool> operate,
+                       QMap<QString, QString> telem = {})
+{
+    AmpDelta d;
+    d.handle = handle;
+    d.operate = operate;
+    d.telemetry = std::move(telem);
+    return d;
 }
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    qRegisterMetaType<AmpDelta>();
 
-    // ---- presence detection: ip/model captured on the first status only ----
+    // ---- presence latch: model/ip captured once, on the first detect ----
     {
         AmpModel amp;
         QSignalSpy presence(&amp, &AmpModel::presenceChanged);
-        amp.applyStatus("0x1000", "PowerGeniusXL", kv({{"ip", "192.168.1.50"}, {"state", "STANDBY"}}));
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "192.168.1.50", false));
         CHECK(amp.present());
         CHECK(amp.handle() == "0x1000");
         CHECK(amp.ip() == "192.168.1.50");
         CHECK(amp.modelName() == "PowerGeniusXL");
-        CHECK(!amp.operate());                 // STANDBY → off
-        CHECK(presence.count() == 1);
-        CHECK(presence.takeFirst().at(0).toBool() == true);
+        CHECK(!amp.operate());
+        CHECK(presence.count() == 1 && presence.takeFirst().at(0).toBool() == true);
+        // A second detect does not re-latch ip/model or re-emit presence.
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "10.0.0.9", true));
+        CHECK(amp.ip() == "192.168.1.50");            // unchanged
+        CHECK(presence.count() == 0);
     }
 
-    // ---- TGXL is NOT a power amp (never marks present) ----
+    // ---- a delta with no detectedModel + unknown handle is a no-op (TGXL case) ----
     {
         AmpModel amp;
-        amp.applyStatus("0x2000", "TunerGeniusXL", kv({{"state", "OPERATE"}}));
+        QSignalSpy presence(&amp, &AmpModel::presenceChanged);
+        QSignalSpy tel(&amp, &AmpModel::telemetryUpdated);
+        amp.applyChanges(update("0x2000", true, {{"state", "OPERATE"}}));
         CHECK(!amp.present());
-        CHECK(amp.handle().isEmpty());
+        CHECK(presence.count() == 0 && tel.count() == 0);
     }
 
-    // ---- operate derivation: IDLE/OPERATE/TRANSMIT* = on, STANDBY = off; change-gated ----
+    // ---- operate change-gating; absent operate leaves it as-is ----
     {
         AmpModel amp;
-        amp.applyStatus("0x1000", "PowerGeniusXL", kv({{"state", "STANDBY"}}));
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "", false));
         QSignalSpy st(&amp, &AmpModel::stateChanged);
-        amp.applyStatus("0x1000", "", kv({{"state", "IDLE"}}));       // later updates omit model
+        amp.applyChanges(update("0x1000", true));     // off→on
         CHECK(amp.operate() && st.count() == 1);
-        amp.applyStatus("0x1000", "", kv({{"state", "OPERATE"}}));    // still on → no re-emit
+        amp.applyChanges(update("0x1000", true));     // on→on: no re-emit
         CHECK(amp.operate() && st.count() == 1);
-        amp.applyStatus("0x1000", "", kv({{"state", "TRANSMIT_A"}})); // keyed → on
-        CHECK(amp.operate() && st.count() == 1);
-        amp.applyStatus("0x1000", "", kv({{"state", "STANDBY"}}));    // off
+        amp.applyChanges(update("0x1000", std::nullopt, {{"temp", "40"}}));  // no state key
+        CHECK(amp.operate() && st.count() == 1);      // operate unchanged
+        amp.applyChanges(update("0x1000", false));    // on→off
         CHECK(!amp.operate() && st.count() == 2);
     }
 
-    // ---- telemetry emitted for a matching handle, ignored otherwise ----
+    // ---- telemetry forwarded for a matching handle, ignored otherwise ----
     {
         AmpModel amp;
-        amp.applyStatus("0x1000", "PowerGeniusXL", kv({{"state", "IDLE"}}));
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "", true));
         QSignalSpy tel(&amp, &AmpModel::telemetryUpdated);
-        amp.applyStatus("0x1000", "", kv({{"temp", "42"}, {"id", "3.1"}}));
+        amp.applyChanges(update("0x1000", std::nullopt, {{"temp", "42"}, {"id", "3.1"}}));
         CHECK(tel.count() == 1);
-        amp.applyStatus("0x9999", "", kv({{"temp", "99"}}));          // foreign handle → ignored
+        amp.applyChanges(update("0x9999", std::nullopt, {{"temp", "99"}}));  // foreign handle
         CHECK(tel.count() == 1);
     }
 
     // ---- removal clears presence for our handle only ----
     {
         AmpModel amp;
-        amp.applyStatus("0x1000", "PowerGeniusXL", kv({{"state", "IDLE"}}));
-        CHECK(amp.present());
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "", true));
         QSignalSpy presence(&amp, &AmpModel::presenceChanged);
-        amp.handleRemoval("0x9999");           // not ours → no-op
+        AmpDelta rmOther; rmOther.handle = "0x9999"; rmOther.removed = true;
+        amp.applyChanges(rmOther);                    // not ours → no-op
         CHECK(amp.present() && presence.count() == 0);
-        amp.handleRemoval("0x1000");
+        AmpDelta rm; rm.handle = "0x1000"; rm.removed = true;
+        amp.applyChanges(rm);
         CHECK(!amp.present() && amp.handle().isEmpty());
         CHECK(presence.count() == 1 && presence.takeFirst().at(0).toBool() == false);
     }
@@ -93,21 +118,20 @@ int main(int argc, char** argv)
     {
         AmpModel amp;
         QSignalSpy cmd(&amp, &AmpModel::commandReady);
-        amp.setOperate(true);                  // no handle yet → nothing
+        amp.setOperate(true);                         // no handle yet
         CHECK(cmd.count() == 0);
-        amp.applyStatus("0x1000", "PowerGeniusXL", kv({{"state", "STANDBY"}}));
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "", false));
         amp.setOperate(true);
         CHECK(cmd.count() == 1);
         CHECK(cmd.takeFirst().at(0).toString() == "amplifier set 0x1000 operate=1");
         amp.setOperate(false);
-        CHECK(cmd.count() == 1);
         CHECK(cmd.takeFirst().at(0).toString() == "amplifier set 0x1000 operate=0");
     }
 
     // ---- reset clears present/handle/operate ----
     {
         AmpModel amp;
-        amp.applyStatus("0x1000", "PowerGeniusXL", kv({{"state", "IDLE"}}));
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "", true));
         amp.reset();
         CHECK(!amp.present() && amp.handle().isEmpty() && !amp.operate());
     }

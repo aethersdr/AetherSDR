@@ -170,6 +170,12 @@ class QsoRecorder;
 //                                     for deterministic UI screenshots; add
 //                                     accepts tone=info|warning, timed messages
 //                                     expose countdown in snapshots.
+//   dss snapshot|reset|inject|scrollback|live
+//                                  -> automation-only 3D stacked-trace /
+//                                     waterfall scrollback proof surface.
+//                                     Injects synthetic RX rows through the
+//                                     normal SpectrumWidget row paths and reads
+//                                     compact DSS/waterfall counters.
 //   dumpTree (extended)            -> nodes now carry toolTip, and QComboBox
 //                                     nodes carry items[]/currentIndex and pans
 //                                     carry panIndex, all assertable without
@@ -315,6 +321,14 @@ private:
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
+    // clickAt [<target>] <x> <y>: synthesize a real left-click at a point. With no
+    // target, x/y are GLOBAL screen coordinates (matching dumpTree geometry); with
+    // a target they are LOCAL to that widget. Generic fallback for when name/text
+    // matching is ambiguous (e.g. several tiles share accessibleName
+    // "containerClose" and only the first is reachable by invoke). TX-gated on the
+    // whole ancestor chain; disabled widgets and (with the power ceiling armed)
+    // the RF/Tune power sliders are refused.
+    QJsonObject doClickAt(const QString& target, const QString& value) const;
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The
@@ -332,6 +346,9 @@ private:
                              const QString& detail,
                              int timeoutMs,
                              const QString& tone) const;
+    QJsonObject doDss(const QString& action,
+                      const QString& target,
+                      const QString& value) const;
     // Radio-side display-stream inventory / leak detector (#3856).
     //   streams        — Layer A: registered pan/wf streams + UDP "orphan"
     //                     streams the radio is still transmitting that we let go.
@@ -405,6 +422,10 @@ private:
     // window's state (resize only ever set explicit geometry, so an un-maximize
     // was unverifiable). dumpTree now also carries `windowState`. (#3918)
     QJsonObject doWindow(const QString& action, const QString& target) const;
+    // Fire a ShortcutManager action by id — the MIDI-controller dispatch path —
+    // for actions with no key sequence and no menu entry (Band Zoom, Segment
+    // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
+    QJsonObject doShortcut(const QString& id) const;
     // Resolve the top-level window a window-scoped verb (resize/window) acts on:
     // the target's window() if given, else the QMainWindow (or first visible real
     // top-level). Shared by doResize and doWindow.

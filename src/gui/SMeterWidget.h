@@ -5,7 +5,6 @@
 #include <QElapsedTimer>
 
 #include "core/KiwiSdrProtocol.h"
-#include "MeterSmoother.h"
 
 namespace AetherSDR {
 
@@ -139,13 +138,6 @@ private:
     static constexpr float ARC_START_DEG = 55.0f;   // right end (degrees from +X axis)
     static constexpr float ARC_END_DEG   = 125.0f;  // left end
 
-    // SMeterWidget runs its own needle animation (see m_needleAnimation /
-    // m_needleFraction above), but lean-mode repaint throttling is shared
-    // with every other meter through MeterSmoother::shouldRepaint().
-    // Holding an instance here only for its per-widget gate keeps every
-    // meter independently hitting kLeanRepaintHz instead of starving on a
-    // shared static (#3283).
-    MeterSmoother m_smooth;
 };
 
 } // namespace AetherSDR

@@ -207,6 +207,32 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
             emit fpsReported(fps);
         }
     }
+    // Averaging is radio-authoritative: parse the level the firmware echoes back
+    // and re-emit it so MainWindow can reconcile the user's desired value after a
+    // global-profile / band switch (#4001). average=0 (off) is a valid value —
+    // the ok-guard rejects only a malformed field, exactly like fps.
+    if (fields.contains(QStringLiteral("average"))) {
+        bool ok = false;
+        const int average = fields.value(QStringLiteral("average")).toInt(&ok);
+        if (ok) {
+            if (average != m_average) {
+                m_average = average;
+                emit averageChanged(m_average);
+            }
+            emit averageReported(average);
+        }
+    }
+    // weighted_average is a bool flag on the wire (weighted_average=0/1) — same
+    // latent desync gap; parse it like the loopa/loopb flags (present-only).
+    if (fields.contains(QStringLiteral("weighted_average"))) {
+        const bool weighted =
+            fields.value(QStringLiteral("weighted_average")).toInt() != 0;
+        if (weighted != m_weightedAverage) {
+            m_weightedAverage = weighted;
+            emit weightedAverageChanged(m_weightedAverage);
+        }
+        emit weightedAverageReported(weighted);
+    }
     if (fields.contains(QStringLiteral("pre"))) {
         const QString pre = fields.value(QStringLiteral("pre")).toString();
         // Preamp is internal state only — no UI listeners, no emit (#1498).
@@ -217,6 +243,33 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         if (ch != m_daxiqChannel) {
             m_daxiqChannel = ch;
             emit daxiqChannelChanged(ch);
+        }
+    }
+    // Band / segment zoom (#4057). Mirror FlexLib's parse exactly (Panadapter.cs
+    // 933-947/1159-1173): uint parse, values > 1 invalid → skip, no local mutual
+    // exclusion — the radio clears the sibling flag itself and broadcasts both
+    // transitions. Malformed values are ignored, not applied as 0, matching the
+    // wnb_level guard above (Principle VII).
+    if (fields.contains(QStringLiteral("band_zoom"))) {
+        bool ok = false;
+        const uint v = fields.value(QStringLiteral("band_zoom")).toString().toUInt(&ok);
+        if (ok && v <= 1) {
+            const bool on = (v == 1);
+            if (on != m_bandZoomOn) {
+                m_bandZoomOn = on;
+                emit bandZoomChanged(on);
+            }
+        }
+    }
+    if (fields.contains(QStringLiteral("segment_zoom"))) {
+        bool ok = false;
+        const uint v = fields.value(QStringLiteral("segment_zoom")).toString().toUInt(&ok);
+        if (ok && v <= 1) {
+            const bool on = (v == 1);
+            if (on != m_segmentZoomOn) {
+                m_segmentZoomOn = on;
+                emit segmentZoomChanged(on);
+            }
         }
     }
     // #3977: ownership is radio-authoritative. When another session reclaims

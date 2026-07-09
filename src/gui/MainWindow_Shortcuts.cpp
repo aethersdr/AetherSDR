@@ -826,18 +826,20 @@ void MainWindow::registerShortcutActions()
                 tx.requestPttOff(TransmitModel::PttSource::Mox);
             else
                 tx.requestPttOn(TransmitModel::PttSource::Mox);
-        });
+        }, /*autoRepeat=*/false, /*keysTx=*/true);
     // PTT (Hold) is handled by the app-level event filter (handlePttHoldShortcut)
     // because QShortcut has no "released" signal. Register with a null handler so
     // the keyboard map shows it as bound; the event filter looks the binding up
-    // by kPttHoldActionId so a reassigned key takes effect (#3879).
+    // by kPttHoldActionId so a reassigned key takes effect (#3879). keysTx even
+    // with a null handler: the flag is declared where the action is, so a future
+    // direct handler is born gated (#4057 review).
     m_shortcutManager.registerAction(kPttHoldActionId, "PTT (Hold)", "TX",
-        QKeySequence(Qt::Key_Space), nullptr);
+        QKeySequence(Qt::Key_Space), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction("atu_start", "ATU Start", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
             m_radioModel.transmitModel().atuStart();
-        });
+        }, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction("tune_toggle", "TUNE Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
@@ -845,12 +847,12 @@ void MainWindow::registerShortcutActions()
                 m_radioModel.transmitModel().stopTune();
             else
                 m_radioModel.transmitModel().startTune();
-        });
+        }, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction("two_tone_tune", "Two-Tone Tune", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
             m_radioModel.transmitModel().toggleTwoToneTune();
-        });
+        }, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction("vox_toggle", "VOX Toggle", "TX",
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
@@ -1203,13 +1205,15 @@ void MainWindow::registerShortcutActions()
             tx.setCwBreakIn(!tx.cwBreakIn());
         });
     // Momentary CW actions are handled by the app-level event filter so
-    // key release edges reach the netCW path too.
+    // key release edges reach the netCW path too. keysTx even with null
+    // handlers: CW keying IS transmitting; the flag lives with the action so a
+    // future direct handler is born gated (#4057 review).
     m_shortcutManager.registerAction(kCwStraightKeyActionId, kCwStraightKeyActionName, "CW",
-        QKeySequence(), nullptr);
+        QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction(kCwLeftPaddleActionId, kCwLeftPaddleActionName, "CW",
-        QKeySequence(), nullptr);
+        QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
     m_shortcutManager.registerAction(kCwRightPaddleActionId, kCwRightPaddleActionName, "CW",
-        QKeySequence(), nullptr);
+        QKeySequence(), nullptr, /*autoRepeat=*/false, /*keysTx=*/true);
 
     // ── EQ ──────────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("tx_eq_toggle", "TX EQ Toggle", "EQ",
@@ -1226,20 +1230,12 @@ void MainWindow::registerShortcutActions()
         });
 
     // ── Display ─────────────────────────────────────────────────────────
+    // Band/Segment Zoom read the pan's radio-authoritative model state — see
+    // togglePanZoomModeForPan below for why no client-side bool exists. (#4057)
     m_shortcutManager.registerAction("band_zoom", "Band Zoom", "Display",
-        QKeySequence(), [this]() {
-            if (!m_radioModel.isConnected()) return;
-            auto* s = activeSlice();
-            if (s) m_radioModel.sendCommand(
-                QString("slice set %1 band_zoom=1").arg(s->sliceId()));
-        });
+        QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/false); });
     m_shortcutManager.registerAction("segment_zoom", "Segment Zoom", "Display",
-        QKeySequence(), [this]() {
-            if (!m_radioModel.isConnected()) return;
-            auto* s = activeSlice();
-            if (s) m_radioModel.sendCommand(
-                QString("slice set %1 segment_zoom=1").arg(s->sliceId()));
-        });
+        QKeySequence(), [this]() { togglePanZoomMode(/*segmentZoom=*/true); });
     m_shortcutManager.registerAction("pan_zoom_in", "Panadapter Zoom In", "Display",
         QKeySequence(Qt::Key_Equal), [zoomActivePanadapter]() { zoomActivePanadapter(1.0 / kPanZoomFactor); });
     m_shortcutManager.registerAction("pan_zoom_out", "Panadapter Zoom Out", "Display",
@@ -1279,6 +1275,76 @@ void MainWindow::registerShortcutActions()
         else
             releaseSliderShortcutLease(false);
     });
+}
+
+int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
+{
+    // Mirrors the MIDI dispatch path (fireShortcut in MainWindow_Controllers.cpp):
+    // look up the registered action and run its handler directly. Actions with
+    // no key sequence and no menu entry — e.g. Band Zoom / Segment Zoom — are
+    // only reachable this way, so this is how the bridge exercises them.
+    // The distinct result codes let the caller report honestly: "unknown id",
+    // "keys TX" (per the action's registration-site keysTx flag — one source of
+    // truth, no parallel id list), and "event-filter-driven" (ptt_hold, CW keys
+    // register null handlers on purpose) are three different situations, not one
+    // generic false (#4057 review).
+    auto* a = m_shortcutManager.action(id);
+    if (!a) {
+        return ShortcutFireUnknownId;
+    }
+    if (a->keysTx && !allowTx) {
+        return ShortcutFireTxBlocked;
+    }
+    if (!a->handler) {
+        return ShortcutFireNoDirectHandler;
+    }
+    a->handler();
+    return ShortcutFireOk;
+}
+
+void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
+{
+    // Radio-authoritative toggle (#4057). band_zoom/segment_zoom are per-pan,
+    // radio-owned flags broadcast in pan status (FlexLib Panadapter.cs:933) and
+    // decoded into PanadapterModel. Reading the model instead of a client-side
+    // bool keeps every entry point — keyboard/MIDI shortcut, right-click menu,
+    // FlexControl, RC28 — in sync with the radio: a manual pan/zoom clears the
+    // flag on the radio, the status echo clears the model, and the next press
+    // correctly sends =1 again instead of a dead =0. Band/segment mutual
+    // exclusion is likewise the radio's own (it clears the other flag and
+    // broadcasts both), per-pan state is naturally per-pan, and a failed send
+    // can't invert anything because nothing is latched client-side.
+    if (panId.isEmpty()) {
+        return;
+    }
+    auto* pan = m_radioModel.panadapter(panId);
+    if (!pan) {
+        return;
+    }
+    const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
+    m_radioModel.sendCommand(QString("display pan set %1 %2=%3")
+        .arg(panId,
+             segmentZoom ? QStringLiteral("segment_zoom")
+                         : QStringLiteral("band_zoom"))
+        .arg(on ? 1 : 0));
+}
+
+void MainWindow::togglePanZoomMode(bool segmentZoom)
+{
+    // Active-slice entry: shortcut/MIDI/FlexControl/RC28 paths resolve the pan
+    // from the active slice (falling back to the active pan) and share the
+    // per-pan toggle above.
+    if (!m_radioModel.isConnected()) {
+        return;
+    }
+    auto* s = activeSlice();
+    if (!s) {
+        return;
+    }
+    const QString panId = !s->panId().isEmpty()
+        ? s->panId()
+        : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+    togglePanZoomModeForPan(panId, segmentZoom);
 }
 
 

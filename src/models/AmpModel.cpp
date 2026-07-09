@@ -2,48 +2,42 @@
 
 namespace AetherSDR {
 
-void AmpModel::applyStatus(const QString& handle, const QString& model,
-                           const QMap<QString, QString>& kvs)
+void AmpModel::applyChanges(const AmpDelta& d)
 {
-    // Presence: any non-empty, non-TGXL amp model marks a power amp present.
-    // (The radio reports both TGXL and PGXL via the "amplifier" API; the caller
-    // routes TunerGeniusXL to TunerModel and everything else here.)
-    if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
-        m_handle = handle;
+    if (d.removed) {
+        // Clear only if it's our amp (matches the original removal semantics —
+        // leaves m_ip/m_operate untouched; consumers gate on present()).
+        if (d.handle == m_handle) {
+            m_handle.clear();
+            m_present = false;
+            m_model.clear();
+            emit presenceChanged(false);
+        }
+        return;
+    }
+
+    // Presence latch: a detected (non-TGXL) power-amp model marks us present.
+    if (d.detectedModel) {
+        m_handle = d.handle;
         if (!m_present) {
             m_present = true;
-            m_ip = kvs.value(QStringLiteral("ip"));
-            m_model = model;
+            // Strict parity with the prior applyStatus (m_ip = kvs.value("ip"),
+            // which blanked to "" when absent) — keeps this a behavior-neutral move.
+            m_ip = d.ip.value_or(QString());
+            m_model = *d.detectedModel;
             emit presenceChanged(true);
         }
     }
 
-    if (!m_handle.isEmpty() && handle == m_handle) {
-        // PGXL uses "state=OPERATE|IDLE|STANDBY|TRANSMIT…" (not operate=/bypass=
-        // like TGXL). IDLE = on/ready, STANDBY = off, TRANSMIT* = keyed.
-        const QString state = kvs.value(QStringLiteral("state")).toUpper();
-        if (!state.isEmpty()) {
-            const bool op = (state == QLatin1String("IDLE")
-                             || state == QLatin1String("OPERATE")
-                             || state.startsWith(QLatin1String("TRANSMIT")));
-            if (m_operate != op) {
-                m_operate = op;
-                emit stateChanged();
-            }
+    if (!m_handle.isEmpty() && d.handle == m_handle) {
+        // Operate is change-gated; a status without a "state" leaves it as-is.
+        if (d.operate && m_operate != *d.operate) {
+            m_operate = *d.operate;
+            emit stateChanged();
         }
-        // Forward the full KVS so the GUI can update telemetry (drain current,
-        // mains voltage, meffa, temp) without a direct PGXL TCP connection.
-        emit telemetryUpdated(kvs);
-    }
-}
-
-void AmpModel::handleRemoval(const QString& handle)
-{
-    if (handle == m_handle) {
-        m_handle.clear();
-        m_present = false;
-        m_model.clear();
-        emit presenceChanged(false);
+        // Forward telemetry (drain current, mains voltage, meffa, temp, …) so
+        // the GUI updates without a direct PGXL TCP connection.
+        emit telemetryUpdated(d.telemetry);
     }
 }
 

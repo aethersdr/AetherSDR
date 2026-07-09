@@ -4,6 +4,8 @@
 #include <QMap>
 #include <QString>
 
+#include "core/backends/TunerDelta.h"
+
 namespace AetherSDR {
 
 class TgxlConnection;
@@ -42,8 +44,10 @@ public:
     bool    isPresent() const { return !m_handle.isEmpty() || m_directPresence; }
     bool    hasDirectConnection() const;
 
-    // Apply key=value pairs from a TCP status message.
-    void applyStatus(const QMap<QString, QString>& kvs);
+    // Apply a normalized tuner delta decoded by the backend
+    // (IRadioBackend::tunerChanged). Change-gated; emits tuningChanged /
+    // antennaAChanged on their edges and stateChanged once if anything moved.
+    void applyChanges(const TunerDelta& delta);
 
     // Set the tuner handle (extracted from the status object name).
     void setHandle(const QString& handle);

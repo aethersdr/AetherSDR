@@ -406,6 +406,8 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<GpsDelta>();
     qRegisterMetaType<MemoryDelta>();
     qRegisterMetaType<ProfileDelta>();
+    qRegisterMetaType<AmpDelta>();
+    qRegisterMetaType<TunerDelta>();
 
     // aetherd RFC step 2.2b: the radio-facing seam owns the wire objects. The
     // FlexBackend creates the RadioConnection and PanadapterStream on their
@@ -548,6 +550,14 @@ RadioModel::RadioModel(QObject* parent)
     // handlers (main-thread AutoConnection → DirectConnection).
     connect(m_backend.get(), &IRadioBackend::transmitChanged, this,
             [this](const TransmitDelta& delta) { m_transmitModel.applyChanges(delta); });
+
+    // aetherd 2.4 (#4094): power-amp status decoded in the backend drives AmpModel.
+    connect(m_backend.get(), &IRadioBackend::amplifierChanged, this,
+            [this](const AmpDelta& delta) { m_amplifier.applyChanges(delta); });
+
+    // aetherd 2.4 (#4092): TGXL tuner status decoded in the backend drives TunerModel.
+    connect(m_backend.get(), &IRadioBackend::tunerChanged, this,
+            [this](const TunerDelta& delta) { m_tunerModel.applyChanges(delta); });
 
     // aetherd RFC 2.3 (RadioModel residual): radio-global status decoded in the
     // backend drives RadioModel's own state via applyRadioChanges.
@@ -1048,12 +1058,41 @@ void RadioModel::setPanTransmitInhibited(const QString& panId,
 
     if (!inhibited) {
         m_panTransmitInhibitReasons.remove(trimmedPanId);
+        const bool hadRestoreSlice =
+            m_panTransmitInhibitedTxSlices.contains(trimmedPanId);
+        const int restoreSliceId = hadRestoreSlice
+            ? m_panTransmitInhibitedTxSlices.take(trimmedPanId)
+            : -1;
+        if (hadRestoreSlice) {
+            SliceModel* restoreSlice = slice(restoreSliceId);
+            SliceModel* currentTxSlice = txSlice();
+            const int currentTxSliceId = currentTxSlice
+                ? currentTxSlice->sliceId()
+                : -1;
+            if (restoreSlice
+                && TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                    trimmedPanId, restoreSlice->panId(),
+                    sliceMayBelongToUs(restoreSliceId), restoreSliceId,
+                    currentTxSliceId)) {
+                sendSliceCommand(restoreSlice,
+                                 QStringLiteral("slice set %1 tx=1")
+                                     .arg(restoreSliceId));
+            }
+        }
         return;
     }
 
     const QString trimmedReason = reason.trimmed().isEmpty()
         ? QStringLiteral("Transmit is disabled because this panadapter is displaying receive-only data.")
         : reason.trimmed();
+    if (!m_panTransmitInhibitedTxSlices.contains(trimmedPanId)) {
+        if (SliceModel* currentTxSlice = txSlice();
+            currentTxSlice && currentTxSlice->panId() == trimmedPanId
+            && sliceMayBelongToUs(currentTxSlice->sliceId())) {
+            m_panTransmitInhibitedTxSlices.insert(
+                trimmedPanId, currentTxSlice->sliceId());
+        }
+    }
     if (m_panTransmitInhibitReasons.value(trimmedPanId) == trimmedReason) {
         return;
     }
@@ -1138,6 +1177,23 @@ bool RadioModel::transmitStartBlockedByInhibit(const QString& key)
     return true;
 }
 
+void RadioModel::noteLocalTxSliceEnableIntent(int sliceId)
+{
+    if (sliceId < 0) {
+        return;
+    }
+
+    for (auto it = m_panTransmitInhibitedTxSlices.begin();
+         it != m_panTransmitInhibitedTxSlices.end();) {
+        if (it.value() == sliceId) {
+            ++it;
+            continue;
+        }
+
+        it = m_panTransmitInhibitedTxSlices.erase(it);
+    }
+}
+
 void RadioModel::sendSliceCommand(SliceModel* slice, const QString& cmd)
 {
     const TransmitInhibitPolicy::SliceTxCommand txCommand =
@@ -1154,6 +1210,7 @@ void RadioModel::sendSliceCommand(SliceModel* slice, const QString& cmd)
                 target->panId());
             return;
         }
+        noteLocalTxSliceEnableIntent(txCommand.sliceId);
     }
 
     sendCmd(cmd);
@@ -2359,6 +2416,7 @@ void RadioModel::stageSessionModelsForReconnect()
     m_foreignSliceOwners.clear();
     m_pendingPanStatuses.clear();
     m_panTransmitInhibitReasons.clear();
+    m_panTransmitInhibitedTxSlices.clear();
     m_activePanId.clear();
 
     if (!m_staleSlices.isEmpty() || !m_stalePanadapters.isEmpty()) {
@@ -4976,6 +5034,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_radioDisplayPans.remove(normalizePanadapterId(panId));   // #3856 Layer B inventory
                 m_pendingPanStatuses.remove(panId);
                 m_panTransmitInhibitReasons.remove(panId);
+                m_panTransmitInhibitedTxSlices.remove(panId);
                 auto* pan = m_panadapters.take(panId);
                 if (!pan) {
                     pan = m_stalePanadapters.take(panId);
@@ -5067,6 +5126,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 }
                 if (rejectedPan) {
                     m_panTransmitInhibitReasons.remove(panId);
+                    m_panTransmitInhibitedTxSlices.remove(panId);
                     m_panStream->unregisterPanStream(rejectedPan->panStreamId());
                     m_panStream->unregisterWfStream(rejectedPan->wfStreamId());
                     qCDebug(lcProtocol) << "RadioModel: panadapter" << panId
@@ -5096,6 +5156,8 @@ void RadioModel::onStatusReceived(const QString& object,
                             << "reassigned to client" << newOwner
                             << "— going quiet on it (#3977)";
                     }
+                    m_panTransmitInhibitReasons.remove(panId);
+                    m_panTransmitInhibitedTxSlices.remove(panId);
                     heldPan->setClientHandle(newOwner);
                 }
                 return;  // not our panadapter, ignore
@@ -5217,9 +5279,9 @@ void RadioModel::onStatusReceived(const QString& object,
         const auto m = atuRe.match(object);
         if (m.hasMatch() && m_tunerModel.handle().isEmpty())
             m_tunerModel.setHandle(m.captured(1));
-        if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);
-        if (m_tunerModel.isPresent())
-            m_tunerModel.applyStatus(kvs);
+        if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);   // radio's own ATU → TransmitModel
+        if (m_tunerModel.isPresent() && m_flexBackend)
+            m_flexBackend->decodeTunerStatus(kvs);                // external TGXL → TunerModel (#4092)
         return;
     }
 
@@ -5269,7 +5331,7 @@ void RadioModel::onStatusReceived(const QString& object,
             qCDebug(lcProtocol) << "RadioModel: amplifier removed (bare) handle=" << handle;
             if (handle == m_tunerModel.handle())
                 m_tunerModel.setHandle({});
-            m_amplifier.handleRemoval(handle);
+            if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
             return;
         }
         const auto m = ampRe.match(object);
@@ -5282,7 +5344,7 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("removed")) {
                 if (handle == m_tunerModel.handle())
                     m_tunerModel.setHandle({});
-                m_amplifier.handleRemoval(handle);
+                if (m_flexBackend) m_flexBackend->decodeAmplifierStatus(handle, QString(), {}, /*removed=*/true);
                 return;
             }
 
@@ -5297,11 +5359,14 @@ void RadioModel::onStatusReceived(const QString& object,
                     m_tunerModel.setHandle(handle);
                     m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
                 }
-                m_tunerModel.applyStatus(kvs);
+                if (m_flexBackend) m_flexBackend->decodeTunerStatus(kvs);   // #4092
             }
-
-            // Power amplifier (PGXL / any non-TGXL amp) → AmpModel.
-            m_amplifier.applyStatus(handle, model, kvs);
+            // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
+            // tuner branch: a TGXL status is already routed above and would only
+            // no-op the amp decode — skip it to avoid the per-status AmpDelta copy.
+            else if (m_flexBackend) {
+                m_flexBackend->decodeAmplifierStatus(handle, model, kvs, /*removed=*/false);
+            }
         }
         return;
     }

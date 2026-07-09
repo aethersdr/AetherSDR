@@ -241,6 +241,9 @@ void MainWindow::wireDiscovery()
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected) return;
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT")) {
+            return;
+        }
         if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()
@@ -1101,13 +1104,11 @@ void MainWindow::wirePanLifecycle()
                                   "#0a0a14").toString());
             if (bgFill.isValid())
                 sw->setBackgroundFillColor(bgFill);
-            // Restore the spectrum render mode (2D / 3D stacked trace) + 3D floor
-            // depth per pan, like the other Display settings above, so a pan set
-            // to 3D survives a restart / pan re-attach.
+            // Restore the spectrum render mode per pan. Source-specific trace
+            // positions/depths are loaded by SpectrumWidget from
+            // DisplaySourceTraceSettings; do not reapply legacy flat keys here.
             sw->setSpectrumRenderMode(
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
-            sw->setDssFloorDepth(
-                s.value(sw->settingsKey("Display3DFloorDepth"), "6").toInt());
             sw->setDssGain(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
             // Nudge rate to force waterfall tile re-sync
@@ -1334,6 +1335,7 @@ void MainWindow::wirePanLifecycle()
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
+        clearKiwiSdrPanDisplaySourceOverride(panId);
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -1362,6 +1364,32 @@ void MainWindow::wirePanLifecycle()
                 it->timer->deleteLater();
             }
             m_wfLineDurationReconcile.erase(it);
+        }
+        if (auto it = m_panAverageReconcileConnections.find(panId);
+            it != m_panAverageReconcileConnections.end()) {
+            QObject::disconnect(it.value());
+            m_panAverageReconcileConnections.erase(it);
+        }
+        if (auto it = m_panWeightedAvgReconcileConnections.find(panId);
+            it != m_panWeightedAvgReconcileConnections.end()) {
+            QObject::disconnect(it.value());
+            m_panWeightedAvgReconcileConnections.erase(it);
+        }
+        if (auto it = m_panAverageReconcile.find(panId);
+            it != m_panAverageReconcile.end()) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+            m_panAverageReconcile.erase(it);
+        }
+        if (auto it = m_panWeightedAvgReconcile.find(panId);
+            it != m_panWeightedAvgReconcile.end()) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+            m_panWeightedAvgReconcile.erase(it);
         }
 
         // Disconnect all signals from the dying applet's widgets to prevent

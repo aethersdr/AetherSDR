@@ -273,27 +273,43 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     QList<PanadapterApplet*> applets = m_pans.values();
     if (applets.isEmpty()) return;
 
-    // Remove all applets from current splitter (don't delete them).  setParent()
-    // can temporarily change the QRhiWidget's top-level window, so give Qt a
-    // chance to unregister the old backing-store callback before the move.
-    for (auto* a : applets) {
-        if (auto* sw = a ? a->spectrumWidget() : nullptr) {
-            sw->hide();
-            sw->prepareForTopLevelChange();
-            sw->resetGpuResources();
-            appendRebound(sw);
-        }
-        a->setParent(nullptr);
-    }
-
-    // Hide + remove old splitter from layout, defer deletion
-    m_splitter->hide();
-    layout()->removeWidget(m_splitter);
-    m_splitter->deleteLater();
+    // Build the new splitter first, then move applets straight into it below.
+    // addWidget() reparents splitter→splitter within the same top-level window
+    // in one step — the same pattern rebuildDockedSplitter() and
+    // dockPanadapter() already use — so the QRhiWidget's backing-store QRhi
+    // and cleanup-callback registration never change and no GPU teardown is
+    // needed for pans that stay docked. The old code detoured every applet
+    // through setParent(nullptr), which puts the QRhiWidget in a transient
+    // top-level state and forces the full hide/prepare/reset/rebuild dance;
+    // that destroy→recreate→resize storm is what the 2016-era Intel D3D11
+    // UMD (igd10iumd64.dll) null-derefed on when adding a 2nd pan (#4091).
+    // Only pans returning from floating windows (handled above) change
+    // top-level windows and need the reset.
+    QSplitter* oldSplitter = m_splitter;
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->setHandleWidth(3);
     m_splitter->setChildrenCollapsible(false);
     layout()->addWidget(m_splitter);
+
+    // Create a horizontal sub-splitter already attached to the (in-window)
+    // m_splitter, so pans reparented into it never transit a parentless,
+    // transient top-level window. A *live* QRhiWidget that changes top-level
+    // window mid-rearrange changes its backing-store QRhi; since this path
+    // deliberately skips the teardown dance (docked pans keep their QRhi —
+    // see above), that would leave a stale cleanup callback / reconfigure the
+    // swapchain mid-render → Intel D3D11 null-deref. This only bit the nested
+    // layouts (3+ pans): the flat 2v/2h/3v/4v cases reparent straight into the
+    // already-in-window m_splitter and were fixed already; the sub-splitters
+    // were still built parentless-then-filled, so the 3rd-pan add kept
+    // crashing (#4091, follow-up). Sub-splitter must join the window BEFORE it
+    // is filled — hence addWidget(sub) here, addWidget(pan) at the call site.
+    auto addRow = [this]() {
+        auto* s = new QSplitter(Qt::Horizontal);
+        s->setHandleWidth(3);
+        s->setChildrenCollapsible(false);
+        m_splitter->addWidget(s);
+        return s;
+    };
 
     if (layoutId == "2h" && applets.size() >= 2) {
         m_splitter->setOrientation(Qt::Horizontal);
@@ -302,23 +318,17 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     else if (layoutId == "2h1" && applets.size() >= 3) {
         // A|B on top, C on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
-        m_splitter->addWidget(topSplit);
         m_splitter->addWidget(applets[2]);
     }
     else if (layoutId == "12h" && applets.size() >= 3) {
         // A on top, B|C on bottom
         m_splitter->addWidget(applets[0]);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[1]);
         botSplit->addWidget(applets[2]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "3v" && applets.size() >= 3) {
         // A / B / C vertical stack
@@ -328,18 +338,12 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     else if (layoutId == "2x2" && applets.size() >= 4) {
         // A|B on top, C|D on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
-        m_splitter->addWidget(topSplit);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[2]);
         botSplit->addWidget(applets[3]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "4v" && applets.size() >= 4) {
         // A / B / C / D vertical stack
@@ -350,58 +354,40 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     }
     else if (layoutId == "3h2" && applets.size() >= 5) {
         // A|B|C on top, D|E on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
         topSplit->addWidget(applets[2]);
-        m_splitter->addWidget(topSplit);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[3]);
         botSplit->addWidget(applets[4]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "2x3" && applets.size() >= 6) {
         // A|B / C|D / E|F — three rows of two
         for (int r = 0; r < 3; ++r) {
-            auto* rowSplit = new QSplitter(Qt::Horizontal);
-            rowSplit->setHandleWidth(3);
-            rowSplit->setChildrenCollapsible(false);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(applets[r * 2]);
             rowSplit->addWidget(applets[r * 2 + 1]);
-            m_splitter->addWidget(rowSplit);
         }
     }
     else if (layoutId == "4h3" && applets.size() >= 7) {
         // A|B|C|D on top, E|F|G on bottom
-        auto* topSplit = new QSplitter(Qt::Horizontal);
-        topSplit->setHandleWidth(3);
-        topSplit->setChildrenCollapsible(false);
+        auto* topSplit = addRow();
         topSplit->addWidget(applets[0]);
         topSplit->addWidget(applets[1]);
         topSplit->addWidget(applets[2]);
         topSplit->addWidget(applets[3]);
-        m_splitter->addWidget(topSplit);
-        auto* botSplit = new QSplitter(Qt::Horizontal);
-        botSplit->setHandleWidth(3);
-        botSplit->setChildrenCollapsible(false);
+        auto* botSplit = addRow();
         botSplit->addWidget(applets[4]);
         botSplit->addWidget(applets[5]);
         botSplit->addWidget(applets[6]);
-        m_splitter->addWidget(botSplit);
     }
     else if (layoutId == "2x4" && applets.size() >= 8) {
         // A|B / C|D / E|F / G|H — four rows of two
         for (int r = 0; r < 4; ++r) {
-            auto* rowSplit = new QSplitter(Qt::Horizontal);
-            rowSplit->setHandleWidth(3);
-            rowSplit->setChildrenCollapsible(false);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(applets[r * 2]);
             rowSplit->addWidget(applets[r * 2 + 1]);
-            m_splitter->addWidget(rowSplit);
         }
     }
     else {
@@ -410,10 +396,35 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
             m_splitter->addWidget(a);
     }
 
-    // Defer equalize until the new splitter has been laid out by Qt.
-    // Re-show + refresh GPU surfaces for any spectrum widgets that came
-    // out of a floating window, so they bind to the new top-level window
-    // before the first render (mirrors the dockPanadapter() refresh dance).
+    // Safety sweep: layout branches only place the applets their layout id
+    // calls for (e.g. "2h" places two). If the count ever mismatches the id,
+    // any leftover would still be a child of oldSplitter and die with its
+    // deleteLater() below, leaving dangling pointers in m_pans — fold
+    // stragglers into the new splitter instead.
+    for (auto* a : applets) {
+        if (a && !m_splitter->isAncestorOf(a))
+            m_splitter->addWidget(a);
+    }
+
+    // All applets have moved to the new splitter — retire the old one.
+    layout()->removeWidget(oldSplitter);
+    oldSplitter->hide();
+    oldSplitter->deleteLater();
+
+    // Equalize immediately so each pan's first layout pass in the new
+    // splitter already lands at final geometry. The new splitter hasn't had
+    // its layout pass yet, so the absolute values are provisional — but
+    // QSplitter redistributes proportionally on resize, so equal stays
+    // equal. This collapses the old default-sizes-then-deferred-equalize
+    // two-step into a single resize per pan; every avoided resize is one
+    // fewer swapchain rebuild for marginal GPU drivers to survive (#4091).
+    equalizeSizes();
+
+    // Deferred pass: re-show + refresh GPU surfaces for any spectrum widgets
+    // that came out of a floating window, so they bind to the new top-level
+    // window before the first render (mirrors the dockPanadapter() refresh
+    // dance). The trailing equalize is a no-op when sizes are already equal;
+    // it only settles integer-rounding drift after the real layout pass.
     QTimer::singleShot(0, this, [this, rebound]() {
         for (SpectrumWidget* sw : rebound) {
             if (!sw) continue;
@@ -465,11 +476,16 @@ void PanadapterStack::rebuildDockedSplitter()
         layoutId = defaultDockedLayoutForCount(docked.size());
     }
 
-    auto makeSplitter = [](Qt::Orientation orientation) {
-        auto* splitter = new QSplitter(orientation);
-        splitter->setHandleWidth(3);
-        splitter->setChildrenCollapsible(false);
-        return splitter;
+    // Same transient-top-level hazard as rearrangeLayout(): attach each
+    // horizontal sub-splitter to the in-window newSplitter BEFORE filling it,
+    // so a live QRhiWidget never transits a parentless top-level on dock/float
+    // (#4091). Fill happens at the call site, after addRow().
+    auto addRow = [&]() {
+        auto* s = new QSplitter(Qt::Horizontal);
+        s->setHandleWidth(3);
+        s->setChildrenCollapsible(false);
+        newSplitter->addWidget(s);
+        return s;
     };
 
     auto addVertical = [&]() {
@@ -485,61 +501,51 @@ void PanadapterStack::rebuildDockedSplitter()
         newSplitter->addWidget(docked[0]);
         newSplitter->addWidget(docked[1]);
     } else if (layoutId == "2h1" && docked.size() >= 3) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
-        newSplitter->addWidget(topSplit);
         newSplitter->addWidget(docked[2]);
     } else if (layoutId == "12h" && docked.size() >= 3) {
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        newSplitter->addWidget(docked[0]);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[1]);
         botSplit->addWidget(docked[2]);
-        newSplitter->addWidget(docked[0]);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "2x2" && docked.size() >= 4) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[2]);
         botSplit->addWidget(docked[3]);
-        newSplitter->addWidget(topSplit);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "3h2" && docked.size() >= 5) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
         topSplit->addWidget(docked[2]);
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[3]);
         botSplit->addWidget(docked[4]);
-        newSplitter->addWidget(topSplit);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "2x3" && docked.size() >= 6) {
         for (int r = 0; r < 3; ++r) {
-            auto* rowSplit = makeSplitter(Qt::Horizontal);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(docked[r * 2]);
             rowSplit->addWidget(docked[r * 2 + 1]);
-            newSplitter->addWidget(rowSplit);
         }
     } else if (layoutId == "4h3" && docked.size() >= 7) {
-        auto* topSplit = makeSplitter(Qt::Horizontal);
+        auto* topSplit = addRow();
         topSplit->addWidget(docked[0]);
         topSplit->addWidget(docked[1]);
         topSplit->addWidget(docked[2]);
         topSplit->addWidget(docked[3]);
-        auto* botSplit = makeSplitter(Qt::Horizontal);
+        auto* botSplit = addRow();
         botSplit->addWidget(docked[4]);
         botSplit->addWidget(docked[5]);
         botSplit->addWidget(docked[6]);
-        newSplitter->addWidget(topSplit);
-        newSplitter->addWidget(botSplit);
     } else if (layoutId == "2x4" && docked.size() >= 8) {
         for (int r = 0; r < 4; ++r) {
-            auto* rowSplit = makeSplitter(Qt::Horizontal);
+            auto* rowSplit = addRow();
             rowSplit->addWidget(docked[r * 2]);
             rowSplit->addWidget(docked[r * 2 + 1]);
-            newSplitter->addWidget(rowSplit);
         }
     } else {
         addVertical();

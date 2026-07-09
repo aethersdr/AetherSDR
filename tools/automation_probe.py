@@ -106,11 +106,15 @@ def main():
                "  automation_probe.py slice rxsource 7 K4JK\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
                "  automation_probe.py hitTest SpectrumWidget 80 80\n"
+               "  automation_probe.py clickAt 1420 210          # global point (dumpTree geometry)\n"
+               "  automation_probe.py clickAt AppletPanel 12 34  # point local to a widget\n"
                "  automation_probe.py resize 1600 900\n"
                "  automation_probe.py audioCapture start 3000 raw,post,final\n"
                "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"
+               "  automation_probe.py dss inject 0 3 100 100 native\n"
+               "  automation_probe.py dss inject 0 3 100 0 kiwi 14.000 14.010\n"
                "  automation_probe.py panmessage add 0 kiwi 0 'Waiting|Queued'\n"
                "  automation_probe.py panmessage add 0 tx 10000 tone=warning 'Transmit disabled|TX blocked'",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -118,16 +122,21 @@ def main():
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect", "slice", "audioCapture",
                              "record", "testtone", "tci", "panmessage",
-                             "hitTest", "resize"],
+                             "hitTest", "clickAt", "resize", "dss"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
                          "invoke <target> <action> [value] | "
                          "get <model> [selector] [property] | "
                          "hitTest <target> [x y] | "
+                         "clickAt <x> <y> | clickAt <target> <x> <y> | "
                          "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
                          "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
+                         "dss <snapshot|reset|live> [pan] [args] | "
+                         "dss inject [pan] <count> <firstPeakBin> <stepBin> "
+                         "[native|kiwi [rowLowMhz rowHighMhz]] | "
+                         "dss scrollback [pan] <offsetRows> | "
                          "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
@@ -192,6 +201,31 @@ def main():
                 req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
+        elif args.command == "clickAt":
+            # clickAt <x> <y>            -> global screen coords (dumpTree geometry)
+            # clickAt <target> <x> <y>  -> coords local to <target>
+            # Disambiguate like the server: first token numeric => global form.
+            # int() (not isdigit) so a float like 1420.5 errors loudly instead
+            # of being reclassified as a widget NAME ("widget not found: 1420.5").
+            def _as_int(tok):
+                try:
+                    return int(tok)
+                except ValueError:
+                    return None
+
+            if len(args.rest) >= 2 and _as_int(args.rest[0]) is not None:
+                if _as_int(args.rest[1]) is None:
+                    sys.exit(f"error: clickAt y must be an integer, got {args.rest[1]!r}")
+                req = {"cmd": "clickAt", "value": f"{args.rest[0]} {args.rest[1]}"}
+            elif len(args.rest) >= 3 and _as_int(args.rest[0]) is None:
+                if _as_int(args.rest[1]) is None or _as_int(args.rest[2]) is None:
+                    sys.exit("error: clickAt <target> <x> <y> — x and y must be integers")
+                req = {"cmd": "clickAt", "target": args.rest[0],
+                       "value": f"{args.rest[1]} {args.rest[2]}"}
+            else:
+                sys.exit("error: clickAt needs <x> <y> or <target> <x> <y>")
+            print(json.dumps(bridge.request(req), indent=2))
+
         elif args.command == "resize":
             if len(args.rest) < 2:
                 sys.exit("error: resize needs <w> <h> [target]")
@@ -217,6 +251,39 @@ def main():
             req = {"cmd": "slice", "action": args.rest[0]}
             if len(args.rest) > 1:
                 req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "dss":
+            if not args.rest:
+                sys.exit("error: dss needs <snapshot|reset|inject|scrollback|live> [pan] [args]")
+            action = args.rest[0]
+            req = {"cmd": "dss", "action": action}
+            dss_args = args.rest[1:]
+            if action == "inject":
+                stream_names = {"native", "flex", "kiwi", "kiwisdr"}
+                if len(dss_args) < 3:
+                    sys.exit("error: dss inject needs [pan] <count> <firstPeakBin> <stepBin> "
+                             "[native|kiwi [rowLowMhz rowHighMhz]]")
+                if (len(dss_args) == 3
+                        or (len(dss_args) == 4 and dss_args[3].lower() in stream_names)
+                        or (len(dss_args) == 6 and dss_args[3].lower() in stream_names)):
+                    req["value"] = " ".join(dss_args)
+                else:
+                    req["target"] = dss_args[0]
+                    req["value"] = " ".join(dss_args[1:])
+            elif action == "scrollback":
+                if not dss_args:
+                    sys.exit("error: dss scrollback needs [pan] <offsetRows>")
+                if len(dss_args) == 1:
+                    req["value"] = dss_args[0]
+                else:
+                    req["target"] = dss_args[0]
+                    req["value"] = " ".join(dss_args[1:])
+            else:
+                if dss_args:
+                    req["target"] = dss_args[0]
+                if len(dss_args) > 1:
+                    req["value"] = " ".join(dss_args[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "audioCapture":

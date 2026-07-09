@@ -26,53 +26,35 @@ void TunerModel::setHandle(const QString& handle)
     emit stateChanged();
 }
 
-void TunerModel::applyStatus(const QMap<QString, QString>& kvs)
+void TunerModel::applyChanges(const TunerDelta& d)
 {
+    // Apply only the present fields, change-gated — faithful to the prior
+    // applyStatus (which iterated the wire kv-set). The SmartSDR key names and
+    // "1"/toInt parsing now live in FlexBackend::decodeTunerStatus; informational
+    // fields (nickname/version/ant/dhcp/netmask/gateway/ptta/pttb) are dropped there.
+    // Edge-signal emit order matches the old QMap key-sorted iteration:
+    // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
     bool changed = false;
 
-    for (auto it = kvs.constBegin(); it != kvs.constEnd(); ++it) {
-        const QString& key = it.key();
-        const QString& val = it.value();
-
-        if (key == "serial_num") {
-            if (m_serialNum != val) { m_serialNum = val; changed = true; }
-        } else if (key == "model") {
-            if (m_model != val) { m_model = val; changed = true; }
-        } else if (key == "operate") {
-            bool on = (val == "1");
-            if (m_operate != on) { m_operate = on; changed = true; }
-        } else if (key == "bypass") {
-            bool on = (val == "1");
-            if (m_bypass != on) { m_bypass = on; changed = true; }
-        } else if (key == "tuning") {
-            bool on = (val == "1");
-            if (m_tuning != on) {
-                m_tuning = on;
-                changed = true;
-                emit tuningChanged(m_tuning);
-            }
-        } else if (key == "relayC1") {
-            int v = val.toInt();
-            if (m_relayC1 != v) { m_relayC1 = v; changed = true; }
-        } else if (key == "relayC2") {
-            int v = val.toInt();
-            if (m_relayC2 != v) { m_relayC2 = v; changed = true; }
-        } else if (key == "relayL") {
-            int v = val.toInt();
-            if (m_relayL != v) { m_relayL = v; changed = true; }
-        }
-        else if (key == "antA") {
-            int v = val.toInt();
-            if (m_antennaA != v) { m_antennaA = v; changed = true; emit antennaAChanged(v); }
-        } else if (key == "one_by_three") {
-            bool v = val == "1";
-            if (m_oneByThree != v) { m_oneByThree = v; changed = true; }
-        } else if (key == "ip") {
-            if (m_tgxlIp != val) { m_tgxlIp = val; changed = true; }
-        }
-        // nickname, version, ant, dhcp, netmask, gateway, ptta, pttb
-        // are informational — ignore for now.
+    if (d.serialNum && m_serialNum != *d.serialNum) { m_serialNum = *d.serialNum; changed = true; }
+    if (d.model && m_model != *d.model)             { m_model = *d.model;         changed = true; }
+    if (d.operate && m_operate != *d.operate)       { m_operate = *d.operate;     changed = true; }
+    if (d.bypass && m_bypass != *d.bypass)          { m_bypass = *d.bypass;       changed = true; }
+    if (d.antennaA && m_antennaA != *d.antennaA) {
+        m_antennaA = *d.antennaA;
+        changed = true;
+        emit antennaAChanged(m_antennaA);        // "antA" sorts before "tuning"
     }
+    if (d.tuning && m_tuning != *d.tuning) {
+        m_tuning = *d.tuning;
+        changed = true;
+        emit tuningChanged(m_tuning);
+    }
+    if (d.relayC1 && m_relayC1 != *d.relayC1) { m_relayC1 = *d.relayC1; changed = true; }
+    if (d.relayC2 && m_relayC2 != *d.relayC2) { m_relayC2 = *d.relayC2; changed = true; }
+    if (d.relayL && m_relayL != *d.relayL)    { m_relayL = *d.relayL;   changed = true; }
+    if (d.oneByThree && m_oneByThree != *d.oneByThree) { m_oneByThree = *d.oneByThree; changed = true; }
+    if (d.ip && m_tgxlIp != *d.ip)                     { m_tgxlIp = *d.ip;              changed = true; }
 
     if (changed)
         emit stateChanged();

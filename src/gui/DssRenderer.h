@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QSize>
 #include <QVector>
+#include <QtCore/qfloat16.h>
 
 #include <array>
 #include <functional>
@@ -44,6 +45,15 @@ public:
     // Push one freshly-decoded FFT row (any bin count, dBm). Peak-preserving
     // downsample to kCols and store it as the newest (front) trace.
     void pushRow(const QVector<float>& binsDbm);
+    void setHistoryCapacityRows(int rows);
+    int historyCapacityRows() const { return m_historyCapacityRows; }
+    int historyRowCount() const { return m_historyRowCount; }
+    void appendHistoryRow(const QVector<float>& binsDbm,
+                          double centerMhz, double bandwidthMhz,
+                          float fallbackDbm);
+    void rebuildVisibleFromHistory(int offsetRows,
+                                   double centerMhz, double bandwidthMhz,
+                                   float fallbackDbm);
     void reprojectFrequencyFrame(double oldCenterMhz, double oldBandwidthMhz,
                                  double newCenterMhz, double newBandwidthMhz,
                                  float fallbackDbm);
@@ -86,6 +96,8 @@ public:
     quint64 generation() const { return m_generation; }
 
 private:
+    bool historyStorageMatchesCapacity() const;
+    void resetHistorySmoothing();
     void rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                  float rangeDb, float zCurve, const PaletteFn& palette,
                  const QColor& bgFill);
@@ -106,6 +118,19 @@ private:
     std::array<float, kCols> m_rawPrev1{};
     std::array<float, kCols> m_rawPrev2{};
     int m_rawHistCount = 0;
+
+    // Retained scrollback store. This is intentionally separate from the
+    // 96-row visible surface above: waterfall history can be much deeper, and
+    // the visible 3D mesh is rebuilt from this ring only while viewing history.
+    QVector<qfloat16> m_historyRows;      // flat [history row][kCols]
+    QVector<double> m_historyRowCenterMhz;
+    QVector<double> m_historyRowBandwidthMhz;
+    int m_historyCapacityRows = 0;
+    int m_historyWriteRow = 0;            // ring index of newest retained row
+    int m_historyRowCount = 0;
+    std::array<float, kCols> m_historyRawPrev1{};
+    std::array<float, kCols> m_historyRawPrev2{};
+    int m_historyRawHistCount = 0;
 
     // Cache + the parameters it was built for (rebuild on any change).
     QImage  m_cache;

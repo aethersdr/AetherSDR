@@ -108,8 +108,7 @@ private:
     void rebuildStaticLayers(const SmartMtrGeometry& g);
 
     // One animation tick: advance the smoother (and the extremes) by the elapsed
-    // wall-clock, stop the timer once both settle, and repaint through the
-    // lean-mode gate.
+    // wall-clock, stop the timer once both settle, and repaint.
     void advance();
 
     // Apply the bar ballistics for a meter kind: the analog d'Arsonval sag for
@@ -167,8 +166,8 @@ private:
     MeterValues m_showValues = MeterValues::None;
     bool m_showTypeLabel = false; // draw the MIC/SWR/PWR/COMP label inside the hole
 
-    // Repaint cadence for a returning marker, independent of the bar's lean
-    // repaint gate (which throttles to 12 Hz and would step the slow glide).
+    // Repaint cadence for a returning marker (the bar is settled during the
+    // glide, so this clock is what keeps the marker moving smoothly).
     // Timestamp (on m_extremesClock) of the last marker-driven repaint; -1 until
     // the first. See SmartMtrExtremes::kExtremesRepaintHz.
     qint64 m_lastExtremesRepaintMs = -1;

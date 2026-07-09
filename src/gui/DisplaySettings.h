@@ -8,26 +8,22 @@
 
 namespace AetherSDR {
 
-// Persistence helper for display-related UI toggles (#3283 Lean Mode is the
-// first; future display-feature toggles like frameless / theme variants land
-// here as additional fields).
+// Persistence helper for display-related UI toggles (the SmartMTR meter view
+// and its options; future display-feature toggles land here as additional
+// fields).
 //
 // Stored as a nested JSON blob under AppSettings["Display"], per the
-// nested-JSON-per-feature convention (constitution Principle V).  The legacy
-// flat key "LeanMode" is migrated into this blob by migrateLegacy(), called
-// once at startup (before the first read), so existing users keep their
-// behavior.
+// nested-JSON-per-feature convention (constitution Principle V).
+//
+// RETIRED KEYS — do not reuse. Pre-removal installs still carry these values,
+// so a new feature reusing the name would inherit stale state (e.g. a
+// leftover "True" force-enabling itself):
+//   - "leanMode" (nested, this blob) — Lean Mode, removed with #3283's
+//     mitigation retirement; ex-lean users have "True" persisted.
+//   - "LeanMode" (legacy flat AppSettings key) — pre-blob spelling, was
+//     migrated by the now-removed migrateLegacy().
 class DisplaySettings {
 public:
-    static bool leanMode() { return readObj().value("leanMode").toString("False") == "True"; }
-
-    static void setLeanMode(bool on)
-    {
-        QJsonObject o = readObj();
-        o["leanMode"] = on ? QStringLiteral("True") : QStringLiteral("False");
-        write(o);
-    }
-
     // VFO meter view: false = standard S-meter, true = SmartMTR component.
     // Global (not per-slice) — see MeterViewController for the live-broadcast
     // layer that fans this choice out to every open VFO flag.
@@ -158,23 +154,6 @@ public:
         case TxMeter::None: break;
         }
         return QStringLiteral("None");
-    }
-
-    // One-shot migration from the legacy "LeanMode" flat key.  Run at app
-    // startup before any caller reads the new blob.  Safe to call repeatedly:
-    // returns immediately if the new blob already exists.
-    static void migrateLegacy()
-    {
-        auto& s = AppSettings::instance();
-        if (s.contains("Display")) return;
-        const bool legacyLean =
-            s.value("LeanMode", "False").toString() == "True";
-        QJsonObject o;
-        o["leanMode"] = legacyLean ? QStringLiteral("True") : QStringLiteral("False");
-        write(o);
-        // Leave the legacy flat key in place — harmless after migration, and a
-        // future cleanup PR can drop it once we're confident no other reader
-        // still touches it.
     }
 
 private:

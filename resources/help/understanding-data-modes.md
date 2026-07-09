@@ -250,9 +250,17 @@ Audio format: **24 kHz, stereo, 32-bit float** (shared memory ring buffer).
 
 #### Windows
 
-DAX virtual audio devices require **macOS or Linux with PipeWire**. On Windows,
-use **TCI** instead — TCI carries both control and audio over a single WebSocket
-connection, eliminating the need for virtual audio devices entirely.
+AetherSDR does **not** ship its own DAX audio driver on Windows — the built-in
+DAX bridge (the **Enable** button and meters in the DAX Audio tile) runs on
+**macOS or Linux with PipeWire** only, and those controls are disabled on
+Windows. You still have two working paths for digital-mode audio:
+
+- **TCI** (recommended) — carries both control and audio over a single WebSocket
+  connection, with no virtual audio devices to install. See the TCI setup below.
+- **FlexRadio's SmartSDR DAX** — install FlexRadio's own DAX drivers (from the
+  SmartSDR installer). AetherSDR runs alongside them, and your digital program
+  (including JTDX, which has no TCI support) uses the DAX audio devices those
+  drivers create.
 
 ### DAX gain staging
 
@@ -393,9 +401,11 @@ needed.
 2. The WSJT-X waterfall should fill with signals.
 3. Test transmit with **Tune** as above.
 
-> **Windows users:** TCI is the recommended method on Windows since DAX virtual
-> audio devices are not available. WSJT-X 3.0's TCI support gives you full
-> control and audio through a single connection.
+> **Windows users:** AetherSDR ships no DAX audio driver on Windows, so TCI is
+> the recommended method — WSJT-X 3.0's TCI support gives you full control and
+> audio through a single connection with nothing to install. If you need
+> soundcard-style DAX (for example JTDX, which has no TCI support), install
+> FlexRadio's SmartSDR DAX drivers and select those devices instead.
 
 ---
 
@@ -669,7 +679,8 @@ PulseAudio/PipeWire service is not running.
 - Click **Enable** in the DAX Audio tile.
 - On Linux: run `pactl list sources short` to check if the devices exist.
 - On macOS: check **System Settings > Sound > Input** for AetherSDR devices.
-- On Windows: use TCI instead — DAX virtual audio is not available on Windows.
+- On Windows: AetherSDR ships no DAX driver — use TCI, or FlexRadio's SmartSDR
+  DAX drivers, and check those devices instead.
 
 ### Everything works locally, but remote digital operation is choppy
 

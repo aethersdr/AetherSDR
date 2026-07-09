@@ -240,6 +240,68 @@ int main(int argc, char** argv)
         CHECK(pan.ownerHandle() == 0x5C0FFEE0u);
     }
 
+    // ---- Facet 2c: band/segment zoom — carry + model semantics (#4057) ----
+    {
+        // Backend: the two radio-owned zoom flags ride the panState bundle.
+        FlexBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::extensionStatus);
+        backend.decodePanState(QStringLiteral("0x40000000"),
+                               {{QStringLiteral("band_zoom"), QStringLiteral("1")},
+                                {QStringLiteral("segment_zoom"), QStringLiteral("0")}});
+        CHECK(spy.count() == 1);
+        {
+            const QVariantMap f = spy.takeFirst().at(2).toMap();
+            CHECK(f.value(QStringLiteral("band_zoom")).toString() == QStringLiteral("1"));
+            CHECK(f.value(QStringLiteral("segment_zoom")).toString() == QStringLiteral("0"));
+        }
+
+        // Model: FlexLib parse semantics verbatim (Panadapter.cs 933/1159) —
+        // 0/1 apply with change-gated signals; >1 or non-numeric are invalid
+        // and skipped, not applied as 0 (Principle VII).
+        PanadapterModel pan(QStringLiteral("0x40000000"));
+        QSignalSpy band(&pan, &PanadapterModel::bandZoomChanged);
+        QSignalSpy seg(&pan, &PanadapterModel::segmentZoomChanged);
+        CHECK(pan.bandZoomOn() == false);      // default off
+        CHECK(pan.segmentZoomOn() == false);
+
+        QVariantMap on;
+        on.insert(QStringLiteral("band_zoom"), QStringLiteral("1"));
+        pan.applyStateExtension(on);
+        CHECK(pan.bandZoomOn() == true);
+        CHECK(band.count() == 1);
+        CHECK(band.takeFirst().at(0).toBool() == true);
+
+        // Same value again → no re-emit (change-gated, like FlexLib's
+        // continue-on-equal).
+        pan.applyStateExtension(on);
+        CHECK(band.count() == 0);
+
+        // The radio clearing band_zoom while engaging segment_zoom lands as
+        // one bundle; both flags apply independently (radio owns exclusion).
+        QVariantMap swap;
+        swap.insert(QStringLiteral("band_zoom"), QStringLiteral("0"));
+        swap.insert(QStringLiteral("segment_zoom"), QStringLiteral("1"));
+        pan.applyStateExtension(swap);
+        CHECK(pan.bandZoomOn() == false);
+        CHECK(pan.segmentZoomOn() == true);
+        CHECK(band.count() == 1);
+        CHECK(seg.count() == 1);
+        band.clear(); seg.clear();
+
+        // Invalid values (>1, non-numeric, negative) → skipped, state held.
+        QVariantMap bad;
+        bad.insert(QStringLiteral("band_zoom"), QStringLiteral("2"));
+        bad.insert(QStringLiteral("segment_zoom"), QStringLiteral("nope"));
+        pan.applyStateExtension(bad);
+        QVariantMap neg;
+        neg.insert(QStringLiteral("segment_zoom"), QStringLiteral("-1"));
+        pan.applyStateExtension(neg);
+        CHECK(pan.bandZoomOn() == false);
+        CHECK(pan.segmentZoomOn() == true);    // still on — invalids ignored
+        CHECK(band.count() == 0);
+        CHECK(seg.count() == 0);
+    }
+
     // ---- Facet 3: model sinks ----
     {
         PanadapterModel pan(QStringLiteral("0x40000000"));

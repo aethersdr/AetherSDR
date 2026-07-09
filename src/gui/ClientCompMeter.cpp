@@ -43,8 +43,7 @@ ClientCompMeter::ClientCompMeter(QWidget* parent) : QWidget(parent)
         const bool settled = !m_smooth.tick(m_animElapsed.restart());
         if (settled)
             m_animTimer.stop();
-        if (settled || m_smooth.shouldRepaint())
-            update();
+        update();
     });
 
     // Phase 5 PR 3b — repaint when the theme changes so live edits to

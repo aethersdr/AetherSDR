@@ -40,8 +40,8 @@ production; it only exists when you ask for it via an env var.
 cmake --build build --parallel
 
 # 2. Launch the app with the bridge enabled.
-AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
-#   AETHER_AUTOMATION=1 ./build/AetherSDR &                            # Linux/Windows
+AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
+#   AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR &                            # Linux/Windows
 
 # 3. Drive it. The dependency-free probe needs no Qt:
 python3 tools/automation_probe.py ping
@@ -53,6 +53,8 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
+`AETHER_AUTOMATION_NO_AUTOCONNECT=1` suppresses saved-radio autoconnect during
+bridge runs; use the `connect` verb when a test intentionally needs a radio.
 
 KiwiSDR compression can be forced for diagnostic runs by adding
 `AETHER_KIWI_SND_COMP=1` and/or `AETHER_KIWI_WF_COMP=1` at launch. These are
@@ -77,7 +79,7 @@ HIServices are unavailable, before AetherSDR reaches the automation bridge; with
 socket the bridge needs. Launch outside the command sandbox instead:
 
 ```bash
-QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
+QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
 ```
 
 ---
@@ -135,9 +137,11 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
+| | [`clickAt [<target>] <x> <y>`](#clickat) | Click at a global (or target-local) point — fallback when name matching is ambiguous (TX-guarded). |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
+| | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
@@ -145,6 +149,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
+| | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
 | | [`get clients`](#get-clients) | Radio client roster + foreign-pan-write forensics (#3977). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
@@ -155,6 +160,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
+| | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
 | **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X-shaped). |
@@ -431,7 +437,7 @@ connects).
 
 | `model` | `selector` | returns |
 |---|---|---|
-| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate) |
+| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
@@ -441,14 +447,21 @@ connects).
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
-| `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
+| `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
+| `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
+
+For `get audio`, `receivePresentationOutputSignalEmitCount` counts output
+chunks dispatched to Receive Presentation Sync analysis, while
+`receivePresentationOutputSignalSuppressedCount` counts non-empty output chunks
+that were captured for automation but skipped because no KiwiSDR audio source
+was active.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
@@ -497,7 +510,7 @@ cost a few integer adds per frame.
 → {"cmd":"get","model":"panstats"}
 ← {"ok":true,"model":"panstats","pans":[{
    "panIndex":0,"renderMode":"2D","renderer":"GPU QRhi (Metal; Apple M1 Ultra)",
-   "widthPx":2280,"heightPx":1302,"dpr":2.0,"leanMode":false,"sinceMs":60012,
+   "widthPx":2280,"heightPx":1302,"dpr":2.0,"sinceMs":60012,
    "fftFramesPerSec":29.6,"ingestMsPerSec":8.1,
    "gpuFramesPerSec":29.6,"gpuFrameMsPerSec":97.4,"avgGpuFrameUs":3290.0,
    "fftBuildMsPerSec":64.2,"fftVboBytesPerSec":42049536.0,
@@ -520,6 +533,47 @@ cost a few integer adds per frame.
 `selector` filters by pan index (`get panstats 0`) or objectName. `property`
 `reset` zeroes the counters after the read so successive reads measure
 disjoint intervals: `get panstats 0 reset`.
+
+> **Removed field:** `leanMode` (boolean) was dropped when Lean Mode was
+> removed from the app — scripts that keyed on it should stop; every pan now
+> always renders the full-quality path.
+
+### `get tracedebug`
+Per-panadapter `SpectrumWidget` trace diagnostics for proving Flex/Kiwi display
+source behavior without screenshots. This is intentionally diagnostic rather
+than user-facing state: use it to compare the currently displayed source, hidden
+background histories, separate 2D/3D trace positions, and the 3D floor anchor
+used by the stacked trace renderer.
+
+```json
+→ {"cmd":"get","model":"tracedebug","selector":"0"}
+← {"ok":true,"model":"tracedebug","pans":[{
+   "panIndex":0,"name":"SpectrumWidget","renderMode":"3D",
+   "kiwiWaterfallActive":false,
+   "noiseFloorPosition":75,
+   "flexNoiseFloorPosition":75,"kiwiNoiseFloorPosition":68,
+   "dssFloorDepth":6,
+   "flexDssFloorDepth":6,"kiwiDssFloorDepth":10,
+   "dssFloorDbm":-120.5,"dssSpanDb":90.0,
+   "flexDssRows":96,"kiwiDssRows":96,
+   "kiwiFftTraceFloorDbm":-124.0,
+   "kiwiDisplayFloorDbm":-110.0,
+   "flexBins":{"count":768,"finiteCount":768},
+   "kiwiBins":{"count":768,"finiteCount":768}}]}
+```
+
+`selector` filters by pan index (`get tracedebug 0`) or objectName. Key fields:
+
+- `kiwiWaterfallActive` — whether this pan is displaying Kiwi spectrum/waterfall
+  (`false` means Flex is displayed; audio and meters are separate concerns).
+- `flexNoiseFloorPosition` / `kiwiNoiseFloorPosition` — the source-specific 2D
+  trace position values restored when toggling displays.
+- `flexDssFloorDepth` / `kiwiDssFloorDepth` — the source-specific 3D floor-depth
+  values restored when toggling displays.
+- `flexDssRows` / `kiwiDssRows` — rolling 3D history row counts for both display
+  sources; useful for checking that hidden histories continue updating.
+- `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
+  trace floor used by 3D placement from the waterfall color floor.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -804,6 +858,62 @@ owner at the same screen point.
    "widgetAt":{"class":"VfoWidget",...}}
 ```
 
+### `clickAt`
+Synthesize a real left-click (`press`→`release`) at a **point** rather than at a
+named widget. This is the escape hatch for when `invoke`/name matching can't reach
+the control you want — most commonly because several widgets share the same
+`accessibleName` (every side-panel tile's close button is `containerClose`, its
+float toggle `containerFloatToggle`, etc.), so `invoke` can only ever hit the
+**first** match. `dumpTree` reports widget `geometry` in **global (screen)**
+coordinates, so clicking the centre of a tile's dumpTree rect clicks exactly that
+tile's control.
+
+Two forms:
+- **`clickAt <x> <y>`** — `x y` are **global** screen coordinates. The bridge
+  clicks whatever `QApplication::widgetAt(x, y)` resolves (the topmost widget at
+  that point).
+- **`clickAt <target> <x> <y>`** — `x y` are **local** to `<target>` (like
+  `hitTest`); the point must lie inside the target's rect, and the click is
+  routed to the deepest `childAt` that point.
+
+The click is **TX-guarded** like `invoke`, but stricter: the guard walks the
+**whole ancestor chain** of the widget under the point (Qt propagates an
+unaccepted press to parents, so a click on a passive child of a keying control
+must be refused too) and is refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — a
+coordinate click is never a hole around the keying gate. Clicks on the RF/Tune
+power sliders are refused while `AETHER_AUTOMATION_TX_MAX_POWER` is armed (a
+groove click can't be clamped — use `invoke … setValue`, which is). A disabled
+widget under the point is refused (`"disabled":true`), same as `invoke`.
+
+Delivery is deferred one main-loop turn (`"deferred":true`), so any popup/dialog
+it raises runs on a clean stack; follow with `dumpTree`/`grab` to read the
+result. Because the reply is sent **before** delivery, anything already queued
+(a relayout, a pan re-center) can change what that pixel means by the time the
+press lands — re-`dumpTree` right before `clickAt` and don't interleave other
+mutating verbs in between.
+
+In the reply, `localX`/`localY` are local to the widget the click was **routed
+to** (`clicked`) — the deepest child — not to the named `<target>`, so for the
+target-local form they generally differ from the `x y` you sent.
+
+```json
+→ {"cmd":"clickAt","x":1420,"y":210}          // global point (or "value":"1420 210")
+← {"ok":true,"clicked":{"class":"QPushButton","accessibleName":"containerClose",…},
+   "globalX":1420,"globalY":210,"localX":7,"localY":6,"deferred":true}
+
+→ {"cmd":"clickAt","target":"AppletPanel","value":"12 34"}   // point local to a widget
+← {"ok":true,"clicked":{"class":"…"},"globalX":1318,"globalY":97,
+   "localX":5,"localY":3,"deferred":true}     // local to `clicked`, not to AppletPanel
+```
+
+The JSON `x`/`y` fields must both be present and JSON-numeric; a missing or
+string-typed coordinate is rejected rather than coerced to 0 (which would click
+the screen edge).
+
+Recipe — close a **specific** side-panel tile (not just the first `containerClose`):
+read the target tile's `containerClose` rect from `dumpTree`, compute its centre in
+global coordinates, and `clickAt` that point.
+
 ### `menu`
 Enumerate or pop a **menu-bar** menu. On macOS the native menu bar reparents its
 menus to top-level `QMenu`s, so `dumpTree` finds them but `menuBar()->actions()`
@@ -862,6 +972,45 @@ State changes are synchronous (no nested event loop), so the reply's
 `windowState` is authoritative. `resize` and `window` share window-target
 resolution (`topLevelWindowForTarget`): a child `target` resolves to its
 `window()`.
+
+### `shortcut`
+Fire a registered `ShortcutManager` action by id — the **exact** path a MIDI
+controller mapping takes (`fireShortcut` → `action(id)->handler()` in
+`MainWindow_Controllers.cpp`). Many actions carry no default key sequence **and**
+no menu entry — Band Zoom, Segment Zoom, and every MIDI-only trigger — so they're
+otherwise unreachable by `invoke` (no widget), a key event (no `QKeySequence`), or
+`menu` (no menu item). This verb drives them directly. The id is the shortcut's
+registration id (as in the Configure Shortcuts list / MIDI mapping short id), e.g.
+`band_zoom`, `segment_zoom`, `split_toggle`, `filter_widen`.
+
+```json
+→ {"cmd":"shortcut","target":"band_zoom"}
+← {"ok":true,"shortcut":"band_zoom","fired":true}
+```
+
+(JSON form: the id rides the `target` field; a `target` present alongside other
+fields wins.) The handler runs synchronously on the GUI thread. An unknown id
+replies `{"ok":false,"error":"unknown shortcut action id: …"}`.
+
+**`fired:true` means the handler ran, not that anything happened.** Handlers
+validate their own preconditions exactly like a physical MIDI press — no radio
+connection, no active slice, or no resolvable pan is a silent no-op. Assert
+effects through `get`/`dumpTree` (e.g. `get pans` for the zoom actions), not
+from the reply.
+
+**Momentary key actions can't be fired by id.** `ptt_hold` and the CW
+straight-key/paddle ids appear in the Configure Shortcuts list but register
+null handlers on purpose — they're driven by the app-level event filter, which
+needs key **release** edges. The bridge replies with a distinct
+`event-filter-driven` error for these, not `unknown id`.
+
+**TX-safety:** actions registered as transmit-keying (`keysTx` at their
+`registerAction` site — `mox_toggle`, `tune_toggle`, `two_tone_tune`,
+`atu_start`, `ptt_hold`, and the CW key ids) are refused unless
+`AETHER_AUTOMATION_ALLOW_TX=1`, mirroring the [`invoke`](#invoke) /
+[`key`](#key) TX guard. The gate reads the registration flag — one source of
+truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
+included) need no flag.
 
 ### `pan`
 Panadapter lifecycle — create or tear down a pan regardless of how it was opened.
@@ -1197,6 +1346,65 @@ recovery (#3804) or that the waterfall auto-range settled.
 
 One entry per `SpectrumWidget` that has a real measurement; the same numbers
 appear per-node in `dumpTree` (`noiseFloorDbm`/`displayFloorDbm`/`panIndex`).
+
+### `dss`
+Automation-only 3D stacked-trace / waterfall scrollback proof surface. It finds
+a `SpectrumWidget` by `panIndex`, injects synthetic RX rows through the normal
+SpectrumWidget waterfall paths, and returns compact counters/peak-bin snapshots.
+It is RX-only: no radio commands and no transmit keying.
+
+```json
+→ {"cmd":"dss","action":"reset","target":"0","value":"native"}
+← {"ok":true,"panIndex":0,"live":true,"waterfallRows":96,
+   "centerMhz":14.1,"bandwidthMhz":0.192,"dssHistoryRows":0,...}
+
+→ {"cmd":"dss","action":"inject","target":"0","value":"99 100 1 native"}
+← {"ok":true,"dssHistoryRows":99,"waterfallHistoryRows":99,
+   "maxHistoryOffsetRows":3,
+   "dssHistoryRowsAdded":99,"waterfallHistoryRowsAdded":99,...}
+
+→ {"cmd":"dss","action":"scrollback","target":"0","value":"1"}
+← {"ok":true,"live":false,"historyOffsetRows":1,
+   "maxHistoryOffsetRows":3,...}
+
+→ {"cmd":"dss","action":"inject","target":"0","value":"3 420 0 native"}
+← {"ok":true,"live":false,"dssHistoryRows":102,
+   "waterfallHistoryRows":102,"historyOffsetRows":4,
+   "dssHistoryRowsAdded":3,"waterfallHistoryRowsAdded":3,
+   ...}
+
+→ {"cmd":"dss","action":"scrollback","target":"0","value":"0"}
+← {"ok":true,"live":false,"historyOffsetRows":0,"dssVisiblePeakBin":420,...}
+```
+
+This example assumes the reset response reports `waterfallRows:96`; for a
+different widget height, inject at least `waterfallRows + 3` rows before asking
+for `scrollback 1`.
+
+Actions:
+
+| action | value | effect |
+|---|---|---|
+| `snapshot` | optional pan target | Read `live`, current center/bandwidth MHz, waterfall/DSS history row counts, visible DSS row count, and the current front-row peak bin. |
+| `reset` | `native` or `kiwi` | Clear the selected stream's current/history rows and make that stream active for subsequent injection. |
+| `inject` | `<count> <firstPeakBin> <stepBin> [native\|kiwi [rowLowMhz rowHighMhz]]` | Add synthetic rows with one strong peak per row. `count` is rejected if it exceeds the retained waterfall history capacity. Native injection adds one fallback-style waterfall/DSS row per input row; Kiwi injection drives `updateKiwiSdrWaterfallRow()`. Kiwi frame arguments override the source row's frequency span, so tests can cover partial-overlap rows. |
+| `scrollback` | `<offsetRows>` | Enter waterfall history mode and rebuild the 3D surface using the same offset. |
+| `live` | none | Return to live mode. |
+
+The paused/live-history assertion is: enter `scrollback`, inject more rows,
+confirm both `waterfallHistoryRowsAdded` and `dssHistoryRowsAdded` match the
+injected count while `historyOffsetRows` advances and `dssVisiblePeakBin` stays
+on the same paused historical row, then set `scrollback 0` and confirm the newly
+injected peak becomes visible. The total row counts are still returned, but the
+`*RowsAdded` fields are the deterministic assertion surface if live data is also
+arriving between bridge requests.
+
+To reproduce a low-coverage Kiwi row, read `centerMhz` and `bandwidthMhz` from
+`dss snapshot`, then inject a Kiwi source row whose span overlaps less than 5%
+of the current view. For example, with `viewHigh = centerMhz + bandwidthMhz/2`,
+`dss inject 3 120 0 kiwi <viewHigh - 0.03*bandwidthMhz> <viewHigh + 0.97*bandwidthMhz>`
+keeps row counts aligned while proving the DSS history stores the partial row
+content instead of a flat fallback row.
 
 ### `whoami`
 Identify **this** bridge instance among concurrent bridges (each app process gets
