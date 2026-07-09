@@ -1,5 +1,6 @@
 #include "SpectrumWidget.h"
 #include "KiwiSdrTraceMath.h"
+#include "PanadapterRenderScheduler.h"
 #include "PanadapterMessageOverlay.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
@@ -816,6 +817,17 @@ QString SpectrumWidget::rendererDescription() const
 #endif
 }
 
+void SpectrumWidget::setRenderScheduler(PanadapterRenderScheduler* scheduler)
+{
+    if (m_renderScheduler == scheduler) {
+        return;
+    }
+
+    m_renderScheduler = scheduler;
+    m_presentPending = false;
+    m_leanRepaintClock.invalidate();
+}
+
 QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
 {
     const double secs = std::max(0.001, m_panStats.sinceMs() / 1000.0);
@@ -864,6 +876,17 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
     if (reset)
         m_panStats.reset();
     return m;
+}
+
+QVariantMap SpectrumWidget::renderSchedulerStatsSnapshot(bool reset)
+{
+    if (!m_renderScheduler) {
+        QVariantMap stats;
+        stats[QStringLiteral("enabled")] = false;
+        return stats;
+    }
+
+    return m_renderScheduler->statsSnapshot(reset);
 }
 
 QVariantMap SpectrumWidget::automationDssSnapshot() const
@@ -7723,6 +7746,20 @@ void SpectrumWidget::leanCappedUpdate()
     // (~30 Hz cap); normal mode never drops — a trailing update presents
     // whatever arrived inside the slot.
     const int slotMs = m_leanMode ? kLeanFrameMs : kPresentCoalesceMs;
+    if (m_renderScheduler) {
+        if (m_leanMode && m_leanRepaintClock.isValid()
+            && m_leanRepaintClock.elapsed() < slotMs) {
+            return;
+        }
+        if (m_leanRepaintClock.isValid()) {
+            m_leanRepaintClock.restart();
+        } else {
+            m_leanRepaintClock.start();
+        }
+        m_renderScheduler->requestDataFrame(this, slotMs);
+        return;
+    }
+
     if (!m_leanRepaintClock.isValid()) {
         m_leanRepaintClock.start();
         update();

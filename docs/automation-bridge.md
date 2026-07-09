@@ -507,7 +507,9 @@ cost a few integer adds per frame.
    "overlayRebuildsPerSec":0.1,"overlayRebuildMsPerSec":1.9,
    "overlayUploadBytesPerSec":3964928.0,"wfUploadBytesPerSec":18240.0,
    "paintsPerSec":0.0,"paintMsPerSec":0.0,
-   "overlayDirtyCauses":{"smartMtr":2,"detect":1,"other":3}}]}
+   "overlayDirtyCauses":{"smartMtr":2,"detect":1,"other":3}}],
+   "renderScheduler":{"enabled":true,"requests":612,"flushes":301,
+   "coalescedRequests":288,"avgWidgetsPerFlush":1.9}}
 ```
 
 | field | meaning |
@@ -519,10 +521,12 @@ cost a few integer adds per frame.
 | `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
 | `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
+| `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 
 `selector` filters by pan index (`get panstats 0`) or objectName. `property`
 `reset` zeroes the counters after the read so successive reads measure
-disjoint intervals: `get panstats 0 reset`.
+disjoint intervals: `get panstats reset` resets all panes plus the shared
+scheduler counters, and `get panstats 0 reset` resets one pane.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,

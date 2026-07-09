@@ -10,6 +10,7 @@ namespace AetherSDR {
 class BandStackPanel;
 class PanFloatingWindow;
 class PanadapterApplet;
+class PanadapterRenderScheduler;
 class SpectrumWidget;
 
 // Vertical stack of N PanadapterApplet instances, each showing an
@@ -75,6 +76,7 @@ signals:
 private:
     void rebuildDockedSplitter();
 
+    PanadapterRenderScheduler* m_renderScheduler{nullptr};
     BandStackPanel* m_bandStackPanel{nullptr};
     QSplitter* m_splitter{nullptr};
     QMap<QString, PanadapterApplet*> m_pans;
