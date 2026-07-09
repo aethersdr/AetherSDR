@@ -5656,11 +5656,17 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     }
     m_bins = *spectrumBins;
 
-    // Feed the Flex rolling history every frame (not only in 3D and not only
-    // while Flex is visible) so switching back from Kiwi shows current Flex
-    // 3D history instead of an old surface that refills over ~96 frames.
-    // Raw bins: the renderer does its own spatial/temporal smoothing.
-    pushDssRowForWaterfallStream(false, m_bins);
+    // While Kiwi is displayed, keep the *background* Flex surface warm every
+    // frame (not only in 3D and not only while Flex is visible) so switching
+    // back from Kiwi shows current Flex 3D history instead of an old surface
+    // that refills over ~96 frames. Raw bins: the renderer does its own
+    // spatial/temporal smoothing. When Flex is the active stream this must NOT
+    // run: updateWaterfallRow() already advances m_dss at waterfall-row cadence
+    // (paired with the 2D waterfall appendHistoryRow), and feeding here too
+    // would over-advance the retained DSS scrollback past the waterfall (#4083).
+    if (m_kiwiSdrWaterfallActive) {
+        pushDssRowForWaterfallStream(false, m_bins);
+    }
 
     if (!m_kiwiSdrWaterfallActive) {
         // ── Live noise floor measurement (two-pass trimmed mean) ─────────
