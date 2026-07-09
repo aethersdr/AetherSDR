@@ -4601,7 +4601,7 @@ void MainWindow::buildUI()
     auto* netStack = new QWidget;
     reserveTelemetryStack(netStack, {
         QStringLiteral("Network:"),
-        QStringLiteral("[Excellent · 120 fps cap (restoring)]")
+        QStringLiteral("[Very Good]")
     });
     netStack->setCursor(Qt::PointingHandCursor);
     auto* netVbox = new QVBoxLayout(netStack);
