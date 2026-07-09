@@ -13,10 +13,9 @@ namespace AetherSDR {
 // here as additional fields).
 //
 // Stored as a nested JSON blob under AppSettings["Display"], per the
-// nested-JSON-per-feature convention (constitution Principle V).  The legacy
-// flat key "LeanMode" is migrated into this blob by migrateLegacy(), called
-// once at startup (before the first read), so existing users keep their
-// behavior.
+// nested-JSON-per-feature convention (constitution Principle V).  Legacy flat
+// display keys are migrated into this blob by migrateLegacy(), called once at
+// startup (before the first read), so existing users keep their behavior.
 class DisplaySettings {
 public:
     static bool leanMode() { return readObj().value("leanMode").toString("False") == "True"; }
@@ -25,6 +24,20 @@ public:
     {
         QJsonObject o = readObj();
         o["leanMode"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // Global panadapter marker overlay preference. Default False preserves the
+    // waterfall as signal history unless the operator opts into the overlay.
+    static bool extendedPassband()
+    {
+        return readObj().value("extendedPassband").toString("False") == "True";
+    }
+
+    static void setExtendedPassband(bool on)
+    {
+        QJsonObject o = readObj();
+        o["extendedPassband"] = on ? QStringLiteral("True") : QStringLiteral("False");
         write(o);
     }
 
@@ -160,21 +173,40 @@ public:
         return QStringLiteral("None");
     }
 
-    // One-shot migration from the legacy "LeanMode" flat key.  Run at app
-    // startup before any caller reads the new blob.  Safe to call repeatedly:
-    // returns immediately if the new blob already exists.
+    // One-shot migration from legacy flat display keys. Run at app startup
+    // before any caller reads the new blob. Safe to call repeatedly.
     static void migrateLegacy()
     {
         auto& s = AppSettings::instance();
-        if (s.contains("Display")) return;
-        const bool legacyLean =
-            s.value("LeanMode", "False").toString() == "True";
-        QJsonObject o;
-        o["leanMode"] = legacyLean ? QStringLiteral("True") : QStringLiteral("False");
-        write(o);
-        // Leave the legacy flat key in place — harmless after migration, and a
-        // future cleanup PR can drop it once we're confident no other reader
-        // still touches it.
+        QJsonObject o = readObj();
+        bool changed = false;
+
+        if (!s.contains("Display")) {
+            const bool legacyLean =
+                s.value("LeanMode", "False").toString() == "True";
+            o["leanMode"] = legacyLean ? QStringLiteral("True") : QStringLiteral("False");
+            changed = true;
+        }
+
+        // Migrate the short-lived flat key used by early Extended Passband
+        // builds into the Display blob so local testers keep their preference.
+        if (s.contains("ExtendedPassband")) {
+            if (!o.contains("extendedPassband")) {
+                const bool legacyExtendedPassband =
+                    s.value("ExtendedPassband", "False").toString() == "True";
+                o["extendedPassband"] =
+                    legacyExtendedPassband ? QStringLiteral("True") : QStringLiteral("False");
+            }
+            s.remove("ExtendedPassband");
+            changed = true;
+        }
+
+        if (changed) {
+            write(o);
+        }
+        // Leave the legacy LeanMode flat key in place — harmless after
+        // migration, and a future cleanup PR can drop it once we're confident
+        // no other reader still touches it.
     }
 
 private:

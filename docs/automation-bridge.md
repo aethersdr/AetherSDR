@@ -136,6 +136,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
+| | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
@@ -788,6 +789,27 @@ handler pops a `QMenu` that runs its own event loop). Returns `deferred:true`;
 → {"cmd":"contextMenu","target":"SMeterWidget","value":"40 12"}
 ← {"ok":true,"target":"SMeterWidget","class":"SMeterWidget","x":40,"y":12,"deferred":true}
 ```
+
+### `rightClick`
+Trigger a widget path that handles right-clicks directly in `mousePressEvent`,
+rather than through Qt's `contextMenuEvent`/`customContextMenuRequested` policy.
+The panadapter's `SpectrumWidget` menu is the main use case: it is position
+sensitive and built from a real right-button press, so [`contextMenu`](#contextmenu)
+cannot reach it.
+
+```json
+→ {"cmd":"rightClick","target":"Panadapter spectrum display"}
+← {"ok":true,"target":"Panadapter spectrum display","class":"SpectrumWidget",
+   "x":939,"y":735,"deferred":true}
+
+→ {"cmd":"rightClick","target":"Panadapter spectrum display","value":"940 730"}
+← {"ok":true,"target":"Panadapter spectrum display","class":"SpectrumWidget",
+   "x":940,"y":730,"deferred":true}
+```
+
+The verb posts a right-button `MouseButtonPress` onto the GUI event loop with the
+owning window raised, then returns immediately. Follow with `dumpTree` to inspect
+the visible `QMenu`, and `invoke <menu item text> trigger` to choose an action.
 
 Section-title rows (a disabled `QWidgetAction` + `QLabel`, the app's idiom for
 menu headers since `QMenu::addSection` text doesn't render under the app styling)

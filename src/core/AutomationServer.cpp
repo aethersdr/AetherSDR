@@ -1730,7 +1730,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, whoami, log, mark)";
+        << "menu, close, drag, hover, showMenu, contextMenu, rightClick, hitTest, whoami, log, mark)";
     return true;
 }
 
@@ -2102,6 +2102,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("contextMenu")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "contextMenu SMeterWidget [x y]"
+        } else if (cmd == QLatin1String("rightClick")) {
+            target = tok(1);
+            value = tok(2) + QLatin1Char(' ') + tok(3);  // "rightClick SpectrumWidget [x y]"
         } else {  // whoami and friends
             target = tok(1); path = tok(2);
         }
@@ -2159,6 +2162,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (target.isEmpty())
             return err(QStringLiteral("contextMenu requires a target widget"));
         return doContextMenu(target, value);
+    }
+    if (cmd == QLatin1String("rightClick")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("rightClick requires a target widget"));
+        return doRightClick(target, value);
     }
     if (cmd == QLatin1String("hitTest") || cmd == QLatin1String("hittest")) {
         if (target.isEmpty())
@@ -4568,6 +4576,63 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
         {QStringLiteral("x"), local.x()},
         {QStringLiteral("y"), local.y()},
         {QStringLiteral("deferred"), true},   // popup runs next turn; dumpTree to read it
+    };
+}
+
+// ── Real right-button press for mousePressEvent menus (#3646) ────────────────
+// Some widgets build context menus directly from mousePressEvent instead of
+// Qt's context-menu policy. SpectrumWidget is the important case: its
+// panadapter menu is position-sensitive and lives behind a real right-button
+// press, so QContextMenuEvent does not reach it. Post a right-button press onto
+// the GUI loop and leave the menu's nested event loop to dumpTree/invoke.
+QJsonObject AutomationServer::doRightClick(const QString& target,
+                                           const QString& value) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget not found: ") + target);
+    if (!w->isVisible())
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+
+    QPoint local = w->rect().center();
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() >= 2) {
+        bool okx = false, oky = false;
+        const int x = parts.at(0).toInt(&okx);
+        const int y = parts.at(1).toInt(&oky);
+        if (!okx || !oky)
+            return err(QStringLiteral("rightClick offset x/y must be integers"));
+        local = QPoint(x, y);
+    }
+
+    QPointer<QWidget> wp = w;
+    QPointer<QWidget> win = w->window();
+    QTimer::singleShot(0, qApp, [wp, win, local]() {
+        if (!wp)
+            return;
+        if (win && win->isVisible()) {
+            win->raise();
+            win->activateWindow();
+        }
+        const QPoint global = wp->mapToGlobal(local);
+        QMouseEvent ev(QEvent::MouseButtonPress,
+                       QPointF(local),
+                       QPointF(local),
+                       QPointF(global),
+                       Qt::RightButton,
+                       Qt::RightButton,
+                       Qt::NoModifier);
+        QApplication::sendEvent(wp, &ev);
+    });
+    qCInfo(lcAutomation).noquote() << "rightClick on" << target << "at" << local;
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("x"), local.x()},
+        {QStringLiteral("y"), local.y()},
+        {QStringLiteral("deferred"), true},
     };
 }
 

@@ -157,6 +157,10 @@ class QsoRecorder;
 //                                     contextMenuEvent) via a synthesized
 //                                     QContextMenuEvent; deferred, then dumpTree
 //                                     to read it and invoke to drive it.
+//   rightClick <target> [x y]      -> synthesize a real right-button press for
+//                                     widgets whose context menus live in
+//                                     mousePressEvent (SpectrumWidget);
+//                                     deferred, then dumpTree/invoke.
 //   hitTest <target> [x y]         -> report Qt's widgetAt()/childAt() owner for
 //                                     a target-local point. Read-only proof for
 //                                     transparent overlays and input masks.
@@ -318,6 +322,11 @@ private:
     // handler pops a QMenu that runs its own event loop. The popped menu is read
     // via dumpTree and driven via invoke, no extra inspection code needed. (#3858)
     QJsonObject doContextMenu(const QString& target, const QString& value) const;
+    // rightClick <target> [x y]: synthesize a real right-button mouse press for
+    // widgets that build context menus directly in mousePressEvent rather than
+    // via Qt's context-menu policy. Posted for the same native-popup safety as
+    // doContextMenu. (#3646 fidelity)
+    QJsonObject doRightClick(const QString& target, const QString& value) const;
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;

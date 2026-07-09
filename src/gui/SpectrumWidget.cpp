@@ -3,6 +3,7 @@
 #include "PanadapterMessageOverlay.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
+#include "DisplaySettings.h"
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -1543,6 +1544,7 @@ void SpectrumWidget::loadSettings()
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
+    m_extendedPassband = DisplaySettings::extendedPassband();
 
     // Background image — default to bundled logo, "none" = explicitly cleared
     QString bgPath = s.value(settingsKey("BackgroundImage"), ":/bg-default.jpg").toString();
@@ -2663,6 +2665,24 @@ void SpectrumWidget::setExtendedFrequencyLine(bool on) {
         }
     }
 }
+
+void SpectrumWidget::setExtendedPassband(bool on) {
+    m_extendedPassband = on;
+    DisplaySettings::setExtendedPassband(on);
+    markOverlayDirty();
+
+    // Propagate to all sibling SpectrumWidgets so the toggle is global.
+    if (QWidget* top = window()) {
+        const auto siblings = top->findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* sw : siblings) {
+            if (sw != this && sw->m_extendedPassband != on) {
+                sw->m_extendedPassband = on;
+                sw->markOverlayDirty();
+            }
+        }
+    }
+}
+
 void SpectrumWidget::setFftLineWidth(float w) {
     m_fftLineWidth = std::clamp(w, 0.0f, 5.0f);
     auto& s = AppSettings::instance();
@@ -6629,6 +6649,11 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             extendedLineAction->setCheckable(true);
             extendedLineAction->setChecked(m_extendedFrequencyLine);
             connect(extendedLineAction, &QAction::toggled, this, &SpectrumWidget::setExtendedFrequencyLine);
+
+            QAction* extendedPassbandAction = menu.addAction("Extended Passband");
+            extendedPassbandAction->setCheckable(true);
+            extendedPassbandAction->setChecked(m_extendedPassband);
+            connect(extendedPassbandAction, &QAction::toggled, this, &SpectrumWidget::setExtendedPassband);
 
             menu.addSeparator();
             bool floating = m_isFloating;
@@ -11461,7 +11486,6 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         const QColor bandCol = so.isActive
             ? SliceColorManager::instance().activeColor(colourIdx)
             : AetherSDR::ThemeManager::instance().color("color.text.secondary");
-        const int freqLineBottom = m_extendedFrequencyLine ? wfRect.bottom() : specRect.bottom();
         const double fLoMhz = so.freqMhz + so.filterLowHz / 1.0e6;
         const double fHiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
 
@@ -11470,12 +11494,21 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         const int fX2  = mhzToX(fHiMhz);
         const int fW   = fX2 - fX1;
 
+        auto drawFrequencyLine = [&](int x) {
+            p.drawLine(x, specRect.top(), x, specRect.bottom());
+            if (m_extendedFrequencyLine && !wfRect.isEmpty()) {
+                p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+            }
+        };
+
         // ── Filter passband shading ──────────────────────────────────────
-        // Drawn only in the spectrum area. The waterfall is a historical
-        // record of received signals; painting a UI affordance over it
-        // makes the passband look like a signal in the history (#1270).
-        p.fillRect(QRect(fX1, specRect.top(), fW, specRect.height()),
-                   QColor(bandCol.red(), bandCol.green(), bandCol.blue(), 35));
+        // Default stays spectrum-only because the waterfall is a historical
+        // record of received signals (#1270). The waterfall fill is opt-in.
+        const QColor passbandFill(bandCol.red(), bandCol.green(), bandCol.blue(), 35);
+        p.fillRect(QRect(fX1, specRect.top(), fW, specRect.height()), passbandFill);
+        if (m_extendedPassband && !wfRect.isEmpty()) {
+            p.fillRect(QRect(fX1, wfRect.top(), fW, wfRect.height()), passbandFill);
+        }
 
         // Filter edge lines — user-hidden via per-slice VFO flag toggle (#1526)
         if (!so.filterEdgesHidden) {
@@ -11503,11 +11536,11 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
 
             // Mark line — green, dashed
             p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.success", 200), 1, Qt::DashLine));
-            p.drawLine(markX, specRect.top(), markX, freqLineBottom);
+            drawFrequencyLine(markX);
 
             // Space line — red, dashed
             p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.danger", 200), 1, Qt::DashLine));
-            p.drawLine(spaceX, specRect.top(), spaceX, freqLineBottom);
+            drawFrequencyLine(spaceX);
 
             // Labels at top
             QFont f = p.font();
@@ -11527,7 +11560,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             // Per-slice VFO marker thickness — user-toggled via VFO flag (#1526)
             const qreal vfoLineW = static_cast<qreal>(so.markerWidth);
             p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 220), vfoLineW));
-            p.drawLine(markerX, specRect.top(), markerX, freqLineBottom);
+            drawFrequencyLine(markerX);
 
             // ── Triangle marker at top ───────────────────────────────────
             const int triHalf = 6;
