@@ -14,6 +14,14 @@ namespace AetherSDR {
 //
 // Stored as a nested JSON blob under AppSettings["Display"], per the
 // nested-JSON-per-feature convention (constitution Principle V).
+//
+// RETIRED KEYS — do not reuse. Pre-removal installs still carry these values,
+// so a new feature reusing the name would inherit stale state (e.g. a
+// leftover "True" force-enabling itself):
+//   - "leanMode" (nested, this blob) — Lean Mode, removed with #3283's
+//     mitigation retirement; ex-lean users have "True" persisted.
+//   - "LeanMode" (legacy flat AppSettings key) — pre-blob spelling, was
+//     migrated by the now-removed migrateLegacy().
 class DisplaySettings {
 public:
     // VFO meter view: false = standard S-meter, true = SmartMTR component.

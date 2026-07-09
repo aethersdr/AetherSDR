@@ -532,6 +532,10 @@ cost a few integer adds per frame.
 `reset` zeroes the counters after the read so successive reads measure
 disjoint intervals: `get panstats 0 reset`.
 
+> **Removed field:** `leanMode` (boolean) was dropped when Lean Mode was
+> removed from the app — scripts that keyed on it should stop; every pan now
+> always renders the full-quality path.
+
 ### `get tracedebug`
 Per-panadapter `SpectrumWidget` trace diagnostics for proving Flex/Kiwi display
 source behavior without screenshots. This is intentionally diagnostic rather
