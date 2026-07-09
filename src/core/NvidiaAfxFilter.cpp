@@ -310,9 +310,15 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
 
     const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
     const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    m_stereoAdapter.pushDryStereo(pcm24kStereo);
 
-    // 1. 24 kHz stereo float32 → 48 kHz mono float32
-    QByteArray mono48k = m_up->processStereoToMono(src, stereoFrames);
+    // 1. 24 kHz stereo float32 → 48 kHz mono float32. Keep the dry stereo
+    // queued so the BNR attenuation can be applied without collapsing pan.
+    std::vector<float> mono24k(stereoFrames);
+    for (int i = 0; i < stereoFrames; ++i) {
+        mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+    }
+    QByteArray mono48k = m_up->process(mono24k.data(), stereoFrames);
     const auto* mono = reinterpret_cast<const float*>(mono48k.constData());
     const int monoSamples = mono48k.size() / static_cast<int>(sizeof(float));
 
@@ -349,8 +355,12 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
         } else {
             m_inAccum.clear();
         }
-        // 3. 48 kHz mono float32 → 24 kHz stereo float32
-        m_outAccum.append(m_down->processMonoToStereo(out, consumed));
+        // 3. 48 kHz mono float32 → 24 kHz mono float32, then re-apply the
+        // shared BNR envelope to the delayed dry stereo.
+        const QByteArray downsampled = m_down->process(out, consumed);
+        const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
+        const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
+        m_outAccum.append(m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
     }
 
     // 4. Return exactly the input byte count. Use a read cursor instead of an
@@ -379,6 +389,7 @@ void NvidiaAfxFilter::reset()
     m_inAccum.clear();
     m_outAccum.clear();
     m_outReadPos = 0;
+    m_stereoAdapter.reset();
     m_up   = std::make_unique<Resampler>(24000, 48000);
     m_down = std::make_unique<Resampler>(48000, 24000);
 }

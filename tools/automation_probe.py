@@ -33,6 +33,7 @@ Usage:
     python tools/automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png
     python tools/automation_probe.py panmessage add 0 kiwi 0 "Waiting|Queued"
     python tools/automation_probe.py audioCapture start 3000 raw,post,final
+    python tools/automation_probe.py audioCapture probeDspStereo all [strict]
     python tools/automation_probe.py audioCapture read /tmp/aether-audio.json
 """
 
@@ -399,6 +400,8 @@ def main():
                "  automation_probe.py clickAt AppletPanel 12 34  # point local to a widget\n"
                "  automation_probe.py resize 1600 900\n"
                "  automation_probe.py audioCapture start 3000 raw,post,final\n"
+               "  automation_probe.py audioCapture probeNr2Stereo\n"
+               "  automation_probe.py audioCapture probeDspStereo all [strict]\n"
                "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"
@@ -463,6 +466,7 @@ def main():
             if mapper is not None:
                 req = mapper(args.rest)
                 req["cmd"] = args.command
+                action = req.get("action", "")
                 resp = bridge.request(req)
             else:
                 # No bespoke mapping: pass the bare positional line through and
@@ -471,6 +475,10 @@ def main():
                 # entry (or the JSON protocol) to survive quoting.
                 resp = bridge.request_line(" ".join([args.command] + args.rest))
             print(json.dumps(resp, indent=2))
+            if (args.command == "audioCapture"
+                    and action in ("probeNr2Stereo", "probeDspStereo")
+                    and resp.get("ok") is False):
+                sys.exit(1)
     finally:
         bridge.close()
 

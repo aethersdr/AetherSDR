@@ -2,6 +2,8 @@
 
 #ifdef HAVE_NVIDIA_AFX
 
+#include "MonoDspStereoAdapter.h"
+
 #include <QByteArray>
 #include <QString>
 #include <atomic>
@@ -78,6 +80,7 @@ private:
     QByteArray m_inAccum;                        // 48 kHz mono float input
     QByteArray m_outAccum;                       // 24 kHz stereo float output
     int        m_outReadPos{0};                 // read cursor into m_outAccum
+    MonoDspStereoAdapter m_stereoAdapter;
     std::vector<float> m_runScratch;            // reused NvAFX_Run output buffer
 
     std::atomic<float> m_intensity{1.0f};

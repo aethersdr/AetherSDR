@@ -141,9 +141,8 @@ public:
     float rxOutputTrimDb() const { return m_rxOutputTrimDb.load(); }
 
     // Client-side RX pan (0=full-left, 50=centre, 100=full-right).
-    // Normally the radio handles panning, but client-side NR mono-mixes
-    // L+R, discarding the balance. This re-applies it to the NR output
-    // so that the pan slider still works when NR2/NR4/etc. are active (#1460).
+    // Normally the radio handles Flex panning. External single-source audio
+    // still uses this as an output pan after stereo-preserving client DSP.
     void setRxPan(int panValue);
     int  rxPan() const { return m_rxPan.load(); }
     void  setRxBufferCapMs(int ms) { m_rxBufferCapMs.store(qBound(50, ms, 1000)); }
@@ -170,6 +169,8 @@ public:
                                             const QStringList& points);
     QJsonObject stopAutomationAudioCapture();
     QJsonObject automationAudioCaptureSnapshot(bool includePcm) const;
+    QJsonObject automationNr2StereoProbe() const;
+    QJsonObject automationDspStereoProbe(const QString& mode) const;
 
     // Client-side PC mic gain (0-100 → 0.0-1.0, applied before Opus encoding)
     void setPcMicGain(int level) { m_pcMicGain.store(qBound(0, level, 100) / 100.0f); }
@@ -648,10 +649,21 @@ private:
         QByteArray rxBuffer;
         std::deque<QByteArray> rxPackets;
         QByteArray outputBuffer;
-        std::vector<float> nr2Mono;
-        std::vector<float> nr2Processed;
         QByteArray nr2Output;
         std::unique_ptr<SpectralNR> nr2;
+        std::unique_ptr<RNNoiseFilter> rn2;
+#ifdef HAVE_SPECBLEACH
+        std::unique_ptr<SpecbleachFilter> nr4;
+#endif
+#ifdef __APPLE__
+        std::unique_ptr<MacNRFilter> mnr;
+#endif
+#ifdef HAVE_DFNR
+        std::unique_ptr<DeepFilterFilter> dfnr;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+        std::unique_ptr<NvidiaAfxFilter> nvAfx;
+#endif
         std::unique_ptr<Resampler> rxResampler;
         std::unique_ptr<Resampler> rxResamplerR;
         float gain{1.0f};
@@ -700,6 +712,10 @@ private:
     void processNr2(const QByteArray& stereoPcm,
                     RxDspSource source = RxDspSource::Main,
                     ExternalRxAudioSourceState* externalSource = nullptr);
+    static void processNr2StereoSharedMask(SpectralNR& nr2,
+                                           const float* src,
+                                           int stereoFrames,
+                                           QByteArray& output);
     void updateRxBufferStats();
     ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
                                                    bool create);
@@ -708,6 +724,38 @@ private:
     bool anyExternalKiwiAudioEnabled() const;
     bool anyExternalKiwiBufferQueued() const;
     qsizetype externalKiwiOutputBufferBytes() const;
+    bool ensureLegacyKiwiDspState();
+    bool ensureExternalKiwiSourceDspState(ExternalRxAudioSourceState& source);
+    void resetLegacyKiwiDspState();
+    void clearLegacyKiwiDspState();
+    void resetExternalKiwiDspState(ExternalRxAudioSourceState& source);
+    void clearExternalKiwiDspState(ExternalRxAudioSourceState& source);
+    std::unique_ptr<RNNoiseFilter> createRn2Filter(const QString& label) const;
+    RNNoiseFilter* rn2ForSource(RxDspSource source,
+                                ExternalRxAudioSourceState* externalSource) const;
+#ifdef HAVE_SPECBLEACH
+    std::unique_ptr<SpecbleachFilter> createNr4Filter(const QString& label) const;
+    SpecbleachFilter* nr4ForSource(
+        RxDspSource source,
+        ExternalRxAudioSourceState* externalSource) const;
+#endif
+#ifdef __APPLE__
+    std::unique_ptr<MacNRFilter> createMnrFilter(const QString& label) const;
+    MacNRFilter* mnrForSource(RxDspSource source,
+                              ExternalRxAudioSourceState* externalSource) const;
+#endif
+#ifdef HAVE_DFNR
+    std::unique_ptr<DeepFilterFilter> createDfnrFilter(const QString& label) const;
+    DeepFilterFilter* dfnrForSource(
+        RxDspSource source,
+        ExternalRxAudioSourceState* externalSource) const;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+    std::unique_ptr<NvidiaAfxFilter> createNvAfxFilter(const QString& label) const;
+    NvidiaAfxFilter* nvAfxForSource(
+        RxDspSource source,
+        ExternalRxAudioSourceState* externalSource) const;
+#endif
     // Apply client-side TX EQ in-place. No-op if disabled. Caller owns data.
     void applyClientEqTxInt16(QByteArray& int16stereo);
     void applyClientEqTxFloat32(QByteArray& float32);
@@ -889,18 +937,21 @@ private:
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH
     std::unique_ptr<SpecbleachFilter> m_nr4;
+    std::unique_ptr<SpecbleachFilter> m_kiwiSdrNr4;
 #endif
     std::atomic<bool> m_nr4Enabled{false};
 
     // Client-side MNR (macOS MMSE-Wiener)
 #ifdef __APPLE__
     std::unique_ptr<MacNRFilter> m_mnr;
+    std::unique_ptr<MacNRFilter> m_kiwiSdrMnr;
 #endif
     std::atomic<bool>  m_mnrEnabled{false};
     std::atomic<float> m_mnrStrength{1.0f};
 
     // Client-side RN2 (RNNoise)
     std::unique_ptr<RNNoiseFilter> m_rn2;
+    std::unique_ptr<RNNoiseFilter> m_kiwiSdrRn2;
     std::atomic<bool> m_rn2Enabled{false};
 
     // Client-side RN2 — TX path (mic pre-amp).  Lazy-allocated under
@@ -915,6 +966,7 @@ private:
     // Client-side DFNR (DeepFilterNet3)
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> m_dfnr;
+    std::unique_ptr<DeepFilterFilter> m_kiwiSdrDfnr;
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
 
@@ -922,6 +974,7 @@ private:
     // mutual-exclusion in the other NR setters compiles regardless of the build).
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> m_nvAfx;
+    std::unique_ptr<NvidiaAfxFilter> m_kiwiSdrNvAfx;
 #endif
     std::atomic<bool> m_nvAfxEnabled{false};
 
@@ -1017,12 +1070,8 @@ private:
     void tapClientEqTxInt16(const int16_t* int16stereo, int frames);
     void tapClientEqTxFloat32(const float* f32, int samples, int channels);
 
-    // Pre-allocated NR2 work buffers (avoid per-call heap allocation)
-    std::vector<float> m_nr2Mono;
-    std::vector<float> m_nr2Processed;
+    // Pre-allocated NR2 output buffers (avoid per-call heap allocation)
     QByteArray m_nr2Output;
-    std::vector<float> m_kiwiSdrNr2Mono;
-    std::vector<float> m_kiwiSdrNr2Processed;
     QByteArray m_kiwiSdrNr2Output;
 
     // Zombie sink watchdog: tracks consecutive RX timer ticks where we have

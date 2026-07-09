@@ -26,8 +26,8 @@ namespace AetherSDR {
 //     gaps; startup latency is one hop (≈10.7 ms) of pre-filled zeros.
 //   - User-adjustable strength: 0 = bypass, 1 = full NR.
 //
-// Processing chain (all at 24 kHz):
-//   stereo float32 → mono float → FFT NR (512-pt OLA) → stereo float32
+    // Processing chain (all at 24 kHz):
+    //   stereo float32 → shared mono FFT NR mask → independent L/R OLA synthesis
 
 class MacNRFilter {
 public:
@@ -51,8 +51,8 @@ public:
     float strength()     const { return m_strength.load(); }
 
 private:
-    // Process one N-sample analysis frame; writes H output samples to outBuf.
-    void processFrame(const float* inBuf, float* outBuf);
+    void updateGainFromFrame(const float* inBuf);
+    void synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf);
 
     // ── FFT parameters ─────────────────────────────────────────────────
     static constexpr int LOG2N = 9;           // log2(512)
@@ -76,10 +76,14 @@ private:
     // ── OLA buffers ────────────────────────────────────────────────────
     std::vector<float> m_window;    // sqrt-Hann analysis+synthesis window [N]
     std::vector<float> m_inAccum;   // 24 kHz mono float input accumulator
-    std::vector<float> m_olaBuffer; // overlap-add accumulator [N]
+    std::vector<float> m_inAccumL;  // 24 kHz left-channel input accumulator
+    std::vector<float> m_inAccumR;  // 24 kHz right-channel input accumulator
+    std::vector<float> m_olaBufferL; // left overlap-add accumulator [N]
+    std::vector<float> m_olaBufferR; // right overlap-add accumulator [N]
     std::vector<float> m_frameBuf;  // windowed analysis frame [N]
     std::vector<float> m_synthBuf;  // synthesis frame [N]
-    std::vector<float> m_outAccum;  // processed 24 kHz mono float output
+    std::vector<float> m_outAccumL; // processed 24 kHz left-channel output
+    std::vector<float> m_outAccumR; // processed 24 kHz right-channel output
 
     // ── Noise estimator state ─────────────────────────────────────────
     float              m_powerHistory[HIST][NBINS]{};

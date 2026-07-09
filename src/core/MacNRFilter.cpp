@@ -29,12 +29,16 @@ MacNRFilter::MacNRFilter()
     // first call to process() sees a centred first frame immediately and
     // latency is exactly one hop (H samples ≈ 10.7 ms at 24 kHz).
     m_inAccum.assign(N, 0.0f);
+    m_inAccumL.assign(N, 0.0f);
+    m_inAccumR.assign(N, 0.0f);
 
     // OLA and scratch buffers
-    m_olaBuffer.assign(N, 0.0f);
+    m_olaBufferL.assign(N, 0.0f);
+    m_olaBufferR.assign(N, 0.0f);
     m_frameBuf .assign(N, 0.0f);
     m_synthBuf .assign(N, 0.0f);
-    m_outAccum .clear();
+    m_outAccumL.clear();
+    m_outAccumR.clear();
 
     // Noise estimator
     m_noiseEst .assign(NBINS, 1e-6f);
@@ -64,11 +68,17 @@ void MacNRFilter::reset()
 {
     // Clear time-domain accumulators
     std::fill(m_inAccum .begin(), m_inAccum .end(), 0.0f);
-    std::fill(m_olaBuffer.begin(), m_olaBuffer.end(), 0.0f);
-    m_outAccum.clear();
+    std::fill(m_inAccumL.begin(), m_inAccumL.end(), 0.0f);
+    std::fill(m_inAccumR.begin(), m_inAccumR.end(), 0.0f);
+    std::fill(m_olaBufferL.begin(), m_olaBufferL.end(), 0.0f);
+    std::fill(m_olaBufferR.begin(), m_olaBufferR.end(), 0.0f);
+    m_outAccumL.clear();
+    m_outAccumR.clear();
 
     // Re-prime input accumulator for one-hop latency (same as constructor)
     m_inAccum.assign(N, 0.0f);
+    m_inAccumL.assign(N, 0.0f);
+    m_inAccumR.assign(N, 0.0f);
 
     // Reset noise estimator
     std::fill(m_noiseEst  .begin(), m_noiseEst  .end(), 1e-6f);
@@ -85,12 +95,12 @@ void MacNRFilter::reset()
     m_frameCount = 0;
 }
 
-// ── processFrame ────────────────────────────────────────────────────────────
+// ── updateGainFromFrame ─────────────────────────────────────────────────────
 //
-// inBuf  : N windowed analysis samples
-// outBuf : N synthesis samples (added into OLA buffer by caller)
+// inBuf: N mono analysis samples. Updates m_prevGain, which is then reused for
+// independent left/right synthesis so balance survives the MNR stage.
 
-void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
+void MacNRFilter::updateGainFromFrame(const float* inBuf)
 {
     // ── 1. Apply analysis window and copy into frame buffer ─────────────────
     vDSP_vmul(inBuf, 1, m_window.data(), 1, m_frameBuf.data(), 1, N);
@@ -148,8 +158,22 @@ void MacNRFilter::processFrame(const float* inBuf, float* outBuf)
         m_prevGain[k] = appliedGain;
         m_prevPow [k] = m_powerBuf[k];
     }
+}
 
-    // ── 5. Apply gain to spectrum ────────────────────────────────────────────
+// ── synthesizeFrameWithCurrentGain ──────────────────────────────────────────
+//
+// inBuf  : N channel samples
+// outBuf : N synthesis samples (added into OLA buffer by caller)
+
+void MacNRFilter::synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf)
+{
+    vDSP_vmul(inBuf, 1, m_window.data(), 1, m_frameBuf.data(), 1, N);
+
+    DSPSplitComplex sc{ m_splitRe.data(), m_splitIm.data() };
+    vDSP_ctoz(reinterpret_cast<const DSPComplex*>(m_frameBuf.data()), 2, &sc, 1, H);
+    vDSP_fft_zrip(m_fftSetup, &sc, 1, LOG2N, kFFTDirection_Forward);
+
+    // ── Apply shared gain to spectrum ───────────────────────────────────────
     m_splitRe[0] *= m_prevGain[0];   // DC
     m_splitIm[0] *= m_prevGain[H];   // Nyquist (stored in im[0] by vDSP)
     for (int k = 1; k < H; ++k) {
@@ -183,41 +207,55 @@ QByteArray MacNRFilter::process(const QByteArray& pcm24kStereo)
     const int nFrames  = nBytes / (2 * sizeof(float));  // 2 ch × 4 bytes each
     const auto* src    = reinterpret_cast<const float*>(pcm24kStereo.constData());
 
-    // ── Stereo float32 → mono float (average channels) ──────────────────────
+    // ── Stereo float32 → shared mono analysis plus dry L/R synthesis inputs ──
     for (int i = 0; i < nFrames; ++i) {
         const float L = src[2 * i    ];
         const float R = src[2 * i + 1];
         m_inAccum.push_back(0.5f * (L + R));
+        m_inAccumL.push_back(L);
+        m_inAccumR.push_back(R);
     }
 
     // ── OLA processing — emit one hop per iteration ──────────────────────────
     while (static_cast<int>(m_inAccum.size()) >= N) {
-        // Overlap-add: accumulate synthesis output
-        std::vector<float> outFrame(N, 0.0f);
-        processFrame(m_inAccum.data(), outFrame.data());
+        updateGainFromFrame(m_inAccum.data());
+
+        std::vector<float> outFrameL(N, 0.0f);
+        std::vector<float> outFrameR(N, 0.0f);
+        synthesizeFrameWithCurrentGain(m_inAccumL.data(), outFrameL.data());
+        synthesizeFrameWithCurrentGain(m_inAccumR.data(), outFrameR.data());
 
         // Add into OLA buffer
-        for (int i = 0; i < N; ++i)
-            m_olaBuffer[i] += outFrame[i];
+        for (int i = 0; i < N; ++i) {
+            m_olaBufferL[i] += outFrameL[i];
+            m_olaBufferR[i] += outFrameR[i];
+        }
 
         // Flush the first H samples to output
-        for (int i = 0; i < H; ++i)
-            m_outAccum.push_back(m_olaBuffer[i]);
+        for (int i = 0; i < H; ++i) {
+            m_outAccumL.push_back(m_olaBufferL[i]);
+            m_outAccumR.push_back(m_olaBufferR[i]);
+        }
 
         // Shift OLA buffer left by H
-        std::copy(m_olaBuffer.begin() + H, m_olaBuffer.end(), m_olaBuffer.begin());
-        std::fill(m_olaBuffer.begin() + H, m_olaBuffer.end(), 0.0f);
+        std::copy(m_olaBufferL.begin() + H, m_olaBufferL.end(), m_olaBufferL.begin());
+        std::copy(m_olaBufferR.begin() + H, m_olaBufferR.end(), m_olaBufferR.begin());
+        std::fill(m_olaBufferL.begin() + H, m_olaBufferL.end(), 0.0f);
+        std::fill(m_olaBufferR.begin() + H, m_olaBufferR.end(), 0.0f);
 
         // Consume H input samples
         m_inAccum.erase(m_inAccum.begin(), m_inAccum.begin() + H);
+        m_inAccumL.erase(m_inAccumL.begin(), m_inAccumL.begin() + H);
+        m_inAccumR.erase(m_inAccumR.begin(), m_inAccumR.begin() + H);
 
         ++m_frameCount;
     }
 
-    // ── Drain exactly nFrames processed mono samples → stereo float32 ───────
+    // ── Drain exactly nFrames processed L/R samples → stereo float32 ────────
     // If the accumulator has fewer samples than needed (first few calls during
     // startup), pad with zeros rather than silence the whole buffer.
-    const int available = static_cast<int>(m_outAccum.size());
+    const int available = std::min(static_cast<int>(m_outAccumL.size()),
+                                   static_cast<int>(m_outAccumR.size()));
     const int take      = std::min(available, nFrames);
 
     QByteArray out;
@@ -225,9 +263,8 @@ QByteArray MacNRFilter::process(const QByteArray& pcm24kStereo)
     auto* dst = reinterpret_cast<float*>(out.data());
 
     for (int i = 0; i < take; ++i) {
-        const float s = m_outAccum[i];
-        dst[2 * i    ] = s;
-        dst[2 * i + 1] = s;
+        dst[2 * i    ] = m_outAccumL[i];
+        dst[2 * i + 1] = m_outAccumR[i];
     }
 
     // Zero-fill any samples not yet produced (startup transient only)
@@ -237,8 +274,10 @@ QByteArray MacNRFilter::process(const QByteArray& pcm24kStereo)
     }
 
     // Remove consumed samples
-    if (take > 0)
-        m_outAccum.erase(m_outAccum.begin(), m_outAccum.begin() + take);
+    if (take > 0) {
+        m_outAccumL.erase(m_outAccumL.begin(), m_outAccumL.begin() + take);
+        m_outAccumR.erase(m_outAccumR.begin(), m_outAccumR.begin() + take);
+    }
 
     return out;
 }

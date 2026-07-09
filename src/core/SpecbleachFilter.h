@@ -2,6 +2,8 @@
 
 #ifdef HAVE_SPECBLEACH
 
+#include "MonoDspStereoAdapter.h"
+
 #include <QByteArray>
 #include <atomic>
 #include <vector>
@@ -10,8 +12,8 @@ typedef void* SpectralBleachHandle;
 
 namespace AetherSDR {
 
-// SpecbleachFilter — wrapper around libspecbleach for NR4 noise reduction.
-// Processes 24 kHz stereo int16 audio (same interface as RNNoiseFilter).
+    // SpecbleachFilter — wrapper around libspecbleach for NR4 noise reduction.
+    // Processes 24 kHz stereo float32 audio (same interface as RNNoiseFilter).
 // Thread-safe parameter setters (main thread writes, audio thread reads).
 class SpecbleachFilter {
 public:
@@ -21,7 +23,7 @@ public:
     SpecbleachFilter(const SpecbleachFilter&) = delete;
     SpecbleachFilter& operator=(const SpecbleachFilter&) = delete;
 
-    // Process stereo int16 PCM at 24 kHz. Returns processed audio.
+    // Process stereo float32 PCM at 24 kHz. Returns processed audio.
     QByteArray process(const QByteArray& pcm24kStereo);
 
     bool isValid() const { return m_handle != nullptr; }
@@ -63,6 +65,7 @@ private:
     // Buffers
     std::vector<float> m_monoIn;
     std::vector<float> m_monoOut;
+    MonoDspStereoAdapter m_stereoAdapter;
 };
 
 } // namespace AetherSDR

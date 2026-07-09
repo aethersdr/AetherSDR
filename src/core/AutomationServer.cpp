@@ -1260,7 +1260,11 @@ QJsonObject sliceSnapshot(const SliceModel* s)
         {QStringLiteral("txAntenna"),  s->txAntenna()},   // live TX antenna — lets a driver enforce the dummy-load gate before keying (#3646)
         {QStringLiteral("rfGain"),     s->rfGain()},
         {QStringLiteral("audioGain"),  s->audioGain()},
+        {QStringLiteral("flexAudioGain"), s->flexAudioGain()},
         {QStringLiteral("audioPan"),   s->audioPan()},
+        {QStringLiteral("flexAudioPan"), s->flexAudioPan()},
+        {QStringLiteral("audioMute"),  s->audioMute()},
+        {QStringLiteral("flexAudioMute"), s->flexAudioMute()},
         {QStringLiteral("locked"),     s->isLocked()},
         {QStringLiteral("diversity"),  s->diversity()},
         {QStringLiteral("diversityParent"), s->isDiversityParent()},
@@ -2571,7 +2575,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTci(a.action, a.value);
             });
 
-        add("audioCapture", {}, "audioCapture <start|stop|status|read> [args]",
+        add("audioCapture", {},
+            "audioCapture <start|stop|status|read|probeNr2Stereo|probeDspStereo> [args]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doAudioCapture(a.action.isEmpty() ? QStringLiteral("status")
@@ -6693,7 +6698,14 @@ QJsonObject AutomationServer::doAudioCapture(const QString& action,
         };
     }
 
-    return err(QStringLiteral("audioCapture action must be start, stop, status, or read"));
+    if (normalizedAction == QLatin1String("probenr2stereo")) {
+        return m_audioEngine->automationNr2StereoProbe();
+    }
+    if (normalizedAction == QLatin1String("probedspstereo")) {
+        return m_audioEngine->automationDspStereoProbe(arg);
+    }
+
+    return err(QStringLiteral("audioCapture action must be start, stop, status, read, probeNr2Stereo, or probeDspStereo"));
 }
 
 QJsonObject AutomationServer::doWhoami() const

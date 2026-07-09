@@ -32,6 +32,7 @@ SpecbleachFilter::~SpecbleachFilter()
 void SpecbleachFilter::reset()
 {
     m_frameCount = 0;
+    m_stereoAdapter.reset();
     if (m_handle)
         specbleach_reset_noise_profile(m_handle);
 }
@@ -90,18 +91,12 @@ QByteArray SpecbleachFilter::process(const QByteArray& pcm24kStereo)
     // builds. The library still receives the audio above for profiling. (#827)
     if (m_frameCount < kLearningFrames) {
         ++m_frameCount;
+        m_stereoAdapter.reset();
         return pcm24kStereo;
     }
 
-    // Mono float → stereo float32 (duplicate to L+R)
-    QByteArray result(totalFloats * static_cast<int>(sizeof(float)), Qt::Uninitialized);
-    auto* out = reinterpret_cast<float*>(result.data());
-    for (int i = 0; i < monoSamples; ++i) {
-        out[i * 2]     = m_monoOut[i];
-        out[i * 2 + 1] = m_monoOut[i];
-    }
-
-    return result;
+    m_stereoAdapter.pushDryStereo(pcm24kStereo);
+    return m_stereoAdapter.takeProcessedMono(m_monoOut.data(), monoSamples);
 }
 
 // Parameter setters — mark dirty so next process() applies them

@@ -2,6 +2,8 @@
 
 #ifdef HAVE_DFNR
 
+#include "MonoDspStereoAdapter.h"
+
 #include <QByteArray>
 #include <atomic>
 #include <memory>
@@ -52,7 +54,8 @@ private:
     std::unique_ptr<Resampler> m_up;        // 24kHz mono → 48kHz mono
     std::unique_ptr<Resampler> m_down;      // 48kHz mono → 24kHz mono
     QByteArray m_inAccum;                   // accumulate 48kHz mono float input
-    QByteArray m_outAccum;                  // accumulate 24kHz stereo int16 output
+    QByteArray m_outAccum;                  // accumulate 24kHz stereo float output
+    MonoDspStereoAdapter m_stereoAdapter;
     std::atomic<float> m_attenLimit{100.0f};
     std::atomic<float> m_postFilterBeta{0.0f};
     std::atomic<bool>  m_paramsDirty{false};

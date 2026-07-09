@@ -105,6 +105,10 @@ SpectralNR::SpectralNR(int fftSize, int sampleRate)
     // Allocate overlap-add accumulators
     m_inAccum.resize(fftSize * 4, 0.0);
     m_outAccum.resize(fftSize * 4, 0.0);
+    m_stereoInAccumL.resize(fftSize * 4, 0.0);
+    m_stereoInAccumR.resize(fftSize * 4, 0.0);
+    m_stereoOutAccumL.resize(fftSize * 4, 0.0);
+    m_stereoOutAccumR.resize(fftSize * 4, 0.0);
 
     m_window.resize(fftSize);
     m_fftIn.resize(fftSize);
@@ -190,6 +194,10 @@ void SpectralNR::reset()
 {
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
+    std::fill(m_stereoInAccumL.begin(), m_stereoInAccumL.end(), 0.0);
+    std::fill(m_stereoInAccumR.begin(), m_stereoInAccumR.end(), 0.0);
+    std::fill(m_stereoOutAccumL.begin(), m_stereoOutAccumL.end(), 0.0);
+    std::fill(m_stereoOutAccumR.begin(), m_stereoOutAccumR.end(), 0.0);
     m_inWritePos = 0;
     m_inReadPos = 0;
     m_samplesAccum = 0;
@@ -228,6 +236,7 @@ void SpectralNR::reset()
     m_subwc = 1;
     m_ambIdx = 0;
     m_frameCount = 0;
+    m_currentWet = 0.0;
 }
 
 void SpectralNR::initWindow()
@@ -479,10 +488,86 @@ void SpectralNR::process(const float* input, float* output, int numSamples)
     }
 }
 
-void SpectralNR::processFrame()
+void SpectralNR::processStereoSharedMask(const float* input, float* output, int numFrames)
+{
+    if (numFrames <= 0) {
+        return;
+    }
+
+    if (numFrames > m_hopSize) {
+        int offset = 0;
+        while (offset < numFrames) {
+            const int chunk = std::min(m_hopSize, numFrames - offset);
+            processStereoSharedMask(input + (2 * offset),
+                                    output + (2 * offset),
+                                    chunk);
+            offset += chunk;
+        }
+        return;
+    }
+
+    const int accSize = static_cast<int>(m_inAccum.size());
+    const int outSize = static_cast<int>(m_outAccum.size());
+
+    for (int i = 0; i < numFrames; ++i) {
+        const float left = input[2 * i];
+        const float right = input[2 * i + 1];
+        m_inAccum[m_inWritePos] =
+            0.5 * (static_cast<double>(left) + static_cast<double>(right));
+        m_stereoInAccumL[m_inWritePos] = static_cast<double>(left);
+        m_stereoInAccumR[m_inWritePos] = static_cast<double>(right);
+        m_inWritePos = (m_inWritePos + 1) % accSize;
+    }
+    m_samplesAccum += numFrames;
+
+    while (m_samplesAccum >= m_fftSize) {
+        const int frameReadPos = m_inReadPos;
+
+        for (int i = 0; i < m_fftSize; ++i) {
+            const int idx = (frameReadPos + i) % accSize;
+            m_fftIn[i] = m_window[i] * m_inAccum[idx];
+        }
+
+        if (updateMaskFromCurrentFrame()) {
+            for (int i = 0; i < m_fftSize; ++i) {
+                const int idx = (frameReadPos + i) % accSize;
+                m_fftIn[i] = m_window[i] * m_stereoInAccumL[idx];
+            }
+            synthesizeCurrentFrameWithMask();
+            for (int i = 0; i < m_fftSize; ++i) {
+                const int idx = (m_outWritePos + i) % outSize;
+                m_stereoOutAccumL[idx] += m_window[i] * m_ifftOut[i];
+            }
+
+            for (int i = 0; i < m_fftSize; ++i) {
+                const int idx = (frameReadPos + i) % accSize;
+                m_fftIn[i] = m_window[i] * m_stereoInAccumR[idx];
+            }
+            synthesizeCurrentFrameWithMask();
+            for (int i = 0; i < m_fftSize; ++i) {
+                const int idx = (m_outWritePos + i) % outSize;
+                m_stereoOutAccumR[idx] += m_window[i] * m_ifftOut[i];
+            }
+        }
+
+        m_inReadPos = (m_inReadPos + m_hopSize) % accSize;
+        m_samplesAccum -= m_hopSize;
+        m_outWritePos = (m_outWritePos + m_hopSize) % outSize;
+    }
+
+    for (int i = 0; i < numFrames; ++i) {
+        output[2 * i] = static_cast<float>(m_stereoOutAccumL[m_outReadPos]);
+        output[2 * i + 1] = static_cast<float>(m_stereoOutAccumR[m_outReadPos]);
+        m_stereoOutAccumL[m_outReadPos] = 0.0;
+        m_stereoOutAccumR[m_outReadPos] = 0.0;
+        m_outReadPos = (m_outReadPos + 1) % outSize;
+    }
+}
+
+bool SpectralNR::updateMaskFromCurrentFrame()
 {
 #ifdef HAVE_FFTW3
-    if (m_planFailed) return;  // FFTW plans failed — pass audio through unmodified
+    if (m_planFailed) return false;  // FFTW plans failed — pass audio through unmodified
 
     // Forward FFT via FFTW (real-to-complex, in-place from m_fftIn)
     fftw_execute(m_planFwd);
@@ -521,13 +606,35 @@ void SpectralNR::processFrame()
     // Startup ramp: crossfade from dry (gain=1) to processed over ~1 second
     // to avoid transients while the noise estimator converges.
     ++m_frameCount;
-    double wet = (m_frameCount >= RampFrames)
+    m_currentWet = (m_frameCount >= RampFrames)
         ? 1.0
         : static_cast<double>(m_frameCount) / RampFrames;
 
+    return true;
+}
+
+void SpectralNR::synthesizeCurrentFrameWithMask()
+{
+#ifdef HAVE_FFTW3
+    if (m_planFailed) return;
+
+    fftw_execute(m_planFwd);
+    for (int k = 0; k < m_msize; ++k) {
+        m_freqRe[k] = m_fftOut[k][0];
+        m_freqIm[k] = m_fftOut[k][1];
+    }
+#else
+    fftForward(m_fftIn.data(), m_freqRe.data(), m_freqIm.data());
+#endif
+
+    synthesizeCurrentFrequencyBinsWithMask();
+}
+
+void SpectralNR::synthesizeCurrentFrequencyBinsWithMask()
+{
     // Apply smoothed gain to frequency bins (with dry/wet blend during startup)
     for (int k = 0; k < m_msize; ++k) {
-        double g = wet * m_smoothMask[k] + (1.0 - wet) * 1.0;
+        double g = m_currentWet * m_smoothMask[k] + (1.0 - m_currentWet) * 1.0;
         m_gainRe[k] = g * m_freqRe[k];
         m_gainIm[k] = g * m_freqIm[k];
     }
@@ -549,6 +656,14 @@ void SpectralNR::processFrame()
 #else
     fftInverse(m_gainRe.data(), m_gainIm.data(), m_ifftOut.data());
 #endif
+}
+
+void SpectralNR::processFrame()
+{
+    if (!updateMaskFromCurrentFrame()) {
+        return;
+    }
+    synthesizeCurrentFrequencyBinsWithMask();
 }
 
 // ─── Noise Estimation (dispatches on m_npeMethod) ─────────────────────────────

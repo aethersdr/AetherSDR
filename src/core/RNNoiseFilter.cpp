@@ -31,6 +31,7 @@ void RNNoiseFilter::reset()
     m_down = std::make_unique<Resampler>(48000, 24000);
     m_inAccum.clear();
     m_outAccum.clear();
+    m_stereoAdapter.reset();
 }
 
 QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
@@ -40,9 +41,15 @@ QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
 
     const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
     const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    m_stereoAdapter.pushDryStereo(pcm24kStereo);
 
-    // 1. Upsample 24kHz stereo float32 → 48kHz mono float32 via r8brain
-    QByteArray mono48k = m_up->processStereoToMono(src, stereoFrames);
+    // 1. Downmix, then upsample 24kHz mono float32 → 48kHz mono float32 via r8brain.
+    // The dry stereo stays queued so the RNNoise gain can be applied to both channels.
+    std::vector<float> mono24k(stereoFrames);
+    for (int i = 0; i < stereoFrames; ++i) {
+        mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+    }
+    QByteArray mono48k = m_up->process(mono24k.data(), stereoFrames);
 
     const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
     const int monoSamples48k = mono48k.size() / static_cast<int>(sizeof(float));
@@ -89,11 +96,13 @@ QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
         for (int i = 0; i < outputMonoSamples; ++i)
             processed48kFloat[i] = processed48k[i] / 32768.0f;
 
-        // Downsample 48kHz mono → 24kHz stereo via r8brain
-        QByteArray downsampled = m_down->processMonoToStereo(
-            processed48kFloat.data(), outputMonoSamples);
+        // Downsample 48kHz mono → 24kHz mono, then apply the shared gain envelope
+        // to the delayed dry stereo so slice/diversity balance survives RN2.
+        QByteArray downsampled = m_down->process(processed48kFloat.data(), outputMonoSamples);
+        const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
+        const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
 
-        m_outAccum.append(downsampled);
+        m_outAccum.append(m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
     }
 
     // 4. Return exactly the same number of bytes as input

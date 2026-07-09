@@ -49,8 +49,9 @@ namespace AetherSDR {
 // Uses FFTW3 for FFT computation (with wisdom file for optimised plans)
 // when available; falls back to a built-in radix-2 FFT otherwise.
 //
-// Processes mono int16 audio at 24 kHz.  The caller is responsible for
-// stereo<->mono conversion (average L+R on input, duplicate on output).
+// Processes mono float32 audio at 24 kHz.  For stereo Flex speaker audio,
+// processStereoSharedMask() computes one mono NR mask and applies it to both
+// original channels so radio-side balance survives client NR.
 
 class SpectralNR {
 public:
@@ -63,6 +64,12 @@ public:
     // Feed mono float32 samples in, get noise-reduced mono float32 out.
     // Output buffer must be at least numSamples long.
     void process(const float* input, float* output, int numSamples);
+
+    // Feed interleaved stereo float32 samples in, get interleaved stereo
+    // float32 out.  The NR estimate/mask is computed from (L+R)/2, then the
+    // same spectral gain is applied to each original channel.
+    // Output buffer must be at least numFrames * 2 samples long.
+    void processStereoSharedMask(const float* input, float* output, int numFrames);
 
     // Reset all internal state (call when toggling on or stream restarts).
     void reset();
@@ -130,6 +137,10 @@ private:
     std::vector<double> m_outAccum;     // overlap-add output ring
     int m_outWritePos{0};
     int m_outReadPos{0};
+    std::vector<double> m_stereoInAccumL;
+    std::vector<double> m_stereoInAccumR;
+    std::vector<double> m_stereoOutAccumL;
+    std::vector<double> m_stereoOutAccumR;
 
     // Window
     std::vector<double> m_window;
@@ -190,6 +201,7 @@ private:
     std::vector<double> m_mask;         // current gain mask
     std::vector<double> m_smoothMask;   // temporally smoothed gain (anti-musical-noise)
     std::vector<double> m_lambdaY;      // current frame signal PSD
+    double m_currentWet{0.0};            // startup dry/wet blend for current frame
 
     // Startup ramp
     int m_frameCount{0};                // frames processed since reset
@@ -220,6 +232,9 @@ private:
     // ── Internal methods ───────────────────────────────────────────────
     void initWindow();
     void processFrame();
+    bool updateMaskFromCurrentFrame();
+    void synthesizeCurrentFrequencyBinsWithMask();
+    void synthesizeCurrentFrameWithMask();
 
     // Noise estimation (dispatches on m_npeMethod)
     void estimateNoise();

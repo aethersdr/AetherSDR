@@ -218,6 +218,7 @@ void DeepFilterFilter::reset()
     m_down = std::make_unique<Resampler>(48000, 24000);
     m_inAccum.clear();
     m_outAccum.clear();
+    m_stereoAdapter.reset();
     m_paramsDirty.store(true);
 }
 
@@ -247,9 +248,15 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
 
     const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
     const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    m_stereoAdapter.pushDryStereo(pcm24kStereo);
 
-    // 1. Upsample 24kHz stereo float32 → 48kHz mono float32 via r8brain
-    QByteArray mono48k = m_up->processStereoToMono(src, stereoFrames);
+    // 1. Downmix, then upsample 24kHz mono float32 → 48kHz mono float32 via r8brain.
+    // The dry stereo stays queued so DeepFilterNet attenuation preserves balance.
+    std::vector<float> mono24k(stereoFrames);
+    for (int i = 0; i < stereoFrames; ++i) {
+        mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+    }
+    QByteArray mono48k = m_up->process(mono24k.data(), stereoFrames);
 
     // Already float32 in [-1, 1] range — DeepFilterNet's native format
     const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
@@ -290,13 +297,15 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
             m_inAccum.clear();
         }
 
-        // 3. Downsample processed 48kHz mono float32 → 24kHz stereo float32
+        // 3. Downsample processed 48kHz mono float32 → 24kHz mono float32,
+        //    then apply the shared attenuation to delayed dry stereo.
         const int outputMonoSamples = completeFrames * m_frameSize;
 
-        QByteArray downsampled = m_down->processMonoToStereo(
-            processed48k.data(), outputMonoSamples);
+        QByteArray downsampled = m_down->process(processed48k.data(), outputMonoSamples);
+        const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
+        const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
 
-        m_outAccum.append(downsampled);
+        m_outAccum.append(m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
     }
 
     // 4. Return exactly the same number of bytes as input

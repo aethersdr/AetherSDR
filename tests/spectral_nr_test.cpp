@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 using AetherSDR::SpectralNR;
@@ -249,6 +250,46 @@ std::vector<float> processWithBlockSize(const std::vector<float>& input,
     return output;
 }
 
+std::vector<float> processStereoSharedMaskWithBlockSize(
+    const std::vector<float>& input,
+    int blockFrames)
+{
+    SpectralNR nr;
+    nr.setGainMethod(2);
+
+    std::vector<float> output(input.size());
+    int offsetFrames = 0;
+    const int totalFrames = static_cast<int>(input.size() / 2);
+    while (offsetFrames < totalFrames) {
+        const int count = std::min(blockFrames, totalFrames - offsetFrames);
+        nr.processStereoSharedMask(input.data() + (2 * offsetFrames),
+                                   output.data() + (2 * offsetFrames),
+                                   count);
+        offsetFrames += count;
+    }
+    return output;
+}
+
+std::pair<double, double> stereoRmsAfter(const std::vector<float>& interleaved,
+                                         int startFrame)
+{
+    double leftSum = 0.0;
+    double rightSum = 0.0;
+    int count = 0;
+    const int totalFrames = static_cast<int>(interleaved.size() / 2);
+    for (int frame = startFrame; frame < totalFrames; ++frame) {
+        const double left = interleaved[2 * frame];
+        const double right = interleaved[2 * frame + 1];
+        leftSum += left * left;
+        rightSum += right * right;
+        ++count;
+    }
+    return {
+        std::sqrt(leftSum / std::max(count, 1)),
+        std::sqrt(rightSum / std::max(count, 1)),
+    };
+}
+
 void test_block_size_invariance()
 {
     // KiwiSDR audio arrives in packet-sized bursts, while native Flex RX audio
@@ -269,6 +310,47 @@ void test_block_size_invariance()
     std::snprintf(detail, sizeof(detail), " (max abs diff: %.3e)", maxAbsDiff);
     report("block_size_invariance: 1024-sample packets match 128-sample hops",
            maxAbsDiff < 1e-7, detail);
+}
+
+void test_stereo_shared_mask_preserves_balance()
+{
+    // Flex remote_audio_rx is one radio-mixed stereo stream.  NR2 should use a
+    // shared noise estimate, but must not collapse the stream to mono and then
+    // rebuild it with one active-slice pan value (#4035).
+    constexpr int sampleRate = 24000;
+    constexpr int frames = sampleRate;
+    std::vector<float> input(frames * 2);
+    for (int i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const float signal = static_cast<float>(
+            0.34 * std::sin(2.0 * std::numbers::pi * 720.0 * t)
+          + 0.13 * std::sin(2.0 * std::numbers::pi * 1740.0 * t)
+          + 0.03 * std::sin(2.0 * std::numbers::pi * 43.0 * t));
+        input[2 * i] = 0.80f * signal;
+        input[2 * i + 1] = 0.20f * signal;
+    }
+
+    const std::vector<float> output =
+        processStereoSharedMaskWithBlockSize(input, 1024);
+
+    constexpr int discardFrames = 4096;
+    const auto [inLeft, inRight] = stereoRmsAfter(input, discardFrames);
+    const auto [outLeft, outRight] = stereoRmsAfter(output, discardFrames);
+    const double inRatio = inLeft / std::max(inRight, 1e-12);
+    const double outRatio = outLeft / std::max(outRight, 1e-12);
+    const double ratioError = std::abs(outRatio - inRatio);
+
+    char detail[128];
+    std::snprintf(detail, sizeof(detail),
+                  " (input L/R %.4f, output L/R %.4f, err %.3e)",
+                  inRatio, outRatio, ratioError);
+    report("stereo_shared_mask: preserves unbalanced L/R energy",
+           ratioError < 1e-3, detail);
+
+    std::snprintf(detail, sizeof(detail),
+                  " (output L %.6f, R %.6f)", outLeft, outRight);
+    report("stereo_shared_mask: output remains non-silent",
+           outLeft > 1e-5 && outRight > 1e-5, detail);
 }
 
 void test_gain_formula_extreme_v()
@@ -334,6 +416,9 @@ int main()
 
     std::printf("\n-- Block-size invariance (Kiwi packet cadence regression) --\n");
     test_block_size_invariance();
+
+    std::printf("\n-- Stereo shared-mask balance preservation (#4035) --\n");
+    test_stereo_shared_mask_preserves_balance();
 
     std::printf("\n-- Gain formula at extreme v (NaN-clamp regression) --\n");
     test_gain_formula_extreme_v();
