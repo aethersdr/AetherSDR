@@ -115,7 +115,11 @@ public:
         }
 
         constexpr int kEdgeHysteresis = 20;
-        constexpr double kPanFollowTriggerMarginFrac = 0.05; // matches incremental pan-follow
+        // Must track kIncrementalTriggerEdgeMarginFrac (MainWindow_Wiring.cpp)
+        // so the flag flips sides at the same margin the pan starts to
+        // scroll — a looser value here makes the flag jump sides long
+        // before anything else reacts (#3482: 0.05 -> 0.02).
+        constexpr double kPanFollowTriggerMarginFrac = 0.02; // matches incremental pan-follow
         const int guardPx = std::max(
             kEdgeHysteresis,
             static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
@@ -149,7 +153,11 @@ public:
         }
 
         constexpr int kEdgeHysteresis = 20;
-        constexpr double kPanFollowTriggerMarginFrac = 0.05; // matches incremental pan-follow
+        // Must track kIncrementalTriggerEdgeMarginFrac (MainWindow_Wiring.cpp)
+        // so the flag flips sides at the same margin the pan starts to
+        // scroll — a looser value here makes the flag jump sides long
+        // before anything else reacts (#3482: 0.05 -> 0.02).
+        constexpr double kPanFollowTriggerMarginFrac = 0.02; // matches incremental pan-follow
         const int guardPx = std::max(
             kEdgeHysteresis,
             static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
