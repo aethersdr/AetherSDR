@@ -94,6 +94,9 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_PROPERTY(double noiseFloorDbm READ noiseFloorDbm)
     Q_PROPERTY(double displayFloorDbm READ displayFloorDbm)
     Q_PROPERTY(int panIndex READ panIndex)
+    Q_PROPERTY(double centerMhz READ centerMhz)
+    Q_PROPERTY(double bandwidthMhz READ bandwidthMhz)
+    Q_PROPERTY(int centerLockSliceId READ centerLockSliceId)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -714,6 +717,8 @@ public:
     static void toggleStarstruckMode();
 
 private:
+    void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
+                                   bool animateSmallNudges);
     double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);

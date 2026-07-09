@@ -1180,6 +1180,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     buildMenuBar();
     buildUI();
+    loadCenterLockSettings();
 #ifdef Q_OS_WIN
     applyWindowsCustomFrame();
 #endif
@@ -5704,15 +5705,20 @@ void MainWindow::applyMasterVolume(int pct)
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 SliceModel* MainWindow::activeSlice() const
 {
+    SliceModel* cached = nullptr;
     if (m_activeSliceId >= 0) {
-        if (SliceModel* slice = m_radioModel.slice(m_activeSliceId)) {
-            return slice;
+        cached = m_radioModel.slice(m_activeSliceId);
+        if (cached && cached->isActive()) {
+            return cached;
         }
     }
     for (SliceModel* slice : m_radioModel.slices()) {
         if (slice && slice->isActive()) {
             return slice;
         }
+    }
+    if (cached) {
+        return cached;
     }
     return nullptr;
 }
@@ -5782,7 +5788,8 @@ void MainWindow::pushSliceFrequencyToOverlays(SliceModel* slice, double mhz)
         return;
     }
 
-    snapCenterLockForSlice(slice, mhz, true);
+    mhz = centerLockDisplayFrequency(slice, mhz);
+    snapCenterLocksForTuningSlice(slice, mhz, true);
 
     const QString freqStr = vfoFrequencyText(mhz);
     auto pushOne = [this, mhz, &freqStr](SliceModel* s) {
@@ -5916,6 +5923,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 #endif
     }
 
+    holdCenterLockTuneTarget(slice, mhz);
     pushSliceFrequencyToOverlays(slice, mhz);
 
     const BandStackPreselectResult bandPreselect =
@@ -5923,6 +5931,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             ? preselectBandStackForTune(slice, mhz, source)
             : BandStackPreselectResult::NotNeeded;
     if (bandPreselect == BandStackPreselectResult::Unsupported) {
+        m_centerLockTuneHoldBySlice.remove(slice->sliceId());
         pushSliceFrequencyToOverlays(slice, oldFreqMhz);
         return;
     }
@@ -5934,6 +5943,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             auto* pendingSlice = m_radioModel.slice(sliceId);
             if (!pendingSlice || pendingSlice->isLocked() || m_swrSweep.running)
                 return;
+            holdCenterLockTuneTarget(pendingSlice, mhz);
             pushSliceFrequencyToOverlays(pendingSlice, mhz);
             pendingSlice->tuneAndRecenter(mhz);
 
@@ -5956,6 +5966,48 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             ? panFollowVfo(slice, mhz, source)
             : revealFrequencyIfNeeded(slice, mhz, intent, source);
     logTunePolicyDecision(source, intent, oldFreqMhz, mhz, result);
+}
+
+QJsonObject MainWindow::automationTune(double mhz)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("no slice to tune")}};
+    }
+    if (slice->isLocked()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("refused: slice %1 is VFO-locked").arg(slice->letter())}};
+    }
+    if (m_swrSweep.running) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: SWR sweep is running")}};
+    }
+
+    applyTuneRequest(slice, mhz, TuneIntent::IncrementalTune, "automation-tune");
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("tune"), mhz},
+                       {QStringLiteral("sliceId"), slice->sliceId()},
+                       {QStringLiteral("letter"), slice->letter()}};
+}
+
+QJsonObject MainWindow::automationSetCenterLock(int sliceId, bool enabled)
+{
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no slice with id %1").arg(sliceId)}};
+    }
+
+    setCenterLockForSlice(slice, enabled);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("slice"), QStringLiteral("centerlock")},
+                       {QStringLiteral("id"), sliceId},
+                       {QStringLiteral("enabled"), enabled}};
 }
 
 void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,

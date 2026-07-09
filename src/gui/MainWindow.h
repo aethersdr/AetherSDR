@@ -205,6 +205,8 @@ public:
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
+    QJsonObject automationSetCenterLock(int sliceId, bool enabled);
+    QJsonObject automationTune(double mhz);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;
 
@@ -1290,7 +1292,14 @@ private:
     // Center Lock — per-pan mode that keeps a selected slice centered while
     // tuning, so the pan/waterfall scrolls underneath it.
     QHash<QString, int> m_centerLockSliceByPan;  // panId -> sliceId
-    QHash<QString, QMetaObject::Connection> m_centerLockFrequencyConnByPan;
+    // Persist the client-side intent by radio + display slot + slice letter.
+    // Radio pan/slice IDs remain radio-authoritative and are never saved.
+    QHash<QString, QHash<int, QString>> m_centerLockSliceLetterByRadioPanIndex;
+    struct CenterLockTuneHold {
+        double targetMhz{0.0};
+        qint64 untilMs{0};
+    };
+    QHash<int, CenterLockTuneHold> m_centerLockTuneHoldBySlice;
     // While a slice is being dragged (in-window tune OR edge auto-pan) Center Lock
     // stands down so it doesn't fight the drag with per-tick recenters. The
     // drag-end handler recenters once so the locked pan re-asserts.
@@ -1300,12 +1309,21 @@ private:
     qint64 m_sliceDragEchoHoldUntilMs{0};
     int centerLockSliceForPan(const QString& panId) const;
     bool centerLockActiveForSlice(const SliceModel* slice) const;
+    void loadCenterLockSettings();
+    void saveCenterLockSettings() const;
+    void persistCenterLockForSlice(const SliceModel* slice);
+    void restoreCenterLockForPan(const QString& panId);
     void setCenterLockForSlice(SliceModel* slice, bool on);
-    void setCenterLockForPan(const QString& panId, int sliceId, bool on);
-    void clearCenterLockForPan(const QString& panId);
+    void setCenterLockForPan(const QString& panId, int sliceId, bool on,
+                             bool persist = true);
+    void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
     void clearCenterLockForSlice(int sliceId);
     void syncCenterLockUi(const QString& panId);
     bool snapCenterLockForSlice(SliceModel* slice, double mhz, bool sendCommand);
+    void snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,
+                                       bool sendCommand);
+    void holdCenterLockTuneTarget(SliceModel* slice, double mhz);
+    double centerLockDisplayFrequency(const SliceModel* slice, double mhz) const;
     void recenterCenterLockForPan(const QString& panId);
     void recenterCenterLocks();
 

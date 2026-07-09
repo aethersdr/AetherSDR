@@ -1144,6 +1144,12 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
+                connect(pan, &PanadapterModel::infoChanged,
+                        this, [this, panId = pan->panId()](double, double) {
+                    if (!profileLoadRadioStateWritesHeld()) {
+                        recenterCenterLockForPan(panId);
+                    }
+                });
                 connect(pan, &PanadapterModel::levelChanged,
                         sw, [sw](float minDbm, float maxDbm) {
                     if (sw->isDraggingDbmScale()) {
@@ -1200,6 +1206,12 @@ void MainWindow::wirePanLifecycle()
         }
         connect(pan, &PanadapterModel::infoChanged,
                 applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
+        connect(pan, &PanadapterModel::infoChanged,
+                this, [this, panId = pan->panId()](double, double) {
+            if (!profileLoadRadioStateWritesHeld()) {
+                recenterCenterLockForPan(panId);
+            }
+        });
         // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
         // don't connect it here again or setDbmRange fires twice per level change.
         connect(pan, &PanadapterModel::rfGainInfoChanged,

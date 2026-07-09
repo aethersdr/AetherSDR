@@ -39,6 +39,8 @@
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <QApplication>
+#include <QAccessible>
+#include <QAccessibleValueChangeEvent>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QGuiApplication>
@@ -5017,6 +5019,17 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, true);
+}
+
+void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
+{
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
+}
+
+void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
+                                               bool animateSmallNudges)
+{
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
@@ -5084,8 +5097,9 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         m_bandwidthMhz = bandwidthMhz;
     }
 
-    if (largeShift) {
-        // Large jump: cancel any running animation and snap immediately.
+    if (largeShift || !animateSmallNudges) {
+        // Large jumps and explicit immediate updates snap without pan-follow
+        // animation, but still share the same stale-echo and waterfall guards.
         if (m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
             m_panCenterAnim->stop();
         }
@@ -5175,45 +5189,6 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     m_panCenterAnim->setDuration(110);
     m_panCenterAnim->start();
     emit frequencyRangeChanged(centerMhz, m_bandwidthMhz);
-}
-
-void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
-{
-    if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz) {
-        return;
-    }
-
-    const double oldCenterMhz = m_centerMhz;
-    const double oldBandwidthMhz = m_bandwidthMhz;
-
-    if (m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
-        m_panCenterAnim->stop();
-    }
-
-    if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
-        handleWaterfallFrequencyFrameChange(oldCenterMhz,
-                                            oldBandwidthMhz,
-                                            centerMhz,
-                                            bandwidthMhz);
-    }
-    const bool keptSpectrum = reprojectSpectrum(oldCenterMhz, oldBandwidthMhz,
-                                                centerMhz, bandwidthMhz);
-    if (!keptSpectrum) {
-        m_bins.clear();
-        m_smoothed.clear();
-        m_resetFftSmoothingOnNextFrame = true;
-        if (bandwidthMhz == oldBandwidthMhz) {
-            m_wfWriteRow = 0;
-        }
-    }
-
-    m_centerMhz = centerMhz;
-    m_bandwidthMhz = bandwidthMhz;
-    m_panCenterStart = centerMhz;
-    m_panCenterTarget = centerMhz;
-    resetNoiseFloorBaseline();
-    markOverlayDirty();
-    emit frequencyRangeChanged(m_centerMhz, m_bandwidthMhz);
 }
 
 void SpectrumWidget::setSpectrumFrac(float f)
@@ -5624,7 +5599,24 @@ void SpectrumWidget::setSliceOverlayAdaptiveActive(int sliceId, bool active)
 
 void SpectrumWidget::setCenterLockSliceId(int sliceId)
 {
+    if (m_centerLockSliceId == sliceId) {
+        return;
+    }
     m_centerLockSliceId = sliceId;
+    QString sliceName = QString::number(sliceId);
+    const int overlay = overlayIndex(sliceId);
+    if (overlay >= 0) {
+        sliceName = SliceLabel::unicodeForm(
+            m_sliceOverlays.at(overlay).sliceId,
+            m_sliceOverlays.at(overlay).perClientLetter);
+    }
+    setAccessibleDescription(
+        sliceId >= 0
+            ? tr("Center Lock enabled for Slice %1").arg(sliceName)
+            : tr("Center Lock is off"));
+    QAccessibleValueChangeEvent event(this, sliceId);
+    QAccessible::updateAccessibility(&event);
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setSliceOverlayFreq(int sliceId, double freqMhz)
@@ -6957,9 +6949,9 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     : sliceName);
             action->setCheckable(true);
             action->setChecked(m_centerLockSliceId == so.sliceId);
-            connect(action, &QAction::toggled, this,
-                    [this, sliceId = so.sliceId](bool checked) {
-                emit centerLockRequested(sliceId, checked);
+            connect(action, &QAction::triggered, this,
+                    [this, sliceId = so.sliceId]() {
+                emit centerLockRequested(sliceId, m_centerLockSliceId != sliceId);
             });
         };
         auto addCenterLockControls = [this, addCenterLockAction](QMenu& targetMenu) {
@@ -12181,6 +12173,21 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         const int fX1  = mhzToX(fLoMhz);
         const int fX2  = mhzToX(fHiMhz);
         const int fW   = fX2 - fX1;
+
+        // Passive target marker: Center Lock is a controller state, so its
+        // visible affordance stays attached to the locked slice rather than
+        // adding another mouse control to the pan chrome.
+        if (so.sliceId == m_centerLockSliceId) {
+            const QPoint targetCenter(vfoX, specRect.top() + 18);
+            p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 2));
+            p.drawEllipse(targetCenter, 6, 6);
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 1));
+            p.drawLine(targetCenter.x() - 9, targetCenter.y(),
+                       targetCenter.x() + 9, targetCenter.y());
+            p.drawLine(targetCenter.x(), targetCenter.y() - 9,
+                       targetCenter.x(), targetCenter.y() + 9);
+        }
 
         // ── Filter passband shading ──────────────────────────────────────
         // Drawn only in the spectrum area. The waterfall is a historical

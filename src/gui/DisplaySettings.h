@@ -22,6 +22,11 @@ namespace AetherSDR {
 //     mitigation retirement; ex-lean users have "True" persisted.
 //   - "LeanMode" (legacy flat AppSettings key) — pre-blob spelling, was
 //     migrated by the now-removed migrateLegacy().
+//   - "TitleBar" (legacy flat AppSettings JSON blob) — held the removed
+//     title-bar Pan Lock control state.
+//   - "panLockEnabled" (nested in "TitleBar") — removed title-bar Pan Lock.
+//   - "PanLockEnabled" (legacy flat AppSettings key) — pre-blob Pan Lock
+//     spelling migrated by the now-removed TitleBarSettings helper.
 class DisplaySettings {
 public:
     // VFO meter view: false = standard S-meter, true = SmartMTR component.

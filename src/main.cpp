@@ -437,6 +437,14 @@ int main(int argc, char* argv[])
                 [&window](const QString& arg) {
                     return window.automationSetSliceReceiveSource(arg);
                 });
+            automation->setSliceCenterLockHandler(
+                [&window](int sliceId, bool enabled) {
+                    return window.automationSetCenterLock(sliceId, enabled);
+                });
+            automation->setTuneHandler(
+                [&window](double mhz) {
+                    return window.automationTune(mhz);
+                });
             automation->setReceiveSyncSnapshotHandler(
                 [&window]() {
                     return window.automationReceiveSyncSnapshot();

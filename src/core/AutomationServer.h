@@ -246,6 +246,14 @@ public:
     {
         m_sliceReceiveSourceHandler = std::move(handler);
     }
+    void setSliceCenterLockHandler(std::function<QJsonObject(int, bool)> handler)
+    {
+        m_sliceCenterLockHandler = std::move(handler);
+    }
+    void setTuneHandler(std::function<QJsonObject(double)> handler)
+    {
+        m_tuneHandler = std::move(handler);
+    }
     void setReceiveSyncSnapshotHandler(std::function<QJsonObject()> handler)
     {
         m_receiveSyncSnapshotHandler = std::move(handler);
@@ -495,6 +503,8 @@ private:
     }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
+    std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
+    std::function<QJsonObject(double)> m_tuneHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
