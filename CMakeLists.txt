@@ -2583,6 +2583,13 @@ target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
 
+if(Qt6WebSockets_FOUND)
+    add_executable(tci_protocol_test tests/tci_protocol_test.cpp)
+    target_include_directories(tci_protocol_test PRIVATE src)
+    target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
+endif()
+
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)

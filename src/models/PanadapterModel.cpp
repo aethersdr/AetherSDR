@@ -75,9 +75,16 @@ void PanadapterModel::setRfGainInfo(int low, int high, int step)
 void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
 {
     bool changed = false;
-    if (centerMhz >= 0.0 && centerMhz != m_centerMhz) {
-        m_centerMhz = centerMhz;
-        changed = true;
+    if (centerMhz >= 0.0) {
+        // The numeric default is a plausible real 20 m center. Track whether
+        // a producer has supplied a center so consumers never mistake the
+        // placeholder for radio/model state (#3913 review).
+        changed = !m_centerKnown;
+        m_centerKnown = true;
+        if (centerMhz != m_centerMhz) {
+            m_centerMhz = centerMhz;
+            changed = true;
+        }
     }
     if (bandwidthMhz >= 0.0 && bandwidthMhz != m_bandwidthMhz) {
         m_bandwidthMhz = bandwidthMhz;

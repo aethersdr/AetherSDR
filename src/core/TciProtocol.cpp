@@ -25,6 +25,11 @@ int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
     return index >= 0 ? index : slice->sliceId();
 }
 
+long long TciProtocol::mhzToHz(double mhz)
+{
+    return static_cast<long long>(std::round(mhz * 1e6));
+}
+
 TciProtocol::TciProtocol(RadioModel* model)
     : m_model(model)
 {}
@@ -82,15 +87,20 @@ SliceModel* TciProtocol::sliceForTrx(int trx) const
 // the pan, not the slice (FlexLib: DAXIQChannel is a Panadapter property), so
 // the center is the panadapter center, not the slice/VFO frequency. Reporting
 // the slice freq mis-maps every detected signal by (slice − panCenter) Hz.
-// Falls back to the slice frequency if the pan can't be resolved. (#3910)
-long long TciProtocol::ddsCenterHz(const SliceModel* slice) const
+// Falls back to the slice frequency if the pan can't be resolved or has not
+// received a normalized center update yet. (#3910, #3913 review)
+long long TciProtocol::ddsCenterHz(RadioModel* model, const SliceModel* slice)
 {
-    if (!slice) return 0;
-    if (m_model) {
-        if (auto* pan = m_model->panadapter(slice->panId()))
-            return static_cast<long long>(std::round(pan->centerMhz() * 1e6));
+    if (!slice) {
+        return 0;
     }
-    return static_cast<long long>(std::round(slice->frequency() * 1e6));
+    if (model) {
+        PanadapterModel* pan = model->panadapter(slice->panId());
+        if (pan && pan->centerKnown()) {
+            return mhzToHz(pan->centerMhz());
+        }
+    }
+    return mhzToHz(slice->frequency());
 }
 
 // ── Init burst ─────────────────────────────────────────────────────────────
@@ -159,12 +169,12 @@ QString TciProtocol::generateInitBurst()
     if (m_model) {
         for (auto* s : slices) {
             int trx = tciTrxForSlice(m_model, s);
-            long long hz = static_cast<long long>(std::round(s->frequency() * 1e6));
+            const long long hz = mhzToHz(s->frequency());
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
             // dds: = IQ-stream center (panadapter center). Skimmers learn the
             // IQ center only from this; without it every spot is mis-mapped by
             // (slice − panCenter) Hz. (#3910)
-            burst += QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(s));
+            burst += QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(m_model, s));
             burst += QStringLiteral("modulation:%1,%2;")
                          .arg(trx).arg(smartsdrToTci(s->mode()));
             burst += QStringLiteral("rx_enable:%1,true;").arg(trx);
@@ -1311,9 +1321,16 @@ QString TciProtocol::cmdIqSampleRate(const QStringList& args, bool isSet)
     }
 
     if (args.isEmpty()) return {};
-    int rate = args[0].toInt();
-    if (rate != 24000 && rate != 48000 && rate != 96000 && rate != 192000)
-        return {};
+    const int rate = args[0].toInt();
+    if (rate != 24000 && rate != 48000 && rate != 96000 && rate != 192000) {
+        // Reject without hanging the requester: report the rate that remains
+        // in force. No pending notification is set because other clients saw
+        // no state change (#3913 review).
+        const int currentRate = m_model
+            ? m_model->daxIqModel().stream(1).sampleRate
+            : 48000;
+        return QStringLiteral("iq_samplerate:%1;").arg(currentRate);
+    }
     if (m_model) {
         QMetaObject::invokeMethod(m_model, [model = m_model, rate]() {
             model->daxIqModel().setSampleRate(1, rate);
@@ -1399,7 +1416,7 @@ QString TciProtocol::cmdDds(const QStringList& args, bool isSet)
     if (!s) return {};
 
     if (!isSet) {
-        return QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(s));
+        return QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(m_model, s));
     }
 
     if (args.size() < 2) return {};

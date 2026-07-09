@@ -307,6 +307,18 @@ int main(int argc, char** argv)
         PanadapterModel pan(QStringLiteral("0x40000000"));
         QSignalSpy info(&pan, &PanadapterModel::infoChanged);
 
+        // The numeric center default is only a placeholder until a normalized
+        // update arrives. An update equal to that default still marks it known
+        // and emits one edge so consumers can replace their fallback; repeated
+        // identical updates remain quiet (#3913 review).
+        CHECK(pan.centerKnown() == false);
+        pan.setCenterBandwidth(14.1, -1.0);
+        CHECK(pan.centerKnown() == true);
+        CHECK(info.count() == 1);
+        info.clear();
+        pan.setCenterBandwidth(14.1, -1.0);
+        CHECK(info.count() == 0);
+
         // Negative = "leave unchanged": bandwidth held, only center moves.
         const double origBw = pan.bandwidthMhz();
         pan.setCenterBandwidth(7.15, -1.0);

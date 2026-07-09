@@ -38,10 +38,12 @@ public:
 
     // Display state
     double centerMhz() const { return m_centerMhz; }
+    bool centerKnown() const { return m_centerKnown; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Normalized setter driven by the backend (aetherd RFC 2.3). A negative
     // value means "leave unchanged" (the radio may report one without the
-    // other). Emits infoChanged when either actually changes.
+    // other). Emits infoChanged when either value changes or when the center
+    // is populated for the first time (even if it equals the placeholder).
     void setCenterBandwidth(double centerMhz, double bandwidthMhz);
     // Normalized display-level-range setter driven by the backend (aetherd RFC
     // 2.3, second universal pan field). NaN for either bound means "leave
@@ -159,6 +161,7 @@ private:
     QString     m_clientHandle;
     quint32     m_ownerHandle{0};   // parsed m_clientHandle; 0 = unknown (#3977)
     double      m_centerMhz{14.1};
+    bool        m_centerKnown{false}; // true after a normalized center update
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};

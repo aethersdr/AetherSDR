@@ -150,6 +150,7 @@ private:
     void replyText(QWebSocket* ws, const QString& msg);
     void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
                               int trx, int channel);
+    void broadcastSliceFrequencies(SliceModel* slice);
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
