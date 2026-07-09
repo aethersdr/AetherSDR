@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QString>
+#include <QVariantMap>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -58,6 +59,50 @@ int main(int argc, char** argv)
     EXPECT_EQ(pan.rfGain(), -8);
     EXPECT_EQ(gainSpy.count(), 1);
     EXPECT_EQ(gainSpy.takeFirst().at(0).toInt(), -8);
+
+    // #4147: malformed bool wire flags must be ignored, keeping last-known-good
+    // state — mirroring FlexLib's TryParse guard (Panadapter.cs). A garbled or
+    // out-of-range value must NOT silently overwrite a prior true with false.
+    {
+        auto apply = [&pan](const QString& key, const QString& val) {
+            QVariantMap m;
+            m.insert(key, val);
+            pan.applyStateExtension(m);
+        };
+
+        // wide: reject non-numeric and > 1, keep prior state.
+        apply(QStringLiteral("wide"), QStringLiteral("1"));
+        EXPECT_EQ(pan.wideActive(), true);
+        apply(QStringLiteral("wide"), QStringLiteral("bogus"));
+        EXPECT_EQ(pan.wideActive(), true);   // malformed → kept
+        apply(QStringLiteral("wide"), QStringLiteral("2"));
+        EXPECT_EQ(pan.wideActive(), true);   // out-of-range → kept
+        apply(QStringLiteral("wide"), QStringLiteral("0"));
+        EXPECT_EQ(pan.wideActive(), false);  // well-formed 0 → applied
+
+        // loopa: same guard + range reject.
+        apply(QStringLiteral("loopa"), QStringLiteral("1"));
+        EXPECT_EQ(pan.loopA(), true);
+        apply(QStringLiteral("loopa"), QStringLiteral("xx"));
+        EXPECT_EQ(pan.loopA(), true);        // malformed → kept
+        apply(QStringLiteral("loopa"), QStringLiteral("3"));
+        EXPECT_EQ(pan.loopA(), true);        // out-of-range → kept
+
+        // loopb: same; setting it clears loopa via mutual exclusion.
+        apply(QStringLiteral("loopb"), QStringLiteral("1"));
+        EXPECT_EQ(pan.loopB(), true);
+        EXPECT_EQ(pan.loopA(), false);
+        apply(QStringLiteral("loopb"), QStringLiteral("nope"));
+        EXPECT_EQ(pan.loopB(), true);        // malformed → kept
+
+        // weighted_average: parse-guard ONLY (no > 1 reject), per FlexLib.
+        apply(QStringLiteral("weighted_average"), QStringLiteral("1"));
+        EXPECT_EQ(pan.weightedAverage(), true);
+        apply(QStringLiteral("weighted_average"), QStringLiteral("garbage"));
+        EXPECT_EQ(pan.weightedAverage(), true);  // malformed → kept
+        apply(QStringLiteral("weighted_average"), QStringLiteral("0"));
+        EXPECT_EQ(pan.weightedAverage(), false); // well-formed 0 → applied
+    }
 
     if (g_failures == 0) {
         std::printf("panadapter_model_rx_antenna_test: all checks passed\n");
