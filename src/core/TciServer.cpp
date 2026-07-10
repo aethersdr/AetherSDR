@@ -1909,13 +1909,18 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
     }
     if (!anyIq) return;
 
-    // Byte-swap big-endian float32 → native little-endian
+    // dax_iq payloads are LITTLE-endian float32 (the radio reports
+    // payload_endian=little for this stream type, unlike pan/wf/meter/audio
+    // which are big-endian network order). Reading them big-endian byte-reverses
+    // every float into a denormal ≈ 0, so the skimmer (SDC / CW Skimmer) sees a
+    // dead, flat IQ stream. Read little-endian to native (a no-op on an LE host),
+    // matching DaxIqModel::feedRawIqPacket's handling of the same payload.
     const int numFloats = rawPayload.size() / 4;
     QByteArray swapped(rawPayload.size(), Qt::Uninitialized);
     const quint32* src = reinterpret_cast<const quint32*>(rawPayload.constData());
     quint32* dst = reinterpret_cast<quint32*>(swapped.data());
     for (int i = 0; i < numFloats; ++i)
-        dst[i] = qFromBigEndian(src[i]);
+        dst[i] = qFromLittleEndian(src[i]);
 
     // Build TCI IQ binary frame (type=0, channels=2 for I/Q pair)
     const int iqFrames = numFloats / 2;  // I/Q pairs
