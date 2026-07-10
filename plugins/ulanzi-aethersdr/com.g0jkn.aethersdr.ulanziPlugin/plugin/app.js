@@ -2,11 +2,11 @@
 //
 // Bridges Ulanzi Studio (which manages the D100H dial / LCD button device
 // over Bluetooth) to AetherSDR (the desktop SDR app) via TCI WebSocket on
-// port 40001.  Studio sends us button-press + dial events; we translate
+// port 50001.  Studio sends us button-press + dial events; we translate
 // them into TCI commands and ship them to AetherSDR.
 //
 // TCI command vocabulary in this plugin is faithful to the existing
-// AetherSDR Stream Deck plugin (com.aethersdr.radio at port 40001) so
+// AetherSDR Stream Deck plugin (com.aethersdr.radio at port 50001) so
 // the two plugins behave identically against the same radio.
 
 import UlanziApi from '../libs/common-node/index.js';
@@ -17,8 +17,8 @@ import WebSocket from 'ws';
 const PLUGIN_UUID = 'com.g0jkn.aethersdr.controller';
 
 // AetherSDR's TCI WebSocket server.  Default is the same port the Elgato
-// AetherSDR plugin uses (40001) — confirmed live against the same radio.
-const DEFAULT_TCI_URL = 'ws://127.0.0.1:40001';
+// AetherSDR plugin uses (50001) — confirmed live against the same radio.
+const DEFAULT_TCI_URL = 'ws://127.0.0.1:50001';
 
 const ACTION_CACHES = {};
 let tci = null;

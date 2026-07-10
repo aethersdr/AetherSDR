@@ -30,15 +30,16 @@ const radio = {
 let tciWs = null;
 let tciReconnectTimer = null;
 const TCI_HOST = "localhost";
-const TCI_PORT = 40001;
+const TCI_PORT = 50001;
 
 function tciConnect() {
+    console.log(`Connecting to TCI at ws://${TCI_HOST}:${TCI_PORT}`);
     try {
         tciWs = new WebSocket(`ws://${TCI_HOST}:${TCI_PORT}`);
         tciWs.on("open", () => { console.log("TCI connected"); });
         tciWs.on("message", (data) => parseTci(data.toString()));
-        tciWs.on("close", () => { tciWs = null; tciScheduleReconnect(); });
-        tciWs.on("error", () => {});
+        tciWs.on("close", () => { tciWs = null; console.log("TCI disconnected, reconnecting in 3s"); tciScheduleReconnect(); });
+        tciWs.on("error", (e) => console.log("TCI error:", e && e.message));
     } catch (e) { tciScheduleReconnect(); }
 }
 
