@@ -90,8 +90,8 @@ QTreeWidget#networkDiagnosticsNavigation::item {
     border-radius: 5px;
 }
 QTreeWidget#networkDiagnosticsNavigation::item:selected {
-    color: #07101c;
-    background: #65d379;
+    color: {{color.background.0}};
+    background: {{color.accent}};
 }
 QTreeWidget#networkDiagnosticsNavigation::item:hover:!selected {
     color: #d6dfeb;
@@ -106,7 +106,7 @@ QLineEdit#networkDiagnosticsSearch {
     font-size: 13px;
 }
 QLineEdit#networkDiagnosticsSearch:focus {
-    border-color: #65d379;
+    border-color: {{color.accent}};
 }
 QLabel#networkDiagnosticsPageTitle {
     color: #d4deea;
@@ -857,7 +857,8 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     theme::setContainer(this, QStringLiteral("dialog/networkDiag"));
     setMinimumSize(920, 680);
     resize(980, 760);
-    bodyWidget()->setStyleSheet(QString::fromLatin1(kNetworkDiagnosticsStyle));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        bodyWidget(), QString::fromLatin1(kNetworkDiagnosticsStyle));
 
     auto* body = new QVBoxLayout(bodyWidget());
     body->setSpacing(8);
