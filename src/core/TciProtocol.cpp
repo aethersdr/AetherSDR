@@ -1294,10 +1294,24 @@ QString TciProtocol::cmdCwMacrosStop()
 QString TciProtocol::cmdIqStart(const QStringList& args)
 {
     if (!m_model || args.isEmpty()) return {};
-    int channel = args[0].toInt() + 1;  // TRX 0 → DAX IQ channel 1
+    const int trx = args[0].toInt();
+    const int channel = trx + 1;  // TRX 0 → DAX IQ channel 1
     if (channel < 1 || channel > 4) return {};
-    QMetaObject::invokeMethod(m_model, [model = m_model, channel]() {
+    // Creating the dax_iq stream is not enough to make IQ flow: on FlexRadio
+    // `daxiq_channel` is a Panadapter property, so the radio streams nothing
+    // (or a stale pan's IQ) until a panadapter is routed to this channel with
+    // `display pan set <panId> daxiq_channel=N`. The GUI does this from the
+    // spectrum overlay menu, but a TCI skimmer client (SDC / CW Skimmer) has no
+    // such hook — so bind the requested TRX's pan here. Mirrors the only other
+    // non-GUI IQ consumer, WfmDemodulator, and centers the stream on the same
+    // pan whose center is reported to the client via dds: (#3910/#3913).
+    const SliceModel* s = sliceForTrx(trx);
+    const QString panId = s ? s->panId() : QString();
+    QMetaObject::invokeMethod(m_model, [model = m_model, channel, panId]() {
         model->daxIqModel().createStream(channel);
+        if (!panId.isEmpty())
+            model->sendCommand(QStringLiteral("display pan set %1 daxiq_channel=%2")
+                                   .arg(panId).arg(channel));
     }, Qt::QueuedConnection);
     return {};
 }
