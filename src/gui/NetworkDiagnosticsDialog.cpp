@@ -91,7 +91,7 @@ QTreeWidget#networkDiagnosticsNavigation::item {
 }
 QTreeWidget#networkDiagnosticsNavigation::item:selected {
     color: {{color.background.0}};
-    background: {{color.accent}};
+    background: {{color.accent.bright}};
 }
 QTreeWidget#networkDiagnosticsNavigation::item:hover:!selected {
     color: #d6dfeb;
@@ -106,7 +106,7 @@ QLineEdit#networkDiagnosticsSearch {
     font-size: 13px;
 }
 QLineEdit#networkDiagnosticsSearch:focus {
-    border-color: {{color.accent}};
+    border-color: {{color.accent.bright}};
 }
 QLabel#networkDiagnosticsPageTitle {
     color: #d4deea;
@@ -880,9 +880,9 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     navigation->setObjectName(QStringLiteral("networkDiagnosticsNavigation"));
     navigation->setHeaderHidden(true);
     navigation->setRootIsDecorated(false);
-    // Category headers provide the hierarchy; removing the native branch
-    // column keeps the selected-page highlight a single uninterrupted bar.
-    navigation->setIndentation(0);
+    // Match Radio Setup's hierarchy cue: the child indent leaves a narrow
+    // accent notch at the leading edge of the selected page.
+    navigation->setIndentation(14);
     navigation->setMinimumWidth(220);
     navigation->setMaximumWidth(310);
     navigation->setAccessibleName(QStringLiteral("Network Diagnostics categories"));
