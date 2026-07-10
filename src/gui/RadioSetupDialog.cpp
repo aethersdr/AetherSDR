@@ -80,6 +80,9 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QToolButton>
+#include <QTreeWidget>
+#include <QAction>
+#include <QKeySequence>
 
 #include <algorithm>
 #include <functional>
@@ -595,59 +598,191 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_kiwiSdrManager(kiwiSdrManager)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
-    setMinimumSize(820, 620);
+    setMinimumSize(960, 680);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }");
 
     auto* layout = new QVBoxLayout(bodyWidget());
 
-    auto* tabs = new QTabWidget;
-    m_tabs = tabs;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(tabs, "QTabWidget::pane { border: 1px solid {{color.background.2}}; background: {{color.background.0}}; }"
-        "QTabBar::tab { background: {{color.background.1}}; color: {{color.text.secondary}}; "
-        "border: 1px solid {{color.background.2}}; padding: 4px 12px; margin-right: 2px; }"
-        "QTabBar::tab:selected { background: {{color.background.0}}; color: {{color.text.primary}}; "
-        "border-bottom-color: {{color.background.0}}; }");
+    auto* search = new QLineEdit;
+    search->setObjectName(QStringLiteral("radioSetupSearch"));
+    search->setPlaceholderText(QStringLiteral("Search settings (Ctrl+F)"));
+    search->setClearButtonEnabled(true);
+    search->setAccessibleName(QStringLiteral("Search Radio Setup settings"));
+    search->setAccessibleDescription(
+        QStringLiteral("Type a feature, device, or setting name to filter the navigation list."));
+    search->setMinimumHeight(38);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(search,
+        "QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        "border: 2px solid {{color.background.2}}; border-radius: 6px; padding: 7px 10px; font-size: 13px; }"
+        "QLineEdit:focus { border-color: {{color.accent.bright}}; }");
+    layout->addWidget(search);
+
+    auto* content = new QSplitter(Qt::Horizontal);
+    content->setChildrenCollapsible(false);
+
+    m_navigation = new QTreeWidget;
+    m_navigation->setObjectName(QStringLiteral("radioSetupNavigation"));
+    m_navigation->setHeaderHidden(true);
+    m_navigation->setRootIsDecorated(false);
+    m_navigation->setIndentation(14);
+    m_navigation->setUniformRowHeights(false);
+    m_navigation->setMinimumWidth(235);
+    m_navigation->setMaximumWidth(340);
+    m_navigation->setAccessibleName(QStringLiteral("Radio Setup categories"));
+    m_navigation->setAccessibleDescription(
+        QStringLiteral("Use the arrow keys to move between categories and settings pages."));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_navigation,
+        "QTreeWidget { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        "border: 1px solid {{color.background.2}}; border-radius: 6px; padding: 6px; outline: none; }"
+        "QTreeWidget::branch { image: none; border-image: none; background: transparent; }"
+        "QTreeWidget::item { min-height: 36px; padding: 3px 8px; border-radius: 4px; }"
+        "QTreeWidget::item:selected { background: {{color.accent.bright}}; color: {{color.background.0}}; }"
+        "QTreeWidget::item:hover:!selected { background: {{color.background.2}}; }");
+    content->addWidget(m_navigation);
+
+    auto* pageHost = new QWidget;
+    auto* pageLayout = new QVBoxLayout(pageHost);
+    pageLayout->setContentsMargins(16, 4, 4, 4);
+    pageLayout->setSpacing(10);
+    m_pageTitle = new QLabel;
+    m_pageTitle->setAccessibleName(QStringLiteral("Current settings page"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pageTitle,
+        "QLabel { color: {{color.text.primary}}; font-size: 20px; font-weight: 600; padding: 2px 0 8px 0; }");
+    pageLayout->addWidget(m_pageTitle);
+    m_pages = new QStackedWidget;
+    m_pages->setObjectName(QStringLiteral("radioSetupPages"));
+    m_pages->setAccessibleName(QStringLiteral("Settings page content"));
+    pageLayout->addWidget(m_pages, 1);
+    content->addWidget(pageHost);
+    content->setStretchFactor(0, 0);
+    content->setStretchFactor(1, 1);
+    content->setSizes({260, 700});
+
+    auto addCategory = [this](const QString& name) {
+        auto* item = new QTreeWidgetItem(m_navigation, {name});
+        item->setFlags(Qt::ItemIsEnabled);
+        QFont font = item->font(0);
+        font.setBold(true);
+        item->setFont(0, font);
+        item->setForeground(0, palette().color(QPalette::Disabled, QPalette::Text));
+        return item;
+    };
+
+    auto* radioCategory = addCategory(QStringLiteral("RADIO"));
+    auto* signalCategory = addCategory(QStringLiteral("RECEIVE & TRANSMIT"));
+    auto* hardwareCategory = addCategory(QStringLiteral("CONTROLLERS & HARDWARE"));
+    auto* onlineCategory = addCategory(QStringLiteral("ONLINE & APPEARANCE"));
+
+    auto addPage = [this](QTreeWidgetItem* category, const QString& name,
+                         const QString& keywords, std::function<QWidget*()> builder,
+                         bool eager = false) {
+        QWidget* placeholder = eager ? wrapTabInScrollArea(builder()) : new QWidget;
+        const int index = m_pages->addWidget(placeholder);
+        auto* item = new QTreeWidgetItem(category, {name});
+        item->setData(0, Qt::UserRole, index);
+        item->setData(0, Qt::UserRole + 1, keywords);
+        item->setToolTip(0, keywords);
+        m_pageIndexes.insert(name, index);
+        m_pageItems.insert(index, item);
+        if (!eager) {
+            m_deferredBuilders[index] = std::move(builder);
+        }
+        return item;
+    };
 
     // Build only the default (Radio) tab eagerly; defer the rest until first
     // selected.  This avoids hardware-probing calls (QSerialPortInfo,
     // QMediaDevices) during construction, which crash on some Wayland/Qt 6.11
     // configurations (#1776).
-    tabs->addTab(wrapTabInScrollArea(buildRadioTab()), "Radio");
-
-    auto addDeferred = [&](const QString& name, std::function<QWidget*()> builder) {
-        int idx = tabs->addTab(new QWidget, name);
-        m_deferredBuilders[idx] = std::move(builder);
-    };
-    addDeferred("Network",     [this] { return buildNetworkTab(); });
-    addDeferred("GPS",         [this] { return buildGpsTab(); });
-    addDeferred("Audio",       [this] { return buildAudioTab(); });
-    addDeferred("TX",          [this] { return buildTxTab(); });
-    addDeferred("Phone/CW",   [this] { return buildPhoneCwTab(); });
-    addDeferred("RX",          [this] { return buildRxTab(); });
-    addDeferred("Antennas",    [this] { return buildAntennaNamesTab(); });
-    addDeferred("Filters",     [this] { return buildFiltersTab(); });
-    addDeferred("XVTR",        [this] { return buildXvtrTab(); });
+    QTreeWidgetItem* firstItem = addPage(radioCategory, QStringLiteral("Radio"),
+        QStringLiteral("identity nickname callsign firmware license model region remote power"),
+        [this] { return buildRadioTab(); }, true);
+    addPage(radioCategory, QStringLiteral("Network"),
+        QStringLiteral("ip address dhcp static ethernet connection network"),
+        [this] { return buildNetworkTab(); });
+    addPage(radioCategory, QStringLiteral("GPS"),
+        QStringLiteral("gpsdo satellite location oscillator time"), [this] { return buildGpsTab(); });
+    addPage(signalCategory, QStringLiteral("Audio"),
+        QStringLiteral("speaker microphone device sample rate latency sound dax"), [this] { return buildAudioTab(); });
+    addPage(signalCategory, QStringLiteral("Transmit"),
+        QStringLiteral("tx transmit rf power tune ptt band settings"), [this] { return buildTxTab(); });
+    addPage(signalCategory, QStringLiteral("Phone & CW"),
+        QStringLiteral("phone cw keyer break-in sidetone microphone voice"), [this] { return buildPhoneCwTab(); });
+    addPage(signalCategory, QStringLiteral("Receive"),
+        QStringLiteral("rx receive calibration rf gain preamp"), [this] { return buildRxTab(); });
+    addPage(signalCategory, QStringLiteral("Filters"),
+        QStringLiteral("filter bandwidth low high cut mode"), [this] { return buildFiltersTab(); });
+    addPage(hardwareCategory, QStringLiteral("Antennas"),
+        QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
+    addPage(hardwareCategory, QStringLiteral("Transverters"),
+        QStringLiteral("xvtr transverter if frequency offset power"), [this] { return buildXvtrTab(); });
     // External APD tab (#2186) — only present on radios that report
     // `apd configurable=1` (FLEX-8x00 series with SmartSDR 4.2.18+).
-    m_apdTabIndex = tabs->addTab(new QWidget, "APD");
-    m_deferredBuilders[m_apdTabIndex] = [this] { return buildApdTab(); };
-    tabs->setTabVisible(m_apdTabIndex, m_model->transmitModel().apdConfigurable());
+    QTreeWidgetItem* apdItem = addPage(hardwareCategory, QStringLiteral("APD"),
+        QStringLiteral("adaptive predistortion amplifier sampler linearization"), [this] { return buildApdTab(); });
+    m_apdTabIndex = m_pageIndexes.value(QStringLiteral("APD"));
+    apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
     connect(&m_model->transmitModel(), &TransmitModel::apdStateChanged,
-            this, [this, tabs] {
-        tabs->setTabVisible(m_apdTabIndex, m_model->transmitModel().apdConfigurable());
+            this, [this, apdItem] {
+        apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
     });
-    addDeferred("USB Cables",      [this] { return buildUsbCablesTab(); });
-    addDeferred("Peripherals",     [this] { return buildPeripheralsTab(); });
-    addDeferred("Themes",          [this] { return buildUiEnhancementsTab(); });
-    addDeferred("SmartLink",       [this] { return buildSmartLinkTab(); });
-    addDeferred("QRZ",             [this] { return buildQrzTab(); });
+    addPage(hardwareCategory, QStringLiteral("USB Cables"),
+        QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
+    addPage(hardwareCategory, QStringLiteral("Peripherals"),
+        QStringLiteral("controllers amplifier tuner antenna genius pgxl tgxl manual ip"), [this] { return buildPeripheralsTab(); });
+    addPage(onlineCategory, QStringLiteral("Appearance & Behavior"),
+        QStringLiteral("themes colors display font vision contrast click wheel ui enhancements"), [this] { return buildUiEnhancementsTab(); });
+    addPage(onlineCategory, QStringLiteral("SmartLink"),
+        QStringLiteral("remote internet certificate security pin wan"), [this] { return buildSmartLinkTab(); });
+    addPage(onlineCategory, QStringLiteral("QRZ & Callsigns"),
+        QStringLiteral("qrz callsign lookup spots contact online account"), [this] { return buildQrzTab(); });
 #ifdef HAVE_SERIALPORT
-    addDeferred("Serial",          [this] { return buildSerialTab(); });
+    addPage(hardwareCategory, QStringLiteral("Serial & Controllers"),
+        QStringLiteral("serial flexcontrol midi controller knob com port baud ptt cw"), [this] { return buildSerialTab(); });
 #endif
 
-    connect(tabs, &QTabWidget::currentChanged, this, &RadioSetupDialog::buildDeferredTab);
-
-    layout->addWidget(tabs);
+    m_navigation->expandAll();
+    connect(m_navigation, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem* current) {
+        if (!current || !current->parent()) {
+            return;
+        }
+        const int index = current->data(0, Qt::UserRole).toInt();
+        buildDeferredTab(index);
+        m_pages->setCurrentIndex(index);
+        m_pageTitle->setText(current->text(0));
+    });
+    connect(search, &QLineEdit::textChanged, this, [this](const QString& text) {
+        const QString needle = text.trimmed();
+        for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
+            QTreeWidgetItem* category = m_navigation->topLevelItem(i);
+            bool anyVisible = false;
+            for (int j = 0; j < category->childCount(); ++j) {
+                QTreeWidgetItem* item = category->child(j);
+                const QString haystack = item->text(0) + QStringLiteral(" ")
+                    + item->data(0, Qt::UserRole + 1).toString();
+                const bool matches = needle.isEmpty()
+                    || haystack.contains(needle, Qt::CaseInsensitive);
+                if (item != m_pageItems.value(m_apdTabIndex)
+                    || m_model->transmitModel().apdConfigurable()) {
+                    item->setHidden(!matches);
+                }
+                anyVisible = anyVisible || !item->isHidden();
+            }
+            category->setHidden(!anyVisible);
+            category->setExpanded(true);
+        }
+    });
+    auto* findAction = new QAction(this);
+    findAction->setShortcut(QKeySequence::Find);
+    findAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(findAction, &QAction::triggered, search, [search] {
+        search->setFocus();
+        search->selectAll();
+    });
+    addAction(findAction);
+    m_navigation->setCurrentItem(firstItem);
+    layout->addWidget(content, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     AetherSDR::ThemeManager::instance().applyStyleSheet(buttons, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
@@ -6038,7 +6173,7 @@ void RadioSetupDialog::buildDeferredTab(int index)
     if (it == m_deferredBuilders.end())
         return;                             // already built or out of range
 
-    QWidget* placeholder = m_tabs->widget(index);
+    QWidget* placeholder = m_pages->widget(index);
     QWidget* content = it.value()();        // run the real builder
     auto* lay = new QVBoxLayout(placeholder);
     lay->setContentsMargins(0, 0, 0, 0);
@@ -6051,12 +6186,24 @@ void RadioSetupDialog::buildDeferredTab(int index)
 
 void RadioSetupDialog::selectTab(const QString& tabName)
 {
-    if (!m_tabs) return;
-    for (int i = 0; i < m_tabs->count(); ++i) {
-        if (m_tabs->tabText(i) == tabName) {
-            m_tabs->setCurrentIndex(i);
-            return;
-        }
+    if (!m_navigation) {
+        return;
+    }
+
+    static const QHash<QString, QString> kLegacyPageNames = {
+        {QStringLiteral("TX"), QStringLiteral("Transmit")},
+        {QStringLiteral("RX"), QStringLiteral("Receive")},
+        {QStringLiteral("Phone/CW"), QStringLiteral("Phone & CW")},
+        {QStringLiteral("XVTR"), QStringLiteral("Transverters")},
+        {QStringLiteral("Themes"), QStringLiteral("Appearance & Behavior")},
+        {QStringLiteral("QRZ"), QStringLiteral("QRZ & Callsigns")},
+        {QStringLiteral("Serial"), QStringLiteral("Serial & Controllers")}
+    };
+    const QString pageName = kLegacyPageNames.value(tabName, tabName);
+    const int index = m_pageIndexes.value(pageName, -1);
+    if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
+        m_navigation->setCurrentItem(item);
+        m_navigation->scrollToItem(item, QAbstractItemView::PositionAtCenter);
     }
 }
 

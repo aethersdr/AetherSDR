@@ -7,7 +7,6 @@
 #include <array>
 #include <functional>
 
-class QTabWidget;
 class QLabel;
 class QLineEdit;
 class QGroupBox;
@@ -18,6 +17,9 @@ class QCheckBox;
 class QSpinBox;
 class QVBoxLayout;
 class QTableWidget;
+class QStackedWidget;
+class QTreeWidget;
+class QTreeWidgetItem;
 
 namespace AetherSDR {
 
@@ -30,8 +32,7 @@ class PgxlConnection;
 class AntennaGeniusModel;
 class KiwiSdrManager;
 
-// Radio Setup dialog — tabbed configuration window matching SmartSDR's
-// Settings → Radio Setup. Shows radio info, GPS, TX, RX, filters, etc.
+// Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -106,7 +107,11 @@ private:
     PgxlConnection*    m_pgxl{nullptr};
     AntennaGeniusModel* m_ag{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
-    QTabWidget*  m_tabs{nullptr};
+    QTreeWidget* m_navigation{nullptr};
+    QStackedWidget* m_pages{nullptr};
+    QLabel* m_pageTitle{nullptr};
+    QHash<QString, int> m_pageIndexes;
+    QHash<int, QTreeWidgetItem*> m_pageItems;
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};
@@ -151,7 +156,7 @@ private:
     FirmwareUploader* m_uploader{nullptr};
     FirmwareStager*   m_stager{nullptr};
 
-    // Lazy tab construction — deferred builders keyed by tab index (#1776)
+    // Lazy page construction — deferred builders keyed by page index (#1776)
     QHash<int, std::function<QWidget*()>> m_deferredBuilders;
     void buildDeferredTab(int index);
 
