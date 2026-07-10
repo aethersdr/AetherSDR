@@ -21,6 +21,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
@@ -40,7 +41,11 @@
 #include <QStandardPaths>
 #include <functional>
 #include <QSyntaxHighlighter>
-#include <QTabWidget>
+#include <QTreeWidget>
+#include <QStackedWidget>
+#include <QSplitter>
+#include <QAction>
+#include <QKeySequence>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QHeaderView>
@@ -66,33 +71,47 @@ QFrame#DiagnosticsPanel {
     border: 1px solid #233246;
     border-radius: 7px;
 }
-QTabWidget::pane {
-    background: transparent;
-    border: none;
-    top: 0;
-}
-QTabBar {
-    background: transparent;
-    border-bottom: none;
-}
-QTabBar::tab {
+QTreeWidget#networkDiagnosticsNavigation {
     color: #aeb9cc;
+    background: #0b1625;
+    border: 1px solid #233246;
+    border-radius: 7px;
+    padding: 6px;
+    outline: none;
+}
+QTreeWidget#networkDiagnosticsNavigation::branch {
+    image: none;
+    border-image: none;
     background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 9px 16px;
-    margin: 3px 2px 2px 0;
-    min-height: 24px;
-    font-weight: 600;
 }
-QTabBar::tab:selected {
-    color: #d4deea;
-    border-color: #54c768;
-    background: #0d1c20;
+QTreeWidget#networkDiagnosticsNavigation::item {
+    min-height: 38px;
+    padding: 3px 9px;
+    border-radius: 5px;
 }
-QTabBar::tab:hover {
-    border-color: #3c526d;
+QTreeWidget#networkDiagnosticsNavigation::item:selected {
+    color: #07101c;
+    background: #65d379;
+}
+QTreeWidget#networkDiagnosticsNavigation::item:hover:!selected {
     color: #d6dfeb;
+    background: #142235;
+}
+QLineEdit#networkDiagnosticsSearch {
+    color: #d4deea;
+    background: #0b1625;
+    border: 2px solid #26374e;
+    border-radius: 7px;
+    padding: 8px 11px;
+    font-size: 13px;
+}
+QLineEdit#networkDiagnosticsSearch:focus {
+    border-color: #65d379;
+}
+QLabel#networkDiagnosticsPageTitle {
+    color: #d4deea;
+    font-size: 20px;
+    font-weight: 700;
 }
 QLabel#DiagnosticsPanelTitle {
     background: transparent;
@@ -843,11 +862,51 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     auto* body = new QVBoxLayout(bodyWidget());
     body->setSpacing(8);
 
-    // Timeframe selector lives in the top-right corner of the QTabWidget's
-    // tab bar so the tabs and the dropdown share a single row, eliminating
-    // the otherwise-empty band above the tabs.
+    auto* search = new QLineEdit;
+    search->setObjectName(QStringLiteral("networkDiagnosticsSearch"));
+    search->setPlaceholderText(QStringLiteral("Search diagnostics (Ctrl+F)"));
+    search->setClearButtonEnabled(true);
+    search->setMinimumHeight(40);
+    search->setAccessibleName(QStringLiteral("Search Network Diagnostics"));
+    search->setAccessibleDescription(
+        QStringLiteral("Type a symptom, stream, protocol, or measurement to filter diagnostic pages."));
+    body->addWidget(search);
+
+    auto* split = new QSplitter(Qt::Horizontal);
+    split->setChildrenCollapsible(false);
+
+    auto* navigation = new QTreeWidget;
+    navigation->setObjectName(QStringLiteral("networkDiagnosticsNavigation"));
+    navigation->setHeaderHidden(true);
+    navigation->setRootIsDecorated(false);
+    // Category headers provide the hierarchy; removing the native branch
+    // column keeps the selected-page highlight a single uninterrupted bar.
+    navigation->setIndentation(0);
+    navigation->setMinimumWidth(220);
+    navigation->setMaximumWidth(310);
+    navigation->setAccessibleName(QStringLiteral("Network Diagnostics categories"));
+    navigation->setAccessibleDescription(
+        QStringLiteral("Use the arrow keys to choose a diagnostic summary, trend, log, or client page."));
+    split->addWidget(navigation);
+
+    auto* pageHost = new QWidget;
+    auto* pageHostLayout = new QVBoxLayout(pageHost);
+    pageHostLayout->setContentsMargins(14, 2, 2, 2);
+    pageHostLayout->setSpacing(8);
+    auto* pageHeader = new QHBoxLayout;
+    auto* pageTitle = new QLabel;
+    pageTitle->setObjectName(QStringLiteral("networkDiagnosticsPageTitle"));
+    pageTitle->setAccessibleName(QStringLiteral("Current diagnostics page"));
+    pageHeader->addWidget(pageTitle);
+    pageHeader->addStretch();
+
     auto* rangeLabel = new QLabel("Timeframe");
+    rangeLabel->setAccessibleName(QStringLiteral("Chart timeframe"));
     m_rangeCombo = new QComboBox(this);
+    m_rangeCombo->setObjectName(QStringLiteral("networkDiagnosticsTimeframe"));
+    m_rangeCombo->setAccessibleName(QStringLiteral("Chart timeframe"));
+    m_rangeCombo->setAccessibleDescription(
+        QStringLiteral("Choose how much recent diagnostic history the charts display."));
     m_rangeCombo->setFixedWidth(132);
     m_rangeCombo->addItem("1 minute", 60);
     m_rangeCombo->addItem("5 minutes", 5 * 60);
@@ -856,16 +915,42 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_rangeCombo->addItem("1 day", 24 * 60 * 60);
     m_rangeCombo->addItem("1 week", 7 * 24 * 60 * 60);
 
-    auto* tabs = new QTabWidget(this);
-    auto* corner = new QWidget(tabs);
-    corner->setObjectName("networkDiagnosticsTimeframeCorner");
-    auto* cornerRow = new QHBoxLayout(corner);
-    cornerRow->setContentsMargins(0, 0, 6, 2);
-    cornerRow->setSpacing(6);
-    cornerRow->addWidget(rangeLabel);
-    cornerRow->addWidget(m_rangeCombo);
-    tabs->setCornerWidget(corner, Qt::TopRightCorner);
-    body->addWidget(tabs, 1);
+    pageHeader->addWidget(rangeLabel);
+    pageHeader->addWidget(m_rangeCombo);
+    pageHostLayout->addLayout(pageHeader);
+
+    auto* pages = new QStackedWidget;
+    pages->setObjectName(QStringLiteral("networkDiagnosticsPages"));
+    pages->setAccessibleName(QStringLiteral("Network Diagnostics page content"));
+    pageHostLayout->addWidget(pages, 1);
+    split->addWidget(pageHost);
+    split->setStretchFactor(0, 0);
+    split->setStretchFactor(1, 1);
+    split->setSizes({245, 735});
+    body->addWidget(split, 1);
+
+    auto addCategory = [navigation, this](const QString& name) {
+        auto* item = new QTreeWidgetItem(navigation, {name});
+        item->setFlags(Qt::ItemIsEnabled);
+        QFont font = item->font(0);
+        font.setBold(true);
+        item->setFont(0, font);
+        item->setForeground(0, palette().color(QPalette::Disabled, QPalette::Text));
+        return item;
+    };
+    QTreeWidgetItem* statusCategory = addCategory(QStringLiteral("STATUS"));
+    QTreeWidgetItem* trendsCategory = addCategory(QStringLiteral("TRENDS"));
+    QTreeWidgetItem* supportCategory = addCategory(QStringLiteral("SUPPORT"));
+
+    auto addPage = [pages](QTreeWidgetItem* category, QWidget* page,
+                           const QString& name, const QString& keywords) {
+        const int index = pages->addWidget(page);
+        auto* item = new QTreeWidgetItem(category, {name});
+        item->setData(0, Qt::UserRole, index);
+        item->setData(0, Qt::UserRole + 1, keywords);
+        item->setToolTip(0, keywords);
+        return item;
+    };
 
     auto* overviewPage = new QWidget(this);
     auto* overviewLayout = new QGridLayout(overviewPage);
@@ -876,12 +961,14 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     overviewLayout->setColumnStretch(1, 1);
     overviewLayout->setColumnStretch(2, 1);
     overviewLayout->setColumnStretch(3, 1);
-    tabs->addTab(overviewPage, "Overview");
+    QTreeWidgetItem* firstItem = addPage(statusCategory, overviewPage, QStringLiteral("Overview"),
+        QStringLiteral("health status summary quality connection latency loss audio buffer troubleshoot"));
 
     auto* detailsScroll = new QScrollArea(this);
     detailsScroll->setWidgetResizable(true);
     detailsScroll->setFrameShape(QFrame::NoFrame);
-    tabs->addTab(detailsScroll, "Details");
+    addPage(statusCategory, detailsScroll, QStringLiteral("Connection Details"),
+        QStringLiteral("details route source ip tcp udp endpoint packet streams bitrate throttle support"));
 
     auto* content = new QWidget;
     detailsScroll->setWidget(content);
@@ -1104,7 +1191,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     row = 0;
     audioGrid->addWidget(makeNote(
         "Radio-to-PC speaker audio health. The stream rate should stay near 24 kHz while audio is playing. "
-        "The Audio tab shows per-stream rows and timing trends."),
+        "The Audio Health page shows per-stream rows and timing trends."),
         row++, 0, 1, 2);
 
     audioGrid->addWidget(new QLabel("Health:"), row, 0);
@@ -1153,7 +1240,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_audioStreamsDetailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamsDetailLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
     m_audioStreamsDetailLabel->setToolTip(
-        "The radio normally sends one mixed PC speaker stream. Use the Audio tab for per-stream timing rows.");
+        "The radio normally sends one mixed PC speaker stream. Use the Audio Health page for per-stream timing rows.");
     audioGrid->addWidget(m_audioStreamsDetailLabel, row++, 1);
 
     audioGrid->addWidget(new QLabel("RX Buffer Now:"), row, 0);
@@ -1229,36 +1316,41 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     overviewLayout->addWidget(m_overviewRatesGraph, 2, 0, 1, 2);
     overviewLayout->addWidget(m_overviewAudioGraph, 2, 2, 1, 2);
 
-    auto makeGraphTab = [tabs](const QString& tabName, TimeSeriesGraphWidget** graph,
-                               const QString& title, const QString& suffix) {
+    auto makeGraphPage = [&addPage, trendsCategory](const QString& pageName,
+                                                    const QString& keywords,
+                                                    TimeSeriesGraphWidget** graph,
+                                                    const QString& title,
+                                                    const QString& suffix) {
         auto* page = new QWidget;
         auto* layout = new QVBoxLayout(page);
         layout->setContentsMargins(8, 8, 8, 8);
         *graph = new TimeSeriesGraphWidget(title, suffix, page);
         layout->addWidget(*graph);
-        tabs->addTab(page, tabName);
+        addPage(trendsCategory, page, pageName, keywords);
+        return page;
     };
-    makeGraphTab("Latency", &m_latencyGraph, "Latency, Arrival Gap, and Jitter", " ms");
-    makeGraphTab("Rates", &m_ratesGraph, "Incoming Stream Rates", " kbps");
+    makeGraphPage(QStringLiteral("Latency & Jitter"),
+        QStringLiteral("latency rtt jitter arrival gap delay slow connection ping"),
+        &m_latencyGraph, QStringLiteral("Latency, Arrival Gap, and Jitter"), QStringLiteral(" ms"));
+    QWidget* ratesPage = makeGraphPage(QStringLiteral("Stream Rates"),
+        QStringLiteral("rates bitrate bandwidth throughput rx tx fft waterfall meters dax traffic"),
+        &m_ratesGraph, QStringLiteral("Incoming Stream Rates"), QStringLiteral(" kbps"));
     m_ratesGraph->setLogScale(true);
-    // Add fps-cap step graph below the rates graph on the Rates tab.
-    // Relies on the just-added Rates tab being last; assert so a future
-    // reorder fails loudly instead of silently landing on the wrong tab.
-    Q_ASSERT(tabs->tabText(tabs->count() - 1) == QStringLiteral("Rates"));
-    if (auto* ratesPage = tabs->widget(tabs->count() - 1)) {
-        if (auto* ratesLayout = qobject_cast<QVBoxLayout*>(ratesPage->layout())) {
-            m_fpsCapGraph = new TimeSeriesGraphWidget("Adaptive Throttle — FPS Cap", " fps", ratesPage);
-            m_fpsCapGraph->setMinimumHeight(120);
-            m_fpsCapGraph->setMaximumHeight(160);
-            ratesLayout->addWidget(m_fpsCapGraph);
-        }
+    if (auto* ratesLayout = qobject_cast<QVBoxLayout*>(ratesPage->layout())) {
+        m_fpsCapGraph = new TimeSeriesGraphWidget("Adaptive Throttle — FPS Cap", " fps", ratesPage);
+        m_fpsCapGraph->setMinimumHeight(120);
+        m_fpsCapGraph->setMaximumHeight(160);
+        ratesLayout->addWidget(m_fpsCapGraph);
     }
-    makeGraphTab("Packet Loss", &m_lossGraph, "Packet Loss by Stream", "%");
+    makeGraphPage(QStringLiteral("Packet Loss"),
+        QStringLiteral("packet loss dropped missing sequence gaps vita udp network"),
+        &m_lossGraph, QStringLiteral("Packet Loss by Stream"), QStringLiteral("%"));
 
-    makeGraphTab("Audio", &m_audioGraph, "RX Audio Buffer and Timing", " ms");
+    QWidget* audioPage = makeGraphPage(QStringLiteral("Audio Health"),
+        QStringLiteral("audio speaker buffer underrun late packets gaps stream slow delivery feed rate"),
+        &m_audioGraph, QStringLiteral("RX Audio Buffer and Timing"), QStringLiteral(" ms"));
     m_audioGraph->setPrimaryAxisSeries("Buffer");
-    if (auto* audioPage = tabs->widget(tabs->count() - 1)) {
-        if (auto* audioLayout = qobject_cast<QVBoxLayout*>(audioPage->layout())) {
+    if (auto* audioLayout = qobject_cast<QVBoxLayout*>(audioPage->layout())) {
             audioLayout->setSpacing(8);
             auto* audioNote = new QLabel(
                 "PC speaker audio is normally one radio-mixed stream. If more than one transport stream appears, "
@@ -1287,18 +1379,19 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
             m_audioFeedGraph = new TimeSeriesGraphWidget("RX Audio Stream Rate vs Target", " Hz", audioPage);
             audioLayout->addWidget(m_audioFeedGraph, 1);
-        }
     }
 
     QWidget* logsTab = buildLogsTab();
-    tabs->addTab(logsTab, "Logs");
+    addPage(supportCategory, logsTab, QStringLiteral("Application Logs"),
+        QStringLiteral("logs errors warnings commands status discovery support export follow live filter"));
 
     // TCI client list — only when a TCI server instance is available.
     QWidget* tciTab = nullptr;
 #ifdef HAVE_WEBSOCKETS
     if (m_tci) {
         tciTab = buildTciTab();
-        tabs->addTab(tciTab, "TCI");
+        addPage(supportCategory, tciTab, QStringLiteral("TCI Clients"),
+            QStringLiteral("tci websocket clients wsjt-x skimmer iq audio monitor connections messages"));
     }
 #endif
 
@@ -1315,11 +1408,56 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     connect(m_rangeCombo, &QComboBox::currentIndexChanged, this, [this] {
         updateCharts();
     });
-    connect(tabs, &QTabWidget::currentChanged, this,
-            [tabs, corner, logsTab, tciTab](int index) {
-        QWidget* w = tabs->widget(index);
-        corner->setVisible(w != logsTab && w != tciTab);
+    connect(navigation, &QTreeWidget::currentItemChanged, this,
+            [pages, pageTitle, rangeLabel, this, logsTab, tciTab](QTreeWidgetItem* current) {
+        if (!current || !current->parent()) {
+            return;
+        }
+        const int index = current->data(0, Qt::UserRole).toInt();
+        pages->setCurrentIndex(index);
+        pageTitle->setText(current->text(0));
+        const QWidget* page = pages->widget(index);
+        const bool showTimeframe = page != logsTab && page != tciTab;
+        rangeLabel->setVisible(showTimeframe);
+        m_rangeCombo->setVisible(showTimeframe);
     });
+    connect(search, &QLineEdit::textChanged, this, [navigation](const QString& text) {
+        const QString needle = text.trimmed();
+        QTreeWidgetItem* firstMatch = nullptr;
+        for (int i = 0; i < navigation->topLevelItemCount(); ++i) {
+            QTreeWidgetItem* category = navigation->topLevelItem(i);
+            bool anyVisible = false;
+            for (int j = 0; j < category->childCount(); ++j) {
+                QTreeWidgetItem* item = category->child(j);
+                const QString haystack = item->text(0) + QStringLiteral(" ")
+                    + item->data(0, Qt::UserRole + 1).toString();
+                const bool matches = needle.isEmpty()
+                    || haystack.contains(needle, Qt::CaseInsensitive);
+                item->setHidden(!matches);
+                if (matches && !firstMatch) {
+                    firstMatch = item;
+                }
+                anyVisible = anyVisible || matches;
+            }
+            category->setHidden(!anyVisible);
+            category->setExpanded(true);
+        }
+        QTreeWidgetItem* current = navigation->currentItem();
+        if (firstMatch && (!current || current->isHidden())) {
+            navigation->setCurrentItem(firstMatch);
+            navigation->scrollToItem(firstMatch, QAbstractItemView::PositionAtCenter);
+        }
+    });
+    auto* findAction = new QAction(this);
+    findAction->setShortcut(QKeySequence::Find);
+    findAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(findAction, &QAction::triggered, search, [search] {
+        search->setFocus();
+        search->selectAll();
+    });
+    addAction(findAction);
+    navigation->expandAll();
+    navigation->setCurrentItem(firstItem);
     connect(&m_refreshTimer, &QTimer::timeout, this, &NetworkDiagnosticsDialog::refresh);
     m_refreshTimer.start(1000);
     connect(&m_logRefreshTimer, &QTimer::timeout, this, &NetworkDiagnosticsDialog::appendNewLogData);
@@ -2301,7 +2439,7 @@ static QString formatAudioSupportDetails(int streamCount, const QStringList& sli
     }
     return QString("The radio sends PC speaker audio as a mixed remote_audio_rx stream. "
                    "Slice audio is mixed before the packet stream, so per-slice packet timing is not available here. "
-                   "The Audio tab shows the transport stream rows; current mix: %1.")
+                   "The Audio Health page shows the transport stream rows; current mix: %1.")
         .arg(formatSliceMix(sliceLabels));
 }
 

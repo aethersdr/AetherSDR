@@ -71,6 +71,10 @@ class QsoRecorder;
 //                                     QTreeWidget / QListWidget) so the dialog's
 //                                     row-scoped buttons (Tune/Edit/Remove/Disable)
 //                                     become drivable; echoes selectedRow[Text].
+//   invoke <view> setCurrentText <label>
+//                                  -> recursively select an item-view entry by
+//                                     visible label. This drives hierarchical
+//                                     navigation such as diagnostics categories.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
