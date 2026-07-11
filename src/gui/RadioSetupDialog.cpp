@@ -74,6 +74,7 @@
 #include <QDebug>
 #include <QGuiApplication>
 #include <QPainter>
+#include <QRandomGenerator>
 #include <QPaintEvent>
 #include <QPointer>
 #include <QScreen>
@@ -1214,7 +1215,126 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         });
         grid->addWidget(enforceBtn, 0, 1);
 
-        grid->addWidget(new QLabel("Network MTU:"), 1, 0);
+        // 128-bit hex token generator — plenty for a local same-user secret.
+        auto genToken = []() -> QString {
+            quint64 a = QRandomGenerator::global()->generate64();
+            quint64 b = QRandomGenerator::global()->generate64();
+            return QStringLiteral("%1%2")
+                .arg(a, 16, 16, QLatin1Char('0'))
+                .arg(b, 16, 16, QLatin1Char('0'));
+        };
+        // The token field is created here (before the toggle) so the toggle's
+        // enable handler can auto-fill it — enabling the bridge without a
+        // token would leave it open, which defeats the point.
+        auto* tokenEdit = new QLineEdit;
+        tokenEdit->setReadOnly(true);
+        tokenEdit->setText(
+            AppSettings::instance().value("AutomationBridgeToken").toString());
+        tokenEdit->setPlaceholderText("(none — enable the bridge or click Rotate)");
+        tokenEdit->setToolTip(
+            "Paste this into your AI assistant's MCP server config as the\n"
+            "AETHER_MCP_TOKEN environment variable. Only a client holding\n"
+            "this token can drive the radio.");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(tokenEdit,
+            "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-family: monospace; "
+            "font-size: 11px; padding: 3px 6px; }");
+
+        // Agent automation bridge (#3646) — the endpoint MCP clients (AI
+        // coding assistants) connect to for validating changes against the
+        // running app. Off by default; the operator opts in here. The
+        // AETHER_AUTOMATION launch env var still force-enables it regardless
+        // of this toggle (headless/CI path), so we reflect either source.
+        {
+            grid->addWidget(new QLabel("Agent Automation (MCP):"), 1, 0);
+            const bool bridgeOn =
+                AppSettings::instance().value("AutomationBridgeEnabled", false).toBool()
+                || qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+            auto* mcpBtn = new QPushButton(bridgeOn ? "Enabled" : "Disabled");
+            mcpBtn->setCheckable(true);
+            mcpBtn->setChecked(bridgeOn);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(mcpBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+                "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
+                "padding: 3px 10px; }"
+                "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
+                "border: 1px solid #20a040; }");
+            mcpBtn->setToolTip(
+                "Enable the in-app automation bridge so an AI coding assistant "
+                "(via the MCP server, tools/aether_mcp.py) can introspect and\n"
+                "drive this app to validate changes. Off by default. Transmit-"
+                "keying controls stay blocked unless the app is launched with\n"
+                "AETHER_AUTOMATION_ALLOW_TX. See docs/automation-bridge.md.");
+            // Env-var force-enable wins and can't be turned off from the UI —
+            // make that visible rather than letting a toggle silently no-op.
+            if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+                mcpBtn->setEnabled(false);
+                mcpBtn->setToolTip(mcpBtn->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION launch environment variable.");
+            }
+            connect(mcpBtn, &QPushButton::toggled, this,
+                    [this, mcpBtn, tokenEdit, genToken](bool on) {
+                mcpBtn->setText(on ? "Enabled" : "Disabled");
+                AppSettings::instance().setValue("AutomationBridgeEnabled", on);
+                AppSettings::instance().save();
+                // Enabling with no token yet → mint one so the bridge is never
+                // exposed without auth. Copy it out so the operator can wire it
+                // into their assistant immediately.
+                if (on && tokenEdit->text().isEmpty()) {
+                    const QString tok = genToken();
+                    tokenEdit->setText(tok);
+                    AppSettings::instance().setValue("AutomationBridgeToken", tok);
+                    AppSettings::instance().save();
+                    QGuiApplication::clipboard()->setText(tok);
+                    emit automationBridgeTokenRotated(tok);
+                }
+                emit automationBridgeToggled(on);
+            });
+            grid->addWidget(mcpBtn, 1, 1);
+        }
+
+        // Access token row — display the shared secret with Copy + Rotate.
+        // Rotate makes a new token and applies it immediately, locking out any
+        // client still using the old one.
+        {
+            grid->addWidget(new QLabel("Access Token:"), 2, 0);
+            auto* tokenRow = new QWidget;
+            auto* tokLay = new QHBoxLayout(tokenRow);
+            tokLay->setContentsMargins(0, 0, 0, 0);
+            tokLay->setSpacing(6);
+
+            auto* copyBtn = new QPushButton("Copy");
+            auto* rotateBtn = new QPushButton("Rotate");
+            for (auto* b : {copyBtn, rotateBtn})
+                AetherSDR::ThemeManager::instance().applyStyleSheet(b,
+                    "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+                    "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; "
+                    "padding: 3px 10px; }");
+            copyBtn->setToolTip("Copy the token to the clipboard.");
+            rotateBtn->setToolTip(
+                "Generate a new token and apply it immediately. Any client still\n"
+                "using the old token is locked out until you update its config.");
+
+            connect(copyBtn, &QPushButton::clicked, this, [tokenEdit]() {
+                if (!tokenEdit->text().isEmpty())
+                    QGuiApplication::clipboard()->setText(tokenEdit->text());
+            });
+            connect(rotateBtn, &QPushButton::clicked, this,
+                    [this, tokenEdit, genToken]() {
+                const QString tok = genToken();
+                tokenEdit->setText(tok);
+                AppSettings::instance().setValue("AutomationBridgeToken", tok);
+                AppSettings::instance().save();
+                QGuiApplication::clipboard()->setText(tok);
+                emit automationBridgeTokenRotated(tok);
+            });
+
+            tokLay->addWidget(tokenEdit, 1);
+            tokLay->addWidget(copyBtn);
+            tokLay->addWidget(rotateBtn);
+            grid->addWidget(tokenRow, 2, 1);
+        }
+
+        grid->addWidget(new QLabel("Network MTU:"), 3, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
         mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
@@ -1226,7 +1346,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
         });
-        grid->addWidget(mtuSpin, 1, 1);
+        grid->addWidget(mtuSpin, 3, 1);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
         // kernel clamps the grant at net.core.rmem_max, so we show the granted
@@ -1243,7 +1363,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             return QStringLiteral("%1 KB").arg(b / 1024);
         };
 
-        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 2, 0);
+        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 4, 0);
         auto* bufRow = new QWidget;
         auto* bufLay = new QHBoxLayout(bufRow);
         bufLay->setContentsMargins(0, 0, 0, 0);
@@ -1271,7 +1391,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         bufValLabel->setMinimumWidth(48);
         bufLay->addWidget(bufSlider, 1);
         bufLay->addWidget(bufValLabel);
-        grid->addWidget(bufRow, 2, 1);
+        grid->addWidget(bufRow, 4, 1);
 
         auto* bufGrantedLabel = new QLabel;
         if (m_model && m_model->panStream()) {
@@ -1279,7 +1399,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
                                            : QStringLiteral("granted: — (applies on connect)"));
         }
-        grid->addWidget(bufGrantedLabel, 3, 1);
+        grid->addWidget(bufGrantedLabel, 5, 1);
 
         connect(bufSlider, &QSlider::valueChanged, this,
                 [this, bufValLabel, fmtBytes](int idx) {

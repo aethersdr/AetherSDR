@@ -2057,6 +2057,7 @@ void AutomationServer::onDisconnected()
 struct AutomationServer::VerbArgs {
     QString target, path, action, value, model, selector, property;
     QString id, title, detail, tone;
+    QString token;                       // shared-secret auth (#3646); JSON `token` field
     int timeoutMs{0};
 };
 
@@ -2162,13 +2163,14 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                          std::move(parse), std::move(dispatch)});
         };
 
-        add("ping", {}, "liveness check → app + version",
+        add("ping", {}, "liveness check → app + version + whether a token is required",
             parseNothing,
-            [](AutomationServer&, A&, QLocalSocket*) {
+            [](AutomationServer& self, A&, QLocalSocket*) {
                 return QJsonObject{
                     {QStringLiteral("ok"), true},
                     {QStringLiteral("app"), QStringLiteral("AetherSDR")},
                     {QStringLiteral("version"), QCoreApplication::applicationVersion()},
+                    {QStringLiteral("authRequired"), !self.m_authToken.isEmpty()},
                 };
             });
 
@@ -2701,6 +2703,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         a.title    = obj.value(QStringLiteral("title")).toString();
         a.detail   = obj.value(QStringLiteral("detail")).toString();
         a.tone     = obj.value(QStringLiteral("tone")).toString();
+        a.token    = obj.value(QStringLiteral("token")).toString();
         a.timeoutMs = obj.value(QStringLiteral("timeoutMs")).toInt(0);
         // clickAt accepts numeric x/y fields directly (dumpTree geometry is
         // global), folded into `value` as "x y" so both request forms share one
@@ -2737,6 +2740,37 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     const VerbSpec* spec = findVerb(cmd);
     if (!spec)
         return err(QStringLiteral("unknown command: ") + cmd);
+
+    // Shared-secret gate (#3646). When a token is configured, every verb
+    // except `ping` must present a matching `token` field. The Unix socket /
+    // named pipe only enforces same-user access; the token is what stops a
+    // *different* local process (a stray agent) from driving the radio once
+    // the operator has opted a specific client in via Radio Setup -> Network.
+    // ping stays open (see its registry entry, which reports authRequired) so
+    // a client can detect the bridge without holding the secret. Constant-time
+    // compare so a wrong token leaks no length/prefix timing signal.
+    if (!m_authToken.isEmpty() && cmd != QLatin1String("ping")) {
+        const QByteArray want = m_authToken.toUtf8();
+        const QByteArray got = a.token.toUtf8();
+        // Never index `got` out of range — when it's shorter (or empty),
+        // substitute a zero byte rather than reading got[0], which segfaults
+        // on an empty QByteArray.
+        int diff = static_cast<int>(want.size() ^ got.size());
+        for (int i = 0; i < want.size(); ++i) {
+            const char g = (i < got.size()) ? got.at(i) : char(0);
+            diff |= want.at(i) ^ g;
+        }
+        if (diff != 0) {
+            qCWarning(lcAutomation)
+                << "rejected unauthenticated request:" << cmd
+                << "(missing or invalid token)";
+            return err(QStringLiteral(
+                "unauthorized: this bridge requires a token. Set AETHER_MCP_TOKEN "
+                "in your MCP client from Radio Setup -> Network -> Agent "
+                "Automation."));
+        }
+    }
+
     return spec->dispatch(*this, a, sock);
 }
 

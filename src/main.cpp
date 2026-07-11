@@ -443,45 +443,16 @@ int main(int argc, char* argv[])
         // two concurrent automation instances don't steal each other's socket
         // (QLocalServer::removeServer() unlinks a sibling's live socket on a
         // shared name); drivers find the right one via the discovery file/dir.
-        std::unique_ptr<AetherSDR::AutomationServer> automation;
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
-            const QString sockName = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
-                ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
-                : QStringLiteral("aethersdr-automation-%1").arg(QCoreApplication::applicationPid());
-            automation = std::make_unique<AetherSDR::AutomationServer>();
-            automation->setRadioModel(&window.radioModel());  // for the get() verb
-            automation->setAudioEngine(window.audioEngine());
-            automation->setQsoRecorder(window.qsoRecorder());  // for the record() verb
-            automation->setConnectionDialogHost(&window);
-            automation->setConnectionAutomation(
-                window.findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
-            automation->setSliceReceiveSourceHandler(
-                [&window](const QString& arg) {
-                    return window.automationSetSliceReceiveSource(arg);
-                });
-            automation->setSliceCenterLockHandler(
-                [&window](int sliceId, bool enabled) {
-                    return window.automationSetCenterLock(sliceId, enabled);
-                });
-            automation->setTuneHandler(
-                [&window](double mhz) {
-                    return window.automationTune(mhz);
-                });
-            automation->setReceiveSyncSnapshotHandler(
-                [&window]() {
-                    return window.automationReceiveSyncSnapshot();
-                });
-            automation->setKiwiSdrSnapshotHandler(
-                [&window]() {
-                    return window.automationKiwiSdrSnapshot();
-                });
-            automation->setTxTimerSnapshotHandler(
-                [&window]() {
-                    return window.automationTxTimerSnapshot();
-                });
-            if (!automation->start(sockName))
-                automation.reset();
-        }
+        // Agent automation bridge (#3646). Construction + handler wiring now
+        // lives in MainWindow::startAutomationBridge() so the same path serves
+        // both triggers. Start it when the operator persisted the toggle in
+        // Radio Setup → Network, OR when AETHER_AUTOMATION is set (the launch-
+        // time override that headless drivers/CI rely on — always wins). The
+        // window owns the server for its lifetime.
+        const bool bridgePersisted =
+            AetherSDR::AppSettings::instance().value("AutomationBridgeEnabled", false).toBool();
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION") || bridgePersisted)
+            window.startAutomationBridge();
 
         exitCode = app.exec();
     }

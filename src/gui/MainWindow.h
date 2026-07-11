@@ -92,6 +92,7 @@ class QSystemTrayIcon;
 
 namespace AetherSDR {
 
+class AutomationServer;
 class ConnectionPanel;
 class TitleBar;
 class KiwiSdrManager;
@@ -211,6 +212,24 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+
+    // Agent automation bridge (#3646) lifecycle. Construction + full
+    // handler wiring lives in startAutomationBridge() so it can be driven
+    // both at launch (AETHER_AUTOMATION env var, from main.cpp) and at
+    // runtime from the Radio Setup → Network toggle. Idempotent: starting
+    // while running is a no-op; stopping while stopped is a no-op.
+    // sockName empty → the default PID-suffixed name. Returns true if the
+    // bridge is listening afterwards.
+    bool startAutomationBridge(const QString& sockName = QString());
+    void stopAutomationBridge();
+    bool isAutomationBridgeRunning() const;
+    // Persist a new shared-secret token and push it to the running bridge
+    // (the Radio Setup → Network rotate button). Old tokens stop working
+    // immediately.
+    void setAutomationBridgeToken(const QString& token);
+    // Resolved socket path / pipe name, or empty when stopped — shown in
+    // the Network toggle so the operator can point their MCP client at it.
+    QString automationBridgeEndpoint() const;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -696,6 +715,7 @@ private:
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
+    std::unique_ptr<AutomationServer> m_automation;  // agent bridge (#3646); nullptr when off
     ClientPuduMonitor* m_finalMonitor{nullptr};
     AudioOutputRouter* m_outputRouter{nullptr};   // registry for output-following sinks (#3306)
     BandSettings      m_bandSettings;

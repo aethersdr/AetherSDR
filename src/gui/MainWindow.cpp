@@ -213,6 +213,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/AutomationServer.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
 #ifdef HAVE_RADE
@@ -2640,6 +2641,20 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     if (!dlg) return;
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
+    // Agent automation bridge toggle (#3646). The dialog already persisted
+    // AutomationBridgeEnabled; here we act on it live. AETHER_AUTOMATION
+    // force-enables at launch and the dialog disables the toggle in that
+    // case, so a stop request can't arrive for an env-forced bridge.
+    connect(dlg, &RadioSetupDialog::automationBridgeToggled, this, [this](bool on) {
+        if (on) {
+            if (!startAutomationBridge())
+                qWarning() << "automation bridge failed to start (socket in use?)";
+        } else {
+            stopAutomationBridge();
+        }
+    });
+    connect(dlg, &RadioSetupDialog::automationBridgeTokenRotated, this,
+            [this](const QString& tok) { setAutomationBridgeToken(tok); });
     // serialSettingsChanged is the "external-device settings changed" signal in
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
@@ -3348,6 +3363,85 @@ QJsonObject MainWindow::automationTxTimerSnapshot() const
         return QJsonObject{{QStringLiteral("visible"), false},
                            {QStringLiteral("running"), false}};
     return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
+}
+
+bool MainWindow::startAutomationBridge(const QString& sockName)
+{
+    if (m_automation && m_automation->isRunning())
+        return true;  // idempotent
+
+    // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
+    // endpoint; otherwise the default is PID-suffixed so two instances don't
+    // steal each other's socket. Drivers find the right one via the discovery
+    // file the server drops in the temp dir.
+    QString name = sockName;
+    if (name.isEmpty())
+        name = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
+                   ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
+                   : QStringLiteral("aethersdr-automation-%1")
+                         .arg(QCoreApplication::applicationPid());
+
+    if (!m_automation)
+        m_automation = std::make_unique<AutomationServer>();
+
+    m_automation->setRadioModel(&radioModel());  // for the get() verb
+    m_automation->setAudioEngine(audioEngine());
+    m_automation->setQsoRecorder(qsoRecorder());  // for the record() verb
+    m_automation->setConnectionDialogHost(this);
+    m_automation->setConnectionAutomation(
+        findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
+    m_automation->setSliceReceiveSourceHandler(
+        [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
+    m_automation->setSliceCenterLockHandler(
+        [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
+    m_automation->setTuneHandler(
+        [this](double mhz) { return automationTune(mhz); });
+    m_automation->setReceiveSyncSnapshotHandler(
+        [this]() { return automationReceiveSyncSnapshot(); });
+    m_automation->setKiwiSdrSnapshotHandler(
+        [this]() { return automationKiwiSdrSnapshot(); });
+    m_automation->setTxTimerSnapshotHandler(
+        [this]() { return automationTxTimerSnapshot(); });
+
+    // Shared-secret gate. Empty setting → open bridge (unchanged behavior);
+    // a non-empty token means only clients holding it can drive the radio.
+    m_automation->setAuthToken(
+        AppSettings::instance().value("AutomationBridgeToken").toString());
+
+    if (!m_automation->start(name)) {
+        m_automation.reset();
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::stopAutomationBridge()
+{
+    if (m_automation) {
+        m_automation->stop();
+        m_automation.reset();
+    }
+}
+
+bool MainWindow::isAutomationBridgeRunning() const
+{
+    return m_automation && m_automation->isRunning();
+}
+
+QString MainWindow::automationBridgeEndpoint() const
+{
+    return m_automation ? m_automation->fullServerName() : QString();
+}
+
+void MainWindow::setAutomationBridgeToken(const QString& token)
+{
+    // Persist so it survives restart and is read by startAutomationBridge().
+    AppSettings::instance().setValue("AutomationBridgeToken", token);
+    AppSettings::instance().save();
+    // Push live so a rotate takes effect immediately on the running bridge —
+    // any client still using the old token is locked out on its next request.
+    if (m_automation)
+        m_automation->setAuthToken(token);
 }
 
 void MainWindow::showConnectionDialog()

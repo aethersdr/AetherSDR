@@ -84,6 +84,46 @@ QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1
 
 ---
 
+## MCP server — drive the bridge from any AI assistant
+
+`tools/aether_mcp.py` wraps this bridge in the Model Context Protocol, so
+an MCP-capable coding assistant (Claude Code, Cursor, Copilot, Codex CLI,
+Gemini CLI, …) can validate your PR against the running app natively —
+no socket scripting required. This is the recommended way for
+contributors to self-verify UI changes before requesting review.
+
+**Setup** (zero dependencies — plain Python 3):
+
+1. Launch the app with the bridge on: `AETHER_AUTOMATION=1 ./build/AetherSDR`
+2. Register the server with your assistant:
+   - **Claude Code**: nothing to do — the repo's `.mcp.json` registers it;
+     approve the prompt on first use. (Manual: `claude mcp add aethersdr
+     -- python3 tools/aether_mcp.py`)
+   - **Cursor / Windsurf / others**: add to your MCP config:
+     ```json
+     {"mcpServers": {"aethersdr-automation": {
+        "command": "python3", "args": ["tools/aether_mcp.py"]}}}
+     ```
+   - **Windows**: use `python` (or `py -3`) instead of `python3`.
+
+**Tools exposed**: `bridge_status` (is the app up? which instance?),
+`dump_tree` (widget tree, with a `filter` arg to prune), `grab_widget`
+(PNG screenshot, returned inline to the model), `invoke` (click/toggle/
+setValue/…), `get_state` (`get` model snapshots), `shortcut`, and
+`bridge_command` (raw escape hatch to every other verb below).
+
+A typical assistant validation loop for a PR:
+`bridge_status` → `dump_tree filter=<your widget>` → `invoke` the
+control you changed → `get_state` to assert the model reacted →
+`grab_widget` for a visual check.
+
+The TX-safety gate is unchanged: the bridge refuses transmit-keying
+controls regardless of who's calling (see [TX safety](#tx-safety)), so
+an assistant can never key your radio unless you launched the app with
+`AETHER_AUTOMATION_ALLOW_TX=1` yourself.
+
+---
+
 ## How it works (the contract)
 
 - **Transport:** a `QLocalServer` — an `AF_UNIX` socket on macOS/Linux, a named
