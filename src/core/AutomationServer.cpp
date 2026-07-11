@@ -1938,6 +1938,38 @@ void AutomationServer::stop()
     }
 }
 
+void AutomationServer::setTxAllowed(bool allowed)
+{
+    if (m_txAllowed == allowed)
+        return;  // idempotent
+    m_txAllowed = allowed;
+    if (allowed) {
+        // Arm the force-unkey watchdog (mirrors the start()-time arming). The
+        // env-driven TX_MAX_MS/POWER limits, if any, were already read at
+        // start(); keep whatever's in effect.
+        if (!m_txWatchdog) {
+            m_txWatchdog = new QTimer(this);
+            m_txWatchdog->setInterval(500);
+            connect(m_txWatchdog, &QTimer::timeout, this, &AutomationServer::onTxWatchdog);
+            m_txWatchdog->start();
+        }
+        qCInfo(lcAutomation).noquote()
+            << "TX automation ENABLED by operator — watchdog max key"
+            << m_txMaxKeyMs << "ms, power ceiling"
+            << (m_txMaxPower < 0 ? QStringLiteral("none") : QString::number(m_txMaxPower));
+    } else {
+        // Disabling: never leave the radio keyed by a script mid-transmit,
+        // then disarm the watchdog. forceUnkey is a safe no-op if not keyed.
+        forceUnkey("TX automation disabled by operator");
+        if (m_txWatchdog) {
+            m_txWatchdog->stop();
+            m_txWatchdog->deleteLater();
+            m_txWatchdog = nullptr;
+        }
+        qCInfo(lcAutomation).noquote() << "TX automation DISABLED by operator";
+    }
+}
+
 bool AutomationServer::isRunning() const
 {
     return m_server && m_server->isListening();
@@ -3051,13 +3083,13 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             return err(QStringLiteral("action '") + target + QStringLiteral("' is disabled"));
         }
 
-        if (isTransmitAction(menuAction, menu)
-            && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+        if (isTransmitAction(menuAction, menu) && !m_txAllowed) {
             qCWarning(lcAutomation).noquote()
                 << "BLOCKED transmit-related QAction invoke on" << target;
             return err(QStringLiteral("blocked: '") + target
                        + QStringLiteral("' is a transmit-keying action (TX-safety guard). "
-                                        "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+                                        "Enable \"Allow TX via MCP\" in Radio Setup → Network "
+                                        "(or set AETHER_AUTOMATION_ALLOW_TX=1) to override."));
         }
 
         QPointer<QAction> actionGuard = menuAction;
@@ -3159,14 +3191,14 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
-    if (isTransmitControl(w)
-        && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+    if (isTransmitControl(w) && !m_txAllowed) {
         qCWarning(lcAutomation).noquote()
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
         return err(QStringLiteral("blocked: '") + target
                    + QStringLiteral("' is a transmit-keying control (TX-safety guard). "
-                                    "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+                                    "Enable \"Allow TX via MCP\" in Radio Setup → Network "
+                                    "(or set AETHER_AUTOMATION_ALLOW_TX=1) to override."));
     }
 
     // Power-ceiling rail (#3646): clamp RF/Tune power setpoints to the
@@ -4914,7 +4946,7 @@ QJsonObject AutomationServer::doShortcut(const QString& id) const
         return err(QStringLiteral("no main window to dispatch shortcut"));
     }
 
-    const bool allowTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+    const bool allowTx = m_txAllowed;
     int result = -1;
     const bool invoked = QMetaObject::invokeMethod(
         mw, "fireShortcutAction", Qt::DirectConnection,
@@ -5684,7 +5716,7 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     // ancestor chain (see the function comment): an unaccepted press propagates
     // to parents, so every widget Qt could deliver this click to must pass.
     // (#3646 safety.)
-    if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+    if (!m_txAllowed) {
         for (const QWidget* p = w; p; p = p->parentWidget()) {
             if (!isTransmitControl(p)) {
                 continue;
@@ -5696,8 +5728,9 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
             return err(QStringLiteral("blocked: point resolves into '")
                        + shortClassName(p)
                        + QStringLiteral("', a transmit-keying control (TX-safety "
-                                        "guard). Set AETHER_AUTOMATION_ALLOW_TX=1 "
-                                        "to override."));
+                                        "guard). Enable \"Allow TX via MCP\" in Radio "
+                                        "Setup → Network (or set "
+                                        "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
         }
     }
 

@@ -1334,7 +1334,73 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             grid->addWidget(tokenRow, 2, 1);
         }
 
-        grid->addWidget(new QLabel("Network MTU:"), 3, 0);
+        // Allow TX via MCP — the transmit-keying guard. Off by default; the
+        // bridge refuses MOX/PTT/TUNE/ATU/CWX unless this (or the
+        // AETHER_AUTOMATION_ALLOW_TX env var) is set. Checking the box the
+        // first time raises a confirmation with the operator-responsibility
+        // warning; once confirmed the choice persists and is not re-prompted.
+        {
+            grid->addWidget(new QLabel("Allow TX via MCP:"), 3, 0);
+            auto* txCheck = new QCheckBox("Enable transmit control");
+            auto& s0 = AppSettings::instance();
+            const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+            txCheck->setChecked(s0.value("AutomationBridgeTxAllowed", false).toBool()
+                                || envForcesTx);
+            txCheck->setToolTip(
+                "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
+                "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
+                "A force-unkey watchdog stays armed whenever this is on. You are\n"
+                "responsible for anything transmitted. See docs/automation-bridge.md.");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
+                "QCheckBox::indicator { width: 14px; height: 14px; }");
+            if (envForcesTx) {
+                txCheck->setEnabled(false);
+                txCheck->setToolTip(txCheck->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.");
+            }
+            connect(txCheck, &QCheckBox::toggled, this, [this, txCheck](bool on) {
+                auto& s = AppSettings::instance();
+                if (on && !s.value("AutomationBridgeTxAck", false).toBool()) {
+                    // First-time enable → confirm. Operator must acknowledge.
+                    QMessageBox box(this);
+                    box.setIcon(QMessageBox::Warning);
+                    box.setWindowTitle("Allow TX via MCP?");
+                    box.setText("Allow an AI assistant / MCP client to key the transmitter?");
+                    box.setInformativeText(
+                        "This lets any MCP client holding the access token drive "
+                        "transmit-keying controls — MOX/PTT, TUNE, the ATU, and CWX "
+                        "send — on your radio. Automated software will be able to put "
+                        "a signal on the air.\n\n"
+                        "A force-unkey watchdog stays armed while this is enabled, but "
+                        "it is a backstop, not a guarantee. You, the operator, are "
+                        "ultimately responsible for all transmissions from your station "
+                        "— including their content, timing, frequency, power, and "
+                        "compliance with your license and local regulations.\n\n"
+                        "Only enable this if you understand and accept that "
+                        "responsibility. You can turn it off again at any time.");
+                    auto* confirm = box.addButton("Confirm — allow TX", QMessageBox::AcceptRole);
+                    box.addButton("Cancel", QMessageBox::RejectRole);
+                    box.setDefaultButton(qobject_cast<QPushButton*>(box.buttons().value(1)));
+                    box.exec();
+                    if (box.clickedButton() != confirm) {
+                        // Cancelled — revert without persisting or emitting.
+                        QSignalBlocker blocker(txCheck);
+                        txCheck->setChecked(false);
+                        return;
+                    }
+                    // Confirmed — remember the acknowledgement so we never
+                    // prompt again on a future enable.
+                    s.setValue("AutomationBridgeTxAck", true);
+                }
+                s.setValue("AutomationBridgeTxAllowed", on);
+                s.save();
+                emit automationBridgeTxAllowedChanged(on);
+            });
+            grid->addWidget(txCheck, 3, 1);
+        }
+
+        grid->addWidget(new QLabel("Network MTU:"), 4, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
         mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
@@ -1346,7 +1412,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
         });
-        grid->addWidget(mtuSpin, 3, 1);
+        grid->addWidget(mtuSpin, 4, 1);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
         // kernel clamps the grant at net.core.rmem_max, so we show the granted
@@ -1363,7 +1429,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             return QStringLiteral("%1 KB").arg(b / 1024);
         };
 
-        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 4, 0);
+        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 5, 0);
         auto* bufRow = new QWidget;
         auto* bufLay = new QHBoxLayout(bufRow);
         bufLay->setContentsMargins(0, 0, 0, 0);
@@ -1391,7 +1457,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         bufValLabel->setMinimumWidth(48);
         bufLay->addWidget(bufSlider, 1);
         bufLay->addWidget(bufValLabel);
-        grid->addWidget(bufRow, 4, 1);
+        grid->addWidget(bufRow, 5, 1);
 
         auto* bufGrantedLabel = new QLabel;
         if (m_model && m_model->panStream()) {
@@ -1399,7 +1465,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
                                            : QStringLiteral("granted: — (applies on connect)"));
         }
-        grid->addWidget(bufGrantedLabel, 5, 1);
+        grid->addWidget(bufGrantedLabel, 6, 1);
 
         connect(bufSlider, &QSlider::valueChanged, this,
                 [this, bufValLabel, fmtBytes](int idx) {

@@ -281,6 +281,14 @@ public:
     void setAuthToken(const QString& token) { m_authToken = token; }
     QString authToken() const { return m_authToken; }
 
+    // Runtime TX-automation gate (#3646). Mirrors AETHER_AUTOMATION_ALLOW_TX
+    // but operator-driven from Radio Setup → Network. Enabling arms the
+    // force-unkey watchdog; disabling force-unkeys immediately and disarms it.
+    // The env var still force-enables at start(); this lets the GUI toggle it
+    // live on a running bridge. Idempotent.
+    void setTxAllowed(bool allowed);
+    bool txAllowed() const { return m_txAllowed; }
+
 private slots:
     void onNewConnection();
     void onReadyRead();

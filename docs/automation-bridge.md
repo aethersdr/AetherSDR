@@ -117,10 +117,16 @@ A typical assistant validation loop for a PR:
 control you changed → `get_state` to assert the model reacted →
 `grab_widget` for a visual check.
 
-The TX-safety gate is unchanged: the bridge refuses transmit-keying
-controls regardless of who's calling (see [TX safety](#tx-safety)), so
-an assistant can never key your radio unless you launched the app with
-`AETHER_AUTOMATION_ALLOW_TX=1` yourself.
+The TX-safety gate is unchanged in spirit: the bridge refuses transmit-
+keying controls regardless of who's calling (see [TX safety](#tx-safety)).
+An assistant can only key your radio if **you** opt in — either by
+launching with `AETHER_AUTOMATION_ALLOW_TX=1`, or by checking **"Allow
+TX via MCP"** in Radio Setup → Network. That checkbox raises a one-time
+confirmation spelling out that automated software will be able to
+transmit and that you, the operator, remain responsible for all
+emissions; once confirmed the choice persists. Toggling it drives the
+same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
+disabling force-unkeys immediately).
 
 ---
 

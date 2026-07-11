@@ -64,6 +64,10 @@ signals:
     // token. MainWindow persists it and pushes it to the running bridge so
     // the rotation takes effect immediately.
     void automationBridgeTokenRotated(const QString& token);
+    // Fired when the user changes the "Allow TX via MCP" toggle (after the
+    // one-time confirmation dialog). MainWindow persists it and pushes it to
+    // the running bridge — enabling arms the force-unkey watchdog.
+    void automationBridgeTxAllowedChanged(bool allowed);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

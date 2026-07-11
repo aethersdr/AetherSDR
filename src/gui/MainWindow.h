@@ -227,6 +227,9 @@ public:
     // (the Radio Setup → Network rotate button). Old tokens stop working
     // immediately.
     void setAutomationBridgeToken(const QString& token);
+    // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
+    // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
+    void setAutomationTxAllowed(bool allowed);
     // Resolved socket path / pipe name, or empty when stopped — shown in
     // the Network toggle so the operator can point their MCP client at it.
     QString automationBridgeEndpoint() const;

@@ -2655,6 +2655,8 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     });
     connect(dlg, &RadioSetupDialog::automationBridgeTokenRotated, this,
             [this](const QString& tok) { setAutomationBridgeToken(tok); });
+    connect(dlg, &RadioSetupDialog::automationBridgeTxAllowedChanged, this,
+            [this](bool allowed) { setAutomationTxAllowed(allowed); });
     // serialSettingsChanged is the "external-device settings changed" signal in
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
@@ -3412,6 +3414,14 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         m_automation.reset();
         return false;
     }
+
+    // TX-automation gate. start() already set it from AETHER_AUTOMATION_ALLOW_TX;
+    // fold in the persisted operator opt-in (Radio Setup → Network) so a GUI
+    // enable survives restart. setTxAllowed is idempotent and arms the
+    // force-unkey watchdog if this turns TX on.
+    m_automation->setTxAllowed(
+        qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
+        || AppSettings::instance().value("AutomationBridgeTxAllowed", false).toBool());
     return true;
 }
 
@@ -3442,6 +3452,18 @@ void MainWindow::setAutomationBridgeToken(const QString& token)
     // any client still using the old token is locked out on its next request.
     if (m_automation)
         m_automation->setAuthToken(token);
+}
+
+void MainWindow::setAutomationTxAllowed(bool allowed)
+{
+    // Persist the operator opt-in so it survives restart and is read by
+    // startAutomationBridge().
+    AppSettings::instance().setValue("AutomationBridgeTxAllowed", allowed);
+    AppSettings::instance().save();
+    // Push live so toggling takes effect on a running bridge immediately —
+    // disabling force-unkeys the radio; enabling arms the TX watchdog.
+    if (m_automation)
+        m_automation->setTxAllowed(allowed);
 }
 
 void MainWindow::showConnectionDialog()
