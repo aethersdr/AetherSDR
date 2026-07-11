@@ -1718,16 +1718,6 @@ void MainWindow::stopAutomationBridge()
     }
 }
 
-bool MainWindow::isAutomationBridgeRunning() const
-{
-    return m_automation && m_automation->isRunning();
-}
-
-QString MainWindow::automationBridgeEndpoint() const
-{
-    return m_automation ? m_automation->fullServerName() : QString();
-}
-
 void MainWindow::setAutomationBridgeToken(const QString& token)
 {
     // Persist to the OS secret store (survives restart; read by

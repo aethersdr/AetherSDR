@@ -222,7 +222,6 @@ public:
     // bridge is listening afterwards.
     bool startAutomationBridge(const QString& sockName = QString());
     void stopAutomationBridge();
-    bool isAutomationBridgeRunning() const;
     // Persist a new shared-secret token and push it to the running bridge
     // (the Radio Setup → Network rotate button). Old tokens stop working
     // immediately.
@@ -230,9 +229,6 @@ public:
     // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
     // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
     void setAutomationTxAllowed(bool allowed);
-    // Resolved socket path / pipe name, or empty when stopped — shown in
-    // the Network toggle so the operator can point their MCP client at it.
-    QString automationBridgeEndpoint() const;
 
 protected:
     void showEvent(QShowEvent* event) override;
