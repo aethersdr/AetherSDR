@@ -72,9 +72,9 @@ QFrame#DiagnosticsPanel {
     border-radius: 7px;
 }
 QTreeWidget#networkDiagnosticsNavigation {
-    color: #aeb9cc;
-    background: #0b1625;
-    border: 1px solid #233246;
+    color: {{color.text.primary}};
+    background: {{color.background.1}};
+    border: 1px solid {{color.background.2}};
     border-radius: 7px;
     padding: 6px;
     outline: none;
@@ -94,13 +94,13 @@ QTreeWidget#networkDiagnosticsNavigation::item:selected {
     background: {{color.accent.bright}};
 }
 QTreeWidget#networkDiagnosticsNavigation::item:hover:!selected {
-    color: #d6dfeb;
-    background: #142235;
+    color: {{color.text.primary}};
+    background: {{color.background.2}};
 }
 QLineEdit#networkDiagnosticsSearch {
-    color: #d4deea;
-    background: #0b1625;
-    border: 2px solid #26374e;
+    color: {{color.text.primary}};
+    background: {{color.background.1}};
+    border: 2px solid {{color.background.2}};
     border-radius: 7px;
     padding: 8px 11px;
     font-size: 13px;
@@ -109,7 +109,7 @@ QLineEdit#networkDiagnosticsSearch:focus {
     border-color: {{color.accent.bright}};
 }
 QLabel#networkDiagnosticsPageTitle {
-    color: #d4deea;
+    color: {{color.text.primary}};
     font-size: 20px;
     font-weight: 700;
 }
@@ -865,7 +865,8 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     auto* search = new QLineEdit;
     search->setObjectName(QStringLiteral("networkDiagnosticsSearch"));
-    search->setPlaceholderText(QStringLiteral("Search diagnostics (Ctrl+F)"));
+    search->setPlaceholderText(QStringLiteral("Search diagnostics (%1)")
+        .arg(QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText)));
     search->setClearButtonEnabled(true);
     search->setMinimumHeight(40);
     search->setAccessibleName(QStringLiteral("Search Network Diagnostics"));
@@ -930,13 +931,12 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     split->setSizes({245, 735});
     body->addWidget(split, 1);
 
-    auto addCategory = [navigation, this](const QString& name) {
+    auto addCategory = [navigation](const QString& name) {
         auto* item = new QTreeWidgetItem(navigation, {name});
         item->setFlags(Qt::ItemIsEnabled);
         QFont font = item->font(0);
         font.setBold(true);
         item->setFont(0, font);
-        item->setForeground(0, palette().color(QPalette::Disabled, QPalette::Text));
         return item;
     };
     QTreeWidgetItem* statusCategory = addCategory(QStringLiteral("STATUS"));
@@ -1352,34 +1352,35 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         &m_audioGraph, QStringLiteral("RX Audio Buffer and Timing"), QStringLiteral(" ms"));
     m_audioGraph->setPrimaryAxisSeries("Buffer");
     if (auto* audioLayout = qobject_cast<QVBoxLayout*>(audioPage->layout())) {
-            audioLayout->setSpacing(8);
-            auto* audioNote = new QLabel(
-                "PC speaker audio is normally one radio-mixed stream. If more than one transport stream appears, "
-                "each row below is shown separately; slice letters list the unmuted slices feeding the speaker mix.",
-                audioPage);
-            audioNote->setWordWrap(true);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(audioNote, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-            audioLayout->insertWidget(0, audioNote);
+        audioLayout->setSpacing(8);
+        auto* audioNote = new QLabel(
+            "PC speaker audio is normally one radio-mixed stream. If more than one transport stream appears, "
+            "each row below is shown separately; slice letters list the unmuted slices feeding the speaker mix.",
+            audioPage);
+        audioNote->setWordWrap(true);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            audioNote, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        audioLayout->insertWidget(0, audioNote);
 
-            m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
-            m_audioStreamsTable->setHorizontalHeaderLabels({
-                "Stream", "Source", "Format", "Rate", "Slow Delivery",
-                "Late", "Packet Gaps", "Worst Gap", "Last Packet"
-            });
-            m_audioStreamsTable->verticalHeader()->setVisible(false);
-            m_audioStreamsTable->horizontalHeader()->setStretchLastSection(false);
-            m_audioStreamsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-            m_audioStreamsTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-            m_audioStreamsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-            m_audioStreamsTable->setSelectionMode(QAbstractItemView::NoSelection);
-            m_audioStreamsTable->setFocusPolicy(Qt::NoFocus);
-            m_audioStreamsTable->setAlternatingRowColors(true);
-            m_audioStreamsTable->setMinimumHeight(136);
-            m_audioStreamsTable->setMaximumHeight(190);
-            audioLayout->insertWidget(1, m_audioStreamsTable);
+        m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
+        m_audioStreamsTable->setHorizontalHeaderLabels({
+            "Stream", "Source", "Format", "Rate", "Slow Delivery",
+            "Late", "Packet Gaps", "Worst Gap", "Last Packet"
+        });
+        m_audioStreamsTable->verticalHeader()->setVisible(false);
+        m_audioStreamsTable->horizontalHeader()->setStretchLastSection(false);
+        m_audioStreamsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        m_audioStreamsTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        m_audioStreamsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_audioStreamsTable->setSelectionMode(QAbstractItemView::NoSelection);
+        m_audioStreamsTable->setFocusPolicy(Qt::NoFocus);
+        m_audioStreamsTable->setAlternatingRowColors(true);
+        m_audioStreamsTable->setMinimumHeight(136);
+        m_audioStreamsTable->setMaximumHeight(190);
+        audioLayout->insertWidget(1, m_audioStreamsTable);
 
-            m_audioFeedGraph = new TimeSeriesGraphWidget("RX Audio Stream Rate vs Target", " Hz", audioPage);
-            audioLayout->addWidget(m_audioFeedGraph, 1);
+        m_audioFeedGraph = new TimeSeriesGraphWidget("RX Audio Stream Rate vs Target", " Hz", audioPage);
+        audioLayout->addWidget(m_audioFeedGraph, 1);
     }
 
     QWidget* logsTab = buildLogsTab();
@@ -1410,8 +1411,18 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         updateCharts();
     });
     connect(navigation, &QTreeWidget::currentItemChanged, this,
-            [pages, pageTitle, rangeLabel, this, logsTab, tciTab](QTreeWidgetItem* current) {
-        if (!current || !current->parent()) {
+            [pages, pageTitle, rangeLabel, navigation, this, logsTab, tciTab](
+                QTreeWidgetItem* current, QTreeWidgetItem* previous) {
+        if (!current) {
+            return;
+        }
+        if (!current->parent()) {
+            QTreeWidgetItem* next = previous && navigation->itemAbove(current) == previous
+                ? navigation->itemBelow(current)
+                : navigation->itemAbove(current);
+            if (next && next->parent()) {
+                navigation->setCurrentItem(next);
+            }
             return;
         }
         const int index = current->data(0, Qt::UserRole).toInt();
