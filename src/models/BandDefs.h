@@ -35,6 +35,11 @@ inline constexpr BandDef kBands[] = {
     {"440",  420.000,  450.000,  432.100,   "FM"},
     {"33cm", 902.000,  928.000,  903.100,   "FM"},
     {"23cm",1240.000, 1300.000, 1296.100,   "USB"},
+    // Microwave / weak-signal — transverter bands (defaults = SSB/CW calling freqs)
+    {"13cm",2300.000, 2450.000, 2304.100,   "USB"},
+    {"9cm", 3300.000, 3500.000, 3456.100,   "USB"},
+    {"5cm", 5650.000, 5925.000, 5760.100,   "USB"},
+    {"3cm",10000.000,10500.000,10368.100,   "USB"},
 };
 
 inline constexpr int kBandCount = static_cast<int>(std::size(kBands));

@@ -47,5 +47,13 @@
         <file alias="DSEG14Modern-Bold.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-Bold.ttf</file>
         <file alias="DSEG14Modern-BoldItalic.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-BoldItalic.ttf</file>
         <file alias="DSEGWeather.ttf">../third_party/dseg/DSEGWeather/DSEGWeather.ttf</file>
+        <!-- Bundled Inter UI font (SIL OFL 1.1 — third_party/inter/LICENSE.txt).
+             Static Regular + Bold instances (not the variable font — variable-
+             axis support needs Qt 6.7+ and Linux CI is pre-6.5).  Registered at
+             startup so the `font.family.ui` = "Inter" theme token resolves the
+             same on every OS instead of falling back to Segoe UI (Windows) /
+             SF (macOS) and drifting the px-tuned QSS layout.  ~800 KB total. -->
+        <file alias="Inter-Regular.ttf">../third_party/inter/Inter-Regular.ttf</file>
+        <file alias="Inter-Bold.ttf">../third_party/inter/Inter-Bold.ttf</file>
     </qresource>
 </RCC>

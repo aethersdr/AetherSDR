@@ -267,6 +267,13 @@ void TransmitModel::startTune(PttSource source)
     if (!runPttPreflight(source, false))
         return;
 
+    // Tag the initiating source so the status-bar operator TX timer can exclude
+    // a TCI/DAX-initiated tune (the radio reports both as source=SW). An
+    // operator tune (source=Tune) is neither TCI nor DAX, so it still shows the
+    // timer. Without this, an external-app tune inherits the stale Mox tag and
+    // wrongly runs the "operator-only" timer. (#4131 review)
+    m_activePttSource = source;
+
     emit commandReady("transmit tune 1");
 }
 
@@ -275,6 +282,7 @@ void TransmitModel::startTwoToneTune(PttSource source)
     if (!runPttPreflight(source, false))
         return;
 
+    m_activePttSource = source;   // exclude TCI/DAX-initiated tune (see startTune, #4131)
     setTuneMode("two_tone");
     emit commandReady("transmit tune 1");
 }
@@ -755,6 +763,10 @@ void TransmitModel::requestPttOn(PttSource source)
 {
     if (!runPttPreflight(source))
         return;
+
+    // Remember who asked to key so the status-bar TX timer can exclude
+    // TCI-hardware and DAX transmits (both surface as source=SW at the radio).
+    m_activePttSource = source;
 
     // If Quindar is enabled + phone mode + we have an engine, start
     // the intro tone alongside MOX so the radio keys up while the

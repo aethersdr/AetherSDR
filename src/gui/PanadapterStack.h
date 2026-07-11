@@ -10,6 +10,7 @@ namespace AetherSDR {
 class BandStackPanel;
 class PanFloatingWindow;
 class PanadapterApplet;
+class PanadapterRenderScheduler;
 class SpectrumWidget;
 
 // Vertical stack of N PanadapterApplet instances, each showing an
@@ -49,6 +50,16 @@ public:
     void equalizeSizes();
     void rearrangeLayout(const QString& layoutId);
 
+    // Automation bridge hook: drive rearrangeLayout directly (or, with an empty
+    // id, just report) so tests can exercise the splitter reparent path without
+    // the radio granting extra panadapters. Rejects unknown ids (error map) and
+    // reports fellBack/effectiveLayout when the id needed more applets than
+    // exist. Returns saved layout id + counts; geometry settles next turn.
+    Q_INVOKABLE QVariantMap automationRearrange(const QString& layoutId);
+    // Minimum applets a layout id needs before its rearrangeLayout branch
+    // takes it (-1 = unknown id). Mirrors the >= guards — keep in sync.
+    static int layoutRequiredPanCount(const QString& layoutId);
+
     // Float/dock panadapters
     void floatPanadapter(const QString& panId);
     void dockPanadapter(const QString& panId);
@@ -75,6 +86,7 @@ signals:
 private:
     void rebuildDockedSplitter();
 
+    PanadapterRenderScheduler* m_renderScheduler{nullptr};
     BandStackPanel* m_bandStackPanel{nullptr};
     QSplitter* m_splitter{nullptr};
     QMap<QString, PanadapterApplet*> m_pans;

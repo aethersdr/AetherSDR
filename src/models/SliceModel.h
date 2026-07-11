@@ -352,7 +352,18 @@ signals:
     // commands still use commandReady until they convert.)
     void modeChangeRequested(const QString& mode);
 
+public:
+    // Filter polarity families (#3434): the single mode→family mapping every
+    // polarity decision uses. Public/static so capture paths (memories) can
+    // mirror back to the wire form without duplicating the mode list.
+    static bool filterPolarityUsbFamily(const QString& mode);
+    static bool filterPolarityLsbFamily(const QString& mode);
+
 private:
+    // Sign-guarded, idempotent (lo,hi)→(-hi,-lo) mirror of the stored filter
+    // when its polarity is wrong for m_mode; true if it changed anything.
+    bool normalizeFilterPolarity();
+
     int     m_id{0};
     QString m_letter;          // per-client display letter from `index_letter`
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")

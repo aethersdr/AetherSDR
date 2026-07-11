@@ -21,6 +21,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- **liquid-dsp is disabled in default builds on every platform.** The vendored
+  toolkit remains available to opt-in builds with
+  `-DENABLE_LIQUID_DSP=ON`, but no AetherSDR module currently consumes it.
 - **WAVE applet defaults to 25 fps** (was 60), matching the panadapter's
   default FFT cadence. A previously saved refresh rate is kept; the slider
   still reaches 60.
