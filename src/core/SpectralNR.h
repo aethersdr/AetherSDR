@@ -69,6 +69,8 @@ public:
     // float32 out.  The NR estimate/mask is computed from (L+R)/2, then the
     // same spectral gain is applied to each original channel.
     // Output buffer must be at least numFrames * 2 samples long.
+    // Use only one process entry point for an instance between resets; the mono
+    // and stereo paths share ring cursors but maintain different OLA buffers.
     void processStereoSharedMask(const float* input, float* output, int numFrames);
 
     // Reset all internal state (call when toggling on or stream restarts).

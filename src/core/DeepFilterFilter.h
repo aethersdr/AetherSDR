@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <atomic>
 #include <memory>
+#include <vector>
 
 struct DFState;
 
@@ -55,6 +56,8 @@ private:
     std::unique_ptr<Resampler> m_down;      // 48kHz mono → 24kHz mono
     QByteArray m_inAccum;                   // accumulate 48kHz mono float input
     QByteArray m_outAccum;                  // accumulate 24kHz stereo float output
+    std::vector<float> m_mono24k;
+    std::vector<float> m_processed48k;
     MonoDspStereoAdapter m_stereoAdapter;
     std::atomic<float> m_attenLimit{100.0f};
     std::atomic<float> m_postFilterBeta{0.0f};

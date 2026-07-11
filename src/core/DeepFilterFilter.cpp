@@ -188,6 +188,10 @@ DeepFilterFilter::DeepFilterFilter()
     m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
     if (m_state) {
         m_frameSize = static_cast<int>(df_get_frame_length(m_state));
+        // The bundled DFN3 model uses fft_size=960, hop_size=480 and two
+        // lookahead frames. Its documented delay is
+        // (fft_size - hop_size) + lookahead * hop_size = 3 hops at 48 kHz.
+        m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize / 2);
         qDebug() << "DeepFilterFilter: initialized, frame size =" << m_frameSize;
     } else {
         qWarning() << "DeepFilterFilter: df_create() failed!";
@@ -212,6 +216,7 @@ void DeepFilterFilter::reset()
         m_state = df_create(modelPath.constData(), m_attenLimit.load(), nullptr);
         if (m_state) {
             m_frameSize = static_cast<int>(df_get_frame_length(m_state));
+            m_stereoAdapter.setProcessingLatencyFrames(3 * m_frameSize / 2);
         }
     }
     m_up = std::make_unique<Resampler>(24000, 48000);
@@ -252,11 +257,11 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
 
     // 1. Downmix, then upsample 24kHz mono float32 → 48kHz mono float32 via r8brain.
     // The dry stereo stays queued so DeepFilterNet attenuation preserves balance.
-    std::vector<float> mono24k(stereoFrames);
+    m_mono24k.resize(stereoFrames);
     for (int i = 0; i < stereoFrames; ++i) {
-        mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+        m_mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
     }
-    QByteArray mono48k = m_up->process(mono24k.data(), stereoFrames);
+    QByteArray mono48k = m_up->process(m_mono24k.data(), stereoFrames);
 
     // Already float32 in [-1, 1] range — DeepFilterNet's native format
     const auto* mono48kSamples = reinterpret_cast<const float*>(mono48k.constData());
@@ -278,12 +283,12 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
 
     if (completeFrames > 0) {
         auto* accumData = reinterpret_cast<float*>(m_inAccum.data());
-        std::vector<float> processed48k(completeFrames * m_frameSize);
+        m_processed48k.resize(completeFrames * m_frameSize);
 
         for (int f = 0; f < completeFrames; ++f) {
             df_process_frame(m_state,
                              &accumData[f * m_frameSize],
-                             &processed48k[f * m_frameSize]);
+                             &m_processed48k[f * m_frameSize]);
         }
 
         // Keep leftover input samples
@@ -301,7 +306,8 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
         //    then apply the shared attenuation to delayed dry stereo.
         const int outputMonoSamples = completeFrames * m_frameSize;
 
-        QByteArray downsampled = m_down->process(processed48k.data(), outputMonoSamples);
+        QByteArray downsampled = m_down->process(
+            m_processed48k.data(), outputMonoSamples);
         const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
         const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
 

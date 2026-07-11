@@ -81,6 +81,7 @@ private:
     QByteArray m_outAccum;                       // 24 kHz stereo float output
     int        m_outReadPos{0};                 // read cursor into m_outAccum
     MonoDspStereoAdapter m_stereoAdapter;
+    std::vector<float> m_mono24k;
     std::vector<float> m_runScratch;            // reused NvAFX_Run output buffer
 
     std::atomic<float> m_intensity{1.0f};

@@ -2085,6 +2085,12 @@ target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 
+add_executable(rnnoise_filter_test
+    tests/rnnoise_filter_test.cpp
+)
+target_link_libraries(rnnoise_filter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
+
 add_executable(adaptive_filter_test
     tests/adaptive_filter_test.cpp
     src/core/OccupiedRegion.cpp

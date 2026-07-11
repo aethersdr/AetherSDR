@@ -46,6 +46,17 @@ QByteArray makeOppositePhaseStereoBlock(int frames, float scale)
     return block;
 }
 
+QByteArray makeConstantStereoBlock(int frames, float left, float right)
+{
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    for (int i = 0; i < frames; ++i) {
+        samples[i * 2] = left;
+        samples[i * 2 + 1] = right;
+    }
+    return block;
+}
+
 std::vector<float> makeProcessedMono(const QByteArray& stereoBlock, float gain)
 {
     const auto* samples = reinterpret_cast<const float*>(stereoBlock.constData());
@@ -216,6 +227,67 @@ bool testIndependentAdaptersDoNotDrainOtherSource()
     return true;
 }
 
+bool testDuplicatedMonoUsesProcessedWaveform()
+{
+    MonoDspStereoAdapter adapter;
+    const int frames = 960;
+    const QByteArray dry = makeStereoBlock(frames, 0.6f, 0.6f);
+    std::vector<float> processed(frames);
+    for (int i = 0; i < frames; ++i) {
+        processed[i] = 0.2f * std::sin(
+            2.0f * kPi * 1379.0f * static_cast<float>(i) / kSampleRate);
+    }
+
+    adapter.pushDryStereo(dry);
+    const QByteArray out = adapter.takeProcessedMono(processed.data(), frames);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = 0; i < frames; ++i) {
+        if (!nearlyEqual(samples[i * 2], processed[i], 1.0e-6)
+            || !nearlyEqual(samples[i * 2 + 1], processed[i], 1.0e-6)) {
+            std::printf("duplicated mono discarded processed waveform at frame %d\n", i);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool testProcessingLatencyRetainsDryTimeline()
+{
+    constexpr int latencyFrames = 4;
+    MonoDspStereoAdapter adapter(latencyFrames);
+    const QByteArray dry = makeConstantStereoBlock(8, 0.8f, 0.2f);
+    const std::vector<float> processed(8, 0.0f);
+
+    adapter.pushDryStereo(dry);
+    const QByteArray out = adapter.takeProcessedMono(processed.data(), 8);
+    const auto* samples = reinterpret_cast<const float*>(out.constData());
+    for (int i = 0; i < latencyFrames; ++i) {
+        if (samples[i * 2] != 0.0f || samples[i * 2 + 1] != 0.0f) {
+            std::printf("latency priming emitted dry audio at frame %d\n", i);
+            return false;
+        }
+    }
+    if (adapter.bufferedFrames() != latencyFrames) {
+        std::printf("latency pairing consumed wrong dry count: got %d expected %d\n",
+                    adapter.bufferedFrames(),
+                    latencyFrames);
+        return false;
+    }
+    return true;
+}
+
+bool testOverflowClearsInsteadOfMisaligning()
+{
+    MonoDspStereoAdapter adapter;
+    adapter.pushDryStereo(makeConstantStereoBlock(kSampleRate * 6, 0.8f, 0.2f));
+    if (adapter.bufferedFrames() != 0) {
+        std::printf("overflow retained a misaligned dry timeline: %d frames\n",
+                    adapter.bufferedFrames());
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -233,6 +305,15 @@ int main()
         return 1;
     }
     if (!testIndependentAdaptersDoNotDrainOtherSource()) {
+        return 1;
+    }
+    if (!testDuplicatedMonoUsesProcessedWaveform()) {
+        return 1;
+    }
+    if (!testProcessingLatencyRetainsDryTimeline()) {
+        return 1;
+    }
+    if (!testOverflowClearsInsteadOfMisaligning()) {
         return 1;
     }
     std::printf("mono_dsp_stereo_adapter_test passed\n");

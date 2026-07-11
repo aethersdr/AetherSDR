@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <memory>
+#include <vector>
 
 struct DenoiseState;
 
@@ -19,7 +20,12 @@ class Resampler;
 
 class RNNoiseFilter {
 public:
-    RNNoiseFilter();
+    enum class OutputMode {
+        PreserveRxStereo,
+        ProcessedMono,
+    };
+
+    explicit RNNoiseFilter(OutputMode outputMode = OutputMode::PreserveRxStereo);
     ~RNNoiseFilter();
 
     // Process a block of 24kHz duplicated-stereo FLOAT32 PCM (NOT int16
@@ -40,7 +46,11 @@ private:
     std::unique_ptr<Resampler> m_down;  // 48kHz mono → 24kHz mono
     QByteArray    m_inAccum;            // accumulate 48kHz mono float input
     QByteArray    m_outAccum;           // accumulate 24kHz stereo float output
+    std::vector<float> m_mono24k;
+    std::vector<float> m_processed48k;
+    std::vector<float> m_processed48kFloat;
     MonoDspStereoAdapter m_stereoAdapter;
+    OutputMode m_outputMode{OutputMode::PreserveRxStereo};
 };
 
 } // namespace AetherSDR

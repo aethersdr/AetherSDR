@@ -19,22 +19,50 @@ constexpr float kPowerFloor = 1.0e-10f;
 constexpr float kMonoObservabilityRatio = 0.01f;
 constexpr float kMinObservableGain = 0.035f;
 constexpr float kMaxGain = 1.0f;
+constexpr float kStereoDetectionRatio = 1.0e-4f;
+constexpr float kProcessedMixAttackCoeff = 0.05f;
+constexpr float kProcessedMixReleaseCoeff = 0.01f;
 
 float clampSample(float sample)
 {
     return std::clamp(sample, -1.0f, 1.0f);
 }
 
+float updatePowerEnvelope(float current, float samplePower)
+{
+    current += kEnvelopeCoeff * (samplePower - current);
+    return current < kPowerFloor ? 0.0f : current;
+}
+
 } // namespace
+
+MonoDspStereoAdapter::MonoDspStereoAdapter(int processingLatencyFrames)
+    : m_processingLatencyFrames(std::max(0, processingLatencyFrames))
+    , m_latencyFramesRemaining(m_processingLatencyFrames)
+{}
 
 void MonoDspStereoAdapter::reset()
 {
     m_dryStereoFifo.clear();
     m_dryStereoReadOffset = 0;
+    m_latencyFramesRemaining = m_processingLatencyFrames;
+    resetEnvelopeState();
+}
+
+void MonoDspStereoAdapter::setProcessingLatencyFrames(int frames)
+{
+    m_processingLatencyFrames = std::max(0, frames);
+    reset();
+}
+
+void MonoDspStereoAdapter::resetEnvelopeState()
+{
     m_dryMonoPower = 0.0f;
     m_dryStereoPower = 0.0f;
+    m_sidePower = 0.0f;
     m_processedPower = 0.0f;
     m_gain = 1.0f;
+    m_processedMix = 1.0f;
 }
 
 int MonoDspStereoAdapter::readableDryStereoBytes() const
@@ -72,11 +100,14 @@ void MonoDspStereoAdapter::pushDryStereo(const QByteArray& stereoPcm)
 
     const int readableBytes = readableDryStereoBytes();
     if (readableBytes > kMaxBufferedBytes) {
-        const int extraBytes = readableBytes - kMaxBufferedBytes;
-        const int alignedExtraBytes = extraBytes - (extraBytes % kFrameBytes);
-        if (alignedExtraBytes > 0) {
-            m_dryStereoReadOffset += alignedExtraBytes;
-        }
+        // A rate mismatch this large means dry and processed timelines can no
+        // longer be paired reliably. Drop the pending dry side and re-prime on
+        // the next block instead of preserving a permanent offset.
+        m_dryStereoFifo.clear();
+        m_dryStereoReadOffset = 0;
+        m_latencyFramesRemaining = m_processingLatencyFrames;
+        resetEnvelopeState();
+        return;
     }
 
     compactDryStereoFifoIfNeeded();
@@ -93,20 +124,37 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
     auto* dst = reinterpret_cast<float*>(output.data());
 
     const int availableFrames = readableDryStereoBytes() / kFrameBytes;
-    const int dryFrames = std::min(frames, availableFrames);
     const auto* dry = reinterpret_cast<const float*>(
         m_dryStereoFifo.constData() + m_dryStereoReadOffset);
+    int dryFrames = 0;
 
-    for (int i = 0; i < dryFrames; ++i) {
-        const float left = dry[i * kChannels];
-        const float right = dry[i * kChannels + 1];
-        const float dryMono = 0.5f * (left + right);
-        const float dryStereoPower = 0.5f * (left * left + right * right);
+    for (int i = 0; i < frames; ++i) {
         const float processed = processedMono[i];
+        if (m_latencyFramesRemaining > 0) {
+            // Preserve the engine's own startup output while retaining dry
+            // samples until the processed stream reaches the same timeline.
+            dst[i * kChannels] = clampSample(processed);
+            dst[i * kChannels + 1] = clampSample(processed);
+            --m_latencyFramesRemaining;
+            continue;
+        }
 
-        m_dryMonoPower += kEnvelopeCoeff * (dryMono * dryMono - m_dryMonoPower);
-        m_dryStereoPower += kEnvelopeCoeff * (dryStereoPower - m_dryStereoPower);
-        m_processedPower += kEnvelopeCoeff * (processed * processed - m_processedPower);
+        if (dryFrames >= availableFrames) {
+            dst[i * kChannels] = clampSample(processed);
+            dst[i * kChannels + 1] = clampSample(processed);
+            continue;
+        }
+
+        const float left = dry[dryFrames * kChannels];
+        const float right = dry[dryFrames * kChannels + 1];
+        const float dryMono = 0.5f * (left + right);
+        const float side = 0.5f * (left - right);
+        const float dryStereoPower = 0.5f * (left * left + right * right);
+
+        m_dryMonoPower = updatePowerEnvelope(m_dryMonoPower, dryMono * dryMono);
+        m_dryStereoPower = updatePowerEnvelope(m_dryStereoPower, dryStereoPower);
+        m_sidePower = updatePowerEnvelope(m_sidePower, side * side);
+        m_processedPower = updatePowerEnvelope(m_processedPower, processed * processed);
 
         float targetGain = kMaxGain;
         const float observableMonoFloor =
@@ -122,13 +170,24 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         const float smoothCoeff = targetGain < m_gain ? kAttackCoeff : kReleaseCoeff;
         m_gain += smoothCoeff * (targetGain - m_gain);
 
-        dst[i * kChannels] = clampSample(left * m_gain);
-        dst[i * kChannels + 1] = clampSample(right * m_gain);
-    }
+        const float stereoRatio = m_sidePower
+            / std::max(m_dryStereoPower, kPowerFloor);
+        const float targetProcessedMix =
+            stereoRatio <= kStereoDetectionRatio ? 1.0f : 0.0f;
+        const float mixCoeff = targetProcessedMix < m_processedMix
+            ? kProcessedMixAttackCoeff
+            : kProcessedMixReleaseCoeff;
+        m_processedMix += mixCoeff * (targetProcessedMix - m_processedMix);
+        if (std::fabs(m_processedMix - targetProcessedMix) < 1.0e-6f) {
+            m_processedMix = targetProcessedMix;
+        }
 
-    for (int i = dryFrames; i < frames; ++i) {
-        dst[i * kChannels] = 0.0f;
-        dst[i * kChannels + 1] = 0.0f;
+        const float envelopeMix = 1.0f - m_processedMix;
+        dst[i * kChannels] = clampSample(
+            m_processedMix * processed + envelopeMix * left * m_gain);
+        dst[i * kChannels + 1] = clampSample(
+            m_processedMix * processed + envelopeMix * right * m_gain);
+        ++dryFrames;
     }
 
     if (dryFrames > 0) {

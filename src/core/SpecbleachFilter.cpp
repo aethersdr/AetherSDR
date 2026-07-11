@@ -18,6 +18,8 @@ SpecbleachFilter::SpecbleachFilter()
         qWarning() << "SpecbleachFilter: failed to initialize";
         return;
     }
+    m_stereoAdapter.setProcessingLatencyFrames(
+        static_cast<int>(specbleach_get_latency(m_handle)));
     applyParams();
     qDebug() << "SpecbleachFilter: initialized, latency ="
              << specbleach_get_latency(m_handle) << "samples";

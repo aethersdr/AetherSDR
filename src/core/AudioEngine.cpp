@@ -64,6 +64,7 @@
 #include <QJsonObject>
 #include <QStringList>
 #include <QtGlobal>
+#include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstring>
 #include <functional>
@@ -75,11 +76,16 @@ static QString wisdomDir();
 static void logNr2WisdomSummary(const QString& context);
 static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result);
 static void applyNr2SettingsFromAppSettings(SpectralNR& nr2);
+static void copyNr2Settings(const SpectralNR& source, SpectralNR& target);
 #ifdef HAVE_SPECBLEACH
 static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4);
+static void copyNr4Settings(const SpecbleachFilter& source,
+                            SpecbleachFilter& target);
 #endif
 #ifdef HAVE_DFNR
 static void applyDfnrSettingsFromAppSettings(DeepFilterFilter& dfnr);
+static void copyDfnrSettings(const DeepFilterFilter& source,
+                             DeepFilterFilter& target);
 #endif
 
 namespace {
@@ -978,7 +984,6 @@ AudioEngine::externalKiwiSource(const QString& sourceId, bool create)
         id, m_externalKiwiReceivePresentationDelaySourceId,
         m_externalKiwiReceivePresentationDelayMs);
     source->prebuffering = true;
-    ensureExternalKiwiSourceDspState(*source);
     m_externalKiwiSources.push_back(std::move(source));
     return m_externalKiwiSources.back().get();
 }
@@ -1005,7 +1010,6 @@ AudioEngine::createNr4Filter(const QString& label) const
             << "AudioEngine: NR4 initialization failed for" << label;
         return {};
     }
-    applyNr4SettingsFromAppSettings(*filter);
     return filter;
 }
 #endif
@@ -1035,7 +1039,6 @@ AudioEngine::createDfnrFilter(const QString& label) const
             << "AudioEngine: DFNR df_create() failed for" << label;
         return {};
     }
-    applyDfnrSettingsFromAppSettings(*filter);
     return filter;
 }
 #endif
@@ -1051,125 +1054,405 @@ AudioEngine::createNvAfxFilter(const QString& label) const
             << "-" << filter->lastError();
         return {};
     }
-    filter->setIntensity(NvidiaBnrSettings::intensity());
     return filter;
 }
 #endif
 
 bool AudioEngine::ensureLegacyKiwiDspState()
 {
-    if (!kiwiSdrAudioActive()) {
-        return true;
+    quint64 configurationGeneration = 0;
+    bool needNr2 = false;
+    bool needRn2 = false;
+#ifdef HAVE_SPECBLEACH
+    bool needNr4 = false;
+#endif
+#ifdef __APPLE__
+    bool needMnr = false;
+#endif
+#ifdef HAVE_DFNR
+    bool needDfnr = false;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+    bool needNvAfx = false;
+#endif
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+        if (!kiwiSdrAudioActive() || m_legacyKiwiDspInitializationPending) {
+            return true;
+        }
+        needNr2 = m_nr2Enabled.load(std::memory_order_relaxed) && m_nr2
+            && !m_kiwiSdrNr2;
+        needRn2 = m_rn2Enabled.load(std::memory_order_relaxed) && m_rn2
+            && !m_kiwiSdrRn2;
+#ifdef HAVE_SPECBLEACH
+        needNr4 = m_nr4Enabled.load(std::memory_order_relaxed) && m_nr4
+            && !m_kiwiSdrNr4;
+#endif
+#ifdef __APPLE__
+        needMnr = m_mnrEnabled.load(std::memory_order_relaxed) && m_mnr
+            && !m_kiwiSdrMnr;
+#endif
+#ifdef HAVE_DFNR
+        needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
+            && !m_kiwiSdrDfnr;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+        needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
+            && !m_kiwiSdrNvAfx;
+#endif
+        m_legacyKiwiDspInitializationPending = needNr2 || needRn2
+#ifdef HAVE_SPECBLEACH
+            || needNr4
+#endif
+#ifdef __APPLE__
+            || needMnr
+#endif
+#ifdef HAVE_DFNR
+            || needDfnr
+#endif
+#ifdef HAVE_NVIDIA_AFX
+            || needNvAfx
+#endif
+            ;
+        if (!m_legacyKiwiDspInitializationPending) {
+            return true;
+        }
+        configurationGeneration = m_dspConfigurationGeneration;
     }
 
     bool ok = true;
-    if (m_nr2Enabled.load(std::memory_order_relaxed) && m_nr2
-        && !m_kiwiSdrNr2) {
-        m_kiwiSdrNr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
-        if (m_kiwiSdrNr2->hasPlanFailed()) {
+    std::unique_ptr<SpectralNR> nr2;
+    std::unique_ptr<RNNoiseFilter> rn2;
+#ifdef HAVE_SPECBLEACH
+    std::unique_ptr<SpecbleachFilter> nr4;
+#endif
+#ifdef __APPLE__
+    std::unique_ptr<MacNRFilter> mnr;
+#endif
+#ifdef HAVE_DFNR
+    std::unique_ptr<DeepFilterFilter> dfnr;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+    std::unique_ptr<NvidiaAfxFilter> nvAfx;
+#endif
+
+    if (needNr2) {
+        nr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
+        if (nr2->hasPlanFailed()) {
             qCWarning(lcAudio)
                 << "AudioEngine: legacy Kiwi NR2 plan failed";
-            m_kiwiSdrNr2.reset();
+            nr2.reset();
             ok = false;
-        } else {
-            applyNr2SettingsFromAppSettings(*m_kiwiSdrNr2);
         }
     }
-    if (m_rn2Enabled.load(std::memory_order_relaxed) && m_rn2
-        && !m_kiwiSdrRn2) {
-        m_kiwiSdrRn2 = createRn2Filter(QStringLiteral("legacy Kiwi"));
-        ok = ok && static_cast<bool>(m_kiwiSdrRn2);
+    if (needRn2) {
+        rn2 = createRn2Filter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(rn2);
     }
 #ifdef HAVE_SPECBLEACH
-    if (m_nr4Enabled.load(std::memory_order_relaxed) && m_nr4
-        && !m_kiwiSdrNr4) {
-        m_kiwiSdrNr4 = createNr4Filter(QStringLiteral("legacy Kiwi"));
-        ok = ok && static_cast<bool>(m_kiwiSdrNr4);
+    if (needNr4) {
+        nr4 = createNr4Filter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(nr4);
     }
 #endif
 #ifdef __APPLE__
-    if (m_mnrEnabled.load(std::memory_order_relaxed) && m_mnr
-        && !m_kiwiSdrMnr) {
-        m_kiwiSdrMnr = createMnrFilter(QStringLiteral("legacy Kiwi"));
-        ok = ok && static_cast<bool>(m_kiwiSdrMnr);
+    if (needMnr) {
+        mnr = createMnrFilter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(mnr);
     }
 #endif
 #ifdef HAVE_DFNR
-    if (m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
-        && !m_kiwiSdrDfnr) {
-        m_kiwiSdrDfnr = createDfnrFilter(QStringLiteral("legacy Kiwi"));
-        ok = ok && static_cast<bool>(m_kiwiSdrDfnr);
+    if (needDfnr) {
+        dfnr = createDfnrFilter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(dfnr);
     }
 #endif
 #ifdef HAVE_NVIDIA_AFX
-    if (m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
-        && !m_kiwiSdrNvAfx) {
-        m_kiwiSdrNvAfx = createNvAfxFilter(QStringLiteral("legacy Kiwi"));
-        ok = ok && static_cast<bool>(m_kiwiSdrNvAfx);
+    if (needNvAfx) {
+        nvAfx = createNvAfxFilter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(nvAfx);
     }
 #endif
+
+    bool retryForNewConfiguration = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+        m_legacyKiwiDspInitializationPending = false;
+        if (!kiwiSdrAudioActive()) {
+            return ok;
+        }
+        if (needNr2 && m_nr2Enabled && m_nr2 && !m_kiwiSdrNr2) {
+            if (nr2) {
+                copyNr2Settings(*m_nr2, *nr2);
+            }
+            m_kiwiSdrNr2 = std::move(nr2);
+        }
+        if (needRn2 && m_rn2Enabled && m_rn2 && !m_kiwiSdrRn2) {
+            m_kiwiSdrRn2 = std::move(rn2);
+        }
+#ifdef HAVE_SPECBLEACH
+        if (needNr4 && m_nr4Enabled && m_nr4 && !m_kiwiSdrNr4) {
+            if (nr4) {
+                copyNr4Settings(*m_nr4, *nr4);
+            }
+            m_kiwiSdrNr4 = std::move(nr4);
+        }
+#endif
+#ifdef __APPLE__
+        if (needMnr && m_mnrEnabled && m_mnr && !m_kiwiSdrMnr) {
+            if (mnr) {
+                mnr->setStrength(m_mnrStrength.load());
+            }
+            m_kiwiSdrMnr = std::move(mnr);
+        }
+#endif
+#ifdef HAVE_DFNR
+        if (needDfnr && m_dfnrEnabled && m_dfnr && !m_kiwiSdrDfnr) {
+            if (dfnr) {
+                copyDfnrSettings(*m_dfnr, *dfnr);
+            }
+            m_kiwiSdrDfnr = std::move(dfnr);
+        }
+#endif
+#ifdef HAVE_NVIDIA_AFX
+        if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !m_kiwiSdrNvAfx) {
+            if (nvAfx) {
+                nvAfx->setIntensity(m_nvAfx->intensity());
+            }
+            m_kiwiSdrNvAfx = std::move(nvAfx);
+        }
+#endif
+        retryForNewConfiguration =
+            configurationGeneration != m_dspConfigurationGeneration;
+    }
+    if (retryForNewConfiguration) {
+        ok = ensureLegacyKiwiDspState() && ok;
+    }
     return ok;
 }
 
 bool AudioEngine::ensureExternalKiwiSourceDspState(
-    ExternalRxAudioSourceState& source)
+    const QString& sourceId)
 {
-    if (!externalKiwiSourceAudible(source)) {
-        return true;
+    quint64 configurationGeneration = 0;
+    const QString id = sourceId.trimmed();
+    if (id.isEmpty()) {
+        return false;
+    }
+
+    const auto findSource = [this, &id]() -> ExternalRxAudioSourceState* {
+        for (const auto& candidate : m_externalKiwiSources) {
+            if (candidate && candidate->id == id) {
+                return candidate.get();
+            }
+        }
+        return nullptr;
+    };
+
+    bool needNr2 = false;
+    bool needRn2 = false;
+#ifdef HAVE_SPECBLEACH
+    bool needNr4 = false;
+#endif
+#ifdef __APPLE__
+    bool needMnr = false;
+#endif
+#ifdef HAVE_DFNR
+    bool needDfnr = false;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+    bool needNvAfx = false;
+#endif
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+        ExternalRxAudioSourceState* source = findSource();
+        if (!source || !externalKiwiSourceAudible(*source)
+            || source->dspInitializationPending) {
+            return true;
+        }
+        needNr2 = m_nr2Enabled.load(std::memory_order_relaxed) && m_nr2
+            && !source->nr2;
+        needRn2 = m_rn2Enabled.load(std::memory_order_relaxed) && m_rn2
+            && !source->rn2;
+#ifdef HAVE_SPECBLEACH
+        needNr4 = m_nr4Enabled.load(std::memory_order_relaxed) && m_nr4
+            && !source->nr4;
+#endif
+#ifdef __APPLE__
+        needMnr = m_mnrEnabled.load(std::memory_order_relaxed) && m_mnr
+            && !source->mnr;
+#endif
+#ifdef HAVE_DFNR
+        needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
+            && !source->dfnr;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+        needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
+            && !source->nvAfx;
+#endif
+        source->dspInitializationPending = needNr2 || needRn2
+#ifdef HAVE_SPECBLEACH
+            || needNr4
+#endif
+#ifdef __APPLE__
+            || needMnr
+#endif
+#ifdef HAVE_DFNR
+            || needDfnr
+#endif
+#ifdef HAVE_NVIDIA_AFX
+            || needNvAfx
+#endif
+            ;
+        if (!source->dspInitializationPending) {
+            return true;
+        }
+        configurationGeneration = m_dspConfigurationGeneration;
     }
 
     bool ok = true;
-    if (m_nr2Enabled.load(std::memory_order_relaxed) && m_nr2
-        && !source.nr2) {
-        source.nr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
-        if (source.nr2->hasPlanFailed()) {
+    std::unique_ptr<SpectralNR> nr2;
+    std::unique_ptr<RNNoiseFilter> rn2;
+#ifdef HAVE_SPECBLEACH
+    std::unique_ptr<SpecbleachFilter> nr4;
+#endif
+#ifdef __APPLE__
+    std::unique_ptr<MacNRFilter> mnr;
+#endif
+#ifdef HAVE_DFNR
+    std::unique_ptr<DeepFilterFilter> dfnr;
+#endif
+#ifdef HAVE_NVIDIA_AFX
+    std::unique_ptr<NvidiaAfxFilter> nvAfx;
+#endif
+
+    if (needNr2) {
+        nr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
+        if (nr2->hasPlanFailed()) {
             qCWarning(lcAudio) << "AudioEngine: external Kiwi NR2 plan failed for"
-                               << source.id;
-            source.nr2.reset();
+                               << id;
+            nr2.reset();
             ok = false;
-        } else {
-            applyNr2SettingsFromAppSettings(*source.nr2);
         }
     }
-    if (m_rn2Enabled.load(std::memory_order_relaxed) && m_rn2
-        && !source.rn2) {
-        source.rn2 = createRn2Filter(
-            QStringLiteral("external Kiwi %1").arg(source.id));
-        ok = ok && static_cast<bool>(source.rn2);
+    if (needRn2) {
+        rn2 = createRn2Filter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(rn2);
     }
 #ifdef HAVE_SPECBLEACH
-    if (m_nr4Enabled.load(std::memory_order_relaxed) && m_nr4
-        && !source.nr4) {
-        source.nr4 = createNr4Filter(
-            QStringLiteral("external Kiwi %1").arg(source.id));
-        ok = ok && static_cast<bool>(source.nr4);
+    if (needNr4) {
+        nr4 = createNr4Filter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(nr4);
     }
 #endif
 #ifdef __APPLE__
-    if (m_mnrEnabled.load(std::memory_order_relaxed) && m_mnr
-        && !source.mnr) {
-        source.mnr = createMnrFilter(
-            QStringLiteral("external Kiwi %1").arg(source.id));
-        ok = ok && static_cast<bool>(source.mnr);
+    if (needMnr) {
+        mnr = createMnrFilter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(mnr);
     }
 #endif
 #ifdef HAVE_DFNR
-    if (m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
-        && !source.dfnr) {
-        source.dfnr = createDfnrFilter(
-            QStringLiteral("external Kiwi %1").arg(source.id));
-        ok = ok && static_cast<bool>(source.dfnr);
+    if (needDfnr) {
+        dfnr = createDfnrFilter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(dfnr);
     }
 #endif
 #ifdef HAVE_NVIDIA_AFX
-    if (m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
-        && !source.nvAfx) {
-        source.nvAfx = createNvAfxFilter(
-            QStringLiteral("external Kiwi %1").arg(source.id));
-        ok = ok && static_cast<bool>(source.nvAfx);
+    if (needNvAfx) {
+        nvAfx = createNvAfxFilter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(nvAfx);
     }
 #endif
+
+    bool retryForNewConfiguration = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+        ExternalRxAudioSourceState* source = findSource();
+        if (!source) {
+            return ok;
+        }
+        source->dspInitializationPending = false;
+        if (!externalKiwiSourceAudible(*source)) {
+            return ok;
+        }
+        if (needNr2 && m_nr2Enabled && m_nr2 && !source->nr2) {
+            if (nr2) {
+                copyNr2Settings(*m_nr2, *nr2);
+            }
+            source->nr2 = std::move(nr2);
+        }
+        if (needRn2 && m_rn2Enabled && m_rn2 && !source->rn2) {
+            source->rn2 = std::move(rn2);
+        }
+#ifdef HAVE_SPECBLEACH
+        if (needNr4 && m_nr4Enabled && m_nr4 && !source->nr4) {
+            if (nr4) {
+                copyNr4Settings(*m_nr4, *nr4);
+            }
+            source->nr4 = std::move(nr4);
+        }
+#endif
+#ifdef __APPLE__
+        if (needMnr && m_mnrEnabled && m_mnr && !source->mnr) {
+            if (mnr) {
+                mnr->setStrength(m_mnrStrength.load());
+            }
+            source->mnr = std::move(mnr);
+        }
+#endif
+#ifdef HAVE_DFNR
+        if (needDfnr && m_dfnrEnabled && m_dfnr && !source->dfnr) {
+            if (dfnr) {
+                copyDfnrSettings(*m_dfnr, *dfnr);
+            }
+            source->dfnr = std::move(dfnr);
+        }
+#endif
+#ifdef HAVE_NVIDIA_AFX
+        if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !source->nvAfx) {
+            if (nvAfx) {
+                nvAfx->setIntensity(m_nvAfx->intensity());
+            }
+            source->nvAfx = std::move(nvAfx);
+        }
+#endif
+        retryForNewConfiguration =
+            configurationGeneration != m_dspConfigurationGeneration;
+    }
+    if (retryForNewConfiguration) {
+        ok = ensureExternalKiwiSourceDspState(id) && ok;
+    }
     return ok;
+}
+
+bool AudioEngine::ensureAllKiwiDspState()
+{
+    bool ok = ensureLegacyKiwiDspState();
+    QStringList sourceIds;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+        for (const auto& source : m_externalKiwiSources) {
+            if (source && externalKiwiSourceAudible(*source)) {
+                sourceIds.append(source->id);
+            }
+        }
+    }
+    for (const QString& sourceId : sourceIds) {
+        ok = ensureExternalKiwiSourceDspState(sourceId) && ok;
+    }
+    return ok;
+}
+
+void AudioEngine::scheduleAllKiwiDspStateInitialization()
+{
+    std::lock_guard<std::mutex> lock(m_dspInitializationTasksMutex);
+    if (m_dspInitializationStopping) {
+        return;
+    }
+    QFuture<void> task = QtConcurrent::run([this]() {
+        ensureAllKiwiDspState();
+    });
+    m_dspInitializationTasks.addFuture(task);
 }
 
 void AudioEngine::resetLegacyKiwiDspState()
@@ -2138,6 +2421,11 @@ AudioEngine::AudioEngine(QObject* parent)
 
 AudioEngine::~AudioEngine()
 {
+    {
+        std::lock_guard<std::mutex> lock(m_dspInitializationTasksMutex);
+        m_dspInitializationStopping = true;
+        m_dspInitializationTasks.waitForFinished();
+    }
     stopRxStream();
     stopTxStream();
 }
@@ -2508,16 +2796,26 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
     tokenText.replace(QLatin1Char(','), QLatin1Char(' '));
     const QStringList requestTokens =
         tokenText.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    QString normalizedMode = QStringLiteral("ALL");
+    QStringList modeTokens;
     bool strictCoverage = false;
     for (const QString& token : requestTokens) {
         const QString normalizedToken = token.toUpper();
         if (normalizedToken == QLatin1String("STRICT")) {
             strictCoverage = true;
-        } else if (normalizedMode == QLatin1String("ALL")) {
-            normalizedMode = normalizedToken;
+        } else {
+            modeTokens.append(normalizedToken);
         }
     }
+    if (modeTokens.size() > 1) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("probeDspStereo accepts one mode or all, plus optional strict")},
+        };
+    }
+    const QString normalizedMode = modeTokens.isEmpty()
+        ? QStringLiteral("ALL")
+        : modeTokens.constFirst();
 
     const auto probeOne = [this, &input](const QString& requestedMode) -> QJsonObject {
         if (requestedMode == QLatin1String("NR2")) {
@@ -3383,6 +3681,7 @@ void AudioEngine::feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat)
 void AudioEngine::feedKiwiSdrAudioData(const QString& sourceId,
                                        const QByteArray& pcm24kStereoFloat)
 {
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
     if (!source || !source->enabled) {
         return;
@@ -3424,49 +3723,53 @@ void AudioEngine::setKiwiSdrAudioEnabled(bool on)
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-    m_kiwiSdrRxBuffer.clear();
-    m_kiwiSdrRxPackets.clear();
-    m_kiwiSdrOutputBuffer.clear();
-    m_kiwiSdrNr2Output.clear();
-    m_kiwiSdrRxResampler.reset();
-    m_kiwiSdrRxResamplerR.reset();
-    if (on) {
-        ensureLegacyKiwiDspState();
-        resetLegacyKiwiDspState();
-    } else {
-        clearLegacyKiwiDspState();
+    {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        m_kiwiSdrRxBuffer.clear();
+        m_kiwiSdrRxPackets.clear();
+        m_kiwiSdrOutputBuffer.clear();
+        m_kiwiSdrNr2Output.clear();
+        m_kiwiSdrRxResampler.reset();
+        m_kiwiSdrRxResamplerR.reset();
+        if (!on) {
+            clearLegacyKiwiDspState();
+        }
+        m_kiwiSdrPrebuffering.store(on && !kiwiSdrAudioTransmitMuted(),
+                                    std::memory_order_relaxed);
+        updateRxBufferStats();
     }
-    m_kiwiSdrPrebuffering.store(on && !kiwiSdrAudioTransmitMuted(),
-                                std::memory_order_relaxed);
-    updateRxBufferStats();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
 }
 
 void AudioEngine::setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on)
 {
-    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-    ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, on);
-    if (!source || source->enabled == on) {
-        return;
-    }
+    {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, on);
+        if (!source || source->enabled == on) {
+            return;
+        }
 
-    source->enabled = on;
-    qCDebug(lcKiwiSdrAudio).noquote()
-        << "Audio source" << (on ? "enabled" : "disabled") << source->id;
-    source->rxBuffer.clear();
-    source->rxPackets.clear();
-    source->outputBuffer.clear();
-    source->nr2Output.clear();
-    source->rxResampler.reset();
-    source->rxResamplerR.reset();
-    if (on) {
-        ensureExternalKiwiSourceDspState(*source);
-        resetExternalKiwiDspState(*source);
-    } else {
-        clearExternalKiwiDspState(*source);
+        source->enabled = on;
+        qCDebug(lcKiwiSdrAudio).noquote()
+            << "Audio source" << (on ? "enabled" : "disabled") << source->id;
+        source->rxBuffer.clear();
+        source->rxPackets.clear();
+        source->outputBuffer.clear();
+        source->nr2Output.clear();
+        source->rxResampler.reset();
+        source->rxResamplerR.reset();
+        if (!on) {
+            clearExternalKiwiDspState(*source);
+        }
+        source->prebuffering = on;
+        updateRxBufferStats();
     }
-    source->prebuffering = on;
-    updateRxBufferStats();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
 }
 
 void AudioEngine::setKiwiSdrAudioSourceGain(const QString& sourceId,
@@ -3484,24 +3787,28 @@ void AudioEngine::setKiwiSdrAudioSourceGain(const QString& sourceId,
 void AudioEngine::setKiwiSdrAudioSourceMuted(const QString& sourceId,
                                              bool muted)
 {
-    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-    ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
-    if (!source || source->muted == muted) {
-        return;
-    }
+    {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
+        if (!source || source->muted == muted) {
+            return;
+        }
 
-    source->muted = muted;
-    source->rxBuffer.clear();
-    source->rxPackets.clear();
-    source->outputBuffer.clear();
-    source->nr2Output.clear();
-    if (!muted) {
-        ensureExternalKiwiSourceDspState(*source);
+        source->muted = muted;
+        source->rxBuffer.clear();
+        source->rxPackets.clear();
+        source->outputBuffer.clear();
+        source->nr2Output.clear();
+        if (muted) {
+            clearExternalKiwiDspState(*source);
+        }
+        source->prebuffering =
+            !muted && source->enabled && !kiwiSdrAudioTransmitMuted();
+        updateRxBufferStats();
     }
-    resetExternalKiwiDspState(*source);
-    source->prebuffering =
-        !muted && source->enabled && !kiwiSdrAudioTransmitMuted();
-    updateRxBufferStats();
+    if (!muted) {
+        scheduleAllKiwiDspStateInitialization();
+    }
 }
 
 void AudioEngine::setKiwiSdrAudioTransmitMuted(bool muted)
@@ -3511,34 +3818,33 @@ void AudioEngine::setKiwiSdrAudioTransmitMuted(bool muted)
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-    m_kiwiSdrRxBuffer.clear();
-    m_kiwiSdrRxPackets.clear();
-    m_kiwiSdrOutputBuffer.clear();
-    m_kiwiSdrNr2Output.clear();
-    if (!muted) {
-        ensureLegacyKiwiDspState();
-    }
-    resetLegacyKiwiDspState();
-    m_kiwiSdrPrebuffering.store(
-        !muted && m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed),
-        std::memory_order_relaxed);
+    {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        m_kiwiSdrRxBuffer.clear();
+        m_kiwiSdrRxPackets.clear();
+        m_kiwiSdrOutputBuffer.clear();
+        m_kiwiSdrNr2Output.clear();
+        resetLegacyKiwiDspState();
+        m_kiwiSdrPrebuffering.store(
+            !muted && m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed),
+            std::memory_order_relaxed);
 
-    for (const auto& source : m_externalKiwiSources) {
-        if (!source) {
-            continue;
+        for (const auto& source : m_externalKiwiSources) {
+            if (!source) {
+                continue;
+            }
+            source->rxBuffer.clear();
+            source->rxPackets.clear();
+            source->outputBuffer.clear();
+            source->nr2Output.clear();
+            resetExternalKiwiDspState(*source);
+            source->prebuffering = !muted && source->enabled && !source->muted;
         }
-        source->rxBuffer.clear();
-        source->rxPackets.clear();
-        source->outputBuffer.clear();
-        source->nr2Output.clear();
-        if (!muted) {
-            ensureExternalKiwiSourceDspState(*source);
-        }
-        resetExternalKiwiDspState(*source);
-        source->prebuffering = !muted && source->enabled && !source->muted;
+        updateRxBufferStats();
     }
-    updateRxBufferStats();
+    if (!muted) {
+        scheduleAllKiwiDspStateInitialization();
+    }
 }
 
 void AudioEngine::setKiwiSdrAudioSourcePan(const QString& sourceId, int pan)
@@ -3714,7 +4020,10 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     const auto sourcePan = [this, externalSource]() {
         return externalSource ? externalSource->pan : m_rxPan.load();
     };
-    const bool applyKiwiOutputPan = source == RxDspSource::KiwiSdr;
+    // Virtual Kiwi profiles have their own client-side pan. Flex and the
+    // legacy Kiwi stream keep the stereo orientation already present in their
+    // input; m_rxPan mirrors a Flex radio control and must not retarget Kiwi.
+    const bool applyKiwiOutputPan = externalSource != nullptr;
 
     // feedAudioData() handles all remote_audio_rx paths: SSB/CW/digital on any
     // pan, and the zero-filled frames the radio sends for muted slices
@@ -5841,6 +6150,16 @@ static void applyNr2SettingsFromAppSettings(SpectralNR& nr2)
     nr2.setAeFilter(s.value("NR2AeFilter", "True").toString() == "True");
 }
 
+static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
+{
+    target.setGainMax(source.gainMax());
+    target.setGainSmooth(source.gainSmooth());
+    target.setQspp(source.qspp());
+    target.setGainMethod(source.gainMethod());
+    target.setNpeMethod(source.npeMethod());
+    target.setAeFilter(source.aeFilter());
+}
+
 #ifdef HAVE_SPECBLEACH
 static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4)
 {
@@ -5854,6 +6173,18 @@ static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4)
     nr4.setSuppressionStrength(
         s.value("NR4SuppressionStrength", "0.50").toFloat());
 }
+
+static void copyNr4Settings(const SpecbleachFilter& source,
+                            SpecbleachFilter& target)
+{
+    target.setReductionAmount(source.reductionAmount());
+    target.setSmoothingFactor(source.smoothingFactor());
+    target.setWhiteningFactor(source.whiteningFactor());
+    target.setAdaptiveNoise(source.adaptiveNoise());
+    target.setNoiseEstimationMethod(source.noiseEstimationMethod());
+    target.setMaskingDepth(source.maskingDepth());
+    target.setSuppressionStrength(source.suppressionStrength());
+}
 #endif
 
 #ifdef HAVE_DFNR
@@ -5862,6 +6193,13 @@ static void applyDfnrSettingsFromAppSettings(DeepFilterFilter& dfnr)
     auto& s = AppSettings::instance();
     dfnr.setAttenLimit(s.value("DfnrAttenLimit", "100").toFloat());
     dfnr.setPostFilterBeta(s.value("DfnrPostFilterBeta", "0.0").toFloat());
+}
+
+static void copyDfnrSettings(const DeepFilterFilter& source,
+                             DeepFilterFilter& target)
+{
+    target.setAttenLimit(source.attenLimit());
+    target.setPostFilterBeta(source.postFilterBeta());
 }
 #endif
 
@@ -5899,7 +6237,8 @@ SpectralNR::WisdomResult AudioEngine::generateWisdom(
 void AudioEngine::setNr2Enabled(bool on)
 {
     if (m_nr2Enabled == on) return;
-    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
     m_rxBuffer.clear();
     m_rxPackets.clear();
     m_rxOutputBuffer.clear();
@@ -5949,13 +6288,6 @@ void AudioEngine::setNr2Enabled(bool on)
         // Restore user-adjusted parameters from AppSettings
         applyNr2SettingsFromAppSettings(*m_nr2);
         m_nr2Enabled = true;
-        ensureLegacyKiwiDspState();
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            ensureExternalKiwiSourceDspState(*source);
-        }
     } else {
         m_nr2Enabled = false;
         m_nr2.reset();
@@ -5972,12 +6304,17 @@ void AudioEngine::setNr2Enabled(bool on)
             source->prebuffering = externalKiwiSourceAudible(*source);
         }
     }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
     qCDebug(lcAudio) << "AudioEngine: NR2" << (on ? "enabled" : "disabled");
     emit nr2EnabledChanged(on);
 }
 
 void AudioEngine::setNr2GainMax(float v)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr2) m_nr2->setGainMax(v);
     if (m_kiwiSdrNr2) m_kiwiSdrNr2->setGainMax(v);
     for (const auto& source : m_externalKiwiSources) {
@@ -5989,6 +6326,7 @@ void AudioEngine::setNr2GainMax(float v)
 
 void AudioEngine::setNr2Qspp(float v)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr2) m_nr2->setQspp(v);
     if (m_kiwiSdrNr2) m_kiwiSdrNr2->setQspp(v);
     for (const auto& source : m_externalKiwiSources) {
@@ -6000,6 +6338,7 @@ void AudioEngine::setNr2Qspp(float v)
 
 void AudioEngine::setNr2GainSmooth(float v)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr2) m_nr2->setGainSmooth(v);
     if (m_kiwiSdrNr2) m_kiwiSdrNr2->setGainSmooth(v);
     for (const auto& source : m_externalKiwiSources) {
@@ -6011,6 +6350,7 @@ void AudioEngine::setNr2GainSmooth(float v)
 
 void AudioEngine::setNr2GainMethod(int m)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr2) m_nr2->setGainMethod(m);
     if (m_kiwiSdrNr2) m_kiwiSdrNr2->setGainMethod(m);
     for (const auto& source : m_externalKiwiSources) {
@@ -6022,6 +6362,7 @@ void AudioEngine::setNr2GainMethod(int m)
 
 void AudioEngine::setNr2NpeMethod(int m)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr2) m_nr2->setNpeMethod(m);
     if (m_kiwiSdrNr2) m_kiwiSdrNr2->setNpeMethod(m);
     for (const auto& source : m_externalKiwiSources) {
@@ -6033,6 +6374,7 @@ void AudioEngine::setNr2NpeMethod(int m)
 
 void AudioEngine::setNr2AeFilter(bool on)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr2) m_nr2->setAeFilter(on);
     if (m_kiwiSdrNr2) m_kiwiSdrNr2->setAeFilter(on);
     for (const auto& source : m_externalKiwiSources) {
@@ -6048,7 +6390,8 @@ void AudioEngine::setNr2AeFilter(bool on)
 void AudioEngine::setNr4Enabled(bool on)
 {
     if (m_nr4Enabled == on) return;
-    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
     if (on) {
         if (m_nr2Enabled)  setNr2Enabled(false);
         if (m_rn2Enabled)  setRn2Enabled(false);
@@ -6061,14 +6404,8 @@ void AudioEngine::setNr4Enabled(bool on)
             emit nr4EnabledChanged(false);
             return;
         }
+        applyNr4SettingsFromAppSettings(*m_nr4);
         m_nr4Enabled = true;
-        ensureLegacyKiwiDspState();
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            ensureExternalKiwiSourceDspState(*source);
-        }
     } else {
         m_nr4Enabled = false;
         m_nr4.reset();
@@ -6079,12 +6416,17 @@ void AudioEngine::setNr4Enabled(bool on)
             }
         }
     }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
     qCDebug(lcAudio) << "AudioEngine: NR4" << (on ? "enabled" : "disabled");
     emit nr4EnabledChanged(on);
 }
 
 void AudioEngine::setNr4ReductionAmount(float dB)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setReductionAmount(dB);
     }
@@ -6099,6 +6441,7 @@ void AudioEngine::setNr4ReductionAmount(float dB)
 }
 void AudioEngine::setNr4SmoothingFactor(float pct)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setSmoothingFactor(pct);
     }
@@ -6113,6 +6456,7 @@ void AudioEngine::setNr4SmoothingFactor(float pct)
 }
 void AudioEngine::setNr4WhiteningFactor(float pct)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setWhiteningFactor(pct);
     }
@@ -6127,6 +6471,7 @@ void AudioEngine::setNr4WhiteningFactor(float pct)
 }
 void AudioEngine::setNr4AdaptiveNoise(bool on)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setAdaptiveNoise(on);
     }
@@ -6141,6 +6486,7 @@ void AudioEngine::setNr4AdaptiveNoise(bool on)
 }
 void AudioEngine::setNr4NoiseEstimationMethod(int m)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setNoiseEstimationMethod(m);
     }
@@ -6155,6 +6501,7 @@ void AudioEngine::setNr4NoiseEstimationMethod(int m)
 }
 void AudioEngine::setNr4MaskingDepth(float v)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setMaskingDepth(v);
     }
@@ -6169,6 +6516,7 @@ void AudioEngine::setNr4MaskingDepth(float v)
 }
 void AudioEngine::setNr4SuppressionStrength(float v)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nr4) {
         m_nr4->setSuppressionStrength(v);
     }
@@ -6196,7 +6544,8 @@ void AudioEngine::setNr4SuppressionStrength(float) {}
 void AudioEngine::setMnrEnabled(bool on)
 {
     if (m_mnrEnabled == on) return;
-    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
 #ifdef __APPLE__
     if (on) {
         // Disable all other noise-reduction modes — they're mutually exclusive
@@ -6215,13 +6564,6 @@ void AudioEngine::setMnrEnabled(bool on)
             return;
         }
         m_mnrEnabled = true;
-        ensureLegacyKiwiDspState();
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            ensureExternalKiwiSourceDspState(*source);
-        }
     } else {
         m_mnr.reset();
         m_kiwiSdrMnr.reset();
@@ -6233,6 +6575,10 @@ void AudioEngine::setMnrEnabled(bool on)
     }
 #endif
     m_mnrEnabled = on;
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
     emit mnrEnabledChanged(on);
 }
 
@@ -6242,6 +6588,7 @@ void AudioEngine::setMnrStrength(float normalized)
     AppSettings::instance().setValue("MnrStrength",
         QString::number(m_mnrStrength.load(), 'f', 2));
 #ifdef __APPLE__
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_mnr) {
         m_mnr->setStrength(m_mnrStrength.load());
     }
@@ -6264,7 +6611,8 @@ float AudioEngine::mnrStrength() const
 void AudioEngine::setRn2Enabled(bool on)
 {
     if (m_rn2Enabled == on) return;
-    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
     if (on) {
         // Disable all other NR modes — they're mutually exclusive
         if (m_nr2Enabled)  setNr2Enabled(false);
@@ -6279,13 +6627,6 @@ void AudioEngine::setRn2Enabled(bool on)
             return;
         }
         m_rn2Enabled = true;
-        ensureLegacyKiwiDspState();
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            ensureExternalKiwiSourceDspState(*source);
-        }
     } else {
         m_rn2Enabled = false;
         m_rn2.reset();
@@ -6295,6 +6636,10 @@ void AudioEngine::setRn2Enabled(bool on)
                 source->rn2.reset();
             }
         }
+    }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
     }
     qCDebug(lcAudio) << "AudioEngine: RN2 (RNNoise)" << (on ? "enabled" : "disabled");
     emit rn2EnabledChanged(on);
@@ -6311,7 +6656,8 @@ void AudioEngine::setRn2TxEnabled(bool on)
     if (m_rn2TxEnabled.load() == on) return;
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (on) {
-        m_rn2Tx = std::make_unique<RNNoiseFilter>();
+        m_rn2Tx = std::make_unique<RNNoiseFilter>(
+            RNNoiseFilter::OutputMode::ProcessedMono);
         if (!m_rn2Tx->isValid()) {
             qCWarning(lcAudio) << "AudioEngine: RN2 TX rnnoise_create() failed — disabling";
             m_rn2Tx.reset();
@@ -6335,7 +6681,8 @@ void AudioEngine::setRn2TxEnabled(bool on)
 void AudioEngine::setDfnrEnabled(bool on)
 {
     if (m_dfnrEnabled == on) return;
-    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
     if (on) {
         // Mutual exclusion with all other NR modes
         if (m_nr2Enabled)  setNr2Enabled(false);
@@ -6349,14 +6696,8 @@ void AudioEngine::setDfnrEnabled(bool on)
             emit dfnrEnabledChanged(false);
             return;
         }
+        applyDfnrSettingsFromAppSettings(*m_dfnr);
         m_dfnrEnabled = true;
-        ensureLegacyKiwiDspState();
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            ensureExternalKiwiSourceDspState(*source);
-        }
     } else {
         m_dfnrEnabled = false;
         m_dfnr.reset();
@@ -6367,12 +6708,17 @@ void AudioEngine::setDfnrEnabled(bool on)
             }
         }
     }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
     qCDebug(lcAudio) << "AudioEngine: DFNR (DeepFilterNet3)" << (on ? "enabled" : "disabled");
     emit dfnrEnabledChanged(on);
 }
 
 void AudioEngine::setDfnrAttenLimit(float db)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_dfnr) {
         m_dfnr->setAttenLimit(db);
     }
@@ -6388,11 +6734,13 @@ void AudioEngine::setDfnrAttenLimit(float db)
 
 float AudioEngine::dfnrAttenLimit() const
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     return m_dfnr ? m_dfnr->attenLimit() : 100.0f;
 }
 
 void AudioEngine::setDfnrPostFilterBeta(float beta)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_dfnr) {
         m_dfnr->setPostFilterBeta(beta);
     }
@@ -6420,7 +6768,8 @@ void AudioEngine::setDfnrPostFilterBeta(float) {}
 void AudioEngine::setNvAfxEnabled(bool on)
 {
     if (m_nvAfxEnabled == on) return;
-    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
     if (on) {
         // Mutual exclusion with all other NR modes
         if (m_nr2Enabled)  setNr2Enabled(false);
@@ -6435,14 +6784,8 @@ void AudioEngine::setNvAfxEnabled(bool on)
             emit nvAfxEnabledChanged(false);
             return;
         }
+        m_nvAfx->setIntensity(NvidiaBnrSettings::intensity());
         m_nvAfxEnabled = true;
-        ensureLegacyKiwiDspState();
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            ensureExternalKiwiSourceDspState(*source);
-        }
     } else {
         m_nvAfxEnabled = false;
         m_nvAfx.reset();
@@ -6453,12 +6796,17 @@ void AudioEngine::setNvAfxEnabled(bool on)
             }
         }
     }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
     qCDebug(lcAudio) << "AudioEngine: NVIDIA AFX denoiser" << (on ? "enabled" : "disabled");
     emit nvAfxEnabledChanged(on);
 }
 
 void AudioEngine::setNvAfxIntensity(float ratio)
 {
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nvAfx) {
         m_nvAfx->setIntensity(ratio);
     }

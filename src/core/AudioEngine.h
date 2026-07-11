@@ -17,6 +17,7 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QFutureSynchronizer>
 #include <QPointer>
 #include <QString>
 #include <QStringList>
@@ -672,6 +673,7 @@ private:
         bool enabled{false};
         bool muted{false};
         bool prebuffering{false};
+        bool dspInitializationPending{false};
     };
 
     struct AutomationAudioCaptureChunk {
@@ -725,7 +727,9 @@ private:
     bool anyExternalKiwiBufferQueued() const;
     qsizetype externalKiwiOutputBufferBytes() const;
     bool ensureLegacyKiwiDspState();
-    bool ensureExternalKiwiSourceDspState(ExternalRxAudioSourceState& source);
+    bool ensureExternalKiwiSourceDspState(const QString& sourceId);
+    bool ensureAllKiwiDspState();
+    void scheduleAllKiwiDspStateInitialization();
     void resetLegacyKiwiDspState();
     void clearLegacyKiwiDspState();
     void resetExternalKiwiDspState(ExternalRxAudioSourceState& source);
@@ -928,7 +932,8 @@ private:
 
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND
     // during enable/disable to prevent use-after-free (#502)
-    std::recursive_mutex m_dspMutex;
+    mutable std::recursive_mutex m_dspMutex;
+    quint64 m_dspConfigurationGeneration{0};
 
     // Client-side NR2 (spectral)
     std::unique_ptr<SpectralNR> m_nr2;
@@ -1114,6 +1119,10 @@ private:
     QByteArray    m_kiwiSdrOutputBuffer;  // post-DSP Kiwi speaker audio at output device rate
     QByteArray    m_radeRxBuffer;  // decoded RADE speech at output device rate
     std::atomic<bool> m_kiwiSdrAudioEnabled{false};
+    bool m_legacyKiwiDspInitializationPending{false};
+    QFutureSynchronizer<void> m_dspInitializationTasks;
+    std::mutex m_dspInitializationTasksMutex;
+    bool m_dspInitializationStopping{false};
     std::atomic<bool> m_kiwiSdrAudioTransmitMuted{false};
     std::atomic<int>  m_flexReceivePresentationDelayMs{0};
     std::atomic<int>  m_kiwiReceivePresentationDelayMs{0};

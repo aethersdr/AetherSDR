@@ -314,11 +314,11 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
 
     // 1. 24 kHz stereo float32 → 48 kHz mono float32. Keep the dry stereo
     // queued so the BNR attenuation can be applied without collapsing pan.
-    std::vector<float> mono24k(stereoFrames);
+    m_mono24k.resize(stereoFrames);
     for (int i = 0; i < stereoFrames; ++i) {
-        mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+        m_mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
     }
-    QByteArray mono48k = m_up->process(mono24k.data(), stereoFrames);
+    QByteArray mono48k = m_up->process(m_mono24k.data(), stereoFrames);
     const auto* mono = reinterpret_cast<const float*>(mono48k.constData());
     const int monoSamples = mono48k.size() / static_cast<int>(sizeof(float));
 

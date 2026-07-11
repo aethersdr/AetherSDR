@@ -33,7 +33,7 @@ Usage:
     python tools/automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png
     python tools/automation_probe.py panmessage add 0 kiwi 0 "Waiting|Queued"
     python tools/automation_probe.py audioCapture start 3000 raw,post,final
-    python tools/automation_probe.py audioCapture probeDspStereo all [strict]
+    python tools/automation_probe.py audioCapture probeDspStereo all [strict]  # may take up to 120s
     python tools/automation_probe.py audioCapture read /tmp/aether-audio.json
 """
 
@@ -72,16 +72,21 @@ class Bridge:
             self._sock.connect(sock_path)
             self._pipe = None
 
-    def request(self, obj):
-        return self.request_line(json.dumps(obj))
+    def request(self, obj, timeout_seconds=None):
+        return self.request_line(json.dumps(obj), timeout_seconds)
 
-    def request_line(self, text):
+    def request_line(self, text, timeout_seconds=None):
         """Send one raw request line (JSON or bare positional) and return the
         decoded JSON response."""
         line = (text + "\n").encode()
         if self._sock:
-            self._sock.sendall(line)
-            return self._read_line_sock()
+            previous_timeout = self._sock.gettimeout()
+            try:
+                self._sock.settimeout(timeout_seconds)
+                self._sock.sendall(line)
+                return self._read_line_sock()
+            finally:
+                self._sock.settimeout(previous_timeout)
         self._pipe.write(line)
         self._pipe.flush()
         return json.loads(self._pipe.readline().decode())
@@ -401,7 +406,7 @@ def main():
                "  automation_probe.py resize 1600 900\n"
                "  automation_probe.py audioCapture start 3000 raw,post,final\n"
                "  automation_probe.py audioCapture probeNr2Stereo\n"
-               "  automation_probe.py audioCapture probeDspStereo all [strict]\n"
+               "  automation_probe.py audioCapture probeDspStereo all [strict]  # up to 120s\n"
                "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"
@@ -463,11 +468,18 @@ def main():
 
         else:
             mapper = MAPPERS.get(args.command)
+            action = ""
             if mapper is not None:
                 req = mapper(args.rest)
                 req["cmd"] = args.command
                 action = req.get("action", "")
-                resp = bridge.request(req)
+                probe_timeout = (120 if args.command == "audioCapture"
+                                 and action in ("probeNr2Stereo", "probeDspStereo")
+                                 else None)
+                try:
+                    resp = bridge.request(req, timeout_seconds=probe_timeout)
+                except TimeoutError:
+                    sys.exit(f"error: {action} exceeded the {probe_timeout}s bridge timeout")
             else:
                 # No bespoke mapping: pass the bare positional line through and
                 # let the server's verb registry parse it. Note: the server
