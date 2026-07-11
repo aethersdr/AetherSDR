@@ -2330,6 +2330,11 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+    # Bridge docs must stay in sync with the verb registry (#4174 Phase 3):
+    # fail CI if the generated verb table drifts or a detail heading is dup'd.
+    add_test(NAME bridge_docs_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
 endif()
 
 add_executable(gui_client_identity_policy_test

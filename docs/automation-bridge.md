@@ -538,21 +538,6 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
 
-### `shortcut`
-Invoke a registered `ShortcutManager` action by id. This exercises the same
-handler a user-bound key would call, without requiring the test profile to bind
-an actual key sequence. It is useful for controller-style actions that may ship
-without a default keyboard shortcut.
-
-```json
-→ {"cmd":"shortcut","target":"center_lock_toggle"}
-← {"ok":true,"shortcut":"center_lock_toggle","fired":true}
-```
-
-Handlers may no-op when their normal app-side preconditions are not met; assert
-effects with `get`/`dumpTree` after firing, the same way a MIDI/controller
-test should.
-
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
 model (present once the app is running; fields are empty until a radio
@@ -2060,3 +2045,62 @@ lands.
   scoped-targets duplicates, skips disabled + keying controls, and prints a
   findings table with timing. The reusable form of the QA sweep.
 - Log category: `lcAutomation` (`aether.automation`) — toggle in Help → Support.
+
+---
+
+## Verb registry (auto-generated)
+
+The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
+
+<!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 45 verbs. -->
+
+| Verb | Aliases | Description |
+|---|---|---|
+| `ping` | — | liveness check → app + version + whether a token is required |
+| `verbs` | — | list every bridge verb with aliases and help (this table) |
+| `dumpTree` | — | serialize the full widget tree as JSON |
+| `floors` | — | per-pan measured noise + display floor (dBm) |
+| `grab` | — | grab <target\|pan\|pan-visible [index]> [path] — PNG capture |
+| `close` | — | close <target> — close the target's top-level window |
+| `hover` | — | hover <target> [leave] — synthetic mouse hover |
+| `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
+| `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
+| `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
+| `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
+| `contextMenu` | — | contextMenu <target> [x y] — Qt context-menu path |
+| `rightClick` | — | rightClick <target> [x y] — mousePressEvent menu path |
+| `hitTest` | `hittest` | hitTest <target> [x y] — read-only widget-owner probe |
+| `clickAt` | `clickat` | clickAt <x> <y> \| clickAt <target> <x> <y> — TX-guarded coordinate click |
+| `invoke` | — | invoke <target> <action> [value…] — drive a control (TX-guarded) |
+| `get` | — | get <model> [selector] [property] — live model snapshot |
+| `connect` | — | connect <list\|show\|hide\|local\|ip\|wait> [args] |
+| `disconnect` | — | disconnect from the radio |
+| `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
+| `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
+| `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `tune` | — | tune <mhz> — set the active slice frequency |
+| `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
+| `record` | — | record <start\|stop\|status\|path\|dir> [args] |
+| `testtone` | — | testtone <on\|off> [freqHz levelDb] |
+| `pan` | — | pan <create\|add\|remove\|close\|center> [value] |
+| `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
+| `scale` | — | scale [pct] — report/persist the UI scale factor |
+| `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
+| `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
+| `streams` | — | streams [radio\|reset] — stream diagnostics |
+| `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
+| `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
+| `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
+| `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |
+| `station` | — | station <name> — set the GUI-client station name |
+| `resize` | — | resize <w> <h> [target] — resize a window |
+| `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
+| `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
+| `menu` | — | menu list \| open <name> — menu-bar menus |
+| `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
+| `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |
+| `mark` | — | mark <text> — timestamped annotation in the log ring |
+| `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |
+
+<!-- END GENERATED VERB TABLE -->
