@@ -26,3 +26,4 @@ msix-root-*/
 *.msixupload
 *.pfx
 packaging/windows/certs/
+__pycache__/

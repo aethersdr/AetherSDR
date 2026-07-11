@@ -37,6 +37,7 @@
 #include "models/SliceModel.h"
 
 #include <QAbstractSlider>
+#include <QJsonObject>
 #include <QToolTip>
 #include <QApplication>
 #include <QApplicationStateChangeEvent>
@@ -998,6 +999,13 @@ void MainWindow::registerShortcutActions()
         QKeySequence(Qt::Key_L), [this]() {
             auto* s = activeSlice();
             if (s) s->setLocked(!s->isLocked());
+        });
+    m_shortcutManager.registerAction("center_lock_toggle", "Center Lock Active Slice", "Tuning",
+        QKeySequence(), [this]() {
+            SliceModel* slice = activeSlice();
+            if (slice) {
+                setCenterLockForSlice(slice, !centerLockActiveForSlice(slice));
+            }
         });
 
     static constexpr double kPanZoomFactor = 1.5;

@@ -32,8 +32,25 @@ MemoryEntry captureMemoryFromSlice(const RadioModel& model,
     memory.toneValue = slice.fmToneValue().toDouble();
     memory.squelch = slice.squelchOn();
     memory.squelchLevel = slice.squelchLevel();
-    memory.rxFilterLow = slice.filterLow();
-    memory.rxFilterHigh = slice.filterHigh();
+    // Memory filter fields are USB-form on the wire for FDV modes (FlexLib
+    // Memory.cs clamps FDV rx_filter_low to >= 0), while the client stores
+    // FDVL canonically negative since #3434. Mirror back to the ecosystem
+    // form at capture so radio-side memory slots (and the CSV export built
+    // from this struct) stay compatible with SmartSDR/FlexLib clients —
+    // a stored negative low would be clamped to 0 there, degrading the slot.
+    {
+        int memLow = slice.filterLow();
+        int memHigh = slice.filterHigh();
+        if (SliceModel::filterPolarityLsbFamily(memory.mode)
+            && memory.mode.startsWith(QStringLiteral("FDV"))
+            && memLow < 0) {
+            const int lo = memLow, hi = memHigh;
+            memLow  = -hi;
+            memHigh = -lo;
+        }
+        memory.rxFilterLow = memLow;
+        memory.rxFilterHigh = memHigh;
+    }
     memory.rttyMark = slice.rttyMark();
     memory.rttyShift = slice.rttyShift();
     memory.diglOffset = slice.diglOffset();

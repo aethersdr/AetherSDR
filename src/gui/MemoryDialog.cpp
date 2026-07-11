@@ -966,6 +966,7 @@ void MemoryDialog::onImport()
         QList<MemoryCsvRecord> records;
         QStringList issues;
         QString fileName;
+        MemoryCsvFormat format{MemoryCsvFormat::Unknown};
         int nextRecord{0};
         int processedCount{0};
         int importedCount{0};
@@ -975,6 +976,7 @@ void MemoryDialog::onImport()
     state->records = parsed.records;
     state->issues = parsed.errors;
     state->fileName = QFileInfo(path).fileName();
+    state->format = parsed.format;
 
     const QPointer<MemoryDialog> dialogGuard(this);
     auto showSummary = [dialogGuard, state]() {
@@ -986,10 +988,11 @@ void MemoryDialog::onImport()
         QMessageBox summary(dialogGuard);
         summary.setWindowTitle("Import Memories");
         summary.setIcon(state->issues.isEmpty() ? QMessageBox::Information : QMessageBox::Warning);
-        summary.setText(QString("Imported %1 %2 from %3.")
+        summary.setText(QString("Imported %1 %2 from %3 (%4 format).")
                             .arg(state->importedCount)
                             .arg(state->importedCount == 1 ? "record" : "records")
-                            .arg(state->fileName));
+                            .arg(state->fileName)
+                            .arg(MemoryCsvCompat::formatName(state->format)));
         if (!state->issues.isEmpty()) {
             summary.setInformativeText(
                 QString("%1 %2 skipped or couldn't be imported. See Details for the row names and messages.")

@@ -6,6 +6,7 @@
 #include <QWidget>
 #include <QPushButton>
 #include <QVector>
+#include <QPointer>
 #include <QMap>
 #include <QImage>
 #include <QColor>
@@ -32,6 +33,7 @@ namespace AetherSDR {
 
 class SpectrumOverlayMenu;
 class VfoWidget;
+class PanadapterRenderScheduler;
 struct PanadapterOverlayMessage;
 class PanadapterMessageOverlay;
 
@@ -94,6 +96,9 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_PROPERTY(double noiseFloorDbm READ noiseFloorDbm)
     Q_PROPERTY(double displayFloorDbm READ displayFloorDbm)
     Q_PROPERTY(int panIndex READ panIndex)
+    Q_PROPERTY(double centerMhz READ centerMhz)
+    Q_PROPERTY(double bandwidthMhz READ bandwidthMhz)
+    Q_PROPERTY(int centerLockSliceId READ centerLockSliceId)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -110,11 +115,15 @@ public:
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
+    // Same range update, but snaps instead of using the small pan-follow
+    // animation. Center Lock uses this so the locked slice stays pinned.
+    void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
+    void setRenderScheduler(PanadapterRenderScheduler* scheduler);
     // macOS: whether the pan gets its own native NSView (historical default —
     // #714). AETHER_PAN_NO_NATIVE_WINDOW=1 opts out to validate the cheaper
     // composited path (no per-present raster flushSubWindow blend).
@@ -128,6 +137,11 @@ public:
     // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
     // counters after the read so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
+    Q_INVOKABLE QVariantMap renderSchedulerStatsSnapshot(bool reset);
+    // QRhiWidget surface geometry for `get rhi`: widget size, devicePixelRatio,
+    // and (on GPU builds) the pinned fixedColorBufferSize so automation can
+    // assert it stays even-aligned under a fractional QT_SCALE_FACTOR (#4091).
+    Q_INVOKABLE QVariantMap automationRhiSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssReset(bool kiwiStream);
     Q_INVOKABLE QVariantMap automationDssInjectRows(int count,
@@ -283,6 +297,8 @@ public:
     VfoWidget* vfoWidget() const { return m_vfoWidget; }  // active slice (compat)
     VfoWidget* vfoWidget(int sliceId) const;
     VfoWidget* addVfoWidget(int sliceId);
+    VfoWidget* takeVfoWidget(int sliceId);
+    void       adoptVfoWidget(int sliceId, VfoWidget* widget);
     void       removeVfoWidget(int sliceId);
     void       setActiveVfoWidget(int sliceId);
     bool vfoFlagOnLeftForSlice(int sliceId, double freqMhz,
@@ -360,6 +376,8 @@ public:
     bool showTuneGuides() const { return m_showTuneGuides; }
     void setExtendedFrequencyLine(bool on);
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
+    void setExtendedPassband(bool on);
+    bool extendedPassband() const { return m_extendedPassband; }
     void setFloating(bool on) { m_isFloating = on; }
     void setBackgroundImage(const QString& path);
     QString backgroundImagePath() const { return m_bgImagePath; }
@@ -502,6 +520,8 @@ public:
     void setSliceOverlayAdaptive(int sliceId, bool enabled);
     // Status of the adaptive fit (green/red ball after the high-cut label)
     void setSliceOverlayAdaptiveActive(int sliceId, bool active);
+    void setCenterLockSliceId(int sliceId);
+    int centerLockSliceId() const { return m_centerLockSliceId; }
     // Remove a slice overlay.
     void removeSliceOverlay(int sliceId);
 
@@ -664,6 +684,7 @@ signals:
     void sliceTuneRequested(int sliceId, double freqMhz);
     void popOutRequested(bool popOut);  // true=float, false=dock
     void sliceTxRequested(int sliceId);
+    void centerLockRequested(int sliceId, bool locked);
     // Emitted when FFT bin-mapping dimensions change so MainWindow can re-push
     // xpixels/ypixels to the radio (#1511).
     void dimensionsChanged(int w, int h);
@@ -702,6 +723,8 @@ public:
     static void toggleStarstruckMode();
 
 private:
+    void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
+                                   bool animateSmallNudges);
     double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
@@ -1002,6 +1025,7 @@ private:
 
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
+    int m_centerLockSliceId{-1};
 
     int    m_filterMinHz{-12000};  // per-mode lower bound (active slice)
     int    m_filterMaxHz{12000};   // per-mode upper bound (active slice)
@@ -1239,6 +1263,9 @@ private:
     // fires at the slot edge) while capping flushes at ~60/s.
     static constexpr int kPresentCoalesceMs = 16;
     bool m_presentPending{false};           // trailing update scheduled
+    // Shared cross-pan repaint coalescer (owned by PanadapterStack). QPointer so
+    // a teardown reorder can't leave a dangling scheduler here. (#4139)
+    QPointer<PanadapterRenderScheduler> m_renderScheduler;
     void coalescedUpdate();                 // update(), coalesced into one present per slot
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
@@ -1324,6 +1351,7 @@ private:
     // Tune guide overlay (vertical line + freq label, auto-hides after 4s)
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
+    bool    m_extendedPassband{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};
     QTimer* m_tuneGuideTimer{nullptr};

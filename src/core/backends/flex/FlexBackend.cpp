@@ -4,6 +4,7 @@
 
 #include <QThread>
 
+#include "core/LogManager.h"
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
 #include "core/backends/flex/FlexKvCarry.h"
@@ -325,29 +326,51 @@ void FlexBackend::decodePanExtensions(const QString& panId,
 {
     // WNB (wideband noise blanker) is a Flex-specific pan feature, not core
     // profile — carry only the keys the wire reported, namespaced under "flex".
+    // All three keys mirror FlexLib's guarded parses (#4147 audit): a malformed
+    // or out-of-range value is dropped from the carry (the model keeps
+    // last-known-good), never coerced to false/0.
     QVariantMap wnb;
     if (kvs.contains(QStringLiteral("wnb"))) {
-        wnb.insert(QStringLiteral("wnb"),
-                   kvs.value(QStringLiteral("wnb")).toInt() != 0);
+        // FlexLib Panadapter.cs:1226 — uint.TryParse + reject > 1, skip on
+        // failure. Bare toInt() != 0 turned "wnb=bogus" into false and could
+        // silently switch the noise blanker indicator off.
+        bool ok = false;
+        const uint v = kvs.value(QStringLiteral("wnb")).toUInt(&ok);
+        if (ok && v <= 1) {
+            wnb.insert(QStringLiteral("wnb"), v != 0);
+        } else {
+            qCDebug(lcProtocol) << "FlexBackend: invalid wnb value"
+                                << kvs.value(QStringLiteral("wnb"));
+        }
     }
     if (kvs.contains(QStringLiteral("wnb_level"))) {
-        // Guard the numeric parse: a malformed/non-numeric wnb_level must be
-        // ignored, not applied as 0. The old inline applyPanStatus path did
-        // exactly this (toInt(&ok) + if(ok)), mirroring FlexLib's own
-        // uint.TryParse + skip-on-failure (Panadapter.cs:1244). Dropping the
-        // guard would silently snap the WNB-level UI to 0 (Principle VII).
+        // FlexLib Panadapter.cs:1244 — uint.TryParse (negatives fail to parse)
+        // + reject > 100, skip on failure: an out-of-range level keeps the last
+        // known-good value rather than being clamped into range (the old signed
+        // toInt(&ok) accepted negatives and left > 100 to a model-side clamp,
+        // fabricating levels FlexLib refuses; Principle VII).
         bool ok = false;
-        const int level = kvs.value(QStringLiteral("wnb_level")).toInt(&ok);
-        if (ok) {
-            wnb.insert(QStringLiteral("wnb_level"), level);
+        const uint level = kvs.value(QStringLiteral("wnb_level")).toUInt(&ok);
+        if (ok && level <= 100) {
+            wnb.insert(QStringLiteral("wnb_level"), int(level));
+        } else {
+            qCDebug(lcProtocol) << "FlexBackend: invalid wnb_level value"
+                                << kvs.value(QStringLiteral("wnb_level"));
         }
     }
     if (kvs.contains(QStringLiteral("wnb_updating"))) {
         // FlexLib v4.2.18 exposes wnb_updating on display pan status while the
         // radio normalizes the SCU-level WNB threshold; it is distinct from the
-        // per-pan WNB enable flag ("wnb") above — keep them separate.
-        wnb.insert(QStringLiteral("wnb_updating"),
-                   kvs.value(QStringLiteral("wnb_updating")).toInt() != 0);
+        // per-pan WNB enable flag ("wnb") above — keep them separate. Same
+        // guarded parse as wnb (Panadapter.cs:1262, uint.TryParse + > 1 reject).
+        bool ok = false;
+        const uint v = kvs.value(QStringLiteral("wnb_updating")).toUInt(&ok);
+        if (ok && v <= 1) {
+            wnb.insert(QStringLiteral("wnb_updating"), v != 0);
+        } else {
+            qCDebug(lcProtocol) << "FlexBackend: invalid wnb_updating value"
+                                << kvs.value(QStringLiteral("wnb_updating"));
+        }
     }
     if (!wnb.isEmpty()) {
         wnb.insert(QStringLiteral("panId"), panId);

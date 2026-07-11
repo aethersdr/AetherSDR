@@ -2,10 +2,12 @@
 
 #include "MemoryFieldValues.h"
 
+#include <QHash>
 #include <QLoggingCategory>
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <cmath>
 
 Q_LOGGING_CATEGORY(lcMemoryCsv, "aether.memory.csv")
 
@@ -389,6 +391,180 @@ bool parseRecord(const QStringList& fields,
     return true;
 }
 
+// ── CHIRP-next generic CSV import ───────────────────────────────────────────
+//
+// CHIRP (chirp_common.Memory.CSV_FORMAT) writes a header whose first column is
+// "Location". The columns AetherSDR consumes, with CHIRP's units:
+//   Frequency  MHz      ("146.520000")   -> MemoryEntry::freq      (MHz, same)
+//   Duplex     +/-/split/off/""          -> offsetDir  up/down/simplex
+//   Offset     MHz      ("0.600000")     -> repeaterOffset          (MHz, same)
+//   Tone       Tone/TSQL/DTCS/Cross/""   -> toneMode   off/ctcss_tx
+//   rToneFreq  CTCSS Hz (TX tone)        -> toneValue               (Hz)
+//   cToneFreq  CTCSS Hz (RX tone, TSQL)  -> toneValue               (Hz)
+//   Mode       FM/NFM/AM/USB/LSB/CW/...  -> mode (mapped to Flex modes)
+//   TStep      kHz      ("5.00")         -> step  (Hz — scaled ×1000)
+//   Name                                 -> name
+// CHIRP-only columns (Location, DtcsCode, CrossMode, Skip, Power, Comment,
+// URCALL/RPT*/DVCODE) have no MemoryEntry home and are dropped; the DTCS and
+// D-STAR/DV tone systems the FlexRadio can't reproduce degrade to a plain
+// (tone-off) memory rather than failing the row.
+
+bool looksLikeChirpHeader(const QStringList& fields)
+{
+    if (fields.isEmpty()) {
+        return false;
+    }
+    if (fields.at(0).trimmed().compare("Location", Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    // Require the one column we cannot import a channel without.
+    for (const QString& f : fields) {
+        if (f.trimmed().compare("Frequency", Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// CHIRP header name -> column index (case-insensitive), so we tolerate the
+// column-count drift between CHIRP releases and only read what we recognize.
+QHash<QString, int> chirpColumnIndex(const QStringList& header)
+{
+    QHash<QString, int> map;
+    for (int i = 0; i < header.size(); ++i) {
+        map.insert(header.at(i).trimmed().toLower(), i);
+    }
+    return map;
+}
+
+QString chirpField(const QStringList& fields, const QHash<QString, int>& cols, const char* name)
+{
+    const int idx = cols.value(QString::fromLatin1(name).toLower(), -1);
+    if (idx < 0 || idx >= fields.size()) {
+        return {};
+    }
+    return fields.at(idx).trimmed();
+}
+
+QString chirpModeToWire(const QString& chirpMode)
+{
+    static const QHash<QString, QString> kMap = {
+        {"WFM", "FM"},   {"FM", "FM"},    {"NFM", "NFM"},
+        {"AM", "AM"},    {"NAM", "AM"},
+        {"USB", "USB"},  {"LSB", "LSB"},
+        {"CW", "CW"},    {"CWR", "CW"},   {"NCW", "CW"},  {"NCWR", "CW"},
+        {"RTTY", "RTTY"},{"RTTYR", "RTTY"},{"FSK", "RTTY"},{"FSKR", "RTTY"},
+        {"DIG", "DIGU"}, {"PKT", "DIGU"},
+        {"DV", "DSTR"},  {"DSTAR", "DSTR"},
+    };
+    const QString upper = MemoryFields::sanitizeText(chirpMode).trimmed().toUpper();
+    const auto it = kMap.constFind(upper);
+    if (it != kMap.constEnd()) {
+        return it.value();
+    }
+    // Unknown/vendor mode (DMR, P25, DN, Auto…): pass the upper-case token
+    // through and let the radio validate, matching the SmartSDR-import path.
+    return upper;
+}
+
+QString chirpDuplexToOffsetDir(const QString& duplex)
+{
+    const QString d = duplex.trimmed().toLower();
+    if (d == "+") { return "up"; }
+    if (d == "-") { return "down"; }
+    // "", "split", "off": the Flex memory model has no split/odd-split slot, so
+    // anything that isn't a simple +/- repeater shift lands as simplex.
+    return "simplex";
+}
+
+bool parseChirpRecord(const QStringList& fields,
+                      const QHash<QString, int>& cols,
+                      int lineNumber,
+                      MemoryCsvRecord& record,
+                      QString& error)
+{
+    MemoryEntry memory;
+
+    memory.name = MemoryFields::sanitizeText(chirpField(fields, cols, "Name")).trimmed();
+
+    const QString rowLabel = !memory.name.isEmpty()
+        ? QString("Line %1 (%2)").arg(lineNumber).arg(memory.name)
+        : QString("Line %1").arg(lineNumber);
+
+    // Frequency — CHIRP writes MHz, the same unit as MemoryEntry::freq.
+    const QString freqText = chirpField(fields, cols, "Frequency");
+    if (!parseDoubleField(freqText, memory.freq) || !validateRange(memory.freq, 0.0, 10000.0)) {
+        error = QString("%1: invalid CHIRP frequency '%2'.").arg(rowLabel).arg(freqText);
+        return false;
+    }
+
+    // Mode.
+    memory.mode = chirpModeToWire(chirpField(fields, cols, "Mode"));
+    if (memory.mode.isEmpty()) {
+        memory.mode = QStringLiteral("FM");  // CHIRP's implicit VHF/UHF default.
+    }
+    if (!MemoryFields::isKnownMode(memory.mode)) {
+        qCInfo(lcMemoryCsv) << rowLabel << "CHIRP mode mapped to unrecognized"
+                            << memory.mode << "- passing through to radio for validation";
+    }
+
+    // TStep — CHIRP writes kHz (e.g. "5.00"); MemoryEntry::step is Hz.
+    const QString stepText = chirpField(fields, cols, "TStep");
+    double stepKhz = 0.0;
+    if (!stepText.isEmpty() && parseDoubleField(stepText, stepKhz) && stepKhz > 0.0) {
+        memory.step = std::clamp(int(std::lround(stepKhz * 1000.0)), 1, 1000000);
+    }
+    // else: keep MemoryEntry's default step.
+
+    // Duplex/Offset — CHIRP offset is MHz, matching repeaterOffset.
+    memory.offsetDir = chirpDuplexToOffsetDir(chirpField(fields, cols, "Duplex"));
+    if (memory.offsetDir == QLatin1String("simplex")) {
+        memory.repeaterOffset = 0.0;
+    } else {
+        double offMhz = 0.0;
+        if (parseDoubleField(chirpField(fields, cols, "Offset"), offMhz)) {
+            memory.repeaterOffset = std::clamp(offMhz, -100.0, 100.0);
+        }
+    }
+
+    // Tone — map CHIRP's tone-mode taxonomy onto the Flex off/ctcss_tx pair. A
+    // FlexRadio memory carries a single TX CTCSS tone; DTCS and cross modes it
+    // can't reproduce degrade to tone-off rather than failing the row.
+    const QString tmode = chirpField(fields, cols, "Tone").toUpper();
+    double tone = 0.0;
+    if (tmode == QLatin1String("TONE")) {
+        parseDoubleField(chirpField(fields, cols, "rToneFreq"), tone);
+        memory.toneMode = QStringLiteral("ctcss_tx");
+    } else if (tmode == QLatin1String("TSQL")) {
+        parseDoubleField(chirpField(fields, cols, "cToneFreq"), tone);
+        memory.toneMode = QStringLiteral("ctcss_tx");
+    } else if (tmode == QLatin1String("CROSS")) {
+        // Cross modes are "<tx>-><rx>"; honor the TX side when it is a tone.
+        const QString cross = chirpField(fields, cols, "CrossMode").toUpper();
+        if (cross.startsWith(QLatin1String("TONE"))) {
+            parseDoubleField(chirpField(fields, cols, "rToneFreq"), tone);
+            memory.toneMode = QStringLiteral("ctcss_tx");
+        } else {
+            memory.toneMode = QStringLiteral("off");
+        }
+    } else {
+        memory.toneMode = QStringLiteral("off");  // "", DTCS, or unrecognized.
+    }
+    // CTCSS tones live in ~67–254.1 Hz; a parse miss leaves tone at 0.0, and
+    // an inclusive 0-lower-bound accepted it — importing ctcss_tx with an
+    // invalid 0 Hz tone instead of taking the off fallback below (#4129
+    // review: reproducible with a trimmed export whose rToneFreq column is
+    // absent while Tone=Tone). 50 Hz floors out missing/garbage values.
+    if (memory.toneMode == QLatin1String("ctcss_tx") && validateRange(tone, 50.0, 300.0)) {
+        memory.toneValue = tone;
+    } else if (memory.toneMode == QLatin1String("ctcss_tx")) {
+        memory.toneMode = QStringLiteral("off");  // tone freq missing/out of range.
+    }
+
+    record.memory = memory;
+    return true;
+}
+
 } // namespace
 
 QByteArray MemoryCsvCompat::serialize(const QList<MemoryCsvRecord>& records)
@@ -416,6 +592,7 @@ MemoryCsvParseResult MemoryCsvCompat::parse(const QByteArray& bytes)
     const QStringList lines = text.split(QRegularExpression("\r\n|\n|\r"), Qt::KeepEmptyParts);
 
     bool sawHeader = false;
+    QHash<QString, int> chirpCols;
     for (int i = 0; i < lines.size(); ++i) {
         QString line = lines.at(i);
         if (i == 0)
@@ -431,24 +608,33 @@ MemoryCsvParseResult MemoryCsvCompat::parse(const QByteArray& bytes)
         }
 
         if (!sawHeader) {
-            if (fields.size() != kHeader.size()) {
-                result.errors << QString("Line 1: expected %1 header columns, got %2.")
-                                 .arg(kHeader.size()).arg(fields.size());
-                return result;
+            if (!fields.isEmpty())
+                fields[0] = trimBom(fields.at(0));
+
+            // Native SmartSDR memory CSV: header must match exactly.
+            if (fields.size() == kHeader.size() && fields == kHeader) {
+                result.format = MemoryCsvFormat::SmartSdr;
+                sawHeader = true;
+                continue;
+            }
+            // CHIRP-next generic CSV: "Location"-led header; map by column name.
+            if (looksLikeChirpHeader(fields)) {
+                result.format = MemoryCsvFormat::Chirp;
+                chirpCols = chirpColumnIndex(fields);
+                sawHeader = true;
+                continue;
             }
 
-            fields[0] = trimBom(fields.at(0));
-            if (fields != kHeader) {
-                result.errors << "Line 1: header does not match SmartSDR memory CSV format.";
-                return result;
-            }
-            sawHeader = true;
-            continue;
+            result.errors << "Line 1: header does not match the SmartSDR or CHIRP memory CSV format.";
+            return result;
         }
 
         MemoryCsvRecord record;
         QString error;
-        if (!parseRecord(fields, i + 1, record, error)) {
+        const bool parsed = (result.format == MemoryCsvFormat::Chirp)
+            ? parseChirpRecord(fields, chirpCols, i + 1, record, error)
+            : parseRecord(fields, i + 1, record, error);
+        if (!parsed) {
             result.errors << error;
             continue;
         }
@@ -456,9 +642,19 @@ MemoryCsvParseResult MemoryCsvCompat::parse(const QByteArray& bytes)
     }
 
     if (!sawHeader)
-        result.errors << "Missing SmartSDR memory CSV header.";
+        result.errors << "Missing SmartSDR or CHIRP memory CSV header.";
 
     return result;
+}
+
+QString MemoryCsvCompat::formatName(MemoryCsvFormat format)
+{
+    switch (format) {
+    case MemoryCsvFormat::SmartSdr: return QStringLiteral("SmartSDR");
+    case MemoryCsvFormat::Chirp:    return QStringLiteral("CHIRP");
+    case MemoryCsvFormat::Unknown:  break;
+    }
+    return QStringLiteral("unknown");
 }
 
 MemoryCsvRecord MemoryCsvCompat::fromMemoryEntry(const MemoryEntry& memory)

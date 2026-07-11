@@ -54,6 +54,20 @@ signals:
     // widgets (the AppSettings value is what's actually consulted at
     // paint time — this signal is just the redraw trigger).
     void sliceLetterDisplayModeChanged();
+    // Fired when the user toggles the agent automation bridge in the
+    // Network tab. MainWindow starts/stops the in-app bridge that MCP
+    // clients (AI coding assistants) connect to. The AppSettings value
+    // AutomationBridgeEnabled is persisted by the dialog before the
+    // signal fires, so it survives restart.
+    void automationBridgeToggled(bool enabled);
+    // Fired when the user rotates (or first-generates) the bridge access
+    // token. MainWindow persists it and pushes it to the running bridge so
+    // the rotation takes effect immediately.
+    void automationBridgeTokenRotated(const QString& token);
+    // Fired when the user changes the "Allow TX via MCP" toggle (after the
+    // one-time confirmation dialog). MainWindow persists it and pushes it to
+    // the running bridge — enabling arms the force-unkey watchdog.
+    void automationBridgeTxAllowedChanged(bool allowed);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

@@ -2,6 +2,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/AutomationBridgeSettings.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
@@ -228,6 +229,28 @@ int main(int argc, char* argv[])
         }
     }
 
+    // ── Bundled Inter UI font (SIL OFL 1.1) ───────────────────────────────
+    // The theme's `font.family.ui` token resolves to "Inter" (ThemeManager),
+    // with the QSS fallback chain "Inter", "Segoe UI", sans-serif.  Inter
+    // ships with nothing by default, so on a stock box the chain fell through
+    // to Segoe UI on Windows and SF/Helvetica on macOS — every px-tuned QSS
+    // (paddings, fixed heights, the flag header row) was implicitly tuned
+    // against one family and rendered against another per platform (#4036).
+    // Register the static Regular + Bold instances so "Inter" resolves the
+    // same everywhere.  Static weights, not the variable font: variable-axis
+    // support needs Qt 6.7+ and Linux CI is pre-6.5.
+    {
+        static constexpr const char* kInterFonts[] = {
+            ":/fonts/Inter-Regular.ttf",
+            ":/fonts/Inter-Bold.ttf",
+        };
+        for (const char* path : kInterFonts) {
+            if (QFontDatabase::addApplicationFont(QString::fromLatin1(path)) < 0) {
+                qWarning() << "Failed to load bundled font:" << path;
+            }
+        }
+    }
+
     // Request microphone permission early (macOS only).
     // Shows the system prompt on first launch so it's ready before PTT.
     requestMicrophonePermission();
@@ -421,33 +444,15 @@ int main(int argc, char* argv[])
         // two concurrent automation instances don't steal each other's socket
         // (QLocalServer::removeServer() unlinks a sibling's live socket on a
         // shared name); drivers find the right one via the discovery file/dir.
-        std::unique_ptr<AetherSDR::AutomationServer> automation;
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
-            const QString sockName = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
-                ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
-                : QStringLiteral("aethersdr-automation-%1").arg(QCoreApplication::applicationPid());
-            automation = std::make_unique<AetherSDR::AutomationServer>();
-            automation->setRadioModel(&window.radioModel());  // for the get() verb
-            automation->setAudioEngine(window.audioEngine());
-            automation->setQsoRecorder(window.qsoRecorder());  // for the record() verb
-            automation->setConnectionDialogHost(&window);
-            automation->setConnectionAutomation(
-                window.findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
-            automation->setSliceReceiveSourceHandler(
-                [&window](const QString& arg) {
-                    return window.automationSetSliceReceiveSource(arg);
-                });
-            automation->setReceiveSyncSnapshotHandler(
-                [&window]() {
-                    return window.automationReceiveSyncSnapshot();
-                });
-            automation->setKiwiSdrSnapshotHandler(
-                [&window]() {
-                    return window.automationKiwiSdrSnapshot();
-                });
-            if (!automation->start(sockName))
-                automation.reset();
-        }
+        // Agent automation bridge (#3646). Construction + handler wiring now
+        // lives in MainWindow::startAutomationBridge() so the same path serves
+        // both triggers. Start it when the operator persisted the toggle in
+        // Radio Setup → Network, OR when AETHER_AUTOMATION is set (the launch-
+        // time override that headless drivers/CI rely on — always wins). The
+        // window owns the server for its lifetime.
+        const bool bridgePersisted = AetherSDR::AutomationBridgeSettings::enabled();
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION") || bridgePersisted)
+            window.startAutomationBridge();
 
         exitCode = app.exec();
     }

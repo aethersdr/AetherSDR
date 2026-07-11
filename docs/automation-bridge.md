@@ -84,6 +84,69 @@ QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1
 
 ---
 
+## MCP server — drive the bridge from any AI assistant
+
+`tools/aether_mcp.py` wraps this bridge in the Model Context Protocol, so
+an MCP-capable coding assistant (Claude Code, Cursor, Copilot, Codex CLI,
+Gemini CLI, …) can validate your PR against the running app natively —
+no socket scripting required. This is the recommended way for
+contributors to self-verify UI changes before requesting review.
+
+**Setup** (zero dependencies — plain Python 3):
+
+1. Launch the app with the bridge on: `AETHER_AUTOMATION=1 ./build/AetherSDR`
+2. Register the server with your assistant:
+   - **Claude Code**: nothing to do — the repo's `.mcp.json` registers it;
+     approve the prompt on first use. (Manual: `claude mcp add aethersdr
+     -- python3 tools/aether_mcp.py`)
+   - **Cursor / Windsurf / others**: add to your MCP config:
+     ```json
+     {"mcpServers": {"aethersdr-automation": {
+        "command": "python3", "args": ["tools/aether_mcp.py"]}}}
+     ```
+   - **Windows**: use `python` (or `py -3`) instead of `python3`.
+
+**Tools exposed**: `bridge_status` (is the app up? which instance?),
+`dump_tree` (widget tree, with a `filter` arg to prune), `grab_widget`
+(PNG screenshot, returned inline to the model), `invoke` (click/toggle/
+setValue/…), `get_state` (`get` model snapshots), `shortcut`, and
+`bridge_command` (raw escape hatch to every other verb below).
+
+A typical assistant validation loop for a PR:
+`bridge_status` → `dump_tree filter=<your widget>` → `invoke` the
+control you changed → `get_state` to assert the model reacted →
+`grab_widget` for a visual check.
+
+**Access token.** Enabling the bridge in Radio Setup → Network mints a
+random token (stored in your OS secret store via QtKeychain — macOS
+Keychain / Windows Credential Manager / libsecret-KWallet, never in the
+plaintext settings file). Copy it into your assistant's MCP config as the
+`AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
+verb except `ping` without a matching token. Headless/CI can supply the
+token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
+
+What the token *does* and *doesn't* do: it opts a **specific** client in
+and protects the secret at rest (nothing in a backed-up / synced /
+screen-shared dotfile), across other user accounts, and over any network
+reach. It is **not** a hard wall against a determined *same-user* process
+on Linux/Windows — once your login keychain is unlocked, libsecret and
+DPAPI hand the secret to any same-user caller (macOS, with its per-item
+ACL prompt, is the exception). Treat it as "this app deliberately grants
+this client access," not "same-user isolation."
+
+The TX-safety gate is unchanged in spirit: the bridge refuses transmit-
+keying controls regardless of who's calling (see [TX safety](#tx-safety)).
+An assistant can only key your radio if **you** opt in — either by
+launching with `AETHER_AUTOMATION_ALLOW_TX=1`, or by checking **"Allow
+TX via MCP"** in Radio Setup → Network. That checkbox raises a one-time
+confirmation spelling out that automated software will be able to
+transmit and that you, the operator, remain responsible for all
+emissions; once confirmed the choice persists. Toggling it drives the
+same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
+disabling force-unkeys immediately).
+
+---
+
 ## How it works (the contract)
 
 - **Transport:** a `QLocalServer` — an `AF_UNIX` socket on macOS/Linux, a named
@@ -125,6 +188,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | Category | Verb | One-liner |
 |---|---|---|
 | **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| | [`verbs`](#verbs) | Machine-readable catalog of every verb + aliases + help. |
 | | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
 | | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
 | | [`grab pan <index> [path]`](#grab) | Raw spectrum surface of a specific pan. |
@@ -136,6 +200,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
+| | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`clickAt [<target>] <x> <y>`](#clickat) | Click at a global (or target-local) point — fallback when name matching is ambiguous (TX-guarded). |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
@@ -147,6 +212,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
+| | [`get flags`](#get) | VFO flag attachment state for slice-to-pan assertions. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
@@ -154,10 +220,11 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
+| | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
-| | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/diversity/centerlock/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -180,6 +247,12 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 > or JSON (`{"cmd":"get","model":"slice","selector":"active","property":"mode"}`).
 > The JSON field names per verb are noted in each section; positional order is
 > shown in the bare-line examples.
+>
+> Server-side, every verb is one entry in a single registry table
+> (`AutomationServer::verbRegistry()`, #4174) that owns its name, aliases,
+> bare-line parsing, and dispatch; the startup banner, the unknown-command
+> error, and [`verbs`](#verbs) are all derived from it. When this table and
+> the running app disagree, trust `verbs` — it cannot go stale.
 
 ### `ping`
 Connectivity / handshake.
@@ -187,6 +260,22 @@ Connectivity / handshake.
 ```json
 → {"cmd":"ping"}
 ← {"ok":true,"app":"AetherSDR","version":"26.6.3"}
+```
+
+### `verbs`
+Machine-readable catalog of every verb the running build understands —
+canonical name, aliases, and a one-line help string, straight from the server's
+verb registry (#4174). Use it instead of hand-maintained verb lists in drivers;
+`tools/automation_probe.py` passes any verb not in its own mapping table
+through as a bare line, so new simple verbs work in the probe with no probe
+changes.
+
+```json
+→ {"cmd":"verbs"}
+← {"ok":true,"count":45,"verbs":[
+    {"name":"ping","help":"liveness check → app + version"},
+    {"name":"drag","aliases":["mouse"],"help":"drag <target> <dx> <dy> — synthesize press→move→release"},
+    …]}
 ```
 
 ### `dumpTree`
@@ -208,6 +297,7 @@ Each `<node>`:
   "toolTip": "Clear the displayed SWR sweep trace.",  // present only if set
   "enabled": true,
   "visible": true,
+  "cursor": "pointinghand",                // present only if the widget owns a cursor (WA_SetCursor); shape name — see below
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "windowState": "maximized",              // top-level windows only: normal|maximized|minimized|fullscreen
   "value": "42",                           // best-effort; see below
@@ -286,6 +376,14 @@ present.
   switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
   (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
   screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
+- `cursor` — the widget's mouse-cursor **shape name**, reported only when the
+  widget explicitly owns a cursor (`WA_SetCursor`); inheriting widgets omit it.
+  Lets a driver assert **hover affordance** — a clickable control carries
+  `pointinghand`, a text field `ibeam` — without observing the live OS cursor,
+  which no `grab`/screenshot captures. Shape names: `arrow`, `pointinghand`,
+  `ibeam`, `splith`, `splitv`, `sizehor`, `sizever`, `openhand`, `forbidden`,
+  `wait`, `busy`, `cross`, `blank`, … (`other` for anything unmapped). Used to
+  prove every interactive slice-flag field now signals clickability (#4036).
 
 ### `grab`
 PNG capture of a single widget.
@@ -421,6 +519,21 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
 
+### `shortcut`
+Invoke a registered `ShortcutManager` action by id. This exercises the same
+handler a user-bound key would call, without requiring the test profile to bind
+an actual key sequence. It is useful for controller-style actions that may ship
+without a default keyboard shortcut.
+
+```json
+→ {"cmd":"shortcut","target":"center_lock_toggle"}
+← {"ok":true,"shortcut":"center_lock_toggle","fired":true}
+```
+
+Handlers may no-op when their normal app-side preconditions are not met; assert
+effects with `get`/`dumpTree` after firing, the same way a MIDI/controller
+test should.
+
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
 model (present once the app is running; fields are empty until a radio
@@ -448,6 +561,7 @@ connects).
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
+| `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
@@ -517,7 +631,9 @@ cost a few integer adds per frame.
    "overlayRebuildsPerSec":0.1,"overlayRebuildMsPerSec":1.9,
    "overlayUploadBytesPerSec":3964928.0,"wfUploadBytesPerSec":18240.0,
    "paintsPerSec":0.0,"paintMsPerSec":0.0,
-   "overlayDirtyCauses":{"smartMtr":2,"detect":1,"other":3}}]}
+   "overlayDirtyCauses":{"smartMtr":2,"detect":1,"other":3}}],
+   "renderScheduler":{"enabled":true,"requests":612,"flushes":301,
+   "coalescedRequests":288,"avgWidgetsPerFlush":1.9}}
 ```
 
 | field | meaning |
@@ -529,10 +645,12 @@ cost a few integer adds per frame.
 | `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
 | `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
+| `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 
 `selector` filters by pan index (`get panstats 0`) or objectName. `property`
 `reset` zeroes the counters after the read so successive reads measure
-disjoint intervals: `get panstats 0 reset`.
+disjoint intervals: `get panstats reset` resets all panes plus the shared
+scheduler counters, and `get panstats 0 reset` resets one pane.
 
 > **Removed field:** `leanMode` (boolean) was dropped when Lean Mode was
 > removed from the app — scripts that keyed on it should stop; every pan now
@@ -574,6 +692,32 @@ used by the stacked trace renderer.
   sources; useful for checking that hidden histories continue updating.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
+
+### `get rhi`
+Per-panadapter `QRhiWidget` **surface geometry** — the widget size,
+devicePixelRatio, and pinned color-buffer extents — so automation can assert
+the swapchain sizing that the #4091 fix controls (the color buffer stays
+even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
+
+```json
+→ {"cmd":"get","model":"rhi"}
+← {"ok":true,"model":"rhi","pans":[{
+   "panIndex":0,"name":"","visible":true,"widthPx":1100,"heightPx":455,"dpr":0.85,
+   "gpu":true,"renderer":"GPU QRhi (D3D11; Intel(R) HD Graphics 520)",
+   "colorBufferAutoSized":false,"colorBufferW":936,"colorBufferH":388,
+   "expectedEvenW":936,"expectedEvenH":388,"evenAligned":true}]}
+```
+
+| field | meaning |
+|---|---|
+| `dpr` | effective device-pixel ratio (fractional when `QT_SCALE_FACTOR` ≠ integer) |
+| `colorBufferAutoSized` | `true` when the widget lets QRhiWidget auto-size (`fixedColorBufferSize` unset); `false` when pinned |
+| `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
+| `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
+| `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+
+`selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
+each entry reports `gpu:false` and omits the buffer fields.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -696,9 +840,10 @@ recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
 ### `slice`
-Slice lifecycle, TX assignment, antennas, and receive source. All actions are
-RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
-(radio-authoritative); re-poll `get slices`.
+Slice lifecycle, diversity, Center Lock, TX assignment, antennas, and receive
+source. All actions are RX/config — none keys the transmitter.
+`add`/`remove`/`tx`/`diversity` are async (radio-authoritative); re-poll
+`get slices`.
 
 ```json
 → {"cmd":"slice","action":"add","value":"14.074"}
@@ -714,8 +859,12 @@ RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
+| `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
+| `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
+| `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
+| `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -783,6 +932,24 @@ one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
 resolves to the first-created one; hover a single meter per instance for an
 unambiguous grab.
 
+### `tooltip`
+Force-show a widget's native Qt tooltip, using the widget's current
+`toolTip()` text unless an override string is supplied. This is for screenshots
+and assertions where injected hover should prove the target state but the
+platform does not run Qt's built-in tooltip timer under automation.
+
+```text
+→ {"cmd":"tooltip","target":"E"}
+← {"ok":true,"target":"E","class":"QToolButton",
+   "text":"Slice E (global slot 5)","grabHint":"QTipLabel", ...}
+→ tooltip E Screenshot override text
+← {"ok":true,"target":"E","text":"Screenshot override text", ...}
+→ {"cmd":"grab","target":"QTipLabel","path":"/tmp/slice-tooltip.png"}
+← {"ok":true,"class":"QTipLabel","path":"/tmp/slice-tooltip.png", ...}
+```
+
+Use `{"cmd":"tooltip","target":"E","action":"hide"}` to dismiss it.
+
 ### `scrollTo` (alias `ensureVisible`)
 Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the
 viewport. Widgets parked below the fold of a scroll area receive **no paint
@@ -839,6 +1006,27 @@ handler pops a `QMenu` that runs its own event loop). Returns `deferred:true`;
 → {"cmd":"contextMenu","target":"SMeterWidget","value":"40 12"}
 ← {"ok":true,"target":"SMeterWidget","class":"SMeterWidget","x":40,"y":12,"deferred":true}
 ```
+
+### `rightClick`
+Trigger a widget path that handles right-clicks directly in `mousePressEvent`,
+rather than through Qt's `contextMenuEvent`/`customContextMenuRequested` policy.
+The panadapter's `SpectrumWidget` menu is the main use case: it is position
+sensitive and built from a real right-button press, so [`contextMenu`](#contextmenu)
+cannot reach it.
+
+```json
+→ {"cmd":"rightClick","target":"Panadapter spectrum display"}
+← {"ok":true,"target":"Panadapter spectrum display","class":"SpectrumWidget",
+   "x":939,"y":735,"deferred":true}
+
+→ {"cmd":"rightClick","target":"Panadapter spectrum display","value":"940 730"}
+← {"ok":true,"target":"Panadapter spectrum display","class":"SpectrumWidget",
+   "x":940,"y":730,"deferred":true}
+```
+
+The verb posts a right-button `MouseButtonPress` onto the GUI event loop with the
+owning window raised, then returns immediately. Follow with `dumpTree` to inspect
+the visible `QMenu`, and `invoke <menu item text> trigger` to choose an action.
 
 Section-title rows (a disabled `QWidgetAction` + `QLabel`, the app's idiom for
 menu headers since `QMenu::addSection` text doesn't render under the app styling)
@@ -1032,6 +1220,68 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
 action is RX/config only; none keys the transmitter.
+
+### `layout`
+Drive the panadapter **splitter layout** directly, decoupled from how many
+panadapters the radio has granted.
+
+```json
+→ {"cmd":"layout","action":"rearrange","value":"2v"}
+← {"ok":true,"layout":"rearrange","requested":"2v","applied":true,
+   "fellBack":false,"effectiveLayout":"2v","settlesNextTurn":true,
+   "panCount":2,"dockedCount":2,"floatingCount":0,"savedLayout":"1"}
+
+→ {"cmd":"layout","action":"get"}
+← {"ok":true,"layout":"get","requested":"","applied":false,
+   "panCount":1,"dockedCount":1,"floatingCount":0,"savedLayout":"1"}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `rearrange` | layout id (`1`/`2v`/`2h`/`2h1`/`12h`/`3v`/`2x2`/`4v`/`3h2`/`2x3`/`4h3`/`2x4`) | rebuild the splitter for that id via the production `PanadapterStack::rearrangeLayout`, exercising the full teardown/reparent/GPU-surface path on whatever pans exist. |
+| `get` | — | report the saved `PanadapterLayout` + live pan/docked/floating counts without changing anything. |
+
+Why it exists: on a shared radio, MultiFlex caps how many panadapters a client
+can open, so the add-2nd-pan resize path (the #4091 crash) can be unreachable
+from the bridge. `layout rearrange` forces the splitter machinery to run
+regardless. It is a **transient exerciser** — it does *not* persist
+`PanadapterLayout`. RX/config only; never keys TX.
+
+Honesty of the reply: an **unknown id is rejected** (`ok:false`) rather than
+silently building the trivial fallback; an id needing **more applets than
+exist** runs the production vertical-stack fallback and reports
+`fellBack:true` + `effectiveLayout:"vstack"` — a test that meant to exercise a
+*nested* layout (the #4091 reparent path) must assert `fellBack:false`, or the
+green result proves nothing. Geometry **settles on the next event-loop turn**
+(`settlesNextTurn:true` — ex-floating pans re-show and sizes equalize
+deferred), so don't pipeline `get rhi`/`grab` in the same write; re-poll after.
+
+### `scale`
+Report — and optionally persist — the UI scale factor, so scale-dependent
+rendering bugs (fractional `QT_SCALE_FACTOR`, e.g. #4091) are reproducible and
+assertable.
+
+```json
+→ {"cmd":"scale"}
+← {"ok":true,"scale":true,"qtScaleFactorEnv":"0.85",
+   "uiScalePercentSaved":85,"primaryScreenDpr":2.0}
+
+→ {"cmd":"scale","value":"85"}
+← {"ok":true,"scale":true,"qtScaleFactorEnv":null,"uiScalePercentSaved":100,
+   "primaryScreenDpr":2.0,"uiScalePercentSet":85,"appliesOnNextLaunch":true}
+```
+
+Bare `scale` reports only. `scale <pct>` (one of `75|85|100|110|125|150|175|200`,
+matching the **View → UI Scale** menu) persists `UiScalePercent`. Because
+`QT_SCALE_FACTOR` must be set before `QApplication` (see `main.cpp`), a scale
+change **only applies on the next launch** — this verb never mutates the running
+process. To actually run under a fractional scale in one shot, launch with the
+env directly: `QT_SCALE_FACTOR=0.85 AETHER_AUTOMATION=1 …`. Pair with `get rhi`
+to assert the resulting swapchain dimensions. Never keys TX.
+
+Note: the running session's **View → UI Scale menu checkmark is built once at
+startup and will not reflect a bridge write** — the persisted value is applied
+(and the menu re-seeded) on the next launch.
 
 ### `panmessage`
 Manual test hook for panadapter overlay popup messages. This is UI-only: it
@@ -1254,6 +1504,32 @@ Semantics to assert against: a channel with holders and `streamId=0x0` +
 is inside the 1.5 s removal grace window (it disappears once the removal
 lands); a channel entry that persists with holders across a consumer teardown
 proves the co-hold path.
+
+### `get txtimer`
+Read the status-bar transmit timer's state. The timer sits just left of the
+**PC Audio** button and runs **only** for operator-driven phone/data transmits
+— MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
+TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
+QSK toggles the interlock per element, which would thrash a wall-clock timer).
+All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
+hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
+fades out.
+
+```json
+→ {"cmd":"get","model":"txtimer"}
+← {"ok":true,"model":"txtimer","visible":true,"running":true,"holding":false,
+   "fading":false,"elapsedMs":4210,"text":"0:04","opacity":1.0}
+```
+
+Fields: `visible` (label shown at all), `running` (keyed, counting up),
+`holding` (the 15 s post-unkey hold is armed), `fading` (fade-out animation in
+flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
+(1.0 while shown/holding, ramps to 0 during fade). A trailing property narrows
+it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
+dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
+`running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
+`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
+throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server

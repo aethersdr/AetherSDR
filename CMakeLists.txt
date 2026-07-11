@@ -8,9 +8,9 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Libraries options — opt-in system-package replacements for vendored
-# dependencies.  Off by default so existing build hosts (CI containers,
-# release builds, contributor laptops) keep using the bundled, version-
-# pinned third_party/ snapshots.  Distro packagers turn these ON to
+# dependencies.  For dependencies enabled in a build, these stay off by
+# default so CI, releases, and contributor laptops use the bundled,
+# version-pinned third_party/ snapshots.  Distro packagers turn these ON to
 # match their dynamic-linking policy.
 
 option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
@@ -23,6 +23,7 @@ option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 
 option(REQUIRE_SERIALPORT "Fail if Qt6 SerialPort is not found (use for release builds)" OFF)
 option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release builds)" OFF)
+option(ENABLE_LIQUID_DSP "Build with liquid-dsp toolkit support" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
@@ -550,6 +551,7 @@ set(CORE_SOURCES
     src/core/PskReporterClient.cpp
     src/core/MqttAntennaAlias.cpp
     src/core/MqttSettings.cpp
+    src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
@@ -700,6 +702,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/gui/PanadapterMessageOverlay.h
+    src/gui/PanadapterRenderScheduler.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/DssRenderer.cpp
@@ -974,11 +977,16 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 # bundled third_party/fftw3 can be a follow-up if a future consumer wants
 # FFTW-accelerated transforms.
 #
-# AetherSDR links against liquid-static (conditionally on non-MSVC) so the
-# build verifies clean on Linux + macOS even though no module currently
-# consumes liquid symbols. Standard linker dead-code elimination
-# (--gc-sections on ELF) drops the unused static lib from the final binary.
-if(NOT MSVC AND NOT USE_SYSTEM_LIQUID_DSP)
+# Disabled by default on every platform because no AetherSDR module currently
+# consumes liquid-dsp symbols. Opt-in non-MSVC builds link liquid-static; the
+# static linker then extracts only symbols used by a future consumer.
+if(ENABLE_LIQUID_DSP AND MSVC)
+    message(FATAL_ERROR
+        "ENABLE_LIQUID_DSP is not supported with MSVC because liquid-dsp's "
+        "public headers use C99 _Complex types")
+endif()
+
+if(ENABLE_LIQUID_DSP AND NOT USE_SYSTEM_LIQUID_DSP)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
@@ -1006,9 +1014,9 @@ if(NOT MSVC AND NOT USE_SYSTEM_LIQUID_DSP)
     if(TARGET liquid-static)
         target_compile_options(liquid-static PRIVATE -w)
     endif()
-endif()  # NOT MSVC
+endif()
 
-if (USE_SYSTEM_LIQUID_DSP)
+if(ENABLE_LIQUID_DSP AND USE_SYSTEM_LIQUID_DSP)
     find_package(PkgConfig REQUIRED)
     if(PkgConfig_FOUND)
         pkg_check_modules(liquid-dsp REQUIRED IMPORTED_TARGET liquid-dsp)
@@ -1232,12 +1240,12 @@ target_link_libraries(AetherSDR PRIVATE
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
-if (USE_SYSTEM_LIQUID_DSP)
-    target_link_libraries(aethercore PRIVATE PkgConfig::liquid-dsp)
-else()
-    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
-    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
-    target_link_libraries(aethercore PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>)
+if(ENABLE_LIQUID_DSP)
+    if(USE_SYSTEM_LIQUID_DSP)
+        target_link_libraries(aethercore PRIVATE PkgConfig::liquid-dsp)
+    else()
+        target_link_libraries(aethercore PRIVATE liquid-static)
+    endif()
 endif()
 
 if(Qt6SerialPort_FOUND)
@@ -2279,6 +2287,15 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
+# MCP server field-mapping / protocol regression test (#4177). Pure Python,
+# no app or Qt needed — guards the schema ↔ bridge verb field mapping.
+find_program(PYTHON3_EXECUTABLE NAMES python3 python)
+if(PYTHON3_EXECUTABLE)
+    add_test(NAME aether_mcp_field_mapping
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+endif()
+
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp
 )
@@ -2727,6 +2744,17 @@ add_executable(memory_field_values_test
 target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
+
+add_executable(memory_csv_compat_test
+    tests/memory_csv_compat_test.cpp
+    src/core/MemoryCsvCompat.cpp
+    src/core/MemoryFieldValues.cpp
+)
+target_include_directories(memory_csv_compat_test PRIVATE src)
+target_compile_definitions(memory_csv_compat_test PRIVATE
+    CHIRP_SAMPLE_CSV="${CMAKE_CURRENT_SOURCE_DIR}/docs/automation/sample-chirp-memories.csv")
+target_link_libraries(memory_csv_compat_test PRIVATE Qt6::Core)
+add_test(NAME memory_csv_compat_test COMMAND memory_csv_compat_test)
 
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp

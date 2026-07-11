@@ -1,4 +1,5 @@
 #include "PanadapterModel.h"
+#include "core/LogManager.h"
 #include "core/PerfTelemetry.h"
 #include <QDebug>
 #include <algorithm>
@@ -179,25 +180,51 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
     // namespaced extensionStatus("flex","panState",…). Each key applies only
     // when present, with the exact per-field semantics the old applyPanStatus
     // had (aetherd RFC 2.3 — the decode lives in FlexBackend, not here).
+    // wide / loopa / loopb are bool wire flags. Mirror FlexLib's parse exactly
+    // (Panadapter.cs 1040-1068/1211-1223): byte.TryParse + reject > 1 → skip the
+    // update on a malformed/out-of-range value, keeping last-known-good state.
+    // Bare .toInt() != 0 silently coerced garbage to false and could clobber a
+    // prior true, diverging from FlexLib (Principle I; #4147).
     if (fields.contains(QStringLiteral("wide"))) {
-        const bool wide = fields.value(QStringLiteral("wide")).toInt() != 0;
-        if (wide != m_wideActive) {
-            m_wideActive = wide;
-            emit wideChanged(m_wideActive);
+        bool ok = false;
+        const uint v = fields.value(QStringLiteral("wide")).toString().toUInt(&ok);
+        if (ok && v <= 1) {
+            const bool wide = (v != 0);
+            if (wide != m_wideActive) {
+                m_wideActive = wide;
+                emit wideChanged(m_wideActive);
+            }
+        } else {
+            qCDebug(lcProtocol) << "PanadapterModel: invalid wide value"
+                                << fields.value(QStringLiteral("wide"));
         }
     }
     if (fields.contains(QStringLiteral("loopa"))
         || fields.contains(QStringLiteral("loopb"))) {
         bool changed = false;
         if (fields.contains(QStringLiteral("loopa"))) {
-            const bool loopA = fields.value(QStringLiteral("loopa")).toInt() != 0;
-            if (loopA != m_loopA) { m_loopA = loopA; changed = true; }
-            if (loopA && m_loopB) { m_loopB = false; changed = true; }
+            bool ok = false;
+            const uint v = fields.value(QStringLiteral("loopa")).toString().toUInt(&ok);
+            if (ok && v <= 1) {
+                const bool loopA = (v != 0);
+                if (loopA != m_loopA) { m_loopA = loopA; changed = true; }
+                if (loopA && m_loopB) { m_loopB = false; changed = true; }
+            } else {
+                qCDebug(lcProtocol) << "PanadapterModel: invalid loopa value"
+                                    << fields.value(QStringLiteral("loopa"));
+            }
         }
         if (fields.contains(QStringLiteral("loopb"))) {
-            const bool loopB = fields.value(QStringLiteral("loopb")).toInt() != 0;
-            if (loopB != m_loopB) { m_loopB = loopB; changed = true; }
-            if (loopB && m_loopA) { m_loopA = false; changed = true; }
+            bool ok = false;
+            const uint v = fields.value(QStringLiteral("loopb")).toString().toUInt(&ok);
+            if (ok && v <= 1) {
+                const bool loopB = (v != 0);
+                if (loopB != m_loopB) { m_loopB = loopB; changed = true; }
+                if (loopB && m_loopA) { m_loopA = false; changed = true; }
+            } else {
+                qCDebug(lcProtocol) << "PanadapterModel: invalid loopb value"
+                                    << fields.value(QStringLiteral("loopb"));
+            }
         }
         if (changed) {
             emit loopChanged(m_loopA, m_loopB);
@@ -230,26 +257,47 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         }
     }
     // weighted_average is a bool flag on the wire (weighted_average=0/1) — same
-    // latent desync gap; parse it like the loopa/loopb flags (present-only).
+    // latent desync gap. Mirror FlexLib (Panadapter.cs 1195-1208): byte.TryParse
+    // with a parse guard ONLY — no > 1 range reject, unlike wide/loopa/loopb, so
+    // any value in byte range (0-255) applies as its truthiness, but negatives
+    // and > 255 fail the byte parse and are skipped (last-known-good kept)
+    // rather than coerced (Principle I; #4147).
     if (fields.contains(QStringLiteral("weighted_average"))) {
-        const bool weighted =
-            fields.value(QStringLiteral("weighted_average")).toInt() != 0;
-        if (weighted != m_weightedAverage) {
-            m_weightedAverage = weighted;
-            emit weightedAverageChanged(m_weightedAverage);
+        bool ok = false;
+        const uint v =
+            fields.value(QStringLiteral("weighted_average")).toString().toUInt(&ok);
+        if (ok && v <= 255) {
+            const bool weighted = (v != 0);
+            if (weighted != m_weightedAverage) {
+                m_weightedAverage = weighted;
+                emit weightedAverageChanged(m_weightedAverage);
+            }
+            emit weightedAverageReported(weighted);
+        } else {
+            qCDebug(lcProtocol) << "PanadapterModel: invalid weighted_average value"
+                                << fields.value(QStringLiteral("weighted_average"));
         }
-        emit weightedAverageReported(weighted);
     }
     if (fields.contains(QStringLiteral("pre"))) {
         const QString pre = fields.value(QStringLiteral("pre")).toString();
         // Preamp is internal state only — no UI listeners, no emit (#1498).
         if (pre != m_preamp) { m_preamp = pre; }
     }
+    // daxiq_channel mirrors FlexLib (Panadapter.cs 980-994): uint.TryParse and
+    // skip on failure — a garbled value must not rebind the pan to "no DAX IQ
+    // channel" (0), it keeps the last-known-good channel (#4147 audit).
     if (fields.contains(QStringLiteral("daxiq_channel"))) {
-        const int ch = fields.value(QStringLiteral("daxiq_channel")).toInt();
-        if (ch != m_daxiqChannel) {
-            m_daxiqChannel = ch;
-            emit daxiqChannelChanged(ch);
+        bool ok = false;
+        const uint ch =
+            fields.value(QStringLiteral("daxiq_channel")).toString().toUInt(&ok);
+        if (ok) {
+            if (int(ch) != m_daxiqChannel) {
+                m_daxiqChannel = int(ch);
+                emit daxiqChannelChanged(int(ch));
+            }
+        } else {
+            qCDebug(lcProtocol) << "PanadapterModel: invalid daxiq_channel value"
+                                << fields.value(QStringLiteral("daxiq_channel"));
         }
     }
     // Band / segment zoom (#4057). Mirror FlexLib's parse exactly (Panadapter.cs
@@ -291,8 +339,24 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
             m_clientHandle = QString::number(parsed, 16);
         }
     }
+    // FlexLib parses the child waterfall stream id before assigning
+    // (Panadapter.cs 1177-1193, hex-aware TryParseInteger + skip on failure):
+    // validate before storing so garbage can't displace a previously-valid id —
+    // wfStreamId() pairing and the outgoing `display panafall set <id>` commands
+    // both read this back (#4147 audit). Accept the same forms the radio sends:
+    // "0x…" (base-0 auto-detect) or bare hex.
     if (fields.contains(QStringLiteral("waterfall"))) {
-        setWaterfallId(fields.value(QStringLiteral("waterfall")).toString());
+        const QString wf = fields.value(QStringLiteral("waterfall")).toString();
+        bool ok = false;
+        wf.toUInt(&ok, 0);
+        if (!ok) {
+            wf.toUInt(&ok, 16);
+        }
+        if (ok) {
+            setWaterfallId(wf);
+        } else {
+            qCDebug(lcProtocol) << "PanadapterModel: invalid waterfall value" << wf;
+        }
     }
 }
 
