@@ -311,8 +311,9 @@ QJsonObject describeWidget(const QWidget* w)
     // cursor (WA_SetCursor), so a driver can prove hover affordance (clickable
     // flag fields carry "pointinghand") without observing the live OS cursor,
     // which no screenshot/grab captures (#4036).
-    if (w->testAttribute(Qt::WA_SetCursor))
+    if (w->testAttribute(Qt::WA_SetCursor)) {
         o[QStringLiteral("cursor")] = QLatin1String(cursorShapeName(w->cursor().shape()));
+    }
 
     // Geometry in global screen coordinates so a driver can correlate with
     // computer-use / screenshots if it ever needs to.

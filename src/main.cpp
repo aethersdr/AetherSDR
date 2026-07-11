@@ -244,8 +244,9 @@ int main(int argc, char* argv[])
             ":/fonts/Inter-Bold.ttf",
         };
         for (const char* path : kInterFonts) {
-            if (QFontDatabase::addApplicationFont(QString::fromLatin1(path)) < 0)
+            if (QFontDatabase::addApplicationFont(QString::fromLatin1(path)) < 0) {
                 qWarning() << "Failed to load bundled font:" << path;
+            }
         }
     }
 

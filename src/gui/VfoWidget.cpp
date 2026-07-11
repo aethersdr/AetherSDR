@@ -1314,12 +1314,20 @@ void VfoWidget::buildUI()
 void VfoWidget::applyInteractiveCursors()
 {
     const auto setHand = [](QWidget* w) {
-        if (w) w->setCursor(Qt::PointingHandCursor);
+        if (w) {
+            w->setCursor(Qt::PointingHandCursor);
+        }
     };
 
-    for (auto* b : findChildren<QAbstractButton*>()) setHand(b);
-    for (auto* c : findChildren<QComboBox*>())        setHand(c);
-    for (auto* s : findChildren<ScrollableLabel*>())  setHand(s);
+    for (auto* b : findChildren<QAbstractButton*>()) {
+        setHand(b);
+    }
+    for (auto* c : findChildren<QComboBox*>()) {
+        setHand(c);
+    }
+    for (auto* s : findChildren<ScrollableLabel*>()) {
+        setHand(s);
+    }
 
     // The frequency readout is a plain QLabel but is fully interactive
     // (scroll-to-tune, double-click to edit, right-click "Add Spot" menu).
