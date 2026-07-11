@@ -411,14 +411,18 @@ bool parseRecord(const QStringList& fields,
 
 bool looksLikeChirpHeader(const QStringList& fields)
 {
-    if (fields.isEmpty())
+    if (fields.isEmpty()) {
         return false;
-    if (fields.at(0).trimmed().compare("Location", Qt::CaseInsensitive) != 0)
+    }
+    if (fields.at(0).trimmed().compare("Location", Qt::CaseInsensitive) != 0) {
         return false;
+    }
     // Require the one column we cannot import a channel without.
-    for (const QString& f : fields)
-        if (f.trimmed().compare("Frequency", Qt::CaseInsensitive) == 0)
+    for (const QString& f : fields) {
+        if (f.trimmed().compare("Frequency", Qt::CaseInsensitive) == 0) {
             return true;
+        }
+    }
     return false;
 }
 
@@ -427,16 +431,18 @@ bool looksLikeChirpHeader(const QStringList& fields)
 QHash<QString, int> chirpColumnIndex(const QStringList& header)
 {
     QHash<QString, int> map;
-    for (int i = 0; i < header.size(); ++i)
+    for (int i = 0; i < header.size(); ++i) {
         map.insert(header.at(i).trimmed().toLower(), i);
+    }
     return map;
 }
 
 QString chirpField(const QStringList& fields, const QHash<QString, int>& cols, const char* name)
 {
     const int idx = cols.value(QString::fromLatin1(name).toLower(), -1);
-    if (idx < 0 || idx >= fields.size())
+    if (idx < 0 || idx >= fields.size()) {
         return {};
+    }
     return fields.at(idx).trimmed();
 }
 
@@ -453,8 +459,9 @@ QString chirpModeToWire(const QString& chirpMode)
     };
     const QString upper = MemoryFields::sanitizeText(chirpMode).trimmed().toUpper();
     const auto it = kMap.constFind(upper);
-    if (it != kMap.constEnd())
+    if (it != kMap.constEnd()) {
         return it.value();
+    }
     // Unknown/vendor mode (DMR, P25, DN, Auto…): pass the upper-case token
     // through and let the radio validate, matching the SmartSDR-import path.
     return upper;
@@ -463,8 +470,8 @@ QString chirpModeToWire(const QString& chirpMode)
 QString chirpDuplexToOffsetDir(const QString& duplex)
 {
     const QString d = duplex.trimmed().toLower();
-    if (d == "+") return "up";
-    if (d == "-") return "down";
+    if (d == "+") { return "up"; }
+    if (d == "-") { return "down"; }
     // "", "split", "off": the Flex memory model has no split/odd-split slot, so
     // anything that isn't a simple +/- repeater shift lands as simplex.
     return "simplex";
@@ -493,8 +500,9 @@ bool parseChirpRecord(const QStringList& fields,
 
     // Mode.
     memory.mode = chirpModeToWire(chirpField(fields, cols, "Mode"));
-    if (memory.mode.isEmpty())
+    if (memory.mode.isEmpty()) {
         memory.mode = QStringLiteral("FM");  // CHIRP's implicit VHF/UHF default.
+    }
     if (!MemoryFields::isKnownMode(memory.mode)) {
         qCInfo(lcMemoryCsv) << rowLabel << "CHIRP mode mapped to unrecognized"
                             << memory.mode << "- passing through to radio for validation";
@@ -503,8 +511,9 @@ bool parseChirpRecord(const QStringList& fields,
     // TStep — CHIRP writes kHz (e.g. "5.00"); MemoryEntry::step is Hz.
     const QString stepText = chirpField(fields, cols, "TStep");
     double stepKhz = 0.0;
-    if (!stepText.isEmpty() && parseDoubleField(stepText, stepKhz) && stepKhz > 0.0)
+    if (!stepText.isEmpty() && parseDoubleField(stepText, stepKhz) && stepKhz > 0.0) {
         memory.step = std::clamp(int(std::lround(stepKhz * 1000.0)), 1, 1000000);
+    }
     // else: keep MemoryEntry's default step.
 
     // Duplex/Offset — CHIRP offset is MHz, matching repeaterOffset.
@@ -513,8 +522,9 @@ bool parseChirpRecord(const QStringList& fields,
         memory.repeaterOffset = 0.0;
     } else {
         double offMhz = 0.0;
-        if (parseDoubleField(chirpField(fields, cols, "Offset"), offMhz))
+        if (parseDoubleField(chirpField(fields, cols, "Offset"), offMhz)) {
             memory.repeaterOffset = std::clamp(offMhz, -100.0, 100.0);
+        }
     }
 
     // Tone — map CHIRP's tone-mode taxonomy onto the Flex off/ctcss_tx pair. A
@@ -540,10 +550,16 @@ bool parseChirpRecord(const QStringList& fields,
     } else {
         memory.toneMode = QStringLiteral("off");  // "", DTCS, or unrecognized.
     }
-    if (memory.toneMode == QLatin1String("ctcss_tx") && validateRange(tone, 0.0, 300.0))
+    // CTCSS tones live in ~67–254.1 Hz; a parse miss leaves tone at 0.0, and
+    // an inclusive 0-lower-bound accepted it — importing ctcss_tx with an
+    // invalid 0 Hz tone instead of taking the off fallback below (#4129
+    // review: reproducible with a trimmed export whose rToneFreq column is
+    // absent while Tone=Tone). 50 Hz floors out missing/garbage values.
+    if (memory.toneMode == QLatin1String("ctcss_tx") && validateRange(tone, 50.0, 300.0)) {
         memory.toneValue = tone;
-    else if (memory.toneMode == QLatin1String("ctcss_tx"))
+    } else if (memory.toneMode == QLatin1String("ctcss_tx")) {
         memory.toneMode = QStringLiteral("off");  // tone freq missing/out of range.
+    }
 
     record.memory = memory;
     return true;

@@ -5,6 +5,7 @@
 #include "core/MemoryCsvCompat.h"
 
 #include <QByteArray>
+#include <QFile>
 #include <QString>
 
 #include <cmath>
@@ -136,6 +137,47 @@ void testSmartSdrStillWorks()
     }
 }
 
+void testChirpMissingToneFreqFallsToOff()
+{
+    // Tone=Tone but no rToneFreq column at all (a trimmed export): the tone
+    // frequency parse misses, and the import must fall back to tone-off, not
+    // ctcss_tx with an invalid 0 Hz tone (#4129 review).
+    const char* csv =
+        "Location,Name,Frequency,Duplex,Offset,Mode,TStep,Tone\r\n"
+        "0,NoToneCol,146.520000,,0.000000,FM,5.00,Tone\r\n";
+    const MemoryCsvParseResult r = MemoryCsvCompat::parse(QByteArray(csv));
+    if (!expect(r.records.size() == 1, "tone-column-less CHIRP row parses"))
+        return;
+    expect(r.records.at(0).memory.toneMode == "off",
+           "missing rToneFreq degrades Tone=Tone to off, not ctcss_tx/0");
+
+    // Same fallback for an out-of-range (sub-CTCSS) tone value.
+    const char* csv2 =
+        "Location,Name,Frequency,Duplex,Offset,Mode,TStep,Tone,rToneFreq\r\n"
+        "0,ZeroTone,146.520000,,0.000000,FM,5.00,Tone,0.0\r\n";
+    const MemoryCsvParseResult r2 = MemoryCsvCompat::parse(QByteArray(csv2));
+    if (expect(r2.records.size() == 1, "zero-tone CHIRP row parses"))
+        expect(r2.records.at(0).memory.toneMode == "off",
+               "0 Hz tone value degrades to off");
+}
+
+#ifdef CHIRP_SAMPLE_CSV
+void testSampleFixtureParses()
+{
+    // The in-repo sample (docs/automation/sample-chirp-memories.csv) is the
+    // manual-import fixture; parsing it here keeps it from drifting from the
+    // importer (#4129 review — it was orphaned when the csv bridge verb was
+    // removed for the engine-boundary violation).
+    QFile f(QStringLiteral(CHIRP_SAMPLE_CSV));
+    if (!expect(f.open(QIODevice::ReadOnly), "sample fixture opens"))
+        return;
+    const MemoryCsvParseResult r = MemoryCsvCompat::parse(f.readAll());
+    expect(r.format == MemoryCsvFormat::Chirp, "sample fixture detected as CHIRP");
+    expect(r.ok(), "sample fixture parses without errors");
+    expect(r.records.size() == 6, "sample fixture yields six records");
+}
+#endif
+
 void testUnknownHeaderRejected()
 {
     const char* csv = "Foo,Bar,Baz\r\n1,2,3\r\n";
@@ -150,6 +192,10 @@ int main()
 {
     testChirpImport();
     testChirpColumnOrderIndependence();
+    testChirpMissingToneFreqFallsToOff();
+#ifdef CHIRP_SAMPLE_CSV
+    testSampleFixtureParses();
+#endif
     testSmartSdrStillWorks();
     testUnknownHeaderRejected();
 

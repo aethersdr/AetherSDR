@@ -2727,6 +2727,8 @@ add_executable(memory_csv_compat_test
     src/core/MemoryFieldValues.cpp
 )
 target_include_directories(memory_csv_compat_test PRIVATE src)
+target_compile_definitions(memory_csv_compat_test PRIVATE
+    CHIRP_SAMPLE_CSV="${CMAKE_CURRENT_SOURCE_DIR}/docs/automation/sample-chirp-memories.csv")
 target_link_libraries(memory_csv_compat_test PRIVATE Qt6::Core)
 add_test(NAME memory_csv_compat_test COMMAND memory_csv_compat_test)
 
