@@ -472,8 +472,7 @@ No build step, npm, or command line is required just to use the plugin.
 
 #### What it controls
 
-<!-- TODO(#4162): action count will become 46 once the Encoder dial PR lands (adds VFO Tuning, RF Power Dial, Volume Dial). -->
-The official Elgato plugin currently provides **43 actions** across areas such as:
+The official Elgato plugin currently provides actions across areas such as:
 
 - TX
 - Bands
@@ -486,24 +485,21 @@ The official Elgato plugin currently provides **43 actions** across areas such a
 
 #### Important note about dials
 
-<!-- TODO(#4162): rewrite once the Encoder dial PR lands -- the Elgato
-plugin will gain VFO Tuning / RF Power / Volume dial actions, so this can
-no longer say dial support is StreamController-exclusive. Also revisit
-the "On Linux, use StreamController, not Elgato-format" troubleshooting
-lines further down this file (two occurrences) once that lands. -->
 The current official Elgato plugin is **button-oriented**. Its manifest advertises keypad-style actions, not dial/controller actions. If you want Stream Deck dial support, the Linux StreamController path below is currently the better fit.
 
 #### Linux via OpenDeck (experimental)
 
-The same `com.aethersdr.radio.streamDeckPlugin` package above (built to
-the official Elgato Stream Deck SDK) also works with **OpenDeck**, a
-third-party Elgato-SDK-compatible controller app for Linux, on compatible
-third-party hardware (e.g. Ajazz AKP03 / Mirabox N3-family devices).
+Because the `com.aethersdr.radio.streamDeckPlugin` package above is built
+to the official Elgato Stream Deck SDK, it is also loadable by **OpenDeck**,
+a third-party Elgato-SDK-compatible controller app for Linux that targets
+various Stream-Deck-compatible devices (e.g. Ajazz / Mirabox hardware).
 Installation follows the same steps as above — download the package and
 load it into OpenDeck the same way you would the official Elgato app.
-This path is less tested than the
-officially supported macOS/Windows + Elgato Stream Deck software
-combination, so treat it as experimental.
+This path is **experimental and community-reported**: it has not been
+verified by the AetherSDR team on specific hardware, unlike the officially
+supported macOS/Windows + Elgato Stream Deck software combination. If it
+does not load or a device is unrecognized, prefer the StreamController
+path below.
 
 ### Linux: StreamController plugin
 

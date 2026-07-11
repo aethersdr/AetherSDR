@@ -20,6 +20,17 @@ const PLUGIN_UUID = 'com.g0jkn.aethersdr.controller';
 // AetherSDR plugin uses (50001) — confirmed live against the same radio.
 const DEFAULT_TCI_URL = 'ws://127.0.0.1:50001';
 
+// The plugin shipped for a while with a wrong default port of 40001 (#4154),
+// which the inspector persisted into per-action settings for anyone who edited
+// the URL field. 40001 was never a working AetherSDR port, so a saved 40001 is
+// always the stale default, not a deliberate choice — upgrade it to 50001 so
+// existing installs connect after updating instead of silently retrying a dead
+// port. Any other host/port the operator set is left untouched.
+function migrateTciUrl(url) {
+  if (typeof url !== 'string') return url;
+  return url.replace(/^(ws:\/\/(?:127\.0\.0\.1|localhost)):40001\b/i, '$1:50001');
+}
+
 const ACTION_CACHES = {};
 let tci = null;
 let tciUrl = DEFAULT_TCI_URL;
@@ -278,7 +289,10 @@ $UD.onAdd((jsn) => {
   // not `action` like I originally assumed.  Store the class UUID so the
   // dispatch switch below can match against `${PLUGIN_UUID}.mox` etc.
   ACTION_CACHES[jsn.context] = { actionId: jsn.uuid, settings: jsn.param || {} };
-  if (jsn.param && jsn.param.tci_url && jsn.param.tci_url !== tciUrl) tciConnect(jsn.param.tci_url);
+  if (jsn.param && jsn.param.tci_url) {
+    const url = migrateTciUrl(jsn.param.tci_url);
+    if (url !== tciUrl) tciConnect(url);
+  }
 });
 
 $UD.onClear((jsn) => {
@@ -288,7 +302,10 @@ $UD.onClear((jsn) => {
 
 $UD.onParamFromPlugin((jsn) => {
   if (ACTION_CACHES[jsn.context]) ACTION_CACHES[jsn.context].settings = jsn.param || {};
-  if (jsn.param && jsn.param.tci_url && jsn.param.tci_url !== tciUrl) tciConnect(jsn.param.tci_url);
+  if (jsn.param && jsn.param.tci_url) {
+    const url = migrateTciUrl(jsn.param.tci_url);
+    if (url !== tciUrl) tciConnect(url);
+  }
 });
 
 // Keypad — button press.  Studio sends cmd:'keydown' (not cmd:'run');
