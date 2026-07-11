@@ -47,10 +47,13 @@ jobs:
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted
       # vendor snapshot fails here rather than on the first future consumer.
+      # The full project configure is intentional: it exercises the main
+      # CMakeLists ENABLE_LIQUID_DSP gating, not just the third_party compile —
+      # don't narrow it to an isolated third_party/liquid-dsp configure.
       - name: Verify vendored liquid-dsp still builds (opt-in)
         run: |
           cmake -B build-liquid -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DENABLE_NVIDIA_AFX=ON -DENABLE_LIQUID_DSP=ON
+            -DENABLE_LIQUID_DSP=ON
           cmake --build build-liquid --target liquid-static -j$(nproc)
 
   # Cross-platform build check — runs on every PR (no path gating).
