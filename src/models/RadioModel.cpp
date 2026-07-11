@@ -827,6 +827,12 @@ RadioModel::RadioModel(QObject* parent)
     // gate inside updateOperatorTransmit() keeps TCI/DAX transmits out.
     connect(&m_transmitModel, &TransmitModel::transmittingChanged, this,
             [this](bool) { updateOperatorTransmit(); });
+    // Also recompute when the TX-slice mode changes (phone↔CW) or first resolves
+    // after connect: updateOperatorTransmit() gates on modeIsCw, which a
+    // transmittingChanged edge alone can't catch mid-over. Idempotent — the
+    // extra trigger only emits operatorTransmitChanged on a real edge. (#4131)
+    connect(&m_transmitModel, &TransmitModel::txSliceModeChanged, this,
+            [this](const QString&) { updateOperatorTransmit(); });
 
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
@@ -4845,6 +4851,8 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             && daxTxStatusCanUpdateLocalState(stream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
             m_daxTxStreamId = stream.streamId;
             m_daxTxActive = state.tx;
+            updateOperatorTransmit();  // DAX TX toggled — refresh the operator
+                                       // TX-timer gate promptly (#4131 review)
             m_daxTxClientHandle = state.clientHandle;
             if (ownedByUs)
                 m_daxTxCreatePending = false;
@@ -4920,6 +4928,7 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
     if (daxTxStatusCanUpdateLocalState(txAudioStream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
         m_daxTxStreamId = txAudioStream.streamId;
         m_daxTxActive = state.tx;
+        updateOperatorTransmit();  // DAX TX toggled (#4131 review)
         m_daxTxClientHandle = state.clientHandle;
         if (ownedByUs)
             m_daxTxCreatePending = false;

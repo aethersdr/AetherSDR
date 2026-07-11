@@ -910,6 +910,11 @@ void TitleBar::updateTxTimerText()
 void TitleBar::setOperatorTransmitting(bool active)
 {
     if (active) {
+        if (m_txTimerRunning)
+            return;   // duplicate rising edge — keep the in-progress timer
+                      // running rather than resetting the elapsed clock to 0.
+                      // A genuine new over is always preceded by an unkey
+                      // (falling edge) that clears m_txTimerRunning first.
         // Key-up: cancel any pending hold/fade, restart from 0:00 (each
         // transmission is its own timer), and show at full opacity.
         m_txTimerHoldTimer->stop();
@@ -948,7 +953,9 @@ QVariantMap TitleBar::txTimerState() const
         {QStringLiteral("fading"),
             m_txTimerFade && m_txTimerFade->state() == QAbstractAnimation::Running},
         {QStringLiteral("elapsedMs"), ms},
-        {QStringLiteral("text"), m_txTimerLabel ? m_txTimerLabel->text() : QString()},
+        // Derive text from the same live `ms` as elapsedMs so the two never
+        // disagree (the label itself is only repainted at 5 Hz). (#4131 review)
+        {QStringLiteral("text"), formatTxElapsed(ms)},
         {QStringLiteral("opacity"), m_txTimerOpacity ? m_txTimerOpacity->opacity() : 0.0},
     };
 }
