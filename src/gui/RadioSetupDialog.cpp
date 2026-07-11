@@ -605,7 +605,8 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
 
     auto* search = new QLineEdit;
     search->setObjectName(QStringLiteral("radioSetupSearch"));
-    search->setPlaceholderText(QStringLiteral("Search settings (Ctrl+F)"));
+    search->setPlaceholderText(QStringLiteral("Search settings (%1)")
+        .arg(QKeySequence(QKeySequence::Find).toString(QKeySequence::NativeText)));
     search->setClearButtonEnabled(true);
     search->setAccessibleName(QStringLiteral("Search Radio Setup settings"));
     search->setAccessibleDescription(
