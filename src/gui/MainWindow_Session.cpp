@@ -53,12 +53,16 @@
 #include "SpectrumWidget.h"
 #include "TitleBar.h"
 #include "core/AppSettings.h"
+#include "core/AutomationBridgeSettings.h"
+#include "core/AutomationServer.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QMessageBox>
+#include <QCoreApplication>
 #include <QDateTime>
+#include <QPointer>
 #include <QThread>
 #include <QTimer>
 
@@ -1630,6 +1634,119 @@ void MainWindow::wireDaxIq()
     });
 #endif
 
+}
+
+// ── Agent automation bridge (#3646) lifecycle ────────────────────────────────
+// Kept out of the MainWindow.cpp monolith. The bridge is the endpoint MCP
+// clients connect to; MainWindow owns the server instance for its lifetime.
+
+bool MainWindow::startAutomationBridge(const QString& sockName)
+{
+    if (m_automation && m_automation->isRunning())
+        return true;  // idempotent
+
+    // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
+    // endpoint; otherwise the default is PID-suffixed so two instances don't
+    // steal each other's socket. Drivers find the right one via the discovery
+    // file the server drops in the temp dir.
+    QString name = sockName;
+    if (name.isEmpty())
+        name = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
+                   ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
+                   : QStringLiteral("aethersdr-automation-%1")
+                         .arg(QCoreApplication::applicationPid());
+
+    if (!m_automation)
+        m_automation = std::make_unique<AutomationServer>();
+
+    m_automation->setRadioModel(&radioModel());  // for the get() verb
+    m_automation->setAudioEngine(audioEngine());
+    m_automation->setQsoRecorder(qsoRecorder());  // for the record() verb
+    m_automation->setConnectionDialogHost(this);
+    m_automation->setConnectionAutomation(
+        findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
+    m_automation->setSliceReceiveSourceHandler(
+        [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
+    m_automation->setSliceCenterLockHandler(
+        [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
+    m_automation->setTuneHandler(
+        [this](double mhz) { return automationTune(mhz); });
+    m_automation->setReceiveSyncSnapshotHandler(
+        [this]() { return automationReceiveSyncSnapshot(); });
+    m_automation->setKiwiSdrSnapshotHandler(
+        [this]() { return automationKiwiSdrSnapshot(); });
+    m_automation->setTxTimerSnapshotHandler(
+        [this]() { return automationTxTimerSnapshot(); });
+
+    // The access token lives in the OS secret store (QtKeychain), which reads
+    // ASYNCHRONOUSLY. Defer start()/listen() into the token callback rather
+    // than opening a brief tokenless window on the socket. A QPointer guards
+    // against the bridge being stopped/replaced before the read lands.
+    QPointer<AutomationServer> guard(m_automation.get());
+    const QString startName = name;
+    AutomationBridgeSettings::loadToken(this, [this, guard, startName](const QString& tok) {
+        if (!guard || m_automation.get() != guard)
+            return;  // toggled off or restarted before the token arrived
+        guard->setAuthToken(tok);
+        if (tok.isEmpty()) {
+            qWarning().noquote()
+                << "Automation bridge starting UNAUTHENTICATED — any same-user "
+                   "process can drive the radio. Set an access token in Radio "
+                   "Setup → Network, or the AETHER_MCP_TOKEN environment variable.";
+        }
+        if (!guard->start(startName)) {
+            qWarning() << "Automation bridge failed to start (socket in use?)";
+            m_automation.reset();
+            return;
+        }
+        // TX-automation gate — set AFTER start(), which reads
+        // AETHER_AUTOMATION_ALLOW_TX into m_txAllowed and would otherwise
+        // clobber a pre-start value. Fold in the persisted operator opt-in so
+        // a GUI enable survives restart; setTxAllowed arms the watchdog.
+        guard->setTxAllowed(
+            qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
+            || AutomationBridgeSettings::txAllowed());
+    });
+    return true;  // start initiated; the socket begins listening once the token resolves
+}
+
+void MainWindow::stopAutomationBridge()
+{
+    if (m_automation) {
+        m_automation->stop();
+        m_automation.reset();
+    }
+}
+
+bool MainWindow::isAutomationBridgeRunning() const
+{
+    return m_automation && m_automation->isRunning();
+}
+
+QString MainWindow::automationBridgeEndpoint() const
+{
+    return m_automation ? m_automation->fullServerName() : QString();
+}
+
+void MainWindow::setAutomationBridgeToken(const QString& token)
+{
+    // Persist to the OS secret store (survives restart; read by
+    // startAutomationBridge). No plaintext copy in the settings file.
+    AutomationBridgeSettings::saveToken(token);
+    // Push live so a rotate takes effect immediately on the running bridge —
+    // any client still using the old token is locked out on its next request.
+    if (m_automation)
+        m_automation->setAuthToken(token);
+}
+
+void MainWindow::setAutomationTxAllowed(bool allowed)
+{
+    // Persist the operator opt-in (nested config) so it survives restart.
+    AutomationBridgeSettings::setTxAllowed(allowed);
+    // Push live so toggling takes effect on a running bridge immediately —
+    // disabling force-unkeys the radio; enabling arms the TX watchdog.
+    if (m_automation)
+        m_automation->setTxAllowed(allowed);
 }
 
 } // namespace AetherSDR

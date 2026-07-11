@@ -2,6 +2,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/AutomationBridgeSettings.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
@@ -449,8 +450,7 @@ int main(int argc, char* argv[])
         // Radio Setup → Network, OR when AETHER_AUTOMATION is set (the launch-
         // time override that headless drivers/CI rely on — always wins). The
         // window owns the server for its lifetime.
-        const bool bridgePersisted =
-            AetherSDR::AppSettings::instance().value("AutomationBridgeEnabled", false).toBool();
+        const bool bridgePersisted = AetherSDR::AutomationBridgeSettings::enabled();
         if (qEnvironmentVariableIsSet("AETHER_AUTOMATION") || bridgePersisted)
             window.startAutomationBridge();
 

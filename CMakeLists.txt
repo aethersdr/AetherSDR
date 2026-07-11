@@ -551,6 +551,7 @@ set(CORE_SOURCES
     src/core/PskReporterClient.cpp
     src/core/MqttAntennaAlias.cpp
     src/core/MqttSettings.cpp
+    src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
@@ -2285,6 +2286,15 @@ target_include_directories(radio_status_ownership_test PRIVATE src)
 target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
+
+# MCP server field-mapping / protocol regression test (#4177). Pure Python,
+# no app or Qt needed — guards the schema ↔ bridge verb field mapping.
+find_program(PYTHON3_EXECUTABLE NAMES python3 python)
+if(PYTHON3_EXECUTABLE)
+    add_test(NAME aether_mcp_field_mapping
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+endif()
 
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp

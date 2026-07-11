@@ -1791,15 +1791,18 @@ bool AutomationServer::start(const QString& serverName)
         m_discoveryFile.clear();
     }
 
-    // TX safety rails (#3646): when the operator has enabled transmit
-    // automation, arm a watchdog that force-unkeys the radio if it stays keyed
-    // past a limit — a backstop independent of whatever script is driving us.
+    // TX safety rails (#3646): the watchdog force-unkeys the radio if it stays
+    // keyed past a limit — a backstop independent of whatever script drives us.
+    // Read the key-time / power-ceiling limits UNCONDITIONALLY so they also
+    // apply when TX is enabled later via the GUI toggle (setTxAllowed) — they
+    // are watchdog policy, not an env-only feature. Only the watchdog *arming*
+    // is gated on TX actually being allowed.
+    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_MS"))
+        m_txMaxKeyMs = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_MS");
+    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_POWER"))
+        m_txMaxPower = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_POWER");
     m_txAllowed = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
     if (m_txAllowed) {
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_MS"))
-            m_txMaxKeyMs = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_MS");
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_POWER"))
-            m_txMaxPower = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_POWER");
         m_txWatchdog = new QTimer(this);
         m_txWatchdog->setInterval(500);
         connect(m_txWatchdog, &QTimer::timeout, this, &AutomationServer::onTxWatchdog);
@@ -1945,8 +1948,9 @@ void AutomationServer::setTxAllowed(bool allowed)
     m_txAllowed = allowed;
     if (allowed) {
         // Arm the force-unkey watchdog (mirrors the start()-time arming). The
-        // env-driven TX_MAX_MS/POWER limits, if any, were already read at
-        // start(); keep whatever's in effect.
+        // TX_MAX_MS / TX_MAX_POWER limits are read unconditionally in start(),
+        // so the same key-time and power-ceiling policy applies on this GUI
+        // path as on the env path.
         if (!m_txWatchdog) {
             m_txWatchdog = new QTimer(this);
             m_txWatchdog->setInterval(500);

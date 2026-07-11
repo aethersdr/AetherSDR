@@ -125,7 +125,7 @@ class Bridge:
             if self._pipe:
                 self._pipe.close()
         except OSError:
-            pass
+            pass  # best-effort teardown — a close failure is not actionable
 
 
 def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
@@ -372,7 +372,9 @@ def handle_tool(name, args):
         return text_result(bridge_request(req))
 
     if name == "shortcut":
-        return text_result(bridge_request({"cmd": "shortcut", "value": args["id"]}))
+        # The registry's shortcut verb reads `id` (or `target`), not `value` —
+        # a JSON request bypasses the bare-line positional parser.
+        return text_result(bridge_request({"cmd": "shortcut", "id": args["id"]}))
 
     if name == "bridge_command":
         req = args.get("request")
@@ -396,6 +398,17 @@ def main():
         try:
             msg = json.loads(raw)
         except ValueError:
+            continue
+        # A JSON-RPC message must be an object. A batch array or a bare scalar
+        # would make msg.get(...) raise AttributeError outside every try and
+        # kill the loop — reject them per JSON-RPC (-32600) and keep serving.
+        if not isinstance(msg, dict):
+            sys.stdout.write(json.dumps({
+                "jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600,
+                          "message": "Invalid Request: expected a JSON object"
+                                     " (batch requests are not supported)"}}) + "\n")
+            sys.stdout.flush()
             continue
         method, mid = msg.get("method"), msg.get("id")
         if method == "initialize":

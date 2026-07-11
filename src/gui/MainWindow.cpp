@@ -3367,104 +3367,12 @@ QJsonObject MainWindow::automationTxTimerSnapshot() const
     return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
 }
 
-bool MainWindow::startAutomationBridge(const QString& sockName)
-{
-    if (m_automation && m_automation->isRunning())
-        return true;  // idempotent
-
-    // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
-    // endpoint; otherwise the default is PID-suffixed so two instances don't
-    // steal each other's socket. Drivers find the right one via the discovery
-    // file the server drops in the temp dir.
-    QString name = sockName;
-    if (name.isEmpty())
-        name = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
-                   ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
-                   : QStringLiteral("aethersdr-automation-%1")
-                         .arg(QCoreApplication::applicationPid());
-
-    if (!m_automation)
-        m_automation = std::make_unique<AutomationServer>();
-
-    m_automation->setRadioModel(&radioModel());  // for the get() verb
-    m_automation->setAudioEngine(audioEngine());
-    m_automation->setQsoRecorder(qsoRecorder());  // for the record() verb
-    m_automation->setConnectionDialogHost(this);
-    m_automation->setConnectionAutomation(
-        findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
-    m_automation->setSliceReceiveSourceHandler(
-        [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
-    m_automation->setSliceCenterLockHandler(
-        [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
-    m_automation->setTuneHandler(
-        [this](double mhz) { return automationTune(mhz); });
-    m_automation->setReceiveSyncSnapshotHandler(
-        [this]() { return automationReceiveSyncSnapshot(); });
-    m_automation->setKiwiSdrSnapshotHandler(
-        [this]() { return automationKiwiSdrSnapshot(); });
-    m_automation->setTxTimerSnapshotHandler(
-        [this]() { return automationTxTimerSnapshot(); });
-
-    // Shared-secret gate. Empty setting → open bridge (unchanged behavior);
-    // a non-empty token means only clients holding it can drive the radio.
-    m_automation->setAuthToken(
-        AppSettings::instance().value("AutomationBridgeToken").toString());
-
-    if (!m_automation->start(name)) {
-        m_automation.reset();
-        return false;
-    }
-
-    // TX-automation gate. start() already set it from AETHER_AUTOMATION_ALLOW_TX;
-    // fold in the persisted operator opt-in (Radio Setup → Network) so a GUI
-    // enable survives restart. setTxAllowed is idempotent and arms the
-    // force-unkey watchdog if this turns TX on.
-    m_automation->setTxAllowed(
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-        || AppSettings::instance().value("AutomationBridgeTxAllowed", false).toBool());
-    return true;
-}
-
-void MainWindow::stopAutomationBridge()
-{
-    if (m_automation) {
-        m_automation->stop();
-        m_automation.reset();
-    }
-}
-
-bool MainWindow::isAutomationBridgeRunning() const
-{
-    return m_automation && m_automation->isRunning();
-}
-
-QString MainWindow::automationBridgeEndpoint() const
-{
-    return m_automation ? m_automation->fullServerName() : QString();
-}
-
-void MainWindow::setAutomationBridgeToken(const QString& token)
-{
-    // Persist so it survives restart and is read by startAutomationBridge().
-    AppSettings::instance().setValue("AutomationBridgeToken", token);
-    AppSettings::instance().save();
-    // Push live so a rotate takes effect immediately on the running bridge —
-    // any client still using the old token is locked out on its next request.
-    if (m_automation)
-        m_automation->setAuthToken(token);
-}
-
-void MainWindow::setAutomationTxAllowed(bool allowed)
-{
-    // Persist the operator opt-in so it survives restart and is read by
-    // startAutomationBridge().
-    AppSettings::instance().setValue("AutomationBridgeTxAllowed", allowed);
-    AppSettings::instance().save();
-    // Push live so toggling takes effect on a running bridge immediately —
-    // disabling force-unkeys the radio; enabling arms the TX watchdog.
-    if (m_automation)
-        m_automation->setTxAllowed(allowed);
-}
+// The agent automation-bridge lifecycle (startAutomationBridge / stop /
+// isRunning / endpoint / setAutomationBridgeToken / setAutomationTxAllowed)
+// lives in MainWindow_Session.cpp with the rest of the session/subsystem
+// wiring — not in this monolith. automationTxTimerSnapshot above is the
+// per-frame status accessor and stays here with the other automation*
+// snapshot accessors.
 
 void MainWindow::showConnectionDialog()
 {

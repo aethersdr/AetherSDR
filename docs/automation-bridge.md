@@ -117,6 +117,23 @@ A typical assistant validation loop for a PR:
 control you changed → `get_state` to assert the model reacted →
 `grab_widget` for a visual check.
 
+**Access token.** Enabling the bridge in Radio Setup → Network mints a
+random token (stored in your OS secret store via QtKeychain — macOS
+Keychain / Windows Credential Manager / libsecret-KWallet, never in the
+plaintext settings file). Copy it into your assistant's MCP config as the
+`AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
+verb except `ping` without a matching token. Headless/CI can supply the
+token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
+
+What the token *does* and *doesn't* do: it opts a **specific** client in
+and protects the secret at rest (nothing in a backed-up / synced /
+screen-shared dotfile), across other user accounts, and over any network
+reach. It is **not** a hard wall against a determined *same-user* process
+on Linux/Windows — once your login keychain is unlocked, libsecret and
+DPAPI hand the secret to any same-user caller (macOS, with its per-item
+ACL prompt, is the exception). Treat it as "this app deliberately grants
+this client access," not "same-user isolation."
+
 The TX-safety gate is unchanged in spirit: the bridge refuses transmit-
 keying controls regardless of who's calling (see [TX safety](#tx-safety)).
 An assistant can only key your radio if **you** opt in — either by

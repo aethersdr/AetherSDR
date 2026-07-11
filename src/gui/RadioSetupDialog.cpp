@@ -6,6 +6,7 @@
 #include "models/RadioModel.h"
 #include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
+#include "core/AutomationBridgeSettings.h"
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -1225,20 +1226,29 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         };
         // The token field is created here (before the toggle) so the toggle's
         // enable handler can auto-fill it — enabling the bridge without a
-        // token would leave it open, which defeats the point.
+        // token would leave it open, which defeats the point. The token lives
+        // in the OS secret store and reads ASYNCHRONOUSLY; tokenLoaded gates
+        // the auto-mint so a toggle fired before the read lands can't clobber
+        // an existing token.
         auto* tokenEdit = new QLineEdit;
         tokenEdit->setReadOnly(true);
-        tokenEdit->setText(
-            AppSettings::instance().value("AutomationBridgeToken").toString());
-        tokenEdit->setPlaceholderText("(none — enable the bridge or click Rotate)");
+        tokenEdit->setPlaceholderText("(loading…)");
         tokenEdit->setToolTip(
             "Paste this into your AI assistant's MCP server config as the\n"
             "AETHER_MCP_TOKEN environment variable. Only a client holding\n"
-            "this token can drive the radio.");
+            "this token can drive the radio. Stored in your OS secret store.");
         AetherSDR::ThemeManager::instance().applyStyleSheet(tokenEdit,
             "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-family: monospace; "
             "font-size: 11px; padding: 3px 6px; }");
+        auto tokenLoaded = std::make_shared<bool>(false);
+        AutomationBridgeSettings::loadToken(this,
+            [tokenEdit, tokenLoaded](const QString& tok) {
+                tokenEdit->setText(tok);
+                tokenEdit->setPlaceholderText(
+                    "(none — enable the bridge or click Rotate)");
+                *tokenLoaded = true;
+            });
 
         // Agent automation bridge (#3646) — the endpoint MCP clients (AI
         // coding assistants) connect to for validating changes against the
@@ -1247,8 +1257,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         // of this toggle (headless/CI path), so we reflect either source.
         {
             grid->addWidget(new QLabel("Agent Automation (MCP):"), 1, 0);
-            const bool bridgeOn =
-                AppSettings::instance().value("AutomationBridgeEnabled", false).toBool()
+            const bool bridgeOn = AutomationBridgeSettings::enabled()
                 || qEnvironmentVariableIsSet("AETHER_AUTOMATION");
             auto* mcpBtn = new QPushButton(bridgeOn ? "Enabled" : "Disabled");
             mcpBtn->setCheckable(true);
@@ -1272,18 +1281,16 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     + "\n\nForced on by the AETHER_AUTOMATION launch environment variable.");
             }
             connect(mcpBtn, &QPushButton::toggled, this,
-                    [this, mcpBtn, tokenEdit, genToken](bool on) {
+                    [this, mcpBtn, tokenEdit, genToken, tokenLoaded](bool on) {
                 mcpBtn->setText(on ? "Enabled" : "Disabled");
-                AppSettings::instance().setValue("AutomationBridgeEnabled", on);
-                AppSettings::instance().save();
+                AutomationBridgeSettings::setEnabled(on);
                 // Enabling with no token yet → mint one so the bridge is never
-                // exposed without auth. Copy it out so the operator can wire it
-                // into their assistant immediately.
-                if (on && tokenEdit->text().isEmpty()) {
+                // exposed without auth. Only when the async token read has
+                // landed (tokenLoaded) so we can't clobber an existing token.
+                if (on && *tokenLoaded && tokenEdit->text().isEmpty()) {
                     const QString tok = genToken();
                     tokenEdit->setText(tok);
-                    AppSettings::instance().setValue("AutomationBridgeToken", tok);
-                    AppSettings::instance().save();
+                    AutomationBridgeSettings::saveToken(tok);
                     QGuiApplication::clipboard()->setText(tok);
                     emit automationBridgeTokenRotated(tok);
                 }
@@ -1322,8 +1329,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     [this, tokenEdit, genToken]() {
                 const QString tok = genToken();
                 tokenEdit->setText(tok);
-                AppSettings::instance().setValue("AutomationBridgeToken", tok);
-                AppSettings::instance().save();
+                AutomationBridgeSettings::saveToken(tok);
                 QGuiApplication::clipboard()->setText(tok);
                 emit automationBridgeTokenRotated(tok);
             });
@@ -1342,10 +1348,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         {
             grid->addWidget(new QLabel("Allow TX via MCP:"), 3, 0);
             auto* txCheck = new QCheckBox("Enable transmit control");
-            auto& s0 = AppSettings::instance();
             const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
-            txCheck->setChecked(s0.value("AutomationBridgeTxAllowed", false).toBool()
-                                || envForcesTx);
+            txCheck->setChecked(AutomationBridgeSettings::txAllowed() || envForcesTx);
             txCheck->setToolTip(
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
@@ -1360,8 +1364,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.");
             }
             connect(txCheck, &QCheckBox::toggled, this, [this, txCheck](bool on) {
-                auto& s = AppSettings::instance();
-                if (on && !s.value("AutomationBridgeTxAck", false).toBool()) {
+                if (on && !AutomationBridgeSettings::txAck()) {
                     // First-time enable → confirm. Operator must acknowledge.
                     QMessageBox box(this);
                     box.setIcon(QMessageBox::Warning);
@@ -1391,10 +1394,9 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     }
                     // Confirmed — remember the acknowledgement so we never
                     // prompt again on a future enable.
-                    s.setValue("AutomationBridgeTxAck", true);
+                    AutomationBridgeSettings::setTxAck(true);
                 }
-                s.setValue("AutomationBridgeTxAllowed", on);
-                s.save();
+                AutomationBridgeSettings::setTxAllowed(on);
                 emit automationBridgeTxAllowedChanged(on);
             });
             grid->addWidget(txCheck, 3, 1);
