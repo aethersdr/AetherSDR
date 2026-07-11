@@ -4,6 +4,7 @@
 #include "Resampler.h"
 #include "deep_filter.h"
 
+#include <cstddef>
 #include <cstring>
 #include <vector>
 #include <QCoreApplication>
@@ -283,7 +284,9 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
 
     if (completeFrames > 0) {
         auto* accumData = reinterpret_cast<float*>(m_inAccum.data());
-        m_processed48k.resize(completeFrames * m_frameSize);
+        m_processed48k.resize(
+            static_cast<std::size_t>(completeFrames)
+            * static_cast<std::size_t>(m_frameSize));
 
         for (int f = 0; f < completeFrames; ++f) {
             df_process_frame(m_state,
