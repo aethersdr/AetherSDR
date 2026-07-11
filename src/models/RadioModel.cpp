@@ -2453,6 +2453,9 @@ void RadioModel::setPanBandwidth(double bandwidthMhz)
 void RadioModel::setPanCenter(double centerMhz)
 {
     if (m_activePanId.isEmpty()) return;
+    if (PanadapterModel* pan = panadapter(m_activePanId)) {
+        pan->setCenterBandwidth(centerMhz, -1.0);
+    }
     sendCmd(
         QString("display pan set %1 center=%2")
             .arg(m_activePanId).arg(centerMhz, 0, 'f', 6));
@@ -2650,6 +2653,7 @@ void RadioModel::stageSessionModelsForReconnect()
         if (it.value()) {
             it.value()->setResized(false);
             it.value()->setWaterfallConfigured(false);
+            it.value()->resetCenterKnownForReconnect();
             m_stalePanadapters.insert(it.key(), it.value());
         }
     }

@@ -45,6 +45,10 @@ public:
     // other). Emits infoChanged when either value changes or when the center
     // is populated for the first time (even if it equals the placeholder).
     void setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // A reclaimed model retains its numeric display state while reconnecting,
+    // but that previous-session center is not authoritative until the radio
+    // reports the new session's pan state.
+    void resetCenterKnownForReconnect() { m_centerKnown = false; }
     // Normalized display-level-range setter driven by the backend (aetherd RFC
     // 2.3, second universal pan field). NaN for either bound means "leave
     // unchanged" (dBm is signed, so no numeric sentinel is safe). Emits

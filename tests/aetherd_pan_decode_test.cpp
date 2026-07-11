@@ -365,6 +365,17 @@ int main(int argc, char** argv)
         pan.setCenterBandwidth(7.15, -1.0);
         CHECK(info.count() == 0);
 
+        // Reconnect staging may retain the model object, but its old numeric
+        // center must not remain authoritative for TCI dds: in the new session.
+        pan.resetCenterKnownForReconnect();
+        CHECK(pan.centerKnown() == false);
+        CHECK(qFuzzyCompare(pan.centerMhz(), 7.15));
+        CHECK(info.count() == 0);
+        pan.setCenterBandwidth(7.15, -1.0);
+        CHECK(pan.centerKnown() == true);
+        CHECK(info.count() == 1);
+        info.clear();
+
         // setRange: NaN = "leave unchanged" (max held, only min moves); returns
         // whether anything changed (gates the setDbmRange side-effect).
         QSignalSpy lvl(&pan, &PanadapterModel::levelChanged);

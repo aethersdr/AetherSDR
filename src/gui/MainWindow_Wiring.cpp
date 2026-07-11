@@ -2408,8 +2408,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
-        if (const auto* pan = m_radioModel.panadapter(applet->panId()))
+        if (auto* pan = m_radioModel.panadapter(applet->panId())) {
             center = std::max(center, pan->bandwidthMhz() / 2.0);
+            // The radio may acknowledge this command without echoing a display
+            // status to the setting client. Keep the canonical model aligned
+            // with the visible pan so TCI dds: follows the IQ center.
+            pan->setCenterBandwidth(center, -1.0);
+        }
         m_radioModel.sendCommand(
             QString("display pan set %1 center=%2").arg(applet->panId()).arg(center, 0, 'f', 6));
     });
