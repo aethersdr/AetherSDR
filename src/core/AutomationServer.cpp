@@ -3397,15 +3397,13 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         };
 
         QJsonArray flags;
-        QSet<QWidget*> seenWidgets;
         QSet<int> seenSliceIds;
         const QList<QWidget*> widgets =
             findWidgetsByClass(QStringLiteral("VfoWidget"));
         for (QWidget* vfo : widgets) {
-            if (!vfo || seenWidgets.contains(vfo)) {
+            if (!vfo) {
                 continue;
             }
-            seenWidgets.insert(vfo);
             const QVariant sid = vfo->property("sliceId");
             if (!sid.isValid()) {
                 continue;

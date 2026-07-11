@@ -120,7 +120,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
-                             "connect", "disconnect", "slice", "pan", "audioCapture",
+                             "connect", "disconnect", "slice", "audioCapture",
                              "record", "testtone", "tci", "panmessage",
                              "hitTest", "clickAt", "resize", "dss",
                              "pan", "layout", "scale"],
@@ -134,7 +134,6 @@ def main():
                          "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
                          "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
-                         "pan <create|add|remove|close|center> [args] | "
                          "dss <snapshot|reset|live> [pan] [args] | "
                          "dss inject [pan] <count> <firstPeakBin> <stepBin> "
                          "[native|kiwi [rowLowMhz rowHighMhz]] | "
@@ -274,14 +273,6 @@ def main():
             if not args.rest:
                 sys.exit("error: slice needs an action")
             req = {"cmd": "slice", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "pan":
-            if not args.rest:
-                sys.exit("error: pan needs an action")
-            req = {"cmd": "pan", "action": args.rest[0]}
             if len(args.rest) > 1:
                 req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))

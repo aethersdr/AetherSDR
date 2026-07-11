@@ -5813,4 +5813,28 @@ void VfoWidget::setRadeCallsign(const QString& callsign)
 }
 #endif
 
+void VfoWidget::reparentFlagSatellites(QWidget* newParent)
+{
+    if (!newParent) {
+        return;
+    }
+    const std::initializer_list<QWidget*> satellites = {
+        m_closeSliceBtn.data(), m_lockVfoBtn.data(),
+        m_recordBtn.data(), m_playBtn.data(),
+        m_collapsedFreqLabel.data(),
+    };
+    for (QWidget* sat : satellites) {
+        if (!sat || sat->parentWidget() == newParent) {
+            continue;
+        }
+        // setParent() hides the widget; restore its prior visibility so a
+        // shown button doesn't vanish until the next collapse toggle. The
+        // next updatePosition() re-places it in the new coordinate space.
+        const bool wasVisible = sat->isVisible();
+        sat->setParent(newParent);
+        sat->setVisible(wasVisible);
+        sat->raise();
+    }
+}
+
 } // namespace AetherSDR

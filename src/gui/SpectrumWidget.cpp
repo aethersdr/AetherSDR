@@ -1789,6 +1789,11 @@ void SpectrumWidget::adoptVfoWidget(int sliceId, VfoWidget* widget)
         removeVfoWidget(sliceId);
     }
     widget->setParent(this);
+    // The flag's close/lock/record/play buttons and collapsed freq label are
+    // siblings parented to the SPECTRUM (so they render outside the flag's
+    // bounds) — they must move with the flag or they ghost on the old pan
+    // (#4037 review).
+    widget->reparentFlagSatellites(this);
     widget->setProperty("sliceId", sliceId);
     installVfoCursorEventFilter(widget);
     connect(widget, &VfoWidget::smartMtrLabelsChanged, this,

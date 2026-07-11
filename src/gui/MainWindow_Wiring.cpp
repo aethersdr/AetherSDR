@@ -440,7 +440,10 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
 
 bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
 {
-    if (!s || m_applyingLayout) {
+    // (No m_applyingLayout guard: that flag is never set anywhere — a dead
+    // remnant of the old delete/recreate layout path. The sibling guards in
+    // onSliceAdded/onSliceRemoved are equally inert; flagged for cleanup.)
+    if (!s) {
         return false;
     }
 
@@ -490,6 +493,13 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
             wireVfoTelemetry(targetVfo, s);
+#ifdef HAVE_RADE
+            // Parity with onSliceAdded: a deferred-attach slice can already
+            // be in FDVU/FDVL when its pan finally lands (#4037 review).
+            if (s->mode().startsWith("FDV")) {
+                activateFdvDisplay(sliceId);
+            }
+#endif
         }
     }
 
@@ -954,38 +964,46 @@ void MainWindow::onSliceAdded(SliceModel* s)
         syncKiwiSdrDiversityEscControls();
     });
 
-    // Create a VfoWidget for this slice on the correct panadapter
-    auto* swForVfo = spectrumForSlice(s);
-    if (!swForVfo) return;
-    auto* vfo = swForVfo->addVfoWidget(s->sliceId());
+    // Create a VfoWidget for this slice on the correct panadapter. When the
+    // pan hasn't arrived yet (out-of-order reconnect), skip ONLY the widget
+    // creation — reattachSliceVisualsToPanadapter() creates and wires it when
+    // the pan lands. The slice-scoped wiring below must still run: it is all
+    // pan-independent (every connect resolves the VFO dynamically at fire
+    // time), and skipping it left the late-attached slice 90% wired — no
+    // applet tab button, no split refresh on external TX-role changes, no
+    // band-stack dwell (#4037 review).
+    if (auto* swForVfo = spectrumForSlice(s)) {
+        auto* vfo = swForVfo->addVfoWidget(s->sliceId());
 
-    // Set SmartSDR+ flag before wireVfoWidget so rebuildFilterButtons
-    // sees the correct value when setSlice() triggers the first build (#1356)
-    {
-        const QString& sub = m_radioModel.licenseSubscription();
-        bool hasPlus = sub.contains("SmartSDR+");
-        vfo->setSmartSdrPlus(hasPlus);
+        // Set SmartSDR+ flag before wireVfoWidget so rebuildFilterButtons
+        // sees the correct value when setSlice() triggers the first build (#1356)
+        {
+            const QString& sub = m_radioModel.licenseSubscription();
+            bool hasPlus = sub.contains("SmartSDR+");
+            vfo->setSmartSdrPlus(hasPlus);
+        }
+
+        // Set extended DSP flag before wireVfoWidget so the mode-change lambda
+        // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
+        vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
+
+        wireVfoWidget(vfo, s);
+
+        // NR2/RN2/RADE are now wired permanently in wireVfoWidget — no
+        // special handling needed here for active slice timing.
+
+        // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
+        vfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
+
+        wireVfoTelemetry(vfo, s);
     }
 
-    // Set extended DSP flag before wireVfoWidget so the mode-change lambda
-    // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
-    vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
-
-    wireVfoWidget(vfo, s);
-
-    // NR2/RN2/RADE are now wired permanently in wireVfoWidget — no
-    // special handling needed here for active slice timing.
-
 #ifdef HAVE_RADE
-    // Reconnect scenario: slice may already be in FDVU/FDVL when AetherSDR connects
+    // Reconnect scenario: slice may already be in FDVU/FDVL when AetherSDR
+    // connects. Pan-independent — runs even when the VFO is deferred.
     if (s->mode().startsWith("FDV"))
         activateFdvDisplay(s->sliceId());
 #endif
-
-    // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
-    vfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
-
-    wireVfoTelemetry(vfo, s);
 
     // Refresh the split-pair visualization whenever this slice's TX role changes,
     // so an externally-initiated split (rigctld / CAT / TCI / front panel) is
