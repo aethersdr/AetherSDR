@@ -43,7 +43,6 @@
 #endif
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
-#include "MeterSmoother.h"  // global lean-mode meter repaint throttle (#3283)
 #include "AppletPanel.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
@@ -171,6 +170,7 @@
 #include <QImage>
 #include <QBuffer>
 #include <QFont>
+#include <QFontMetrics>
 #include <QWidgetAction>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -291,15 +291,46 @@ void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color)
     AetherSDR::ThemeManager::instance().applyStyleSheet(label, statusBarCompactLabelStyle(color));
 }
 
-void setStatusBarStationText(QLabel* label, const QString& text)
+int statusBarCompactTextWidth(const QStringList& samples, int horizontalPadding)
 {
-    if (!label) {
+    QFont font = QApplication::font();
+    font.setPixelSize(12);
+    const QFontMetrics metrics(font);
+
+    int width = 0;
+    for (const QString& sample : samples) {
+        width = qMax(width, metrics.horizontalAdvance(sample));
+    }
+    return width + horizontalPadding;
+}
+
+void reserveStatusBarStackWidth(QWidget* stack, const QStringList& samples, int minimumWidth)
+{
+    if (!stack) {
         return;
     }
 
-    label->setText(text);
+    stack->setMinimumWidth(qMax(minimumWidth, statusBarCompactTextWidth(samples, 16)));
+}
+
+bool setStatusBarStationText(QLabel* label, const QString& text)
+{
+    if (!label) {
+        return false;
+    }
+
+    bool changed = false;
+    if (label->text() != text) {
+        label->setText(text);
+        changed = true;
+    }
     label->ensurePolished();
-    label->setMinimumWidth(label->sizeHint().width() + 2);
+    const int minimumWidth = label->sizeHint().width() + 2;
+    if (label->minimumWidth() != minimumWidth) {
+        label->setMinimumWidth(minimumWidth);
+        changed = true;
+    }
+    return changed;
 }
 
 QString vfoFrequencyText(double mhz)
@@ -991,16 +1022,6 @@ MainWindow::MainWindow(QWidget* parent)
     // Audio worker thread (#502) — AudioEngine runs on its own thread so
     // audio processing never competes with paintEvent for main thread CPU.
     m_audioThread = new QThread(this);
-    // Lean render mode (#3283): read persisted state early so panadapters
-    // created during startup seed their Lean button/widget correctly, then
-    // apply once after construction to cover VFOs + the WAVE applet.
-    // Persistence is the nested "Display" blob (Principle V); the legacy
-    // flat "LeanMode" key is migrated into it on first read.
-    DisplaySettings::migrateLegacy();
-    m_leanMode = DisplaySettings::leanMode();
-    if (m_leanMode) {
-        QTimer::singleShot(0, this, [this]() { applyLeanMode(true); });
-    }
     initReceivePresentationSync();
 
     m_audioThread->setObjectName("AudioEngine");
@@ -1159,6 +1180,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     buildMenuBar();
     buildUI();
+    loadCenterLockSettings();
 #ifdef Q_OS_WIN
     applyWindowsCustomFrame();
 #endif
@@ -1511,11 +1533,6 @@ MainWindow::MainWindow(QWidget* parent)
     // Overlay-menu antenna wiring is now per-pan in wirePanadapter() (#1260).
     // Antenna list and S-meter are now wired per-widget in onSliceAdded.
 
-    // ── Title bar: Pan Follow ────────────────────────────────────────────────
-    connect(m_titleBar, &TitleBar::panFollowToggled,
-            this, &MainWindow::setPanFollow);
-    if (m_titleBar->isPanFollowChecked()) setPanFollow(true);
-
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
@@ -1568,6 +1585,12 @@ MainWindow::MainWindow(QWidget* parent)
     // Multi-Flex: show when another client is transmitting
     connect(&m_radioModel, &RadioModel::txOwnerChanged,
             m_titleBar, &TitleBar::setOtherClientTx);
+
+    // Status-bar transmit timer — runs only for operator MOX/PTT/VOX, never
+    // TCI/DAX (the model gates the source). Hidden idle; 15s hold + fade on
+    // unkey is handled inside TitleBar.
+    connect(&m_radioModel, &RadioModel::operatorTransmitChanged,
+            m_titleBar, &TitleBar::setOperatorTransmitting);
 
     // Multi-Flex: title bar indicator when other clients are connected
     connect(&m_radioModel, &RadioModel::otherClientsChanged,
@@ -1769,8 +1792,7 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Update station label (nickname arrives via status after connect)
         const QString nick = m_radioModel.nickname();
-        if (!nick.isEmpty()) {
-            setStatusBarStationText(m_stationLabel, nick);
+        if (!nick.isEmpty() && setStatusBarStationText(m_stationLabel, nick)) {
             updateStatusBarMinimumWidth();
         }
     });
@@ -2401,9 +2423,12 @@ void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
     const QString mode = s->mode();
     int lo = audioLo;
     int hi = audioHi;
-    if (mode == "LSB" || mode == "DIGL") {
+    if (mode == "LSB" || mode == "DIGL" || mode == "FDVL") {
         // Lower-sideband: filter offsets are negative; the audio low edge
-        // maps to the high (closest-to-zero) offset and vice versa.
+        // maps to the high (closest-to-zero) offset and vice versa. FDVL
+        // included since #3434 stores it canonically negative — the old
+        // pass-through sent positives that flip-flopped the overlay per
+        // drag step against the mirrored radio echo.
         lo = -audioHi;
         hi = -audioLo;
     } else if (mode == "AM" || mode == "SAM" || mode == "FM"
@@ -3315,6 +3340,14 @@ void MainWindow::toggleConnectionDialog()
     }
 
     showConnectionDialog();
+}
+
+QJsonObject MainWindow::automationTxTimerSnapshot() const
+{
+    if (!m_titleBar)
+        return QJsonObject{{QStringLiteral("visible"), false},
+                           {QStringLiteral("running"), false}};
+    return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
 }
 
 void MainWindow::showConnectionDialog()
@@ -4389,10 +4422,18 @@ void MainWindow::buildUI()
     // Reserve consistent width for the compact telemetry stacks so updates
     // do not cause the status bar to reshuffle as values change.
     constexpr int kTelemetryStackMinWidth = 84;
+    auto reserveTelemetryStack = [](QWidget* stack, const QStringList& samples) {
+        reserveStatusBarStackWidth(stack, samples, kTelemetryStackMinWidth);
+    };
 
     // GPS satellites (top) + lock status (bottom) stacked
     auto* gpsStack = new QWidget;
-    gpsStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(gpsStack, {
+        QStringLiteral("GPS: 12/12"),
+        QStringLiteral("Ref: Ext 10M"),
+        QStringLiteral("[Unlocked]"),
+        QStringLiteral("[No 10M]")
+    });
     auto* gpsVbox = new QVBoxLayout(gpsStack);
     gpsVbox->setContentsMargins(0, 0, 0, 0);
     gpsVbox->setSpacing(0);
@@ -4412,7 +4453,10 @@ void MainWindow::buildUI()
     // CPU (top) + Memory (bottom) stacked
     {
         auto* cpuStack = new QWidget;
-        cpuStack->setMinimumWidth(kTelemetryStackMinWidth);
+        reserveTelemetryStack(cpuStack, {
+            QStringLiteral("CPU: 100.0%"),
+            QStringLiteral("Mem: 99999 MB")
+        });
         auto* cpuVbox = new QVBoxLayout(cpuStack);
         cpuVbox->setContentsMargins(0, 0, 0, 0);
         cpuVbox->setSpacing(0);
@@ -4531,7 +4575,11 @@ void MainWindow::buildUI()
 
     // PA temp (top) + supply voltage (bottom) stacked
     auto* paStack = new QWidget;
-    paStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(paStack, {
+        QStringLiteral("PA 248.0°F"),
+        QStringLiteral("PA 120.0°C"),
+        QStringLiteral("99.99 V")
+    });
     auto* paVbox = new QVBoxLayout(paStack);
     paVbox->setContentsMargins(0, 0, 0, 0);
     paVbox->setSpacing(0);
@@ -4553,7 +4601,10 @@ void MainWindow::buildUI()
 
     // Network label (top) + quality (bottom) stacked
     auto* netStack = new QWidget;
-    netStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(netStack, {
+        QStringLiteral("Network:"),
+        QStringLiteral("[Very Good]")
+    });
     netStack->setCursor(Qt::PointingHandCursor);
     auto* netVbox = new QVBoxLayout(netStack);
     netVbox->setContentsMargins(0, 0, 0, 0);
@@ -4674,7 +4725,11 @@ void MainWindow::buildUI()
     // UTC date (top) + UTC time (bottom) stacked, right-aligned. Two-row
     // layout matches all other telemetry stacks in the status bar (#1583).
     auto* timeStack = new QWidget;
-    timeStack->setMinimumWidth(kTelemetryStackMinWidth);
+    reserveTelemetryStack(timeStack, {
+        QStringLiteral("12/31/2026"),
+        QStringLiteral("31/12/2026"),
+        QStringLiteral("HH:mm:ssZ")
+    });
     auto* timeVbox = new QVBoxLayout(timeStack);
     timeVbox->setContentsMargins(0, 0, 0, 0);
     timeVbox->setSpacing(0);
@@ -4829,46 +4884,6 @@ void MainWindow::applyDarkTheme()
 }
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
-
-void MainWindow::applyLeanMode(bool on)
-{
-    m_leanMode = on;
-
-    // Panadapters: opaque single layer (no wallpaper / fill) + ~30 Hz cap.
-    // Also keep every pan's Lean button in sync (the toggle is global).
-    for (auto* sw : findChildren<SpectrumWidget*>()) {
-        sw->setLeanMode(on);
-        if (auto* menu = sw->overlayMenu())
-            menu->setLeanChecked(on);
-    }
-
-    // VFO panels: opaque, cacheable layer (kills the translucent re-composite).
-    for (auto* vfo : findChildren<VfoWidget*>())
-        vfo->setOpaqueMode(on);
-
-    // WAVE scope: hidden + feed dropped. Round-trip respects the user's
-    // pre-Lean choice (if they had the scope hidden before enabling Lean,
-    // disabling Lean must not silently re-show it).
-    if (m_appletPanel) {
-        if (auto* wave = m_appletPanel->waveApplet()) {
-            if (on) {
-                m_preLeanWaveActive = wave->isActive();
-                wave->setActive(false);
-            } else {
-                wave->setActive(m_preLeanWaveActive);
-            }
-        }
-    }
-
-    // Meters: throttle their animation repaint so they stop dirtying the shared
-    // backing store every frame (which forces a full-window texture re-upload to
-    // recomposite with the GPU panadapter — the dominant pooled cost on large/5K
-    // windows; see #3283). Native-layering the panel was tried and did not
-    // isolate them under Qt 6.11/macOS, so we cap the repaint rate instead.
-    MeterSmoother::setLeanThrottle(on);
-
-    DisplaySettings::setLeanMode(on);
-}
 
 void MainWindow::onConnectionStateChanged(bool connected)
 {
@@ -5148,6 +5163,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
         m_suppressStartupPanLayoutRearrange = false;
         m_layoutRestoreUntilMs = 0;
+        clearKiwiSdrPanDisplaySourceOverrides();
         if (m_appletPanel) {
             m_appletPanel->clearSliceButtons();
         }
@@ -5244,6 +5260,32 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
         m_wfLineDurationReconcile.clear();
+        for (auto it = m_panAverageReconcileConnections.begin();
+             it != m_panAverageReconcileConnections.end(); ++it) {
+            QObject::disconnect(it.value());
+        }
+        m_panAverageReconcileConnections.clear();
+        for (auto it = m_panWeightedAvgReconcileConnections.begin();
+             it != m_panWeightedAvgReconcileConnections.end(); ++it) {
+            QObject::disconnect(it.value());
+        }
+        m_panWeightedAvgReconcileConnections.clear();
+        for (auto it = m_panAverageReconcile.begin();
+             it != m_panAverageReconcile.end(); ++it) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+        }
+        m_panAverageReconcile.clear();
+        for (auto it = m_panWeightedAvgReconcile.begin();
+             it != m_panWeightedAvgReconcile.end(); ++it) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+        }
+        m_panWeightedAvgReconcile.clear();
         m_adaptiveThrottleActive = false;
         m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
 
@@ -5677,8 +5719,22 @@ void MainWindow::applyMasterVolume(int pct)
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 SliceModel* MainWindow::activeSlice() const
 {
-    if (m_activeSliceId < 0) return nullptr;
-    return m_radioModel.slice(m_activeSliceId);
+    SliceModel* cached = nullptr;
+    if (m_activeSliceId >= 0) {
+        cached = m_radioModel.slice(m_activeSliceId);
+        if (cached && cached->isActive()) {
+            return cached;
+        }
+    }
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (slice && slice->isActive()) {
+            return slice;
+        }
+    }
+    if (cached) {
+        return cached;
+    }
+    return nullptr;
 }
 
 void MainWindow::pushRxFilterCutoffsToEq()
@@ -5745,6 +5801,9 @@ void MainWindow::pushSliceFrequencyToOverlays(SliceModel* slice, double mhz)
     if (!slice) {
         return;
     }
+
+    mhz = centerLockDisplayFrequency(slice, mhz);
+    snapCenterLocksForTuningSlice(slice, mhz, true);
 
     const QString freqStr = vfoFrequencyText(mhz);
     auto pushOne = [this, mhz, &freqStr](SliceModel* s) {
@@ -5878,6 +5937,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 #endif
     }
 
+    holdCenterLockTuneTarget(slice, mhz);
     pushSliceFrequencyToOverlays(slice, mhz);
 
     const BandStackPreselectResult bandPreselect =
@@ -5885,6 +5945,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             ? preselectBandStackForTune(slice, mhz, source)
             : BandStackPreselectResult::NotNeeded;
     if (bandPreselect == BandStackPreselectResult::Unsupported) {
+        m_centerLockTuneHoldBySlice.remove(slice->sliceId());
         pushSliceFrequencyToOverlays(slice, oldFreqMhz);
         return;
     }
@@ -5896,6 +5957,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             auto* pendingSlice = m_radioModel.slice(sliceId);
             if (!pendingSlice || pendingSlice->isLocked() || m_swrSweep.running)
                 return;
+            holdCenterLockTuneTarget(pendingSlice, mhz);
             pushSliceFrequencyToOverlays(pendingSlice, mhz);
             pendingSlice->tuneAndRecenter(mhz);
 
@@ -5920,6 +5982,48 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
     logTunePolicyDecision(source, intent, oldFreqMhz, mhz, result);
 }
 
+QJsonObject MainWindow::automationTune(double mhz)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("no slice to tune")}};
+    }
+    if (slice->isLocked()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("refused: slice %1 is VFO-locked").arg(slice->letter())}};
+    }
+    if (m_swrSweep.running) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: SWR sweep is running")}};
+    }
+
+    applyTuneRequest(slice, mhz, TuneIntent::IncrementalTune, "automation-tune");
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("tune"), mhz},
+                       {QStringLiteral("sliceId"), slice->sliceId()},
+                       {QStringLiteral("letter"), slice->letter()}};
+}
+
+QJsonObject MainWindow::automationSetCenterLock(int sliceId, bool enabled)
+{
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no slice with id %1").arg(sliceId)}};
+    }
+
+    setCenterLockForSlice(slice, enabled);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("slice"), QStringLiteral("centerlock")},
+                       {QStringLiteral("id"), sliceId},
+                       {QStringLiteral("enabled"), enabled}};
+}
+
 void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
                                       double bandwidthMhz, const char* source)
 {
@@ -5928,7 +6032,7 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
 
     centerMhz = std::max(centerMhz, bandwidthMhz / 2.0);
 
-    if (!kiwiSdrProfileForPan(panId).isEmpty()) {
+    if (kiwiSdrPanDisplaysKiwi(panId)) {
         return;
     }
 
@@ -6625,6 +6729,193 @@ void MainWindow::schedulePanFpsReconcile(const QString& panId, int reportedFps)
     state.timer->start();
 }
 
+void MainWindow::schedulePanAverageReconcile(const QString& panId, int reportedAverage)
+{
+    // FFT averaging is radio-authoritative (#4001): the firmware runs the
+    // averaging and echoes the level in pan status. After a global-profile /
+    // band switch the firmware adopts the profile's stored average, but the
+    // client never re-asserts the user's displayed level. Mirror the fps
+    // reconcile — reuse the profile-load write-hold + cooldown guards. Unlike
+    // fps, averaging is NOT adaptively throttled, so there is deliberately NO
+    // adaptive-throttle guard here. average=0 (off) is a VALID desired value, so
+    // guard on < 0 (the unknown sentinel), never <= 0.
+    if (panId.isEmpty() || reportedAverage < 0)
+        return;
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: average reconcile suppressed for profile load pan=" << panId
+            << " reported=" << reportedAverage;
+        return;
+    }
+
+    auto* pan = m_radioModel.panadapter(panId);
+    if (!pan)
+        return;
+
+    auto& state = m_panAverageReconcile[panId];
+    if (!state.spectrum) {
+        if (auto* applet = m_panStack->panadapter(panId))
+            state.spectrum = applet->spectrumWidget();
+    }
+
+    auto* sw = state.spectrum.data();
+    if (!sw)
+        return;
+
+    const int desiredAverage = sw->fftAverage();
+    if (desiredAverage < 0)
+        return;
+    if (desiredAverage == reportedAverage) {
+        if (state.timer)
+            state.timer->stop();
+        state.lastSentMs = 0;
+        state.lastSentDesired = -1;
+        return;
+    }
+
+    if (!state.timer) {
+        state.timer = new QTimer(this);
+        state.timer->setSingleShot(true);
+        state.timer->setInterval(300);
+        connect(state.timer, &QTimer::timeout, this, [this, panId]() {
+            auto it = m_panAverageReconcile.find(panId);
+            if (it == m_panAverageReconcile.end())
+                return;
+
+            auto* pan = m_radioModel.panadapter(panId);
+            auto* sw = it->spectrum.data();
+            if (!sw) {
+                if (auto* applet = m_panStack->panadapter(panId)) {
+                    sw = applet->spectrumWidget();
+                    it->spectrum = sw;
+                }
+            }
+            if (!pan || !sw)
+                return;
+            if (profileLoadRadioStateWritesHeld()) {
+                qCDebug(lcProtocol).noquote().nospace()
+                    << "MainWindow: average timer suppressed for profile load pan=" << panId;
+                return;
+            }
+
+            const int reported = pan->average();
+            const int desired = sw->fftAverage();
+            if (reported < 0 || desired < 0 || reported == desired)
+                return;
+
+            constexpr qint64 kCooldownMs = 5000;
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (it->lastSentDesired == desired
+                && it->lastSentMs > 0
+                && now - it->lastSentMs < kCooldownMs) {
+                return;
+            }
+
+            qCDebug(lcProtocol).noquote().nospace()
+                << "MainWindow: reasserting panadapter average pan=" << panId
+                << " reported=" << reported
+                << " desired=" << desired;
+            m_radioModel.sendCommand(
+                QString("display pan set %1 average=%2").arg(panId).arg(desired));
+            it->lastSentMs = now;
+            it->lastSentDesired = desired;
+        });
+    }
+
+    state.timer->start();
+}
+
+void MainWindow::schedulePanWeightedAvgReconcile(const QString& panId, bool reportedWeighted)
+{
+    // weighted_average has the identical latent gap (#4001): a band switch via
+    // global profile adopts the profile's stored flag and the client never
+    // re-asserts the user's checkbox. Mirror the average reconcile; the wire
+    // field is a bool flag (weighted_average=0/1). No adaptive-throttle guard.
+    if (panId.isEmpty())
+        return;
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: weighted_average reconcile suppressed for profile load pan=" << panId
+            << " reported=" << reportedWeighted;
+        return;
+    }
+
+    auto* pan = m_radioModel.panadapter(panId);
+    if (!pan)
+        return;
+
+    auto& state = m_panWeightedAvgReconcile[panId];
+    if (!state.spectrum) {
+        if (auto* applet = m_panStack->panadapter(panId))
+            state.spectrum = applet->spectrumWidget();
+    }
+
+    auto* sw = state.spectrum.data();
+    if (!sw)
+        return;
+
+    const bool desiredWeighted = sw->fftWeightedAvg();
+    if (desiredWeighted == reportedWeighted) {
+        if (state.timer)
+            state.timer->stop();
+        state.lastSentMs = 0;
+        state.lastSentDesired = -1;
+        return;
+    }
+
+    if (!state.timer) {
+        state.timer = new QTimer(this);
+        state.timer->setSingleShot(true);
+        state.timer->setInterval(300);
+        connect(state.timer, &QTimer::timeout, this, [this, panId]() {
+            auto it = m_panWeightedAvgReconcile.find(panId);
+            if (it == m_panWeightedAvgReconcile.end())
+                return;
+
+            auto* pan = m_radioModel.panadapter(panId);
+            auto* sw = it->spectrum.data();
+            if (!sw) {
+                if (auto* applet = m_panStack->panadapter(panId)) {
+                    sw = applet->spectrumWidget();
+                    it->spectrum = sw;
+                }
+            }
+            if (!pan || !sw)
+                return;
+            if (profileLoadRadioStateWritesHeld()) {
+                qCDebug(lcProtocol).noquote().nospace()
+                    << "MainWindow: weighted_average timer suppressed for profile load pan=" << panId;
+                return;
+            }
+
+            const bool reported = pan->weightedAverage();
+            const bool desired = sw->fftWeightedAvg();
+            if (reported == desired)
+                return;
+
+            constexpr qint64 kCooldownMs = 5000;
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            const int desiredInt = desired ? 1 : 0;
+            if (it->lastSentDesired == desiredInt
+                && it->lastSentMs > 0
+                && now - it->lastSentMs < kCooldownMs) {
+                return;
+            }
+
+            qCDebug(lcProtocol).noquote().nospace()
+                << "MainWindow: reasserting panadapter weighted_average pan=" << panId
+                << " reported=" << reported
+                << " desired=" << desired;
+            m_radioModel.sendCommand(
+                QString("display pan set %1 weighted_average=%2").arg(panId).arg(desiredInt));
+            it->lastSentMs = now;
+            it->lastSentDesired = desiredInt;
+        });
+    }
+
+    state.timer->start();
+}
+
 void MainWindow::scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs)
 {
     if (panId.isEmpty() || reportedMs <= 0)
@@ -6761,6 +7052,36 @@ void MainWindow::wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* p
         }));
     scheduleWaterfallLineDurationReconcile(applet->panId(),
                                            pan->waterfallLineDuration());
+
+    auto oldAverageConnection =
+        m_panAverageReconcileConnections.take(applet->panId());
+    if (oldAverageConnection)
+        QObject::disconnect(oldAverageConnection);
+
+    auto& averageState = m_panAverageReconcile[applet->panId()];
+    averageState.spectrum = sw;
+    m_panAverageReconcileConnections.insert(
+        applet->panId(),
+        connect(pan, &PanadapterModel::averageReported,
+                this, [this, panId = applet->panId()](int average) {
+            schedulePanAverageReconcile(panId, average);
+        }));
+    schedulePanAverageReconcile(applet->panId(), pan->average());
+
+    auto oldWeightedAvgConnection =
+        m_panWeightedAvgReconcileConnections.take(applet->panId());
+    if (oldWeightedAvgConnection)
+        QObject::disconnect(oldWeightedAvgConnection);
+
+    auto& weightedAvgState = m_panWeightedAvgReconcile[applet->panId()];
+    weightedAvgState.spectrum = sw;
+    m_panWeightedAvgReconcileConnections.insert(
+        applet->panId(),
+        connect(pan, &PanadapterModel::weightedAverageReported,
+                this, [this, panId = applet->panId()](bool weighted) {
+            schedulePanWeightedAvgReconcile(panId, weighted);
+        }));
+    schedulePanWeightedAvgReconcile(applet->panId(), pan->weightedAverage());
 }
 
 // wirePanadapter() / revealFrequencyIfNeeded() / panFollowVfo() / wireVfoWidget() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
@@ -6952,6 +7273,8 @@ SpectrumWidget* MainWindow::spectrum() const
 }
 
 // ── UI Scale helpers ────────────────────────────────────────────────────
+// Duplicated in AutomationServer::doScale (bridge can't include GUI
+// headers) — if a step is added here, add it there too.
 static constexpr int kScaleSteps[] = {75, 85, 100, 110, 125, 150, 175, 200};
 static constexpr int kScaleStepCount = sizeof(kScaleSteps) / sizeof(kScaleSteps[0]);
 
@@ -8452,79 +8775,6 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
             PerfTelemetry::instance().recordSHistorySkipped();
         }
     }
-}
-
-// ─── Pan Follow ───────────────────────────────────────────────────────────────
-
-void MainWindow::setPanFollow(bool on)
-{
-    disconnect(m_panFollowConn);
-    disconnect(m_panFollowSliceConn);
-    m_panFollowActive = on;
-    // Toggling Pan Lock clears any drag-suppress state — a defensive reset in
-    // case a slice drag was ever abandoned without a mouse-release (e.g. the pane
-    // was removed mid-drag), which would otherwise leave Pan Follow suppressed.
-    m_sliceDragInProgress = false;
-
-    if (!on) return;
-
-    // Re-attach helper: wires frequency tracking to whichever slice 0
-    // is currently live. Called on activation and whenever slice 0 is
-    // recreated (radio reconnect, slice re-assignment, etc.).
-    auto attachToSlice0 = [this]() {
-        disconnect(m_panFollowConn);
-
-        auto* s = m_radioModel.slice(0);
-        if (!s) {
-            // No slice yet — uncheck the button so UI matches reality.
-            if (m_titleBar) m_titleBar->setPanFollowChecked(false);
-            return;
-        }
-
-        recenterPanFollowOnSlice0();
-        m_panFollowConn = connect(s, &SliceModel::frequencyChanged,
-                                  this, [this](double) { recenterPanFollowOnSlice0(); });
-    };
-
-    attachToSlice0();
-
-    // Re-attach whenever a new slice 0 appears (reconnect / re-assignment).
-    m_panFollowSliceConn = connect(&m_radioModel, &RadioModel::sliceAdded,
-        this, [this, attachToSlice0](SliceModel* s) {
-            if (s && s->sliceId() == 0) attachToSlice0();
-        });
-}
-
-// Pan Follow ("Pan Lock"): recenter the panadapter on Slice A (slice 0). Called
-// on enable, on every slice-0 frequency change, and once when a slice drag ends.
-void MainWindow::recenterPanFollowOnSlice0()
-{
-    if (!m_panFollowActive) return;   // Pan Lock off — never move the pan
-    // A slice is being dragged (in-window tune or edge auto-pan): the drag owns
-    // the pan center, so stand down rather than fight it with a per-tick recenter
-    // (that conflict caused ~0.33 MHz pan lurches + jumping). The drag-end handler
-    // calls this once with the flag cleared, so Pan Lock re-asserts on release.
-    // (user-reported)
-    if (m_sliceDragInProgress) return;
-    auto* s = m_radioModel.slice(0);
-    if (!s) return;
-    const QString panId = s->panId();
-    if (panId.isEmpty()) return;
-    // WFM holds its pan fixed: Doppler rides the demodulator's NCO, and
-    // recentring underneath it would desync the NCO offset until the next slice
-    // retune. While WFM is active on this pan, WFM wins and Pan Follow stands
-    // down. (Precedence is a UX call — flagged for maintainer review in the WFM PR.)
-    if (m_wfmSliceId >= 0) {
-        auto* wfmSlice = m_radioModel.slice(m_wfmSliceId);
-        if (wfmSlice && wfmSlice->panId() == panId) return;
-    }
-    const double freq = s->frequency();
-    auto* pan = m_radioModel.panadapter(panId);
-    if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
-    const QString freqStr = QString::number(freq, 'f', 6);
-    if (pan) pan->setCenterBandwidth(freq, -1.0);  // aetherd RFC 2.3
-    m_radioModel.sendCommand(
-        QString("display pan set %1 center=%2").arg(panId, freqStr));
 }
 
 } // namespace AetherSDR

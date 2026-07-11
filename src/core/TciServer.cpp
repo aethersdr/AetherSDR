@@ -165,6 +165,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 // manage.
                 m_channelTrx.clear();
                 m_tciDaxSlices.clear();
+                m_lastDdsCenterHz.clear();
                 return;
             }
             for (const auto& cs : m_clients) {
@@ -213,6 +214,55 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 }
             }
         });
+
+        connect(m_model, &RadioModel::panadapterRemoved, this,
+                [this](const QString& panId) {
+            m_lastDdsCenterHz.remove(panId);
+        });
+
+        // Panadapter recenter → dds: broadcast. The DAX IQ stream a skimmer
+        // (CW Skimmer / SDC) decodes is centered on the panadapter, not the
+        // slice (FlexLib: DAXIQChannel is a Panadapter property). When a pan
+        // scrolls/recenters, every slice on that pan shares the new IQ center,
+        // so emit dds:<trx>,<panCenterHz>; for each — mirroring the vfo:
+        // broadcast in wireSlice(). Without it a skimmer's spots drift as the
+        // pan moves. (#3910)
+        auto wirePan = [this](PanadapterModel* pan) {
+            if (!pan) {
+                return;
+            }
+            if (pan->centerKnown()) {
+                m_lastDdsCenterHz.insert(
+                    pan->panId(), TciProtocol::mhzToHz(pan->centerMhz()));
+            }
+            connect(pan, &PanadapterModel::infoChanged, this,
+                    [this, pan](double centerMhz, double /*bwMhz*/) {
+                if (!m_model) {
+                    return;
+                }
+                const long long hz = TciProtocol::mhzToHz(centerMhz);
+                // infoChanged also fires on bandwidth-only (zoom) changes, so
+                // gate on an actual IQ-center move. Update the gate even with
+                // no clients so it cannot drift from model state (#3910,
+                // #3913 review).
+                if (m_lastDdsCenterHz.value(pan->panId(), -1) == hz) {
+                    return;
+                }
+                m_lastDdsCenterHz.insert(pan->panId(), hz);
+                if (m_clients.isEmpty()) {
+                    return;
+                }
+                for (auto* s : m_model->slices()) {
+                    if (s && s->panId() == pan->panId()) {
+                        broadcastSliceFrequencies(s);
+                    }
+                }
+            });
+        };
+        connect(m_model, &RadioModel::panadapterAdded, this, wirePan);
+        for (auto* pan : m_model->panadapters()) {
+            wirePan(pan);
+        }
     }
 
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)
@@ -1379,16 +1429,34 @@ QByteArray TciServer::buildAudioFrame(int receiver, int type,
 
 // ── Wire slice signals for state change broadcasts ──────────────────────
 
+void TciServer::broadcastSliceFrequencies(SliceModel* slice)
+{
+    if (!slice || !m_model || m_clients.isEmpty()) {
+        return;
+    }
+
+    const long long vfoHz = TciProtocol::mhzToHz(slice->frequency());
+    if (vfoHz <= 0) {
+        return;
+    }
+
+    const int trx = TciProtocol::tciTrxForSlice(m_model, slice);
+    const long long ddsHz = TciProtocol::ddsCenterHz(m_model, slice);
+    broadcast(QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(vfoHz));
+    broadcast(QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsHz));
+}
+
 void TciServer::wireSlice(int trx, SliceModel* slice)
 {
     if (!slice) return;
     Q_UNUSED(trx);
 
-    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double mhz) {
-        if (m_clients.isEmpty()) return;
-        const int trx = TciProtocol::tciTrxForSlice(m_model,slice);
-        long long hz = static_cast<long long>(std::round(mhz * 1e6));
-        broadcast(QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz));
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double) {
+        broadcastSliceFrequencies(slice);
+    });
+
+    connect(slice, &SliceModel::panIdChanged, this, [this, slice](const QString&) {
+        broadcastSliceFrequencies(slice);
     });
 
     connect(slice, &SliceModel::modeChanged, this, [this, slice](const QString& mode) {
@@ -1447,12 +1515,7 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     QTimer::singleShot(400, this, [this, guard]() {
         if (!guard || m_clients.isEmpty()) return;
         SliceModel* s = guard;
-        const int trx = TciProtocol::tciTrxForSlice(m_model, s);
-        const double mhz = s->frequency();
-        if (mhz > 0.0) {
-            long long hz = static_cast<long long>(std::round(mhz * 1e6));
-            broadcast(QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz));
-        }
+        broadcastSliceFrequencies(s);
     });
 }
 
@@ -1846,13 +1909,18 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
     }
     if (!anyIq) return;
 
-    // Byte-swap big-endian float32 → native little-endian
+    // dax_iq payloads are LITTLE-endian float32 (the radio reports
+    // payload_endian=little for this stream type, unlike pan/wf/meter/audio
+    // which are big-endian network order). Reading them big-endian byte-reverses
+    // every float into a denormal ≈ 0, so the skimmer (SDC / CW Skimmer) sees a
+    // dead, flat IQ stream. Read little-endian to native (a no-op on an LE host),
+    // matching DaxIqModel::feedRawIqPacket's handling of the same payload.
     const int numFloats = rawPayload.size() / 4;
     QByteArray swapped(rawPayload.size(), Qt::Uninitialized);
     const quint32* src = reinterpret_cast<const quint32*>(rawPayload.constData());
     quint32* dst = reinterpret_cast<quint32*>(swapped.data());
     for (int i = 0; i < numFloats; ++i)
-        dst[i] = qFromBigEndian(src[i]);
+        dst[i] = qFromLittleEndian(src[i]);
 
     // Build TCI IQ binary frame (type=0, channels=2 for I/Q pair)
     const int iqFrames = numFloats / 2;  // I/Q pairs

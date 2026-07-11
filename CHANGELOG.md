@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Lean Mode.** The global low-overhead render toggle (#3283) is gone; the
+  app always renders at full quality. If you had Lean Mode on: the WAVE scope
+  reappears on upgrade (Lean hid it without turning its sidebar tile off —
+  close the tile if you don't want it), VFO panels return to translucent
+  rendering, and meters repaint at their full animation rate. The structural
+  fixes tracked in #3283 (GPU-side scope/meter rendering) are the intended
+  replacement for Lean's mitigations. `get panstats` no longer reports the
+  `leanMode` field.
+
+### Changed
+
+- **WAVE applet defaults to 25 fps** (was 60), matching the panadapter's
+  default FFT cadence. A previously saved refresh rate is kept; the slider
+  still reaches 60.
+
 ## [v26.7.1] — 2026-07-02
 
 ### 3D stacked-trace spectrum + in-process NVIDIA BNR + TX meter readouts + 60 fps panadapters

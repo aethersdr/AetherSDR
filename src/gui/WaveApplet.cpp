@@ -27,11 +27,12 @@ constexpr int kMinZoomPercent = 100;
 constexpr int kMaxZoomPercent = 600;
 constexpr int kDefaultZoomPercent = 170;
 constexpr int kMinFps = 5;
-// Raised from 30/24 with the incremental-reduction scope (#3283 follow-up):
-// repaints no longer rescan the raw window, so 60 fps costs less than the
-// old 24 fps did. Users who previously saved an explicit FPS keep it.
 constexpr int kMaxFps = 60;
-constexpr int kDefaultFps = 60;
+// Default 25 fps — a calm, low-overhead cadence matching the 2D/3D panadapter
+// default (DisplayFftFps = 25). The slider still reaches 60 for users who want
+// a faster scope. Users who previously saved an explicit FPS keep it — the
+// default is only applied when the setting key is absent.
+constexpr int kDefaultFps = 25;
 // Discrete window steps for the WaveApplet drawer's "Window" slider.
 // First three notches give sub-second detail (240 ms, 480 ms, 1 s); the
 // rest are 1-second increments out to 10 s.  Index-based so each notch
@@ -397,18 +398,8 @@ void WaveApplet::appendScopeSamples(const QByteArray& monoFloat32Pcm,
                                     int sampleRate,
                                     bool tx)
 {
-    if (!m_active)
-        return;  // lean mode: drop the feed so the scope never repaints
     if (m_waveform)
         m_waveform->appendScopeSamples(monoFloat32Pcm, sampleRate, tx);
-}
-
-void WaveApplet::setActive(bool on)
-{
-    if (m_active == on)
-        return;
-    m_active = on;
-    setVisible(on);
 }
 
 void WaveApplet::setTransmitting(bool tx)

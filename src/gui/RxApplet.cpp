@@ -244,9 +244,9 @@ static const ModeSettings& modeSettingsFor(const QString& mode)
         {5600, 6000, 8000, 10000, 12000, 14000},
         {250, 500, 2500, 3000, 5000, 9000, 10000}
     };
-    // CW
+    // CW — first 6 of VfoWidget's 8 presets
     static const ModeSettings cwSettings{
-        {50, 100, 250, 400},
+        {50, 100, 250, 400, 500, 600},
         {1, 5, 10, 50, 100, 200, 400}
     };
     // DIGL / DIGU
@@ -1707,12 +1707,9 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
             btn->setEnabled(true);
             btn->setProperty("sliceId", slotId);
             btn->setProperty("slotState", "ours");
-            const QChar gLetter('A' + slotId);
-            const QString perClient = ourSlice->letter().isEmpty()
-                                           ? QString(gLetter)
-                                           : ourSlice->letter();
+            const QString displayLetter = SliceLabel::plainText(slotId, ourSlice->letter());
             btn->setToolTip(QString("Slice %1 (global slot %2)")
-                                .arg(perClient).arg(slotId + 1));
+                                .arg(displayLetter).arg(slotId + 1));
             btn->setChecked(slotId == activeSliceId);
             // Colour pairs with the displayed letter in RadioIndexed mode.
             const int colourIdx = SliceLabel::displayColorIndex(slotId, ourSlice->letter());

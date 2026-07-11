@@ -51,6 +51,29 @@ void DaxApplet::buildUI()
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
+#ifdef Q_OS_WIN
+    // On Windows AetherSDR has no built-in DAX bridge — it needs a kernel-mode
+    // audio driver we ship only on macOS/Linux (the daxToggled → startDax()
+    // wiring is compiled out here, see MainWindow_Session.cpp). DAX still works
+    // on Windows via FlexRadio's own SmartSDR DAX drivers; we just don't provide
+    // one. The Enable button, per-channel/TX meters and their labels would all
+    // be inert, so on Windows the applet shows ONLY this note and nothing else
+    // is built (#4112). The control member pointers stay null; the level/enable
+    // setters and setRadioModel() are guarded for that. The full "where to set
+    // it up" pointer lives in Help → Configuring Data Modes.
+    auto* winNote = new QLabel(
+        tr("No built-in DAX driver on Windows.\n"
+           "Use TCI, or SmartSDR DAX."));
+    winNote->setObjectName(QStringLiteral("daxWindowsNote"));
+    winNote->setAccessibleName(tr("DAX driver not shipped on Windows"));
+    winNote->setWordWrap(true);
+    winNote->setStyleSheet(
+        "QLabel { color: #d0a040; font-size: 11px; padding: 4px 6px; }");
+    outer->addWidget(winNote);
+    outer->addStretch();  // pin the note to the top; nothing below it on Windows
+    return;
+#else
+
     auto& settings = AppSettings::instance();
 
     // DAX enable row
@@ -147,12 +170,14 @@ void DaxApplet::buildUI()
 
     outer->addLayout(txRow);
     outer->addLayout(daxEnRow);
+#endif  // !Q_OS_WIN
 }
 
 void DaxApplet::setRadioModel(RadioModel* model)
 {
     m_model = model;
-    if (!model) {
+    // On Windows the applet is note-only — no status labels to update. (#4112)
+    if (!model || !m_daxTxStatus) {
         return;
     }
 
@@ -202,14 +227,17 @@ void DaxApplet::setRadioModel(RadioModel* model)
 
 void DaxApplet::setDaxEnabled(bool on)
 {
+    if (!m_daxEnable) {  // note-only on Windows (#4112)
+        return;
+    }
     QSignalBlocker b(m_daxEnable);
     m_daxEnable->setChecked(on);
 }
 
 void DaxApplet::setDaxRxLevel(int channel, float rms)
 {
-    if (channel < 1 || channel > kChannels) {
-        return;
+    if (channel < 1 || channel > kChannels || !m_daxRxMeter[channel - 1]) {
+        return;  // note-only on Windows (#4112)
     }
     // Exponential smoothing: fast attack (α=0.4), slow decay (α=0.08)
     static float smoothed[kChannels]{};
@@ -221,6 +249,9 @@ void DaxApplet::setDaxRxLevel(int channel, float rms)
 
 void DaxApplet::setDaxTxLevel(float rms)
 {
+    if (!m_daxTxMeter) {  // note-only on Windows (#4112)
+        return;
+    }
     m_daxTxMeter->setLevel(std::clamp(rms * 2.0f, 0.0f, 1.0f));
 }
 

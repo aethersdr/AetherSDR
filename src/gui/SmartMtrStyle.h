@@ -111,12 +111,10 @@ inline constexpr double kSlewUnitsPerSec = 60.0;
 // while still smoothing the per-packet step instead of snapping.
 inline constexpr double kPeakSlewUnitsPerSec = 4000.0;
 
-// Repaint cadence (Hz) for a returning marker, used to bypass the bar's lean
-// repaint gate (#3283). In lean mode the bar throttles its repaint to 12 Hz; a
-// marker gliding back at kSlewUnitsPerSec sampled to the screen at 12 Hz steps
-// visibly (~2 deg/frame). The original SmartMTR renders its return at a steady
-// 60 Hz, so we match that for the markers while leaving the bar and idle meters
-// lean-gated. Bounds the extra GPU recomposite cost to the return window only.
+// Repaint cadence (Hz) for a returning marker. The bar is settled while a peak
+// marker glides back, so nothing else would drive a repaint; this clock keeps
+// the marker gliding at a steady 60 Hz (matching the original SmartMTR return),
+// bounding the extra GPU recomposite cost to the return window only.
 inline constexpr int kExtremesRepaintHz = 60;
 
 // Proximity fade: markers fade out when min and max are within a few dB (the

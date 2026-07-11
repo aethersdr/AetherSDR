@@ -331,6 +331,170 @@ int main(int argc, char** argv)
         }
     }
 
+    // ── Filter polarity mirror (#3434). FlexLib reports FDV passbands as
+    // USB-form (positive lo/hi) for BOTH sidebands; FDVL is lower-sideband and
+    // must be mirrored to negative offsets so the overlay draws below the
+    // carrier. The mirror is asymmetric-safe (lo,hi)→(-hi,-lo), so the FreeDV
+    // low cut is preserved rather than collapsed (the regression #3092 hit).
+    {
+        // FDVL: asymmetric positive echo → mirrored, both edges kept.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = 95; d.filterHigh = 2000;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2000);   // was 95 → -hi
+        EXPECT_EQ(s.filterHigh(),  -95);    // was 2000 → -lo (low cut preserved)
+    }
+    {
+        // FDVU: upper-sideband FreeDV stays positive (mode-aware).
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVU");
+            d.filterLow = 95; d.filterHigh = 2000;
+        }));
+        EXPECT_EQ(s.filterLow(),  95);
+        EXPECT_EQ(s.filterHigh(), 2000);
+    }
+    {
+        // LSB: symmetric positive echo → historical (-2700,0) result unchanged.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("LSB");
+            d.filterLow = 0; d.filterHigh = 2700;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2700);
+        EXPECT_EQ(s.filterHigh(), 0);
+    }
+    {
+        // USB: wrong-polarity negative echo after restore → mirrored positive.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("USB");
+            d.filterLow = -2700; d.filterHigh = 0;
+        }));
+        EXPECT_EQ(s.filterLow(),  0);
+        EXPECT_EQ(s.filterHigh(), 2700);
+    }
+    {
+        // FDVL already correct (negative) → left untouched, no double-flip.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = -2000; d.filterHigh = -95;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2000);
+        EXPECT_EQ(s.filterHigh(), -95);
+    }
+    {
+        // FDVU wrong-polarity restore echo → mirrored positive. This is the
+        // behavior FDVU actually GAINS from joining the USB family — the
+        // stays-positive case above also passed pre-mirror (#3434 review).
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVU");
+            d.filterLow = -2000; d.filterHigh = -95;
+        }));
+        EXPECT_EQ(s.filterLow(),  95);
+        EXPECT_EQ(s.filterHigh(), 2000);
+    }
+    {
+        // Plain FDV is USB-family too (FlexLib Slice.cs:543-546) — a
+        // wrong-polarity echo is corrected, not skipped (#3434 review).
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDV");
+            d.filterLow = -2000; d.filterHigh = -95;
+        }));
+        EXPECT_EQ(s.filterLow(),  95);
+        EXPECT_EQ(s.filterHigh(), 2000);
+    }
+    {
+        // Repeated positive echo is idempotent: the radio keeps reporting
+        // USB-form for FDVL on every status; each apply must land on the same
+        // canonical values, never oscillate.
+        SliceModel s(0);
+        auto d1 = delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = 95; d.filterHigh = 2000;
+        });
+        s.applyChanges(d1);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.filterLow = 95; d.filterHigh = 2000;
+        }));
+        EXPECT_EQ(s.filterLow(),  -2000);
+        EXPECT_EQ(s.filterHigh(), -95);
+    }
+    {
+        // Single-edge echoes (#3434 review): under the mirror a wire edge in
+        // the wrong-polarity form maps to the OPPOSITE stored edge — merging
+        // it directly would build a carrier-straddling passband.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = 95; d.filterHigh = 2000;   // → stored (-2000,-95)
+        }));
+        // Wire reports only filter_hi=3000 (USB-form width change):
+        // canonical stored low becomes -3000. NOT (lo=-2000, hi=3000).
+        s.applyChanges(delta([](SliceDelta& d){ d.filterHigh = 3000; }));
+        EXPECT_EQ(s.filterLow(),  -3000);
+        EXPECT_EQ(s.filterHigh(), -95);
+        // Wire reports only filter_lo=200 (USB-form low cut): canonical
+        // stored high becomes -200.
+        s.applyChanges(delta([](SliceDelta& d){ d.filterLow = 200; }));
+        EXPECT_EQ(s.filterLow(),  -3000);
+        EXPECT_EQ(s.filterHigh(), -200);
+        // A canonical-form (negative) single edge merges directly.
+        s.applyChanges(delta([](SliceDelta& d){ d.filterLow = -2500; }));
+        EXPECT_EQ(s.filterLow(),  -2500);
+        EXPECT_EQ(s.filterHigh(), -200);
+    }
+    {
+        // USB-family single wrong-form edge: crosswise with negation.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("USB");
+            d.filterLow = 100; d.filterHigh = 2800;
+        }));
+        s.applyChanges(delta([](SliceDelta& d){ d.filterLow = -2700; }));
+        EXPECT_EQ(s.filterLow(),  100);
+        EXPECT_EQ(s.filterHigh(), 2700);
+    }
+    {
+        // Mode-only change (no filter keys in the delta): a second client
+        // flips FDVU→FDVL mid-session — the reporter's MultiFlex scenario.
+        // The stored positive passband must re-normalize immediately, not
+        // wait for the next filter echo (#3434 review).
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVU");
+            d.filterLow = 95; d.filterHigh = 2000;
+        }));
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+        }));
+        EXPECT_EQ(s.filterLow(),  -2000);
+        EXPECT_EQ(s.filterHigh(), -95);
+    }
+    {
+        // setFilterWidth boundary defense (#3434 review): client-side callers
+        // can replay values captured under the pre-mirror convention (band
+        // stack, snapshots, FilterPresets_FDVL, net presets) or pass
+        // audio-domain positives (EQ drag) — and when the radio's filter
+        // already matches, no echo arrives to heal the model.
+        SliceModel s(0);
+        s.applyChanges(delta([](SliceDelta& d){
+            d.mode = QStringLiteral("FDVL");
+            d.filterLow = -2000; d.filterHigh = -95;
+        }));
+        s.setFilterWidth(95, 2000);                  // stale positive replay
+        EXPECT_EQ(s.filterLow(),  -2000);
+        EXPECT_EQ(s.filterHigh(), -95);
+        s.setFilterWidth(-2500, -95);                // canonical → untouched
+        EXPECT_EQ(s.filterLow(),  -2500);
+        EXPECT_EQ(s.filterHigh(), -95);
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");
         return 0;

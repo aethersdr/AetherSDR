@@ -115,7 +115,11 @@ public:
         }
 
         constexpr int kEdgeHysteresis = 20;
-        constexpr double kPanFollowTriggerMarginFrac = 0.05; // matches incremental pan-follow
+        // Must track kIncrementalTriggerEdgeMarginFrac (MainWindow_Wiring.cpp)
+        // so the flag flips sides at the same margin the pan starts to
+        // scroll — a looser value here makes the flag jump sides long
+        // before anything else reacts (#3482: 0.05 -> 0.02).
+        constexpr double kPanFollowTriggerMarginFrac = 0.02; // matches incremental pan-follow
         const int guardPx = std::max(
             kEdgeHysteresis,
             static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
@@ -149,7 +153,11 @@ public:
         }
 
         constexpr int kEdgeHysteresis = 20;
-        constexpr double kPanFollowTriggerMarginFrac = 0.05; // matches incremental pan-follow
+        // Must track kIncrementalTriggerEdgeMarginFrac (MainWindow_Wiring.cpp)
+        // so the flag flips sides at the same margin the pan starts to
+        // scroll — a looser value here makes the flag jump sides long
+        // before anything else reacts (#3482: 0.05 -> 0.02).
+        constexpr double kPanFollowTriggerMarginFrac = 0.02; // matches incremental pan-follow
         const int guardPx = std::max(
             kEdgeHysteresis,
             static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
@@ -271,10 +279,15 @@ public:
     // to screen readers. (#3754)
     QString accessibleSummary() const;
 
-    // Lean render mode: drop WA_TranslucentBackground so the panel composites
-    // as an opaque, cacheable layer instead of being alpha-blended over the
-    // whole window every frame (the dominant idle CPU cost — see #3283).
-    void setOpaqueMode(bool on);
+    // Reparent the flag's satellite widgets (close/lock/record/play buttons +
+    // collapsed freq label — deliberately siblings of the flag, parented to
+    // the SpectrumWidget so they can render outside the flag's bounds) onto a
+    // new spectrum. Required when the flag itself is moved between pans via
+    // SpectrumWidget::takeVfoWidget/adoptVfoWidget: without this the
+    // satellites stay behind on the old pan — ghost buttons at stale
+    // coordinates whose clicks still act on the migrated slice, deleted
+    // entirely when the old pan is torn down (#4037 review).
+    void reparentFlagSatellites(QWidget* newParent);
 
     // Which side of the slice marker the flag panel is currently rendered on.
     // Tracked by updatePosition() via m_lastOnLeft.  Used by panFollowVfo()
@@ -355,6 +368,10 @@ private:
 
     void buildUI();
     void buildTabContent();
+    // Sweep every interactive flag control and give it Qt::PointingHandCursor so
+    // hovering signals clickability.  Re-run after rebuildFilterButtons() so the
+    // dynamically recreated filter/autotune/adaptive buttons are covered (#4036).
+    void applyInteractiveCursors();
     // Meter view (standard S-Meter vs SmartMTR component).  Driven globally by
     // MeterViewController; m_meterStack switches pages and meterBarRect() locates
     // the painted bar.  The inline selector row (m_meterMenuRow) is revealed by
@@ -401,7 +418,6 @@ private:
     float          m_signalMeterFraction{0.0f};
     float          m_targetSignalMeterFraction{0.0f};
     bool           m_collapsed{false};
-    bool           m_opaqueMode{false};  // lean mode: opaque (non-translucent) panel
     bool           m_collapseToggled{false};  // guard: absorb release after toggle
     int            m_scrollAccum{0};    // trackpad pixel scroll accumulator
     int            m_angleAccum{0};     // mouse wheel angle accumulator

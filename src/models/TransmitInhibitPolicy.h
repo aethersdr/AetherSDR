@@ -47,4 +47,18 @@ inline SliceTxCommand parseSliceTxCommand(const QString& command)
             .txEnabled = tx == QStringLiteral("1")};
 }
 
+inline bool shouldRestoreInhibitedTxSlice(const QString& inhibitedPanId,
+                                          const QString& restoreSlicePanId,
+                                          bool restoreSliceMayBelongToUs,
+                                          int restoreSliceId,
+                                          int currentTxSliceId)
+{
+    const QString trimmedPanId = inhibitedPanId.trimmed();
+    return !trimmedPanId.isEmpty()
+        && restoreSliceId >= 0
+        && restoreSliceMayBelongToUs
+        && restoreSlicePanId == trimmedPanId
+        && (currentTxSliceId < 0 || currentTxSliceId == restoreSliceId);
+}
+
 } // namespace AetherSDR::TransmitInhibitPolicy

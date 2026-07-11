@@ -1,0 +1,7 @@
+Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,RxDtcsCode,CrossMode,Mode,TStep,Skip,Power,Comment,URCALL,RPT1CALL,RPT2CALL,DVCODE
+0,2m Calling,146.520000,,0.000000,,88.5,88.5,023,NN,023,Tone->Tone,FM,5.00,,5.0W,2m FM simplex,,,,
+1,W1AW Rptr,146.940000,-,0.600000,Tone,100.0,88.5,023,NN,023,Tone->Tone,FM,5.00,,50W,ARRL HQ,,,,
+2,GMRS 18,462.550000,+,5.000000,TSQL,141.3,141.3,023,NN,023,Tone->Tone,NFM,12.50,,50W,,,,,
+3,40m FT8,7.074000,,0.000000,,88.5,88.5,023,NN,023,Tone->Tone,USB,1.00,,,digital,,,,
+4,DStar RP,145.670000,,0.000000,,88.5,88.5,023,NN,023,Tone->Tone,DV,5.00,,,D-STAR,,,,
+5,DTCS Simplex,446.000000,,0.000000,DTCS,88.5,88.5,051,NN,051,Tone->Tone,NFM,12.50,,,digital squelch,,,,

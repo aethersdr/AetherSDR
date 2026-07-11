@@ -71,11 +71,14 @@ class QsoRecorder;
 //                                     QTreeWidget / QListWidget) so the dialog's
 //                                     row-scoped buttons (Tune/Edit/Remove/Disable)
 //                                     become drivable; echoes selectedRow[Text].
+//   shortcut <id>                  -> invoke a registered ShortcutManager action
+//                                     by id, without requiring a physical key binding.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
 //                                     pan <panId|active> | pans |
-//                                     kiwi. With a trailing property name,
+//                                     flags [sliceId|all] | kiwi.
+//                                     With a trailing property name,
 //                                     returns just that field.
 //                                     Assert on state without screenshots.
 //                                     `dsp` is the client-side AetherDSP state:
@@ -157,6 +160,10 @@ class QsoRecorder;
 //                                     contextMenuEvent) via a synthesized
 //                                     QContextMenuEvent; deferred, then dumpTree
 //                                     to read it and invoke to drive it.
+//   rightClick <target> [x y]      -> synthesize a real right-button press for
+//                                     widgets whose context menus live in
+//                                     mousePressEvent (SpectrumWidget);
+//                                     deferred, then dumpTree/invoke.
 //   hitTest <target> [x y]         -> report Qt's widgetAt()/childAt() owner for
 //                                     a target-local point. Read-only proof for
 //                                     transparent overlays and input masks.
@@ -241,6 +248,14 @@ public:
     {
         m_sliceReceiveSourceHandler = std::move(handler);
     }
+    void setSliceCenterLockHandler(std::function<QJsonObject(int, bool)> handler)
+    {
+        m_sliceCenterLockHandler = std::move(handler);
+    }
+    void setTuneHandler(std::function<QJsonObject(double)> handler)
+    {
+        m_tuneHandler = std::move(handler);
+    }
     void setReceiveSyncSnapshotHandler(std::function<QJsonObject()> handler)
     {
         m_receiveSyncSnapshotHandler = std::move(handler);
@@ -248,6 +263,12 @@ public:
     void setKiwiSdrSnapshotHandler(std::function<QJsonObject()> handler)
     {
         m_kiwiSdrSnapshotHandler = std::move(handler);
+    }
+    // Status-bar TX-timer state provider (the `txtimer` verb). Supplied by
+    // MainWindow, which reads it off the TitleBar widget on the GUI thread.
+    void setTxTimerSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_txTimerSnapshotHandler = std::move(handler);
     }
 
 private slots:
@@ -300,6 +321,11 @@ private:
     // QEvent::Leave so the fade-after-exit timer can be observed. Unlike drag,
     // no button is pressed, matching a real hover.
     QJsonObject doHover(const QString& target, const QString& action) const;
+    // tooltip <target> [hide]: force-show the target widget's native Qt tooltip
+    // so a driver can grab the resulting QTipLabel under automation.
+    QJsonObject doTooltip(const QString& target,
+                          const QString& action,
+                          const QString& value) const;
     // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
     // ancestor so the target widget sits in its viewport. Widgets parked below
     // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)
@@ -318,15 +344,46 @@ private:
     // handler pops a QMenu that runs its own event loop. The popped menu is read
     // via dumpTree and driven via invoke, no extra inspection code needed. (#3858)
     QJsonObject doContextMenu(const QString& target, const QString& value) const;
+    // rightClick <target> [x y]: synthesize a real right-button mouse press for
+    // widgets that build context menus directly in mousePressEvent rather than
+    // via Qt's context-menu policy. Posted for the same native-popup safety as
+    // doContextMenu. (#3646 fidelity)
+    QJsonObject doRightClick(const QString& target, const QString& value) const;
+    // Shared scaffolding for doContextMenu/doRightClick: resolve + visibility,
+    // optional "<x> <y>" offset, then post a deferred synthetic event onto the
+    // GUI loop with the owning window raised. `send` builds/dispatches the
+    // concrete event given (widget, local, global). (#4137 review — dedup)
+    QJsonObject postDeferredMenuTrigger(
+        const QString& target, const QString& value, const char* verb,
+        std::function<void(QWidget*, QPoint, QPoint)> send) const;
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
+    // clickAt [<target>] <x> <y>: synthesize a real left-click at a point. With no
+    // target, x/y are GLOBAL screen coordinates (matching dumpTree geometry); with
+    // a target they are LOCAL to that widget. Generic fallback for when name/text
+    // matching is ambiguous (e.g. several tiles share accessibleName
+    // "containerClose" and only the first is reachable by invoke). TX-gated on the
+    // whole ancestor chain; disabled widgets and (with the power ceiling armed)
+    // the RF/Tune power sliders are refused.
+    QJsonObject doClickAt(const QString& target, const QString& value) const;
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The
     // production GUI close path now does the same via RadioModel::removePanadapter
     // (#3843). (#3646)
     QJsonObject doPan(const QString& action, const QString& arg);
+    // layout rearrange <id> | get: drive PanadapterStack::rearrangeLayout
+    // directly (decoupled from radio-granted pans) so the splitter
+    // reparent/GPU-reset path is exercisable on any host regardless of
+    // MultiFlex panadapter capacity; `get` reports the saved layout + counts.
+    QJsonObject doLayout(const QString& action, const QString& arg);
+    // scale [pct]: report the effective UI scale (QT_SCALE_FACTOR env,
+    // UiScalePercent setting, primary-screen devicePixelRatio); with a pct
+    // arg, persist UiScalePercent so a subsequent relaunch reproduces a
+    // fractional-DPI configuration (env must precede QApplication, so it
+    // applies on next launch — never mutates the running process).
+    QJsonObject doScale(const QString& arg);
     // panmessage add|remove|clear|list <pan-index|active>: inject/read
     // panadapter overlay messages for deterministic UI verification. UI-only;
     // never sends radio commands and never keys TX. `add` accepts optional
@@ -383,7 +440,8 @@ private:
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
 
-    // Slice lifecycle (add/remove/select/tx) and VFO tuning — RX/config, no keying.
+    // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
+    // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
     QJsonObject doTune(const QString& value);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
@@ -414,6 +472,10 @@ private:
     // window's state (resize only ever set explicit geometry, so an un-maximize
     // was unverifiable). dumpTree now also carries `windowState`. (#3918)
     QJsonObject doWindow(const QString& action, const QString& target) const;
+    // Fire a ShortcutManager action by id — the MIDI-controller dispatch path —
+    // for actions with no key sequence and no menu entry (Band Zoom, Segment
+    // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
+    QJsonObject doShortcut(const QString& id) const;
     // Resolve the top-level window a window-scoped verb (resize/window) acts on:
     // the target's window() if given, else the QMainWindow (or first visible real
     // top-level). Shared by doResize and doWindow.
@@ -458,8 +520,11 @@ private:
     }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
+    std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
+    std::function<QJsonObject(double)> m_tuneHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
+    std::function<QJsonObject()> m_txTimerSnapshotHandler;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on
@@ -470,17 +535,20 @@ private:
 
 #ifdef HAVE_WEBSOCKETS
     // In-process TCI client simulator (`tci start|status|stop`, #3305/#4009).
-    // Connects to the app's own TCI server over loopback exactly like WSJT-X
-    // (init burst → ready → audio_samplerate + audio_start) so agents can
-    // exercise the TCI/DAX lifecycle — including abrupt-disconnect reaping —
-    // without an external WebSocket client.
+    // Connects to the app's own TCI server over loopback with either a WSJT-X
+    // audio profile or an SDC IQ-skimmer profile so agents can exercise both
+    // TCI/DAX lifecycles — including abrupt-disconnect reaping — without an
+    // external WebSocket client.
     QWebSocket* m_tciSim{nullptr};
     bool    m_tciSimReady{false};
     bool    m_tciSimAudioStarted{false};
+    bool    m_tciSimIqStarted{false};
     qint64  m_tciSimBinaryFrames{0};
+    qint64  m_tciSimIqFrames{0};
     qint64  m_tciSimBinaryBytes{0};
     qint64  m_tciSimTextMsgs{0};
     qint64  m_tciSimLastFrameMs{-1};
+    QString m_tciSimProfile{QStringLiteral("wsjtx")};
     QString m_tciSimCloseReason;
     QElapsedTimer m_tciSimTimer;
 #endif

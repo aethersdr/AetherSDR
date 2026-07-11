@@ -38,10 +38,12 @@ public:
 
     // Display state
     double centerMhz() const { return m_centerMhz; }
+    bool centerKnown() const { return m_centerKnown; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Normalized setter driven by the backend (aetherd RFC 2.3). A negative
     // value means "leave unchanged" (the radio may report one without the
-    // other). Emits infoChanged when either actually changes.
+    // other). Emits infoChanged when either value changes or when the center
+    // is populated for the first time (even if it equals the placeholder).
     void setCenterBandwidth(double centerMhz, double bandwidthMhz);
     // Normalized display-level-range setter driven by the backend (aetherd RFC
     // 2.3, second universal pan field). NaN for either bound means "leave
@@ -77,6 +79,8 @@ public:
     bool loopA() const { return m_loopA; }
     bool loopB() const { return m_loopB; }
     int fps() const { return m_fps; }
+    int average() const { return m_average; }
+    bool weightedAverage() const { return m_weightedAverage; }
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
     // Normalized waterfall-line-duration setter driven by the backend (universal
     // display timing). Feeds PerfTelemetry and always emits
@@ -100,6 +104,14 @@ public:
         if (m_preamp != pre) { m_preamp = pre; }
     }
     int daxiqChannel() const { return m_daxiqChannel; }
+
+    // Band / segment zoom — radio-owned per-pan flags (FlexLib Panadapter.cs
+    // IsBandZoomOn/IsSegmentZoomOn). The radio clears them itself on a manual
+    // pan/zoom (and clears the sibling when the other engages) and broadcasts
+    // both transitions in pan status; this model state is the single truth the
+    // zoom toggles read (#4057).
+    bool bandZoomOn() const { return m_bandZoomOn; }
+    bool segmentZoomOn() const { return m_segmentZoomOn; }
 
     // Configuration flags
     bool isResized() const { return m_resized; }
@@ -128,10 +140,20 @@ signals:
     void loopChanged(bool loopA, bool loopB);
     void fpsChanged(int fps);
     void fpsReported(int fps);
+    // Averaging is radio-authoritative (firmware runs it, echoes the level in
+    // pan status). Reported fires every status cycle; Changed only on an actual
+    // change — mirrors the fps pair so MainWindow can reconcile after a
+    // global-profile / band switch adopts the profile's stored value (#4001).
+    void averageChanged(int average);
+    void averageReported(int average);
+    void weightedAverageChanged(bool weighted);
+    void weightedAverageReported(bool weighted);
     void waterfallLineDurationChanged(int ms);
     void waterfallLineDurationReported(int ms);
     void waterfallIdChanged(const QString& wfId);
     void daxiqChannelChanged(int channel);
+    void bandZoomChanged(bool on);
+    void segmentZoomChanged(bool on);
 
 private:
     QString     m_panId;
@@ -139,6 +161,7 @@ private:
     QString     m_clientHandle;
     quint32     m_ownerHandle{0};   // parsed m_clientHandle; 0 = unknown (#3977)
     double      m_centerMhz{14.1};
+    bool        m_centerKnown{false}; // true after a normalized center update
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};
@@ -155,10 +178,14 @@ private:
     bool        m_loopB{false};
     int         m_wnbLevel{50};
     int         m_fps{-1};
+    int         m_average{-1};        // -1 = unknown; 0 = off, 1-N = level (#4001)
+    bool        m_weightedAverage{false};
     int         m_waterfallLineDuration{-1};
     int         m_fftYPixels{-1};
     QString     m_preamp;
     int         m_daxiqChannel{0};
+    bool        m_bandZoomOn{false};
+    bool        m_segmentZoomOn{false};
     bool        m_resized{false};
     bool        m_wfConfigured{false};
 };

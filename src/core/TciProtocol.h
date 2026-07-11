@@ -125,6 +125,13 @@ public:
     // slice is not in the model's list.
     static int tciTrxForSlice(RadioModel* model, const SliceModel* slice);
 
+    static long long mhzToHz(double mhz);
+
+    // IQ center (DDS) for a slice = its populated panadapter center in Hz.
+    // Falls back to the slice frequency while the pan is absent or its center
+    // still holds the model placeholder (#3910, #3913 review).
+    static long long ddsCenterHz(RadioModel* model, const SliceModel* slice);
+
 private:
 
     RadioModel* m_model;

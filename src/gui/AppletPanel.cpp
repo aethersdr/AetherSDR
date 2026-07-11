@@ -471,7 +471,14 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_stack = new QVBoxLayout(container);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->setSpacing(0);
-    m_stack->addStretch();
+    // Stretch factor 1 (not the default 0) so all surplus vertical space is
+    // routed to this trailing spacer.  With a factor-0 spacer, Qt distributes
+    // surplus equally among every item whose expandingDirections() includes
+    // Vertical — which is any tile whose body contains a vertically-expanding
+    // child — parking a blank band below those headers (#3461/#4098).  A
+    // non-zero factor here pins every container to its sizeHint and collects
+    // the slack at the bottom, regardless of a tile's internal size policy.
+    m_stack->addStretch(1);
     m_scrollArea->setWidget(container);
     root->addWidget(m_scrollArea, 1);
 
@@ -979,7 +986,7 @@ void AppletPanel::rebuildStackOrder()
             continue;
         m_stack->addWidget(entry.widget);
     }
-    m_stack->addStretch();
+    m_stack->addStretch(1);  // factor 1: absorb all surplus, pin tiles to sizeHint (#3461)
 }
 
 void AppletPanel::saveOrder()

@@ -15,7 +15,7 @@ ShortcutManager::ShortcutManager(QObject* parent)
 void ShortcutManager::registerAction(const QString& id, const QString& displayName,
                                      const QString& category, const QKeySequence& defaultKey,
                                      std::function<void()> handler,
-                                     bool autoRepeat)
+                                     bool autoRepeat, bool keysTx)
 {
     // The id becomes part of the XML element name "Shortcut_<id>". AppSettings
     // silently drops keys that fail ^[A-Za-z_][A-Za-z0-9_]*$ on save (qWarning
@@ -34,7 +34,7 @@ void ShortcutManager::registerAction(const QString& id, const QString& displayNa
         }
     }
     m_actions.append({id, displayName, category, defaultKey, defaultKey,
-                      std::move(handler), autoRepeat});
+                      std::move(handler), autoRepeat, /*persisted=*/false, keysTx});
 }
 
 void ShortcutManager::setBinding(const QString& actionId, const QKeySequence& key)
