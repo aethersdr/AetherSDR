@@ -84,7 +84,6 @@ def panadapter(iq, freq, rate, bins):
     # no high-frequency bins are dropped when len(dbfs) isn't a multiple of bins.
     cols = [chunk.max() for chunk in np.array_split(dbfs, bins)]
     lo, hi = min(cols), max(cols)
-    span = rate / 1e6
     dc_dbfs = 20 * np.log10(abs(dc) / hpsdr.FULL_SCALE + 1e-12)
     print(f"\n  RX1 {freq/1e6:.6f} MHz   span ±{rate/2000:.1f} kHz ({rate/1000:.0f} kHz)"
           f"   floor {lo:.0f} … peak {hi:.0f} dBFS   (DC offset {dc_dbfs:.0f} dBFS, removed)")

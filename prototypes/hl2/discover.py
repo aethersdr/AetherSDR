@@ -21,7 +21,6 @@ a stream, so it won't disturb another client already using the radio).
 
 import argparse
 import socket
-import struct
 import sys
 
 METIS_PORT = 1024

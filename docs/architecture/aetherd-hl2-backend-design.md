@@ -172,6 +172,9 @@ a `makeBackend(family)` that returns `unique_ptr<IRadioBackend>` — and move th
 Flex-specific sink/object wiring behind a `if (auto* flex = dynamic_cast<FlexBackend*>...)`
 adapter step, so a non-Flex backend simply skips it. This is the smallest change
 that lets a second family exist; it does **not** require the full step-3 protocol.
+The `dynamic_cast` shim is **explicitly interim** — it is the transitional stand-in
+until the step-3 engine-side registry lands and each backend injects its own
+sinks; the implementation PR should label it as such so it doesn't calcify.
 Selection input for Phase 1 can be explicit (config/UI "radio family = HL2"),
 deferring auto-discovery-driven selection.
 
