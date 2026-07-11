@@ -43,6 +43,16 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
+      # #4146 turned liquid-dsp off by default, so the main build above no
+      # longer proves the vendored snapshot still compiles. Build only the
+      # liquid-static target (separate build dir, opt-in flag) so a bitrotted
+      # vendor snapshot fails here rather than on the first future consumer.
+      - name: Verify vendored liquid-dsp still builds (opt-in)
+        run: |
+          cmake -B build-liquid -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DENABLE_NVIDIA_AFX=ON -DENABLE_LIQUID_DSP=ON
+          cmake --build build-liquid --target liquid-static -j$(nproc)
+
   # Cross-platform build check — runs on every PR (no path gating).
   #
   # History: previously gated by a `check-paths` job on a hand-maintained

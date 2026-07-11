@@ -978,6 +978,17 @@ message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-
 # Disabled by default on every platform because no AetherSDR module currently
 # consumes liquid-dsp symbols. Opt-in non-MSVC builds link liquid-static; the
 # static linker then extracts only symbols used by a future consumer.
+#
+# USE_SYSTEM_LIQUID_DSP only takes effect once liquid-dsp itself is enabled, so
+# warn if a packager set it without ENABLE_LIQUID_DSP rather than silently
+# ignoring it (#4146 review).
+if(USE_SYSTEM_LIQUID_DSP AND NOT ENABLE_LIQUID_DSP)
+    message(WARNING
+        "USE_SYSTEM_LIQUID_DSP=ON has no effect without ENABLE_LIQUID_DSP=ON — "
+        "liquid-dsp is off by default. Pass -DENABLE_LIQUID_DSP=ON to build "
+        "against it.")
+endif()
+
 if(ENABLE_LIQUID_DSP AND MSVC)
     message(FATAL_ERROR
         "ENABLE_LIQUID_DSP is not supported with MSVC because liquid-dsp's "
