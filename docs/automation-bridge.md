@@ -742,6 +742,8 @@ RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
+| `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
+| `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -808,6 +810,24 @@ one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
 — note each `HGauge` owns its own popup, so with several meters hovered the name
 resolves to the first-created one; hover a single meter per instance for an
 unambiguous grab.
+
+### `tooltip`
+Force-show a widget's native Qt tooltip, using the widget's current
+`toolTip()` text unless an override string is supplied. This is for screenshots
+and assertions where injected hover should prove the target state but the
+platform does not run Qt's built-in tooltip timer under automation.
+
+```text
+→ {"cmd":"tooltip","target":"E"}
+← {"ok":true,"target":"E","class":"QToolButton",
+   "text":"Slice E (global slot 5)","grabHint":"QTipLabel", ...}
+→ tooltip E Screenshot override text
+← {"ok":true,"target":"E","text":"Screenshot override text", ...}
+→ {"cmd":"grab","target":"QTipLabel","path":"/tmp/slice-tooltip.png"}
+← {"ok":true,"class":"QTipLabel","path":"/tmp/slice-tooltip.png", ...}
+```
+
+Use `{"cmd":"tooltip","target":"E","action":"hide"}` to dismiss it.
 
 ### `scrollTo` (alias `ensureVisible`)
 Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the

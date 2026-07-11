@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -825,6 +826,7 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
+            clearAutomationSliceFixtures();
             QMetaObject::invokeMethod(m_connection, [this] {
                 m_connection->connectToRadio(m_lastInfo);
             });
@@ -904,6 +906,169 @@ QString RadioModel::foreignSliceOwnerStation(int sliceId) const
     auto it = m_foreignSliceOwners.constFind(sliceId);
     if (it == m_foreignSliceOwners.constEnd()) return {};
     return m_clientStations.value(it.value(), {});
+}
+
+void RadioModel::clearAutomationSliceFixtures()
+{
+    const QSet<int> fixtures = m_automationSliceFixtures;
+    for (int sliceId : fixtures) {
+        handleSliceStatus(sliceId, QMap<QString, QString>{}, true);
+        m_ownedSliceIds.remove(sliceId);
+        m_foreignSliceOwners.remove(sliceId);
+    }
+    m_automationSliceFixtures.clear();
+    restoreAutomationSliceFixtureBaseline();
+}
+
+void RadioModel::restoreAutomationSliceFixtureBaseline()
+{
+    if (!m_automationSliceFixtureBaselineActive
+        || !m_automationSliceFixtures.isEmpty()) {
+        return;
+    }
+
+    bool changed = false;
+    if (m_model != m_automationSliceFixtureBaselineModel) {
+        m_model = m_automationSliceFixtureBaselineModel;
+        changed = true;
+    }
+    if (m_maxSlices != m_automationSliceFixtureBaselineMaxSlices) {
+        m_maxSlices = m_automationSliceFixtureBaselineMaxSlices;
+        changed = true;
+    }
+
+    m_automationSliceFixtureBaselineActive = false;
+    m_automationSliceFixtureBaselineModel.clear();
+    m_automationSliceFixtureBaselineMaxSlices = 4;
+
+    if (changed) {
+        emit infoChanged();
+    }
+}
+
+bool RadioModel::automationApplySliceFixture(int sliceId,
+                                             const QString& radioLetter,
+                                             QString* error)
+{
+    auto fail = [error](const QString& message) {
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (isConnected()) {
+        return fail(QStringLiteral("slice fixture is only available while disconnected"));
+    }
+    if (sliceId < 0 || sliceId >= 8) {
+        return fail(QStringLiteral("slice fixture id must be 0..7"));
+    }
+
+    const QString trimmedLetter = radioLetter.trimmed();
+    if (trimmedLetter.size() > 1) {
+        return fail(QStringLiteral("slice fixture letter must be a single A..H letter"));
+    }
+
+    QString letter = trimmedLetter.toUpper();
+    if (letter.isEmpty()) {
+        letter = QString(QChar(static_cast<ushort>('A' + sliceId)));
+    }
+    const ushort letterCode = letter.at(0).unicode();
+    if (letterCode < 'A' || letterCode > 'H') {
+        return fail(QStringLiteral("slice fixture letter must be A..H"));
+    }
+
+    if (!m_automationSliceFixtureBaselineActive) {
+        m_automationSliceFixtureBaselineModel = m_model;
+        m_automationSliceFixtureBaselineMaxSlices = m_maxSlices;
+        m_automationSliceFixtureBaselineActive = true;
+    }
+
+    bool infoChangedNeeded = false;
+    if (m_model.isEmpty() || maxSlicesForModel(m_model) <= sliceId) {
+        m_model = QStringLiteral("FLEX-6700");
+        infoChangedNeeded = true;
+    }
+    const int modelMaxSlices = maxSlicesForModel(m_model);
+    if (m_maxSlices < modelMaxSlices) {
+        m_maxSlices = modelMaxSlices;
+        infoChangedNeeded = true;
+    }
+    if (m_maxSlices <= sliceId) {
+        return fail(QStringLiteral("model %1 supports only %2 slices")
+                        .arg(m_model)
+                        .arg(m_maxSlices));
+    }
+    if (infoChangedNeeded) {
+        emit infoChanged();
+    }
+
+    QMap<QString, QString> kvs;
+    kvs.insert(QStringLiteral("in_use"), QStringLiteral("1"));
+    kvs.insert(QStringLiteral("pan"), QStringLiteral("0x40000000"));
+    kvs.insert(QStringLiteral("index_letter"), letter);
+    kvs.insert(QStringLiteral("RF_frequency"), QStringLiteral("14.225000"));
+    kvs.insert(QStringLiteral("mode"), QStringLiteral("USB"));
+    kvs.insert(QStringLiteral("filter_lo"), QStringLiteral("100"));
+    kvs.insert(QStringLiteral("filter_hi"), QStringLiteral("2700"));
+    kvs.insert(QStringLiteral("active"), QStringLiteral("1"));
+    kvs.insert(QStringLiteral("tx"), QStringLiteral("0"));
+    kvs.insert(QStringLiteral("audio_level"), QStringLiteral("50"));
+    kvs.insert(QStringLiteral("audio_pan"), QStringLiteral("50"));
+    kvs.insert(QStringLiteral("audio_mute"), QStringLiteral("0"));
+    kvs.insert(QStringLiteral("rxant"), QStringLiteral("ANT1"));
+    kvs.insert(QStringLiteral("txant"), QStringLiteral("ANT1"));
+    kvs.insert(QStringLiteral("rxant_list"), QStringLiteral("ANT1,ANT2"));
+    kvs.insert(QStringLiteral("txant_list"), QStringLiteral("ANT1,ANT2"));
+
+    for (int existingId : std::as_const(m_automationSliceFixtures)) {
+        if (existingId == sliceId) {
+            continue;
+        }
+        handleSliceStatus(existingId,
+                          {{QStringLiteral("active"), QStringLiteral("0")}},
+                          false);
+    }
+
+    m_ownedSliceIds.insert(sliceId);
+    m_foreignSliceOwners.remove(sliceId);
+    handleSliceStatus(sliceId, kvs, false);
+    if (!slice(sliceId)) {
+        m_ownedSliceIds.remove(sliceId);
+        if (m_automationSliceFixtures.isEmpty()) {
+            restoreAutomationSliceFixtureBaseline();
+        }
+        return fail(QStringLiteral("slice fixture did not create slice %1").arg(sliceId));
+    }
+    m_automationSliceFixtures.insert(sliceId);
+    return true;
+}
+
+bool RadioModel::automationRemoveSliceFixture(int sliceId, QString* error)
+{
+    auto fail = [error](const QString& message) {
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (isConnected()) {
+        return fail(QStringLiteral("slice fixture is only available while disconnected"));
+    }
+    if (sliceId < 0 || sliceId >= 8) {
+        return fail(QStringLiteral("slice fixture id must be 0..7"));
+    }
+    if (!m_automationSliceFixtures.contains(sliceId)) {
+        return fail(QStringLiteral("no slice fixture with id %1").arg(sliceId));
+    }
+
+    handleSliceStatus(sliceId, QMap<QString, QString>{}, true);
+    m_ownedSliceIds.remove(sliceId);
+    m_foreignSliceOwners.remove(sliceId);
+    m_automationSliceFixtures.remove(sliceId);
+    restoreAutomationSliceFixtureBaseline();
+    return true;
 }
 
 int RadioModel::activeTxSliceNum() const
@@ -1391,6 +1556,8 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    clearAutomationSliceFixtures();
+
     m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
     m_intentionalDisconnect = false;
@@ -1421,6 +1588,8 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
              << "udpPort=" << udpPort
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
+
+    clearAutomationSliceFixtures();
 
     // Disconnect any stale signal connections from a previous WAN session
     if (m_wanConn)

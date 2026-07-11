@@ -64,6 +64,7 @@
 #include <QToolButton>   // doShowMenu: QToolButton::menu()
 #include <QWidgetAction>  // describeAction: header rows (disabled QWidgetAction + QLabel)
 #include <QContextMenuEvent>  // doContextMenu: synthesize a right-click menu trigger
+#include <QHelpEvent>    // doTooltip: synthesize the same tooltip event as a real hover
 #ifdef HAVE_WEBSOCKETS
 #include <QWebSocket>         // doTci: in-process TCI client simulator (#3305)
 #endif
@@ -1744,7 +1745,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, layout, scale, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, clickAt, shortcut, whoami, log, mark)";
+        << "menu, close, drag, hover, tooltip, showMenu, contextMenu, hitTest, clickAt, shortcut, whoami, log, mark)";
     return true;
 }
 
@@ -2004,7 +2005,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             for (int i = 2; i < p.size(); ++i) {
                 rest << tok(i);
             }
-            value = rest.join(QLatin1Char(' '));  // "slice add 14.2", "slice rxsource 7 K4JK"
+            value = rest.join(QLatin1Char(' '));  // "slice add 14.2", "slice fixture 4 B"
         } else if (cmd == QLatin1String("tune")) {
             value = tok(1);   // "tune 3.7"
         } else if (cmd == QLatin1String("log")) {
@@ -2147,6 +2148,17 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("hover")) {
             target = tok(1);
             action = tok(2);  // optional "leave" → fade after exit
+        } else if (cmd == QLatin1String("tooltip")) {
+            target = tok(1);
+            if (tok(2) == QLatin1String("hide") && p.size() == 3) {
+                action = QStringLiteral("hide");
+            } else {
+                QStringList rest;
+                for (int i = 2; i < p.size(); ++i) {
+                    rest << tok(i);
+                }
+                value = rest.join(QLatin1Char(' '));
+            }
         } else if (cmd == QLatin1String("contextMenu")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "contextMenu SMeterWidget [x y]"
@@ -2187,6 +2199,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (target.isEmpty())
             return err(QStringLiteral("hover requires a target widget"));
         return doHover(target, action);
+    }
+    if (cmd == QLatin1String("tooltip")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("tooltip requires a target widget"));
+        return doTooltip(target, action, value);
     }
     if (cmd == QLatin1String("scrollTo") || cmd == QLatin1String("ensureVisible")) {
         if (target.isEmpty())
@@ -3954,7 +3971,52 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         }
         return m_sliceReceiveSourceHandler(arg);
     }
-    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select|tx|txant|rxant|rxsource)"));
+    if (action == QLatin1String("fixture")) {
+        const QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty()) {
+            return err(QStringLiteral("slice fixture requires a slice id"));
+        }
+        if (parts.size() > 2) {
+            return err(QStringLiteral("slice fixture accepts only: <slice id> [letter]"));
+        }
+        bool okId = false;
+        const int id = parts.at(0).toInt(&okId);
+        if (!okId) {
+            return err(QStringLiteral("slice fixture requires a numeric slice id"));
+        }
+        const QString letter = parts.value(1);
+        QString error;
+        if (!radio->automationApplySliceFixture(id, letter, &error)) {
+            return err(error);
+        }
+
+        QJsonObject response{{QStringLiteral("ok"), true},
+                             {QStringLiteral("slice"), QStringLiteral("fixture")},
+                             {QStringLiteral("id"), id},
+                             {QStringLiteral("sliceCount"), radio->slices().size()}};
+        SliceModel* s = radio->slice(id);
+        if (s) {
+            response[QStringLiteral("letter")] = s->letter();
+        }
+        return response;
+    }
+    if (action == QLatin1String("clearfixture")) {
+        bool okId = false;
+        const int id = arg.toInt(&okId);
+        if (!okId) {
+            return err(QStringLiteral("slice clearfixture requires a slice id"));
+        }
+        QString error;
+        if (!radio->automationRemoveSliceFixture(id, &error)) {
+            return err(error);
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("clearfixture")},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("sliceCount"), radio->slices().size()}};
+    }
+    return err(QStringLiteral("unknown slice action: ") + action
+               + QStringLiteral(" (add|remove|select|tx|txant|rxant|rxsource|fixture|clearfixture)"));
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
@@ -4617,6 +4679,72 @@ QJsonObject AutomationServer::doHover(const QString& target, const QString& acti
                                          : QStringLiteral("enter")},
         {QStringLiteral("x"), global.x()},
         {QStringLiteral("y"), global.y()},
+    };
+}
+
+// tooltip <target> [hide]: explicitly ask the target widget to show its native
+// Qt tooltip. Synthetic hover is useful for hover-driven app UI, but platforms
+// do not always run the built-in tooltip timer for injected events under
+// offscreen automation. Sending QEvent::ToolTip uses the same widget event path
+// as a real hover, so a driver can `grab QTipLabel` for PR evidence.
+QJsonObject AutomationServer::doTooltip(const QString& target,
+                                        const QString& action,
+                                        const QString& value) const
+{
+    if (action == QLatin1String("hide")) {
+        bool hidden = false;
+        if (QWidget* tip = resolveWidget(QStringLiteral("QTipLabel"))) {
+            tip->hide();
+            hidden = true;
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("target"), target},
+                           {QStringLiteral("action"), QStringLiteral("hide")},
+                           {QStringLiteral("hidden"), hidden}};
+    }
+
+    QWidget* w = resolveWidget(target);
+    if (!w) {
+        return err(QStringLiteral("widget or window not found: ") + target);
+    }
+    if (!w->isVisible()) {
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+    }
+
+    const QString text = value.isEmpty() ? w->toolTip() : value;
+    if (text.isEmpty()) {
+        return err(QStringLiteral("target has no tooltip: ") + target);
+    }
+
+    const QPoint center(w->width() / 2, w->height() / 2);
+    const QPoint global = w->mapToGlobal(center);
+
+    const QString originalToolTip = w->toolTip();
+    const bool overrideToolTip = !value.isEmpty() && value != originalToolTip;
+    if (overrideToolTip) {
+        w->setToolTip(value);
+    }
+
+    QHelpEvent event(QEvent::ToolTip, center, global);
+    QCoreApplication::sendEvent(w, &event);
+    const bool accepted = event.isAccepted();
+
+    if (overrideToolTip) {
+        w->setToolTip(originalToolTip);
+    }
+
+    qCInfo(lcAutomation).noquote()
+        << "tooltip" << target << "at" << global << text;
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("text"), text},
+        {QStringLiteral("x"), global.x()},
+        {QStringLiteral("y"), global.y()},
+        {QStringLiteral("accepted"), accepted},
+        {QStringLiteral("grabHint"), QStringLiteral("QTipLabel")},
     };
 }
 

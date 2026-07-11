@@ -300,6 +300,11 @@ private:
     // QEvent::Leave so the fade-after-exit timer can be observed. Unlike drag,
     // no button is pressed, matching a real hover.
     QJsonObject doHover(const QString& target, const QString& action) const;
+    // tooltip <target> [hide]: force-show the target widget's native Qt tooltip
+    // so a driver can grab the resulting QTipLabel under automation.
+    QJsonObject doTooltip(const QString& target,
+                          const QString& action,
+                          const QString& value) const;
     // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
     // ancestor so the target widget sits in its viewport. Widgets parked below
     // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)
@@ -402,7 +407,8 @@ private:
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
 
-    // Slice lifecycle (add/remove/select/tx) and VFO tuning — RX/config, no keying.
+    // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
+    // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
     QJsonObject doTune(const QString& value);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`

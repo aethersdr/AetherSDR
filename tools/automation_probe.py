@@ -104,7 +104,10 @@ def main():
                "  automation_probe.py get sync\n"
                "  automation_probe.py get slice active frequency\n"
                "  automation_probe.py slice rxsource 7 K4JK\n"
+               "  automation_probe.py slice fixture 4 B\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
+               "  automation_probe.py hover E\n"
+               "  automation_probe.py tooltip E\n"
                "  automation_probe.py hitTest SpectrumWidget 80 80\n"
                "  automation_probe.py clickAt 1420 210          # global point (dumpTree geometry)\n"
                "  automation_probe.py clickAt AppletPanel 12 34  # point local to a widget\n"
@@ -122,18 +125,20 @@ def main():
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect", "slice", "audioCapture",
                              "record", "testtone", "tci", "panmessage",
-                             "hitTest", "clickAt", "resize", "dss",
+                             "hover", "tooltip", "hitTest", "clickAt", "resize", "dss",
                              "pan", "layout", "scale"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
                          "invoke <target> <action> [value] | "
                          "get <model> [selector] [property] | "
+                         "hover <target> [leave] | "
+                         "tooltip <target> [hide|text...] | "
                          "hitTest <target> [x y] | "
                          "clickAt <x> <y> | clickAt <target> <x> <y> | "
                          "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
-                         "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
+                         "slice <add|remove|select|tx|txant|rxant|rxsource|fixture|clearfixture> [args] | "
                          "dss <snapshot|reset|live> [pan] [args] | "
                          "dss inject [pan] <count> <firstPeakBin> <stepBin> "
                          "[native|kiwi [rowLowMhz rowHighMhz]] | "
@@ -248,6 +253,24 @@ def main():
             req = {"cmd": "scale"}
             if args.rest:
                 req["value"] = args.rest[0]
+
+        elif args.command == "hover":
+            if not args.rest:
+                sys.exit("error: hover needs <target> [leave]")
+            req = {"cmd": "hover", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["action"] = args.rest[1]
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "tooltip":
+            if not args.rest:
+                sys.exit("error: tooltip needs <target> [hide|text...]")
+            req = {"cmd": "tooltip", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                if args.rest[1] == "hide" and len(args.rest) == 2:
+                    req["action"] = "hide"
+                else:
+                    req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "resize":
