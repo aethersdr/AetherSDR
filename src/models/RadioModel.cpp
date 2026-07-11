@@ -978,6 +978,19 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
         return fail(QStringLiteral("slice fixture letter must be A..H"));
     }
 
+    // Refuse to hijack a real slice (#4122 review). m_slices deliberately
+    // survives an unexpected disconnect so the session can be reclaimed on
+    // reconnect — a fixture applied over that id would decode fixture kvs
+    // into the user's real SliceModel (visibly retuning it) and the eventual
+    // fixture clear would DESTROY it, breaking reconnect continuity. Same for
+    // a staged stale slice, which the create path would silently reclaim.
+    if (!m_automationSliceFixtures.contains(sliceId)
+        && (slice(sliceId) || m_staleSlices.contains(sliceId))) {
+        return fail(QStringLiteral(
+            "slice %1 already exists from the previous session — "
+            "fixtures may not overwrite reclaimable slices").arg(sliceId));
+    }
+
     if (!m_automationSliceFixtureBaselineActive) {
         m_automationSliceFixtureBaselineModel = m_model;
         m_automationSliceFixtureBaselineMaxSlices = m_maxSlices;
@@ -1021,6 +1034,19 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
     kvs.insert(QStringLiteral("rxant_list"), QStringLiteral("ANT1,ANT2"));
     kvs.insert(QStringLiteral("txant_list"), QStringLiteral("ANT1,ANT2"));
 
+    m_ownedSliceIds.insert(sliceId);
+    m_foreignSliceOwners.remove(sliceId);
+    handleSliceStatus(sliceId, kvs, false);
+    if (!slice(sliceId)) {
+        m_ownedSliceIds.remove(sliceId);
+        restoreAutomationSliceFixtureBaseline();  // self-guards on live fixtures
+        return fail(QStringLiteral("slice fixture did not create slice %1").arg(sliceId));
+    }
+    m_automationSliceFixtures.insert(sliceId);
+
+    // Deactivate sibling fixtures only after the new one verifiably exists —
+    // deactivating first would leave no active slice if creation failed
+    // (#4122 review). Mirrors the radio's single-active semantics.
     for (int existingId : std::as_const(m_automationSliceFixtures)) {
         if (existingId == sliceId) {
             continue;
@@ -1029,18 +1055,6 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
                           {{QStringLiteral("active"), QStringLiteral("0")}},
                           false);
     }
-
-    m_ownedSliceIds.insert(sliceId);
-    m_foreignSliceOwners.remove(sliceId);
-    handleSliceStatus(sliceId, kvs, false);
-    if (!slice(sliceId)) {
-        m_ownedSliceIds.remove(sliceId);
-        if (m_automationSliceFixtures.isEmpty()) {
-            restoreAutomationSliceFixtureBaseline();
-        }
-        return fail(QStringLiteral("slice fixture did not create slice %1").arg(sliceId));
-    }
-    m_automationSliceFixtures.insert(sliceId);
     return true;
 }
 
@@ -2520,6 +2534,12 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected";
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
+    // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
+    // but isConnected() stays false for the whole Connecting phase, so a
+    // fixture applied while the handshake was in flight (seconds on WAN)
+    // would otherwise be staged below and "reclaimed" by the real status
+    // replay — with the fixture set staying poisoned for the session.
+    clearAutomationSliceFixtures();
     stageSessionModelsForReconnect();
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);

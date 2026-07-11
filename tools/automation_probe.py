@@ -267,7 +267,9 @@ def main():
                 sys.exit("error: tooltip needs <target> [hide|text...]")
             req = {"cmd": "tooltip", "target": args.rest[0]}
             if len(args.rest) > 1:
-                if args.rest[1] == "hide" and len(args.rest) == 2:
+                if args.rest[1] == "hide":
+                    if len(args.rest) != 2:
+                        sys.exit("error: tooltip hide takes no extra arguments")
                     req["action"] = "hide"
                 else:
                     req["value"] = " ".join(args.rest[1:])

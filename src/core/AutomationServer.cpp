@@ -2150,7 +2150,15 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             action = tok(2);  // optional "leave" → fade after exit
         } else if (cmd == QLatin1String("tooltip")) {
             target = tok(1);
-            if (tok(2) == QLatin1String("hide") && p.size() == 3) {
+            if (tok(2) == QLatin1String("hide")) {
+                // "hide" with trailing tokens must not silently become an
+                // override that force-SHOWS a tip reading "hide …" (#4122
+                // review). An override literally starting with "hide" is
+                // available via the JSON form's explicit value field.
+                if (p.size() != 3) {
+                    return err(QStringLiteral(
+                        "tooltip hide takes no extra arguments"));
+                }
                 action = QStringLiteral("hide");
             } else {
                 QStringList rest;
@@ -4692,6 +4700,12 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
                                         const QString& value) const
 {
     if (action == QLatin1String("hide")) {
+        // Validate the target like the show path — a typo'd target must not
+        // return ok:true (#4122 review). The tip itself is global, so the
+        // target is only checked, not used.
+        if (!resolveWidget(target)) {
+            return err(QStringLiteral("widget or window not found: ") + target);
+        }
         bool hidden = false;
         if (QWidget* tip = resolveWidget(QStringLiteral("QTipLabel"))) {
             tip->hide();
@@ -4703,7 +4717,7 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
                            {QStringLiteral("hidden"), hidden}};
     }
 
-    QWidget* w = resolveWidget(target);
+    QPointer<QWidget> w = resolveWidget(target);
     if (!w) {
         return err(QStringLiteral("widget or window not found: ") + target);
     }
@@ -4729,6 +4743,19 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
     QCoreApplication::sendEvent(w, &event);
     const bool accepted = event.isAccepted();
 
+    // QPointer guard (#4122 review): a ToolTip handler that rebuilds UI can
+    // destroy the target during sendEvent — restoring through a raw pointer
+    // would be a use-after-free.
+    if (!w) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("target"), target},
+            {QStringLiteral("text"), text},
+            {QStringLiteral("accepted"), accepted},
+            {QStringLiteral("targetDestroyed"), true},
+            {QStringLiteral("grabHint"), QStringLiteral("QTipLabel")},
+        };
+    }
     if (overrideToolTip) {
         w->setToolTip(originalToolTip);
     }
