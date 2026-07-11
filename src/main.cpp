@@ -228,6 +228,28 @@ int main(int argc, char* argv[])
         }
     }
 
+    // ── Bundled Inter UI font (SIL OFL 1.1) ───────────────────────────────
+    // The theme's `font.family.ui` token resolves to "Inter" (ThemeManager),
+    // with the QSS fallback chain "Inter", "Segoe UI", sans-serif.  Inter
+    // ships with nothing by default, so on a stock box the chain fell through
+    // to Segoe UI on Windows and SF/Helvetica on macOS — every px-tuned QSS
+    // (paddings, fixed heights, the flag header row) was implicitly tuned
+    // against one family and rendered against another per platform (#4036).
+    // Register the static Regular + Bold instances so "Inter" resolves the
+    // same everywhere.  Static weights, not the variable font: variable-axis
+    // support needs Qt 6.7+ and Linux CI is pre-6.5.
+    {
+        static constexpr const char* kInterFonts[] = {
+            ":/fonts/Inter-Regular.ttf",
+            ":/fonts/Inter-Bold.ttf",
+        };
+        for (const char* path : kInterFonts) {
+            if (QFontDatabase::addApplicationFont(QString::fromLatin1(path)) < 0) {
+                qWarning() << "Failed to load bundled font:" << path;
+            }
+        }
+    }
+
     // Request microphone permission early (macOS only).
     // Shows the system prompt on first launch so it's ready before PTT.
     requestMicrophonePermission();
@@ -437,6 +459,14 @@ int main(int argc, char* argv[])
                 [&window](const QString& arg) {
                     return window.automationSetSliceReceiveSource(arg);
                 });
+            automation->setSliceCenterLockHandler(
+                [&window](int sliceId, bool enabled) {
+                    return window.automationSetCenterLock(sliceId, enabled);
+                });
+            automation->setTuneHandler(
+                [&window](double mhz) {
+                    return window.automationTune(mhz);
+                });
             automation->setReceiveSyncSnapshotHandler(
                 [&window]() {
                     return window.automationReceiveSyncSnapshot();
@@ -444,6 +474,10 @@ int main(int argc, char* argv[])
             automation->setKiwiSdrSnapshotHandler(
                 [&window]() {
                     return window.automationKiwiSdrSnapshot();
+                });
+            automation->setTxTimerSnapshotHandler(
+                [&window]() {
+                    return window.automationTxTimerSnapshot();
                 });
             if (!automation->start(sockName))
                 automation.reset();

@@ -3,6 +3,7 @@
 #include "PanadapterMessageOverlay.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
+#include "DisplaySettings.h"
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -39,6 +40,8 @@
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <QApplication>
+#include <QAccessible>
+#include <QAccessibleValueChangeEvent>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QGuiApplication>
@@ -1706,6 +1709,7 @@ void SpectrumWidget::loadSettings()
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
+    m_extendedPassband = DisplaySettings::extendedPassband();
 
     // Background image — default to bundled logo, "none" = explicitly cleared
     QString bgPath = s.value(settingsKey("BackgroundImage"), ":/bg-default.jpg").toString();
@@ -1756,6 +1760,54 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     m_overlayMenu->raiseAll();  // keep overlay + panels on top of all VFO widgets
     raisePanadapterMessageOverlay();
     return w;
+}
+
+VfoWidget* SpectrumWidget::takeVfoWidget(int sliceId)
+{
+    VfoWidget* w = m_vfoWidgets.take(sliceId);
+    if (!w) {
+        return nullptr;
+    }
+    if (m_vfoWidget == w) {
+        m_vfoWidget = nullptr;
+    }
+    disconnect(w, nullptr, this, nullptr);
+    w->removeEventFilter(this);
+    const QList<QWidget*> children = w->findChildren<QWidget*>();
+    for (QWidget* child : children) {
+        child->removeEventFilter(this);
+    }
+    w->setParent(nullptr);
+    return w;
+}
+
+void SpectrumWidget::adoptVfoWidget(int sliceId, VfoWidget* widget)
+{
+    if (!widget) {
+        return;
+    }
+    if (VfoWidget* existing = m_vfoWidgets.value(sliceId, nullptr)) {
+        if (existing == widget) {
+            return;
+        }
+        removeVfoWidget(sliceId);
+    }
+    widget->setParent(this);
+    // The flag's close/lock/record/play buttons and collapsed freq label are
+    // siblings parented to the SPECTRUM (so they render outside the flag's
+    // bounds) — they must move with the flag or they ghost on the old pan
+    // (#4037 review).
+    widget->reparentFlagSatellites(this);
+    widget->setProperty("sliceId", sliceId);
+    installVfoCursorEventFilter(widget);
+    connect(widget, &VfoWidget::smartMtrLabelsChanged, this,
+            [this]() { markOverlayDirty("smartMtr"); });
+    m_vfoWidgets[sliceId] = widget;
+    widget->show();
+    widget->raise();
+    applyActiveVfoZOrder();
+    m_overlayMenu->raiseAll();
+    raisePanadapterMessageOverlay();
 }
 
 void SpectrumWidget::installVfoCursorEventFilter(VfoWidget* widget)
@@ -2939,6 +2991,24 @@ void SpectrumWidget::setExtendedFrequencyLine(bool on) {
         }
     }
 }
+
+void SpectrumWidget::setExtendedPassband(bool on) {
+    m_extendedPassband = on;
+    DisplaySettings::setExtendedPassband(on);
+    markOverlayDirty();
+
+    // Propagate to all sibling SpectrumWidgets so the toggle is global.
+    if (QWidget* top = window()) {
+        const auto siblings = top->findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* sw : siblings) {
+            if (sw != this && sw->m_extendedPassband != on) {
+                sw->m_extendedPassband = on;
+                sw->markOverlayDirty();
+            }
+        }
+    }
+}
+
 void SpectrumWidget::setFftLineWidth(float w) {
     m_fftLineWidth = std::clamp(w, 0.0f, 5.0f);
     auto& s = AppSettings::instance();
@@ -4969,6 +5039,17 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, true);
+}
+
+void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
+{
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
+}
+
+void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
+                                               bool animateSmallNudges)
+{
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
@@ -5036,8 +5117,9 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         m_bandwidthMhz = bandwidthMhz;
     }
 
-    if (largeShift) {
-        // Large jump: cancel any running animation and snap immediately.
+    if (largeShift || !animateSmallNudges) {
+        // Large jumps and explicit immediate updates snap without pan-follow
+        // animation, but still share the same stale-echo and waterfall guards.
         if (m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
             m_panCenterAnim->stop();
         }
@@ -5532,6 +5614,28 @@ void SpectrumWidget::setSliceOverlayAdaptiveActive(int sliceId, bool active)
     auto& o = m_sliceOverlays[idx];
     if (o.adaptiveActive == active) return;
     o.adaptiveActive = active;
+    markOverlayDirty();
+}
+
+void SpectrumWidget::setCenterLockSliceId(int sliceId)
+{
+    if (m_centerLockSliceId == sliceId) {
+        return;
+    }
+    m_centerLockSliceId = sliceId;
+    QString sliceName = QString::number(sliceId);
+    const int overlay = overlayIndex(sliceId);
+    if (overlay >= 0) {
+        sliceName = SliceLabel::unicodeForm(
+            m_sliceOverlays.at(overlay).sliceId,
+            m_sliceOverlays.at(overlay).perClientLetter);
+    }
+    setAccessibleDescription(
+        sliceId >= 0
+            ? tr("Center Lock enabled for Slice %1").arg(sliceName)
+            : tr("Center Lock is off"));
+    QAccessibleValueChangeEvent event(this, sliceId);
+    QAccessible::updateAccessibility(&event);
     markOverlayDirty();
 }
 
@@ -6852,6 +6956,48 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_draggingTnfId = -1;
         const int mx = static_cast<int>(ev->position().x());
 
+        auto sliceDisplayName = [](const SliceOverlay& so) {
+            return SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
+        };
+        auto addCenterLockAction =
+            [this, sliceDisplayName](QMenu* targetMenu, const SliceOverlay& so,
+                                     bool includeCommandName) {
+            const QString sliceName = QStringLiteral("Slice %1").arg(sliceDisplayName(so));
+            QAction* action = targetMenu->addAction(
+                includeCommandName
+                    ? QStringLiteral("Center Lock %1").arg(sliceName)
+                    : sliceName);
+            action->setCheckable(true);
+            action->setChecked(m_centerLockSliceId == so.sliceId);
+            connect(action, &QAction::triggered, this,
+                    [this, sliceId = so.sliceId]() {
+                emit centerLockRequested(sliceId, m_centerLockSliceId != sliceId);
+            });
+        };
+        auto addCenterLockControls = [this, addCenterLockAction](QMenu& targetMenu) {
+            if (m_sliceOverlays.isEmpty()) {
+                return;
+            }
+
+            targetMenu.addSeparator();
+            if (m_sliceOverlays.size() == 1) {
+                addCenterLockAction(&targetMenu, m_sliceOverlays.first(), true);
+                return;
+            }
+
+            QMenu* centerLockMenu = targetMenu.addMenu(QStringLiteral("Center Lock"));
+            const SliceOverlay* active = activeOverlay();
+            if (active) {
+                addCenterLockAction(centerLockMenu, *active, false);
+            }
+            for (const SliceOverlay& so : m_sliceOverlays) {
+                if (active && so.sliceId == active->sliceId) {
+                    continue;
+                }
+                addCenterLockAction(centerLockMenu, so, false);
+            }
+        };
+
         // Right-click on off-screen slice indicator → slice context menu
         for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
             if (!m_offScreenRects[oi].isNull() &&
@@ -6871,6 +7017,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                         markOverlayDirty();
                         emit centerChangeRequested(m_centerMhz);
                     });
+                menu.addSeparator();
+                addCenterLockAction(&menu, so, true);
                 menu.exec(ev->globalPosition().toPoint());
                 ev->accept();
                 return;
@@ -6997,6 +7145,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
 
         if (hitTnf < 0) {
+            addCenterLockControls(menu);
+
             // Close Slice option (only when multiple slices exist)
             if (m_sliceOverlays.size() > 1) {
                 menu.addSeparator();
@@ -7029,6 +7179,11 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             extendedLineAction->setCheckable(true);
             extendedLineAction->setChecked(m_extendedFrequencyLine);
             connect(extendedLineAction, &QAction::toggled, this, &SpectrumWidget::setExtendedFrequencyLine);
+
+            QAction* extendedPassbandAction = menu.addAction("Extended Passband");
+            extendedPassbandAction->setCheckable(true);
+            extendedPassbandAction->setChecked(m_extendedPassband);
+            connect(extendedPassbandAction, &QAction::toggled, this, &SpectrumWidget::setExtendedPassband);
 
             menu.addSeparator();
             bool floating = m_isFloating;
@@ -12035,7 +12190,6 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         const QColor bandCol = so.isActive
             ? SliceColorManager::instance().activeColor(colourIdx)
             : AetherSDR::ThemeManager::instance().color("color.text.secondary");
-        const int freqLineBottom = m_extendedFrequencyLine ? wfRect.bottom() : specRect.bottom();
         const double fLoMhz = so.freqMhz + so.filterLowHz / 1.0e6;
         const double fHiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
 
@@ -12044,12 +12198,36 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         const int fX2  = mhzToX(fHiMhz);
         const int fW   = fX2 - fX1;
 
+        auto drawFrequencyLine = [&](int x) {
+            p.drawLine(x, specRect.top(), x, specRect.bottom());
+            if (m_extendedFrequencyLine && !wfRect.isEmpty()) {
+                p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+            }
+        };
+
+        // Passive target marker: Center Lock is a controller state, so its
+        // visible affordance stays attached to the locked slice rather than
+        // adding another mouse control to the pan chrome.
+        if (so.sliceId == m_centerLockSliceId) {
+            const QPoint targetCenter(vfoX, specRect.top() + 18);
+            p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 2));
+            p.drawEllipse(targetCenter, 6, 6);
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 1));
+            p.drawLine(targetCenter.x() - 9, targetCenter.y(),
+                       targetCenter.x() + 9, targetCenter.y());
+            p.drawLine(targetCenter.x(), targetCenter.y() - 9,
+                       targetCenter.x(), targetCenter.y() + 9);
+        }
+
         // ── Filter passband shading ──────────────────────────────────────
-        // Drawn only in the spectrum area. The waterfall is a historical
-        // record of received signals; painting a UI affordance over it
-        // makes the passband look like a signal in the history (#1270).
-        p.fillRect(QRect(fX1, specRect.top(), fW, specRect.height()),
-                   QColor(bandCol.red(), bandCol.green(), bandCol.blue(), 35));
+        // Default stays spectrum-only because the waterfall is a historical
+        // record of received signals (#1270). The waterfall fill is opt-in.
+        const QColor passbandFill(bandCol.red(), bandCol.green(), bandCol.blue(), 35);
+        p.fillRect(QRect(fX1, specRect.top(), fW, specRect.height()), passbandFill);
+        if (m_extendedPassband && !wfRect.isEmpty()) {
+            p.fillRect(QRect(fX1, wfRect.top(), fW, wfRect.height()), passbandFill);
+        }
 
         // Filter edge lines — user-hidden via per-slice VFO flag toggle (#1526)
         if (!so.filterEdgesHidden) {
@@ -12077,11 +12255,11 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
 
             // Mark line — green, dashed
             p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.success", 200), 1, Qt::DashLine));
-            p.drawLine(markX, specRect.top(), markX, freqLineBottom);
+            drawFrequencyLine(markX);
 
             // Space line — red, dashed
             p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.danger", 200), 1, Qt::DashLine));
-            p.drawLine(spaceX, specRect.top(), spaceX, freqLineBottom);
+            drawFrequencyLine(spaceX);
 
             // Labels at top
             QFont f = p.font();
@@ -12101,7 +12279,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             // Per-slice VFO marker thickness — user-toggled via VFO flag (#1526)
             const qreal vfoLineW = static_cast<qreal>(so.markerWidth);
             p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 220), vfoLineW));
-            p.drawLine(markerX, specRect.top(), markerX, freqLineBottom);
+            drawFrequencyLine(markerX);
 
             // ── Triangle marker at top ───────────────────────────────────
             const int triHalf = 6;

@@ -1707,12 +1707,9 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
             btn->setEnabled(true);
             btn->setProperty("sliceId", slotId);
             btn->setProperty("slotState", "ours");
-            const QChar gLetter('A' + slotId);
-            const QString perClient = ourSlice->letter().isEmpty()
-                                           ? QString(gLetter)
-                                           : ourSlice->letter();
+            const QString displayLetter = SliceLabel::plainText(slotId, ourSlice->letter());
             btn->setToolTip(QString("Slice %1 (global slot %2)")
-                                .arg(perClient).arg(slotId + 1));
+                                .arg(displayLetter).arg(slotId + 1));
             btn->setChecked(slotId == activeSliceId);
             // Colour pairs with the displayed letter in RadioIndexed mode.
             const int colourIdx = SliceLabel::displayColorIndex(slotId, ourSlice->letter());

@@ -1194,6 +1194,7 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         spectrum->setKiwiSdrWaterfallAvailable(false);
         spectrum->setKiwiSdrWaterfallProfile(QString());
         syncFlexDisplaySettings();
+        recenterCenterLockForPan(panId);
         return;
     }
 
@@ -1206,6 +1207,7 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
             m_kiwiSdrManager->waterfallAvailable(profileId));
         spectrum->setKiwiSdrWaterfallProfile(profileId);
         syncFlexDisplaySettings();
+        recenterCenterLockForPan(panId);
         return;
     }
 
@@ -1271,6 +1273,7 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
                                             profile.waterfallRate);
         }
     }
+    recenterCenterLockForPan(panId);
 }
 
 void MainWindow::syncKiwiSdrPanadapterUiStates()

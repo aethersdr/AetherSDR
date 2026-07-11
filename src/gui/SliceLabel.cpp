@@ -47,6 +47,11 @@ int displayColorIndex(int globalSliceId, const QString& radioLetter)
     return globalSliceId;
 }
 
+QString plainText(int globalSliceId, const QString& radioLetter)
+{
+    return QString(resolveLetter(globalSliceId, radioLetter, currentMode()));
+}
+
 QString richText(int globalSliceId, const QString& radioLetter)
 {
     const Mode mode = currentMode();

@@ -91,6 +91,53 @@ class Bridge:
             self._pipe.close()
 
 
+def _as_int(tok):
+    """Strict int parse: None for floats/non-numerics (so '1420.5' errors
+    loudly instead of being reclassified as a widget name)."""
+    try:
+        return int(tok)
+    except ValueError:
+        return None
+
+
+def collect_actions(node, pattern=None):
+    """Return QAction summaries from a dumpTree response, optionally filtered."""
+    needle = pattern.lower() if pattern else None
+    matches = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            if value.get("class") == "QAction" and not value.get("separator"):
+                fields = [
+                    str(value.get("text", "")),
+                    str(value.get("accessibleName", "")),
+                    str(value.get("toolTip", "")),
+                    str(value.get("value", "")),
+                ]
+                haystack = " ".join(fields).lower()
+                if needle is None or needle in haystack:
+                    matches.append({
+                        "text": value.get("text", ""),
+                        "accessibleName": value.get("accessibleName", ""),
+                        "toolTip": value.get("toolTip", ""),
+                        "value": value.get("value", ""),
+                        "visible": value.get("visible", False),
+                        "enabled": value.get("enabled", False),
+                        "checkable": value.get("checkable", False),
+                        "checked": value.get("checked", False),
+                    })
+            for child in value.get("actions", []):
+                visit(child)
+            for child in value.get("children", []):
+                visit(child)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(node)
+    return matches
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Drive the AetherSDR automation bridge",
@@ -104,8 +151,12 @@ def main():
                "  automation_probe.py get sync\n"
                "  automation_probe.py get slice active frequency\n"
                "  automation_probe.py slice rxsource 7 K4JK\n"
+               "  automation_probe.py slice fixture 4 B\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
+               "  automation_probe.py hover E\n"
+               "  automation_probe.py tooltip E\n"
                "  automation_probe.py hitTest SpectrumWidget 80 80\n"
+               "  automation_probe.py rightClick 'Panadapter spectrum display'\n"
                "  automation_probe.py clickAt 1420 210          # global point (dumpTree geometry)\n"
                "  automation_probe.py clickAt AppletPanel 12 34  # point local to a widget\n"
                "  automation_probe.py resize 1600 900\n"
@@ -120,26 +171,34 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
-                             "connect", "disconnect", "slice", "audioCapture",
+                             "connect", "disconnect", "slice", "tune", "shortcut",
+                             "actions", "contextMenu", "rightClick", "audioCapture",
                              "record", "testtone", "tci", "panmessage",
-                             "hitTest", "clickAt", "resize", "dss",
+                             "hover", "tooltip", "hitTest", "rightClick", "clickAt", "resize", "dss",
                              "pan", "layout", "scale"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
                          "invoke <target> <action> [value] | "
                          "get <model> [selector] [property] | "
+                         "hover <target> [leave] | "
+                         "tooltip <target> [hide|text...] | "
+                         "actions [text-filter] | "
+                         "contextMenu <target> [x y] | "
+                         "rightClick <target> [x y] | "
                          "hitTest <target> [x y] | "
+                         "rightClick <target> [x y] | "
                          "clickAt <x> <y> | clickAt <target> <x> <y> | "
                          "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
-                         "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
+                         "slice <add|remove|select|tx|diversity|centerlock|txant|rxant|rxsource|fixture|clearfixture> [args] | "
                          "dss <snapshot|reset|live> [pan] [args] | "
                          "dss inject [pan] <count> <firstPeakBin> <stepBin> "
                          "[native|kiwi [rowLowMhz rowHighMhz]] | "
                          "dss scrollback [pan] <offsetRows> | "
                          "pan <create|add|center|close|remove> [value] | "
                          "layout <rearrange <id>|get> | scale [pct] | "
+                         "tune <mhz> | shortcut <action-id> | "
                          "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
@@ -188,7 +247,7 @@ def main():
         elif args.command == "get":
             if not args.rest:
                 sys.exit("error: get needs <model> [selector] [property] "
-                         "(model = radio|slice|slices|pan|pans)")
+                         "(model = radio|slice|slices|pan|pans|flags)")
             req = {"cmd": "get", "model": args.rest[0]}
             if len(args.rest) > 1:
                 req["selector"] = args.rest[1]
@@ -204,18 +263,19 @@ def main():
                 req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
+        elif args.command == "rightClick":
+            if not args.rest:
+                sys.exit("error: rightClick needs <target> [x y]")
+            req = {"cmd": "rightClick", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
         elif args.command == "clickAt":
             # clickAt <x> <y>            -> global screen coords (dumpTree geometry)
             # clickAt <target> <x> <y>  -> coords local to <target>
-            # Disambiguate like the server: first token numeric => global form.
-            # int() (not isdigit) so a float like 1420.5 errors loudly instead
-            # of being reclassified as a widget NAME ("widget not found: 1420.5").
-            def _as_int(tok):
-                try:
-                    return int(tok)
-                except ValueError:
-                    return None
-
+            # Disambiguate like the server: first token numeric => global form
+            # (module-level _as_int: strict int, floats error loudly).
             if len(args.rest) >= 2 and _as_int(args.rest[0]) is not None:
                 if _as_int(args.rest[1]) is None:
                     sys.exit(f"error: clickAt y must be an integer, got {args.rest[1]!r}")
@@ -236,6 +296,43 @@ def main():
                 req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
+        elif args.command == "tune":
+            if not args.rest:
+                sys.exit("error: tune needs a frequency in MHz")
+            print(json.dumps(bridge.request({"cmd": "tune", "value": args.rest[0]}), indent=2))
+
+        elif args.command == "shortcut":
+            if not args.rest:
+                sys.exit("error: shortcut needs an action id")
+            print(json.dumps(bridge.request({"cmd": "shortcut", "target": args.rest[0]}), indent=2))
+
+        elif args.command == "actions":
+            tree = bridge.request({"cmd": "dumpTree"})
+            pattern = " ".join(args.rest) if args.rest else None
+            actions = collect_actions(tree, pattern)
+            print(json.dumps({"ok": True, "count": len(actions), "actions": actions}, indent=2))
+
+        elif args.command == "contextMenu":
+            if not args.rest:
+                sys.exit("error: contextMenu needs <target> [x y]")
+            req = {"cmd": "contextMenu", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "rightClick":
+            if not args.rest:
+                sys.exit("error: rightClick needs <target> [x y]")
+            if len(args.rest) not in (1, 3):
+                sys.exit("error: rightClick needs <target> or <target> <x> <y>")
+            if len(args.rest) == 3:
+                if _as_int(args.rest[1]) is None or _as_int(args.rest[2]) is None:
+                    sys.exit("error: rightClick x and y must be integers")
+            req = {"cmd": "rightClick", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
         elif args.command == "layout":
             if not args.rest:
                 sys.exit("error: layout needs <rearrange <id> | get>")
@@ -248,6 +345,26 @@ def main():
             req = {"cmd": "scale"}
             if args.rest:
                 req["value"] = args.rest[0]
+
+        elif args.command == "hover":
+            if not args.rest:
+                sys.exit("error: hover needs <target> [leave]")
+            req = {"cmd": "hover", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["action"] = args.rest[1]
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "tooltip":
+            if not args.rest:
+                sys.exit("error: tooltip needs <target> [hide|text...]")
+            req = {"cmd": "tooltip", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                if args.rest[1] == "hide":
+                    if len(args.rest) != 2:
+                        sys.exit("error: tooltip hide takes no extra arguments")
+                    req["action"] = "hide"
+                else:
+                    req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
         elif args.command == "resize":

@@ -1161,6 +1161,12 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
+                connect(pan, &PanadapterModel::infoChanged,
+                        this, [this, panId = pan->panId()](double, double) {
+                    if (!profileLoadRadioStateWritesHeld()) {
+                        recenterCenterLockForPan(panId);
+                    }
+                });
                 connect(pan, &PanadapterModel::levelChanged,
                         sw, [sw](float minDbm, float maxDbm) {
                     if (sw->isDraggingDbmScale()) {
@@ -1187,6 +1193,11 @@ void MainWindow::wirePanLifecycle()
                 // position. (#3034)
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
+            for (SliceModel* slice : m_radioModel.slices()) {
+                if (slice && slice->panId() == pan->panId()) {
+                    reattachSliceVisualsToPanadapter(slice);
+                }
+            }
             return;
         }
 
@@ -1212,6 +1223,12 @@ void MainWindow::wirePanLifecycle()
         }
         connect(pan, &PanadapterModel::infoChanged,
                 applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
+        connect(pan, &PanadapterModel::infoChanged,
+                this, [this, panId = pan->panId()](double, double) {
+            if (!profileLoadRadioStateWritesHeld()) {
+                recenterCenterLockForPan(panId);
+            }
+        });
         // NOTE: levelChanged → setDbmRange is wired in wirePanadapter() above;
         // don't connect it here again or setDbmRange fires twice per level change.
         connect(pan, &PanadapterModel::rfGainInfoChanged,
@@ -1231,6 +1248,11 @@ void MainWindow::wirePanLifecycle()
         requestPanDimensionsForRadio(pan->panId(), sw, true);
 
         qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice && slice->panId() == pan->panId()) {
+                reattachSliceVisualsToPanadapter(slice);
+            }
+        }
 
         // Debounced layout restore: after all pans are added on connect,
         // rearrange to the saved layout (e.g. 2h instead of default vertical).
@@ -1300,6 +1322,11 @@ void MainWindow::wirePanLifecycle()
             return;
         }
         wirePanReconcilers(applet, pan);
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice && slice->panId() == pan->panId()) {
+                reattachSliceVisualsToPanadapter(slice);
+            }
+        }
     });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,
@@ -1353,6 +1380,7 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
         clearKiwiSdrPanDisplaySourceOverride(panId);
+        clearCenterLockForPan(panId);
         if (m_shuttingDown || !m_panStack) {
             return;
         }

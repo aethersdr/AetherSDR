@@ -71,11 +71,14 @@ class QsoRecorder;
 //                                     QTreeWidget / QListWidget) so the dialog's
 //                                     row-scoped buttons (Tune/Edit/Remove/Disable)
 //                                     become drivable; echoes selectedRow[Text].
+//   shortcut <id>                  -> invoke a registered ShortcutManager action
+//                                     by id, without requiring a physical key binding.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
 //                                     pan <panId|active> | pans |
-//                                     kiwi. With a trailing property name,
+//                                     flags [sliceId|all] | kiwi.
+//                                     With a trailing property name,
 //                                     returns just that field.
 //                                     Assert on state without screenshots.
 //                                     `dsp` is the client-side AetherDSP state:
@@ -157,6 +160,10 @@ class QsoRecorder;
 //                                     contextMenuEvent) via a synthesized
 //                                     QContextMenuEvent; deferred, then dumpTree
 //                                     to read it and invoke to drive it.
+//   rightClick <target> [x y]      -> synthesize a real right-button press for
+//                                     widgets whose context menus live in
+//                                     mousePressEvent (SpectrumWidget);
+//                                     deferred, then dumpTree/invoke.
 //   hitTest <target> [x y]         -> report Qt's widgetAt()/childAt() owner for
 //                                     a target-local point. Read-only proof for
 //                                     transparent overlays and input masks.
@@ -241,6 +248,14 @@ public:
     {
         m_sliceReceiveSourceHandler = std::move(handler);
     }
+    void setSliceCenterLockHandler(std::function<QJsonObject(int, bool)> handler)
+    {
+        m_sliceCenterLockHandler = std::move(handler);
+    }
+    void setTuneHandler(std::function<QJsonObject(double)> handler)
+    {
+        m_tuneHandler = std::move(handler);
+    }
     void setReceiveSyncSnapshotHandler(std::function<QJsonObject()> handler)
     {
         m_receiveSyncSnapshotHandler = std::move(handler);
@@ -248,6 +263,12 @@ public:
     void setKiwiSdrSnapshotHandler(std::function<QJsonObject()> handler)
     {
         m_kiwiSdrSnapshotHandler = std::move(handler);
+    }
+    // Status-bar TX-timer state provider (the `txtimer` verb). Supplied by
+    // MainWindow, which reads it off the TitleBar widget on the GUI thread.
+    void setTxTimerSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_txTimerSnapshotHandler = std::move(handler);
     }
 
 private slots:
@@ -300,6 +321,11 @@ private:
     // QEvent::Leave so the fade-after-exit timer can be observed. Unlike drag,
     // no button is pressed, matching a real hover.
     QJsonObject doHover(const QString& target, const QString& action) const;
+    // tooltip <target> [hide]: force-show the target widget's native Qt tooltip
+    // so a driver can grab the resulting QTipLabel under automation.
+    QJsonObject doTooltip(const QString& target,
+                          const QString& action,
+                          const QString& value) const;
     // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
     // ancestor so the target widget sits in its viewport. Widgets parked below
     // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)
@@ -318,6 +344,18 @@ private:
     // handler pops a QMenu that runs its own event loop. The popped menu is read
     // via dumpTree and driven via invoke, no extra inspection code needed. (#3858)
     QJsonObject doContextMenu(const QString& target, const QString& value) const;
+    // rightClick <target> [x y]: synthesize a real right-button mouse press for
+    // widgets that build context menus directly in mousePressEvent rather than
+    // via Qt's context-menu policy. Posted for the same native-popup safety as
+    // doContextMenu. (#3646 fidelity)
+    QJsonObject doRightClick(const QString& target, const QString& value) const;
+    // Shared scaffolding for doContextMenu/doRightClick: resolve + visibility,
+    // optional "<x> <y>" offset, then post a deferred synthetic event onto the
+    // GUI loop with the owning window raised. `send` builds/dispatches the
+    // concrete event given (widget, local, global). (#4137 review — dedup)
+    QJsonObject postDeferredMenuTrigger(
+        const QString& target, const QString& value, const char* verb,
+        std::function<void(QWidget*, QPoint, QPoint)> send) const;
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;
@@ -402,7 +440,8 @@ private:
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
 
-    // Slice lifecycle (add/remove/select/tx) and VFO tuning — RX/config, no keying.
+    // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
+    // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
     QJsonObject doTune(const QString& value);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
@@ -481,8 +520,11 @@ private:
     }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
+    std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
+    std::function<QJsonObject(double)> m_tuneHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
+    std::function<QJsonObject()> m_txTimerSnapshotHandler;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on

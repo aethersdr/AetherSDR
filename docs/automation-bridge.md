@@ -136,6 +136,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
+| | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
 | | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`clickAt [<target>] <x> <y>`](#clickat) | Click at a global (or target-local) point — fallback when name matching is ambiguous (TX-guarded). |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
@@ -147,6 +148,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
+| | [`get flags`](#get) | VFO flag attachment state for slice-to-pan assertions. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
@@ -154,10 +156,11 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
+| | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
-| | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/diversity/centerlock/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -208,6 +211,7 @@ Each `<node>`:
   "toolTip": "Clear the displayed SWR sweep trace.",  // present only if set
   "enabled": true,
   "visible": true,
+  "cursor": "pointinghand",                // present only if the widget owns a cursor (WA_SetCursor); shape name — see below
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "windowState": "maximized",              // top-level windows only: normal|maximized|minimized|fullscreen
   "value": "42",                           // best-effort; see below
@@ -286,6 +290,14 @@ present.
   switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
   (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
   screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
+- `cursor` — the widget's mouse-cursor **shape name**, reported only when the
+  widget explicitly owns a cursor (`WA_SetCursor`); inheriting widgets omit it.
+  Lets a driver assert **hover affordance** — a clickable control carries
+  `pointinghand`, a text field `ibeam` — without observing the live OS cursor,
+  which no `grab`/screenshot captures. Shape names: `arrow`, `pointinghand`,
+  `ibeam`, `splith`, `splitv`, `sizehor`, `sizever`, `openhand`, `forbidden`,
+  `wait`, `busy`, `cross`, `blank`, … (`other` for anything unmapped). Used to
+  prove every interactive slice-flag field now signals clickability (#4036).
 
 ### `grab`
 PNG capture of a single widget.
@@ -421,6 +433,21 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
 
+### `shortcut`
+Invoke a registered `ShortcutManager` action by id. This exercises the same
+handler a user-bound key would call, without requiring the test profile to bind
+an actual key sequence. It is useful for controller-style actions that may ship
+without a default keyboard shortcut.
+
+```json
+→ {"cmd":"shortcut","target":"center_lock_toggle"}
+← {"ok":true,"shortcut":"center_lock_toggle","fired":true}
+```
+
+Handlers may no-op when their normal app-side preconditions are not met; assert
+effects with `get`/`dumpTree` after firing, the same way a MIDI/controller
+test should.
+
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
 model (present once the app is running; fields are empty until a radio
@@ -448,6 +475,7 @@ connects).
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
+| `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `tracedebug` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter Flex/Kiwi FFT and 3D trace diagnostics — see [`get tracedebug`](#get-tracedebug) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
@@ -722,9 +750,10 @@ recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
 ### `slice`
-Slice lifecycle, TX assignment, antennas, and receive source. All actions are
-RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
-(radio-authoritative); re-poll `get slices`.
+Slice lifecycle, diversity, Center Lock, TX assignment, antennas, and receive
+source. All actions are RX/config — none keys the transmitter.
+`add`/`remove`/`tx`/`diversity` are async (radio-authoritative); re-poll
+`get slices`.
 
 ```json
 → {"cmd":"slice","action":"add","value":"14.074"}
@@ -740,8 +769,12 @@ RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
+| `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
+| `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
+| `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
+| `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -809,6 +842,24 @@ one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
 resolves to the first-created one; hover a single meter per instance for an
 unambiguous grab.
 
+### `tooltip`
+Force-show a widget's native Qt tooltip, using the widget's current
+`toolTip()` text unless an override string is supplied. This is for screenshots
+and assertions where injected hover should prove the target state but the
+platform does not run Qt's built-in tooltip timer under automation.
+
+```text
+→ {"cmd":"tooltip","target":"E"}
+← {"ok":true,"target":"E","class":"QToolButton",
+   "text":"Slice E (global slot 5)","grabHint":"QTipLabel", ...}
+→ tooltip E Screenshot override text
+← {"ok":true,"target":"E","text":"Screenshot override text", ...}
+→ {"cmd":"grab","target":"QTipLabel","path":"/tmp/slice-tooltip.png"}
+← {"ok":true,"class":"QTipLabel","path":"/tmp/slice-tooltip.png", ...}
+```
+
+Use `{"cmd":"tooltip","target":"E","action":"hide"}` to dismiss it.
+
 ### `scrollTo` (alias `ensureVisible`)
 Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the
 viewport. Widgets parked below the fold of a scroll area receive **no paint
@@ -865,6 +916,27 @@ handler pops a `QMenu` that runs its own event loop). Returns `deferred:true`;
 → {"cmd":"contextMenu","target":"SMeterWidget","value":"40 12"}
 ← {"ok":true,"target":"SMeterWidget","class":"SMeterWidget","x":40,"y":12,"deferred":true}
 ```
+
+### `rightClick`
+Trigger a widget path that handles right-clicks directly in `mousePressEvent`,
+rather than through Qt's `contextMenuEvent`/`customContextMenuRequested` policy.
+The panadapter's `SpectrumWidget` menu is the main use case: it is position
+sensitive and built from a real right-button press, so [`contextMenu`](#contextmenu)
+cannot reach it.
+
+```json
+→ {"cmd":"rightClick","target":"Panadapter spectrum display"}
+← {"ok":true,"target":"Panadapter spectrum display","class":"SpectrumWidget",
+   "x":939,"y":735,"deferred":true}
+
+→ {"cmd":"rightClick","target":"Panadapter spectrum display","value":"940 730"}
+← {"ok":true,"target":"Panadapter spectrum display","class":"SpectrumWidget",
+   "x":940,"y":730,"deferred":true}
+```
+
+The verb posts a right-button `MouseButtonPress` onto the GUI event loop with the
+owning window raised, then returns immediately. Follow with `dumpTree` to inspect
+the visible `QMenu`, and `invoke <menu item text> trigger` to choose an action.
 
 Section-title rows (a disabled `QWidgetAction` + `QLabel`, the app's idiom for
 menu headers since `QMenu::addSection` text doesn't render under the app styling)
@@ -1342,6 +1414,32 @@ Semantics to assert against: a channel with holders and `streamId=0x0` +
 is inside the 1.5 s removal grace window (it disappears once the removal
 lands); a channel entry that persists with holders across a consumer teardown
 proves the co-hold path.
+
+### `get txtimer`
+Read the status-bar transmit timer's state. The timer sits just left of the
+**PC Audio** button and runs **only** for operator-driven phone/data transmits
+— MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
+TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
+QSK toggles the interlock per element, which would thrash a wall-clock timer).
+All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
+hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
+fades out.
+
+```json
+→ {"cmd":"get","model":"txtimer"}
+← {"ok":true,"model":"txtimer","visible":true,"running":true,"holding":false,
+   "fading":false,"elapsedMs":4210,"text":"0:04","opacity":1.0}
+```
+
+Fields: `visible` (label shown at all), `running` (keyed, counting up),
+`holding` (the 15 s post-unkey hold is armed), `fading` (fade-out animation in
+flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
+(1.0 while shown/holding, ramps to 0 during fade). A trailing property narrows
+it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
+dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
+`running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
+`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
+throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server

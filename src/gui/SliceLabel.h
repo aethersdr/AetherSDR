@@ -19,7 +19,7 @@ namespace AetherSDR::SliceLabel {
 //                  slice id as a subscript so slot awareness survives the
 //                  SmartSDR-style per-client lettering.  See #2606.
 //
-// All three helpers below consult this setting on every call so the
+// All helpers below consult this setting on every call so the
 // runtime view follows the user flipping it without restart.
 
 enum class Mode {
@@ -36,6 +36,11 @@ Mode currentMode();
 // user's per-client letter and badge colour stay paired regardless of
 // which physical slot the radio assigned.  See #2606.
 int displayColorIndex(int globalSliceId, const QString& radioLetter);
+
+// Render the mode-aware display letter without HTML or Unicode subscript.
+// Use this for prose/tooltips that should name the same slice letter the
+// visible badge is using.
+QString plainText(int globalSliceId, const QString& radioLetter = QString());
 
 // Render the slice label as HTML rich text.  Caller must
 // `setTextFormat(Qt::RichText)` on the target QLabel.

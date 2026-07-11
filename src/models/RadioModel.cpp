@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -822,10 +823,23 @@ RadioModel::RadioModel(QObject* parent)
             restoreTuneInhibit();
     });
 
+    // Drive the status-bar operator TX timer from actual transmit-state edges
+    // (optimistic MOX/PTT plus interlock-driven VOX/footswitch/CW). The source
+    // gate inside updateOperatorTransmit() keeps TCI/DAX transmits out.
+    connect(&m_transmitModel, &TransmitModel::transmittingChanged, this,
+            [this](bool) { updateOperatorTransmit(); });
+    // Also recompute when the TX-slice mode changes (phone↔CW) or first resolves
+    // after connect: updateOperatorTransmit() gates on modeIsCw, which a
+    // transmittingChanged edge alone can't catch mid-over. Idempotent — the
+    // extra trigger only emits operatorTransmitChanged on a real edge. (#4131)
+    connect(&m_transmitModel, &TransmitModel::txSliceModeChanged, this,
+            [this](const QString&) { updateOperatorTransmit(); });
+
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
+            clearAutomationSliceFixtures();
             QMetaObject::invokeMethod(m_connection, [this] {
                 m_connection->connectToRadio(m_lastInfo);
             });
@@ -905,6 +919,183 @@ QString RadioModel::foreignSliceOwnerStation(int sliceId) const
     auto it = m_foreignSliceOwners.constFind(sliceId);
     if (it == m_foreignSliceOwners.constEnd()) return {};
     return m_clientStations.value(it.value(), {});
+}
+
+void RadioModel::clearAutomationSliceFixtures()
+{
+    const QSet<int> fixtures = m_automationSliceFixtures;
+    for (int sliceId : fixtures) {
+        handleSliceStatus(sliceId, QMap<QString, QString>{}, true);
+        m_ownedSliceIds.remove(sliceId);
+        m_foreignSliceOwners.remove(sliceId);
+    }
+    m_automationSliceFixtures.clear();
+    restoreAutomationSliceFixtureBaseline();
+}
+
+void RadioModel::restoreAutomationSliceFixtureBaseline()
+{
+    if (!m_automationSliceFixtureBaselineActive
+        || !m_automationSliceFixtures.isEmpty()) {
+        return;
+    }
+
+    bool changed = false;
+    if (m_model != m_automationSliceFixtureBaselineModel) {
+        m_model = m_automationSliceFixtureBaselineModel;
+        changed = true;
+    }
+    if (m_maxSlices != m_automationSliceFixtureBaselineMaxSlices) {
+        m_maxSlices = m_automationSliceFixtureBaselineMaxSlices;
+        changed = true;
+    }
+
+    m_automationSliceFixtureBaselineActive = false;
+    m_automationSliceFixtureBaselineModel.clear();
+    m_automationSliceFixtureBaselineMaxSlices = 4;
+
+    if (changed) {
+        emit infoChanged();
+    }
+}
+
+bool RadioModel::automationApplySliceFixture(int sliceId,
+                                             const QString& radioLetter,
+                                             QString* error)
+{
+    auto fail = [error](const QString& message) {
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (isConnected()) {
+        return fail(QStringLiteral("slice fixture is only available while disconnected"));
+    }
+    if (sliceId < 0 || sliceId >= 8) {
+        return fail(QStringLiteral("slice fixture id must be 0..7"));
+    }
+
+    const QString trimmedLetter = radioLetter.trimmed();
+    if (trimmedLetter.size() > 1) {
+        return fail(QStringLiteral("slice fixture letter must be a single A..H letter"));
+    }
+
+    QString letter = trimmedLetter.toUpper();
+    if (letter.isEmpty()) {
+        letter = QString(QChar(static_cast<ushort>('A' + sliceId)));
+    }
+    const ushort letterCode = letter.at(0).unicode();
+    if (letterCode < 'A' || letterCode > 'H') {
+        return fail(QStringLiteral("slice fixture letter must be A..H"));
+    }
+
+    // Refuse to hijack a real slice (#4122 review). m_slices deliberately
+    // survives an unexpected disconnect so the session can be reclaimed on
+    // reconnect — a fixture applied over that id would decode fixture kvs
+    // into the user's real SliceModel (visibly retuning it) and the eventual
+    // fixture clear would DESTROY it, breaking reconnect continuity. Same for
+    // a staged stale slice, which the create path would silently reclaim.
+    if (!m_automationSliceFixtures.contains(sliceId)
+        && (slice(sliceId) || m_staleSlices.contains(sliceId))) {
+        return fail(QStringLiteral(
+            "slice %1 already exists from the previous session — "
+            "fixtures may not overwrite reclaimable slices").arg(sliceId));
+    }
+
+    if (!m_automationSliceFixtureBaselineActive) {
+        m_automationSliceFixtureBaselineModel = m_model;
+        m_automationSliceFixtureBaselineMaxSlices = m_maxSlices;
+        m_automationSliceFixtureBaselineActive = true;
+    }
+
+    bool infoChangedNeeded = false;
+    if (m_model.isEmpty() || maxSlicesForModel(m_model) <= sliceId) {
+        m_model = QStringLiteral("FLEX-6700");
+        infoChangedNeeded = true;
+    }
+    const int modelMaxSlices = maxSlicesForModel(m_model);
+    if (m_maxSlices < modelMaxSlices) {
+        m_maxSlices = modelMaxSlices;
+        infoChangedNeeded = true;
+    }
+    if (m_maxSlices <= sliceId) {
+        return fail(QStringLiteral("model %1 supports only %2 slices")
+                        .arg(m_model)
+                        .arg(m_maxSlices));
+    }
+    if (infoChangedNeeded) {
+        emit infoChanged();
+    }
+
+    QMap<QString, QString> kvs;
+    kvs.insert(QStringLiteral("in_use"), QStringLiteral("1"));
+    kvs.insert(QStringLiteral("pan"), QStringLiteral("0x40000000"));
+    kvs.insert(QStringLiteral("index_letter"), letter);
+    kvs.insert(QStringLiteral("RF_frequency"), QStringLiteral("14.225000"));
+    kvs.insert(QStringLiteral("mode"), QStringLiteral("USB"));
+    kvs.insert(QStringLiteral("filter_lo"), QStringLiteral("100"));
+    kvs.insert(QStringLiteral("filter_hi"), QStringLiteral("2700"));
+    kvs.insert(QStringLiteral("active"), QStringLiteral("1"));
+    kvs.insert(QStringLiteral("tx"), QStringLiteral("0"));
+    kvs.insert(QStringLiteral("audio_level"), QStringLiteral("50"));
+    kvs.insert(QStringLiteral("audio_pan"), QStringLiteral("50"));
+    kvs.insert(QStringLiteral("audio_mute"), QStringLiteral("0"));
+    kvs.insert(QStringLiteral("rxant"), QStringLiteral("ANT1"));
+    kvs.insert(QStringLiteral("txant"), QStringLiteral("ANT1"));
+    kvs.insert(QStringLiteral("rxant_list"), QStringLiteral("ANT1,ANT2"));
+    kvs.insert(QStringLiteral("txant_list"), QStringLiteral("ANT1,ANT2"));
+
+    m_ownedSliceIds.insert(sliceId);
+    m_foreignSliceOwners.remove(sliceId);
+    handleSliceStatus(sliceId, kvs, false);
+    if (!slice(sliceId)) {
+        m_ownedSliceIds.remove(sliceId);
+        restoreAutomationSliceFixtureBaseline();  // self-guards on live fixtures
+        return fail(QStringLiteral("slice fixture did not create slice %1").arg(sliceId));
+    }
+    m_automationSliceFixtures.insert(sliceId);
+
+    // Deactivate sibling fixtures only after the new one verifiably exists —
+    // deactivating first would leave no active slice if creation failed
+    // (#4122 review). Mirrors the radio's single-active semantics.
+    for (int existingId : std::as_const(m_automationSliceFixtures)) {
+        if (existingId == sliceId) {
+            continue;
+        }
+        handleSliceStatus(existingId,
+                          {{QStringLiteral("active"), QStringLiteral("0")}},
+                          false);
+    }
+    return true;
+}
+
+bool RadioModel::automationRemoveSliceFixture(int sliceId, QString* error)
+{
+    auto fail = [error](const QString& message) {
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+
+    if (isConnected()) {
+        return fail(QStringLiteral("slice fixture is only available while disconnected"));
+    }
+    if (sliceId < 0 || sliceId >= 8) {
+        return fail(QStringLiteral("slice fixture id must be 0..7"));
+    }
+    if (!m_automationSliceFixtures.contains(sliceId)) {
+        return fail(QStringLiteral("no slice fixture with id %1").arg(sliceId));
+    }
+
+    handleSliceStatus(sliceId, QMap<QString, QString>{}, true);
+    m_ownedSliceIds.remove(sliceId);
+    m_foreignSliceOwners.remove(sliceId);
+    m_automationSliceFixtures.remove(sliceId);
+    restoreAutomationSliceFixtureBaseline();
+    return true;
 }
 
 int RadioModel::activeTxSliceNum() const
@@ -1392,6 +1583,8 @@ void RadioModel::emitInterlockNotification(const QString& message,
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    clearAutomationSliceFixtures();
+
     m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
     m_intentionalDisconnect = false;
@@ -1422,6 +1615,8 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     qCDebug(lcProtocol) << "RadioModel: connectViaWan publicIp=" << publicIp
              << "udpPort=" << udpPort
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
+
+    clearAutomationSliceFixtures();
 
     // Disconnect any stale signal connections from a previous WAN session
     if (m_wanConn)
@@ -1725,6 +1920,9 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
             return;
         }
         armInterlockNotification(source);
+        // Record who initiated this key-up so the status-bar TX timer can tell
+        // an operator MOX/PTT from a TCI-hardware or DAX transmit (#tx-timer).
+        m_transmitModel.noteActivePttSource(source);
     }
 
     // Track local intent so we can keep TX gating aligned with user/PTT edges
@@ -1741,6 +1939,45 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     }
 
     sendCmd(QString("xmit %1").arg(tx ? 1 : 0));
+}
+
+void RadioModel::updateOperatorTransmit()
+{
+    // On a full unkey, forget the remembered PTT source. A subsequent
+    // hardware-mic PTT, footswitch, or VOX key never flows through a
+    // source-bearing entry point (the radio just starts transmitting), so
+    // without this reset it would inherit a stale TCI/DAX tag and be wrongly
+    // excluded from the operator TX timer.
+    if (!m_transmitModel.isTransmitting()
+        && m_transmitModel.activePttSource() != TransmitModel::PttSource::Mox) {
+        m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Mox);
+    }
+
+    // TransmitModel::isTransmitting() already tracks only owned mic/manual TX —
+    // the interlock handler forces it false for DAX and other-client TX. The
+    // only owned path we must additionally exclude is TCI-hardware PTT, which
+    // the radio reports as source=SW and so is indistinguishable at the
+    // interlock level; the remembered source disambiguates it. m_daxTxActive is
+    // a belt-and-suspenders guard for the optimistic DAX key edge.
+    const TransmitModel::PttSource src = m_transmitModel.activePttSource();
+    // CW (incl. any CWU/CWL variant) is excluded — see operatorTransmitActive.
+    // Prefer the TX slice's live mode; fall back to the mode the radio echoes in
+    // its transmit status when there is no resolvable TX slice.
+    const SliceModel* ts = txSlice();
+    const QString txMode = (ts ? ts->mode() : m_transmitModel.txSliceMode())
+                               .trimmed().toUpper();
+    const bool modeIsCw = txMode.startsWith(QStringLiteral("CW"));
+    const bool op = RadioStatusOwnership::operatorTransmitActive(
+        m_transmitModel.isTransmitting(),
+        m_daxTxActive,
+        src == TransmitModel::PttSource::TciHardware,
+        src == TransmitModel::PttSource::Dax,
+        modeIsCw);
+
+    if (op == m_operatorTransmitting)
+        return;
+    m_operatorTransmitting = op;
+    emit operatorTransmitChanged(op);
 }
 
 void RadioModel::setDigitalVoiceTxSlice(int sliceId)
@@ -2353,6 +2590,12 @@ void RadioModel::onConnected()
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
     m_duplicateClientIdEvictionInProgress = false;
+    // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
+    // but isConnected() stays false for the whole Connecting phase, so a
+    // fixture applied while the handshake was in flight (seconds on WAN)
+    // would otherwise be staged below and "reclaimed" by the real status
+    // replay — with the fixture set staying poisoned for the session.
+    clearAutomationSliceFixtures();
     stageSessionModelsForReconnect();
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
@@ -4628,6 +4871,8 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             && daxTxStatusCanUpdateLocalState(stream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
             m_daxTxStreamId = stream.streamId;
             m_daxTxActive = state.tx;
+            updateOperatorTransmit();  // DAX TX toggled — refresh the operator
+                                       // TX-timer gate promptly (#4131 review)
             m_daxTxClientHandle = state.clientHandle;
             if (ownedByUs)
                 m_daxTxCreatePending = false;
@@ -4703,6 +4948,7 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
     if (daxTxStatusCanUpdateLocalState(txAudioStream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
         m_daxTxStreamId = txAudioStream.streamId;
         m_daxTxActive = state.tx;
+        updateOperatorTransmit();  // DAX TX toggled (#4131 review)
         m_daxTxClientHandle = state.clientHandle;
         if (ownedByUs)
             m_daxTxCreatePending = false;

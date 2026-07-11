@@ -157,6 +157,16 @@ public:
         Dax          = 4,   // external digital-audio PTT path
     };
 
+    // Source of the most recently *initiated* key-up. Set by the keying entry
+    // points (requestPttOn / RadioModel::setTransmit) so downstream consumers
+    // can tell an operator-driven MOX/PTT/VOX transmit from a TCI-hardware or
+    // DAX-triggered one — the radio interlock reports both local software paths
+    // as source=SW, so the distinction has to be captured here at the funnel.
+    // Resets to Mox on full unkey so a subsequent hardware/VOX key (which never
+    // flows through a source-bearing entry point) is treated as operator TX.
+    PttSource activePttSource() const { return m_activePttSource; }
+    void      noteActivePttSource(PttSource source) { m_activePttSource = source; }
+
     // ── Command methods (emit commandReady) ─────────────────────────────────
     void setRfPower(int power);
     void setTunePower(int power);
@@ -310,6 +320,9 @@ private:
     bool    m_daxOn{false};
     bool    m_sbMonitor{false};
     int     m_monGainSb{50};
+
+    // Source of the currently-/last-initiated key-up (see activePttSource()).
+    PttSource m_activePttSource{PttSource::Mox};
 
     // VOX / phone state
     bool m_voxEnable{false};

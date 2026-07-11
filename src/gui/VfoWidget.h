@@ -279,6 +279,16 @@ public:
     // to screen readers. (#3754)
     QString accessibleSummary() const;
 
+    // Reparent the flag's satellite widgets (close/lock/record/play buttons +
+    // collapsed freq label — deliberately siblings of the flag, parented to
+    // the SpectrumWidget so they can render outside the flag's bounds) onto a
+    // new spectrum. Required when the flag itself is moved between pans via
+    // SpectrumWidget::takeVfoWidget/adoptVfoWidget: without this the
+    // satellites stay behind on the old pan — ghost buttons at stale
+    // coordinates whose clicks still act on the migrated slice, deleted
+    // entirely when the old pan is torn down (#4037 review).
+    void reparentFlagSatellites(QWidget* newParent);
+
     // Which side of the slice marker the flag panel is currently rendered on.
     // Tracked by updatePosition() via m_lastOnLeft.  Used by panFollowVfo()
     // to extend the pan-follow trigger to the flag's outer edge — single-side
@@ -358,6 +368,10 @@ private:
 
     void buildUI();
     void buildTabContent();
+    // Sweep every interactive flag control and give it Qt::PointingHandCursor so
+    // hovering signals clickability.  Re-run after rebuildFilterButtons() so the
+    // dynamically recreated filter/autotune/adaptive buttons are covered (#4036).
+    void applyInteractiveCursors();
     // Meter view (standard S-Meter vs SmartMTR component).  Driven globally by
     // MeterViewController; m_meterStack switches pages and meterBarRect() locates
     // the painted bar.  The inline selector row (m_meterMenuRow) is revealed by

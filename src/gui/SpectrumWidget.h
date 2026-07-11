@@ -94,6 +94,9 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_PROPERTY(double noiseFloorDbm READ noiseFloorDbm)
     Q_PROPERTY(double displayFloorDbm READ displayFloorDbm)
     Q_PROPERTY(int panIndex READ panIndex)
+    Q_PROPERTY(double centerMhz READ centerMhz)
+    Q_PROPERTY(double bandwidthMhz READ bandwidthMhz)
+    Q_PROPERTY(int centerLockSliceId READ centerLockSliceId)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -110,6 +113,9 @@ public:
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
+    // Same range update, but snaps instead of using the small pan-follow
+    // animation. Center Lock uses this so the locked slice stays pinned.
+    void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
@@ -287,6 +293,8 @@ public:
     VfoWidget* vfoWidget() const { return m_vfoWidget; }  // active slice (compat)
     VfoWidget* vfoWidget(int sliceId) const;
     VfoWidget* addVfoWidget(int sliceId);
+    VfoWidget* takeVfoWidget(int sliceId);
+    void       adoptVfoWidget(int sliceId, VfoWidget* widget);
     void       removeVfoWidget(int sliceId);
     void       setActiveVfoWidget(int sliceId);
     bool vfoFlagOnLeftForSlice(int sliceId, double freqMhz,
@@ -364,6 +372,8 @@ public:
     bool showTuneGuides() const { return m_showTuneGuides; }
     void setExtendedFrequencyLine(bool on);
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
+    void setExtendedPassband(bool on);
+    bool extendedPassband() const { return m_extendedPassband; }
     void setFloating(bool on) { m_isFloating = on; }
     void setBackgroundImage(const QString& path);
     QString backgroundImagePath() const { return m_bgImagePath; }
@@ -506,6 +516,8 @@ public:
     void setSliceOverlayAdaptive(int sliceId, bool enabled);
     // Status of the adaptive fit (green/red ball after the high-cut label)
     void setSliceOverlayAdaptiveActive(int sliceId, bool active);
+    void setCenterLockSliceId(int sliceId);
+    int centerLockSliceId() const { return m_centerLockSliceId; }
     // Remove a slice overlay.
     void removeSliceOverlay(int sliceId);
 
@@ -668,6 +680,7 @@ signals:
     void sliceTuneRequested(int sliceId, double freqMhz);
     void popOutRequested(bool popOut);  // true=float, false=dock
     void sliceTxRequested(int sliceId);
+    void centerLockRequested(int sliceId, bool locked);
     // Emitted when FFT bin-mapping dimensions change so MainWindow can re-push
     // xpixels/ypixels to the radio (#1511).
     void dimensionsChanged(int w, int h);
@@ -706,6 +719,8 @@ public:
     static void toggleStarstruckMode();
 
 private:
+    void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
+                                   bool animateSmallNudges);
     double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
@@ -1006,6 +1021,7 @@ private:
 
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
+    int m_centerLockSliceId{-1};
 
     int    m_filterMinHz{-12000};  // per-mode lower bound (active slice)
     int    m_filterMaxHz{12000};   // per-mode upper bound (active slice)
@@ -1328,6 +1344,7 @@ private:
     // Tune guide overlay (vertical line + freq label, auto-hides after 4s)
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
+    bool    m_extendedPassband{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};
     QTimer* m_tuneGuideTimer{nullptr};
