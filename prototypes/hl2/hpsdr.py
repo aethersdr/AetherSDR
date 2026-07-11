@@ -106,9 +106,18 @@ def parse_ep6(pkt: bytes):
     return seq, n, peak, sumsq, sync_ok
 
 
+def ep6_seq(pkt: bytes):
+    """Sequence number of an EP6 packet, or None if it isn't one. Cheap — reads
+    only the header, no per-sample decode (use when you want seq + iq_samples()
+    without paying for parse_ep6's discarded level stats)."""
+    if len(pkt) < 8 or pkt[0] != 0xEF or pkt[1] != 0xFE or pkt[2] != 0x01 or pkt[3] != 0x06:
+        return None
+    return struct.unpack(">I", pkt[4:8])[0]
+
+
 def iq_samples(pkt: bytes):
     """Yield (I, Q) tuples from an EP6 packet — for FFT/spectrum use."""
-    if len(pkt) < 1032:
+    if len(pkt) < 1032 or pkt[0] != 0xEF or pkt[1] != 0xFE or pkt[2] != 0x01 or pkt[3] != 0x06:
         return
     for fstart in (8, 520):
         frame = pkt[fstart:fstart + 512]

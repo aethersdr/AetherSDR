@@ -31,53 +31,24 @@ you're clear.
 import argparse
 import math
 import socket
-import struct
 import sys
 import time
 
-METIS_PORT = 1024
-SYNC = b"\x7f\x7f\x7f"
-FULL_SCALE = 1 << 23  # 24-bit signed full scale (8388608)
+import hpsdr
 
-
-def metis_command(cmd: int) -> bytes:
-    # 0xEF 0xFE 0x04 <cmd> padded to 64 bytes. cmd bit0 = IQ on.
-    return bytes([0xEF, 0xFE, 0x04, cmd]) + bytes(60)
+# One shared wire definition for the whole spike: framing, register map, and
+# parse_ep6 all live in hpsdr.py (Principle I) — don't re-implement them here.
+METIS_PORT = hpsdr.METIS_PORT
+FULL_SCALE = hpsdr.FULL_SCALE
+metis_command = hpsdr.metis_command
+parse_ep6 = hpsdr.parse_ep6
 
 
 def ep2_keepalive(seq: int) -> bytes:
-    # EP2 (host→radio). Two 512-B frames, each: sync + 5 all-zero C&C + 504 zero
-    # TX bytes. All-zero C&C = register 0, defaults (48 kHz, 1 RX, MOX off) — safe
-    # keep-alive; real config/tuning is tune.py's job.
-    frame = SYNC + bytes(5) + bytes(504)
-    return bytes([0xEF, 0xFE, 0x01, 0x02]) + struct.pack(">I", seq) + frame + frame
-
-
-def parse_ep6(pkt: bytes):
-    """Return (seq, n_samples, peak_abs, sumsq, sync_ok) or None if not EP6."""
-    if len(pkt) < 1032 or pkt[0] != 0xEF or pkt[1] != 0xFE or pkt[2] != 0x01 or pkt[3] != 0x06:
-        return None
-    seq = struct.unpack(">I", pkt[4:8])[0]
-    n = 0
-    peak = 0
-    sumsq = 0.0
-    sync_ok = True
-    for fstart in (8, 520):
-        frame = pkt[fstart:fstart + 512]
-        if frame[0:3] != SYNC:
-            sync_ok = False
-            continue
-        payload = frame[8:512]           # 504 bytes = 63 samples
-        for k in range(0, 504, 8):
-            i = int.from_bytes(payload[k:k + 3], "big", signed=True)
-            q = int.from_bytes(payload[k + 3:k + 6], "big", signed=True)
-            # payload[k+6:k+8] = mic/line-in, ignored for RX
-            a = abs(i) if abs(i) > abs(q) else abs(q)
-            if a > peak:
-                peak = a
-            sumsq += float(i) * i + float(q) * q
-            n += 1
-    return seq, n, peak, sumsq, sync_ok
+    # EP2 (host→radio) keep-alive: two frames of all-zero C&C = register 0,
+    # defaults (48 kHz, 1 RX, MOX off) — sustains the stream without configuring
+    # anything. Real config/tuning is tune.py's job.
+    return hpsdr.ep2_packet(seq, bytes(5), bytes(5))
 
 
 def main() -> int:
@@ -122,7 +93,8 @@ def main() -> int:
             seq, n, pk, ss, sync_ok = r
             if expected_seq is not None and seq != expected_seq:
                 gap = (seq - expected_seq) & 0xFFFFFFFF
-                dropped += gap
+                if gap < 0x80000000:       # forward gap = real loss; the reverse
+                    dropped += gap         # half = a reordered/dup packet, not loss
             expected_seq = (seq + 1) & 0xFFFFFFFF
             pkts += 1
             total_samples += n

@@ -28,7 +28,7 @@ proof in-tree.
 
 FlexBackend is the "thin protocol decoder" half: Flex hardware ships cooked audio
 (24 kHz PCM) plus a hardware spectrum, and FlexBackend's job is almost entirely
-`decodeXStatus` translation (`FlexBackend.cpp:198-889`). **HL2 is the other
+`decodeXStatus` translation (FlexBackend's `decode*Status` translators). **HL2 is the other
 half** — it ships nothing but raw IQ, so `Hl2Backend` must own an engine-side RX
 DSP chain (tune → decimate → demodulate → FFT → S-meter) and then emit the same
 normalized `sliceChanged` / `meterUpdate` / spectrum / audio outlets. It is the
@@ -56,7 +56,7 @@ code incorporated. Recorded under Protocol References in `THIRD_PARTY_LICENSES`.
 ## 2. What `Hl2Backend` owns
 
 Mirroring FlexBackend's ownership shape (it owns its wire objects and their
-worker threads, constructed in a load-bearing order — `FlexBackend.cpp:25-94`),
+worker threads, constructed in a load-bearing order — FlexBackend's constructor),
 `Hl2Backend` owns two internal, below-seam objects, each on its own worker
 thread:
 
@@ -105,7 +105,7 @@ where the same field would be a wire command.
 | `setSliceMode(id, mode)` | **Engine DSP** — selects the `Hl2RxDsp` demodulator (AM/SSB/CW/FM/…). HL2 ships raw IQ, so mode is purely engine-side. |
 | `setSliceFilter(id, lo, hi)` | **Engine DSP** — sets the demod passband in `Hl2RxDsp`. |
 | `setKeying(bool)` | **Guarded no-op** — `capabilities().canTransmit == false`, so the engine TX guard (RFC §6) denies keying above the seam; the backend never keys. (TX is Phase 2+.) |
-| `invokeExtension(...)` | Stub, exactly like FlexBackend (`FlexBackend.cpp:185-196`): if `requestId != 0`, emit `extensionError` immediately. HL2 advertises **no** extension namespaces (see §4). |
+| `invokeExtension(...)` | Stub, exactly like FlexBackend (FlexBackend::invokeExtension): if `requestId != 0`, emit `extensionError` immediately. HL2 advertises **no** extension namespaces (see §4). |
 
 ### State UP
 
@@ -122,7 +122,7 @@ Signals HL2 simply never emits in Phase 1 (no such hardware/wire): `transmitChan
 `amplifierChanged`, `tunerChanged`, `gpsChanged`, `memoryChanged`, `profileChanged`,
 `meterDefined` catalog. RadioModel already tolerates a backend that stays silent
 on these — the wiring is per-signal `connect()` with no "all-must-fire" contract
-(`RadioModel.cpp:443-573`).
+(RadioModel's interface-typed backend signal wiring).
 
 ---
 
@@ -146,7 +146,7 @@ caps.extensionNamespaces = {};                    // advertise NONE until step 3
 ```
 
 The empty `extensionNamespaces` follows FlexBackend's deliberate precedent
-(`FlexBackend.cpp:133-137`): advertising a namespace whose `invokeExtension`
+(FlexBackend's capabilities setup): advertising a namespace whose `invokeExtension`
 can't yet reply would hang a client. HL2 keeps it empty until the step-3 encode
 path lands.
 
@@ -160,11 +160,11 @@ This is a feature: HL2 is the forcing function that closes both gaps minimally.
 
 ### Gap A — backend selection (no factory today)
 
-`FlexBackend` is **hard-wired**: `make_unique<FlexBackend>()` literal at
-`RadioModel.cpp:425`, plus a transitional concrete `FlexBackend* m_flexBackend`
-alias (`RadioModel.h:694`) and Flex-specific sink injection / object grabs
-(`setCommandSink`, `connection()`, `panStream()` — `RadioModel.cpp:426-434`).
-The *signal-wiring* half (`:443-573`) is already interface-typed and reusable;
+`FlexBackend` is **hard-wired**: a `make_unique<FlexBackend>()` literal in
+RadioModel's backend construction, plus a transitional concrete `FlexBackend* m_flexBackend`
+alias and Flex-specific sink injection / object grabs
+(`setCommandSink`, `connection()`, `panStream()`) — all in RadioModel.
+The *signal-wiring* half (the interface-typed half) is already interface-typed and reusable;
 the *construction* half is Flex-shaped.
 
 **Proposal (minimal):** introduce a tiny backend-selection seam in RadioModel —
@@ -181,7 +181,7 @@ The interface's `spectrumFrameReady/audioFrameReady` (`QByteArray`) are **declar
 but never emitted** by FlexBackend; the live path is the existing in-tree frame
 types flowing off `PanadapterStream` and reached via `RadioModel::panStream()` —
 `spectrumReady(QVector<float> binsDbm)` / `audioDataReady(QByteArray pcm)` →
-`AudioEngine::feedAudioData` (`PanadapterStream.h:208-217`; `MainWindow.cpp:1049-1053`).
+`AudioEngine::feedAudioData` (`PanadapterStream.h:208-217`; MainWindow's audio-feed wiring).
 The concrete seam frame formats are **step-4 work, not final**
 (`IRadioBackend.h:210-216`; `aetherd-headless-engine-design.md:251-266`).
 

@@ -51,12 +51,14 @@ def capture(sock, dst, freq, speed_code, gain_db, nsamp, settle):
                 data, _ = sock.recvfrom(2048)
             except socket.timeout:
                 continue
-            s = hpsdr.parse_ep6(data)
-            if s is None:
+            seq_rx = hpsdr.ep6_seq(data)     # cheap header read; iq_samples decodes
+            if seq_rx is None:
                 continue
-            if exp is not None and s[0] != exp:
-                drops += (s[0] - exp) & 0xFFFFFFFF
-            exp = (s[0] + 1) & 0xFFFFFFFF
+            if exp is not None and seq_rx != exp:
+                gap = (seq_rx - exp) & 0xFFFFFFFF
+                if gap < 0x80000000:         # forward gap = real loss; the reverse
+                    drops += gap             # half = a reordered/dup packet
+            exp = (seq_rx + 1) & 0xFFFFFFFF
             if time.monotonic() - t0 > settle:           # let AGC/NCO settle first
                 for i, q in hpsdr.iq_samples(data):
                     I.append(i); Q.append(q)
@@ -77,9 +79,10 @@ def panadapter(iq, freq, rate, bins):
     mag = np.abs(X) / (np.sum(w) / 2)                    # coherent-gain normalized
     dbfs = 20 * np.log10(mag / hpsdr.FULL_SCALE + 1e-12)
 
-    # bin the FFT down to `bins` columns across the full span, taking the peak per column
-    step = len(dbfs) // bins
-    cols = [dbfs[c * step:(c + 1) * step].max() for c in range(bins)]
+    # bin the FFT down to `bins` columns across the full span, taking the peak per
+    # column. array_split covers the whole spectrum (distributes the remainder), so
+    # no high-frequency bins are dropped when len(dbfs) isn't a multiple of bins.
+    cols = [chunk.max() for chunk in np.array_split(dbfs, bins)]
     lo, hi = min(cols), max(cols)
     span = rate / 1e6
     dc_dbfs = 20 * np.log10(abs(dc) / hpsdr.FULL_SCALE + 1e-12)

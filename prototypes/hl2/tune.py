@@ -57,7 +57,9 @@ def measure(sock, dst, freq: int, speed_code: int, seconds: float, seq0: int,
             continue
         s, n, pk, ss, _ = r
         if exp is not None and s != exp:
-            drops += (s - exp) & 0xFFFFFFFF
+            gap = (s - exp) & 0xFFFFFFFF
+            if gap < 0x80000000:             # forward gap = real loss; the reverse
+                drops += gap                 # half = a reordered/dup packet
         exp = (s + 1) & 0xFFFFFFFF
         pkts += 1; samples += n; sumsq += ss
         if pk > peak:
