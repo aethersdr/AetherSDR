@@ -50,6 +50,33 @@ documented numeric ranges/behavior were used; no CuteSDR code is incorporated.
   License:        BSD-2-Clause (Simplified BSD)
   Source:         https://github.com/jks-prv/Beagle_SDR_GPS  (rx/CuteSDR/)
 
+The Hermes-Lite 2 radio backend implements HPSDR Protocol 1 ("Metis") — UDP
+discovery, the EP2/EP6 IQ frame layout, and the Command & Control register map
+(sample-rate/receiver config, the CONFIG_MERCURY ADC-source-select bit, RX NCO
+frequency, and the AD9866 extended-range LNA gain register). These wire-protocol
+facts were consulted clean-room and are expressed in original AetherSDR code
+(prototypes/hl2/ and, subsequently, the in-tree Hl2Backend). No openHPSDR,
+Hermes-Lite 2, or pihpsdr code is incorporated, vendored, translated, or linked
+into AetherSDR; the referenced sources are consulted only to verify protocol
+facts. The consulted facts are:
+  - the Metis discovery handshake and EP2/EP6 1032-byte frame framing;
+  - the C0 register-address encoding ((addr<<1)|MOX) and the config/RX-freq/
+    gain register semantics; and
+  - the minimal round-robin C&C init a receiver requires (config incl.
+    CONFIG_MERCURY, RX1 frequency, LNA gain), verified against the pihpsdr
+    reference client's C&C construction.
+
+  openHPSDR Protocol 1 (Programmer's guide) — HPSDR project, hosted by TAPR
+  License:  GPL-2.0-or-later (consulted as a protocol specification only)
+  Source:   https://github.com/TAPR/OpenHPSDR-Protocol1-Programmers
+
+  Hermes-Lite 2:  Copyright (c) Steve Haynal (KF7O) and Hermes-Lite 2 contributors
+  Reference:      https://github.com/softerhardware/Hermes-Lite2  (wiki + gateware)
+
+  pihpsdr:   Copyright (c) Christoph van Wüllen (DL1YCF) and contributors
+  License:   GPL-3.0-or-later (consulted as a behavioral reference only)
+  Source:    https://github.com/dl1ycf/pihpsdr  (src/old_protocol.c)
+
 
 1. WDSP — Spectral Noise Reduction (NR2)
 -----------------------------------------
