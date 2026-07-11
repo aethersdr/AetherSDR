@@ -147,6 +147,40 @@ int main(int argc, char** argv)
             CHECK(f.value(QStringLiteral("wnb")).toBool() == true);
             CHECK(!f.contains(QStringLiteral("wnb_level")));   // guarded out
         }
+
+        // #4147 audit: wnb / wnb_updating mirror FlexLib's uint.TryParse +
+        // > 1 reject (Panadapter.cs 1226/1262) — malformed AND out-of-range
+        // values are dropped from the carry, not coerced to a bool. wnb_level
+        // additionally rejects > 100 and negatives (Panadapter.cs 1244) instead
+        // of leaving them to a model-side clamp.
+        backend.decodePanExtensions(QStringLiteral("0x40000000"),
+                                    {{QStringLiteral("wnb"), QStringLiteral("bogus")},
+                                     {QStringLiteral("wnb_updating"), QStringLiteral("5")},
+                                     {QStringLiteral("wnb_level"), QStringLiteral("150")}});
+        CHECK(spy.count() == 0);   // every key rejected → nothing to carry
+
+        backend.decodePanExtensions(QStringLiteral("0x40000000"),
+                                    {{QStringLiteral("wnb"), QStringLiteral("2")},
+                                     {QStringLiteral("wnb_level"), QStringLiteral("-5")},
+                                     {QStringLiteral("wnb_updating"), QStringLiteral("1")}});
+        CHECK(spy.count() == 1);   // wnb_updating alone survives
+        {
+            const QVariantMap f = spy.takeFirst().at(2).toMap();
+            CHECK(!f.contains(QStringLiteral("wnb")));         // 2 > 1 → dropped
+            CHECK(!f.contains(QStringLiteral("wnb_level")));   // negative → dropped
+            CHECK(f.value(QStringLiteral("wnb_updating")).toBool() == true);
+        }
+
+        // Boundary values still pass: wnb_level=100 is the FlexLib max.
+        backend.decodePanExtensions(QStringLiteral("0x40000000"),
+                                    {{QStringLiteral("wnb"), QStringLiteral("0")},
+                                     {QStringLiteral("wnb_level"), QStringLiteral("100")}});
+        CHECK(spy.count() == 1);
+        {
+            const QVariantMap f = spy.takeFirst().at(2).toMap();
+            CHECK(f.value(QStringLiteral("wnb")).toBool() == false);
+            CHECK(f.value(QStringLiteral("wnb_level")).toInt() == 100);
+        }
     }
 
     // ---- Facet 1c: DECODE (rfgain / antenna — universal) ----
