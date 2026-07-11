@@ -1,4 +1,5 @@
 #include "AppSettings.h"
+#include "GuiClientIdentityPolicy.h"
 
 #include <QStandardPaths>
 #include <QDir>
@@ -10,6 +11,11 @@
 #include <QDebug>
 #include <QCoreApplication>
 #include <QRegularExpression>
+#include <QCryptographicHash>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLockFile>
+#include <QSysInfo>
 
 namespace AetherSDR {
 
@@ -18,6 +24,32 @@ AppSettings& AppSettings::instance()
     static AppSettings s;
     return s;
 }
+
+AppSettings::~AppSettings() = default;
+
+namespace {
+
+QString validUuidOrEmpty(const QString& value)
+{
+    const QUuid uuid(value.trimmed());
+    return uuid.isNull() ? QString() : uuid.toString(QUuid::WithoutBraces).toUpper();
+}
+
+QString machineBinding()
+{
+    QByteArray unique = QSysInfo::machineUniqueId();
+    if (unique.isEmpty()) {
+        unique = QSysInfo::machineHostName().toUtf8() + '|'
+                 + QSysInfo::kernelType().toUtf8() + '|'
+                 + QSysInfo::currentCpuArchitecture().toUtf8();
+    }
+    return QString::fromLatin1(
+        QCryptographicHash::hash(unique, QCryptographicHash::Sha256).toHex());
+}
+
+constexpr char kIdentityConfigKey[] = "GuiClientIdentity";
+
+} // namespace
 
 AppSettings::AppSettings()
 {
@@ -273,10 +305,18 @@ void AppSettings::save()
 
 void AppSettings::reset()
 {
+    m_guiClientLock.reset();
     m_settings.clear();
     m_stationSettings.clear();
     m_stationName = "AetherSDR";
     m_loadedCount = 0;
+    m_persistentGuiClientId.clear();
+    m_effectiveGuiClientId.clear();
+    m_effectiveStationName.clear();
+    m_automationIdentity.clear();
+    m_automationAgentName.clear();
+    m_guiClientIdentityInitialized = false;
+    m_guiClientIdentityTransient = false;
 }
 
 // ─── Top-level accessors ──────────────────────────────────────────────────────
@@ -326,6 +366,170 @@ void AppSettings::setStationName(const QString& name)
 {
     m_stationName = name;
     m_settings.insert("StationName", name);
+}
+
+void AppSettings::initializeGuiClientIdentity()
+{
+    if (m_guiClientIdentityInitialized) {
+        return;
+    }
+    m_guiClientIdentityInitialized = true;
+
+    const QJsonObject stored = QJsonDocument::fromJson(
+        value(QString::fromLatin1(kIdentityConfigKey)).toString().toUtf8()).object();
+    QString persistent = validUuidOrEmpty(
+        stored.value(QStringLiteral("PersistentId")).toString());
+    if (persistent.isEmpty()) {
+        persistent = validUuidOrEmpty(value(QStringLiteral("GUIClientID")).toString());
+    }
+    if (persistent.isEmpty()) {
+        persistent = QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+    }
+
+    const QString currentBinding = machineBinding();
+    const QString storedBinding = stored.value(QStringLiteral("MachineBinding")).toString();
+    if (!storedBinding.isEmpty() && !currentBinding.isEmpty()
+        && storedBinding != currentBinding) {
+        persistent = QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+        qWarning() << "AppSettings: settings came from another machine; rotated GUI client ID";
+    }
+
+    m_persistentGuiClientId = persistent;
+    QJsonObject identityConfig{
+        {QStringLiteral("PersistentId"), persistent},
+        {QStringLiteral("MachineBinding"), currentBinding},
+    };
+    const QString encoded = QString::fromUtf8(
+        QJsonDocument(identityConfig).toJson(QJsonDocument::Compact));
+    if (value(QString::fromLatin1(kIdentityConfigKey)).toString() != encoded
+        || value(QStringLiteral("GUIClientID")).toString() != persistent) {
+        setValue(QString::fromLatin1(kIdentityConfigKey), encoded);
+        // Compatibility mirror for older builds and existing support tooling.
+        setValue(QStringLiteral("GUIClientID"), persistent);
+        save();
+    }
+
+    const bool automation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+    if (automation) {
+        m_automationIdentity = qEnvironmentVariable("AETHER_AUTOMATION_IDENTITY").trimmed();
+        if (m_automationIdentity.isEmpty()) {
+            m_automationIdentity = qEnvironmentVariable("AETHER_AUTOMATION_SOCKET").trimmed();
+        }
+        if (m_automationIdentity.isEmpty()) {
+            m_automationIdentity = qEnvironmentVariable("AETHER_AUTOMATION_LABEL").trimmed();
+        }
+        if (m_automationIdentity.isEmpty()) {
+            m_automationIdentity = QStringLiteral("pid-%1")
+                                       .arg(QCoreApplication::applicationPid());
+        }
+        m_effectiveGuiClientId =
+            GuiClientIdentityPolicy::automationClientId(m_automationIdentity);
+        m_guiClientIdentityTransient = true;
+        m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_AGENT_NAME").trimmed();
+        if (m_automationAgentName.isEmpty()) {
+            m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_STATION").trimmed();
+        }
+        if (m_automationAgentName.isEmpty()) {
+            m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_LABEL").trimmed();
+        }
+        if (m_automationAgentName.isEmpty()) {
+            m_automationAgentName = QStringLiteral("Automation");
+        }
+        m_effectiveStationName =
+            GuiClientIdentityPolicy::protocolSafeStation(m_automationAgentName);
+        return;
+    }
+
+    m_guiClientLock = std::make_unique<QLockFile>(m_filePath + QStringLiteral(".gui-client.lock"));
+    m_guiClientLock->setStaleLockTime(0);
+    if (m_guiClientLock->tryLock(0)) {
+        m_effectiveGuiClientId = persistent;
+    } else {
+        m_effectiveGuiClientId =
+            QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+        m_guiClientIdentityTransient = true;
+        qWarning() << "AppSettings: another local process owns the persistent GUI client ID;"
+                      " using a process-scoped ID";
+    }
+
+    m_effectiveStationName = GuiClientIdentityPolicy::protocolSafeStation(
+        value(QStringLiteral("StationName")).toString());
+    if (m_effectiveStationName.isEmpty()) {
+        m_effectiveStationName =
+            GuiClientIdentityPolicy::protocolSafeStation(QSysInfo::machineHostName());
+    }
+}
+
+QString AppSettings::effectiveGuiClientId() const
+{
+    return m_effectiveGuiClientId.isEmpty()
+               ? value(QStringLiteral("GUIClientID")).toString()
+               : m_effectiveGuiClientId;
+}
+
+QString AppSettings::persistentGuiClientId() const { return m_persistentGuiClientId; }
+QString AppSettings::effectiveStationName() const { return m_effectiveStationName; }
+QString AppSettings::automationIdentity() const { return m_automationIdentity; }
+QString AppSettings::automationAgentName() const { return m_automationAgentName; }
+bool AppSettings::guiClientIdentityIsTransient() const { return m_guiClientIdentityTransient; }
+
+bool AppSettings::rotatePersistentGuiClientId(const QString& reason)
+{
+    if (!m_guiClientIdentityInitialized || m_guiClientIdentityTransient) {
+        return false;
+    }
+    m_persistentGuiClientId =
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+    m_effectiveGuiClientId = m_persistentGuiClientId;
+    QJsonObject identityConfig{
+        {QStringLiteral("PersistentId"), m_persistentGuiClientId},
+        {QStringLiteral("MachineBinding"), machineBinding()},
+    };
+    setValue(QString::fromLatin1(kIdentityConfigKey), QString::fromUtf8(
+        QJsonDocument(identityConfig).toJson(QJsonDocument::Compact)));
+    setValue(QStringLiteral("GUIClientID"), m_persistentGuiClientId);
+    save();
+    qWarning().noquote() << "AppSettings: rotated GUI client ID —" << reason;
+    return true;
+}
+
+bool AppSettings::resolveLiveGuiClientIdCollision(const QString& otherStation)
+{
+    if (!m_guiClientIdentityInitialized) {
+        return false;
+    }
+    if (m_guiClientIdentityTransient) {
+        m_effectiveGuiClientId =
+            QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+        qWarning().noquote()
+            << "AppSettings: live client already owns this process-scoped GUI ID;"
+               " selected a collision fallback for station"
+            << otherStation;
+        return true;
+    }
+    return rotatePersistentGuiClientId(
+        QStringLiteral("live duplicate belongs to station %1").arg(otherStation));
+}
+
+void AppSettings::recordPersistentGuiClientIdReply(const QString& clientId)
+{
+    if (m_guiClientIdentityTransient) {
+        return;
+    }
+    const QString normalized = validUuidOrEmpty(clientId);
+    if (normalized.isEmpty() || normalized == m_persistentGuiClientId) {
+        return;
+    }
+    m_persistentGuiClientId = normalized;
+    m_effectiveGuiClientId = normalized;
+    QJsonObject identityConfig{
+        {QStringLiteral("PersistentId"), normalized},
+        {QStringLiteral("MachineBinding"), machineBinding()},
+    };
+    setValue(QString::fromLatin1(kIdentityConfigKey), QString::fromUtf8(
+        QJsonDocument(identityConfig).toJson(QJsonDocument::Compact)));
+    setValue(QStringLiteral("GUIClientID"), normalized);
+    save();
 }
 
 // ─── Migration from QSettings ─────────────────────────────────────────────────

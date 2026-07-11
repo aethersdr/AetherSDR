@@ -1852,9 +1852,12 @@ bool AutomationServer::start(const QString& serverName)
     // MultiFlex clients. Apply now if already connected; on every (re)connect —
     // which re-runs the handshake's own `client station <user>` send — re-apply
     // shortly after so the agent name is what sticks.
-    m_agentStation = qEnvironmentVariableIsSet("AETHER_AUTOMATION_STATION")
-                         ? qEnvironmentVariable("AETHER_AUTOMATION_STATION")
-                         : QStringLiteral("Claude");
+    m_agentStation = AppSettings::instance().automationAgentName();
+    if (m_agentStation.isEmpty()) {
+        m_agentStation = qEnvironmentVariableIsSet("AETHER_AUTOMATION_STATION")
+                             ? qEnvironmentVariable("AETHER_AUTOMATION_STATION")
+                             : QStringLiteral("Automation");
+    }
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::connectionStateChanged, this,
                 [this](bool connected) {
@@ -3517,6 +3520,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             clients.append(QJsonObject{
                 {QStringLiteral("handle"),
                  QStringLiteral("0x") + QString::number(it.key(), 16)},
+                {QStringLiteral("clientId"), it.value().clientId},
                 {QStringLiteral("station"), it.value().station},
                 {QStringLiteral("program"), it.value().program},
                 {QStringLiteral("source"), it.value().source},
@@ -3556,6 +3560,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                      infoMap.value(radio->ourClientHandle()).station;
                  return reported.isEmpty() ? radio->ourStationName() : reported;
              }()},
+            {QStringLiteral("guiClientId"),
+             AppSettings::instance().effectiveGuiClientId()},
+            {QStringLiteral("guiClientIdTransient"),
+             AppSettings::instance().guiClientIdentityIsTransient()},
             {QStringLiteral("clients"), clients},
             {QStringLiteral("foreignPanWrites"), foreign},
             {QStringLiteral("evictedHandles"), evicted}};
@@ -6748,6 +6756,11 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("socket"), fullServerName()},
         {QStringLiteral("label"), m_label},
         {QStringLiteral("station"), m_agentStation},
+        {QStringLiteral("agentName"), AppSettings::instance().automationAgentName()},
+        {QStringLiteral("automationIdentity"), AppSettings::instance().automationIdentity()},
+        {QStringLiteral("guiClientId"), AppSettings::instance().effectiveGuiClientId()},
+        {QStringLiteral("guiClientIdTransient"),
+         AppSettings::instance().guiClientIdentityIsTransient()},
         {QStringLiteral("txAllowed"), m_txAllowed},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };

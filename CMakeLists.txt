@@ -2323,6 +2323,13 @@ if(PYTHON3_EXECUTABLE)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
 endif()
 
+add_executable(gui_client_identity_policy_test
+    tests/gui_client_identity_policy_test.cpp
+)
+target_include_directories(gui_client_identity_policy_test PRIVATE src)
+target_link_libraries(gui_client_identity_policy_test PRIVATE Qt6::Core)
+add_test(NAME gui_client_identity_policy_test COMMAND gui_client_identity_policy_test)
+
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp
 )

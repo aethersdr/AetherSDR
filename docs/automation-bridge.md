@@ -56,6 +56,25 @@ For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
 `AETHER_AUTOMATION_NO_AUTOCONNECT=1` suppresses saved-radio autoconnect during
 bridge runs; use the `connect` verb when a test intentionally needs a radio.
 
+Parallel worktrees should give each bridge a stable automation identity and a
+human-readable agent name:
+
+```bash
+AETHER_AUTOMATION=1 \
+AETHER_AUTOMATION_IDENTITY=issue-4166-worktree \
+AETHER_AUTOMATION_AGENT_NAME=Codex-GPT-5.6 \
+AETHER_AUTOMATION_SOCKET=aethersdr-4166 \
+./build/AetherSDR.app/Contents/MacOS/AetherSDR
+```
+
+`AETHER_AUTOMATION_IDENTITY` deterministically selects a process-scoped Flex
+GUI client UUID, so concurrent worktrees do not displace one another through
+the radio's duplicate-client takeover behavior. If it is omitted, the socket,
+automation label, or PID is used in that order. `AETHER_AUTOMATION_AGENT_NAME`
+sets the station label shown to other Multi-Flex clients; it is display-only
+and is never used as the UUID because several worktrees may use the same LLM.
+Automation identities never overwrite the user's persistent `GUIClientID`.
+
 KiwiSDR compression can be forced for diagnostic runs by adding
 `AETHER_KIWI_SND_COMP=1` and/or `AETHER_KIWI_WF_COMP=1` at launch. These are
 receive-only automation knobs: SND changes the outbound sound setup request
@@ -216,7 +235,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
-| | [`get clients`](#get-clients) | Radio client roster + foreign-pan-write forensics (#3977). |
+| | [`get clients`](#get-clients) | Radio client roster, GUI IDs + foreign-pan-write forensics (#3977/#4166). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
