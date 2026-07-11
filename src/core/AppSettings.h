@@ -53,6 +53,12 @@ public:
     // Migrate from old QSettings (INI format) if XML file doesn't exist yet.
     void migrateFromQSettings();
 
+    // #4166: true if the most recent load() detected that GUIClientID's
+    // machine binding didn't match this computer (i.e. AetherSDR.settings
+    // was copied from a different machine) and assigned a fresh client
+    // identity to avoid a Multi-Flex client_id collision.
+    bool clientIdentityWasRegenerated() const { return m_clientIdentityRegenerated; }
+
 private:
     AppSettings();
     ~AppSettings() = default;
@@ -63,11 +69,22 @@ private:
     // triple-nested path. Move the file to the correct GenericConfigLocation.
     void migrateSettingsPath();
 
+    // #4166: hash of a stable, OS-provided per-machine identifier
+    // (QSysInfo::machineUniqueId() — /etc/machine-id, MachineGuid,
+    // IOPlatformUUID). Recomputed live on every load() and compared against
+    // the value stored alongside GUIClientID at the point it was generated;
+    // a mismatch means the settings file — GUIClientID included — arrived
+    // from a different computer, so GUIClientID is regenerated rather than
+    // risking two live clients sharing the same identity.
+    static QString computeMachineFingerprint();
+    void verifyClientIdentityBinding();
+
     QString m_filePath;
     QMap<QString, QString> m_settings;          // top-level key=value
     QMap<QString, QString> m_stationSettings;   // per-station key=value
     QString m_stationName{"AetherSDR"};
     int m_loadedCount{0};  // settings count at load time (guard against truncated saves)
+    bool m_clientIdentityRegenerated{false};
 };
 
 } // namespace AetherSDR

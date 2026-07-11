@@ -10,6 +10,8 @@
 #include <QDebug>
 #include <QCoreApplication>
 #include <QRegularExpression>
+#include <QCryptographicHash>
+#include <QSysInfo>
 
 namespace AetherSDR {
 
@@ -69,6 +71,7 @@ void AppSettings::load()
     if (!file.exists()) {
         // First launch or migration needed
         migrateFromQSettings();
+        verifyClientIdentityBinding();
         return;
     }
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -162,6 +165,8 @@ void AppSettings::load()
     m_loadedCount = m_settings.size();
     qDebug() << "AppSettings: loaded" << m_settings.size() << "settings +"
              << m_stationSettings.size() << "station settings from" << m_filePath;
+
+    verifyClientIdentityBinding();
 }
 
 // ─── Save ─────────────────────────────────────────────────────────────────────
@@ -408,6 +413,51 @@ void AppSettings::migrateFromQSettings()
 
     save();
     qDebug() << "AppSettings: migration complete, saved to" << m_filePath;
+}
+
+// ─── Client identity machine binding (#4166) ──────────────────────────────────
+
+QString AppSettings::computeMachineFingerprint()
+{
+    const QByteArray id = QSysInfo::machineUniqueId();
+    if (id.isEmpty())
+        return QString();
+    return QString::fromLatin1(QCryptographicHash::hash(id, QCryptographicHash::Sha256).toHex());
+}
+
+void AppSettings::verifyClientIdentityBinding()
+{
+    if (!contains("GUIClientID"))
+        return;  // nothing generated yet — migrateFromQSettings() will bind it below
+
+    const QString liveFingerprint = computeMachineFingerprint();
+    if (liveFingerprint.isEmpty())
+        return;  // platform couldn't provide a stable machine ID — fail open
+
+    const QString storedFingerprint = value("GUIClientIDBinding").toString();
+    if (storedFingerprint.isEmpty()) {
+        // Upgrade path (pre-existing install with no binding recorded yet) or a
+        // GUIClientID just generated this run: adopt this machine as the bound
+        // one rather than treating every existing install as "copied".
+        setValue("GUIClientIDBinding", liveFingerprint);
+        save();
+        return;
+    }
+
+    if (storedFingerprint != liveFingerprint) {
+        // The settings file — GUIClientID included — was copied from a
+        // different computer. Reusing that GUIClientID here would give two
+        // live clients the same identity, which the radio resolves by
+        // repeatedly evicting whichever one re-registers last (#4166).
+        qWarning() << "AppSettings: GUIClientID machine-binding mismatch — this "
+                      "settings file appears to have been copied from a "
+                      "different computer; assigning a new client identity "
+                      "to avoid a Multi-Flex client_id collision (#4166)";
+        setValue("GUIClientID", QUuid::createUuid().toString(QUuid::WithoutBraces));
+        setValue("GUIClientIDBinding", liveFingerprint);
+        save();
+        m_clientIdentityRegenerated = true;
+    }
 }
 
 } // namespace AetherSDR

@@ -410,6 +410,18 @@ void MainWindow::wireRadioModel()
         setPanadapterConnectionAnimation(false);
         showForcedDisconnectDialog(wasWan, radioInfo, wanInfo);
     });
+    connect(&m_radioModel, &RadioModel::clientIdentityCollisionDetected,
+            this, [this](const QString&, const QString&) {
+        // #4166: informational only — the reconnect that follows uses the
+        // freshly-assigned identity and will not collide again, so this
+        // doesn't need to interrupt the user like a forced disconnect does.
+        QMessageBox::information(this, tr("Client Identity Reassigned"),
+            tr("Another AetherSDR client on this network is using the same "
+               "client identity as this one — usually caused by copying "
+               "AetherSDR.settings between computers. A new identity has "
+               "been assigned automatically and the radio connection will "
+               "recover on its own."));
+    });
     connect(&m_radioModel, &RadioModel::multiFlexConflictDetected, this, [this] {
         ConnectedStationsDialog::RadioMeta meta;
         meta.model    = m_radioModel.model();

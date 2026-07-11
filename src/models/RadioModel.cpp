@@ -22,6 +22,7 @@
 #include <QRegularExpression>
 #include <QDateTime>
 #include <QSysInfo>
+#include <QUuid>
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
@@ -2661,6 +2662,20 @@ void RadioModel::handleForcedClientDisconnect()
     }
 }
 
+void RadioModel::handleDuplicateClientIdEviction()
+{
+    auto& s = AppSettings::instance();
+    const QString oldId = s.value("GUIClientID").toString();
+    const QString newId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    s.setValue("GUIClientID", newId);
+    s.save();
+    qCWarning(lcProtocol).noquote()
+        << "RadioModel: client_id" << oldId
+        << "collided with another live client (duplicate_client_id=1) —"
+        << "assigned new identity" << newId << "to stop the reconnect loop (#4166)";
+    emit clientIdentityCollisionDetected(oldId, newId);
+}
+
 void RadioModel::registerAsGuiClient(const QString& clientId)
 {
     // Match FlexLib connect-sequence ordering (Radio.cs:2230-2247):
@@ -4776,8 +4791,20 @@ void RadioModel::onStatusReceived(const QString& object,
             QString action = cm.captured(2);  // "disconnected" or empty
 
             if (action == "disconnected") {
-                if (handle == clientHandle() && statusFlagSet(kvs, QStringLiteral("forced")))
-                    handleForcedClientDisconnect();
+                if (handle == clientHandle()) {
+                    if (statusFlagSet(kvs, QStringLiteral("forced")))
+                        handleForcedClientDisconnect();
+                    // #4166: the radio just evicted OUR OWN handle because
+                    // another live client registered with the same
+                    // GUIClientID (duplicate_client_id=1) — most commonly a
+                    // second AetherSDR install whose settings file was
+                    // copied from this one. Auto-reconnecting with the same
+                    // colliding UUID would just re-evict the other side and
+                    // repeat forever (each side taking turns); regenerate
+                    // now so the next reconnect doesn't collide again.
+                    if (statusFlagSet(kvs, QStringLiteral("duplicate_client_id")))
+                        handleDuplicateClientIdEviction();
+                }
                 m_clientStations.remove(handle);
                 m_clientInfoMap.remove(handle);
                 m_announcedClientConnections.remove(handle);

@@ -450,6 +450,11 @@ signals:
                                  const QString& presentedHex);
     // Emitted when another GUI client forces this client to disconnect.
     void forcedDisconnectRequested();
+    // Emitted when the radio evicts OUR OWN handle with duplicate_client_id=1
+    // — another live client is using the same GUIClientID (e.g. a copied
+    // settings file). A fresh identity has already been assigned so the next
+    // reconnect doesn't collide again (#4166).
+    void clientIdentityCollisionDetected(const QString& oldId, const QString& newId);
     // Emitted when a panadapter's center frequency or bandwidth changes.
     void panadapterInfoChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the radio reports the panadapter's dBm display range.
@@ -636,6 +641,7 @@ private:
     // sending client gui. Calls continuation() if no conflict is found.
     void peekForMultiFlexConflictThen(std::function<void()> continuation);
     void handleForcedClientDisconnect();
+    void handleDuplicateClientIdEviction();
     void applyKnownGuiClients(const QStringList& handles,
                               const QStringList& programs,
                               const QStringList& stations,

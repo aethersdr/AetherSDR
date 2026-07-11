@@ -2051,6 +2051,19 @@ MainWindow::MainWindow(QWidget* parent)
             settings.save();
         }
     }
+
+    // #4166: AppSettings::load() ran at startup, before this window existed,
+    // so surface a one-time notice here if it found AetherSDR.settings had
+    // been copied from a different machine and reassigned the client identity.
+    if (AppSettings::instance().clientIdentityWasRegenerated()) {
+        QTimer::singleShot(0, this, [this]() {
+            QMessageBox::information(this, tr("Client Identity Reassigned"),
+                tr("This settings file appears to have been copied from a "
+                   "different computer. A new client identity has been "
+                   "assigned automatically to prevent a Multi-Flex conflict "
+                   "with the original computer."));
+        });
+    }
 }
 
 MainWindow::~MainWindow()
