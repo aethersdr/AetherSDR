@@ -290,6 +290,17 @@ private:
     // is needed for stateful per-client verbs (log subscribe/unsubscribe).
     QJsonObject handleLine(const QByteArray& line, QLocalSocket* sock);
 
+    // Verb registry (#4174): one self-describing entry per bridge verb —
+    // canonical name, aliases, one-line help, bare-line parser, dispatcher.
+    // The startup banner, the unknown-command error, and the `verbs`
+    // introspection verb all derive from this table; never hand-list verbs
+    // anywhere else. Definitions live in AutomationServer.cpp.
+    struct VerbArgs;
+    struct VerbSpec;
+    static const std::vector<VerbSpec>& verbRegistry();
+    static const VerbSpec* findVerb(const QString& cmd);
+    static QString verbNamesJoined();
+
     QJsonObject doDumpTree() const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;

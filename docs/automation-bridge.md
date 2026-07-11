@@ -125,6 +125,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | Category | Verb | One-liner |
 |---|---|---|
 | **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| | [`verbs`](#verbs) | Machine-readable catalog of every verb + aliases + help. |
 | | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
 | | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
 | | [`grab pan <index> [path]`](#grab) | Raw spectrum surface of a specific pan. |
@@ -183,6 +184,12 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 > or JSON (`{"cmd":"get","model":"slice","selector":"active","property":"mode"}`).
 > The JSON field names per verb are noted in each section; positional order is
 > shown in the bare-line examples.
+>
+> Server-side, every verb is one entry in a single registry table
+> (`AutomationServer::verbRegistry()`, #4174) that owns its name, aliases,
+> bare-line parsing, and dispatch; the startup banner, the unknown-command
+> error, and [`verbs`](#verbs) are all derived from it. When this table and
+> the running app disagree, trust `verbs` — it cannot go stale.
 
 ### `ping`
 Connectivity / handshake.
@@ -190,6 +197,22 @@ Connectivity / handshake.
 ```json
 → {"cmd":"ping"}
 ← {"ok":true,"app":"AetherSDR","version":"26.6.3"}
+```
+
+### `verbs`
+Machine-readable catalog of every verb the running build understands —
+canonical name, aliases, and a one-line help string, straight from the server's
+verb registry (#4174). Use it instead of hand-maintained verb lists in drivers;
+`tools/automation_probe.py` passes any verb not in its own mapping table
+through as a bare line, so new simple verbs work in the probe with no probe
+changes.
+
+```json
+→ {"cmd":"verbs"}
+← {"ok":true,"count":45,"verbs":[
+    {"name":"ping","help":"liveness check → app + version"},
+    {"name":"drag","aliases":["mouse"],"help":"drag <target> <dx> <dy> — synthesize press→move→release"},
+    …]}
 ```
 
 ### `dumpTree`

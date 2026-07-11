@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-AetherSDR automation-bridge probe (issue #3646, Phase 0).
+AetherSDR automation-bridge probe (issue #3646, Phase 0; generic since #4174).
 
 Drives the in-app automation bridge that AetherSDR exposes when launched with
 AETHER_AUTOMATION=1. The bridge is a QLocalServer speaking newline-delimited
 JSON. This probe needs no Qt or third-party deps -- it talks to the AF_UNIX
 socket (macOS/Linux) or the named pipe (Windows) directly.
 
-It exercises the two Phase-0 verbs and saves the canonical deliverables:
-  * an applet semantic snapshot  -> <out>/tree.json
-  * a panadapter PNG capture     -> <out>/panadapter.png
+Any bridge verb works: verbs with a bespoke CLI->JSON mapping (multi-word
+arguments, client-side validation) are listed in MAPPERS below; every other
+verb is passed through as a bare positional line and parsed by the server's
+verb registry, so new simple verbs need no probe changes at all. Ask the
+running app what it understands:
+
+    python tools/automation_probe.py verbs
 
 Discovery: the running app writes the resolved socket path to
 <temp>/aethersdr-automation.json, so you don't have to know the platform
@@ -17,8 +21,9 @@ endpoint. Pass --socket to override.
 
 Usage:
     AETHER_AUTOMATION=1 ./AetherSDR &        # launch the app with the bridge on
-    python tools/automation_probe.py         # snapshot + panadapter grab
+    python tools/automation_probe.py         # demo: snapshot + panadapter grab
     python tools/automation_probe.py ping
+    python tools/automation_probe.py verbs
     python tools/automation_probe.py connect list
     python tools/automation_probe.py connect show
     python tools/automation_probe.py connect local first
@@ -67,7 +72,12 @@ class Bridge:
             self._pipe = None
 
     def request(self, obj):
-        line = (json.dumps(obj) + "\n").encode()
+        return self.request_line(json.dumps(obj))
+
+    def request_line(self, text):
+        """Send one raw request line (JSON or bare positional) and return the
+        decoded JSON response."""
+        line = (text + "\n").encode()
         if self._sock:
             self._sock.sendall(line)
             return self._read_line_sock()
@@ -138,17 +148,245 @@ def collect_actions(node, pattern=None):
     return matches
 
 
+# ── Verb → JSON-request mappers ──────────────────────────────────────────────
+# Only verbs whose CLI form needs a bespoke JSON mapping are listed: multi-word
+# arguments that shell quoting must survive (a bare line re-splits on spaces),
+# JSON-only fields (audioCapture's path, panmessage's id/timeoutMs), verbs
+# whose bare form the server doesn't parse (tci), or client-side validation.
+# Every mapper returns the request dict WITHOUT "cmd"; main() adds it and does
+# the one send/print. Anything not listed goes over the wire as a bare
+# positional line for the server's verb registry to parse.
+
+def _need(rest, n, usage):
+    if len(rest) < n:
+        sys.exit(f"error: {usage}")
+
+
+def _map_target_value(usage):
+    """<target> [value…] — quoting-safe target, rest joined into value."""
+    def mapper(rest):
+        _need(rest, 1, usage)
+        req = {"target": rest[0]}
+        if len(rest) > 1:
+            req["value"] = " ".join(rest[1:])
+        return req
+    return mapper
+
+
+def _map_action_value(usage=None):
+    """[action [value…]] — action + rest joined into value."""
+    def mapper(rest):
+        if usage:
+            _need(rest, 1, usage)
+        req = {}
+        if rest:
+            req["action"] = rest[0]
+            if len(rest) > 1:
+                req["value"] = " ".join(rest[1:])
+        return req
+    return mapper
+
+
+def _map_grab(rest):
+    _need(rest, 1, "grab requires a target widget name")
+    req = {"target": rest[0]}
+    if rest[0] in ("pan", "pan-visible", "pan-composite"):
+        _need(rest, 2, f"grab {rest[0]} requires a pan index")
+        req["selector"] = rest[1]
+        if len(rest) > 2:
+            req["path"] = rest[2]
+    elif len(rest) > 1:
+        req["path"] = rest[1]
+    return req
+
+
+def _map_invoke(rest):
+    _need(rest, 2, "invoke needs <target> <action> [value]")
+    req = {"target": rest[0], "action": rest[1]}
+    if len(rest) > 2:
+        req["value"] = " ".join(rest[2:])
+    return req
+
+
+def _map_get(rest):
+    _need(rest, 1, "get needs <model> [selector] [property]")
+    req = {"model": rest[0]}
+    if len(rest) > 1:
+        req["selector"] = rest[1]
+    if len(rest) > 2:
+        req["property"] = rest[2]
+    return req
+
+
+def _map_clickat(rest):
+    # clickAt <x> <y>           -> global screen coords (dumpTree geometry)
+    # clickAt <target> <x> <y>  -> coords local to <target>
+    # Disambiguate like the server: first token numeric => global form
+    # (_as_int: strict int, floats error loudly).
+    if len(rest) >= 2 and _as_int(rest[0]) is not None:
+        if _as_int(rest[1]) is None:
+            sys.exit(f"error: clickAt y must be an integer, got {rest[1]!r}")
+        return {"value": f"{rest[0]} {rest[1]}"}
+    if len(rest) >= 3 and _as_int(rest[0]) is None:
+        if _as_int(rest[1]) is None or _as_int(rest[2]) is None:
+            sys.exit("error: clickAt <target> <x> <y> — x and y must be integers")
+        return {"target": rest[0], "value": f"{rest[1]} {rest[2]}"}
+    raise SystemExit("error: clickAt needs <x> <y> or <target> <x> <y>")
+
+
+def _map_rightclick(rest):
+    if not rest:
+        sys.exit("error: rightClick needs <target> [x y]")
+    if len(rest) not in (1, 3):
+        sys.exit("error: rightClick needs <target> or <target> <x> <y>")
+    if len(rest) == 3:
+        if _as_int(rest[1]) is None or _as_int(rest[2]) is None:
+            sys.exit("error: rightClick x and y must be integers")
+    req = {"target": rest[0]}
+    if len(rest) > 1:
+        req["value"] = " ".join(rest[1:])
+    return req
+
+
+def _map_hover(rest):
+    _need(rest, 1, "hover needs <target> [leave]")
+    req = {"target": rest[0]}
+    if len(rest) > 1:
+        req["action"] = rest[1]
+    return req
+
+
+def _map_tooltip(rest):
+    _need(rest, 1, "tooltip needs <target> [hide|text...]")
+    req = {"target": rest[0]}
+    if len(rest) > 1:
+        if rest[1] == "hide":
+            if len(rest) != 2:
+                sys.exit("error: tooltip hide takes no extra arguments")
+            req["action"] = "hide"
+        else:
+            req["value"] = " ".join(rest[1:])
+    return req
+
+
+def _map_resize(rest):
+    _need(rest, 2, "resize needs <w> <h> [target]")
+    req = {"value": f"{rest[0]} {rest[1]}"}
+    if len(rest) > 2:
+        req["target"] = " ".join(rest[2:])
+    return req
+
+
+def _map_dss(rest):
+    _need(rest, 1, "dss needs <snapshot|reset|inject|scrollback|live> [pan] [args]")
+    action = rest[0]
+    req = {"action": action}
+    dss_args = rest[1:]
+    if action == "inject":
+        stream_names = {"native", "flex", "kiwi", "kiwisdr"}
+        if len(dss_args) < 3:
+            sys.exit("error: dss inject needs [pan] <count> <firstPeakBin> <stepBin> "
+                     "[native|kiwi [rowLowMhz rowHighMhz]]")
+        if (len(dss_args) == 3
+                or (len(dss_args) == 4 and dss_args[3].lower() in stream_names)
+                or (len(dss_args) == 6 and dss_args[3].lower() in stream_names)):
+            req["value"] = " ".join(dss_args)
+        else:
+            req["target"] = dss_args[0]
+            req["value"] = " ".join(dss_args[1:])
+    elif action == "scrollback":
+        if not dss_args:
+            sys.exit("error: dss scrollback needs [pan] <offsetRows>")
+        if len(dss_args) == 1:
+            req["value"] = dss_args[0]
+        else:
+            req["target"] = dss_args[0]
+            req["value"] = " ".join(dss_args[1:])
+    else:
+        if dss_args:
+            req["target"] = dss_args[0]
+        if len(dss_args) > 1:
+            req["value"] = " ".join(dss_args[1:])
+    return req
+
+
+def _map_audiocapture(rest):
+    action = rest[0] if rest else "status"
+    req = {"action": action}
+    if len(rest) > 1:
+        if action == "read" and len(rest) == 2:
+            req["path"] = rest[1]
+        else:
+            req["value"] = " ".join(rest[1:])
+    return req
+
+
+def _map_panmessage(rest):
+    if not rest:
+        sys.exit("error: panmessage needs <add|remove|clear|list> <target> ...")
+    req = {"action": rest[0]}
+    if len(rest) > 1:
+        req["target"] = rest[1]
+    if rest[0] in ("add", "upsert"):
+        if len(rest) < 5:
+            sys.exit("error: panmessage add needs <target> <id> <timeoutMs> <title|detail>")
+        req["id"] = rest[2]
+        try:
+            req["timeoutMs"] = int(rest[3])
+        except ValueError:
+            sys.exit("error: panmessage add timeoutMs must be an integer")
+        text_start = 4
+        if len(rest) > text_start and rest[text_start].lower().startswith("tone="):
+            req["tone"] = rest[text_start].split("=", 1)[1].strip()
+            text_start += 1
+        text = " ".join(rest[text_start:])
+        title, sep, detail = text.partition("|")
+        req["title"] = title.strip()
+        req["detail"] = detail.strip() if sep else ""
+    elif rest[0] in ("remove", "dismiss"):
+        if len(rest) < 3:
+            sys.exit("error: panmessage remove needs <target> <id>")
+        req["id"] = rest[2]
+    return req
+
+
+MAPPERS = {
+    "grab": _map_grab,
+    "invoke": _map_invoke,
+    "get": _map_get,
+    "hitTest": _map_target_value("hitTest needs <target> [x y]"),
+    "contextMenu": _map_target_value("contextMenu needs <target> [x y]"),
+    "rightClick": _map_rightclick,
+    "clickAt": _map_clickat,
+    "hover": _map_hover,
+    "tooltip": _map_tooltip,
+    "resize": _map_resize,
+    "connect": _map_action_value("connect needs <list|show|hide|local|ip|wait> [args]"),
+    "slice": _map_action_value("slice needs an action"),
+    "pan": _map_action_value("pan needs <create|add|center|close|remove> [value]"),
+    "layout": _map_action_value("layout needs <rearrange <id> | get>"),
+    "record": _map_action_value(),
+    "testtone": _map_action_value(),
+    # tci has no bare-line parse arm server-side (see the verb registry) —
+    # the JSON action/value form is the only supported request shape.
+    "tci": _map_action_value(),
+    "dss": _map_dss,
+    "audioCapture": _map_audiocapture,
+    "panmessage": _map_panmessage,
+}
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Drive the AetherSDR automation bridge",
-        epilog="examples:\n"
+        epilog="Any bridge verb is accepted; run `automation_probe.py verbs` to list\n"
+               "what the running app understands. examples:\n"
                "  automation_probe.py demo\n"
+               "  automation_probe.py verbs\n"
                "  automation_probe.py connect list\n"
-               "  automation_probe.py connect show\n"
                "  automation_probe.py connect local first\n"
                "  automation_probe.py connect wait 30000\n"
                "  automation_probe.py get radio\n"
-               "  automation_probe.py get sync\n"
                "  automation_probe.py get slice active frequency\n"
                "  automation_probe.py slice rxsource 7 K4JK\n"
                "  automation_probe.py slice fixture 4 B\n"
@@ -170,37 +408,11 @@ def main():
                "  automation_probe.py panmessage add 0 tx 10000 tone=warning 'Transmit disabled|TX blocked'",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
-                    choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
-                             "connect", "disconnect", "slice", "tune", "shortcut",
-                             "actions", "contextMenu", "rightClick", "audioCapture",
-                             "record", "testtone", "tci", "panmessage",
-                             "hover", "tooltip", "hitTest", "rightClick", "clickAt", "resize", "dss",
-                             "pan", "layout", "scale"],
-                    help="verb to run (default: demo = dumpTree + panadapter grab)")
+                    help="bridge verb, or: demo (dumpTree + panadapter grab), "
+                         "actions [text-filter] (client-side QAction search)")
     ap.add_argument("rest", nargs="*",
-                    help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
-                         "invoke <target> <action> [value] | "
-                         "get <model> [selector] [property] | "
-                         "hover <target> [leave] | "
-                         "tooltip <target> [hide|text...] | "
-                         "actions [text-filter] | "
-                         "contextMenu <target> [x y] | "
-                         "rightClick <target> [x y] | "
-                         "hitTest <target> [x y] | "
-                         "rightClick <target> [x y] | "
-                         "clickAt <x> <y> | clickAt <target> <x> <y> | "
-                         "resize <w> <h> [target] | "
-                         "connect <list|show|hide|local|ip|wait> [args] | "
-                         "slice <add|remove|select|tx|diversity|centerlock|txant|rxant|rxsource|fixture|clearfixture> [args] | "
-                         "dss <snapshot|reset|live> [pan] [args] | "
-                         "dss inject [pan] <count> <firstPeakBin> <stepBin> "
-                         "[native|kiwi [rowLowMhz rowHighMhz]] | "
-                         "dss scrollback [pan] <offsetRows> | "
-                         "pan <create|add|center|close|remove> [value] | "
-                         "layout <rearrange <id>|get> | scale [pct] | "
-                         "tune <mhz> | shortcut <action-id> | "
-                         "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
-                         "audioCapture <start|stop|status|read> [args]")
+                    help="verb arguments (positional, same shapes as the bare "
+                         "socket protocol; see `verbs` and docs/automation-bridge.md)")
     ap.add_argument("--socket", help="override the bridge socket path")
     ap.add_argument("--out", default=".", help="output dir for demo artifacts")
     args = ap.parse_args()
@@ -216,266 +428,8 @@ def main():
         sys.exit(f"error: could not connect to {sock_path}: {e}")
 
     try:
-        if args.command == "ping":
-            print(json.dumps(bridge.request({"cmd": "ping"}), indent=2))
-
-        elif args.command == "dumpTree":
-            print(json.dumps(bridge.request({"cmd": "dumpTree"}), indent=2))
-
-        elif args.command == "grab":
-            if not args.rest:
-                sys.exit("error: grab requires a target widget name")
-            req = {"cmd": "grab", "target": args.rest[0]}
-            if args.rest[0] in ("pan", "pan-visible", "pan-composite"):
-                if len(args.rest) < 2:
-                    sys.exit(f"error: grab {args.rest[0]} requires a pan index")
-                req["selector"] = args.rest[1]
-                if len(args.rest) > 2:
-                    req["path"] = args.rest[2]
-            elif len(args.rest) > 1:
-                req["path"] = args.rest[1]
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "invoke":
-            if len(args.rest) < 2:
-                sys.exit("error: invoke needs <target> <action> [value]")
-            req = {"cmd": "invoke", "target": args.rest[0], "action": args.rest[1]}
-            if len(args.rest) > 2:
-                req["value"] = " ".join(args.rest[2:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "get":
-            if not args.rest:
-                sys.exit("error: get needs <model> [selector] [property] "
-                         "(model = radio|slice|slices|pan|pans|flags)")
-            req = {"cmd": "get", "model": args.rest[0]}
-            if len(args.rest) > 1:
-                req["selector"] = args.rest[1]
-            if len(args.rest) > 2:
-                req["property"] = args.rest[2]
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "hitTest":
-            if not args.rest:
-                sys.exit("error: hitTest needs <target> [x y]")
-            req = {"cmd": "hitTest", "target": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "rightClick":
-            if not args.rest:
-                sys.exit("error: rightClick needs <target> [x y]")
-            req = {"cmd": "rightClick", "target": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "clickAt":
-            # clickAt <x> <y>            -> global screen coords (dumpTree geometry)
-            # clickAt <target> <x> <y>  -> coords local to <target>
-            # Disambiguate like the server: first token numeric => global form
-            # (module-level _as_int: strict int, floats error loudly).
-            if len(args.rest) >= 2 and _as_int(args.rest[0]) is not None:
-                if _as_int(args.rest[1]) is None:
-                    sys.exit(f"error: clickAt y must be an integer, got {args.rest[1]!r}")
-                req = {"cmd": "clickAt", "value": f"{args.rest[0]} {args.rest[1]}"}
-            elif len(args.rest) >= 3 and _as_int(args.rest[0]) is None:
-                if _as_int(args.rest[1]) is None or _as_int(args.rest[2]) is None:
-                    sys.exit("error: clickAt <target> <x> <y> — x and y must be integers")
-                req = {"cmd": "clickAt", "target": args.rest[0],
-                       "value": f"{args.rest[1]} {args.rest[2]}"}
-            else:
-                sys.exit("error: clickAt needs <x> <y> or <target> <x> <y>")
-
-        elif args.command == "pan":
-            if not args.rest:
-                sys.exit("error: pan needs <create|add|center|close|remove> [value]")
-            req = {"cmd": "pan", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "tune":
-            if not args.rest:
-                sys.exit("error: tune needs a frequency in MHz")
-            print(json.dumps(bridge.request({"cmd": "tune", "value": args.rest[0]}), indent=2))
-
-        elif args.command == "shortcut":
-            if not args.rest:
-                sys.exit("error: shortcut needs an action id")
-            print(json.dumps(bridge.request({"cmd": "shortcut", "target": args.rest[0]}), indent=2))
-
-        elif args.command == "actions":
-            tree = bridge.request({"cmd": "dumpTree"})
-            pattern = " ".join(args.rest) if args.rest else None
-            actions = collect_actions(tree, pattern)
-            print(json.dumps({"ok": True, "count": len(actions), "actions": actions}, indent=2))
-
-        elif args.command == "contextMenu":
-            if not args.rest:
-                sys.exit("error: contextMenu needs <target> [x y]")
-            req = {"cmd": "contextMenu", "target": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "rightClick":
-            if not args.rest:
-                sys.exit("error: rightClick needs <target> [x y]")
-            if len(args.rest) not in (1, 3):
-                sys.exit("error: rightClick needs <target> or <target> <x> <y>")
-            if len(args.rest) == 3:
-                if _as_int(args.rest[1]) is None or _as_int(args.rest[2]) is None:
-                    sys.exit("error: rightClick x and y must be integers")
-            req = {"cmd": "rightClick", "target": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "layout":
-            if not args.rest:
-                sys.exit("error: layout needs <rearrange <id> | get>")
-            req = {"cmd": "layout", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "scale":
-            req = {"cmd": "scale"}
-            if args.rest:
-                req["value"] = args.rest[0]
-
-        elif args.command == "hover":
-            if not args.rest:
-                sys.exit("error: hover needs <target> [leave]")
-            req = {"cmd": "hover", "target": args.rest[0]}
-            if len(args.rest) > 1:
-                req["action"] = args.rest[1]
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "tooltip":
-            if not args.rest:
-                sys.exit("error: tooltip needs <target> [hide|text...]")
-            req = {"cmd": "tooltip", "target": args.rest[0]}
-            if len(args.rest) > 1:
-                if args.rest[1] == "hide":
-                    if len(args.rest) != 2:
-                        sys.exit("error: tooltip hide takes no extra arguments")
-                    req["action"] = "hide"
-                else:
-                    req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "resize":
-            if len(args.rest) < 2:
-                sys.exit("error: resize needs <w> <h> [target]")
-            req = {"cmd": "resize", "value": f"{args.rest[0]} {args.rest[1]}"}
-            if len(args.rest) > 2:
-                req["target"] = " ".join(args.rest[2:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "connect":
-            if not args.rest:
-                sys.exit("error: connect needs <list|local|ip|wait> [args]")
-            req = {"cmd": "connect", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "disconnect":
-            print(json.dumps(bridge.request({"cmd": "disconnect"}), indent=2))
-
-        elif args.command == "slice":
-            if not args.rest:
-                sys.exit("error: slice needs an action")
-            req = {"cmd": "slice", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "dss":
-            if not args.rest:
-                sys.exit("error: dss needs <snapshot|reset|inject|scrollback|live> [pan] [args]")
-            action = args.rest[0]
-            req = {"cmd": "dss", "action": action}
-            dss_args = args.rest[1:]
-            if action == "inject":
-                stream_names = {"native", "flex", "kiwi", "kiwisdr"}
-                if len(dss_args) < 3:
-                    sys.exit("error: dss inject needs [pan] <count> <firstPeakBin> <stepBin> "
-                             "[native|kiwi [rowLowMhz rowHighMhz]]")
-                if (len(dss_args) == 3
-                        or (len(dss_args) == 4 and dss_args[3].lower() in stream_names)
-                        or (len(dss_args) == 6 and dss_args[3].lower() in stream_names)):
-                    req["value"] = " ".join(dss_args)
-                else:
-                    req["target"] = dss_args[0]
-                    req["value"] = " ".join(dss_args[1:])
-            elif action == "scrollback":
-                if not dss_args:
-                    sys.exit("error: dss scrollback needs [pan] <offsetRows>")
-                if len(dss_args) == 1:
-                    req["value"] = dss_args[0]
-                else:
-                    req["target"] = dss_args[0]
-                    req["value"] = " ".join(dss_args[1:])
-            else:
-                if dss_args:
-                    req["target"] = dss_args[0]
-                if len(dss_args) > 1:
-                    req["value"] = " ".join(dss_args[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "audioCapture":
-            action = args.rest[0] if args.rest else "status"
-            req = {"cmd": "audioCapture", "action": action}
-            if len(args.rest) > 1:
-                if action == "read" and len(args.rest) == 2:
-                    req["path"] = args.rest[1]
-                else:
-                    req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command in ("record", "testtone", "tci"):
-            # record <start|stop|status|path|dir [path]> | testtone <on [hz] [db]|off>
-            # tci <start [port]|status|stop [abrupt]>
-            req = {"cmd": args.command}
-            if args.rest:
-                req["action"] = args.rest[0]
-                if len(args.rest) > 1:
-                    req["value"] = " ".join(args.rest[1:])
-            print(json.dumps(bridge.request(req), indent=2))
-
-        elif args.command == "panmessage":
-            if not args.rest:
-                sys.exit("error: panmessage needs <add|remove|clear|list> <target> ...")
-            req = {"cmd": "panmessage", "action": args.rest[0]}
-            if len(args.rest) > 1:
-                req["target"] = args.rest[1]
-            if args.rest[0] in ("add", "upsert"):
-                if len(args.rest) < 5:
-                    sys.exit("error: panmessage add needs <target> <id> <timeoutMs> <title|detail>")
-                req["id"] = args.rest[2]
-                try:
-                    req["timeoutMs"] = int(args.rest[3])
-                except ValueError:
-                    sys.exit("error: panmessage add timeoutMs must be an integer")
-                text_start = 4
-                if len(args.rest) > text_start and args.rest[text_start].lower().startswith("tone="):
-                    req["tone"] = args.rest[text_start].split("=", 1)[1].strip()
-                    text_start += 1
-                text = " ".join(args.rest[text_start:])
-                title, sep, detail = text.partition("|")
-                req["title"] = title.strip()
-                req["detail"] = detail.strip() if sep else ""
-            elif args.rest[0] in ("remove", "dismiss"):
-                if len(args.rest) < 3:
-                    sys.exit("error: panmessage remove needs <target> <id>")
-                req["id"] = args.rest[2]
-            print(json.dumps(bridge.request(req), indent=2))
-
-        else:  # demo: produce the Phase-0 deliverables
+        if args.command == "demo":
+            # Produce the Phase-0 deliverables.
             os.makedirs(args.out, exist_ok=True)
 
             pong = bridge.request({"cmd": "ping"})
@@ -497,6 +451,26 @@ def main():
             else:
                 print(f"panadapter grab failed: {grab.get('error')}", file=sys.stderr)
                 sys.exit(1)
+
+        elif args.command == "actions":
+            tree = bridge.request({"cmd": "dumpTree"})
+            pattern = " ".join(args.rest) if args.rest else None
+            actions = collect_actions(tree, pattern)
+            print(json.dumps({"ok": True, "count": len(actions), "actions": actions}, indent=2))
+
+        else:
+            mapper = MAPPERS.get(args.command)
+            if mapper is not None:
+                req = mapper(args.rest)
+                req["cmd"] = args.command
+                resp = bridge.request(req)
+            else:
+                # No bespoke mapping: pass the bare positional line through and
+                # let the server's verb registry parse it. Note: the server
+                # re-splits on spaces, so multi-word arguments need a MAPPERS
+                # entry (or the JSON protocol) to survive quoting.
+                resp = bridge.request_line(" ".join([args.command] + args.rest))
+            print(json.dumps(resp, indent=2))
     finally:
         bridge.close()
 
