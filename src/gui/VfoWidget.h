@@ -368,6 +368,10 @@ private:
 
     void buildUI();
     void buildTabContent();
+    // Sweep every interactive flag control and give it Qt::PointingHandCursor so
+    // hovering signals clickability.  Re-run after rebuildFilterButtons() so the
+    // dynamically recreated filter/autotune/adaptive buttons are covered (#4036).
+    void applyInteractiveCursors();
     // Meter view (standard S-Meter vs SmartMTR component).  Driven globally by
     // MeterViewController; m_meterStack switches pages and meterBarRect() locates
     // the painted bar.  The inline selector row (m_meterMenuRow) is revealed by

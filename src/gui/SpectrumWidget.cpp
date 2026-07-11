@@ -40,6 +40,8 @@
 #include <QVBoxLayout>
 #include <QWidgetAction>
 #include <QApplication>
+#include <QAccessible>
+#include <QAccessibleValueChangeEvent>
 #include <QCoreApplication>
 #include <QCursor>
 #include <QGuiApplication>
@@ -5037,6 +5039,17 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, true);
+}
+
+void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
+{
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
+}
+
+void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
+                                               bool animateSmallNudges)
+{
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
@@ -5104,8 +5117,9 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         m_bandwidthMhz = bandwidthMhz;
     }
 
-    if (largeShift) {
-        // Large jump: cancel any running animation and snap immediately.
+    if (largeShift || !animateSmallNudges) {
+        // Large jumps and explicit immediate updates snap without pan-follow
+        // animation, but still share the same stale-echo and waterfall guards.
         if (m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped) {
             m_panCenterAnim->stop();
         }
@@ -5600,6 +5614,28 @@ void SpectrumWidget::setSliceOverlayAdaptiveActive(int sliceId, bool active)
     auto& o = m_sliceOverlays[idx];
     if (o.adaptiveActive == active) return;
     o.adaptiveActive = active;
+    markOverlayDirty();
+}
+
+void SpectrumWidget::setCenterLockSliceId(int sliceId)
+{
+    if (m_centerLockSliceId == sliceId) {
+        return;
+    }
+    m_centerLockSliceId = sliceId;
+    QString sliceName = QString::number(sliceId);
+    const int overlay = overlayIndex(sliceId);
+    if (overlay >= 0) {
+        sliceName = SliceLabel::unicodeForm(
+            m_sliceOverlays.at(overlay).sliceId,
+            m_sliceOverlays.at(overlay).perClientLetter);
+    }
+    setAccessibleDescription(
+        sliceId >= 0
+            ? tr("Center Lock enabled for Slice %1").arg(sliceName)
+            : tr("Center Lock is off"));
+    QAccessibleValueChangeEvent event(this, sliceId);
+    QAccessible::updateAccessibility(&event);
     markOverlayDirty();
 }
 
@@ -6920,6 +6956,48 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_draggingTnfId = -1;
         const int mx = static_cast<int>(ev->position().x());
 
+        auto sliceDisplayName = [](const SliceOverlay& so) {
+            return SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
+        };
+        auto addCenterLockAction =
+            [this, sliceDisplayName](QMenu* targetMenu, const SliceOverlay& so,
+                                     bool includeCommandName) {
+            const QString sliceName = QStringLiteral("Slice %1").arg(sliceDisplayName(so));
+            QAction* action = targetMenu->addAction(
+                includeCommandName
+                    ? QStringLiteral("Center Lock %1").arg(sliceName)
+                    : sliceName);
+            action->setCheckable(true);
+            action->setChecked(m_centerLockSliceId == so.sliceId);
+            connect(action, &QAction::triggered, this,
+                    [this, sliceId = so.sliceId]() {
+                emit centerLockRequested(sliceId, m_centerLockSliceId != sliceId);
+            });
+        };
+        auto addCenterLockControls = [this, addCenterLockAction](QMenu& targetMenu) {
+            if (m_sliceOverlays.isEmpty()) {
+                return;
+            }
+
+            targetMenu.addSeparator();
+            if (m_sliceOverlays.size() == 1) {
+                addCenterLockAction(&targetMenu, m_sliceOverlays.first(), true);
+                return;
+            }
+
+            QMenu* centerLockMenu = targetMenu.addMenu(QStringLiteral("Center Lock"));
+            const SliceOverlay* active = activeOverlay();
+            if (active) {
+                addCenterLockAction(centerLockMenu, *active, false);
+            }
+            for (const SliceOverlay& so : m_sliceOverlays) {
+                if (active && so.sliceId == active->sliceId) {
+                    continue;
+                }
+                addCenterLockAction(centerLockMenu, so, false);
+            }
+        };
+
         // Right-click on off-screen slice indicator → slice context menu
         for (int oi = 0; oi < m_offScreenRects.size(); ++oi) {
             if (!m_offScreenRects[oi].isNull() &&
@@ -6939,6 +7017,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                         markOverlayDirty();
                         emit centerChangeRequested(m_centerMhz);
                     });
+                menu.addSeparator();
+                addCenterLockAction(&menu, so, true);
                 menu.exec(ev->globalPosition().toPoint());
                 ev->accept();
                 return;
@@ -7065,6 +7145,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
 
         if (hitTnf < 0) {
+            addCenterLockControls(menu);
+
             // Close Slice option (only when multiple slices exist)
             if (m_sliceOverlays.size() > 1) {
                 menu.addSeparator();
@@ -12122,6 +12204,21 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
                 p.drawLine(x, wfRect.top(), x, wfRect.bottom());
             }
         };
+
+        // Passive target marker: Center Lock is a controller state, so its
+        // visible affordance stays attached to the locked slice rather than
+        // adding another mouse control to the pan chrome.
+        if (so.sliceId == m_centerLockSliceId) {
+            const QPoint targetCenter(vfoX, specRect.top() + 18);
+            p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 2));
+            p.drawEllipse(targetCenter, 6, 6);
+            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 240), 1));
+            p.drawLine(targetCenter.x() - 9, targetCenter.y(),
+                       targetCenter.x() + 9, targetCenter.y());
+            p.drawLine(targetCenter.x(), targetCenter.y() - 9,
+                       targetCenter.x(), targetCenter.y() + 9);
+        }
 
         // ── Filter passband shading ──────────────────────────────────────
         // Default stays spectrum-only because the waterfall is a historical

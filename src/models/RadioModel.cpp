@@ -822,6 +822,18 @@ RadioModel::RadioModel(QObject* parent)
             restoreTuneInhibit();
     });
 
+    // Drive the status-bar operator TX timer from actual transmit-state edges
+    // (optimistic MOX/PTT plus interlock-driven VOX/footswitch/CW). The source
+    // gate inside updateOperatorTransmit() keeps TCI/DAX transmits out.
+    connect(&m_transmitModel, &TransmitModel::transmittingChanged, this,
+            [this](bool) { updateOperatorTransmit(); });
+    // Also recompute when the TX-slice mode changes (phone↔CW) or first resolves
+    // after connect: updateOperatorTransmit() gates on modeIsCw, which a
+    // transmittingChanged edge alone can't catch mid-over. Idempotent — the
+    // extra trigger only emits operatorTransmitChanged on a real edge. (#4131)
+    connect(&m_transmitModel, &TransmitModel::txSliceModeChanged, this,
+            [this](const QString&) { updateOperatorTransmit(); });
+
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
@@ -1907,6 +1919,9 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
             return;
         }
         armInterlockNotification(source);
+        // Record who initiated this key-up so the status-bar TX timer can tell
+        // an operator MOX/PTT from a TCI-hardware or DAX transmit (#tx-timer).
+        m_transmitModel.noteActivePttSource(source);
     }
 
     // Track local intent so we can keep TX gating aligned with user/PTT edges
@@ -1923,6 +1938,45 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     }
 
     sendCmd(QString("xmit %1").arg(tx ? 1 : 0));
+}
+
+void RadioModel::updateOperatorTransmit()
+{
+    // On a full unkey, forget the remembered PTT source. A subsequent
+    // hardware-mic PTT, footswitch, or VOX key never flows through a
+    // source-bearing entry point (the radio just starts transmitting), so
+    // without this reset it would inherit a stale TCI/DAX tag and be wrongly
+    // excluded from the operator TX timer.
+    if (!m_transmitModel.isTransmitting()
+        && m_transmitModel.activePttSource() != TransmitModel::PttSource::Mox) {
+        m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Mox);
+    }
+
+    // TransmitModel::isTransmitting() already tracks only owned mic/manual TX —
+    // the interlock handler forces it false for DAX and other-client TX. The
+    // only owned path we must additionally exclude is TCI-hardware PTT, which
+    // the radio reports as source=SW and so is indistinguishable at the
+    // interlock level; the remembered source disambiguates it. m_daxTxActive is
+    // a belt-and-suspenders guard for the optimistic DAX key edge.
+    const TransmitModel::PttSource src = m_transmitModel.activePttSource();
+    // CW (incl. any CWU/CWL variant) is excluded — see operatorTransmitActive.
+    // Prefer the TX slice's live mode; fall back to the mode the radio echoes in
+    // its transmit status when there is no resolvable TX slice.
+    const SliceModel* ts = txSlice();
+    const QString txMode = (ts ? ts->mode() : m_transmitModel.txSliceMode())
+                               .trimmed().toUpper();
+    const bool modeIsCw = txMode.startsWith(QStringLiteral("CW"));
+    const bool op = RadioStatusOwnership::operatorTransmitActive(
+        m_transmitModel.isTransmitting(),
+        m_daxTxActive,
+        src == TransmitModel::PttSource::TciHardware,
+        src == TransmitModel::PttSource::Dax,
+        modeIsCw);
+
+    if (op == m_operatorTransmitting)
+        return;
+    m_operatorTransmitting = op;
+    emit operatorTransmitChanged(op);
 }
 
 void RadioModel::setDigitalVoiceTxSlice(int sliceId)
@@ -4797,6 +4851,8 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
             && daxTxStatusCanUpdateLocalState(stream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
             m_daxTxStreamId = stream.streamId;
             m_daxTxActive = state.tx;
+            updateOperatorTransmit();  // DAX TX toggled — refresh the operator
+                                       // TX-timer gate promptly (#4131 review)
             m_daxTxClientHandle = state.clientHandle;
             if (ownedByUs)
                 m_daxTxCreatePending = false;
@@ -4872,6 +4928,7 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
     if (daxTxStatusCanUpdateLocalState(txAudioStream.streamId, m_daxTxStreamId, kvs, clientHandle())) {
         m_daxTxStreamId = txAudioStream.streamId;
         m_daxTxActive = state.tx;
+        updateOperatorTransmit();  // DAX TX toggled (#4131 review)
         m_daxTxClientHandle = state.clientHandle;
         if (ownedByUs)
             m_daxTxCreatePending = false;

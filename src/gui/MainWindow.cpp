@@ -1180,6 +1180,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     buildMenuBar();
     buildUI();
+    loadCenterLockSettings();
 #ifdef Q_OS_WIN
     applyWindowsCustomFrame();
 #endif
@@ -1532,11 +1533,6 @@ MainWindow::MainWindow(QWidget* parent)
     // Overlay-menu antenna wiring is now per-pan in wirePanadapter() (#1260).
     // Antenna list and S-meter are now wired per-widget in onSliceAdded.
 
-    // ── Title bar: Pan Follow ────────────────────────────────────────────────
-    connect(m_titleBar, &TitleBar::panFollowToggled,
-            this, &MainWindow::setPanFollow);
-    if (m_titleBar->isPanFollowChecked()) setPanFollow(true);
-
     // ── Title bar: PC Audio, master volume, headphone volume ────────────────
     // The remote_audio_rx stream controls the radio's audio routing:
     // stream exists → audio to PC; stream removed → audio to radio speakers.
@@ -1589,6 +1585,12 @@ MainWindow::MainWindow(QWidget* parent)
     // Multi-Flex: show when another client is transmitting
     connect(&m_radioModel, &RadioModel::txOwnerChanged,
             m_titleBar, &TitleBar::setOtherClientTx);
+
+    // Status-bar transmit timer — runs only for operator MOX/PTT/VOX, never
+    // TCI/DAX (the model gates the source). Hidden idle; 15s hold + fade on
+    // unkey is handled inside TitleBar.
+    connect(&m_radioModel, &RadioModel::operatorTransmitChanged,
+            m_titleBar, &TitleBar::setOperatorTransmitting);
 
     // Multi-Flex: title bar indicator when other clients are connected
     connect(&m_radioModel, &RadioModel::otherClientsChanged,
@@ -3338,6 +3340,14 @@ void MainWindow::toggleConnectionDialog()
     }
 
     showConnectionDialog();
+}
+
+QJsonObject MainWindow::automationTxTimerSnapshot() const
+{
+    if (!m_titleBar)
+        return QJsonObject{{QStringLiteral("visible"), false},
+                           {QStringLiteral("running"), false}};
+    return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
 }
 
 void MainWindow::showConnectionDialog()
@@ -5709,8 +5719,22 @@ void MainWindow::applyMasterVolume(int pct)
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 SliceModel* MainWindow::activeSlice() const
 {
-    if (m_activeSliceId < 0) return nullptr;
-    return m_radioModel.slice(m_activeSliceId);
+    SliceModel* cached = nullptr;
+    if (m_activeSliceId >= 0) {
+        cached = m_radioModel.slice(m_activeSliceId);
+        if (cached && cached->isActive()) {
+            return cached;
+        }
+    }
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (slice && slice->isActive()) {
+            return slice;
+        }
+    }
+    if (cached) {
+        return cached;
+    }
+    return nullptr;
 }
 
 void MainWindow::pushRxFilterCutoffsToEq()
@@ -5777,6 +5801,9 @@ void MainWindow::pushSliceFrequencyToOverlays(SliceModel* slice, double mhz)
     if (!slice) {
         return;
     }
+
+    mhz = centerLockDisplayFrequency(slice, mhz);
+    snapCenterLocksForTuningSlice(slice, mhz, true);
 
     const QString freqStr = vfoFrequencyText(mhz);
     auto pushOne = [this, mhz, &freqStr](SliceModel* s) {
@@ -5910,6 +5937,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 #endif
     }
 
+    holdCenterLockTuneTarget(slice, mhz);
     pushSliceFrequencyToOverlays(slice, mhz);
 
     const BandStackPreselectResult bandPreselect =
@@ -5917,6 +5945,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             ? preselectBandStackForTune(slice, mhz, source)
             : BandStackPreselectResult::NotNeeded;
     if (bandPreselect == BandStackPreselectResult::Unsupported) {
+        m_centerLockTuneHoldBySlice.remove(slice->sliceId());
         pushSliceFrequencyToOverlays(slice, oldFreqMhz);
         return;
     }
@@ -5928,6 +5957,7 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             auto* pendingSlice = m_radioModel.slice(sliceId);
             if (!pendingSlice || pendingSlice->isLocked() || m_swrSweep.running)
                 return;
+            holdCenterLockTuneTarget(pendingSlice, mhz);
             pushSliceFrequencyToOverlays(pendingSlice, mhz);
             pendingSlice->tuneAndRecenter(mhz);
 
@@ -5950,6 +5980,48 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             ? panFollowVfo(slice, mhz, source)
             : revealFrequencyIfNeeded(slice, mhz, intent, source);
     logTunePolicyDecision(source, intent, oldFreqMhz, mhz, result);
+}
+
+QJsonObject MainWindow::automationTune(double mhz)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("no slice to tune")}};
+    }
+    if (slice->isLocked()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("refused: slice %1 is VFO-locked").arg(slice->letter())}};
+    }
+    if (m_swrSweep.running) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: SWR sweep is running")}};
+    }
+
+    applyTuneRequest(slice, mhz, TuneIntent::IncrementalTune, "automation-tune");
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("tune"), mhz},
+                       {QStringLiteral("sliceId"), slice->sliceId()},
+                       {QStringLiteral("letter"), slice->letter()}};
+}
+
+QJsonObject MainWindow::automationSetCenterLock(int sliceId, bool enabled)
+{
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no slice with id %1").arg(sliceId)}};
+    }
+
+    setCenterLockForSlice(slice, enabled);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("slice"), QStringLiteral("centerlock")},
+                       {QStringLiteral("id"), sliceId},
+                       {QStringLiteral("enabled"), enabled}};
 }
 
 void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
@@ -8703,79 +8775,6 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
             PerfTelemetry::instance().recordSHistorySkipped();
         }
     }
-}
-
-// ─── Pan Follow ───────────────────────────────────────────────────────────────
-
-void MainWindow::setPanFollow(bool on)
-{
-    disconnect(m_panFollowConn);
-    disconnect(m_panFollowSliceConn);
-    m_panFollowActive = on;
-    // Toggling Pan Lock clears any drag-suppress state — a defensive reset in
-    // case a slice drag was ever abandoned without a mouse-release (e.g. the pane
-    // was removed mid-drag), which would otherwise leave Pan Follow suppressed.
-    m_sliceDragInProgress = false;
-
-    if (!on) return;
-
-    // Re-attach helper: wires frequency tracking to whichever slice 0
-    // is currently live. Called on activation and whenever slice 0 is
-    // recreated (radio reconnect, slice re-assignment, etc.).
-    auto attachToSlice0 = [this]() {
-        disconnect(m_panFollowConn);
-
-        auto* s = m_radioModel.slice(0);
-        if (!s) {
-            // No slice yet — uncheck the button so UI matches reality.
-            if (m_titleBar) m_titleBar->setPanFollowChecked(false);
-            return;
-        }
-
-        recenterPanFollowOnSlice0();
-        m_panFollowConn = connect(s, &SliceModel::frequencyChanged,
-                                  this, [this](double) { recenterPanFollowOnSlice0(); });
-    };
-
-    attachToSlice0();
-
-    // Re-attach whenever a new slice 0 appears (reconnect / re-assignment).
-    m_panFollowSliceConn = connect(&m_radioModel, &RadioModel::sliceAdded,
-        this, [this, attachToSlice0](SliceModel* s) {
-            if (s && s->sliceId() == 0) attachToSlice0();
-        });
-}
-
-// Pan Follow ("Pan Lock"): recenter the panadapter on Slice A (slice 0). Called
-// on enable, on every slice-0 frequency change, and once when a slice drag ends.
-void MainWindow::recenterPanFollowOnSlice0()
-{
-    if (!m_panFollowActive) return;   // Pan Lock off — never move the pan
-    // A slice is being dragged (in-window tune or edge auto-pan): the drag owns
-    // the pan center, so stand down rather than fight it with a per-tick recenter
-    // (that conflict caused ~0.33 MHz pan lurches + jumping). The drag-end handler
-    // calls this once with the flag cleared, so Pan Lock re-asserts on release.
-    // (user-reported)
-    if (m_sliceDragInProgress) return;
-    auto* s = m_radioModel.slice(0);
-    if (!s) return;
-    const QString panId = s->panId();
-    if (panId.isEmpty()) return;
-    // WFM holds its pan fixed: Doppler rides the demodulator's NCO, and
-    // recentring underneath it would desync the NCO offset until the next slice
-    // retune. While WFM is active on this pan, WFM wins and Pan Follow stands
-    // down. (Precedence is a UX call — flagged for maintainer review in the WFM PR.)
-    if (m_wfmSliceId >= 0) {
-        auto* wfmSlice = m_radioModel.slice(m_wfmSliceId);
-        if (wfmSlice && wfmSlice->panId() == panId) return;
-    }
-    const double freq = s->frequency();
-    auto* pan = m_radioModel.panadapter(panId);
-    if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
-    const QString freqStr = QString::number(freq, 'f', 6);
-    if (pan) pan->setCenterBandwidth(freq, -1.0);  // aetherd RFC 2.3
-    m_radioModel.sendCommand(
-        QString("display pan set %1 center=%2").arg(panId, freqStr));
 }
 
 } // namespace AetherSDR

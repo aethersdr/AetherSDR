@@ -577,8 +577,18 @@ void SliceModel::setTxSlice(bool on)
 
 void SliceModel::setActive(bool on)
 {
-    if (on)
+    if (on) {
+        // Optimistic (#3854 review): activeSlice() prefers the radio's active
+        // flag, so waiting for the echo leaves a one-round-trip window where
+        // the PREVIOUS slice still reads active and the first wheel/MIDI/
+        // shortcut inputs land on it (worst over SmartLink latency). The echo
+        // remains authoritative — a rejected select is corrected by status.
+        if (!m_active) {
+            m_active = true;
+            emit activeChanged(true);
+        }
         sendCommand(QString("slice set %1 active=1").arg(m_id));
+    }
 }
 
 // ─── Record/playback ────────────────────────────────────────────────────────

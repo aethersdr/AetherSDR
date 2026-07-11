@@ -156,10 +156,11 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
+| | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
-| | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/diversity/centerlock/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -210,6 +211,7 @@ Each `<node>`:
   "toolTip": "Clear the displayed SWR sweep trace.",  // present only if set
   "enabled": true,
   "visible": true,
+  "cursor": "pointinghand",                // present only if the widget owns a cursor (WA_SetCursor); shape name — see below
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "windowState": "maximized",              // top-level windows only: normal|maximized|minimized|fullscreen
   "value": "42",                           // best-effort; see below
@@ -288,6 +290,14 @@ present.
   switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
   (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
   screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
+- `cursor` — the widget's mouse-cursor **shape name**, reported only when the
+  widget explicitly owns a cursor (`WA_SetCursor`); inheriting widgets omit it.
+  Lets a driver assert **hover affordance** — a clickable control carries
+  `pointinghand`, a text field `ibeam` — without observing the live OS cursor,
+  which no `grab`/screenshot captures. Shape names: `arrow`, `pointinghand`,
+  `ibeam`, `splith`, `splitv`, `sizehor`, `sizever`, `openhand`, `forbidden`,
+  `wait`, `busy`, `cross`, `blank`, … (`other` for anything unmapped). Used to
+  prove every interactive slice-flag field now signals clickability (#4036).
 
 ### `grab`
 PNG capture of a single widget.
@@ -422,6 +432,21 @@ re-`dumpTree` (or re-read) after any sort, filter, or insert.
 > load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
 > Adding a new keying control? Call `markTxKeying(theButton)` — see
 > `src/core/TxKeyingMarker.h`.
+
+### `shortcut`
+Invoke a registered `ShortcutManager` action by id. This exercises the same
+handler a user-bound key would call, without requiring the test profile to bind
+an actual key sequence. It is useful for controller-style actions that may ship
+without a default keyboard shortcut.
+
+```json
+→ {"cmd":"shortcut","target":"center_lock_toggle"}
+← {"ok":true,"shortcut":"center_lock_toggle","fired":true}
+```
+
+Handlers may no-op when their normal app-side preconditions are not met; assert
+effects with `get`/`dumpTree` after firing, the same way a MIDI/controller
+test should.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -725,9 +750,10 @@ recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
 ### `slice`
-Slice lifecycle, TX assignment, antennas, and receive source. All actions are
-RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
-(radio-authoritative); re-poll `get slices`.
+Slice lifecycle, diversity, Center Lock, TX assignment, antennas, and receive
+source. All actions are RX/config — none keys the transmitter.
+`add`/`remove`/`tx`/`diversity` are async (radio-authoritative); re-poll
+`get slices`.
 
 ```json
 → {"cmd":"slice","action":"add","value":"14.074"}
@@ -743,6 +769,8 @@ RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
+| `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
+| `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
@@ -1386,6 +1414,32 @@ Semantics to assert against: a channel with holders and `streamId=0x0` +
 is inside the 1.5 s removal grace window (it disappears once the removal
 lands); a channel entry that persists with holders across a consumer teardown
 proves the co-hold path.
+
+### `get txtimer`
+Read the status-bar transmit timer's state. The timer sits just left of the
+**PC Audio** button and runs **only** for operator-driven phone/data transmits
+— MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
+TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
+QSK toggles the interlock per element, which would thrash a wall-clock timer).
+All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
+hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
+fades out.
+
+```json
+→ {"cmd":"get","model":"txtimer"}
+← {"ok":true,"model":"txtimer","visible":true,"running":true,"holding":false,
+   "fading":false,"elapsedMs":4210,"text":"0:04","opacity":1.0}
+```
+
+Fields: `visible` (label shown at all), `running` (keyed, counting up),
+`holding` (the 15 s post-unkey hold is armed), `fading` (fade-out animation in
+flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
+(1.0 while shown/holding, ramps to 0 during fade). A trailing property narrows
+it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
+dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
+`running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
+`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
+throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server

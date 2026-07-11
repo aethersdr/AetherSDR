@@ -56,8 +56,12 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFileDialog>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QPointer>
 #include <QSet>
+#include <QStringList>
 #include <QTimer>
 
 #include <algorithm>
@@ -86,6 +90,9 @@ constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr int kPanDimensionDecoderFallbackMs = 650;
 constexpr int kKiwiGestureViewUpdateMs = 100;
 constexpr qint64 kProfileLoadDimensionSettleMs = kPanDimensionDecoderFallbackMs + 100;
+constexpr qint64 kCenterLockTuneEchoHoldMs = 550;
+constexpr auto kCenterLockSettingsKey = "CenterLock";
+constexpr int kCenterLockSettingsVersion = 1;
 
 int currentAutoSqlMarginDb()
 {
@@ -170,6 +177,444 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 }
 
 } // namespace
+
+int MainWindow::centerLockSliceForPan(const QString& panId) const
+{
+    return m_centerLockSliceByPan.value(panId, -1);
+}
+
+bool MainWindow::centerLockActiveForSlice(const SliceModel* slice) const
+{
+    return slice
+        && !slice->panId().isEmpty()
+        && centerLockSliceForPan(slice->panId()) == slice->sliceId();
+}
+
+QString MainWindow::centerLockRadioKey() const
+{
+    // Persistence identity (#3854 review): radio serial ALONE is shared by
+    // every client instance on this machine (a real MultiFlex configuration),
+    // so one instance's saved lock intent would engage in another instance —
+    // slice letters are per-client — and either instance's unlock would
+    // clobber the other's saved intent (the save rewrites the whole blob).
+    // Scope the key by this client's station identity (StationName setting,
+    // hostname fallback — the same identity we register with `client
+    // station`). The blob treats keys as opaque, so no format migration.
+    const QString serial = m_radioModel.serial().trimmed();
+    if (serial.isEmpty()) {
+        return QString();
+    }
+    return serial + QLatin1Char('/') + m_radioModel.ourStationName().trimmed();
+}
+
+void MainWindow::loadCenterLockSettings()
+{
+    m_centerLockSliceLetterByRadioPanIndex.clear();
+
+    const QString raw = AppSettings::instance()
+        .value(kCenterLockSettingsKey, QString()).toString().trimmed();
+    if (raw.isEmpty()) {
+        return;
+    }
+
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(raw.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        qCWarning(lcGui).noquote()
+            << "MainWindow: ignoring invalid CenterLock settings:"
+            << error.errorString();
+        return;
+    }
+
+    const QJsonObject root = document.object();
+    if (root.value(QStringLiteral("version")).toInt() != kCenterLockSettingsVersion) {
+        qCWarning(lcGui) << "MainWindow: ignoring unsupported CenterLock settings version";
+        return;
+    }
+
+    const QJsonObject radios = root.value(QStringLiteral("radios")).toObject();
+    for (auto radioIt = radios.constBegin(); radioIt != radios.constEnd(); ++radioIt) {
+        const QString serial = radioIt.key().trimmed();
+        if (serial.isEmpty() || !radioIt.value().isObject()) {
+            continue;
+        }
+
+        QHash<int, QString> targets;
+        const QJsonObject panSlots = radioIt.value().toObject();
+        for (auto slotIt = panSlots.constBegin(); slotIt != panSlots.constEnd(); ++slotIt) {
+            bool indexOk = false;
+            const int panIndex = slotIt.key().toInt(&indexOk);
+            const QString sliceLetter = slotIt.value().toString().trimmed().toUpper();
+            if (indexOk && panIndex >= 0 && !sliceLetter.isEmpty()) {
+                targets.insert(panIndex, sliceLetter);
+            }
+        }
+        if (!targets.isEmpty()) {
+            m_centerLockSliceLetterByRadioPanIndex.insert(serial, targets);
+        }
+    }
+}
+
+void MainWindow::saveCenterLockSettings() const
+{
+    QJsonObject radios;
+    QStringList serials = m_centerLockSliceLetterByRadioPanIndex.keys();
+    std::sort(serials.begin(), serials.end());
+    for (const QString& serial : serials) {
+        const QHash<int, QString>& targets =
+            m_centerLockSliceLetterByRadioPanIndex.value(serial);
+        QList<int> panIndices = targets.keys();
+        std::sort(panIndices.begin(), panIndices.end());
+
+        QJsonObject panSlots;
+        for (int panIndex : panIndices) {
+            const QString sliceLetter = targets.value(panIndex).trimmed().toUpper();
+            if (!sliceLetter.isEmpty()) {
+                panSlots.insert(QString::number(panIndex), sliceLetter);
+            }
+        }
+        if (!panSlots.isEmpty()) {
+            radios.insert(serial, panSlots);
+        }
+    }
+
+    auto& settings = AppSettings::instance();
+    if (radios.isEmpty()) {
+        settings.remove(kCenterLockSettingsKey);
+    } else {
+        QJsonObject root;
+        root.insert(QStringLiteral("version"), kCenterLockSettingsVersion);
+        root.insert(QStringLiteral("radios"), radios);
+        settings.setValue(
+            kCenterLockSettingsKey,
+            QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
+    }
+    settings.save();
+}
+
+void MainWindow::persistCenterLockForSlice(const SliceModel* slice)
+{
+    if (!slice || slice->panId().isEmpty() || !m_panStack) {
+        return;
+    }
+
+    const QString radioKey = centerLockRadioKey();
+    SpectrumWidget* sw = m_panStack->spectrum(slice->panId());
+    const QString sliceLetter = slice->letter().trimmed().toUpper();
+    if (radioKey.isEmpty() || !sw || sliceLetter.isEmpty()) {
+        return;
+    }
+
+    m_centerLockSliceLetterByRadioPanIndex[radioKey].insert(sw->panIndex(), sliceLetter);
+    saveCenterLockSettings();
+}
+
+void MainWindow::restoreCenterLockForPan(const QString& panId)
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return;
+    }
+
+    const QString radioKey = centerLockRadioKey();
+    SpectrumWidget* sw = m_panStack->spectrum(panId);
+    if (radioKey.isEmpty() || !sw) {
+        return;
+    }
+
+    const QString targetLetter = m_centerLockSliceLetterByRadioPanIndex
+        .value(radioKey).value(sw->panIndex()).trimmed();
+    if (targetLetter.isEmpty()) {
+        clearCenterLockForPan(panId);
+        return;
+    }
+
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice || slice->panId() != panId
+            || !m_radioModel.sliceMayBelongToUs(slice->sliceId())
+            || slice->letter().compare(targetLetter, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        setCenterLockForPan(panId, slice->sliceId(), true, false);
+        return;
+    }
+
+    clearCenterLockForPan(panId);
+}
+
+void MainWindow::setCenterLockForSlice(SliceModel* slice, bool on)
+{
+    if (!slice || slice->panId().isEmpty()) {
+        return;
+    }
+
+    setCenterLockForPan(slice->panId(), slice->sliceId(), on);
+}
+
+void MainWindow::setCenterLockForPan(const QString& panId, int sliceId, bool on,
+                                     bool persist)
+{
+    if (panId.isEmpty()) {
+        return;
+    }
+
+    if (!on) {
+        if (sliceId < 0 || centerLockSliceForPan(panId) == sliceId) {
+            clearCenterLockForPan(panId, persist);
+        }
+        return;
+    }
+
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice || slice->panId() != panId) {
+        return;
+    }
+
+    m_centerLockSliceByPan.insert(panId, sliceId);
+    if (persist) {
+        persistCenterLockForSlice(slice);
+    }
+
+    syncCenterLockUi(panId);
+    recenterCenterLockForPan(panId);
+}
+
+void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersistedIntent)
+{
+    if (panId.isEmpty()) {
+        return;
+    }
+
+    if (clearPersistedIntent && m_panStack) {
+        const QString radioKey = centerLockRadioKey();
+        if (SpectrumWidget* sw = m_panStack->spectrum(panId);
+            !radioKey.isEmpty() && sw) {
+            auto radioIt = m_centerLockSliceLetterByRadioPanIndex.find(radioKey);
+            if (radioIt != m_centerLockSliceLetterByRadioPanIndex.end()) {
+                radioIt->remove(sw->panIndex());
+                if (radioIt->isEmpty()) {
+                    m_centerLockSliceLetterByRadioPanIndex.erase(radioIt);
+                }
+                saveCenterLockSettings();
+            }
+        }
+    }
+
+    m_centerLockSliceByPan.remove(panId);
+    syncCenterLockUi(panId);
+}
+
+void MainWindow::clearCenterLockForSlice(int sliceId, bool clearPersistedIntent)
+{
+    QStringList pansToClear;
+    for (auto it = m_centerLockSliceByPan.cbegin();
+         it != m_centerLockSliceByPan.cend(); ++it) {
+        if (it.value() == sliceId) {
+            pansToClear.append(it.key());
+        }
+    }
+    for (const QString& panId : pansToClear) {
+        clearCenterLockForPan(panId, clearPersistedIntent);
+    }
+}
+
+void MainWindow::syncCenterLockUi(const QString& panId)
+{
+    if (panId.isEmpty() || !m_panStack) {
+        return;
+    }
+
+    if (SpectrumWidget* sw = m_panStack->spectrum(panId)) {
+        sw->setCenterLockSliceId(centerLockSliceForPan(panId));
+    }
+}
+
+bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool sendCommand)
+{
+    if (!centerLockActiveForSlice(slice) || m_sliceDragInProgress) {
+        return false;
+    }
+
+    const QString panId = slice->panId();
+    const bool kiwiDisplayActive = kiwiSdrPanDisplaysKiwi(panId);
+
+    if (m_wfmSliceId >= 0) {
+        SliceModel* wfmSlice = m_radioModel.slice(m_wfmSliceId);
+        if (wfmSlice && wfmSlice->panId() == panId) {
+            return false;
+        }
+    }
+
+    PanadapterModel* pan = m_radioModel.panadapter(panId);
+    if (!pan) {
+        return false;
+    }
+
+    SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(panId) : nullptr;
+    // Pan-BACKGROUND drag standdown (#3854 review): m_sliceDragInProgress only
+    // covers slice/VFO drags. During a background drag the drag path owns the
+    // center; snapping here would send a counter-command per radio echo and
+    // ping-pong the pan against the gesture. The release echo re-asserts the
+    // lock via the next recenter.
+    if (sw && sw->panDragActive()) {
+        return false;
+    }
+    const double bandwidthMhz = kiwiDisplayActive && sw && sw->bandwidthMhz() > 0.0
+        ? sw->bandwidthMhz()
+        : (pan->bandwidthMhz() > 0.0
+            ? pan->bandwidthMhz()
+            : (sw ? sw->bandwidthMhz() : 0.0));
+    const double targetCenterMhz =
+        bandwidthMhz > 0.0 ? std::max(mhz, bandwidthMhz / 2.0) : mhz;
+    bool changed = false;
+
+    if (sw && bandwidthMhz > 0.0
+        && (!qFuzzyCompare(sw->centerMhz(), targetCenterMhz)
+            || !qFuzzyCompare(sw->bandwidthMhz(), bandwidthMhz))) {
+        sw->setFrequencyRangeImmediate(targetCenterMhz, bandwidthMhz);
+        changed = true;
+    }
+
+    const bool modelNeedsCenter = !qFuzzyCompare(pan->centerMhz(), targetCenterMhz);
+    if (!kiwiDisplayActive && modelNeedsCenter) {
+        pan->setCenterBandwidth(targetCenterMhz, -1.0);  // aetherd RFC 2.3
+        changed = true;
+    }
+
+    if (sendCommand && !kiwiDisplayActive && modelNeedsCenter) {
+        m_radioModel.sendCommand(
+            QStringLiteral("display pan set %1 center=%2")
+                .arg(panId, QString::number(targetCenterMhz, 'f', 6)));
+    }
+
+    return changed;
+}
+
+void MainWindow::snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,
+                                                bool sendCommand)
+{
+    if (!slice) {
+        return;
+    }
+
+    const QList<int> lockedSliceIds = m_centerLockSliceByPan.values();
+    for (int lockedSliceId : lockedSliceIds) {
+        SliceModel* lockedSlice = m_radioModel.slice(lockedSliceId);
+        if (!lockedSlice) {
+            continue;
+        }
+        if (lockedSlice == slice || isSameDiversityReceivePair(lockedSlice, slice)) {
+            snapCenterLockForSlice(lockedSlice, mhz, sendCommand);
+        }
+    }
+}
+
+void MainWindow::holdCenterLockTuneTarget(SliceModel* slice, double mhz)
+{
+    if (!slice || mhz <= 0.0) {
+        return;
+    }
+
+    bool lockApplies = false;
+    for (int lockedSliceId : m_centerLockSliceByPan.values()) {
+        SliceModel* lockedSlice = m_radioModel.slice(lockedSliceId);
+        if (lockedSlice
+            && (lockedSlice == slice || isSameDiversityReceivePair(lockedSlice, slice))) {
+            lockApplies = true;
+            break;
+        }
+    }
+    if (!lockApplies) {
+        return;
+    }
+
+    const int sliceId = slice->sliceId();
+    const qint64 untilMs = QDateTime::currentMSecsSinceEpoch()
+        + kCenterLockTuneEchoHoldMs;
+    m_centerLockTuneHoldBySlice.insert(sliceId, {mhz, untilMs});
+
+    QTimer::singleShot(kCenterLockTuneEchoHoldMs + 50, this,
+                       [this, sliceId, mhz]() {
+        auto hold = m_centerLockTuneHoldBySlice.find(sliceId);
+        if (hold == m_centerLockTuneHoldBySlice.end()
+            || !qFuzzyCompare(hold->targetMhz, mhz)
+            || QDateTime::currentMSecsSinceEpoch() < hold->untilMs) {
+            return;
+        }
+        m_centerLockTuneHoldBySlice.erase(hold);
+        if (SliceModel* slice = m_radioModel.slice(sliceId)) {
+            pushSliceFrequencyToOverlays(slice, slice->frequency());
+        }
+    });
+}
+
+double MainWindow::centerLockDisplayFrequency(const SliceModel* slice, double mhz) const
+{
+    if (!slice) {
+        return mhz;
+    }
+
+    bool lockApplies = false;
+    for (int lockedSliceId : m_centerLockSliceByPan.values()) {
+        const SliceModel* lockedSlice = m_radioModel.slice(lockedSliceId);
+        if (lockedSlice
+            && (lockedSlice == slice || isSameDiversityReceivePair(lockedSlice, slice))) {
+            lockApplies = true;
+            break;
+        }
+    }
+    if (!lockApplies) {
+        return mhz;
+    }
+
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    qint64 newestUntilMs = 0;
+    double displayMhz = mhz;
+    for (auto hold = m_centerLockTuneHoldBySlice.cbegin();
+         hold != m_centerLockTuneHoldBySlice.cend(); ++hold) {
+        if (hold->untilMs <= nowMs) {
+            continue;
+        }
+        const SliceModel* heldSlice = m_radioModel.slice(hold.key());
+        if (!heldSlice
+            || (heldSlice != slice && !isSameDiversityReceivePair(heldSlice, slice))) {
+            continue;
+        }
+        if (hold->untilMs > newestUntilMs) {
+            newestUntilMs = hold->untilMs;
+            displayMhz = hold->targetMhz;
+        }
+    }
+    return displayMhz;
+}
+
+void MainWindow::recenterCenterLockForPan(const QString& panId)
+{
+    if (m_sliceDragInProgress) {
+        return;
+    }
+
+    const int sliceId = centerLockSliceForPan(panId);
+    if (sliceId < 0) {
+        return;
+    }
+
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice || slice->panId() != panId) {
+        clearCenterLockForPan(panId);
+        return;
+    }
+
+    const double displayMhz = centerLockDisplayFrequency(slice, slice->frequency());
+    snapCenterLockForSlice(slice, displayMhz, true);
+}
+
+void MainWindow::recenterCenterLocks()
+{
+    const QStringList panIds = m_centerLockSliceByPan.keys();
+    for (const QString& panId : panIds) {
+        recenterCenterLockForPan(panId);
+    }
+}
 
 void MainWindow::syncActiveSliceSquelchLineToSpectrums()
 {
@@ -710,7 +1155,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
             [this, s](const QString& letter) {
         if (auto* sw = spectrumForSlice(s))
             sw->setSliceOverlayLetter(s->sliceId(), letter);
+        if (centerLockActiveForSlice(s)) {
+            persistCenterLockForSlice(s);
+        } else {
+            restoreCenterLockForPan(s->panId());
+        }
     });
+    restoreCenterLockForPan(s->panId());
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
@@ -719,6 +1170,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         bool activeTuning = false;
 #ifdef HAVE_SERIALPORT
         activeTuning = activeTuning || m_flexCoalesceTimer.isActive();
+#endif
+#ifdef HAVE_MIDI
+        activeTuning = activeTuning || m_midiTuneIdleTimer.isActive();
 #endif
         // HID encoder frequency tuning routes through applyFlexControlWheelAction,
         // so m_flexCoalesceTimer above already covers it.
@@ -957,6 +1411,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
+        // Migration clears the active lock AND the old pan-slot's persisted
+        // intent — the letter now lives on another pan; leaving the intent
+        // would re-lock a future slice that inherits the letter (#3854
+        // review). The remove/re-add body this branch originally carried is
+        // superseded by #4037's reattachSliceVisualsToPanadapter.
+        clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
@@ -1020,40 +1480,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_bsAutoSaveTimer->start(dwellSec * 1000);
     });
 
-    // Direct freq label update for runtime changes
-    connect(s, &SliceModel::frequencyChanged, this, [this, s]() {
-        auto* sw2 = spectrumForSlice(s);
-        if (!sw2) return;
-        auto* v = sw2->vfoWidget(s->sliceId());
-        if (!v) return;
-        long long hz = static_cast<long long>(std::round(s->frequency() * 1e6));
-        int mhzPart = static_cast<int>(hz / 1000000);
-        int khzPart = static_cast<int>((hz / 1000) % 1000);
-        int hzPart  = static_cast<int>(hz % 1000);
-        v->freqLabel()->setText(QString("%1.%2.%3")
-            .arg(mhzPart)
-            .arg(khzPart, 3, 10, QChar('0'))
-            .arg(hzPart, 3, 10, QChar('0')));
-
-        // Diversity: client-side sync — immediately update child VFO display
-        // to avoid rubber-banding from the radio round-trip delay.
-        // Only for diversity parent→child, NOT split RX→TX.
-        if (s->isDiversityParent()) {
-            for (auto* other : m_radioModel.slices()) {
-                if (other->isDiversityChild() && other->sliceId() != s->sliceId()) {
-                    auto* csw = spectrumForSlice(other);
-                    if (!csw) continue;
-                    auto* cv = csw->vfoWidget(other->sliceId());
-                    if (!cv) continue;
-                    cv->freqLabel()->setText(QString("%1.%2.%3")
-                        .arg(mhzPart)
-                        .arg(khzPart, 3, 10, QChar('0'))
-                        .arg(hzPart, 3, 10, QChar('0')));
-                }
-            }
-        }
-    });
-
     // If split is pending, this new slice is the TX slice
     if (m_splitActive && m_splitTxSliceId < 0 && s->sliceId() != m_splitRxSliceId) {
         m_splitTxSliceId = s->sliceId();
@@ -1068,6 +1494,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
     }
 
     // Refresh slice tab buttons (#1278)
+    if (s->isActive() && s->sliceId() != m_activeSliceId) {
+        m_updatingFromModel = true;
+        setActiveSliceInternal(s->sliceId(), false);
+        m_updatingFromModel = false;
+    }
+
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
@@ -1084,6 +1516,22 @@ void MainWindow::onSliceRemoved(int id)
     if (m_applyingLayout) return;
 
     qDebug() << "MainWindow: slice removed" << id;
+
+    // Center Lock (#3854 review): a LIVE removal clears the persisted letter
+    // intent too — Flex recycles letters lowest-free, so a dormant intent
+    // would silently re-lock a later, unrelated slice. Two guards ride on
+    // m_radioModel.slice(id):
+    //  - the stale-slice prune after reconnect emits sliceRemoved(oldId)
+    //    whose id collides with the NEW session's slices (slice 0 is always
+    //    0). Live removals emit AFTER the slice leaves the model, so a
+    //    non-null slice(id) means this is the prune — the active lock (and
+    //    intent) belong to the new slice; skip entirely.
+    //  - disconnect teardown never emits sliceRemoved, so reconnect/restart
+    //    intent survives — that is the restore feature.
+    if (!m_radioModel.slice(id)) {
+        clearCenterLockForSlice(id, /*clearPersistedIntent=*/true);
+    }
+    m_centerLockTuneHoldBySlice.remove(id);
 
     m_kiwiSdrVirtualPreviousMute.remove(id);
     if (m_kiwiSdrManager) {
@@ -1935,6 +2383,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
+        clearCenterLockForPan(panId, true);
         // Single source of truth for teardown: removePanadapter sends the
         // FlexLib-correct "display pan remove" + "display panafall remove"
         // pair, so a panafall-created pan also frees its waterfall. (#3843)
@@ -2771,15 +3220,19 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         pushSliceFrequencyToOverlays(target, sliceFreqMhz);
         target->setFrequency(sliceFreqMhz);
     });
-    // Pan Follow ("Pan Lock") stands down for the whole duration of a slice drag
-    // so it doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
-    // recenters; on release it recenters once so Pan Lock re-asserts. (user-reported)
+    // Center Lock stands down for the whole duration of a slice drag so it
+    // doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
+    // recenters; on release it recenters once so the locked pan re-asserts.
     connect(sw, &SpectrumWidget::sliceDragActiveChanged, this, [this](bool active) {
         m_sliceDragInProgress = active;
         if (active) {
             m_sliceDragTargetSliceId = -1;
             m_sliceDragTargetMhz = 0.0;
             m_sliceDragEchoHoldUntilMs = 0;
+            // A drag supersedes any in-flight wheel/MIDI tune: a live tune
+            // hold would override the drag's overlay pushes with the stale
+            // wheel target and recenter to it on release (#3854 review).
+            m_centerLockTuneHoldBySlice.clear();
             return;
         }
         if (!active) {
@@ -2790,9 +3243,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 }
                 m_sliceDragEchoHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 350;
             }
-            recenterPanFollowOnSlice0();   // re-assert Pan Lock on release (self-guards if off)
+            recenterCenterLocks();
         }
     });
+
+    connect(sw, &SpectrumWidget::centerLockRequested,
+            this, [this, applet](int sliceId, bool locked) {
+        if (!applet)
+            return;
+
+        const QString panId = applet->panId();
+        if (panId.isEmpty())
+            return;
+
+        if (!locked) {
+            setCenterLockForPan(panId, sliceId, false);
+            return;
+        }
+
+        SliceModel* slice = m_radioModel.slice(sliceId);
+        if (!slice || slice->panId() != panId)
+            return;
+
+        setCenterLockForPan(panId, sliceId, true);
+    });
+    restoreCenterLockForPan(applet->panId());
+    sw->setCenterLockSliceId(centerLockSliceForPan(applet->panId()));
 
     // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
     connect(sw, &SpectrumWidget::spotTriggered, this, [this, applet](int spotIndex) {
@@ -2963,6 +3439,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(sw, &SpectrumWidget::sliceCloseRequested,
             this, [this](int sliceId) {
         if (m_radioModel.slices().size() <= 1) return;
+        if (SliceModel* slice = m_radioModel.slice(sliceId);
+            centerLockActiveForSlice(slice)) {
+            clearCenterLockForPan(slice->panId(), true);
+        }
         m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
     });
     connect(sw, &SpectrumWidget::sliceCreateRequested,
@@ -3143,6 +3623,10 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
     const double halfBw = bandwidthMhz / 2.0;
     if (halfBw <= 0.0)
         return result;
+
+    if (centerLockSliceForPan(pan->panId()) >= 0) {
+        return result;
+    }
 
     if (intent == TuneIntent::CommandedTargetCenter) {
         result.newCenterMhz = mhz;
@@ -3389,6 +3873,10 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
         if (m_radioModel.slices().size() <= 1) return;
+        if (SliceModel* slice = m_radioModel.slice(sliceId);
+            centerLockActiveForSlice(slice)) {
+            clearCenterLockForPan(slice->panId(), true);
+        }
         m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
     });
     connect(w, &VfoWidget::stepTuneRequested, this, [this, sliceId](double mhz) {

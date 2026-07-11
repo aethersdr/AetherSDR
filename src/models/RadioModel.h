@@ -97,6 +97,10 @@ public:
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
+    // True while the local operator is keying a phone/data mode (MOX/PTT/VOX/
+    // tune), false for TCI-hardware, DAX, and CW transmits. See
+    // operatorTransmitChanged().
+    bool  isOperatorTransmitting() const { return m_operatorTransmitting; }
     QStringList antennaList() const { return m_antList; }
     QString antennaAlias(const QString& token) const;
     QString antennaDisplayName(const QString& token,
@@ -526,6 +530,13 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // Operator-driven RF transmit: true while THIS seat is keyed by the local
+    // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX,
+    // tune) and false otherwise. Deliberately excludes TCI-hardware and DAX
+    // transmits (external-app keying paths, not the operator on the mic) and CW
+    // (break-in/QSK per-element keying would thrash a wall-clock timer). Drives
+    // the status-bar TX timer.
+    void operatorTransmitChanged(bool active);
     // Short operator-facing interlock warnings for the panadapter overlay.
     // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",
     // "pan-tx-inhibit:...") so the UI can classify the notice without sniffing
@@ -783,6 +794,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not TCI/DAX)
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
     qint64      m_interlockNotificationArmedUntilMs{0};
@@ -882,6 +894,9 @@ private:
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
     QString radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const;
     void armInterlockNotification(TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
+    // Recompute the operator-transmit predicate and emit operatorTransmitChanged
+    // on a rising/falling edge. Cheap; safe to call from every TX-state path.
+    void updateOperatorTransmit();
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,

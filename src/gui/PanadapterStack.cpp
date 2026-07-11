@@ -98,7 +98,17 @@ PanadapterApplet* PanadapterStack::addPanadapter(const QString& panId)
 
     auto* applet = new PanadapterApplet(m_splitter);
     applet->setPanId(panId);
-    applet->spectrumWidget()->setPanIndex(m_pans.size());
+    QSet<int> usedPanIndices;
+    for (PanadapterApplet* existing : m_pans) {
+        if (existing && existing->spectrumWidget()) {
+            usedPanIndices.insert(existing->spectrumWidget()->panIndex());
+        }
+    }
+    int panIndex = 0;
+    while (usedPanIndices.contains(panIndex)) {
+        ++panIndex;
+    }
+    applet->spectrumWidget()->setPanIndex(panIndex);
     applet->spectrumWidget()->loadSettings();
     m_splitter->addWidget(applet);
 
