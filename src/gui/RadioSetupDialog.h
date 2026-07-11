@@ -160,8 +160,8 @@ private:
     QHash<int, std::function<QWidget*()>> m_deferredBuilders;
     void buildDeferredTab(int index);
 
-    // External APD tab (visible only when the radio reports apd configurable=1)
-    int                       m_apdTabIndex{-1};
+    // External APD page (visible only when the radio reports apd configurable=1)
+    int                       m_apdPageIndex{-1};
     QHash<QString, QComboBox*> m_apdSamplerCombos;
 
     // Peripherals tab — savers run on dialog close to persist field edits

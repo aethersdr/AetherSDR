@@ -665,7 +665,6 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QFont font = item->font(0);
         font.setBold(true);
         item->setFont(0, font);
-        item->setForeground(0, palette().color(QPalette::Disabled, QPalette::Text));
         return item;
     };
 
@@ -721,7 +720,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // `apd configurable=1` (FLEX-8x00 series with SmartSDR 4.2.18+).
     QTreeWidgetItem* apdItem = addPage(hardwareCategory, QStringLiteral("APD"),
         QStringLiteral("adaptive predistortion amplifier sampler linearization"), [this] { return buildApdTab(); });
-    m_apdTabIndex = m_pageIndexes.value(QStringLiteral("APD"));
+    m_apdPageIndex = m_pageIndexes.value(QStringLiteral("APD"));
     apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
     connect(&m_model->transmitModel(), &TransmitModel::apdStateChanged,
             this, [this, apdItem] {
@@ -744,8 +743,17 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
 
     m_navigation->expandAll();
     connect(m_navigation, &QTreeWidget::currentItemChanged, this,
-            [this](QTreeWidgetItem* current) {
-        if (!current || !current->parent()) {
+            [this](QTreeWidgetItem* current, QTreeWidgetItem* previous) {
+        if (!current) {
+            return;
+        }
+        if (!current->parent()) {
+            QTreeWidgetItem* next = previous && m_navigation->itemAbove(current) == previous
+                ? m_navigation->itemBelow(current)
+                : m_navigation->itemAbove(current);
+            if (next && next->parent()) {
+                m_navigation->setCurrentItem(next);
+            }
             return;
         }
         const int index = current->data(0, Qt::UserRole).toInt();
@@ -755,6 +763,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     });
     connect(search, &QLineEdit::textChanged, this, [this](const QString& text) {
         const QString needle = text.trimmed();
+        QTreeWidgetItem* firstVisible = nullptr;
         for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
             QTreeWidgetItem* category = m_navigation->topLevelItem(i);
             bool anyVisible = false;
@@ -764,14 +773,21 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     + item->data(0, Qt::UserRole + 1).toString();
                 const bool matches = needle.isEmpty()
                     || haystack.contains(needle, Qt::CaseInsensitive);
-                if (item != m_pageItems.value(m_apdTabIndex)
-                    || m_model->transmitModel().apdConfigurable()) {
+                const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
+                if (!apdRow || m_model->transmitModel().apdConfigurable()) {
                     item->setHidden(!matches);
                 }
                 anyVisible = anyVisible || !item->isHidden();
+                if (!item->isHidden() && !firstVisible) {
+                    firstVisible = item;
+                }
             }
             category->setHidden(!anyVisible);
             category->setExpanded(true);
+        }
+        if (firstVisible
+            && (!m_navigation->currentItem() || m_navigation->currentItem()->isHidden())) {
+            m_navigation->setCurrentItem(firstVisible);
         }
     });
     auto* findAction = new QAction(this);

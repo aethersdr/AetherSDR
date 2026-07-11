@@ -2853,7 +2853,8 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                 const int rows = model->rowCount(parent);
                 for (int row = 0; row < rows; ++row) {
                     const QModelIndex index = model->index(row, 0, parent);
-                    if (model->data(index, Qt::DisplayRole).toString()
+                    if ((model->flags(index) & Qt::ItemIsSelectable)
+                        && model->data(index, Qt::DisplayRole).toString()
                             .compare(value, Qt::CaseInsensitive) == 0) {
                         return index;
                     }
