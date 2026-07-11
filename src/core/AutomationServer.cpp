@@ -8,7 +8,6 @@
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
-#include "MemoryCsvCompat.h"      // csv() verb — SmartSDR/CHIRP memory CSV parse
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
 
@@ -2017,11 +2016,6 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 2; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // callsign, or free-form CW text
-        } else if (cmd == QLatin1String("csv")) {
-            action = tok(1);  // parse
-            QStringList rest;
-            for (int i = 2; i < p.size(); ++i) rest << tok(i);
-            value = rest.join(QLatin1Char(' '));  // CSV file path (may contain spaces)
         } else if (cmd == QLatin1String("panmessage")) {
             action = tok(1);                  // add | remove | clear | list
             target = tok(2);                  // pan index | active
@@ -2288,9 +2282,6 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("qrz"))
         return doQrz(action.isEmpty() ? QStringLiteral("status") : action, value);
-    if (cmd == QLatin1String("csv"))
-        return doCsv(action, value);
-
     return err(QStringLiteral("unknown command: ") + cmd);
 }
 
@@ -4069,52 +4060,6 @@ QJsonObject AutomationServer::doQrz(const QString& action, const QString& value)
                            {QStringLiteral("fed"), value}};
     }
     return err(QStringLiteral("qrz requires status|cached|lookup|spottext"));
-}
-
-// csv parse <path> — run a memory CSV file through the production import parser
-// and echo back the detected dialect plus each record's mapped/scaled fields.
-// This exercises exactly the MemoryCsvCompat::parse path the Import dialog uses,
-// so an agent can prove CHIRP field-mapping and unit-scaling with no radio.
-QJsonObject AutomationServer::doCsv(const QString& action, const QString& value) const
-{
-    if (action != QLatin1String("parse"))
-        return err(QStringLiteral("csv requires: parse <path>"));
-    if (value.trimmed().isEmpty())
-        return err(QStringLiteral("csv parse requires a file path"));
-
-    QFile file(value.trimmed());
-    if (!file.open(QIODevice::ReadOnly))
-        return err(QStringLiteral("csv parse: couldn't open ") + value.trimmed());
-
-    const AetherSDR::MemoryCsvParseResult parsed =
-        AetherSDR::MemoryCsvCompat::parse(file.readAll());
-
-    QJsonArray records;
-    for (const AetherSDR::MemoryCsvRecord& rec : parsed.records) {
-        const AetherSDR::MemoryEntry& m = rec.memory;
-        records.append(QJsonObject{
-            {QStringLiteral("name"), m.name},
-            {QStringLiteral("freqMHz"), m.freq},
-            {QStringLiteral("mode"), m.mode},
-            {QStringLiteral("stepHz"), m.step},
-            {QStringLiteral("offsetDir"), m.offsetDir},
-            {QStringLiteral("repeaterOffsetMHz"), m.repeaterOffset},
-            {QStringLiteral("toneMode"), m.toneMode},
-            {QStringLiteral("toneValue"), m.toneValue},
-        });
-    }
-
-    QJsonArray errors;
-    for (const QString& e : parsed.errors)
-        errors.append(e);
-
-    return QJsonObject{
-        {QStringLiteral("ok"), true},
-        {QStringLiteral("format"), AetherSDR::MemoryCsvCompat::formatName(parsed.format)},
-        {QStringLiteral("count"), records.size()},
-        {QStringLiteral("records"), records},
-        {QStringLiteral("errors"), errors},
-    };
 }
 
 // Resolve the top-level window a window-scoped verb acts on: the target's
