@@ -21,15 +21,23 @@ public:
         std::function<void()> handler;
         bool autoRepeat{false};   // allow key-hold repeat (e.g. tuning)
         bool persisted{false};    // explicit user intent (set/cleared) → written to settings
+        bool keysTx{false};       // keys the transmitter — declared at the
+                                  // registration site (like markTxKeying for
+                                  // widgets) so TX gates read one source of
+                                  // truth, not a hand-maintained id list that
+                                  // drifts (#4057 review: atu_start was missed).
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
 
-    // Register an action with its default key binding and handler
+    // Register an action with its default key binding and handler. Pass
+    // keysTx=true for any action that keys the transmitter (MOX, TUNE, ATU,
+    // two-tone, PTT, CW keying) — automation gates honor the flag.
     void registerAction(const QString& id, const QString& displayName,
                         const QString& category, const QKeySequence& defaultKey,
                         std::function<void()> handler,
-                        bool autoRepeat = false);
+                        bool autoRepeat = false,
+                        bool keysTx = false);
 
     // Binding management
     void setBinding(const QString& actionId, const QKeySequence& key);

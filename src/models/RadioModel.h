@@ -359,6 +359,11 @@ public:
     // Station name of the client occupying a foreign slot, or empty string
     // if not foreign / not known yet.
     QString foreignSliceOwnerStation(int sliceId) const;
+    bool automationApplySliceFixture(int sliceId,
+                                     const QString& radioLetter,
+                                     QString* error = nullptr);
+    bool automationRemoveSliceFixture(int sliceId,
+                                      QString* error = nullptr);
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
@@ -858,6 +863,7 @@ private:
     };
     QMap<int, TxBandInfo> m_txBandSettings;
     QHash<QString, QString> m_panTransmitInhibitReasons;
+    QHash<QString, int> m_panTransmitInhibitedTxSlices;
     int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
     bool m_tuneInhibitActive{false};
 
@@ -870,6 +876,7 @@ private:
     void enforceTransmitInhibitForPan(const QString& panId);
     void enforceTransmitInhibitForSlice(SliceModel* slice);
     bool transmitStartBlockedByInhibit(const QString& key);
+    void noteLocalTxSliceEnableIntent(int sliceId);
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
@@ -973,6 +980,10 @@ private:
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
     QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
+    QSet<int>          m_automationSliceFixtures; // disconnected bridge fixtures
+    bool               m_automationSliceFixtureBaselineActive{false};
+    QString            m_automationSliceFixtureBaselineModel;
+    int                m_automationSliceFixtureBaselineMaxSlices{4};
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
     int                m_rttyMarkDefault{2125};
@@ -986,6 +997,8 @@ private:
     QSet<quint32> m_startupClientConnections; // clients present before our connect status replay
     QElapsedTimer m_clientConnectionNoticeTimer;
     static constexpr qint64 CLIENT_CONNECTION_STARTUP_SUPPRESS_MS = 5000;
+    void clearAutomationSliceFixtures();
+    void restoreAutomationSliceFixtureBaseline();
 
     SleepInhibitor m_sleepInhibitor;     // prevents OS idle sleep while connected
     RadioInfo m_lastInfo;               // stored for auto-reconnect

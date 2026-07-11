@@ -2527,8 +2527,7 @@ void VfoWidget::setMeterMenuOpen(bool open)
     relayoutToCurrentContent();
     update();      // repaint the meter-strip underline
     // The flag composites over the GPU spectrum (QRhiWidget); our update()
-    // doesn't refresh the parent's texture, so force a recomposite, same as
-    // setOpaqueMode(). (#SmartMTR)
+    // doesn't refresh the parent's texture, so force a recomposite. (#SmartMTR)
     if (QWidget* p = parentWidget()) {
         p->update();
     }
@@ -2558,32 +2557,6 @@ void VfoWidget::showTab(int index)
         }
     }
     relayoutToCurrentContent();
-}
-
-void VfoWidget::setOpaqueMode(bool on)
-{
-    if (m_opaqueMode == on)
-        return;
-    m_opaqueMode = on;
-
-    // The panel's paintEvent already fills an opaque dark rounded rect; the
-    // translucent attribute + "background: transparent" stylesheet only existed
-    // to let the rounded corners show through. In lean mode we trade rounded
-    // corners for an opaque, independently-cacheable layer.
-    //
-    // The #VfoWidgetRoot stylesheet is what actually governs Qt's opacity
-    // decision here — with "background: transparent" the compositor re-blends
-    // the whole panel (and its buttons) over the window on every sync. Swapping
-    // to an opaque background lets it cache + Source-blit instead, which is the
-    // dominant idle/drag pool cost (#3283). Clearing WA_TranslucentBackground
-    // alone is not enough while the stylesheet stays transparent.
-    setAttribute(Qt::WA_TranslucentBackground, !on);
-    setStyleSheet(on
-        ? QStringLiteral("QWidget#VfoWidgetRoot { background: #0a0a14; border: none; }")
-        : kBgStyle);
-    update();
-    if (QWidget* p = parentWidget())
-        p->update();
 }
 
 void VfoWidget::setCollapsed(bool collapsed)
@@ -4770,7 +4743,7 @@ static const ModeFilterPresets& filterPresetsFor(const QString& mode)
     // From docs/data/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
     static const ModeFilterPresets usb{{1800, 2100, 2400, 2700, 2900, 3300, 4000, 6000}};
     static const ModeFilterPresets am {{5600, 6000, 8000, 10000, 12000, 14000, 16000, 20000}};
-    static const ModeFilterPresets cw {{50, 100, 250, 400}};
+    static const ModeFilterPresets cw {{50, 100, 250, 400, 500, 600, 800, 1000}};
     static const ModeFilterPresets dig{{100, 300, 600, 1000, 1500, 2000, 3000, 6000}};
     static const ModeFilterPresets rtty{{250, 300, 350, 400, 500, 1000, 1500, 3000}};
     static const ModeFilterPresets dfm{{6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000}};
@@ -5839,5 +5812,29 @@ void VfoWidget::setRadeCallsign(const QString& callsign)
     }
 }
 #endif
+
+void VfoWidget::reparentFlagSatellites(QWidget* newParent)
+{
+    if (!newParent) {
+        return;
+    }
+    const std::initializer_list<QWidget*> satellites = {
+        m_closeSliceBtn.data(), m_lockVfoBtn.data(),
+        m_recordBtn.data(), m_playBtn.data(),
+        m_collapsedFreqLabel.data(),
+    };
+    for (QWidget* sat : satellites) {
+        if (!sat || sat->parentWidget() == newParent) {
+            continue;
+        }
+        // setParent() hides the widget; restore its prior visibility so a
+        // shown button doesn't vanish until the next collapse toggle. The
+        // next updatePosition() re-places it in the new coordinate space.
+        const bool wasVisible = sat->isVisible();
+        sat->setParent(newParent);
+        sat->setVisible(wasVisible);
+        sat->raise();
+    }
+}
 
 } // namespace AetherSDR

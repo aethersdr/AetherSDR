@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QLayout>
 #include <QStringList>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QPointer>
 #include <QTimer>
@@ -221,6 +222,70 @@ static void equalizeSplitter(QSplitter* splitter)
 void PanadapterStack::equalizeSizes()
 {
     equalizeSplitter(m_splitter);
+}
+
+int PanadapterStack::layoutRequiredPanCount(const QString& layoutId)
+{
+    // Minimum applet count each layout id needs before rearrangeLayout()'s
+    // guarded branch takes it; below that (or for an unknown id) the final
+    // else falls back to a plain vertical stack. Mirrors the `>=` guards in
+    // rearrangeLayout()/rebuildDockedSplitter() — keep in sync. Returns -1
+    // for an id no branch recognizes, so callers can reject typos instead of
+    // silently exercising the trivial fallback (#4091 test honesty).
+    static const QHash<QString, int> kRequired = {
+        {QStringLiteral("1"), 1},   {QStringLiteral("2v"), 2},
+        {QStringLiteral("2h"), 2},  {QStringLiteral("2h1"), 3},
+        {QStringLiteral("12h"), 3}, {QStringLiteral("3v"), 3},
+        {QStringLiteral("2x2"), 4}, {QStringLiteral("4v"), 4},
+        {QStringLiteral("3h2"), 5}, {QStringLiteral("2x3"), 6},
+        {QStringLiteral("4h3"), 7}, {QStringLiteral("2x4"), 8},
+    };
+    return kRequired.value(layoutId, -1);
+}
+
+QVariantMap PanadapterStack::automationRearrange(const QString& layoutId)
+{
+    // Non-empty id drives the real production rearrange (exercising the
+    // splitter teardown/reparent path); empty id is a query-only report.
+    // An unknown id is rejected up-front: rearrangeLayout()'s final else
+    // would silently build a trivial vertical stack — no nested splitters —
+    // and a test asserting ok:true would believe it exercised the #4091
+    // reparent path when it didn't. An id needing more applets than exist
+    // takes the same fallback; that IS reachable intent (production allows
+    // it), so it runs but is reported honestly via fellBack.
+    bool fellBack = false;
+    if (!layoutId.isEmpty()) {
+        const int required = layoutRequiredPanCount(layoutId);
+        if (required < 0) {
+            return QVariantMap{
+                {QStringLiteral("error"),
+                 QStringLiteral("unknown layout id: ") + layoutId
+                     + QStringLiteral(" (1|2v|2h|2h1|12h|3v|2x2|4v|3h2|2x3|4h3|2x4)")},
+            };
+        }
+        fellBack = m_pans.size() < required;
+        rearrangeLayout(layoutId);
+    }
+
+    const int floating = m_floatingWindows.size();
+    return QVariantMap{
+        {QStringLiteral("requested"), layoutId},
+        {QStringLiteral("applied"), !layoutId.isEmpty()},
+        // True when the id needed more applets than exist, so rearrange built
+        // the vertical-stack fallback rather than the requested layout.
+        {QStringLiteral("fellBack"), fellBack},
+        {QStringLiteral("effectiveLayout"),
+         fellBack ? QStringLiteral("vstack") : layoutId},
+        {QStringLiteral("panCount"), m_pans.size()},
+        {QStringLiteral("dockedCount"), m_pans.size() - floating},
+        {QStringLiteral("floatingCount"), floating},
+        // Ex-floating pans re-show and sizes equalize on the NEXT event-loop
+        // turn (rearrangeLayout defers them) — re-poll get rhi / grab after.
+        {QStringLiteral("settlesNextTurn"), !layoutId.isEmpty()},
+        {QStringLiteral("savedLayout"),
+         AppSettings::instance().value(QStringLiteral("PanadapterLayout"),
+                                       QStringLiteral("1")).toString()},
+    };
 }
 
 void PanadapterStack::rearrangeLayout(const QString& layoutId)

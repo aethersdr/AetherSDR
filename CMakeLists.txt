@@ -2583,6 +2583,13 @@ target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
 
+if(Qt6WebSockets_FOUND)
+    add_executable(tci_protocol_test tests/tci_protocol_test.cpp)
+    target_include_directories(tci_protocol_test PRIVATE src)
+    target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
+endif()
+
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
@@ -2720,6 +2727,17 @@ add_executable(memory_field_values_test
 target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
+
+add_executable(memory_csv_compat_test
+    tests/memory_csv_compat_test.cpp
+    src/core/MemoryCsvCompat.cpp
+    src/core/MemoryFieldValues.cpp
+)
+target_include_directories(memory_csv_compat_test PRIVATE src)
+target_compile_definitions(memory_csv_compat_test PRIVATE
+    CHIRP_SAMPLE_CSV="${CMAKE_CURRENT_SOURCE_DIR}/docs/automation/sample-chirp-memories.csv")
+target_link_libraries(memory_csv_compat_test PRIVATE Qt6::Core)
+add_test(NAME memory_csv_compat_test COMMAND memory_csv_compat_test)
 
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp

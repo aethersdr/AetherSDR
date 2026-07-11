@@ -200,6 +200,25 @@ jobs:
           . .\packaging\windows\store-identity.ps1
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign -ExcludeDfnrModel -RequirePdb
 
+      # Hard gate for the PDB-regression class (#3946). The Create MSIX
+      # package step above is continue-on-error (to tolerate MSIX SDK/tool
+      # flakes), which ALSO swallows create-msix.ps1's -RequirePdb throw — so
+      # a missing PDB can't red the build from inside that step. A missing PDB
+      # is not an MSIX hiccup though: it's a build regression (e.g.
+      # CMAKE_BUILD_TYPE flipped back to Release, which omits /Zi + /DEBUG so
+      # no build/AetherSDR.pdb is emitted) that would silently ship
+      # symbol-less .msixupload packages and skip the Windows-Symbols upload.
+      # Re-check the PDB the RelWithDebInfo Build step must emit in a step that
+      # is deliberately NOT continue-on-error, so that regression fails the job
+      # loudly instead of landing on a green build. -RequirePdb is kept above
+      # for local/dev ergonomics; this step is the CI gate that actually reds.
+      - name: Verify debug symbols (PDB) present
+        run: |
+          if (-not (Test-Path build\AetherSDR.pdb)) {
+            throw "build/AetherSDR.pdb is missing. The RelWithDebInfo Windows build must emit a PDB for Partner Center crash symbolication (.appxsym) and the standalone Windows-Symbols artifact. If CMAKE_BUILD_TYPE was changed to Release, restore RelWithDebInfo. See #3946 / #3934."
+          }
+          Write-Host "PDB present: build\AetherSDR.pdb"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

@@ -128,6 +128,10 @@ public:
     // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
     // counters after the read so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
+    // QRhiWidget surface geometry for `get rhi`: widget size, devicePixelRatio,
+    // and (on GPU builds) the pinned fixedColorBufferSize so automation can
+    // assert it stays even-aligned under a fractional QT_SCALE_FACTOR (#4091).
+    Q_INVOKABLE QVariantMap automationRhiSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssSnapshot() const;
     Q_INVOKABLE QVariantMap automationDssReset(bool kiwiStream);
     Q_INVOKABLE QVariantMap automationDssInjectRows(int count,
@@ -138,6 +142,7 @@ public:
                                                     double rowHighMhz = -1.0);
     Q_INVOKABLE QVariantMap automationDssSetScrollback(bool live,
                                                        int offsetRows);
+    Q_INVOKABLE QVariantMap traceDebugSnapshot();
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
@@ -170,6 +175,9 @@ public:
     void setKiwiSdrWaterfallAvailable(bool available);
     void setKiwiSdrWaterfallActive(bool active);
     bool kiwiSdrWaterfallActive() const { return m_kiwiSdrWaterfallActive; }
+    void setKiwiSdrDisplaySourceControlVisible(bool visible);
+    void setKiwiSdrDisplaySourceKiwi(bool kiwi);
+    bool kiwiSdrDisplaySourceKiwi() const { return m_kiwiSdrDisplaySourceKiwi; }
     void setKiwiSdrWaterfallProfile(const QString& profileId);
     void clearKiwiSdrWaterfallRows();
     void clearKiwiSdrWaterfallRowsForProfile(const QString& profileId);
@@ -183,8 +191,8 @@ public:
     void setDbmRange(float minDbm, float maxDbm);
 
     // Noise floor auto-adjust: position (1=top, 99=bottom), enable on/off.
-    // Both setters persist to AppSettings (per-pan keys DisplayNoiseFloor*)
-    // so the state and value survive launch.
+    // The enable flag is shared for the pan; the position is stored separately
+    // for Flex and Kiwi display sources so switching views restores each scale.
     void setNoiseFloorPosition(int pos);
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
@@ -249,6 +257,12 @@ public:
     bool noiseFloorAutoAdjustEnabled() const { return m_noiseFloorEnable; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
+    // Width of the frequency canvas, in logical pixels: the widget width minus
+    // the right-edge dBm / waterfall-time strip that is painted on top of it.
+    // The spectrum, waterfall, and every mhzToX/xToMhz mapping span this width
+    // so the trace ends at the tape (not under it) and Pan-Follows-VFO margins
+    // are symmetric in pixels, not just in frequency (#3482).
+    int contentWidth() const;
 
     // Set the FFT/waterfall split ratio programmatically.
     void setSpectrumFrac(float f);
@@ -266,17 +280,6 @@ public:
     // Set the current demod mode (for zoom centering behavior).
     void setMode(const QString& mode) { m_mode = mode; }
 
-    // Lean render mode (#3283): skip the wallpaper layer (render an opaque
-    // single layer), drop the translucent FFT fill, and cap the spectrum and
-    // waterfall data-driven repaints to ~30 Hz (kLeanFrameMs = 33). The cap is
-    // applied via leanCappedUpdate() only on the two high-frequency entry
-    // points (updateSpectrum, updateWaterfallRow); interactive paths (cursor
-    // moves, marker drags, etc.) keep their immediate update() calls so input
-    // feels snappy. Reversible — no persisted state is destroyed.
-    void setLeanMode(bool on);
-    bool leanMode() const { return m_leanMode; }
-
-
     // Access the floating overlay menu (for wiring signals).
     SpectrumOverlayMenu* overlayMenu() const { return m_overlayMenu; }
 
@@ -284,6 +287,8 @@ public:
     VfoWidget* vfoWidget() const { return m_vfoWidget; }  // active slice (compat)
     VfoWidget* vfoWidget(int sliceId) const;
     VfoWidget* addVfoWidget(int sliceId);
+    VfoWidget* takeVfoWidget(int sliceId);
+    void       adoptVfoWidget(int sliceId, VfoWidget* widget);
     void       removeVfoWidget(int sliceId);
     void       setActiveVfoWidget(int sliceId);
     bool vfoFlagOnLeftForSlice(int sliceId, double freqMhz,
@@ -428,7 +433,8 @@ public:
     void setSpectrumRenderMode(int mode);
     int  spectrumRenderMode() const { return static_cast<int>(m_spectrumRenderMode); }
     // 3DSS floor depth: how far below the measured noise floor to surface (dB),
-    // lifting the floor carpet into view. Persisted per-panadapter.
+    // lifting the floor carpet into view. Stored separately for Flex and Kiwi
+    // display sources so switching views restores each 3D trace position.
     void setDssFloorDepth(int dB);
     int  dssFloorDepth() const { return static_cast<int>(std::lround(-m_dssFloorOffsetDb)); }
     // 3DSS colour floor (0-100): how far down the strength range the colormap
@@ -652,6 +658,7 @@ signals:
     void noiseFloorPositionResolved(int pos);
     void dssFloorDepthResolved(int dB);
     void waterfallLineDurationChangeRequested(int ms);
+    void kiwiSdrDisplaySourceRequested(bool kiwi);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
     void tnfMoveRequested(int id, double newFreqMhz);
@@ -755,7 +762,7 @@ private:
     // Full-height dBm amplitude reference for 3D stacked-trace mode. It follows
     // the floor anchor and scale span; perspective means individual history rows
     // do not share a single pixel-exact y-axis.
-    void drawDbmScale3D(QPainter& p, const QRect& specRect);
+    void drawDbmScale3D(QPainter& p, const QRect& specRect, float floorDbm);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
     void positionPanadapterMessageOverlay();
@@ -806,6 +813,14 @@ private:
         float kiwiFftTraceFloorDbm{-1000.0f};
         bool kiwiFftTraceFloorValid{false};
         bool valid{false};
+#ifdef AETHER_GPU_SPECTRUM
+        bool wfTexFullUpload{true};
+        int wfLastUploadedRow{-1};
+        bool dssTexNeedsUpload{true};
+        quint64 dssLastUploadedGen{~0ull};
+        int dssMeshHeadUploaded{-1};
+        quint64 dssMeshRowGenUploaded{~0ull};
+#endif
     };
     void clearCurrentWaterfallRows();
     void resetKiwiSdrWaterfallDisplayRange();
@@ -814,6 +829,7 @@ private:
     void saveCurrentWaterfallStreamState();
     void restoreCurrentWaterfallStreamState();
     WaterfallStreamState& activeKiwiWaterfallState();
+    const WaterfallStreamState* activeKiwiWaterfallStateConst() const;
     bool beginWaterfallStreamWrite(bool kiwiStream);
     void endWaterfallStreamWrite(bool kiwiStream, bool visibleStream);
     void appendHistoryRow(const QRgb* rowData, qint64 timestampMs,
@@ -887,6 +903,14 @@ private:
     // can persist; startup/enable/layout refreshes only rebuild transient state.
     void refreshNoiseFloorTarget(bool captureCurrentScale = false, bool persistCapture = false);
     bool captureNoiseFloorTargetFromCurrentScale(bool notify, bool persist);
+    QString displaySourceTraceSettingsKey() const;
+    void loadDisplaySourceTraceSettings(int legacyNoiseFloorPosition,
+                                        int legacyDssFloorDepth);
+    void saveDisplaySourceTraceSettings();
+    void setNoiseFloorPositionForSource(bool kiwiSource, int pos, bool persist);
+    void restoreNoiseFloorPositionForCurrentSource(bool syncMenu);
+    void setDssFloorDepthForSource(bool kiwiSource, int dB, bool persist);
+    void restoreDssFloorDepthForCurrentSource(bool syncMenu);
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -927,15 +951,20 @@ private:
 
     // 3DSS — rebuild/return the cached perspective surface for the given pixel
     // size (scaleStripPx = transparent frequency-scale strip at the bottom).
-    const QImage& buildDssImage(const QSize& px, int scaleStripPx);
+    const QImage& buildDssImage(const QSize& px, int scaleStripPx,
+                                float floorDbm);
+    void pushDssRowForWaterfallStream(bool kiwiStream,
+                                      const QVector<float>& binsDbm,
+                                      double frameCenterMhz = -1.0,
+                                      double frameBandwidthMhz = -1.0,
+                                      bool updateLiveSurface = true);
     void resetDssUploadState();
     // Token folding the dbmToRgb() palette inputs so the 3DSS cache rebuilds
     // when the colour mapping (scheme/gain/floor) changes.
     quint64 dssPaletteToken() const;
-    // Unified noise-floor anchor (dBm, quantised) for the 3D surface — uses the
-    // measured floor for the active source (Flex or KiwiSDR), offset by the
-    // user's 3D Floor depth, so the floor sits at the baseline consistently.
-    float dssFloorDbm() const;
+    // Unified noise-floor anchor (dBm, quantised) for the 3D surface.
+    float dssFloorDbm();
+    float peekDssFloorDbm() const;
     // dB span shown above the 3D floor anchor — follows the normal dBm scale,
     // clamped so the wide Flex window can't flatten signals.
     float dssSpanDb() const;
@@ -1007,6 +1036,8 @@ private:
     // Noise floor auto-adjust
     bool  m_noiseFloorEnable{false};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
+    int   m_flexNoiseFloorPosition{75};
+    int   m_kiwiNoiseFloorPosition{75};
     int   m_noiseFloorFrameCount{0};
     // Noise-floor auto-adjust state machine (per-frame baseline tracker
     // with asymmetric smoothing + transient rejection — keeps the floor
@@ -1108,7 +1139,11 @@ private:
     // trace baseline. A few dB negative lifts the noisy floor carpet (with its
     // own colour) up off the baseline so you see floor -> peak, not just crests.
     float m_dssFloorOffsetDb{-6.0f};
+    int   m_flexDssFloorDepth{6};
+    int   m_kiwiDssFloorDepth{6};
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
+    float m_dssFloorAnchorDbm{-1000.0f};
+    bool  m_dssFloorAnchorValid{false};
     // Consumed by BOTH the GPU mesh and the CPU fallback surface, so these stay
     // outside the AETHER_GPU_SPECTRUM block below — the CPU paint path needs them
     // even when GPU spectrum rendering is disabled (older Qt / -DAETHER_GPU_SPECTRUM=OFF).
@@ -1202,15 +1237,8 @@ private:
     FilterEdge m_draggingFilter{FilterEdge::None};
     int m_filterDragStartX{0};      // pixel X at grab time (#764)
     int m_filterDragStartHz{0};     // filter edge Hz at grab time (#764)
-    // Lean render mode state (#3283).
-    bool m_leanMode{false};
-    QElapsedTimer m_leanRepaintClock;       // data-repaint coalescing clock
-    // Each panadapter present forces a full-window backing-store→GPU texture
-    // re-upload (the dominant pooled cost on large/5K windows — #3283), so the
-    // present rate ~= the flush rate. 33 ms (~30 Hz) roughly halves that upload
-    // load vs 60 Hz while staying visually smooth for a low-overhead mode.
-    static constexpr int kLeanFrameMs = 33;
-    // Normal-mode coalescing window: FFT frames and waterfall rows arrive as
+    QElapsedTimer m_presentCoalesceClock;   // data-repaint coalescing clock
+    // Coalescing window: FFT frames and waterfall rows arrive as
     // separate UDP events, so without coalescing a narrow pan schedules up to
     // ~56 window flushes/s (30 fps FFT + 26 rows/s WF) — over the display's
     // 60 Hz budget once WAVE/meters add theirs, which starves the swapchain
@@ -1219,7 +1247,7 @@ private:
     // fires at the slot edge) while capping flushes at ~60/s.
     static constexpr int kPresentCoalesceMs = 16;
     bool m_presentPending{false};           // trailing update scheduled
-    void leanCappedUpdate();                // update(), coalesced / lean-capped
+    void coalescedUpdate();                 // update(), coalesced into one present per slot
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
@@ -1456,10 +1484,12 @@ private:
     VfoWidget* m_vfoWidget{nullptr};  // alias to active slice widget (compat)
 
     // Bottom-left waterfall buttons: S(egment), B(and), −/+.
+    QPushButton* m_kiwiSdrDisplaySourceBtn{nullptr};
     QPushButton* m_zoomSegBtn{nullptr};
     QPushButton* m_zoomBandBtn{nullptr};
     QPushButton* m_zoomOutBtn{nullptr};
     QPushButton* m_zoomInBtn{nullptr};
+    bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM
     bool m_rhiInitialized{false};

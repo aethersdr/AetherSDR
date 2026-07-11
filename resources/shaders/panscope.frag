@@ -7,7 +7,7 @@
 // every frame): the CPU now uploads ~one float per device pixel column and
 // this shader reproduces the same layers —
 //   1. fill under the trace (heat-map or solid-gradient, alpha from the
-//      fill slider; suppressed in lean mode),
+//      fill slider),
 //   2. a feather stroke (line width + featherPx, low alpha),
 //   3. the core stroke (line width, high alpha),
 // with slope-corrected stroke width via screen-space derivatives so steep
@@ -24,7 +24,7 @@ layout(binding = 1) uniform sampler2D columns;
 layout(std140, binding = 0) uniform U {
     vec4 plot;       // wPx, hPx, columnCount, hasData
     vec4 stroke;     // coreHalfWidthPx, featherPx, coreAlpha, featherAlpha
-    vec4 fillP;      // fillAlpha, heatMap (0/1), lean (0/1), pad
+    vec4 fillP;      // fillAlpha, heatMap (0/1), pad, pad
     vec4 fillColor;  // straight rgb, a unused
     vec4 darkColor;  // straight rgb (solid-mode base blend), a unused
 };
@@ -70,8 +70,7 @@ void main()
     float yTrace = (1.0 - t) * hPx;                // trace top edge in px
 
     bool heat = fillP.y > 0.5;
-    bool lean = fillP.z > 0.5;
-    float fa = lean ? 0.0 : fillP.x;
+    float fa = fillP.x;
 
     // ── Fill under the trace ────────────────────────────────────────────
     if (fa > 0.0 && py >= yTrace) {

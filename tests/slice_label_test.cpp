@@ -39,6 +39,8 @@ int main()
     EXPECT_EQ(SliceLabel::richText(2, "A"),      QString("C"));
     EXPECT_EQ(SliceLabel::richText(7, "B"),      QString("H"));
 
+    EXPECT_EQ(SliceLabel::plainText(4, "B"),     QString("E"));
+
     EXPECT_EQ(SliceLabel::unicodeForm(0),        QString("A"));
     EXPECT_EQ(SliceLabel::unicodeForm(2, "A"),   QString("C"));
 
@@ -52,6 +54,7 @@ int main()
     EXPECT_EQ(SliceLabel::richText(0, "A"),      QString("A<sub>1</sub>"));
     EXPECT_EQ(SliceLabel::richText(1, "A"),      QString("A<sub>2</sub>"));
     EXPECT_EQ(SliceLabel::richText(2, "B"),      QString("B<sub>3</sub>"));
+    EXPECT_EQ(SliceLabel::plainText(2, "B"),     QString("B"));
 
     // Missing radio letter falls back to the global letter, still with
     // subscript so slot info isn't lost.

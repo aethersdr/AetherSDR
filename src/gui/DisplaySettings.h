@@ -8,25 +8,22 @@
 
 namespace AetherSDR {
 
-// Persistence helper for display-related UI toggles (#3283 Lean Mode is the
-// first; future display-feature toggles like frameless / theme variants land
-// here as additional fields).
+// Persistence helper for display-related UI toggles (the SmartMTR meter view
+// and its options; future display-feature toggles land here as additional
+// fields).
 //
 // Stored as a nested JSON blob under AppSettings["Display"], per the
-// nested-JSON-per-feature convention (constitution Principle V).  Legacy flat
-// display keys are migrated into this blob by migrateLegacy(), called once at
-// startup (before the first read), so existing users keep their behavior.
+// nested-JSON-per-feature convention (constitution Principle V).
+//
+// RETIRED KEYS — do not reuse. Pre-removal installs still carry these values,
+// so a new feature reusing the name would inherit stale state (e.g. a
+// leftover "True" force-enabling itself):
+//   - "leanMode" (nested, this blob) — Lean Mode, removed with #3283's
+//     mitigation retirement; ex-lean users have "True" persisted.
+//   - "LeanMode" (legacy flat AppSettings key) — pre-blob spelling, was
+//     migrated by the now-removed migrateLegacy().
 class DisplaySettings {
 public:
-    static bool leanMode() { return readObj().value("leanMode").toString("False") == "True"; }
-
-    static void setLeanMode(bool on)
-    {
-        QJsonObject o = readObj();
-        o["leanMode"] = on ? QStringLiteral("True") : QStringLiteral("False");
-        write(o);
-    }
-
     // Global panadapter marker overlay preference. Default False preserves the
     // waterfall as signal history unless the operator opts into the overlay.
     static bool extendedPassband()
@@ -171,42 +168,6 @@ public:
         case TxMeter::None: break;
         }
         return QStringLiteral("None");
-    }
-
-    // One-shot migration from legacy flat display keys. Run at app startup
-    // before any caller reads the new blob. Safe to call repeatedly.
-    static void migrateLegacy()
-    {
-        auto& s = AppSettings::instance();
-        QJsonObject o = readObj();
-        bool changed = false;
-
-        if (!s.contains("Display")) {
-            const bool legacyLean =
-                s.value("LeanMode", "False").toString() == "True";
-            o["leanMode"] = legacyLean ? QStringLiteral("True") : QStringLiteral("False");
-            changed = true;
-        }
-
-        // Migrate the short-lived flat key used by early Extended Passband
-        // builds into the Display blob so local testers keep their preference.
-        if (s.contains("ExtendedPassband")) {
-            if (!o.contains("extendedPassband")) {
-                const bool legacyExtendedPassband =
-                    s.value("ExtendedPassband", "False").toString() == "True";
-                o["extendedPassband"] =
-                    legacyExtendedPassband ? QStringLiteral("True") : QStringLiteral("False");
-            }
-            s.remove("ExtendedPassband");
-            changed = true;
-        }
-
-        if (changed) {
-            write(o);
-        }
-        // Leave the legacy LeanMode flat key in place — harmless after
-        // migration, and a future cleanup PR can drop it once we're confident
-        // no other reader still touches it.
     }
 
 private:

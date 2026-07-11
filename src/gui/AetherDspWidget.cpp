@@ -19,6 +19,7 @@
 #include <QLineEdit>
 #include <QProgressBar>
 #include <QMessageBox>
+#include <QPointer>
 #ifdef HAVE_NVIDIA_AFX
 #include "core/NvidiaAfxPack.h"
 #endif
@@ -32,6 +33,52 @@
 namespace AetherSDR {
 
 namespace {
+
+const char* dspNameForIndex(int index)
+{
+    switch (static_cast<AetherDspWidget::DspId>(index)) {
+    case AetherDspWidget::NR2:  return "NR2";
+    case AetherDspWidget::NR4:  return "NR4";
+    case AetherDspWidget::MNR:  return "MNR";
+    case AetherDspWidget::DFNR: return "DFNR";
+    case AetherDspWidget::RN2:  return "RN2";
+    case AetherDspWidget::BNR:  return "BNR";
+    case AetherDspWidget::NumDsps:
+        break;
+    }
+    return "";
+}
+
+const QString kDfnrUnavailableToolTip = QStringLiteral(
+    "DFNR requires DeepFilterNet to be set up and AetherSDR rebuilt.");
+
+void rememberLastClientNr(int index)
+{
+    const char* name = dspNameForIndex(index);
+    if (name[0] == '\0') {
+        return;
+    }
+
+    auto& s = AppSettings::instance();
+    const QString value = QString::fromLatin1(name);
+    if (s.value("LastClientNr", QString()).toString() == value) {
+        return;
+    }
+
+    s.setValue("LastClientNr", value);
+    s.save();
+}
+
+void clearUnavailableDfnrPreference()
+{
+#ifndef HAVE_DFNR
+    auto& s = AppSettings::instance();
+    if (s.value("LastClientNr", QString()).toString() == QLatin1String("DFNR")) {
+        s.remove("LastClientNr");
+        s.save();
+    }
+#endif
+}
 
 const QString kWidgetStyle = QStringLiteral(
     "QWidget { color: #c8d8e8; }"
@@ -199,6 +246,16 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
                           "Install LLVM from llvm.org and rebuild to enable NR4.");
         }
 #endif
+        // DFNR is cross-platform only when the matching DeepFilterNet library
+        // is present at configure time. If HAVE_DFNR is absent, keep the slot
+        // visible like the other optional methods but do not let the UI select
+        // a no-op engine stub.
+#ifndef HAVE_DFNR
+        if (i == DFNR) {
+            b->setEnabled(false);
+            b->setToolTip(kDfnrUnavailableToolTip);
+        }
+#endif
         // BNR (NVIDIA AFX GPU denoiser) is gated at compile time by
         // HAVE_NVIDIA_AFX (defined only on x86_64 Linux/Windows; never on macOS
         // or aarch64 — no Maxine runtime there). Where it IS built, gate the
@@ -270,11 +327,22 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
 
     syncDspSelectorFromEngine();
     syncFromEngine();
+    clearUnavailableDfnrPreference();
 }
 
 void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
 {
     if (index < 0 || index >= NumDsps) return;
+    if (m_dspBtns[index] && !m_dspBtns[index]->isEnabled()) {
+        syncDspSelectorFromEngine();
+        return;
+    }
+#ifndef HAVE_DFNR
+    if (index == DFNR) {
+        syncDspSelectorFromEngine();
+        return;
+    }
+#endif
     // Always bring this DSP's panel forward, regardless of new check
     // state — toggling off keeps the panel visible so the user can
     // re-enable from the same place.
@@ -289,29 +357,31 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
     if (index == NR2 && nowChecked) {
         emit nr2EnableWithWisdomRequested();
     } else {
-        QMetaObject::invokeMethod(m_audio, [this, index, nowChecked]() {
+        AudioEngine* audio = m_audio;
+        QPointer<AetherDspWidget> self(this);
+        QMetaObject::invokeMethod(audio, [audio, self, index, nowChecked]() {
             switch (index) {
-                case NR2:  m_audio->setNr2Enabled(nowChecked); break;
-                case NR4:  m_audio->setNr4Enabled(nowChecked); break;
-                case MNR:  m_audio->setMnrEnabled(nowChecked); break;
-                case DFNR: m_audio->setDfnrEnabled(nowChecked); break;
-                case RN2:  m_audio->setRn2Enabled(nowChecked); break;
-                case BNR:  m_audio->setNvAfxEnabled(nowChecked); break;  // local AFX
+                case NR2:  audio->setNr2Enabled(nowChecked); break;
+                case NR4:  audio->setNr4Enabled(nowChecked); break;
+                case MNR:  audio->setMnrEnabled(nowChecked); break;
+                case DFNR: audio->setDfnrEnabled(nowChecked); break;
+                case RN2:  audio->setRn2Enabled(nowChecked); break;
+                case BNR:  audio->setNvAfxEnabled(nowChecked); break;  // local AFX
+                case NumDsps: break;
+            }
+            if (self) {
+                QMetaObject::invokeMethod(self.data(), [self]() {
+                    if (self) {
+                        self->syncDspSelectorFromEngine();
+                    }
+                }, Qt::QueuedConnection);
             }
         });
     }
-    // Remember the last-enabled module so the RX chain DSP tile can
-    // re-enable it when clicked from a fully-bypassed state.  Don't
-    // overwrite on disable — we want the value to survive a turn-off.
-    if (nowChecked) {
-        static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR"};
-        auto& s = AppSettings::instance();
-        s.setValue("LastClientNr", QString::fromLatin1(kNames[index]));
-        s.save();
-    }
     // AudioEngine cascades exclusion (enabling NR2 disables DFNR, etc.)
     // and emits *EnabledChanged signals; syncDspSelectorFromEngine()
-    // will update sibling button states without firing setters.
+    // will update sibling button states and persist the last-enabled method
+    // only after engine state proves it actually became active.
 }
 
 void AetherDspWidget::syncDspSelectorFromEngine()
@@ -336,6 +406,9 @@ void AetherDspWidget::syncDspSelectorFromEngine()
     // If something is active, surface its panel.  If nothing's active
     // ("bypass"), keep whichever panel was last visible — don't yank the
     // user back to NR2 just because they clicked the active button off.
+    if (active >= 0) {
+        rememberLastClientNr(active);
+    }
     if (active >= 0 && m_dspStack)
         m_dspStack->setCurrentIndex(active);
 }
@@ -1343,6 +1416,11 @@ QWidget* AetherDspWidget::buildDfnrPage()
 
     auto* info = new QLabel("AI-powered speech enhancement — higher fidelity than RNNoise "
                             "in high-noise HF environments. CPU-only, 10 ms latency, 48 kHz.");
+#ifndef HAVE_DFNR
+    info->setText("DFNR is unavailable in this build. Set up the platform "
+                  "DeepFilterNet library and rebuild AetherSDR to enable it.");
+    info->setToolTip(kDfnrUnavailableToolTip);
+#endif
     info->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     {
@@ -1362,12 +1440,21 @@ QWidget* AetherDspWidget::buildDfnrPage()
         auto* dfnrResetBtn = makeResetIconButton();
         connect(dfnrResetBtn, &QPushButton::clicked,
                 this, &AetherDspWidget::resetCurrentTab);
+#ifndef HAVE_DFNR
+        dfnrResetBtn->setEnabled(false);
+        dfnrResetBtn->setToolTip(kDfnrUnavailableToolTip);
+#endif
         resetRow->addWidget(dfnrResetBtn);
         vbox->addLayout(resetRow);
     }
 
-    grid->addWidget(new QLabel("Attenuation Limit"), 1, 0);
+    auto* attenTitle = new QLabel("Attenuation Limit");
+    grid->addWidget(attenTitle, 1, 0);
     m_dfnrAttenSlider = new QSlider(Qt::Horizontal);
+    m_dfnrAttenSlider->setObjectName(QStringLiteral("dfnrAttenLimitSlider"));
+    m_dfnrAttenSlider->setAccessibleName(tr("DFNR attenuation limit"));
+    m_dfnrAttenSlider->setAccessibleDescription(
+        tr("Maximum noise attenuation in dB for DeepFilterNet noise reduction."));
     m_dfnrAttenSlider->setRange(0, 100);
     m_dfnrAttenSlider->setValue(static_cast<int>(s.value("DfnrAttenLimit", "100").toFloat()));
     applyPrimarySliderStyle(m_dfnrAttenSlider);
@@ -1377,9 +1464,19 @@ QWidget* AetherDspWidget::buildDfnrPage()
                                    "For weak signals: 20–30 dB\n"
                                    "For casual listening: 40–60 dB\n"
                                    "For strong signals: 80–100 dB");
+#ifndef HAVE_DFNR
+    attenTitle->setEnabled(false);
+    attenTitle->setToolTip(kDfnrUnavailableToolTip);
+    m_dfnrAttenSlider->setEnabled(false);
+    m_dfnrAttenSlider->setToolTip(kDfnrUnavailableToolTip);
+#endif
     grid->addWidget(m_dfnrAttenSlider, 1, 1);
     m_dfnrAttenLabel = new QLabel(QString::number(m_dfnrAttenSlider->value()));
     m_dfnrAttenLabel->setFixedWidth(40);
+#ifndef HAVE_DFNR
+    m_dfnrAttenLabel->setEnabled(false);
+    m_dfnrAttenLabel->setToolTip(kDfnrUnavailableToolTip);
+#endif
     grid->addWidget(m_dfnrAttenLabel, 1, 2);
 
     connect(m_dfnrAttenSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1391,8 +1488,13 @@ QWidget* AetherDspWidget::buildDfnrPage()
         emit dfnrAttenLimitChanged(db);
     });
 
-    grid->addWidget(new QLabel("Post-Filter Beta"), 2, 0);
+    auto* betaTitle = new QLabel("Post-Filter Beta");
+    grid->addWidget(betaTitle, 2, 0);
     m_dfnrBetaSlider = new QSlider(Qt::Horizontal);
+    m_dfnrBetaSlider->setObjectName(QStringLiteral("dfnrPostFilterBetaSlider"));
+    m_dfnrBetaSlider->setAccessibleName(tr("DFNR post-filter beta"));
+    m_dfnrBetaSlider->setAccessibleDescription(
+        tr("Post-filter strength for DeepFilterNet noise reduction."));
     m_dfnrBetaSlider->setRange(0, 30);
     m_dfnrBetaSlider->setValue(static_cast<int>(s.value("DfnrPostFilterBeta", "0.0").toFloat() * 100));
     applyPrimarySliderStyle(m_dfnrBetaSlider);
@@ -1400,9 +1502,19 @@ QWidget* AetherDspWidget::buildDfnrPage()
                                   "0 = disabled (default)\n"
                                   "0.05–0.15 = subtle additional filtering\n"
                                   "0.15–0.30 = aggressive post-processing");
+#ifndef HAVE_DFNR
+    betaTitle->setEnabled(false);
+    betaTitle->setToolTip(kDfnrUnavailableToolTip);
+    m_dfnrBetaSlider->setEnabled(false);
+    m_dfnrBetaSlider->setToolTip(kDfnrUnavailableToolTip);
+#endif
     grid->addWidget(m_dfnrBetaSlider, 2, 1);
     m_dfnrBetaLabel = new QLabel(QString::number(m_dfnrBetaSlider->value() / 100.0f, 'f', 2));
     m_dfnrBetaLabel->setFixedWidth(40);
+#ifndef HAVE_DFNR
+    m_dfnrBetaLabel->setEnabled(false);
+    m_dfnrBetaLabel->setToolTip(kDfnrUnavailableToolTip);
+#endif
     grid->addWidget(m_dfnrBetaLabel, 2, 2);
 
     connect(m_dfnrBetaSlider, &QSlider::valueChanged, this, [this](int v) {

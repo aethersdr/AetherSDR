@@ -51,5 +51,40 @@ int main()
         ok &= expect(!parsed.valid, "ignores non-slice command");
     }
 
+    {
+        ok &= expect(TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                         QStringLiteral("0x40000000"),
+                         QStringLiteral("0x40000000"), true, 3, -1),
+                     "restores inhibited TX slice when radio has no current TX slice");
+    }
+
+    {
+        ok &= expect(TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                         QStringLiteral("0x40000000"),
+                         QStringLiteral("0x40000000"), true, 3, 3),
+                     "restores inhibited TX slice when it remains current TX");
+    }
+
+    {
+        ok &= expect(!TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                         QStringLiteral("0x40000000"),
+                         QStringLiteral("0x40000000"), true, 3, 4),
+                     "does not restore when TX moved to another slice");
+    }
+
+    {
+        ok &= expect(!TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                         QStringLiteral("0x40000000"),
+                         QStringLiteral("0x40000001"), true, 3, -1),
+                     "does not restore a slice on another panadapter");
+    }
+
+    {
+        ok &= expect(!TransmitInhibitPolicy::shouldRestoreInhibitedTxSlice(
+                         QStringLiteral("0x40000000"),
+                         QStringLiteral("0x40000000"), false, 3, -1),
+                     "does not restore a slice we cannot safely claim");
+    }
+
     return ok ? 0 : 1;
 }

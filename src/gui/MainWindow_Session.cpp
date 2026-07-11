@@ -1104,13 +1104,11 @@ void MainWindow::wirePanLifecycle()
                                   "#0a0a14").toString());
             if (bgFill.isValid())
                 sw->setBackgroundFillColor(bgFill);
-            // Restore the spectrum render mode (2D / 3D stacked trace) + 3D floor
-            // depth per pan, like the other Display settings above, so a pan set
-            // to 3D survives a restart / pan re-attach.
+            // Restore the spectrum render mode per pan. Source-specific trace
+            // positions/depths are loaded by SpectrumWidget from
+            // DisplaySourceTraceSettings; do not reapply legacy flat keys here.
             sw->setSpectrumRenderMode(
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
-            sw->setDssFloorDepth(
-                s.value(sw->settingsKey("Display3DFloorDepth"), "6").toInt());
             sw->setDssGain(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
             // Nudge rate to force waterfall tile re-sync
@@ -1172,6 +1170,11 @@ void MainWindow::wirePanLifecycle()
                 // position. (#3034)
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
+            for (SliceModel* slice : m_radioModel.slices()) {
+                if (slice && slice->panId() == pan->panId()) {
+                    reattachSliceVisualsToPanadapter(slice);
+                }
+            }
             return;
         }
 
@@ -1216,6 +1219,11 @@ void MainWindow::wirePanLifecycle()
         requestPanDimensionsForRadio(pan->panId(), sw, true);
 
         qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice && slice->panId() == pan->panId()) {
+                reattachSliceVisualsToPanadapter(slice);
+            }
+        }
 
         // Debounced layout restore: after all pans are added on connect,
         // rearrange to the saved layout (e.g. 2h instead of default vertical).
@@ -1285,6 +1293,11 @@ void MainWindow::wirePanLifecycle()
             return;
         }
         wirePanReconcilers(applet, pan);
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (slice && slice->panId() == pan->panId()) {
+                reattachSliceVisualsToPanadapter(slice);
+            }
+        }
     });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,
@@ -1337,6 +1350,7 @@ void MainWindow::wirePanLifecycle()
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
+        clearKiwiSdrPanDisplaySourceOverride(panId);
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -1365,6 +1379,32 @@ void MainWindow::wirePanLifecycle()
                 it->timer->deleteLater();
             }
             m_wfLineDurationReconcile.erase(it);
+        }
+        if (auto it = m_panAverageReconcileConnections.find(panId);
+            it != m_panAverageReconcileConnections.end()) {
+            QObject::disconnect(it.value());
+            m_panAverageReconcileConnections.erase(it);
+        }
+        if (auto it = m_panWeightedAvgReconcileConnections.find(panId);
+            it != m_panWeightedAvgReconcileConnections.end()) {
+            QObject::disconnect(it.value());
+            m_panWeightedAvgReconcileConnections.erase(it);
+        }
+        if (auto it = m_panAverageReconcile.find(panId);
+            it != m_panAverageReconcile.end()) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+            m_panAverageReconcile.erase(it);
+        }
+        if (auto it = m_panWeightedAvgReconcile.find(panId);
+            it != m_panWeightedAvgReconcile.end()) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+            m_panWeightedAvgReconcile.erase(it);
         }
 
         // Disconnect all signals from the dying applet's widgets to prevent

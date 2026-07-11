@@ -68,8 +68,17 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr double kIncrementalTriggerEdgeMarginFrac = 0.05;
-constexpr double kIncrementalSettleEdgeMarginFrac = 0.06;
+// Pan-Follows-VFO edge margins, as a fraction of the visible span. Because
+// frequency now maps linearly across contentWidth() (#3482), these are a
+// constant fraction of the panadapter *width* in pixels at every zoom — trigger
+// is the gap between the VFO flag's outer edge and the pan edge at which the pan
+// starts to scroll; settle is where the flag lands after it does. settle >
+// trigger by ~1.5% supplies the hysteresis that stops a held arrow-key tune from
+// re-firing every step. Tightened from 0.05/0.06 so the signal can tune much
+// closer to the edge before the pan shifts (#3482 follow-up); the flag flips
+// inward at the content edge so it never clips the tape at this margin.
+constexpr double kIncrementalTriggerEdgeMarginFrac = 0.02;
+constexpr double kIncrementalSettleEdgeMarginFrac = 0.035;
 constexpr double kRevealComfortEdgeMarginFrac = 0.18;
 constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 
@@ -360,6 +369,165 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     // FFTW version and crash the next feedAudioData. (#2275 / NR4→NR2)
     connect(w, &AetherDspWidget::nr2EnableWithWisdomRequested,
             this, &MainWindow::enableNr2WithWisdom);
+}
+
+
+void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
+{
+    if (!vfo || !s) {
+        return;
+    }
+
+    // Feed S-meter per-slice — only this VFO's slice level
+    const int sid = s->sliceId();
+    const QPointer<VfoWidget> vfoPtr(vfo);
+    connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
+            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
+        if (sliceIndex == sid
+            && (!m_kiwiSdrManager
+                || m_kiwiSdrManager->assignedProfileForSlice(sid).isEmpty())) {
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [this, vfoPtr, sid, dbm]() {
+                    if (!vfoPtr
+                        || (m_kiwiSdrManager
+                            && !m_kiwiSdrManager
+                                    ->assignedProfileForSlice(sid).isEmpty())) {
+                        return;
+                    }
+                    vfoPtr->setSignalLevel(dbm);
+                },
+                QString::number(sid));
+        }
+    });
+    // Feed ESC meter per-slice — signal strength after ESC processing
+    connect(&m_radioModel.meterModel(), &MeterModel::escLevelChanged,
+            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
+        if (sliceIndex == sid) {
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [vfoPtr, dbm]() {
+                    if (vfoPtr) {
+                        vfoPtr->setEscLevel(dbm);
+                    }
+                },
+                QString::number(sid));
+        }
+    });
+    // Feed the SmartMTR TX scales: mic level + compression (dBFS / dB) from
+    // micMetersChanged, and forward power + SWR from txMetersChanged. The VFO
+    // shows the operator-selected meter only on its own TX slice while
+    // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
+    // meter reports the truth of whatever the operator selected.
+    connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
+            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
+        vfo->setMicLevel(micLevel, micPeak);
+        vfo->setTxCompression(compPeak);
+    });
+    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
+            vfo, [vfo](float fwd, float swr) {
+        vfo->setTxPower(fwd);
+        vfo->setTxSwr(swr);
+    });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            vfo, &VfoWidget::setTransmitting);
+    connect(&m_radioModel, &RadioModel::antListChanged,
+            vfo, &VfoWidget::setAntennaList);
+}
+
+
+bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
+{
+    // (No m_applyingLayout guard: that flag is never set anywhere — a dead
+    // remnant of the old delete/recreate layout path. The sibling guards in
+    // onSliceAdded/onSliceRemoved are equally inert; flagged for cleanup.)
+    if (!s) {
+        return false;
+    }
+
+    SpectrumWidget* target = nullptr;
+    if (m_panStack && !s->panId().isEmpty()) {
+        target = m_panStack->spectrum(s->panId());
+    } else {
+        target = spectrum();
+    }
+    if (!target) {
+        return false;
+    }
+
+    const int sliceId = s->sliceId();
+    VfoWidget* targetVfo = target->vfoWidget(sliceId);
+
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (!applet) {
+                continue;
+            }
+            SpectrumWidget* sw = applet->spectrumWidget();
+            if (!sw || sw == target) {
+                continue;
+            }
+            sw->removeSliceOverlay(sliceId);
+            if (!sw->vfoWidget(sliceId)) {
+                continue;
+            }
+            if (!targetVfo) {
+                targetVfo = sw->takeVfoWidget(sliceId);
+                if (targetVfo) {
+                    target->adoptVfoWidget(sliceId, targetVfo);
+                }
+            } else {
+                sw->removeVfoWidget(sliceId);
+            }
+        }
+    }
+
+    if (!targetVfo) {
+        targetVfo = target->addVfoWidget(sliceId);
+        if (targetVfo) {
+            const QString& sub = m_radioModel.licenseSubscription();
+            targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
+            targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
+            wireVfoWidget(targetVfo, s);
+            targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
+            wireVfoTelemetry(targetVfo, s);
+#ifdef HAVE_RADE
+            // Parity with onSliceAdded: a deferred-attach slice can already
+            // be in FDVU/FDVL when its pan finally lands (#4037 review).
+            if (s->mode().startsWith("FDV")) {
+                activateFdvDisplay(sliceId);
+            }
+#endif
+        }
+    }
+
+    if (targetVfo && sliceId == m_activeSliceId) {
+        target->setActiveVfoWidget(sliceId);
+    }
+    if (m_panStack && !s->panId().isEmpty()) {
+        if (PanadapterApplet* applet = m_panStack->panadapter(s->panId())) {
+            applet->setSliceId(sliceId, s->letter());
+        }
+    }
+
+    pushSliceOverlay(s);
+    target->setSliceOverlayLetter(sliceId, s->letter());
+    if (s->isTxSlice()) {
+        if (m_panStack) {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (applet && applet->spectrumWidget()) {
+                    applet->spectrumWidget()->setHasTxSlice(
+                        applet->spectrumWidget() == target);
+                }
+            }
+        } else if (m_panApplet && m_panApplet->spectrumWidget()) {
+            m_panApplet->spectrumWidget()->setHasTxSlice(true);
+        }
+        syncTxWaterfallSliceToSpectrums();
+    }
+    return true;
 }
 
 
@@ -789,117 +957,53 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
-        // Remove overlay/VFO from all spectrums
-        if (m_panStack) {
-            for (auto* pan : m_radioModel.panadapters()) {
-                if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    sw->removeSliceOverlay(s->sliceId());
-                    sw->removeVfoWidget(s->sliceId());
-                }
-            }
-        }
-        // Re-add on the new pan
-        auto* sw = spectrumForSlice(s);
-        if (!sw) return;
-        auto* vfo = sw->addVfoWidget(s->sliceId());
-        wireVfoWidget(vfo, s);
-        pushSliceOverlay(s);
-        if (s->isTxSlice())
-            syncTxWaterfallSliceToSpectrums();
+        reattachSliceVisualsToPanadapter(s);
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
         syncKiwiSdrDiversityEscControls();
     });
 
-    // Create a VfoWidget for this slice on the correct panadapter
-    auto* swForVfo = spectrumForSlice(s);
-    if (!swForVfo) return;
-    auto* vfo = swForVfo->addVfoWidget(s->sliceId());
+    // Create a VfoWidget for this slice on the correct panadapter. When the
+    // pan hasn't arrived yet (out-of-order reconnect), skip ONLY the widget
+    // creation — reattachSliceVisualsToPanadapter() creates and wires it when
+    // the pan lands. The slice-scoped wiring below must still run: it is all
+    // pan-independent (every connect resolves the VFO dynamically at fire
+    // time), and skipping it left the late-attached slice 90% wired — no
+    // applet tab button, no split refresh on external TX-role changes, no
+    // band-stack dwell (#4037 review).
+    if (auto* swForVfo = spectrumForSlice(s)) {
+        auto* vfo = swForVfo->addVfoWidget(s->sliceId());
 
-    // Set SmartSDR+ flag before wireVfoWidget so rebuildFilterButtons
-    // sees the correct value when setSlice() triggers the first build (#1356)
-    {
-        const QString& sub = m_radioModel.licenseSubscription();
-        bool hasPlus = sub.contains("SmartSDR+");
-        vfo->setSmartSdrPlus(hasPlus);
+        // Set SmartSDR+ flag before wireVfoWidget so rebuildFilterButtons
+        // sees the correct value when setSlice() triggers the first build (#1356)
+        {
+            const QString& sub = m_radioModel.licenseSubscription();
+            bool hasPlus = sub.contains("SmartSDR+");
+            vfo->setSmartSdrPlus(hasPlus);
+        }
+
+        // Set extended DSP flag before wireVfoWidget so the mode-change lambda
+        // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
+        vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
+
+        wireVfoWidget(vfo, s);
+
+        // NR2/RN2/RADE are now wired permanently in wireVfoWidget — no
+        // special handling needed here for active slice timing.
+
+        // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
+        vfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
+
+        wireVfoTelemetry(vfo, s);
     }
 
-    // Set extended DSP flag before wireVfoWidget so the mode-change lambda
-    // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
-    vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
-
-    wireVfoWidget(vfo, s);
-
-    // NR2/RN2/RADE are now wired permanently in wireVfoWidget — no
-    // special handling needed here for active slice timing.
-
 #ifdef HAVE_RADE
-    // Reconnect scenario: slice may already be in FDVU/FDVL when AetherSDR connects
+    // Reconnect scenario: slice may already be in FDVU/FDVL when AetherSDR
+    // connects. Pan-independent — runs even when the VFO is deferred.
     if (s->mode().startsWith("FDV"))
         activateFdvDisplay(s->sliceId());
 #endif
-
-    // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
-    vfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
-
-    // Feed S-meter per-slice — only this VFO's slice level
-    const int sid = s->sliceId();
-    const QPointer<VfoWidget> vfoPtr(vfo);
-    connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
-            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
-        if (sliceIndex == sid
-            && (!m_kiwiSdrManager
-                || m_kiwiSdrManager->assignedProfileForSlice(sid).isEmpty())) {
-            deferReceivePresentation(
-                ReceivePresentationSource::Flex,
-                ReceivePresentationSurface::Meter,
-                [this, vfoPtr, sid, dbm]() {
-                    if (!vfoPtr
-                        || (m_kiwiSdrManager
-                            && !m_kiwiSdrManager
-                                    ->assignedProfileForSlice(sid).isEmpty())) {
-                        return;
-                    }
-                    vfoPtr->setSignalLevel(dbm);
-                },
-                QString::number(sid));
-        }
-    });
-    // Feed ESC meter per-slice — signal strength after ESC processing
-    connect(&m_radioModel.meterModel(), &MeterModel::escLevelChanged,
-            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
-        if (sliceIndex == sid) {
-            deferReceivePresentation(
-                ReceivePresentationSource::Flex,
-                ReceivePresentationSurface::Meter,
-                [vfoPtr, dbm]() {
-                    if (vfoPtr) {
-                        vfoPtr->setEscLevel(dbm);
-                    }
-                },
-                QString::number(sid));
-        }
-    });
-    // Feed the SmartMTR TX scales: mic level + compression (dBFS / dB) from
-    // micMetersChanged, and forward power + SWR from txMetersChanged. The VFO
-    // shows the operator-selected meter only on its own TX slice while
-    // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
-    // meter reports the truth of whatever the operator selected.
-    connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
-        vfo->setMicLevel(micLevel, micPeak);
-        vfo->setTxCompression(compPeak);
-    });
-    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            vfo, [vfo](float fwd, float swr) {
-        vfo->setTxPower(fwd);
-        vfo->setTxSwr(swr);
-    });
-    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            vfo, &VfoWidget::setTransmitting);
-    connect(&m_radioModel, &RadioModel::antListChanged,
-            vfo, &VfoWidget::setAntennaList);
 
     // Refresh the split-pair visualization whenever this slice's TX role changes,
     // so an externally-initiated split (rigctld / CAT / TCI / front panel) is
@@ -985,6 +1089,7 @@ void MainWindow::onSliceRemoved(int id)
     if (m_kiwiSdrManager) {
         m_kiwiSdrManager->clearSliceAssignment(id);
     }
+    syncKiwiSdrPanadapterUiStates();
 
     // Drop the adaptive-filter engine's per-slice smoothing/baseline state.
     // processFrame() only self-clears state for slices it still sees; a deleted
@@ -1609,7 +1714,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     KiwiSdrClient::stateAllowsReceiverControl(
                         m_kiwiSdrManager->state(profileId))
                     && m_kiwiSdrManager->waterfallAvailable(profileId);
-                if (profileId == displayProfileId && profileCanDriveWaterfall) {
+                if (profileId == displayProfileId
+                    && kiwiSdrPanDisplaysKiwi(applet->panId())
+                    && profileCanDriveWaterfall) {
                     sw->setKiwiSdrWaterfallAvailable(
                         m_kiwiSdrManager->waterfallAvailable(profileId));
                     sw->setKiwiSdrWaterfallProfile(profileId);
@@ -1684,6 +1791,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 updateKiwiWaterfallView(centerMhz, bandwidthMhz);
                 kiwiGestureLastViewUpdate->invalidate();
             });
+    connect(sw, &SpectrumWidget::kiwiSdrDisplaySourceRequested,
+            this, [this, applet](bool kiwi) {
+        setKiwiSdrPanDisplaySource(applet->panId(), kiwi);
+    });
 
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
@@ -1837,7 +1948,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::bandwidthChangeRequested,
             this, [this, applet](double bw) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         m_radioModel.sendCommand(
@@ -1845,7 +1956,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::centerChangeRequested,
             this, [this, applet](double center) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         if (const auto* pan = m_radioModel.panadapter(applet->panId()))
@@ -1853,19 +1964,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         m_radioModel.sendCommand(
             QString("display pan set %1 center=%2").arg(applet->panId()).arg(center, 0, 'f', 6));
     });
+    // Band/Segment Zoom toggle off the pan's radio-authoritative model state
+    // (togglePanZoomModeForPan) — shared with the keyboard/MIDI shortcuts
+    // (MainWindow_Shortcuts.cpp) and the RC28/FlexControl paths
+    // (MainWindow_Controllers.cpp), and per-pan by construction. This right-click
+    // menu targets THIS applet's pan, not the active slice's. (#4057)
     connect(sw, &SpectrumWidget::bandZoomRequested,
-            this, [this, applet, bandZoomOn = std::make_shared<bool>(false)]() mutable {
-        *bandZoomOn = !*bandZoomOn;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 band_zoom=%2")
-                .arg(applet->panId()).arg(*bandZoomOn ? 1 : 0));
+            this, [this, applet]() {
+        togglePanZoomModeForPan(applet->panId(), /*segmentZoom=*/false);
     });
     connect(sw, &SpectrumWidget::segmentZoomRequested,
-            this, [this, applet, segZoomOn = std::make_shared<bool>(false)]() mutable {
-        *segZoomOn = !*segZoomOn;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 segment_zoom=%2")
-                .arg(applet->panId()).arg(*segZoomOn ? 1 : 0));
+            this, [this, applet]() {
+        togglePanZoomModeForPan(applet->panId(), /*segmentZoom=*/true);
     });
     connect(sw, &SpectrumWidget::filterChangeRequested,
             this, [this](int lo, int hi) {
@@ -2063,12 +2173,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     }
 
     // ── Per-pan display controls (client-side) ───────────────────────────
-    // Global lean render mode — every pan's Lean button drives the same
-    // app-wide toggle; seed this new pan's button + widget with current state.
-    connect(menu, &SpectrumOverlayMenu::leanModeToggled,
-            this, &MainWindow::applyLeanMode);
-    menu->setLeanChecked(m_leanMode);
-    sw->setLeanMode(m_leanMode);
     connect(menu, &SpectrumOverlayMenu::fftFillAlphaChanged,
             sw, &SpectrumWidget::setFftFillAlpha);
     connect(menu, &SpectrumOverlayMenu::fftFillColorChanged,
@@ -2258,7 +2362,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setDssGain);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,
             this, [this, applet, sw](int v) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfColorGain(v);
@@ -2269,7 +2373,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfBlackLevelChanged,
             this, [this, applet, sw](int v) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfBlackLevel(v);
@@ -2280,7 +2384,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackChanged,
             this, [this, applet, sw](bool on) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfAutoBlack(on);
@@ -2290,13 +2394,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackOffsetChanged,
             this, [this, applet, sw](int offset) {
-        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         sw->setWfAutoBlackOffset(offset);
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackSourceChanged,
-            this, [this, sw](bool radioSide) {
+            this, [this, applet, sw](bool radioSide) {
+        if (kiwiSdrPanDisplaysKiwi(applet->panId())) {
+            return;
+        }
         sw->setWfAutoBlackRadioSide(radioSide);
         // Radio-side → tell the radio to compute its per-tile auto-black level;
         // client-side → stop it (auto_black=0) and use our own estimate.
@@ -2305,7 +2412,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
         const int clampedMs = std::clamp(ms, 1, 100);
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (!profileId.isEmpty()) {
+        if (!profileId.isEmpty() && kiwiSdrPanDisplaysKiwi(applet->panId())) {
             const KiwiSdrAntennaProfile profile =
                 m_kiwiSdrManager ? m_kiwiSdrManager->profile(profileId)
                                  : KiwiSdrAntennaProfile{};
@@ -2340,7 +2447,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty() || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2365,7 +2472,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty() || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2390,7 +2497,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty()
+            || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2407,7 +2515,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
-        if (profileId.isEmpty()) {
+        if (profileId.isEmpty() || !kiwiSdrPanDisplaysKiwi(applet->panId())) {
             return;
         }
         const KiwiSdrAntennaProfile profile =
@@ -2546,6 +2654,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
         s.setValue(sw->settingsKey("DisplayNoiseFloorEnable"),    "False");
         s.setValue(sw->settingsKey("DisplayNoiseFloorPosition"),  "75");
+        s.setValue(sw->settingsKey("DisplaySourceTraceSettings"),
+                   QStringLiteral(
+                       "{\"flex\":{\"dssFloorDepth\":6,\"noiseFloorPosition\":75},"
+                       "\"kiwi\":{\"dssFloorDepth\":6,\"noiseFloorPosition\":75},"
+                       "\"version\":1}"));
         s.setValue(sw->settingsKey("DisplaySpectrumRenderMode"),  "0");
         s.setValue(sw->settingsKey("Display3DFloorDepth"),        "6");
         s.setValue(sw->settingsKey("Display3DGain"),        "70");
@@ -3160,7 +3273,11 @@ MainWindow::TuneCenteringResult MainWindow::panFollowVfo(
     if (auto* sw = spectrumForSlice(s)) {
         if (auto* vfo = sw->vfoWidget(s->sliceId())) {
             const double bw = sw->bandwidthMhz();
-            const int specW = sw->width();
+            // Frequency maps across the content canvas (width minus the right
+            // dBm / time strip), so convert the flag's pixel width to MHz with
+            // the same denominator mhzToX uses — otherwise the flag-edge trigger
+            // drifts from the rendered flag position by the strip ratio (#3482).
+            const int specW = sw->contentWidth();
             if (bw > 0.0 && specW > 0 && !vfo->isCollapsed()) {
                 const double mhzPerPixel = bw / static_cast<double>(specW);
                 const double flagWidthMhz =

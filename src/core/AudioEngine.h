@@ -490,6 +490,16 @@ public:
         return m_rxPlaybackQueuedMs.load(std::memory_order_relaxed);
     }
     ReceivePresentationAudioQueues receivePresentationAudioQueues() const;
+    quint64 receivePresentationOutputSignalEmitCount() const
+    {
+        return m_receivePresentationOutputSignalEmitCount.load(
+            std::memory_order_relaxed);
+    }
+    quint64 receivePresentationOutputSignalSuppressedCount() const
+    {
+        return m_receivePresentationOutputSignalSuppressedCount.load(
+            std::memory_order_relaxed);
+    }
 
     // Local CW sidetone generator — accessor used by RadioModel signal
     // routing and PhoneCwApplet UI bindings.
@@ -1076,6 +1086,8 @@ private:
     std::atomic<int>       m_receivePresentationKiwiSdrOutputBufferMs{0};
     std::atomic<int>       m_receivePresentationExternalKiwiRawBufferMs{0};
     std::atomic<int>       m_receivePresentationExternalKiwiOutputBufferMs{0};
+    std::atomic<quint64>   m_receivePresentationOutputSignalEmitCount{0};
+    std::atomic<quint64>   m_receivePresentationOutputSignalSuppressedCount{0};
     mutable std::mutex     m_automationAudioCaptureMutex;
     std::atomic<bool>      m_automationAudioCaptureActive{false};
     bool                   m_automationCaptureRaw{false};

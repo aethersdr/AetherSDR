@@ -191,6 +191,19 @@ public:
     QsoRecorder* qsoRecorder() const { return m_qsoRecorder; }  // automation bridge
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
+    // fireShortcutAction result codes. Plain ints (not enum class) because the
+    // value crosses QMetaObject::invokeMethod as an int return.
+    static constexpr int ShortcutFireOk              = 0;
+    static constexpr int ShortcutFireUnknownId       = 1;
+    static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
+    static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
+    // Fire a registered ShortcutManager action by id — the exact path a MIDI
+    // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
+    // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
+    // that carry no default key sequence and no menu entry. allowTx gates
+    // actions registered keysTx (the caller decides policy; the registration
+    // site declares the data). Returns a ShortcutFire* code.
+    Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;
@@ -210,11 +223,6 @@ protected:
 #endif
 
 private slots:
-    // Global lean render mode (#3283): opaque pan + VFO, ~30 Hz repaint cap
-    // (kLeanFrameMs = 33), WAVE scope off, meters throttled to ~12 Hz per
-    // instance. Applied across all panes/VFOs, persisted, reversible.
-    void applyLeanMode(bool on);
-
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
     void adjustCatPortCounts(bool connected);  // called from onConnectionStateChanged
@@ -319,6 +327,7 @@ private:
     void updateFilterLimitsForMode(const QString& mode);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
+    bool reattachSliceVisualsToPanadapter(SliceModel* s);
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
@@ -423,6 +432,10 @@ private:
     SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
+    bool kiwiSdrPanDisplaysKiwi(const QString& panId) const;
+    void setKiwiSdrPanDisplaySource(const QString& panId, bool kiwi);
+    void clearKiwiSdrPanDisplaySourceOverride(const QString& panId);
+    void clearKiwiSdrPanDisplaySourceOverrides();
     void syncKiwiSdrPanadapterTxInhibit(const QString& panId,
                                         const QString& profileId);
     void syncKiwiSdrDiversityEscControls();
@@ -438,6 +451,8 @@ private:
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
+    void schedulePanAverageReconcile(const QString& panId, int reportedAverage);
+    void schedulePanWeightedAvgReconcile(const QString& panId, bool reportedWeighted);
     void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -456,6 +471,7 @@ private:
     void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
+    void wireVfoTelemetry(VfoWidget* vfo, SliceModel* s);
     // Push the active RX slice's filter passband (converted from
     // protocol offsets to audio-domain low/high) to the RX EQ canvases.
     void pushRxFilterCutoffsToEq();
@@ -811,8 +827,10 @@ private:
     double               m_flexTargetMhz{-1.0};
     FlexWheelMode        m_flexWheelMode{FlexWheelMode::Frequency};
     int                  m_flexActiveLedButton{0};
-    bool                 m_flexVirtualBandZoomOn{false};
-    bool                 m_flexVirtualSegmentZoomOn{false};
+    // (No client-side band/segment zoom bools: the toggles read the pan's
+    // radio-authoritative model state — togglePanZoomModeForPan, #4057.)
+    void togglePanZoomMode(bool segmentZoom);
+    void togglePanZoomModeForPan(const QString& panId, bool segmentZoom);
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
@@ -925,6 +943,7 @@ private:
     bool             m_kiwiSdrAudioTransmitMuted{false};
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
+    QSet<QString>    m_kiwiSdrFlexDisplayPans;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1048,11 +1067,6 @@ private:
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
     bool m_splitActive{false};
-    bool m_leanMode{false};  // global lean render mode state (#3283)
-    // Pre-lean WaveApplet active state, captured on Lean activation so the
-    // round-trip restores whatever the user had before instead of silently
-    // re-showing the scope. Only meaningful while m_leanMode is true.
-    bool m_preLeanWaveActive{true};
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     int  m_pendingMemoryRevealSliceId{-1};
@@ -1132,6 +1146,26 @@ private:
     };
     QHash<QString, PanFpsReconcileState> m_panFpsReconcile;
     QHash<QString, QMetaObject::Connection> m_panFpsReconcileConnections;
+    // FFT averaging reconcile (#4001) — mirrors the fps reconcile so a global
+    // profile / band switch that adopts the profile's stored average/weighted
+    // value gets the user's desired value re-asserted once the write-hold
+    // releases. Averaging is NOT adaptively throttled, so no throttle guard.
+    struct PanAverageReconcileState {
+        QTimer* timer{nullptr};
+        QPointer<SpectrumWidget> spectrum;
+        qint64 lastSentMs{0};
+        int lastSentDesired{-1};
+    };
+    QHash<QString, PanAverageReconcileState> m_panAverageReconcile;
+    QHash<QString, QMetaObject::Connection> m_panAverageReconcileConnections;
+    struct PanWeightedAvgReconcileState {
+        QTimer* timer{nullptr};
+        QPointer<SpectrumWidget> spectrum;
+        qint64 lastSentMs{0};
+        int lastSentDesired{-1};   // 0/1 last-sent weighted_average flag
+    };
+    QHash<QString, PanWeightedAvgReconcileState> m_panWeightedAvgReconcile;
+    QHash<QString, QMetaObject::Connection> m_panWeightedAvgReconcileConnections;
     bool m_adaptiveThrottleActive{false}; // fps/wf reconcile suppressed while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     struct WaterfallLineDurationReconcileState {
