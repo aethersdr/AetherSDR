@@ -2421,9 +2421,12 @@ void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
     const QString mode = s->mode();
     int lo = audioLo;
     int hi = audioHi;
-    if (mode == "LSB" || mode == "DIGL") {
+    if (mode == "LSB" || mode == "DIGL" || mode == "FDVL") {
         // Lower-sideband: filter offsets are negative; the audio low edge
-        // maps to the high (closest-to-zero) offset and vice versa.
+        // maps to the high (closest-to-zero) offset and vice versa. FDVL
+        // included since #3434 stores it canonically negative — the old
+        // pass-through sent positives that flip-flopped the overlay per
+        // drag step against the mirrored radio echo.
         lo = -audioHi;
         hi = -audioLo;
     } else if (mode == "AM" || mode == "SAM" || mode == "FM"

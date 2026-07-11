@@ -32,6 +32,45 @@ void SliceModel::sendCommand(const QString& cmd)
     emit commandReady(cmd);
 }
 
+// ── Filter polarity (#3434) ─────────────────────────────────────────────
+// FlexLib knows FDV only as a USB-family mode (Slice.cs:543-546), so the
+// radio reports BOTH FDVU and FDVL passbands in USB form (positive lo/hi).
+// Client-side, lower-sideband modes store negative offsets from the carrier
+// (the overlay, hit-testing and preset math all assume it). These helpers
+// hold the single mode→family mapping every polarity decision uses.
+bool SliceModel::filterPolarityUsbFamily(const QString& mode)
+{
+    return mode == "USB" || mode == "DIGU"
+        || mode == "FDV" || mode == "FDVU"   // FlexLib USB-family (FDV incl.)
+        || mode == "NT";                     // NAVTEX: USB-family digital (v4.2.18)
+}
+
+bool SliceModel::filterPolarityLsbFamily(const QString& mode)
+{
+    return mode == "LSB" || mode == "DIGL" || mode == "FDVL";
+}
+
+bool SliceModel::normalizeFilterPolarity()
+{
+    // Mirror across the carrier, preserving BOTH edges (asymmetric-safe):
+    // (lo,hi) → (-hi,-lo). For symmetric SSB this matches the historical
+    // flip (0,2700 → -2700,0); for asymmetric FDVL it keeps the low cut
+    // (95,2000 → -2000,-95) instead of collapsing it to (-2000,0), which is
+    // the discarded-edge regression #3092 worked around by excluding FDV.
+    // Sign-guarded and idempotent: values already in canonical form (and
+    // carrier-straddling passbands) are left untouched.
+    const bool usbFam = filterPolarityUsbFamily(m_mode);
+    const bool lsbFam = filterPolarityLsbFamily(m_mode);
+    if ((usbFam && m_filterLow < 0 && m_filterHigh <= 0)
+        || (lsbFam && m_filterLow >= 0 && m_filterHigh > 0)) {
+        const int lo = m_filterLow, hi = m_filterHigh;
+        m_filterLow  = -hi;
+        m_filterHigh = -lo;
+        return true;
+    }
+    return false;
+}
+
 void SliceModel::setFrequency(double mhz)
 {
     if (m_locked) {
@@ -74,6 +113,16 @@ void SliceModel::setFilterWidth(int low, int high)
 {
     m_filterLow  = low;
     m_filterHigh = high;
+    // Boundary defense (#3434): client-side callers can replay values captured
+    // under the pre-mirror convention (band-stack bookmarks, band snapshots,
+    // FilterPresets_* in AppSettings, net presets stored positive for FDVL) or
+    // pass audio-domain positives (EQ cutoff drag). Normalizing here keeps the
+    // model canonical even when the radio's filter already matches and no
+    // status echo will arrive to heal it. Sign-guarded: canonical input is
+    // untouched.
+    normalizeFilterPolarity();
+    low = m_filterLow;
+    high = m_filterHigh;
     // Operator-driven filter change (preset/drag): bump the user epoch so the
     // adaptive engine adopts this as its new baseline. applyAdaptiveFilter()
     // deliberately does NOT bump it. RFC #3878.
@@ -830,46 +879,57 @@ void SliceModel::applyChanges(const SliceDelta& d)
             modeChanged_ = true;
         }
     }
-    if (d.filterLow.has_value() || d.filterHigh.has_value()) {
-        // The radio may report one edge without the other; keep the current
-        // value for the absent one (the old parse defaulted to the member).
-        m_filterLow  = d.filterLow.has_value()
-            ? *d.filterLow : m_filterLow;
-        m_filterHigh = d.filterHigh.has_value()
-            ? *d.filterHigh : m_filterHigh;
-
-        // Radio sometimes sends wrong-polarity filter offsets after session
-        // restore (e.g. negative offsets for USB/DIGU). Normalize based on mode.
-        //
-        // FlexLib only knows "FDV" as a USB-family mode (Slice.cs:545-550), so
-        // the radio echoes BOTH FDVU and FDVL passbands as USB-form (positive
-        // lo/hi). FDVL is lower-sideband: its overlay, hit-testing and the
-        // client's own preset math all expect NEGATIVE offsets (see
-        // VfoWidget::applyFilterPreset / RxApplet::applyFilterPreset:
-        // lo=-widthHz, hi=-95). Left positive, an FDVL passband is shaded on
-        // the wrong (upper) side of the carrier (#3434). PR #3092 excluded FDV
-        // from the flip because the old anchored flip discarded one edge of the
-        // asymmetric FreeDV passband; the mirror below preserves both edges, so
-        // FDV is normalized safely here again.
-        const bool isUsbFamily = (m_mode == "USB" || m_mode == "DIGU"
-                                  || m_mode == "FDVU"
-                                  || m_mode == "NT");  // NAVTEX: USB-family digital (v4.2.18)
-        const bool isLsbFamily = (m_mode == "LSB" || m_mode == "DIGL"
-                                  || m_mode == "FDVL");
-        // Mirror across the carrier, preserving BOTH edges (asymmetric-safe):
-        // (lo,hi) → (-hi,-lo). For symmetric SSB this matches the historical
-        // flip (0,2700 → -2700,0); for asymmetric FDVL it keeps the low cut
-        // (95,2000 → -2000,-95) instead of collapsing it to (-2000,0).
-        if (isUsbFamily && m_filterLow < 0 && m_filterHigh <= 0) {
-            const int lo = m_filterLow, hi = m_filterHigh;
-            m_filterLow  = -hi;
-            m_filterHigh = -lo;
-        } else if (isLsbFamily && m_filterLow >= 0 && m_filterHigh > 0) {
-            const int lo = m_filterLow, hi = m_filterHigh;
-            m_filterLow  = -hi;
-            m_filterHigh = -lo;
+    if (d.filterLow.has_value() && d.filterHigh.has_value()) {
+        // Full pair: adopt the wire values, then normalize polarity. The radio
+        // sometimes reports wrong-polarity offsets after session restore
+        // (negative for USB/DIGU), and it ALWAYS reports FDVL in USB form
+        // (positive — FlexLib Slice.cs:543-546 knows FDV only as USB-family)
+        // while the client stores lower-sideband modes negative (overlay,
+        // hit-testing and preset math: lo=-widthHz, hi=-95). #3092 excluded
+        // FDV because the old anchored flip discarded one asymmetric edge;
+        // normalizeFilterPolarity()'s mirror preserves both edges (#3434).
+        m_filterLow  = *d.filterLow;
+        m_filterHigh = *d.filterHigh;
+        normalizeFilterPolarity();
+        filterChanged_ = true;
+    } else if (d.filterLow.has_value() || d.filterHigh.has_value()) {
+        // One edge without the other. The stored form can legitimately differ
+        // from the wire form (FDVL: stored negative, wire positive), and under
+        // the mirror a single wire edge maps to the OPPOSITE stored edge
+        // (wire filter_hi=3000 for FDVL means stored filterLow=-3000). Merging
+        // a wrong-form edge directly would build a carrier-straddling passband
+        // that neither pair guard can fix (#3434 review). Sign-gate per edge:
+        // wrong-form → crosswise with negation; canonical-form → direct.
+        // Applying this rule to both edges of a pair reproduces the pair
+        // mirror exactly, so it is a strict generalization.
+        const bool haveLo = d.filterLow.has_value();
+        const int v = haveLo ? *d.filterLow : *d.filterHigh;
+        const bool wrongForm =
+            (filterPolarityLsbFamily(m_mode) && v > 0)
+            || (filterPolarityUsbFamily(m_mode) && v < 0);
+        if (wrongForm) {
+            if (haveLo) {
+                m_filterHigh = -v;
+            } else {
+                m_filterLow = -v;
+            }
+        } else {
+            if (haveLo) {
+                m_filterLow = v;
+            } else {
+                m_filterHigh = v;
+            }
         }
         filterChanged_ = true;
+    } else if (modeChanged_) {
+        // Mode changed with NO filter keys in the same delta (a second client
+        // flipping FDVU→FDVL mid-session — the reporter's MultiFlex setup).
+        // The stored polarity may now be wrong for the new mode; the mirror is
+        // sign-guarded and idempotent, so re-running it is safe and fixes the
+        // stale-side overlay without waiting for the next filter echo (#3434).
+        if (normalizeFilterPolarity()) {
+            filterChanged_ = true;
+        }
     }
     if (d.modeList.has_value()) {
         const QStringList modes = *d.modeList;
