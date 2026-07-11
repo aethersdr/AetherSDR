@@ -2454,6 +2454,11 @@ void RadioModel::setPanCenter(double centerMhz)
 {
     if (m_activePanId.isEmpty()) return;
     if (PanadapterModel* pan = panadapter(m_activePanId)) {
+        // Clamp so the pan's low edge stays >= 0 Hz, matching the spectrum
+        // pan-drag path (MainWindow_Wiring wirePanadapter). Without it an
+        // out-of-range center would be optimistically stored and advertised via
+        // TCI dds: even though the radio rejects it.
+        centerMhz = std::max(centerMhz, pan->bandwidthMhz() / 2.0);
         pan->setCenterBandwidth(centerMhz, -1.0);
     }
     sendCmd(
