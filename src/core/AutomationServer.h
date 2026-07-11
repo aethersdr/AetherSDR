@@ -327,6 +327,13 @@ private:
     // via Qt's context-menu policy. Posted for the same native-popup safety as
     // doContextMenu. (#3646 fidelity)
     QJsonObject doRightClick(const QString& target, const QString& value) const;
+    // Shared scaffolding for doContextMenu/doRightClick: resolve + visibility,
+    // optional "<x> <y>" offset, then post a deferred synthetic event onto the
+    // GUI loop with the owning window raised. `send` builds/dispatches the
+    // concrete event given (widget, local, global). (#4137 review — dedup)
+    QJsonObject postDeferredMenuTrigger(
+        const QString& target, const QString& value, const char* verb,
+        std::function<void(QWidget*, QPoint, QPoint)> send) const;
     // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
     // under a target-local point according to childAt() and QApplication::widgetAt().
     QJsonObject doHitTest(const QString& target, const QString& value) const;

@@ -4533,8 +4533,18 @@ QJsonObject AutomationServer::doShowMenu(const QString& target) const
 // Inspection + invoke come for free: the popped QMenu is a visible top-level
 // menu, which doDumpTree already serializes and invoke already drives by
 // text/path.
-QJsonObject AutomationServer::doContextMenu(const QString& target,
-                                            const QString& value) const
+// Shared scaffolding for the deferred synthetic menu-trigger verbs
+// (contextMenu / rightClick): resolve + visibility-check the target, parse an
+// optional "<x> <y>" local offset (default: widget center, where a
+// position-insensitive handler anchors the menu), then post onto the GUI loop
+// with the owning window raised/activated so the native popup has an anchor.
+// `verb` names the caller in the error/log text; `send` builds and dispatches
+// the concrete event (QContextMenuEvent vs a right-button QMouseEvent) once
+// we're back on the event loop. (#4137 review — dedup of the two near-identical
+// bodies; behaviour is unchanged for both verbs.)
+QJsonObject AutomationServer::postDeferredMenuTrigger(
+    const QString& target, const QString& value, const char* verb,
+    std::function<void(QWidget*, QPoint, QPoint)> send) const
 {
     QWidget* w = resolveWidget(target);
     if (!w)
@@ -4542,8 +4552,6 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
     if (!w->isVisible())
         return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
 
-    // Optional "<x> <y>" local offset; default to the widget center, which is
-    // where a position-insensitive handler expects the menu anchored.
     QPoint local = w->rect().center();
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() >= 2) {
@@ -4551,23 +4559,23 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
         const int x = parts.at(0).toInt(&okx);
         const int y = parts.at(1).toInt(&oky);
         if (!okx || !oky)
-            return err(QStringLiteral("contextMenu offset x/y must be integers"));
+            return err(QString::fromLatin1(verb)
+                       + QStringLiteral(" offset x/y must be integers"));
         local = QPoint(x, y);
     }
 
     QPointer<QWidget> wp = w;
     QPointer<QWidget> win = w->window();
-    QTimer::singleShot(0, qApp, [wp, win, local]() {
+    QTimer::singleShot(0, qApp, [wp, win, local, send = std::move(send)]() {
         if (!wp)
             return;
         if (win && win->isVisible()) {   // realize + activate so Cocoa has an anchor
             win->raise();
             win->activateWindow();
         }
-        QContextMenuEvent ev(QContextMenuEvent::Mouse, local, wp->mapToGlobal(local));
-        QApplication::sendEvent(wp, &ev);
+        send(wp, local, wp->mapToGlobal(local));
     });
-    qCInfo(lcAutomation).noquote() << "contextMenu on" << target << "at" << local;
+    qCInfo(lcAutomation).noquote() << verb << "on" << target << "at" << local;
 
     return QJsonObject{
         {QStringLiteral("ok"), true},
@@ -4579,6 +4587,17 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
     };
 }
 
+QJsonObject AutomationServer::doContextMenu(const QString& target,
+                                            const QString& value) const
+{
+    // Qt context-menu policy path (contextMenuEvent / customContextMenuRequested).
+    return postDeferredMenuTrigger(target, value, "contextMenu",
+        [](QWidget* w, QPoint local, QPoint global) {
+            QContextMenuEvent ev(QContextMenuEvent::Mouse, local, global);
+            QApplication::sendEvent(w, &ev);
+        });
+}
+
 // ── Real right-button press for mousePressEvent menus (#3646) ────────────────
 // Some widgets build context menus directly from mousePressEvent instead of
 // Qt's context-menu policy. SpectrumWidget is the important case: its
@@ -4588,52 +4607,15 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
 QJsonObject AutomationServer::doRightClick(const QString& target,
                                            const QString& value) const
 {
-    QWidget* w = resolveWidget(target);
-    if (!w)
-        return err(QStringLiteral("widget not found: ") + target);
-    if (!w->isVisible())
-        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
-
-    QPoint local = w->rect().center();
-    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    if (parts.size() >= 2) {
-        bool okx = false, oky = false;
-        const int x = parts.at(0).toInt(&okx);
-        const int y = parts.at(1).toInt(&oky);
-        if (!okx || !oky)
-            return err(QStringLiteral("rightClick offset x/y must be integers"));
-        local = QPoint(x, y);
-    }
-
-    QPointer<QWidget> wp = w;
-    QPointer<QWidget> win = w->window();
-    QTimer::singleShot(0, qApp, [wp, win, local]() {
-        if (!wp)
-            return;
-        if (win && win->isVisible()) {
-            win->raise();
-            win->activateWindow();
-        }
-        const QPoint global = wp->mapToGlobal(local);
-        QMouseEvent ev(QEvent::MouseButtonPress,
-                       QPointF(local),
-                       QPointF(local),
-                       QPointF(global),
-                       Qt::RightButton,
-                       Qt::RightButton,
-                       Qt::NoModifier);
-        QApplication::sendEvent(wp, &ev);
-    });
-    qCInfo(lcAutomation).noquote() << "rightClick on" << target << "at" << local;
-
-    return QJsonObject{
-        {QStringLiteral("ok"), true},
-        {QStringLiteral("target"), target},
-        {QStringLiteral("class"), shortClassName(w)},
-        {QStringLiteral("x"), local.x()},
-        {QStringLiteral("y"), local.y()},
-        {QStringLiteral("deferred"), true},
-    };
+    // Real right-button press — for widgets that build their menu directly in
+    // mousePressEvent (SpectrumWidget), which a QContextMenuEvent never reaches.
+    return postDeferredMenuTrigger(target, value, "rightClick",
+        [](QWidget* w, QPoint local, QPoint global) {
+            QMouseEvent ev(QEvent::MouseButtonPress,
+                           QPointF(local), QPointF(local), QPointF(global),
+                           Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+            QApplication::sendEvent(w, &ev);
+        });
 }
 
 QJsonObject AutomationServer::doHitTest(const QString& target,
