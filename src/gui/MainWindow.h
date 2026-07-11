@@ -1317,7 +1317,10 @@ private:
     void setCenterLockForPan(const QString& panId, int sliceId, bool on,
                              bool persist = true);
     void clearCenterLockForPan(const QString& panId, bool clearPersistedIntent = false);
-    void clearCenterLockForSlice(int sliceId);
+    void clearCenterLockForSlice(int sliceId, bool clearPersistedIntent = false);
+    // serial + "/" + station: per-client persistence identity so co-located
+    // MultiFlex instances don't inherit or clobber each other's lock intent.
+    QString centerLockRadioKey() const;
     void syncCenterLockUi(const QString& panId);
     bool snapCenterLockForSlice(SliceModel* slice, double mhz, bool sendCommand);
     void snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,

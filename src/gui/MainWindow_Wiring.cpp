@@ -190,6 +190,23 @@ bool MainWindow::centerLockActiveForSlice(const SliceModel* slice) const
         && centerLockSliceForPan(slice->panId()) == slice->sliceId();
 }
 
+QString MainWindow::centerLockRadioKey() const
+{
+    // Persistence identity (#3854 review): radio serial ALONE is shared by
+    // every client instance on this machine (a real MultiFlex configuration),
+    // so one instance's saved lock intent would engage in another instance —
+    // slice letters are per-client — and either instance's unlock would
+    // clobber the other's saved intent (the save rewrites the whole blob).
+    // Scope the key by this client's station identity (StationName setting,
+    // hostname fallback — the same identity we register with `client
+    // station`). The blob treats keys as opaque, so no format migration.
+    const QString serial = m_radioModel.serial().trimmed();
+    if (serial.isEmpty()) {
+        return QString();
+    }
+    return serial + QLatin1Char('/') + m_radioModel.ourStationName().trimmed();
+}
+
 void MainWindow::loadCenterLockSettings()
 {
     m_centerLockSliceLetterByRadioPanIndex.clear();
@@ -281,14 +298,14 @@ void MainWindow::persistCenterLockForSlice(const SliceModel* slice)
         return;
     }
 
-    const QString serial = m_radioModel.serial().trimmed();
+    const QString radioKey = centerLockRadioKey();
     SpectrumWidget* sw = m_panStack->spectrum(slice->panId());
     const QString sliceLetter = slice->letter().trimmed().toUpper();
-    if (serial.isEmpty() || !sw || sliceLetter.isEmpty()) {
+    if (radioKey.isEmpty() || !sw || sliceLetter.isEmpty()) {
         return;
     }
 
-    m_centerLockSliceLetterByRadioPanIndex[serial].insert(sw->panIndex(), sliceLetter);
+    m_centerLockSliceLetterByRadioPanIndex[radioKey].insert(sw->panIndex(), sliceLetter);
     saveCenterLockSettings();
 }
 
@@ -298,14 +315,14 @@ void MainWindow::restoreCenterLockForPan(const QString& panId)
         return;
     }
 
-    const QString serial = m_radioModel.serial().trimmed();
+    const QString radioKey = centerLockRadioKey();
     SpectrumWidget* sw = m_panStack->spectrum(panId);
-    if (serial.isEmpty() || !sw) {
+    if (radioKey.isEmpty() || !sw) {
         return;
     }
 
     const QString targetLetter = m_centerLockSliceLetterByRadioPanIndex
-        .value(serial).value(sw->panIndex()).trimmed();
+        .value(radioKey).value(sw->panIndex()).trimmed();
     if (targetLetter.isEmpty()) {
         clearCenterLockForPan(panId);
         return;
@@ -368,10 +385,10 @@ void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersisted
     }
 
     if (clearPersistedIntent && m_panStack) {
-        const QString serial = m_radioModel.serial().trimmed();
+        const QString radioKey = centerLockRadioKey();
         if (SpectrumWidget* sw = m_panStack->spectrum(panId);
-            !serial.isEmpty() && sw) {
-            auto radioIt = m_centerLockSliceLetterByRadioPanIndex.find(serial);
+            !radioKey.isEmpty() && sw) {
+            auto radioIt = m_centerLockSliceLetterByRadioPanIndex.find(radioKey);
             if (radioIt != m_centerLockSliceLetterByRadioPanIndex.end()) {
                 radioIt->remove(sw->panIndex());
                 if (radioIt->isEmpty()) {
@@ -386,7 +403,7 @@ void MainWindow::clearCenterLockForPan(const QString& panId, bool clearPersisted
     syncCenterLockUi(panId);
 }
 
-void MainWindow::clearCenterLockForSlice(int sliceId)
+void MainWindow::clearCenterLockForSlice(int sliceId, bool clearPersistedIntent)
 {
     QStringList pansToClear;
     for (auto it = m_centerLockSliceByPan.cbegin();
@@ -396,7 +413,7 @@ void MainWindow::clearCenterLockForSlice(int sliceId)
         }
     }
     for (const QString& panId : pansToClear) {
-        clearCenterLockForPan(panId);
+        clearCenterLockForPan(panId, clearPersistedIntent);
     }
 }
 
@@ -433,6 +450,14 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
     }
 
     SpectrumWidget* sw = m_panStack ? m_panStack->spectrum(panId) : nullptr;
+    // Pan-BACKGROUND drag standdown (#3854 review): m_sliceDragInProgress only
+    // covers slice/VFO drags. During a background drag the drag path owns the
+    // center; snapping here would send a counter-command per radio echo and
+    // ping-pong the pan against the gesture. The release echo re-asserts the
+    // lock via the next recenter.
+    if (sw && sw->panDragActive()) {
+        return false;
+    }
     const double bandwidthMhz = kiwiDisplayActive && sw && sw->bandwidthMhz() > 0.0
         ? sw->bandwidthMhz()
         : (pan->bandwidthMhz() > 0.0
@@ -1386,10 +1411,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
-        // Center Lock clears before the visuals move — the old pan's lock
-        // must not survive the migration (#3854). The remove/re-add body this
-        // branch originally carried is superseded by #4037's reattach.
-        clearCenterLockForSlice(s->sliceId());
+        // Migration clears the active lock AND the old pan-slot's persisted
+        // intent — the letter now lives on another pan; leaving the intent
+        // would re-lock a future slice that inherits the letter (#3854
+        // review). The remove/re-add body this branch originally carried is
+        // superseded by #4037's reattachSliceVisualsToPanadapter.
+        clearCenterLockForSlice(s->sliceId(), /*clearPersistedIntent=*/true);
         reattachSliceVisualsToPanadapter(s);
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
@@ -1490,7 +1517,20 @@ void MainWindow::onSliceRemoved(int id)
 
     qDebug() << "MainWindow: slice removed" << id;
 
-    clearCenterLockForSlice(id);
+    // Center Lock (#3854 review): a LIVE removal clears the persisted letter
+    // intent too — Flex recycles letters lowest-free, so a dormant intent
+    // would silently re-lock a later, unrelated slice. Two guards ride on
+    // m_radioModel.slice(id):
+    //  - the stale-slice prune after reconnect emits sliceRemoved(oldId)
+    //    whose id collides with the NEW session's slices (slice 0 is always
+    //    0). Live removals emit AFTER the slice leaves the model, so a
+    //    non-null slice(id) means this is the prune — the active lock (and
+    //    intent) belong to the new slice; skip entirely.
+    //  - disconnect teardown never emits sliceRemoved, so reconnect/restart
+    //    intent survives — that is the restore feature.
+    if (!m_radioModel.slice(id)) {
+        clearCenterLockForSlice(id, /*clearPersistedIntent=*/true);
+    }
     m_centerLockTuneHoldBySlice.remove(id);
 
     m_kiwiSdrVirtualPreviousMute.remove(id);
@@ -3189,6 +3229,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m_sliceDragTargetSliceId = -1;
             m_sliceDragTargetMhz = 0.0;
             m_sliceDragEchoHoldUntilMs = 0;
+            // A drag supersedes any in-flight wheel/MIDI tune: a live tune
+            // hold would override the drag's overlay pushes with the stale
+            // wheel target and recenter to it on release (#3854 review).
+            m_centerLockTuneHoldBySlice.clear();
             return;
         }
         if (!active) {
