@@ -71,8 +71,8 @@ int main(int argc, char** argv)
            eq(parseDeclaredBands(QStringLiteral(" 2m , 440 ")),
               {QStringLiteral("2m"), QStringLiteral("440")}));
 
-    // Canonical (BandDefs) order is preserved on output, and dedup keeps the
-    // first occurrence, so a mixed/duplicated input yields a clean set.
+    // Output preserves input order; dedup keeps the first occurrence, so a
+    // mixed/duplicated input yields a clean set.
     report("dedup keeps set, drops repeats (2m,440,2m -> [2m,440])",
            eq(parseDeclaredBands(QStringLiteral("2m,440,2m")),
               {QStringLiteral("2m"), QStringLiteral("440")}));
