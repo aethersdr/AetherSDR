@@ -415,12 +415,17 @@ void MainWindow::wireRadioModel()
         // #4166: informational only — the reconnect that follows uses the
         // freshly-assigned identity and will not collide again, so this
         // doesn't need to interrupt the user like a forced disconnect does.
-        QMessageBox::information(this, tr("Client Identity Reassigned"),
-            tr("Another AetherSDR client on this network is using the same "
-               "client identity as this one — usually caused by copying "
-               "AetherSDR.settings between computers. A new identity has "
-               "been assigned automatically and the radio connection will "
-               "recover on its own."));
+        // Defer out of the status-parse call stack (this signal fires
+        // synchronously from onStatusReceived) so the modal doesn't spin a
+        // nested event loop mid-parse.
+        QTimer::singleShot(0, this, [this]() {
+            QMessageBox::information(this, tr("Client Identity Reassigned"),
+                tr("Another AetherSDR client on this network is using the same "
+                   "client identity as this one — usually caused by copying "
+                   "AetherSDR.settings between computers. A new identity has "
+                   "been assigned automatically and the radio connection will "
+                   "recover on its own."));
+        });
     });
     connect(&m_radioModel, &RadioModel::multiFlexConflictDetected, this, [this] {
         ConnectedStationsDialog::RadioMeta meta;

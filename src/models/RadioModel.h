@@ -999,6 +999,12 @@ private:
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
     bool      m_forcedDisconnectInProgress{false};
+    // Re-entry guard for handleDuplicateClientIdEviction() (#4166): mirrors
+    // m_forcedDisconnectInProgress so repeated duplicate_client_id evictions
+    // during the flapping window before the fresh identity takes effect
+    // don't mint several UUIDs and stack several dialogs. Cleared once a
+    // clean reconnect completes in onConnected().
+    bool      m_duplicateClientIdEvictionInProgress{false};
     // Suppress connection-error toasts between rebootRadio() and the next
     // successful reconnect — multiple `Connection refused` retries fire
     // while the radio is still booting and would otherwise spam the UI.

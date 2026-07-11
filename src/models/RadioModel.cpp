@@ -2352,6 +2352,7 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected";
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
+    m_duplicateClientIdEvictionInProgress = false;
     stageSessionModelsForReconnect();
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
@@ -2664,6 +2665,10 @@ void RadioModel::handleForcedClientDisconnect()
 
 void RadioModel::handleDuplicateClientIdEviction()
 {
+    if (m_duplicateClientIdEvictionInProgress)
+        return;
+    m_duplicateClientIdEvictionInProgress = true;
+
     auto& s = AppSettings::instance();
     const QString oldId = s.value("GUIClientID").toString();
     const QString newId = QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -4792,6 +4797,11 @@ void RadioModel::onStatusReceived(const QString& object,
 
             if (action == "disconnected") {
                 if (handle == clientHandle()) {
+                    // `forced` and `duplicate_client_id` are read as independent
+                    // flags and are assumed mutually exclusive: if the radio ever
+                    // set both, handleForcedClientDisconnect() would stop
+                    // m_reconnectTimer and suppress the unexpected-disconnect
+                    // reconnect that the duplicate-id self-heal below depends on.
                     if (statusFlagSet(kvs, QStringLiteral("forced")))
                         handleForcedClientDisconnect();
                     // #4166: the radio just evicted OUR OWN handle because
