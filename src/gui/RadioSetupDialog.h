@@ -69,6 +69,10 @@ signals:
     // one-time confirmation dialog). MainWindow persists it and pushes it to
     // the running bridge — enabling arms the force-unkey watchdog.
     void automationBridgeTxAllowedChanged(bool allowed);
+    // Fired when the user toggles "Observe only" in the Network tab. MainWindow
+    // persists it and pushes it to the running bridge, which then refuses every
+    // mutating verb (#4188 area 6) — MCP clients can read but not drive.
+    void automationBridgeReadOnlyChanged(bool readOnly);
 
 protected:
     void closeEvent(QCloseEvent* event) override;

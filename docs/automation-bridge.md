@@ -186,6 +186,27 @@ emissions; once confirmed the choice persists. Toggling it drives the
 same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
 disabling force-unkeys immediately).
 
+### Observe-only (read-only) mode
+
+For a look-but-don't-touch session — handing an assistant visibility
+without letting it change anything — check **"Observe only"** in Radio
+Setup → Network. The bridge then refuses **every** mutating verb and
+answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
+`dumpTree`, `grab`, the read-only `log` actions, `floors`, the inventory-only
+`streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
+and `streams reset/resync/refresh`; the latter two stream actions clear local
+diagnostics or request a fresh radio inventory. It is
+enforced in the app, not in the MCP server, so no client can flip it
+off; the refusal message points the operator back to the checkbox. The
+toggle takes effect immediately on a running bridge — no restart — so
+the intended flow works: start the app with the bridge off, check
+"Observe only", then start the bridge. `ping` and `whoami` report the
+current state as `readOnly`, and the MCP server surfaces it in
+`bridge_status` as `bridge_read_only`. Headless/CI runs can pin it with
+`AETHER_AUTOMATION_READONLY=1`.
+
+![Observe only setting in Radio Setup → Network](assets/automation-observe-only.png)
+
 ---
 
 ## How it works (the contract)
@@ -235,7 +256,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`grab pan <index> [path]`](#grab) | Raw spectrum surface of a specific pan. |
 | | [`grab pan-visible <index> [path]`](#grab) | Pan applet incl. VFO/flag overlays (alias `pan-composite`). |
 | | [`floors`](#floors) | Per-pan measured noise + display floor (dBm). |
-| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`. |
+| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`, `readOnly`. |
 | **Drive** | [`invoke <target> <action> [v]`](#invoke) | Click/toggle/set/selectRow/submit/trigger a control (TX-guarded). |
 | | [`close <target>`](#close) | Close the target's top-level window. |
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
@@ -1588,8 +1609,11 @@ The `~500ms` is a **best-effort hint, not a contract** — the re-dump is async;
 `streams radio` still looks stale, poll again. Returns
 `not connected — cannot resync display inventory` with no radio.
 
-All `streams` actions are read-only / RX; none keys the transmitter (`resync`
-sends only the `sub pan all` subscription command).
+None of the `streams` actions keys the transmitter. In **Observe only** mode,
+the default Layer-A inventory and `radio`/`inventory` reads remain available;
+`reset`, `resync`, and `refresh` are blocked. `reset` changes the local orphan
+tally, while `resync`/`refresh` send the `sub pan all` subscription command to
+the radio.
 
 ### `txwaterfall`
 Toggle the radio's **show-TX-in-waterfall** display flag (`transmit set
@@ -1872,6 +1896,10 @@ push subscription — the observability suite. All diagnostic; nothing keys.
 `tail` also returns `oldest` (the oldest `seq` still resident): if your `since <
 oldest`, earlier matching events were evicted and the window is a truncated
 suffix, not a complete bracket.
+
+In **Observe only** mode, `categories`, `get`, `tail`, `subscribe`, and
+`unsubscribe` remain available. `set` and `reset` are blocked because they
+change the app's logging state.
 
 ### `record`
 Drive the client-side **QSO WAV recorder** (the same one behind the manual record
@@ -2209,7 +2237,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
-| `streams` | — | streams [radio\|reset] — stream diagnostics |
+| `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |

@@ -230,6 +230,9 @@ public:
     // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
     // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
     void setAutomationTxAllowed(bool allowed);
+    // Persist the observe-only opt-in and push it live (Radio Setup → Network).
+    // When set, the bridge refuses every mutating verb (#4188 area 6).
+    void setAutomationReadOnly(bool readOnly);
 
 protected:
     void showEvent(QShowEvent* event) override;

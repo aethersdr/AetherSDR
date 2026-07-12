@@ -299,6 +299,14 @@ public:
     void setTxAllowed(bool allowed);
     bool txAllowed() const { return m_txAllowed; }
 
+    // Observe-only gate (#4188 area 6). When true, the bridge refuses every
+    // verb that isn't pure introspection — no driving, connect, capture, or
+    // keying. Operator-driven from Radio Setup → Network; enforced in
+    // handleLine so a client can't bypass it. Safe to toggle live. `ping` and
+    // `whoami` report the current state.
+    void setReadOnly(bool readOnly) { m_readOnly = readOnly; }
+    bool readOnly() const { return m_readOnly; }
+
 private slots:
     void onNewConnection();
     void onReadyRead();
@@ -603,6 +611,7 @@ private:
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
+    bool    m_readOnly{false};     // observe-only gate (#4188 area 6)
     QString m_authToken;           // shared-secret gate; empty = open (#3646)
     // Log/event channel (#3646 observability suite). The tap fills m_logRing
     // from arbitrary logging threads; the main thread reads it for tail/drain.

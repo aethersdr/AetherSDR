@@ -2665,6 +2665,8 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
             [this](const QString& tok) { setAutomationBridgeToken(tok); });
     connect(dlg, &RadioSetupDialog::automationBridgeTxAllowedChanged, this,
             [this](bool allowed) { setAutomationTxAllowed(allowed); });
+    connect(dlg, &RadioSetupDialog::automationBridgeReadOnlyChanged, this,
+            [this](bool readOnly) { setAutomationReadOnly(readOnly); });
     // serialSettingsChanged is the "external-device settings changed" signal in
     // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
     // and HID-encoder edits. The Ulanzi/HID branches below run regardless of

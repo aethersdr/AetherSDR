@@ -1570,7 +1570,42 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             grid->addWidget(txCheck, 3, 1);
         }
 
-        grid->addWidget(new QLabel("Network MTU:"), 4, 0);
+        // Observe only — the read-only gate (#4188 area 6). When checked, the
+        // bridge refuses every mutating verb (set/invoke/connect/tune/capture…)
+        // and answers only pure-introspection reads. Enforced in the bridge, so
+        // no MCP client can flip it off. Lets the operator start the app, arm
+        // observe-only, then start the MCP server for a look-but-don't-touch
+        // session. An env override (AETHER_AUTOMATION_READONLY) pins it for
+        // headless/CI runs.
+        {
+            grid->addWidget(new QLabel("Observe only:"), 4, 0);
+            auto* roCheck = new QCheckBox("Read-only (block all driving)");
+            roCheck->setObjectName(QStringLiteral("automationReadOnlyCheck"));
+            const bool envForcesRo = qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY");
+            roCheck->setChecked(AutomationBridgeSettings::readOnly() || envForcesRo);
+            roCheck->setToolTip(
+                "Make the bridge observe-only: MCP clients can read state\n"
+                "(ping/whoami/get/dumpTree/grab, read-only log and streams\n"
+                "actions, floors, and hitTest)\n"
+                "but every mutating verb is refused. Enforced in the app, so a\n"
+                "client cannot bypass it. Toggle takes effect immediately on the\n"
+                "running bridge. See docs/automation-bridge.md.");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(roCheck,
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
+                "QCheckBox::indicator { width: 14px; height: 14px; }");
+            if (envForcesRo) {
+                roCheck->setEnabled(false);
+                roCheck->setToolTip(roCheck->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION_READONLY launch variable.");
+            }
+            connect(roCheck, &QCheckBox::toggled, this, [this](bool on) {
+                AutomationBridgeSettings::setReadOnly(on);
+                emit automationBridgeReadOnlyChanged(on);
+            });
+            grid->addWidget(roCheck, 4, 1);
+        }
+
+        grid->addWidget(new QLabel("Network MTU:"), 5, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
         mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
@@ -1582,7 +1617,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
         });
-        grid->addWidget(mtuSpin, 4, 1);
+        grid->addWidget(mtuSpin, 5, 1);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
         // kernel clamps the grant at net.core.rmem_max, so we show the granted
@@ -1599,7 +1634,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             return QStringLiteral("%1 KB").arg(b / 1024);
         };
 
-        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 5, 0);
+        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 6, 0);
         auto* bufRow = new QWidget;
         auto* bufLay = new QHBoxLayout(bufRow);
         bufLay->setContentsMargins(0, 0, 0, 0);
@@ -1627,7 +1662,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         bufValLabel->setMinimumWidth(48);
         bufLay->addWidget(bufSlider, 1);
         bufLay->addWidget(bufValLabel);
-        grid->addWidget(bufRow, 5, 1);
+        grid->addWidget(bufRow, 6, 1);
 
         auto* bufGrantedLabel = new QLabel;
         if (m_model && m_model->panStream()) {
@@ -1635,7 +1670,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
                                            : QStringLiteral("granted: — (applies on connect)"));
         }
-        grid->addWidget(bufGrantedLabel, 6, 1);
+        grid->addWidget(bufGrantedLabel, 7, 1);
 
         connect(bufSlider, &QSlider::valueChanged, this,
                 [this, bufValLabel, fmtBytes](int idx) {

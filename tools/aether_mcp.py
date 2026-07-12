@@ -546,6 +546,10 @@ def handle_tool(name, args):
             try:
                 pong = bridge_request({"cmd": "ping"}, timeout=10)
                 status["bridge_auth_required"] = pong.get("authRequired")
+                # Observe-only gate (#4188 area 6). The bridge is authoritative;
+                # this just reflects it so a client knows up front that mutating
+                # verbs will be refused. Flip it in Radio Setup → Network.
+                status["bridge_read_only"] = pong.get("readOnly", False)
             except Exception as e:  # noqa: BLE001
                 status["ping_error"] = str(e)
             # whoami is auth-gated — its success confirms our token is accepted.
@@ -560,6 +564,12 @@ def handle_tool(name, args):
                                   "Copy the token from Radio Setup → Network → "
                                   "Access Token and set it in this MCP server's "
                                   "env config.")
+            if status.get("bridge_read_only"):
+                status["read_only_note"] = (
+                    "This bridge is observe-only. Read verbs work; every "
+                    "mutating verb (set/invoke/connect/tune/capture…) is "
+                    "refused by the app. Uncheck \"Observe only\" in Radio "
+                    "Setup → Network to allow driving.")
         if not entries and not os.environ.get("AETHER_MCP_SOCKET"):
             status["hint"] = ("No bridge running. Launch AetherSDR with "
                               "AETHER_AUTOMATION=1 or enable it in Radio Setup "
