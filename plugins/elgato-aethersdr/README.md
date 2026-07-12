@@ -30,7 +30,7 @@ zip -r com.aethersdr.radio.streamDeckPlugin com.aethersdr.radio.sdPlugin/
 **Bands:** 160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m, Band Up, Band Down
 **Frequency:** Tune Up, Tune Down, VFO Tuning (Stream Deck+ dial — rotate to tune, press to cycle step size 10 Hz–1 MHz)
 **Modes:** USB, LSB, CW, AM, FM, DIGU, DIGL, FT8
-**Audio:** Mute Toggle, Volume Up, Volume Down, Volume Dial (Stream Deck+ dial — rotate to adjust, press to cycle step size 1/5)
+**Audio:** Mute Toggle, Volume Up, Volume Down, Volume Dial (Stream Deck+ dial — rotate to adjust, press to toggle mute)
 **DSP:** NB, NR, ANF, APF, SQL toggles
 **Slice:** Split, Lock, RIT, XIT toggles
 **DVK:** Play, Record

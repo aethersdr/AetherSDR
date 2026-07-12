@@ -99,14 +99,14 @@
       "UUID": "com.aethersdr.radio.volume-dial",
       "Name": "Volume Dial",
       "Icon": "imgs/plugin-icon",
-      "Tooltip": "Turn to adjust volume; press to change step size",
+      "Tooltip": "Turn to adjust volume; press to toggle mute",
       "Controllers": ["Encoder"],
       "States": [{ "Image": "imgs/plugin-icon", "Title": "Volume" }],
       "Encoder": {
         "layout": "$A1",
         "TriggerDescription": {
           "Rotate": "Adjust volume",
-          "Push": "Cycle step size (1/5)"
+          "Push": "Toggle mute"
         }
       }
     }
