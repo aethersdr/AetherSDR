@@ -2297,6 +2297,12 @@ target_include_directories(model_capabilities_test PRIVATE src)
 target_link_libraries(model_capabilities_test PRIVATE Qt6::Core)
 add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
 
+# KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
+add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)
+target_include_directories(kiwi_rebind_tracker_test PRIVATE src)
+target_link_libraries(kiwi_rebind_tracker_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_rebind_tracker_test COMMAND kiwi_rebind_tracker_test)
+
 add_executable(declared_bands_test
     tests/declared_bands_test.cpp
     src/models/DeclaredBands.cpp

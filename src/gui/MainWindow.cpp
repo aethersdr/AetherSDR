@@ -3054,6 +3054,28 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // next AetherSDR launch from reacquiring it.
     stopDigitalVoiceService(true);
 
+    // Restore the Flex slice mute for any active KiwiSDR audio replacement
+    // before we exit. The replacement mutes the radio slice (audio_mute=1) so
+    // only the Kiwi stream is heard; with the radio's auto_save enabled that
+    // muted state is persisted, so a slice left replaced comes up silent on the
+    // next launch — KiwiSDR is client-side only and is not reselected, leaving a
+    // plain, muted Flex slice the user must manually unmute (#4158). Restoring
+    // the pre-Kiwi mute here clears that. Done before the UI teardown below so
+    // the radio connection is still open to receive the command.
+    if (m_kiwiSdrManager) {
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (!slice || !slice->externalReceiveReplacementActive()) {
+                continue;
+            }
+            const int sliceId = slice->sliceId();
+            const bool restoreMute =
+                m_kiwiSdrVirtualPreviousMute.contains(sliceId)
+                    ? m_kiwiSdrVirtualPreviousMute.take(sliceId)
+                    : slice->flexAudioMute();
+            slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
+        }
+    }
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
@@ -6474,6 +6496,17 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
     for (auto* slice : slices) {
         if (!slice || slice->panId() != panId || slice->audioMute())
             continue;
+
+        // A KiwiSDR-replaced slice shows unmuted (the Kiwi stream is the audio)
+        // but the Flex slice must stay muted on the radio. Its visible
+        // audioMute() is false, so without this guard a band-change reassert
+        // would blast audio_mute=0 and fight the replacement (the status parser
+        // re-mutes it, but that is a needless round-trip and a brief unmute
+        // glitch). Retaining the Kiwi across a band change (#4158) requires
+        // leaving these muted. flexAudioMute() carries the true radio mute.
+        if (slice->externalReceiveReplacementActive()) {
+            continue;
+        }
 
         // The model already shows unmuted, so SliceModel::setAudioMute(false)
         // would no-op. Send the command directly to rebuild radio audio routing.

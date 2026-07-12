@@ -454,6 +454,22 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    // Re-bind a KiwiSDR replacement across a band-stack slice recreation (#4158).
+    // A band recall DROPS then RE-CREATES the slice (same id, new band). The
+    // tracker re-binds only when a rebind is pending for this id AND this pan
+    // actually just did a band recall (noteBandRecall), so a plain slice-id
+    // reuse can't hijack the Kiwi onto an unrelated slice. Connected AFTER
+    // onSliceAdded so the recreated slice's VFO widget/overlay already exist.
+    connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel* s) {
+        if (!s) {
+            return;
+        }
+        const QString profileId = m_kiwiRebind.onSliceAdded(s->sliceId(), s->panId());
+        if (profileId.isEmpty()) {
+            return;
+        }
+        setKiwiSdrVirtualAntennaForSlice(s->sliceId(), profileId);
+    });
     connect(&m_radioModel, &RadioModel::memoryChanged,
             this, &MainWindow::syncMemorySpot);
     connect(&m_radioModel, &RadioModel::memoryRemoved,

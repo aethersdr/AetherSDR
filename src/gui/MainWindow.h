@@ -16,6 +16,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -970,6 +971,12 @@ private:
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
     QSet<QString>    m_kiwiSdrFlexDisplayPans;
+    // Retains a KiwiSDR replacement across the slice remove->re-add a FLEX
+    // band-stack recall performs (band_persistence drops+re-creates the slice
+    // with the same id at the new band). The tracker is the pure policy; the
+    // grace window itself is a QTimer::singleShot in onSliceRemoved. (#4158)
+    KiwiRebindTracker    m_kiwiRebind;
+    static constexpr int kKiwiSdrRebindGraceMs = 1500;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
