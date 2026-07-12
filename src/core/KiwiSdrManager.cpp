@@ -385,6 +385,15 @@ void KiwiSdrManager::disconnectProfile(const QString& id)
         });
     }
     emit audioSourceEnabledChanged(id, false);
+    // Releasing a receiver ends its waterfall stream, so drop the per-profile
+    // waterfall history the GUI cached for fast switch-back. Without this the
+    // SpectrumWidget keeps a full waterfall + history QImage for every distinct
+    // Kiwi ever switched to (m_kiwiProfileWaterfallStates), which grows the
+    // working set by ~100-200 MB per receiver and is only freed on a full reset
+    // — the leak reported in #4199. Profiles that stay assigned/auto-connected
+    // are never disconnected here, so their cached history (multi-slice toggle)
+    // is preserved. The stream, and its history, rebuild on reconnection.
+    emit profileStreamReset(id);
 }
 
 void KiwiSdrManager::disconnectAll()

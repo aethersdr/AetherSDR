@@ -2122,7 +2122,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 45 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 46 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2148,6 +2148,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> — set the active slice frequency |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |

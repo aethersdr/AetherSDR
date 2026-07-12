@@ -1190,6 +1190,15 @@ void KiwiSdrClient::cleanupSockets()
     m_loggedSoundFrameShape = false;
     m_loggedWaterfallFrameShape = false;
     m_lastDecodedSoundPcm.clear();
+    // Release the sound resampler on teardown, matching the other two teardown
+    // sites (connectToEndpoint / stream-rate change). It was the one sound-decode
+    // member cleanupSockets() left alive, so it lingered per retained
+    // KiwiSdrClient until profile removal. It is rebuilt lazily on the next
+    // connection once the rate is re-negotiated. Minor on its own (~0.2 MB per
+    // receiver); the dominant #4199 growth is the cached waterfall history freed
+    // in KiwiSdrManager::disconnectProfile().
+    m_soundResamplerRateHz = 0.0;
+    m_soundResampler.reset();
     KiwiSdrProtocol::resetSoundAdpcmState(&m_soundAdpcmState);
     m_lastSoundFrameLayout = KiwiSdrProtocol::FrameLayout::Unknown;
     m_soundAudioRateText.clear();
