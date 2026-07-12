@@ -798,7 +798,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         // construct and hardware-probe deferred pages (Audio, Serial,
         // Peripherals) on every keystroke — the probe-on-navigate deferral
         // #1776 exists to avoid. Enter commits the highlight instead (#4183).
-        m_searchFirstMatch = firstVisible;
+        // With an empty needle every page "matches", so leave the stash null —
+        // Enter with no query typed is then a no-op rather than jumping to (and
+        // building) the first page.
+        m_searchFirstMatch = needle.isEmpty() ? nullptr : firstVisible;
     });
     connect(search, &QLineEdit::returnPressed, this, [this] {
         if (m_searchFirstMatch && !m_searchFirstMatch->isHidden()) {
