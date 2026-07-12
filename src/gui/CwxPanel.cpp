@@ -79,8 +79,9 @@ namespace AetherSDR {
 // CwxBubble's class declaration lives in CwxPanel.h so the test target
 // can dynamic_cast bubbles out of the history container and verify the
 // strikeout state set by ESC abort (#3146).
-CwxBubble::CwxBubble(const QString& text, const QString& time, QWidget* parent)
-    : QWidget(parent), m_text(text), m_time(time)
+CwxBubble::CwxBubble(const QString& displayText, const QString& time,
+                     const QString& rawText, QWidget* parent)
+    : QWidget(parent), m_text(displayText), m_rawText(rawText), m_time(time)
 {
     recalcSize();
 }
@@ -308,8 +309,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             // command so the snapshot of m_model->sentIndex() lines up
             // with the chars about to be keyed for this bubble. (#3146)
             const QString raw = m_model->macro(i);
-            appendHistoryBubble(
-                bubbleTextFor(raw, m_model->speed(), m_model->speedStep()));
+            appendHistoryBubble(raw);
             m_model->sendMacro(i + 1);
         });
     }
@@ -472,11 +472,16 @@ void CwxPanel::buildSetupView()
             this, [this](int v) { if (m_model) m_model->setDelay(v); });
     connect(m_qskBtn, &QPushButton::toggled,
             this, [this](bool on) { if (m_model) m_model->setQsk(on); });
+    // Live-update the model on every change (cheap, in-memory) but persist only
+    // on editingFinished (focus-out / Enter) so sweeping the arrows or wheel
+    // doesn't trigger one full atomic settings-file rewrite per tick. (#272)
     connect(m_speedStepSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, [this](int v) {
                 if (m_model) m_model->setSpeedStep(v);
-                writeSpeedStep(v);
             });
+    connect(m_speedStepSpin, &QSpinBox::editingFinished, this, [this]() {
+        if (m_speedStepSpin) writeSpeedStep(m_speedStepSpin->value());
+    });
 
     // Style labels
     for (auto* lbl : m_setupPage->findChildren<QLabel*>())
@@ -513,8 +518,7 @@ void CwxPanel::buildSetupView()
         connect(label, &QPushButton::clicked, this, [this, i]() {
             if (!m_model) return;
             const QString raw = m_model->macro(i);
-            appendHistoryBubble(
-                bubbleTextFor(raw, m_model->speed(), m_model->speedStep()));
+            appendHistoryBubble(raw);
             m_model->sendMacro(i + 1);
         });
 
@@ -554,20 +558,26 @@ void CwxPanel::sendBuffer()
     QString text = m_textEdit->toPlainText().trimmed();
     if (text.isEmpty()) return;
 
-    // Show keyed text (modifiers stripped) so the bubble's char count
-    // matches what the radio's sent=N counter advances against. (#272)
-    appendHistoryBubble(
-        bubbleTextFor(text, m_model->speed(), m_model->speedStep()));
+    // appendHistoryBubble paints the modifier-stripped text (so the bubble's
+    // char count matches the radio's sent=N counter) while retaining the raw
+    // text for Resend. (#272)
+    appendHistoryBubble(text);
     m_textEdit->clear();
 
     m_model->send(text);
 }
 
-void CwxPanel::appendHistoryBubble(const QString& text)
+void CwxPanel::appendHistoryBubble(const QString& rawText)
 {
-    if (!m_historyLayout || text.isEmpty()) return;
+    if (!m_historyLayout || rawText.isEmpty()) return;
+    // Paint the modifier-stripped text (so its length aligns with the radio's
+    // `sent=N` counter) but keep the raw text on the bubble so a later Resend
+    // re-expands the per-word speed modifiers instead of keying at base WPM. (#272)
+    const int baseWpm = m_model ? m_model->speed() : 0;
+    const int step    = m_model ? m_model->speedStep() : 0;
+    const QString displayText = bubbleTextFor(rawText, baseWpm, step);
     const QString ts = QDateTime::currentDateTime().toString("HH:mm:ss");
-    auto* bubble = new CwxBubble(text, ts, m_historyContainer);
+    auto* bubble = new CwxBubble(displayText, ts, rawText, m_historyContainer);
     bubble->installEventFilter(this);
     m_historyLayout->addWidget(bubble);
     // Snapshot the radio's global cumulative sent index at append time —
@@ -575,7 +585,7 @@ void CwxPanel::appendHistoryBubble(const QString& text)
     // progress.  `sent=N` in CWX.cs is global, not per-block. (#3146)
     m_pendingBubble     = bubble;
     m_pendingStartIndex = m_model ? m_model->sentIndex() : -1;
-    m_pendingText       = text;
+    m_pendingText       = displayText;
     QTimer::singleShot(10, this, [this]() {
         if (m_historyScroll) {
             auto* sb = m_historyScroll->verticalScrollBar();
@@ -676,7 +686,9 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
             QAction* clearAction  = menu.addAction("Clear History");
             QAction* chosen = menu.exec(ce->globalPos());
             if (chosen == resendAction) {
-                resendText(bubble->text());
+                // Resend the raw text (modifiers intact) so per-word speeds
+                // are preserved rather than re-keyed at base WPM. (#272)
+                resendText(bubble->rawText());
             } else if (chosen == clearAction) {
                 clearHistory();
             }

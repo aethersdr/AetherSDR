@@ -34,7 +34,12 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
     bool    prevWasSpace = true;  // string start acts like after-space
 
     for (int i = 0; i < text.size(); ) {
-        if (text[i] == ' ') {
+        // Whitespace (space/tab/newline) is a word boundary and keys as a word
+        // gap. Macros come from multi-line QTextEdit widgets, so a raw '\n'/'\t'
+        // must not be treated as a word char — it would bleed a modifier across
+        // the line and, un-DEL-encoded, corrupt the cwx send command. Normalize
+        // any whitespace run to a single space. (#272)
+        if (text[i].isSpace()) {
             accumText += ' ';
             prevWasSpace = true;
             ++i;
@@ -51,7 +56,7 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
             }
             // Treat as modifier only when immediately followed by a word char
             // (non-space, non-modifier).  Standalone +/- are prosigns/hyphens.
-            if (j >= text.size() || text[j] == ' ') {
+            if (j >= text.size() || text[j].isSpace()) {
                 plus = minus = 0;
                 j = i;
             }
@@ -59,7 +64,7 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
 
         // Scan word body to end-of-word
         const int wordStart = j;
-        while (j < text.size() && text[j] != ' ') ++j;
+        while (j < text.size() && !text[j].isSpace()) ++j;
         const QString wordBody = text.mid(wordStart, j - wordStart);
 
         const bool hasModifier = (plus > 0 || minus > 0);
@@ -109,6 +114,7 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
         const SpeedSegment& seg = segs[i];
         if (seg.wpm != cmdWpm) {
             emit commandReady(QString("cwx wpm %1").arg(seg.wpm));
+            ++m_pendingWpmEchoes;   // swallow this transient's echo (#272)
             cmdWpm = seg.wpm;
         }
         QString encoded = seg.text;
@@ -128,8 +134,10 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
             emit transmissionRequested(seg.text, seg.wpm);
     }
     // Restore authoritative WPM if transient changes were made
-    if (cmdWpm != m_speed)
+    if (cmdWpm != m_speed) {
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
+        ++m_pendingWpmEchoes;   // swallow the restore's echo too (#272)
+    }
 }
 
 void CwxModel::send(const QString& text)
@@ -212,6 +220,7 @@ void CwxModel::erase(int numChars)
 void CwxModel::clearBuffer()
 {
     resetDrainWatch();    // abort pending watch + bump epoch (#3949)
+    m_pendingWpmEchoes = 0;   // abort — abandon any pending transient suppression (#272)
     // Re-anchor WPM before clearing so ESC can't leave the radio parked at
     // a transient speed that was in-flight from an expandedSend sequence.
     emit commandReady(QString("cwx wpm %1").arg(m_speed));
@@ -271,6 +280,7 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch, i
 
 void CwxModel::setSpeed(int wpm)
 {
+    m_pendingWpmEchoes = 0;   // user set the base — abandon transient suppression (#272)
     wpm = clampWpm(wpm);
     if (wpm != m_speed) {
         m_speed = wpm;
@@ -338,7 +348,12 @@ void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
         } else if (key == "wpm") {
             bool ok;
             int v = val.toInt(&ok);
-            if (ok && v != m_speed) {
+            if (m_pendingWpmEchoes > 0) {
+                // Echo of a transient `cwx wpm` we emitted for a per-word speed
+                // modifier — swallow it so it can't clobber the authoritative
+                // base speed or flicker the Speed spinbox. (#272)
+                --m_pendingWpmEchoes;
+            } else if (ok && v != m_speed) {
                 m_speed = v;
                 emit speedChanged(m_speed);
             }

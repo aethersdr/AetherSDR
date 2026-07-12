@@ -28,9 +28,15 @@ class CwxModel;
 // (#3146).
 class CwxBubble : public QWidget {
 public:
-    CwxBubble(const QString& text, const QString& time, QWidget* parent = nullptr);
+    // `displayText` is the modifier-stripped text that is painted and whose
+    // length the `sent=N` counter advances against; `rawText` is the original
+    // input (with `+`/`-` speed modifiers intact) so Resend can re-expand it
+    // at the correct per-word speeds rather than flattening to base WPM. (#272)
+    CwxBubble(const QString& displayText, const QString& time,
+              const QString& rawText, QWidget* parent = nullptr);
 
     QString text() const { return m_text; }
+    QString rawText() const { return m_rawText; }
     int     sentCount() const { return m_sentCount; }
     bool    isAborted() const { return m_aborted; }
 
@@ -45,6 +51,7 @@ private:
     void recalcSize();
 
     QString m_text;
+    QString m_rawText;
     QString m_time;
     int     m_sentCount{0};
     bool    m_aborted{false};
@@ -96,7 +103,7 @@ private:
     void sendBuffer();
     void resendText(const QString& text);
     void clearHistory();
-    void appendHistoryBubble(const QString& text);
+    void appendHistoryBubble(const QString& rawText);
     void onKeyPress(const QString& text);
 
     CwxModel*       m_model{nullptr};

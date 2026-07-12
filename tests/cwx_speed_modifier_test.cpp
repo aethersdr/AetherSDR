@@ -126,6 +126,17 @@ int main(int argc, char** argv)
           CwxModel::expandSpeedModifiers("+CQ", 20, 1),
           Segs{{"CQ", 21}});
 
+    // ── whitespace boundaries (#272): macros come from multi-line QTextEdit,
+    // so \n / \t must act as word boundaries (normalized to a space), not word
+    // chars — otherwise a modifier bleeds across the break and a raw \n corrupts
+    // the cwx send command.
+    check("newline is a word boundary — no modifier bleed, normalized to space",
+          CwxModel::expandSpeedModifiers(QStringLiteral("+CQ CQ\nDE W1AW"), 20, 3),
+          Segs{{"CQ", 23}, {" CQ DE W1AW", 20}});
+    check("tab is a word boundary — modifier after tab is recognized",
+          CwxModel::expandSpeedModifiers(QStringLiteral("A\t+B"), 20, 3),
+          Segs{{"A ", 20}, {"B", 23}});
+
     std::printf("\n%s\n",
                 g_failed == 0
                     ? "All tests passed."
