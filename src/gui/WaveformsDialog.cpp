@@ -41,7 +41,6 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr const char* kWfpLicenseFeature = "wfp";
 constexpr int kDStarControlWidth = 92;
 constexpr int kDStarStatusHeight = 28;
 constexpr int kDStarButtonHeight = 30;
@@ -76,35 +75,24 @@ WfpSupportUiState wfpSupportUiState(const RadioModel* radioModel)
         };
     }
 
-    const LicenseFeatureState feature = radioModel->licenseFeature(
-        QString::fromLatin1(kWfpLicenseFeature));
-    if (feature.seen) {
-        if (feature.enabled) {
-            return {
-                QObject::tr("Supported"),
-                QObject::tr("This radio reports Waveform Processor support as available."),
-                true
-            };
-        }
-
-        if (feature.reason == QLatin1String("plus")
-            || feature.reason == QLatin1String("ea")
-            || feature.reason == QLatin1String("license_file")) {
-            return {
-                QObject::tr("Unsupported"),
-                QObject::tr("This radio reports Waveform Processor support as unavailable."),
-                false
-            };
-        }
-
+    // Reflect the radio's actual WFP hardware capability, NOT the FlexLib "wfp"
+    // license feature (#4210). That feature is a SmartSDR+/EA-style entitlement
+    // decoupled from whether the Waveform Processor works — a radio with WFP
+    // powered and ready can report it disabled — so it must not drive this pill
+    // any more than it gates the install action (the two would otherwise
+    // contradict: "Unsupported" next to an enabled Install). Platforms with no
+    // WFP hardware (6000-series Microburst/DeepEddy) are genuinely unsupported;
+    // every other platform has the Waveform Processor, whose live power/ready
+    // state is shown by the separate WFP Power / WFP Ready pills.
+    const RadioPlatform platform = radioModel->capabilities().platform;
+    if (platform == RadioPlatform::Unknown) {
         return {
-            QObject::tr("Unavailable"),
-            QObject::tr("This radio reports Waveform Processor support as unavailable."),
+            QObject::tr("Checking"),
+            QObject::tr("Waiting for the radio to identify its Waveform Processor support."),
             false
         };
     }
-
-    if (isKnownNonWfpPlatform(radioModel->capabilities().platform)) {
+    if (isKnownNonWfpPlatform(platform)) {
         return {
             QObject::tr("Not supported"),
             QObject::tr("This 6000-series radio platform does not support on-radio Docker waveform deployment."),
@@ -113,9 +101,9 @@ WfpSupportUiState wfpSupportUiState(const RadioModel* radioModel)
     }
 
     return {
-        QObject::tr("Checking"),
-        QObject::tr("Waiting for the radio's Waveform Processor support status."),
-        false
+        QObject::tr("Supported"),
+        QObject::tr("This radio has a Waveform Processor for Docker waveform images."),
+        true
     };
 }
 
@@ -1427,10 +1415,9 @@ WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
             this, &WaveformsDialog::refreshStatus);
     connect(m_radioModel, &RadioModel::infoChanged,
             this, &WaveformsDialog::updateInstallButtonState);
-    connect(m_radioModel, &RadioModel::licenseFeaturesChanged,
-            this, &WaveformsDialog::refreshStatus);
-    connect(m_radioModel, &RadioModel::licenseFeaturesChanged,
-            this, &WaveformsDialog::updateInstallButtonState);
+    // The WFP support pill and the Docker-install gate no longer read the "wfp"
+    // license feature (#4210) — both follow WFP hardware/runtime state — so the
+    // former licenseFeaturesChanged refresh connections are no longer needed.
 
     refreshStatus();
     updateInstallButtonState();
