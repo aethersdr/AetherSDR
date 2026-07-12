@@ -8,25 +8,224 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Removed
+## [v26.7.2] — 2026-07-12
 
-- **Lean Mode.** The global low-overhead render toggle (#3283) is gone; the
-  app always renders at full quality. If you had Lean Mode on: the WAVE scope
-  reappears on upgrade (Lean hid it without turning its sidebar tile off —
-  close the tile if you don't want it), VFO panels return to translucent
-  rendering, and meters repaint at their full animation rate. The structural
-  fixes tracked in #3283 (GPU-side scope/meter rendering) are the intended
-  replacement for Lean's mitigations. `get panstats` no longer reports the
-  `leanMode` field.
+### aetherd radio-backend seam · MCP server for AI agents · BNR on RTX 50-series · searchable Radio Setup · KiwiSDR passwords · D-STAR ThumbDV
+
+123 commits since v26.7.1. The headline work is the **aetherd `IRadioBackend`
+seam** — a large architectural refactor that moves all Flex wire objects,
+threads, and status/command decoding behind a typed backend so a second radio
+family can be added without touching the GUI — landing alongside a new
+**Model Context Protocol (MCP) server** that lets an AI assistant drive
+AetherSDR through schema-validated tools. Rounding out the release: **BNR now
+runs on RTX 50-series / Blackwell GPUs**, **per-receiver KiwiSDR passwords**
+plus several KiwiSDR memory/connection fixes, **searchable Radio Setup and
+Network Diagnostics browsers**, **local D-STAR via a ThumbDV**, an **adaptive
+ESSB RX filter**, **WAVE showcase visualizations**, and a broad wave of VFO,
+spectrum, USB-cable, and controller fixes.
+
+### Added
+
+- **Per-receiver KiwiSDR passwords.** Each configured KiwiSDR receiver now
+  takes its own optional password, stored in the OS credential store (with a
+  clearly-reported session-only fallback when no keychain is available). Radio
+  Setup's KiwiSDR section is reorganized into configured-receiver and
+  add-receiver areas; you change a password by typing over the masked value, no
+  old-password entry required. (#4207)
+- **BNR on RTX 50-series / Blackwell GPUs.** The NVIDIA AFX denoiser now ships
+  `sm_100`/`sm_120` packs for Windows and Linux, so RTX 50-series owners (e.g.
+  RTX 5060 Ti) get a working Download instead of a dead button. GPUs with no
+  published pack are handled gracefully — BNR disables itself and steers you to
+  DFNR rather than erroring. (#4206, #3972)
+- **MCP server for AI-assistant control.** A new Model Context Protocol server
+  exposes the automation bridge to AI agents, guarded by a Radio Setup toggle
+  and token auth. 13 common bridge verbs (tune, slice, pan, connect, record,
+  mark, menu, floors, streams, capture_audio, and more) are promoted to
+  first-class, schema-validated MCP tools, and the server adds robustness
+  helpers (`wait_for`, `assert_state`, fuzzy `did_you_mean` target resolution),
+  a guided `validate_ui_change` prompt, and read-only live-state resources.
+  TX keying stays behind the existing `AETHER_AUTOMATION_ALLOW_TX` gate. See
+  [`docs/automation-bridge.md`](docs/automation-bridge.md). (#4177, #4189, #4197)
+- **Local D-STAR via a ThumbDV.** A bundled `aether-dv-waveform` helper adds
+  complete local D-STAR using a connected ThumbDV/DV3000U hardware vocoder —
+  RX/TX audio, headers, callsigns, repeater routing, and 20-character messages.
+  The Waveforms window handles ThumbDV discovery and lifecycle, AetherModem
+  gains a D-STAR station/routing page, and Network Diagnostics gains
+  digital-voice delivery metrics. Cross-platform serial; no proprietary FTDI
+  binaries shipped. Software AMBE is intentionally not included. (#4186)
+- **Radio-declared band capability.** A radio can now advertise which bands it
+  supports via an optional `bands=` discovery/status key, so the band UI reflects
+  what the connected hardware (or a transverter setup) actually offers. (#4027,
+  #4194)
+- **Searchable Radio Setup browser.** Radio Setup is reorganized from a flat tab
+  row into a categorized, symptom-searchable settings browser with a single
+  content pane, larger navigation targets, keyboard Find, and screen-reader
+  metadata. (#4164)
+- **Searchable Network Diagnostics browser.** Network Diagnostics is likewise
+  refactored into a task-oriented troubleshooting browser grouped under Status /
+  Trends / Support, searchable by symptom (jitter, underrun, UDP, packet gaps,
+  bitrate, WSJT-X). (#4165)
+- **Microwave weak-signal bands.** Adds the 13cm / 9cm / 5cm / 3cm microwave
+  bands. (#4149)
+- **Stream Deck+ Encoder dials.** Three rotary-dial actions for the bundled
+  Elgato plugin — VFO tuning, RF power, and volume — each with press-to-cycle
+  behavior. (#4162)
+- **Operator transmit timer in the status bar.** A bright-green elapsed-time
+  readout appears beside PC Audio during operator-driven transmits (MOX, PTT,
+  footswitch, VOX, CW, tune) and stays hidden for TCI/DAX (external-app)
+  transmits. (#4131)
+- **CHIRP-next CSV import.** Memory Import now auto-detects and reads CHIRP-next
+  generic CSV exports in addition to AetherSDR's own SmartSDR-format CSV, so
+  operators can bring channel lists across from other radios. (#4129)
+- **Per-pan Center Lock.** Replaces the old title-bar Pan Lock with a per-panadapter
+  Center Lock in the right-click menu that targets a chosen slice, works
+  independently across multiple pans, and is reachable from keyboard, MIDI,
+  FlexControl, and RC-28. (#4116)
+- **Help menu revamp.** Reset Settings and File an Issue are promoted out of the
+  Support dialog to top-level Help items, with new Website/donation links and a
+  reordered menu; Help windows also gain frameless support. (#4108, #4190)
+- **TCI CW Skimmer support.** Extends TCI to feed SDC / CW Skimmer, keeping the
+  skimmer DDS aligned with the panadapter center. (#3913, #4172)
+- **USB cable configuration.** Adds a Cable Type selector (CAT/Bit/BCD/LDPA/Passthrough)
+  to every cable page plus a new LDPA page and an Unconfigured page for freshly
+  plugged, untyped cables; the Bit cable page gains its full master-detail field
+  set (PTT-dependent, PTT/TX delay, frequency-range, antenna/slice sourcing). (#4038, #4033)
+- **QRZ callsign lookup.** A CW-decoder contact card and lookup dialog resolve
+  callsigns via QRZ with a 7-day cache. (#3990)
+- **WAVE showcase visualizations.** Three GPU-only, theme-colored, audio-reactive
+  scenes — 3D Ridge, Tunnel, and Horizon — for the WAVE scope, with an ambient
+  attract mode when no audio is flowing, riding on a rewritten incremental +
+  QRhi GPU scope render path. (#3991, #3955)
+- **Adaptive RX filter for SSB (ESSB auto-fit).** The RX passband can
+  automatically fit the received signal width for ESSB. (#3945)
+- **Kiwi/Flex display toggle.** A bottom-left toggle switches a KiwiSDR-connected
+  pan's spectrum/waterfall between the Kiwi and Flex sources while audio and
+  meters keep their behavior; Kiwi display keeps TX inhibited. (#4081)
+- **Extended Passband overlay.** A new panadapter context-menu option extends the
+  slice passband fill down through the waterfall. (#4137)
+- **Wider CW filter presets** for the CW filter picker.
+- **°C/°F toggle and live numeric overlays** on the MTR applet. (#3974)
+- **Panadapter overlay message stack** for surfacing transient status text over
+  the spectrum. (#3999)
+- **Automation-bridge additions** for UI testing: `layout` / `scale` / `get rhi`
+  verbs (#4121), a `clickAt` verb (#4100), `rightClick` for context menus (#4137),
+  and a `get clients` verb with stale-session eviction (#3981).
 
 ### Changed
 
+- **aetherd radio-backend architecture (RFC).** A multi-PR refactor introduces
+  the `IRadioBackend` seam and a `RadioCapabilities` model, a `FlexBackend` that
+  now owns the wire objects (RadioConnection / PanadapterStream) and their
+  threads, and typed model conversions that move all Flex status/command decode
+  behind the seam — Panadapter, Slice, Meter, Transmit, plus the amp (PGXL) and
+  tuner (TGXL) accessories. Supporting work extracts `libaethercore` and an
+  `IConnectionAutomation` seam, freezes above-seam vendor coupling with an
+  include ratchet, and reclassifies peripheral/accessory devices out of the
+  radio-vendor set. Purely internal; no user-facing behavior change. (#4047,
+  #4054, #4056, #4058, #4063, #4065, #4066, #4068, #4071, #4075, #4077, #4079,
+  #4087, #4089, #4093, #4099, #4101, #4113, #4192, #4200)
+- **Hermes-Lite 2 groundwork.** A raw-IQ data-plane spike and design note stand
+  up the first non-Flex radio family on the new backend seam (no user-facing HL2
+  support yet). (#4171)
+- **Bridge internals.** The automation bridge moves to a table-driven verb
+  registry, and a new `gen_bridge_docs` CI check fails on verb-documentation
+  drift. (#4175, #4180)
 - **liquid-dsp is disabled in default builds on every platform.** The vendored
-  toolkit remains available to opt-in builds with
-  `-DENABLE_LIQUID_DSP=ON`, but no AetherSDR module currently consumes it.
-- **WAVE applet defaults to 25 fps** (was 60), matching the panadapter's
-  default FFT cadence. A previously saved refresh rate is kept; the slider
-  still reaches 60.
+  toolkit remains available to opt-in builds with `-DENABLE_LIQUID_DSP=ON`, but
+  no AetherSDR module currently consumes it. (#4146, #4176)
+- **WAVE applet defaults to 25 fps** (was 60), matching the panadapter's default
+  FFT cadence, and the GPU device selector moves to the top of the Display
+  panel's SYSTEM group. A previously saved refresh rate is kept; the slider still
+  reaches 60. (#4106)
+- **Smoother panadapter repaints.** Repaint scheduling is coalesced to cut
+  redundant frames. (#4139)
+- **Sharper KiwiSDR waterfall.** Improved clarity and auto-scaling, and the 3D
+  stacked-trace scrollback now stays synced with the waterfall history on Kiwi
+  receivers. (#4069, #4083)
+- **Compiler-warnings cleanup.** A multi-phase sweep clears GCC `-Wall`/`-Wextra`
+  and MSVC `/W3` diagnostics, migrates deprecated Qt APIs, and fixes C++20
+  implicit-`this` captures across the tree. (#4046, #4052, #4059, #4060, #4061, #4062)
+- **Project/CI housekeeping.** Aether-gate is surfaced and auto-mirrored under the
+  org (#4193); a FUNDING.yml Sponsor button is added (#4088); CODEOWNERS is
+  retiered with sensitive workflows carved to Tier 1 (#4080); Windows CI
+  hard-gates the PDB regression class (#4117); dialog-size regression tests are
+  registered with ctest (#4021); and dependencies bump — ws 8.20.1→8.21.0
+  (CVE-2026-48779), docker/login-action, docker/build-push-action (#4169, #4023,
+  #4022). Positioning docs are reframed from Linux-native to cross-platform-equal
+  (#3966), and FreeDV/SpotHub checkboxes migrate to ThemeManager tokens (#4015).
+
+### Fixed
+
+- **KiwiSDR waterfall-history leak.** Releasing a receiver (switch-away,
+  slice-clear, disconnect, profile removal) now frees its cached waterfall
+  history instead of accumulating ~170 MB per distinct receiver for the life of
+  the session. (#4202)
+- **KiwiSDR connection released when a slice stops using it**, instead of being
+  held open indefinitely. (#3971)
+- **Preserve RX DSP stereo balance.** Client-side RX DSP (NR2/RN2/NR4/MNR/DFNR/BNR)
+  no longer collapses the Flex remote-audio stream to mono; left/right balance is
+  kept through the denoisers, and Kiwi/diversity paths keep independent DSP state
+  per source. (#4135)
+- **Adaptive RX filter QSO-swap regression.** Removes the re-engage restore that
+  could reapply one operator's fit to another operator on the same dial
+  frequency, plus accuracy fixes and an opt-in edge-heterodyne mode. (#4050)
+- **Duplicate multiflex client eviction.** A second AetherSDR client sharing an
+  identity is no longer wrongly evicted as a duplicate. (#4179)
+- **CWX robustness.** Inline speed modifiers are hardened, and queue-drain is now
+  detected via the reply's radio index instead of the broken `cwx queue=` field.
+  (#4187, #3979)
+- **Panadapter wire-parse guard.** `wide`/`loopa`/`loopb`/`weighted_average`
+  status fields are parsed defensively. (#4148)
+- **Spectrum fixes.** FFT average vs. weighted-average is reconciled (#4126);
+  frequency now maps across the full content canvas so a band change clears the
+  tape and Pan-Follows-VFO is symmetric, with tighter margins and opaque scale
+  strips (#4107); the 2D FFT trace is restored to crisp segment-clamped strokes
+  (#3975); and FFT edge smoothing during pan/zoom is fixed (#3984).
+- **VFO/slice UI.** Windows cursor and hover feedback is made consistent across
+  every VFO field (#4134); VFO flags are correct after a multi-pan restart
+  (#4124); the RX slice tooltip label mismatch is fixed (#4122); and the FDVL
+  passband is mirrored to the lower side of the carrier (#4104).
+- **Display/panel fixes.** The DFNR selector is disabled when DeepFilterNet isn't
+  built (#4136); the status-bar station label is stabilized (#4138); Band Zoom /
+  Segment Zoom send the panadapter command rather than a slice set (#4102);
+  side-panel tiles pin to their size hint so sparse layouts don't gap (#4100);
+  Windows shows a note-only DAX applet instead of inert controls (#4114); the
+  PROF applet and Profiles menu reflect the radio's active global profile
+  (#4111); and the Display overlay panel scrolls when the window is short (#3989).
+- **Crash fixes.** The add-second-panadapter swapchain crash on Intel D3D11 GPUs
+  is fixed (#4120), and the QsoRecorder slice reference is guarded against
+  use-after-free (#4004).
+- **QRZ.** Login (broken end-to-end since #3990) is repaired and the password is
+  usable without keychain persistence. (#4043, #4044)
+- **DAX RX stream ownership** is centralized in PanadapterStream, killing the
+  re-assert storm class. (#4017)
+- **USB Cables** no longer shares serial settings across cables. (#4030)
+- **APRS/GPS.** The GPSDO lat/lon format is parsed so AetherModem uses the
+  6000-series GPS fix (#3995), and GPS-grid conveniences are enabled from live GPS
+  status rather than the model name (#3997).
+- **Controllers.** The RC-28 TX LED tracks the interlock transmit state rather
+  than MOX (#3978), and the RC-28 accumulator resyncs when a slice is already on
+  the 1 kHz grid (#3973).
+- **Misc.** Radio Settings checkboxes are visible in dark mode (#4012); cleared
+  keyboard bindings no longer revert to default on restart (#3964);
+  `AETHER_NO_GPU` selects the OpenGL backend on Windows (#3987); KiwiSDR waterfall
+  rows stay sharp (#3985); "band not available" feedback returns when net-tuning
+  an unconfigured transverter band (#3992); ownership-gated auto-floor gains
+  stale-session detection and eviction (#3981); the Stream Deck plugin's TCI port
+  default is corrected (40001→50001) with added connection diagnostics (#4167);
+  Radio Setup search stays lazy with a clamped header keyboard skip (#4195); and
+  Network Diagnostics category headers dim with edge-guarded arrow navigation
+  (#4185).
+
+### Removed
+
+- **Lean Mode.** The global low-overhead render toggle (#3283) is gone; the app
+  always renders at full quality. If you had Lean Mode on: the WAVE scope
+  reappears on upgrade (Lean hid it without turning its sidebar tile off — close
+  the tile if you don't want it), VFO panels return to translucent rendering, and
+  meters repaint at their full animation rate. The structural fixes tracked in
+  #3283 (GPU-side scope/meter rendering) are the intended replacement for Lean's
+  mitigations. `get panstats` no longer reports the `leanMode` field. (#4106)
 
 ## [v26.7.1] — 2026-07-02
 

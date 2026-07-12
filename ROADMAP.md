@@ -7,13 +7,17 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.7.1
+## Current cycle: post-v26.7.2
 
 ### In flight
 
-- **Stream Deck plugin** — ship one Elgato-SDK plugin distributed via
-  GitHub Releases (avoid Marketplace DRM); works on Windows/macOS plus
-  Linux via OpenDeck.
+- **aetherd — vendor-neutral radio backend** — extracting an
+  `IRadioBackend` seam (`RadioCapabilities` + typed status/command deltas)
+  so radio-family logic lives behind a stable interface instead of being
+  woven through `RadioModel`. FlexBackend now owns the Flex wire objects
+  and threads, and the Panadapter / Slice / Meter / Transmit / Amp / Tuner
+  status+command paths decode behind the seam (RFC steps 2.1–2.4). This is
+  the foundation for non-Flex radio families — see Hermes-Lite 2 below.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
   Mechanical migration tooling is the prerequisite work.
@@ -24,8 +28,15 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Queued (next cycle)
 
-- **KiwiSDR follow-ups** — audio-quality / AGC polish on top of the
-  v26.6.4 public-receiver browser; potential WebSDR / OpenWebRX support.
+- **Hermes-Lite 2 support** — a first *non-Flex* `IRadioBackend`. HL2 ships
+  raw IQ (the client does all DSP — tune/decimate/demodulate), unlike Flex's
+  cooked audio + spectrum. A throwaway Phase-0 data-plane spike + design note
+  landed in [`prototypes/hl2/`](prototypes/hl2/) ([#4171](https://github.com/aethersdr/AetherSDR/pull/4171));
+  the in-tree backend is demand-driven and, as a new radio family, needs an
+  approved design doc first (per `AGENTS.md`).
+- **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
+  public-receiver browser (per-receiver passwords, idle-release, and
+  waterfall polish already landed in v26.7.2).
 - **Extended region band plans** — DXCC entities outside IARU R1/R2/R3.
 - **macOS VirtualAudioBridge audit** ([#2940](https://github.com/aethersdr/AetherSDR/issues/2940))
   — focused security review of the macOS shared-memory audio bridge.
@@ -94,6 +105,25 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **RTX 50-series / Blackwell BNR** — the in-process NVIDIA AFX denoiser now
+  covers consumer Blackwell (RTX 50xx) on Windows and Linux; the app
+  auto-detects the GPU and downloads the matching per-arch model pack
+  (v26.7.2).
+- **MCP server for agent control** — a Model Context Protocol server exposes
+  the automation bridge as typed tools, gated behind a Radio Setup toggle with
+  token auth (v26.7.2).
+- **Searchable Radio Setup & Network Diagnostics** — both reworked into
+  searchable settings / troubleshooting browsers (v26.7.2).
+- **WAVE showcase visualizations** — GPU-rendered 3D Ridge, Tunnel, and Horizon
+  scope modes, plus an incremental-reduction QRhi scope path (v26.7.2).
+- **Adaptive RX filter (ESSB auto-fit)** — the SSB receive passband auto-fits
+  to the signal, opt-in with edge-heterodyne handling (v26.7.2).
+- **QRZ callsign lookup** — a CW-decoder contact card and lookup dialog backed
+  by a 7-day cache (v26.7.2).
+- **CHIRP-next CSV import** — bring CHIRP memory exports straight into memory
+  channels (v26.7.2).
+- **Microwave weak-signal bands** — 13cm / 9cm / 5cm / 3cm, plus
+  radio-declared band capability from the discovery/status stream (v26.7.2).
 - **3D stacked-trace spectrum** — a perspective stacked-trace panadapter render
   mode (rolling FFT history, floor-anchored ridges, 3D Floor depth) with the
   right-edge dBm scale carried into 3D (v26.7.1).
@@ -119,27 +149,9 @@ Highlights from the last 30 days — full list in
 - **Agent automation bridge expansion** — radio connect/disconnect,
   display-stream leak detection (`streams`), custom context-menu inspection,
   and a panadapter/waterfall control surface (v26.6.5).
-- **KiwiSDR public-receiver browser** — an API-policy-aware directory to
-  find and connect to public KiwiSDR receivers worldwide, with diversity
-  receive and receive-only TX inhibit (v26.6.4).
-- **SmartMTR meter view** — a selectable, analog-ballistics meter for the
-  VFO flag (extremes markers, value labels, TX mic level), opt-in with the
-  S-meter pixel-identical by default (v26.6.4).
-- **Agent automation / test bridge** — an in-app, agent-drivable bridge to
-  drive and verify the GUI without pixels (`AETHER_AUTOMATION`).
-- **GPU-composite slice flags + multi-GPU selector** — flags composited on
-  the GPU instead of raster siblings, plus a render-GPU picker.
-- **Accessibility pass** — `QAccessibleInterface` for custom-painted widgets,
-  backed by a CI accessibility static-analysis check.
-- **CAT / rigctld parity** — a large round of SmartSDR Flex / TS-2000 /
-  rigctld behavior fixes (split VFO, VFO-B dialect capability, the `ZZTX;`
-  uncommanded-TX fix).
-- **Net Reminder Scheduler** — recurring net reminders with one-click tuning.
-- Constitution **v2.0.0** — trims domain conventions (relocated to
-  `AGENTS.md`) and adds governance principles; net 14 principles.
-- Packaging — SHA256-pinned `third_party` downloads, AppStream metainfo +
-  manpage (Flathub prep), and qtkeychain bundled for SmartLink on the
-  AppImage and Windows builds.
+For older highlights (the KiwiSDR public-receiver browser, SmartMTR meters,
+the agent automation bridge, the accessibility pass, CAT/rigctld parity, and
+packaging work) see [`CHANGELOG.md`](CHANGELOG.md).
 
 ## How to influence the roadmap
 
