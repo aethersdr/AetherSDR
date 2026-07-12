@@ -705,8 +705,12 @@ def handle_tool(name, args):
         deadline = time.monotonic() + timeout
         interval, actual, last_err = 0.5, None, None
         while True:
-            resp = _get_property(args["model"], args.get("selector"),
-                                 args["property"])
+            try:
+                resp = _get_property(args["model"], args.get("selector"),
+                                     args["property"])
+            except Exception as e:  # noqa: BLE001 — transient bridge/socket
+                resp = {"error": str(e)}        # error → keep polling, don't
+                                                # abort the wait mid-reconnect
             if isinstance(resp, dict) and "error" in resp:
                 last_err = resp["error"]        # keep polling — property may
             else:                               # not exist until state arrives

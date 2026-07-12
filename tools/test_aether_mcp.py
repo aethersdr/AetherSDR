@@ -250,6 +250,24 @@ def test_robustness_tools():
     finally:
         aether_mcp.bridge_request = orig
 
+    # A transient bridge exception mid-poll must NOT abort the wait — it keeps
+    # polling to the deadline and returns matched:false + last_error.
+    def boom(obj, timeout=None):
+        raise ConnectionError("bridge reset")
+
+    orig = aether_mcp.bridge_request
+    aether_mcp.bridge_request = boom
+    try:
+        r = json.loads(aether_mcp.handle_tool(
+            "wait_for", {"model": "radio", "property": "connected",
+                         "expected": "true", "timeout_s": 0}
+        )["content"][0]["text"])
+        check("wait_for survives a transient bridge exception",
+              r.get("matched") is False and "bridge reset" in str(r.get("last_error", "")),
+              str(r))
+    finally:
+        aether_mcp.bridge_request = orig
+
 
 def test_fuzzy_suggest():
     # A resolution-failure response gets did_you_mean candidates from the tree.
