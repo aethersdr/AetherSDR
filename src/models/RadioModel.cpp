@@ -2936,6 +2936,18 @@ void RadioModel::handleForcedClientDisconnect()
     qCWarning(lcProtocol) << "RadioModel: this GUI client was force-disconnected by another client";
     emit forcedDisconnectRequested();
 
+    closeConnectionForTerminalDisconnect();
+}
+
+// Tear down the transport for a radio-initiated terminal disconnect (forced or
+// duplicate-client-id). The radio evicts our GUI-client registration but does
+// not guarantee closing the raw TCP/TLS socket — FlexLib fires an event and
+// leaves the actual disconnect to the client — so we must close it ourselves,
+// or the model is stranded in a half-open "connected" state with dangling
+// streams. Callers set m_intentionalDisconnect first so this does not trip the
+// auto-reconnect loop.
+void RadioModel::closeConnectionForTerminalDisconnect()
+{
     if (m_wanConn) {
         m_wanConn->disconnectFromRadio();
         return;
@@ -2969,6 +2981,10 @@ void RadioModel::handleDuplicateClientIdDisconnect()
     emit connectionError(tr("Connection stopped: another AetherSDR client was using this "
                             "station identity. A distinct identity has been selected; reconnect "
                             "to continue."));
+    // Close the socket ourselves — the radio does not guarantee a TCP close on
+    // a duplicate-id eviction, and the error above tells the operator to
+    // reconnect, which must start from a fully torn-down connection.
+    closeConnectionForTerminalDisconnect();
 }
 
 void RadioModel::registerAsGuiClient(const QString& clientId)

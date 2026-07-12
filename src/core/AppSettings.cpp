@@ -401,6 +401,12 @@ void AppSettings::initializeGuiClientIdentity()
     };
     const QString encoded = QString::fromUtf8(
         QJsonDocument(identityConfig).toJson(QJsonDocument::Compact));
+    // Only persist when something actually changed, so the common case (a
+    // stored id read back unchanged) issues no save and a second concurrent
+    // instance doesn't rewrite the file. The one racy case — two fresh installs
+    // with no stored id launched simultaneously — writes divergent persistent
+    // ids last-writer-wins, but each instance's *effective* id stays distinct
+    // via the lock below, so runtime behavior is unaffected.
     if (value(QString::fromLatin1(kIdentityConfigKey)).toString() != encoded
         || value(QStringLiteral("GUIClientID")).toString() != persistent) {
         setValue(QString::fromLatin1(kIdentityConfigKey), encoded);
@@ -441,6 +447,14 @@ void AppSettings::initializeGuiClientIdentity()
     }
 
     m_guiClientLock = std::make_unique<QLockFile>(m_filePath + QStringLiteral(".gui-client.lock"));
+    // Disable time-based staleness on purpose: QLockFile stamps the lock mtime
+    // once at creation and never refreshes it while held, so a non-zero stale
+    // time would let a second instance declare a *live* long-running instance's
+    // lock stale after the interval and steal the persistent ID — reintroducing
+    // the exact collision this guards against. QLockFile's same-machine
+    // PID-alive check still reclaims a crashed instance's lock; the only
+    // residual is a crashed PID later reused by an unrelated process, which
+    // leaves this install on a transient ID until the lock file is removed.
     m_guiClientLock->setStaleLockTime(0);
     if (m_guiClientLock->tryLock(0)) {
         m_effectiveGuiClientId = persistent;
@@ -513,6 +527,11 @@ bool AppSettings::resolveLiveGuiClientIdCollision(const QString& otherStation)
 
 void AppSettings::recordPersistentGuiClientIdReply(const QString& clientId)
 {
+    // Defensive: registerAsGuiClient always sends `client gui <id>` with our
+    // non-empty effective id, so the radio normally echoes that same id and we
+    // return early below. This only adopts-and-persists if the radio ever
+    // hands back a *different* id (e.g. a future firmware that normalizes it),
+    // keeping our stored identity aligned with what the radio actually bound.
     if (m_guiClientIdentityTransient) {
         return;
     }

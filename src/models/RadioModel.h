@@ -654,6 +654,9 @@ private:
     void peekForMultiFlexConflictThen(std::function<void()> continuation);
     void handleForcedClientDisconnect();
     void handleDuplicateClientIdDisconnect();
+    // Shared transport teardown for a radio-initiated terminal disconnect
+    // (forced or duplicate-client-id); callers set m_intentionalDisconnect first.
+    void closeConnectionForTerminalDisconnect();
     void resolveLiveGuiClientIdCollision();
     void applyKnownGuiClients(const QStringList& handles,
                               const QStringList& programs,

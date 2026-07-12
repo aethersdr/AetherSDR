@@ -19,8 +19,11 @@ inline QString protocolSafeStation(QString value)
     value = value.trimmed();
     value.replace(QRegularExpression(QStringLiteral("[\\s|=\\x00-\\x1F\\x7F]+")),
                   QStringLiteral("-"));
+    // Truncate before the trailing-dash strip so a cut that lands right after a
+    // dash cannot leave the result ending in one.
+    value = value.left(48);
     value.remove(QRegularExpression(QStringLiteral("^-+|-+$")));
-    return value.left(48);
+    return value;
 }
 
 inline bool shouldSelectDistinctId(bool transientIdentity,
