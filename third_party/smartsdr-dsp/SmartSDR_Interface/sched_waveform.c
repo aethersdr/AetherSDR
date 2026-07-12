@@ -216,6 +216,13 @@ static aether_dstar_tx_snapshot _dstar_tx_snapshot;
 static BOOL _dstar_tx_snapshot_valid = FALSE;
 static BOOL _dstar_rx_status_active = FALSE;
 static char _dstar_last_rx_status[512];
+/* Suppress re-emitting an identical transmit status (mirrors the RX path).
+ * `waveform ... status` requests re-run _dstar_send_tx_status at will, so
+ * without this a client status poll during an active transmission would make
+ * the client log a duplicate TX entry. Reset on each transmit begin/cancel so
+ * a genuine new transmission always emits its first status. */
+static BOOL _dstar_tx_status_active = FALSE;
+static char _dstar_last_tx_status[512];
 static BOOL _dstar_rx_message_status_active = FALSE;
 static char _dstar_last_rx_message_status[256];
 static dstar_transmit_state _transmit_state = DSTAR_TRANSMIT_STATE_INITIALIZER;
@@ -761,7 +768,14 @@ static void _dstar_send_tx_status( uint32 slice,
     if ( written < 0 || ( size_t )written >= sizeof( status ) - used ) {
         return;
     }
+    if ( _dstar_tx_status_active
+         && strcmp( _dstar_last_tx_status, status ) == 0 ) {
+        return;
+    }
     tc_sendSmartSDRcommand( status, FALSE, NULL );
+    snprintf( _dstar_last_tx_status,
+              sizeof( _dstar_last_tx_status ), "%s", status );
+    _dstar_tx_status_active = TRUE;
 }
 
 static void _dstar_send_rx_header( uint32 slice,
@@ -953,6 +967,9 @@ void sched_waveform_beginTransmit( void ) {
     }
 
     if ( dstar_transmit_state_begin( &_transmit_state ) ) {
+        /* New transmission — clear suppression so its first status always
+         * emits even if identical to the previous transmission's. */
+        _dstar_tx_status_active = FALSE;
         _dstar_send_tx_status( slice, &snapshot );
         sched_waveform_signal();
     }
@@ -969,6 +986,8 @@ void sched_waveform_cancelTransmit( void ) {
         pthread_rwlock_wrlock( &_dstar_config_lock );
         _dstar_tx_snapshot_valid = FALSE;
         pthread_rwlock_unlock( &_dstar_config_lock );
+        _dstar_tx_status_active = FALSE;
+        _dstar_last_tx_status[0] = '\0';
         sched_waveform_signal();
     }
 }

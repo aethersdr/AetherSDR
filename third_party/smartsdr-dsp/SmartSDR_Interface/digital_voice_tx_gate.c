@@ -40,6 +40,14 @@ static digital_voice_tx_gate_action digital_voice_tx_gate_recheck(
     }
     if (gate->phase == DIGITAL_VOICE_TX_GATE_IDLE
             && gate->carrier_requested
+            /* Fail closed on an unclassified source: keying requires an
+             * explicit SOFTWARE or HARDWARE source. isEligible() stays a
+             * source-independent slice/mode predicate; this is the actual
+             * key-down decision, so a caller that fires PTT/TRANSMITTING
+             * without setting a source (source_present == FALSE, or after a
+             * READY/RECEIVE/fault reset to UNKNOWN) can never begin TX. */
+            && (gate->source == DIGITAL_VOICE_TX_SOURCE_SOFTWARE
+                || gate->source == DIGITAL_VOICE_TX_SOURCE_HARDWARE)
             && digital_voice_tx_gate_isEligible(gate)) {
         gate->phase = DIGITAL_VOICE_TX_GATE_ACTIVE;
         return DIGITAL_VOICE_TX_GATE_BEGIN;

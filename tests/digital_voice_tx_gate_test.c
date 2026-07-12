@@ -63,6 +63,18 @@ int main(void)
                   DIGITAL_VOICE_TX_GATE_CANCEL);
 
     gate = ready_gate();
+    expect_action("PTT without a classified source never keys TX",
+                  digital_voice_tx_gate_observe(
+                      &gate, DIGITAL_VOICE_TX_EVENT_PTT_REQUESTED,
+                      FALSE, DIGITAL_VOICE_TX_SOURCE_UNKNOWN),
+                  DIGITAL_VOICE_TX_GATE_NONE);
+    expect_action("classifying the source afterwards then begins",
+                  digital_voice_tx_gate_observe(
+                      &gate, DIGITAL_VOICE_TX_EVENT_TRANSMITTING,
+                      TRUE, DIGITAL_VOICE_TX_SOURCE_HARDWARE),
+                  DIGITAL_VOICE_TX_GATE_BEGIN);
+
+    gate = ready_gate();
     expect_action("TUNE never starts digital voice",
                   digital_voice_tx_gate_observe(
                       &gate, DIGITAL_VOICE_TX_EVENT_PTT_REQUESTED,
