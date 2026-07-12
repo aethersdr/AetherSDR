@@ -815,6 +815,31 @@ bool diagnosticWaterfallCompressionFlagEnabled(const QByteArray& value)
     return diagnosticCompressionFlagEnabled(value);
 }
 
+QString formatAuthCommand(const QString& password)
+{
+    // The LGPL Kiwi server parses p= as a whitespace-delimited token capped at
+    // 256 encoded characters, maps a bare '#' to no password, then URL-decodes
+    // the token before comparison (rx/rx_cmd.cpp and support/str.cpp, server
+    // revision 417e2c8). A real '#' must therefore become %23.
+    const QByteArray encodedBytes = password.isEmpty()
+        ? QByteArrayLiteral("#")
+        : QUrl::toPercentEncoding(password);
+    if (encodedBytes.size() > kAuthPasswordEncodedMaxLength) {
+        return QString();
+    }
+    const QString encoded = QString::fromLatin1(encodedBytes);
+    return QStringLiteral("SET auth t=kiwi p=%1").arg(encoded);
+}
+
+bool authPasswordFitsServerLimit(const QString& password)
+{
+    if (password.isEmpty()) {
+        return true;
+    }
+    return QUrl::toPercentEncoding(password).size()
+        <= kAuthPasswordEncodedMaxLength;
+}
+
 QString formatSoundCompressionCommand(bool compressed)
 {
     return QStringLiteral("SET compression=%1").arg(compressed ? 1 : 0);

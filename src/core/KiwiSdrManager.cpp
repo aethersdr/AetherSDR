@@ -35,8 +35,13 @@ QString normalizedProfileEndpoint(const QString& endpoint)
 
 } // namespace
 
-KiwiSdrManager::KiwiSdrManager(QObject* parent)
+KiwiSdrManager::KiwiSdrManager(
+    QObject* parent,
+    std::shared_ptr<IKiwiSdrCredentialStore> credentialStore)
     : QObject(parent)
+    , m_credentialStore(credentialStore
+                            ? std::move(credentialStore)
+                            : createDefaultKiwiSdrCredentialStore())
 {
     qRegisterMetaType<AetherSDR::KiwiSdrClient::State>(
         "AetherSDR::KiwiSdrClient::State");
@@ -49,7 +54,12 @@ KiwiSdrManager::KiwiSdrManager(QObject* parent)
     qRegisterMetaType<AetherSDR::KiwiSdrProtocol::MeterReading>(
         "AetherSDR::KiwiSdrProtocol::MeterReading");
     qRegisterMetaType<QVector<float>>("QVector<float>");
+    qRegisterMetaType<AetherSDR::KiwiSdrPasswordPersistenceState>(
+        "AetherSDR::KiwiSdrPasswordPersistenceState");
     loadSettings();
+    for (const KiwiSdrAntennaProfile& profile : std::as_const(m_profiles)) {
+        loadProfilePassword(profile.id);
+    }
 }
 
 KiwiSdrManager::~KiwiSdrManager()
@@ -201,6 +211,29 @@ int KiwiSdrManager::assignedSliceForProfile(const QString& id) const
     return -1;
 }
 
+QString KiwiSdrManager::profilePassword(const QString& id) const
+{
+    return m_profilePasswords.value(id);
+}
+
+bool KiwiSdrManager::isProfilePasswordLoaded(const QString& id) const
+{
+    return m_loadedProfilePasswords.contains(id);
+}
+
+KiwiSdrPasswordPersistenceState
+KiwiSdrManager::profilePasswordPersistenceState(const QString& id) const
+{
+    return m_profilePasswordPersistenceStates.value(
+        id, KiwiSdrPasswordPersistenceState::Loading);
+}
+
+QString KiwiSdrManager::profilePasswordPersistenceDetail(
+    const QString& id) const
+{
+    return m_profilePasswordPersistenceDetails.value(id);
+}
+
 QString KiwiSdrManager::addProfile(const QString& name, const QString& endpoint)
 {
     const QString normalizedEndpoint = normalizedProfileEndpoint(endpoint);
@@ -259,6 +292,7 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
                                   rate = updated.waterfallRate,
                                   endpointChanged,
                                   endpoint = updated.endpoint,
+                                  password = profilePassword(updated.id),
                                   reconnect = state(updated.id)
                                       != KiwiSdrClient::State::Disconnected](
                                      KiwiSdrClient* client) {
@@ -267,7 +301,7 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
             if (endpointChanged && reconnect) {
                 client->disconnectFromEndpoint();
                 if (!endpoint.isEmpty()) {
-                    client->connectToEndpoint(endpoint);
+                    client->connectToEndpoint(endpoint, password);
                 }
             }
         });
@@ -285,6 +319,39 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     }
 
     emit profilesChanged();
+}
+
+void KiwiSdrManager::setProfilePassword(const QString& id,
+                                        const QString& password)
+{
+    if (!hasProfile(id)) {
+        return;
+    }
+
+    const bool changed = m_profilePasswords.value(id) != password;
+    m_profilePasswordRevisions.insert(
+        id, m_profilePasswordRevisions.value(id) + 1);
+    m_profilePasswords.insert(id, password);
+    m_loadedProfilePasswords.insert(id);
+    m_loadingProfilePasswords.remove(id);
+    queueProfilePasswordStore(id, password, false);
+
+    emit profilePasswordChanged(id);
+    if (m_pendingPasswordConnects.remove(id)) {
+        QTimer::singleShot(0, this, [this, id]() { connectProfile(id); });
+    }
+    if (!changed || state(id) == KiwiSdrClient::State::Disconnected) {
+        return;
+    }
+
+    cancelReconnect(id);
+    const QString endpoint = profile(id).endpoint;
+    invokeClient(id, [endpoint, password](KiwiSdrClient* client) {
+        client->disconnectFromEndpoint();
+        if (!endpoint.isEmpty()) {
+            client->connectToEndpoint(endpoint, password);
+        }
+    });
 }
 
 void KiwiSdrManager::removeProfile(const QString& id)
@@ -316,6 +383,7 @@ void KiwiSdrManager::removeProfile(const QString& id)
     m_waterfallAvailable.remove(id);
     m_waterfallDetails.remove(id);
     m_waterfallDisplayRanges.remove(id);
+    deleteProfilePassword(id);
     m_profiles.removeAt(idx);
     saveSettings();
     // The client deletion is already scheduled above, so no further audio will
@@ -329,6 +397,12 @@ void KiwiSdrManager::connectProfile(const QString& id)
 {
     const int idx = profileIndex(id);
     if (idx < 0) {
+        return;
+    }
+
+    if (!isProfilePasswordLoaded(id)) {
+        m_pendingPasswordConnects.insert(id);
+        loadProfilePassword(id);
         return;
     }
 
@@ -369,8 +443,9 @@ void KiwiSdrManager::connectProfile(const QString& id)
         << "Connecting" << m_profiles[idx].name
         << "->" << m_profiles[idx].endpoint;
     m_states.insert(id, KiwiSdrClient::State::Connecting);
-    invokeClient(id, [endpoint = m_profiles[idx].endpoint](KiwiSdrClient* client) {
-        client->connectToEndpoint(endpoint);
+    invokeClient(id, [endpoint = m_profiles[idx].endpoint,
+                      password = profilePassword(id)](KiwiSdrClient* client) {
+        client->connectToEndpoint(endpoint, password);
     });
 }
 
@@ -940,6 +1015,150 @@ void KiwiSdrManager::saveSettings() const
     settings.setValue(kKiwiSdrRxAntennasSettingsKey, QString::fromUtf8(
         QJsonDocument(root).toJson(QJsonDocument::Compact)));
     settings.save();
+}
+
+QString KiwiSdrManager::profilePasswordKey(const QString& id)
+{
+    return QStringLiteral("kiwisdr_password_%1").arg(id);
+}
+
+void KiwiSdrManager::loadProfilePassword(const QString& id)
+{
+    if (!hasProfile(id) || m_loadedProfilePasswords.contains(id)
+        || m_loadingProfilePasswords.contains(id)) {
+        return;
+    }
+    m_loadingProfilePasswords.insert(id);
+    setProfilePasswordPersistence(
+        id, KiwiSdrPasswordPersistenceState::Loading);
+    const quint64 revision = m_profilePasswordRevisions.value(id);
+
+    m_credentialStore->read(
+        profilePasswordKey(id), this,
+        [this, id, revision](const KiwiSdrCredentialResult& result) {
+        m_loadingProfilePasswords.remove(id);
+        if (!hasProfile(id)) {
+            return;
+        }
+        if (m_profilePasswordRevisions.value(id) != revision) {
+            return;
+        }
+        if (result.code == KiwiSdrCredentialResultCode::Success) {
+            m_profilePasswords.insert(id, result.value);
+            setProfilePasswordPersistence(
+                id, result.value.isEmpty()
+                        ? KiwiSdrPasswordPersistenceState::NoPassword
+                        : (m_credentialStore->isPersistent()
+                               ? KiwiSdrPasswordPersistenceState::Stored
+                               : KiwiSdrPasswordPersistenceState::SessionOnly));
+        } else if (result.code == KiwiSdrCredentialResultCode::NotFound) {
+            m_profilePasswords.remove(id);
+            setProfilePasswordPersistence(
+                id, KiwiSdrPasswordPersistenceState::NoPassword);
+        } else {
+            qCWarning(lcKiwiSdr).noquote()
+                << "KiwiSDR password keychain read failed"
+                << "id=" << id << result.error;
+            setProfilePasswordPersistence(
+                id, KiwiSdrPasswordPersistenceState::Error,
+                tr("Could not read the saved password: %1")
+                    .arg(result.error));
+        }
+        m_loadedProfilePasswords.insert(id);
+        emit profilePasswordChanged(id);
+        if (result.code != KiwiSdrCredentialResultCode::Error
+            && m_pendingPasswordConnects.remove(id)) {
+            connectProfile(id);
+        } else if (result.code == KiwiSdrCredentialResultCode::Error) {
+            m_pendingPasswordConnects.remove(id);
+        }
+    });
+}
+
+void KiwiSdrManager::deleteProfilePassword(const QString& id)
+{
+    m_profilePasswordRevisions.insert(
+        id, m_profilePasswordRevisions.value(id) + 1);
+    m_profilePasswords.remove(id);
+    m_loadedProfilePasswords.remove(id);
+    m_loadingProfilePasswords.remove(id);
+    m_pendingPasswordConnects.remove(id);
+    queueProfilePasswordStore(id, {}, true);
+}
+
+void KiwiSdrManager::queueProfilePasswordStore(
+    const QString& id, const QString& password, bool profileRemoval)
+{
+    const PendingPasswordStore pending{
+        m_profilePasswordRevisions.value(id), password, profileRemoval};
+    if (!profileRemoval) {
+        setProfilePasswordPersistence(
+            id, m_credentialStore->isPersistent()
+                    ? KiwiSdrPasswordPersistenceState::Saving
+                    : (password.isEmpty()
+                           ? KiwiSdrPasswordPersistenceState::NoPassword
+                           : KiwiSdrPasswordPersistenceState::SessionOnly));
+    }
+    const auto finished =
+        [this, id, pending](const KiwiSdrCredentialResult& result) {
+        const bool latest = m_profilePasswordRevisions.value(id)
+            == pending.revision;
+        if (latest) {
+            if (result.code == KiwiSdrCredentialResultCode::Success
+                || (pending.password.isEmpty()
+                    && result.code == KiwiSdrCredentialResultCode::NotFound)) {
+                if (!pending.profileRemoval) {
+                    setProfilePasswordPersistence(
+                        id, pending.password.isEmpty()
+                                ? KiwiSdrPasswordPersistenceState::NoPassword
+                                : (m_credentialStore->isPersistent()
+                                       ? KiwiSdrPasswordPersistenceState::Stored
+                                       : KiwiSdrPasswordPersistenceState::SessionOnly));
+                }
+            } else {
+                const QString action = pending.password.isEmpty()
+                    ? tr("delete") : tr("save");
+                const QString detail =
+                    tr("Could not %1 the KiwiSDR password: %2")
+                        .arg(action, result.error);
+                qCWarning(lcKiwiSdr).noquote()
+                    << "KiwiSDR password credential-store update failed"
+                    << "id=" << id << detail;
+                setProfilePasswordPersistence(
+                    id, KiwiSdrPasswordPersistenceState::Error, detail);
+            }
+        }
+
+        if (pending.profileRemoval && latest) {
+            m_profilePasswordRevisions.remove(id);
+            m_profilePasswordPersistenceStates.remove(id);
+            m_profilePasswordPersistenceDetails.remove(id);
+        }
+    };
+
+    if (pending.password.isEmpty()) {
+        m_credentialStore->remove(profilePasswordKey(id), this, finished);
+    } else {
+        m_credentialStore->write(profilePasswordKey(id), pending.password,
+                                 this, finished);
+    }
+}
+
+void KiwiSdrManager::setProfilePasswordPersistence(
+    const QString& id, KiwiSdrPasswordPersistenceState state,
+    const QString& detail)
+{
+    if (m_profilePasswordPersistenceStates.value(id) == state
+        && m_profilePasswordPersistenceDetails.value(id) == detail) {
+        return;
+    }
+    m_profilePasswordPersistenceStates.insert(id, state);
+    if (detail.isEmpty()) {
+        m_profilePasswordPersistenceDetails.remove(id);
+    } else {
+        m_profilePasswordPersistenceDetails.insert(id, detail);
+    }
+    emit profilePasswordPersistenceChanged(id, state, detail);
 }
 
 bool KiwiSdrManager::shouldMaintainProfileConnection(const QString& id) const

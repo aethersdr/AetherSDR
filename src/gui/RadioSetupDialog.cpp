@@ -3435,11 +3435,72 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
 
     QVBoxLayout* kiwiRowsLayout = nullptr;
 
+#ifdef HAVE_KEYCHAIN
+    const QString kiwiPasswordHelpText =
+        QStringLiteral("Configure receive-only KiwiSDR servers. Passwords "
+                       "are saved separately for each receiver in the "
+                       "operating system credential store when available. "
+                       "The status below each password confirms the result.");
+    const QString kiwiPasswordDescription =
+        QStringLiteral("Optional password for this KiwiSDR receiver. Type "
+                       "over the current value to replace it; the storage "
+                       "status below confirms whether the operating system "
+                       "credential store accepted it.");
+#else
+    const QString kiwiPasswordHelpText =
+        QStringLiteral("Configure receive-only KiwiSDR servers. This build "
+                       "keeps passwords only for the current session.");
+    const QString kiwiPasswordDescription =
+        QStringLiteral("Optional password for this KiwiSDR receiver. This "
+                       "build keeps it only for the current session.");
+#endif
+
     if (m_kiwiSdrManager) {
         auto* kiwiGroup = new QGroupBox("KiwiSDR RX Antennas");
         kiwiGroup->setStyleSheet(kGroupStyle);
         auto* kiwiLayout = new QVBoxLayout(kiwiGroup);
         kiwiLayout->setSpacing(6);
+
+        auto* kiwiHelp = new QLabel(
+            kiwiPasswordHelpText);
+        kiwiHelp->setWordWrap(true);
+        kiwiHelp->setAccessibleName("KiwiSDR receiver configuration help");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            kiwiHelp,
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; "
+            "padding: 0 4px 4px 4px; }");
+        kiwiLayout->addWidget(kiwiHelp);
+
+        auto* kiwiCredentialNotice = new QLabel;
+        kiwiCredentialNotice->setWordWrap(true);
+        kiwiCredentialNotice->setAccessibleName(
+            "KiwiSDR credential storage notice");
+        kiwiCredentialNotice->setVisible(false);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            kiwiCredentialNotice,
+            "QLabel { color: {{color.accent.danger}}; font-size: 11px; "
+            "padding: 4px; }");
+        kiwiLayout->addWidget(kiwiCredentialNotice);
+        connect(
+            m_kiwiSdrManager,
+            &KiwiSdrManager::profilePasswordPersistenceChanged,
+            kiwiCredentialNotice,
+            [kiwiCredentialNotice](
+                const QString& id, KiwiSdrPasswordPersistenceState state,
+                const QString& detail) {
+                if (state != KiwiSdrPasswordPersistenceState::Error) {
+                    if (kiwiCredentialNotice->property("profileId").toString()
+                        == id) {
+                        kiwiCredentialNotice->clear();
+                        kiwiCredentialNotice->setVisible(false);
+                    }
+                    return;
+                }
+                kiwiCredentialNotice->setProperty("profileId", id);
+                kiwiCredentialNotice->setText(detail);
+                kiwiCredentialNotice->setAccessibleDescription(detail);
+                kiwiCredentialNotice->setVisible(true);
+            });
 
         auto* kiwiScroll = new QScrollArea;
         kiwiScroll->setWidgetResizable(true);
@@ -3646,7 +3707,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         };
 
         *refreshKiwi = [this, kiwiRowsLayout, stateText, styleKiwiEdit,
-                        styleKiwiButton, styleKiwiIconButton] {
+                        styleKiwiButton, styleKiwiIconButton,
+                        kiwiPasswordDescription] {
             while (QLayoutItem* item = kiwiRowsLayout->takeAt(0)) {
                 if (QWidget* widget = item->widget()) {
                     widget->deleteLater();
@@ -3656,55 +3718,209 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
 
             const QVector<KiwiSdrAntennaProfile> profiles =
                 m_kiwiSdrManager->profiles();
-            for (int row = 0; row < profiles.size(); ++row) {
-                const KiwiSdrAntennaProfile profile = profiles[row];
+            auto addSectionHeader = [kiwiRowsLayout](const QString& text) {
+                auto* header = new QLabel(text);
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    header,
+                    "QLabel { color: {{color.accent.bright}}; font-size: 11px; "
+                    "font-weight: bold; padding: 4px 2px 1px 2px; }");
+                kiwiRowsLayout->addWidget(header);
+            };
+            auto addFieldLabel = [](QGridLayout* layout, const QString& text,
+                                    int column) {
+                auto* label = new QLabel(text);
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    label,
+                    "QLabel { color: {{color.text.secondary}}; font-size: 10px; "
+                    "font-weight: bold; }");
+                layout->addWidget(label, 1, column);
+            };
+            auto passwordPersistenceText = [](KiwiSdrPasswordPersistenceState state,
+                                              const QString& detail) {
+                switch (state) {
+                case KiwiSdrPasswordPersistenceState::Loading:
+                    return QStringLiteral("Loading secure password…");
+                case KiwiSdrPasswordPersistenceState::NoPassword:
+                    return QStringLiteral("No password stored");
+                case KiwiSdrPasswordPersistenceState::Saving:
+                    return QStringLiteral("Saving securely…");
+                case KiwiSdrPasswordPersistenceState::Stored:
+                    return QStringLiteral("Stored securely");
+                case KiwiSdrPasswordPersistenceState::SessionOnly:
+                    return QStringLiteral("Current session only");
+                case KiwiSdrPasswordPersistenceState::Error:
+                    return detail.isEmpty()
+                        ? QStringLiteral("Password was not stored")
+                        : detail;
+                }
+                return QString();
+            };
+
+            addSectionHeader("CONFIGURED RECEIVERS");
+            if (profiles.isEmpty()) {
+                auto* empty = new QLabel("No KiwiSDR receivers configured.");
+                empty->setAccessibleName("No configured KiwiSDR receivers");
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    empty,
+                    "QLabel { color: {{color.text.label}}; font-size: 12px; "
+                    "padding: 8px; }");
+                kiwiRowsLayout->addWidget(empty);
+            }
+
+            for (const KiwiSdrAntennaProfile& profile : profiles) {
 
                 auto* rowFrame = new QFrame;
                 rowFrame->setObjectName("kiwiAntennaRow");
+                rowFrame->setAccessibleName(
+                    QStringLiteral("KiwiSDR receiver %1").arg(profile.name));
                 rowFrame->setStyleSheet(kKiwiRowStyle);
                 auto* rowLayout = new QGridLayout(rowFrame);
-                rowLayout->setContentsMargins(6, 5, 6, 5);
-                rowLayout->setHorizontalSpacing(6);
-                rowLayout->setVerticalSpacing(3);
+                rowLayout->setContentsMargins(10, 8, 10, 8);
+                rowLayout->setHorizontalSpacing(8);
+                rowLayout->setVerticalSpacing(4);
                 rowLayout->setColumnStretch(0, 1);
+                rowLayout->setColumnStretch(1, 1);
+                rowLayout->setColumnStretch(2, 1);
+
+                auto* title = new QLabel(profile.name);
+                title->setAccessibleName("KiwiSDR receiver name");
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    title,
+                    "QLabel { color: {{color.text.primary}}; font-size: 14px; "
+                    "font-weight: bold; }");
+                rowLayout->addWidget(title, 0, 0, 1, 2);
+
+                const KiwiSdrClient::State kiwiState =
+                    m_kiwiSdrManager->state(profile.id);
+                auto* status = new QLabel(stateText(profile.id));
+                status->setAccessibleName("KiwiSDR antenna status");
+                status->setAccessibleDescription(status->text());
+                QString statusColor = QStringLiteral("{{color.text.secondary}}");
+                if (kiwiState == KiwiSdrClient::State::Connected
+                    || kiwiState == KiwiSdrClient::State::Camping) {
+                    statusColor = QStringLiteral("{{color.accent.success}}");
+                } else if (kiwiState == KiwiSdrClient::State::Error) {
+                    statusColor = QStringLiteral("{{color.accent.danger}}");
+                } else if (kiwiState == KiwiSdrClient::State::Connecting
+                           || kiwiState == KiwiSdrClient::State::Waiting) {
+                    statusColor = QStringLiteral("{{color.accent.bright}}");
+                }
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    status,
+                    QStringLiteral("QLabel { color: %1; font-size: 12px; "
+                                   "padding-left: 6px; }")
+                        .arg(statusColor));
+                status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                status->setWordWrap(true);
+                status->setToolTip(status->text());
+                rowLayout->addWidget(status, 0, 2, 1, 2);
+
+                addFieldLabel(rowLayout, "NAME", 0);
+                addFieldLabel(rowLayout, "SERVER", 1);
+                addFieldLabel(rowLayout, "PASSWORD", 2);
 
                 auto* nameEdit = new QLineEdit(profile.name);
                 nameEdit->setMaxLength(16);
-                nameEdit->setPlaceholderText("Custom Name");
                 nameEdit->setAccessibleName("KiwiSDR antenna name");
                 nameEdit->setAccessibleDescription(
                     "Required display name for this KiwiSDR receive antenna.");
                 styleKiwiEdit(nameEdit);
-                rowLayout->addWidget(nameEdit, 0, 0);
-
-                auto* status = new QLabel(stateText(profile.id));
-                status->setAccessibleName("KiwiSDR antenna status");
-                status->setAccessibleDescription(status->text());
-                status->setStyleSheet(
-                    "QLabel { color: #c8d8e8; font-size: 12px; padding-left: 6px; }");
-                status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                status->setWordWrap(true);
-                status->setToolTip(status->text());
-                rowLayout->addWidget(status, 0, 1, 1, 3);
+                rowLayout->addWidget(nameEdit, 2, 0);
 
                 auto* endpointEdit = new QLineEdit(profile.endpoint);
                 endpointEdit->setAccessibleName("KiwiSDR server");
                 endpointEdit->setAccessibleDescription(
                     "Hostname or hostname:port for this KiwiSDR endpoint.");
                 styleKiwiEdit(endpointEdit);
-                rowLayout->addWidget(endpointEdit, 1, 0);
+                rowLayout->addWidget(endpointEdit, 2, 1);
+
+                auto* passwordEdit = new QLineEdit(
+                    m_kiwiSdrManager->profilePassword(profile.id));
+                passwordEdit->setEchoMode(QLineEdit::Password);
+                passwordEdit->setMaxLength(256);
+                passwordEdit->setObjectName(
+                    QStringLiteral("kiwiPassword_%1").arg(profile.id));
+                passwordEdit->setAccessibleName("KiwiSDR password");
+                passwordEdit->setAccessibleDescription(
+                    kiwiPasswordDescription);
+                if (!m_kiwiSdrManager->isProfilePasswordLoaded(profile.id)) {
+                    passwordEdit->setPlaceholderText("Loading secure password…");
+                    passwordEdit->setEnabled(false);
+                }
+                styleKiwiEdit(passwordEdit);
+                rowLayout->addWidget(passwordEdit, 2, 2, 1, 2);
+
+                const KiwiSdrPasswordPersistenceState persistenceState =
+                    m_kiwiSdrManager->profilePasswordPersistenceState(
+                        profile.id);
+                auto* passwordStatus = new QLabel(passwordPersistenceText(
+                    persistenceState,
+                    m_kiwiSdrManager->profilePasswordPersistenceDetail(
+                        profile.id)));
+                passwordStatus->setObjectName(
+                    QStringLiteral("kiwiPasswordStatus_%1").arg(profile.id));
+                passwordStatus->setAccessibleName(
+                    "KiwiSDR password storage status");
+                passwordStatus->setAccessibleDescription(
+                    passwordStatus->text());
+                passwordStatus->setWordWrap(true);
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    passwordStatus,
+                    persistenceState == KiwiSdrPasswordPersistenceState::Error
+                        ? "QLabel { color: {{color.accent.danger}}; "
+                          "font-size: 10px; padding: 0 2px; }"
+                        : "QLabel { color: {{color.text.secondary}}; "
+                          "font-size: 10px; padding: 0 2px; }");
+                rowLayout->addWidget(passwordStatus, 3, 2, 1, 2);
+                connect(
+                    m_kiwiSdrManager,
+                    &KiwiSdrManager::profilePasswordChanged,
+                    passwordEdit,
+                    [manager = m_kiwiSdrManager, profileId = profile.id,
+                     passwordEdit](const QString& changedId) {
+                        if (changedId != profileId) {
+                            return;
+                        }
+                        const QSignalBlocker blocker(passwordEdit);
+                        passwordEdit->setText(
+                            manager->profilePassword(profileId));
+                        passwordEdit->setPlaceholderText(QString());
+                        passwordEdit->setEnabled(true);
+                    });
+                connect(
+                    m_kiwiSdrManager,
+                    &KiwiSdrManager::profilePasswordPersistenceChanged,
+                    passwordStatus,
+                    [profileId = profile.id, passwordStatus,
+                     passwordPersistenceText](
+                        const QString& changedId,
+                        KiwiSdrPasswordPersistenceState state,
+                        const QString& detail) {
+                        if (changedId != profileId) {
+                            return;
+                        }
+                        const QString text =
+                            passwordPersistenceText(state, detail);
+                        passwordStatus->setText(text);
+                        passwordStatus->setAccessibleDescription(text);
+                        AetherSDR::ThemeManager::instance().applyStyleSheet(
+                            passwordStatus,
+                            state == KiwiSdrPasswordPersistenceState::Error
+                                ? "QLabel { color: {{color.accent.danger}}; "
+                                  "font-size: 10px; padding: 0 2px; }"
+                                : "QLabel { color: {{color.text.secondary}}; "
+                                  "font-size: 10px; padding: 0 2px; }");
+                    });
 
                 auto* autoCheck = new QCheckBox;
-                autoCheck->setText("Auto");
+                autoCheck->setText("Auto-connect");
                 autoCheck->setChecked(profile.autoConnect);
                 autoCheck->setAccessibleName("Auto connect KiwiSDR antenna");
                 AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck,
                     "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
                     + kCheckBoxIndicator);
-                rowLayout->addWidget(autoCheck, 1, 1, Qt::AlignCenter);
+                rowLayout->addWidget(autoCheck, 4, 0, 1, 2, Qt::AlignLeft);
 
-                const KiwiSdrClient::State kiwiState =
-                    m_kiwiSdrManager->state(profile.id);
                 const bool activeSession =
                     kiwiState == KiwiSdrClient::State::Connecting
                     || kiwiState == KiwiSdrClient::State::Waiting
@@ -3715,14 +3931,14 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     activeSession ? "Disconnect KiwiSDR antenna"
                                   : "Connect KiwiSDR antenna");
                 styleKiwiButton(connectButton);
-                rowLayout->addWidget(connectButton, 1, 2);
+                rowLayout->addWidget(connectButton, 4, 2);
 
                 auto* removeButton = new QPushButton;
                 removeButton->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
                 removeButton->setToolTip("Remove");
                 removeButton->setAccessibleName("Remove KiwiSDR antenna");
                 styleKiwiIconButton(removeButton);
-                rowLayout->addWidget(removeButton, 1, 3);
+                rowLayout->addWidget(removeButton, 4, 3);
                 kiwiRowsLayout->addWidget(rowFrame);
 
                 auto updateProfile = [this, profile, nameEdit, endpointEdit,
@@ -3758,6 +3974,11 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                         this, updateProfile);
                 connect(endpointEdit, &QLineEdit::returnPressed,
                         this, updateProfile);
+                connect(passwordEdit, &QLineEdit::editingFinished,
+                        this, [this, profile, passwordEdit] {
+                    m_kiwiSdrManager->setProfilePassword(
+                        profile.id, passwordEdit->text());
+                });
                 connect(autoCheck, &QCheckBox::toggled,
                         this, [updateProfile](bool) { updateProfile(); });
                 connect(connectButton, &QPushButton::clicked,
@@ -3774,14 +3995,21 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 });
             }
 
+            addSectionHeader("ADD RECEIVER");
             auto* rowFrame = new QFrame;
             rowFrame->setObjectName("kiwiAntennaRow");
             rowFrame->setStyleSheet(kKiwiRowStyle);
             auto* rowLayout = new QGridLayout(rowFrame);
-            rowLayout->setContentsMargins(6, 5, 6, 5);
-            rowLayout->setHorizontalSpacing(6);
-            rowLayout->setVerticalSpacing(3);
+            rowLayout->setContentsMargins(10, 8, 10, 8);
+            rowLayout->setHorizontalSpacing(8);
+            rowLayout->setVerticalSpacing(4);
             rowLayout->setColumnStretch(0, 1);
+            rowLayout->setColumnStretch(1, 1);
+            rowLayout->setColumnStretch(2, 1);
+
+            addFieldLabel(rowLayout, "NAME", 0);
+            addFieldLabel(rowLayout, "SERVER", 1);
+            addFieldLabel(rowLayout, "PASSWORD", 2);
 
             auto* nameEdit = new QLineEdit;
             nameEdit->setMaxLength(16);
@@ -3790,7 +4018,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             nameEdit->setAccessibleDescription(
                 "Required display name for the new KiwiSDR receive antenna.");
             styleKiwiEdit(nameEdit);
-            rowLayout->addWidget(nameEdit, 0, 0);
+            rowLayout->addWidget(nameEdit, 2, 0);
 
             auto* endpointEdit = new QLineEdit;
             endpointEdit->setPlaceholderText("host:8073");
@@ -3798,69 +4026,79 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             endpointEdit->setAccessibleDescription(
                 "Hostname or hostname:port for the new KiwiSDR receive antenna.");
             styleKiwiEdit(endpointEdit);
-            rowLayout->addWidget(endpointEdit, 1, 0);
+            rowLayout->addWidget(endpointEdit, 2, 1);
+
+            auto* passwordEdit = new QLineEdit;
+            passwordEdit->setEchoMode(QLineEdit::Password);
+            passwordEdit->setMaxLength(256);
+            passwordEdit->setObjectName("newKiwiPassword");
+            passwordEdit->setAccessibleName("New KiwiSDR password");
+            passwordEdit->setAccessibleDescription(
+                kiwiPasswordDescription);
+            styleKiwiEdit(passwordEdit);
+            rowLayout->addWidget(passwordEdit, 2, 2);
 
             auto* autoCheck = new QCheckBox;
-            autoCheck->setText("Auto");
+            autoCheck->setText("Auto-connect");
             autoCheck->setAccessibleName("Auto connect new KiwiSDR antenna");
             AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
                 + kCheckBoxIndicator);
-            rowLayout->addWidget(autoCheck, 1, 1, Qt::AlignCenter);
+            rowLayout->addWidget(autoCheck, 3, 0, Qt::AlignLeft);
 
-            auto committed = std::make_shared<bool>(false);
-            auto commitNewRow = [this, nameEdit, endpointEdit, autoCheck,
-                                 committed] {
-                if (*committed) {
-                    return;
-                }
+            auto commitNewRow = [this, nameEdit, endpointEdit, passwordEdit,
+                                 autoCheck] {
                 const QString name = nameEdit->text().trimmed();
                 const QString endpoint =
                     KiwiSdrClient::normalizeEndpoint(endpointEdit->text());
                 if (name.isEmpty() || endpoint.isEmpty()) {
                     return;
                 }
-                *committed = true;
                 const QString id = m_kiwiSdrManager->addProfile(name, endpoint);
-                if (autoCheck->isChecked()) {
-                    KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(id);
-                    profile.autoConnect = true;
-                    m_kiwiSdrManager->updateProfile(profile);
+                if (id.isEmpty()) {
+                    return;
                 }
+                m_kiwiSdrManager->setProfilePassword(id, passwordEdit->text());
+                KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(id);
+                profile.autoConnect = autoCheck->isChecked();
+                m_kiwiSdrManager->updateProfile(profile);
             };
 
             // Browse the public KiwiSDR directory to fill in a receiver. Only
             // API-permitting receivers are listed (web-only operators honored).
-            // Picking one adds the profile immediately — no extra Tab/confirm.
+            // Picking one fills the fields; Add receiver commits the profile.
             auto* browseButton = new QPushButton("Browse public…");
             browseButton->setAccessibleName("Browse public KiwiSDR receivers");
             browseButton->setAccessibleDescription(
                 "Choose from the public KiwiSDR directory; receivers whose "
                 "operator disabled the external API are not shown.");
-            rowLayout->addWidget(browseButton, 0, 1);
+            styleKiwiButton(browseButton);
+            rowLayout->addWidget(browseButton, 3, 1);
             connect(browseButton, &QPushButton::clicked, this,
-                    [this, nameEdit, endpointEdit, commitNewRow] {
+                    [this, nameEdit, endpointEdit] {
                 KiwiPublicReceiverPicker picker(this);
                 if (picker.exec() == QDialog::Accepted
                     && !picker.selectedEndpoint().isEmpty()) {
                     endpointEdit->setText(picker.selectedEndpoint());
-                    if (nameEdit->text().trimmed().isEmpty())
+                    if (nameEdit->text().trimmed().isEmpty()) {
                         nameEdit->setText(picker.selectedName());
-                    commitNewRow();  // add directly; no Tab-out needed
+                    }
                 }
             });
+
+            auto* addButton = new QPushButton("Add receiver");
+            addButton->setAccessibleName("Add KiwiSDR receiver");
+            styleKiwiButton(addButton);
+            rowLayout->addWidget(addButton, 3, 2);
+            connect(addButton, &QPushButton::clicked, this, commitNewRow);
             kiwiRowsLayout->addWidget(rowFrame);
 
-            connect(nameEdit, &QLineEdit::editingFinished,
-                    this, commitNewRow);
             connect(nameEdit, &QLineEdit::returnPressed,
-                    this, commitNewRow);
-            connect(endpointEdit, &QLineEdit::editingFinished,
                     this, commitNewRow);
             connect(endpointEdit, &QLineEdit::returnPressed,
                     this, commitNewRow);
-            connect(autoCheck, &QCheckBox::toggled,
-                    this, [commitNewRow](bool) { commitNewRow(); });
+            connect(passwordEdit, &QLineEdit::returnPressed,
+                    this, commitNewRow);
 
             kiwiRowsLayout->addStretch(1);
         };

@@ -433,8 +433,18 @@ void KiwiSdrClient::setReceiverControls(
     sendReceiverControlsToServer();
 }
 
-void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
+void KiwiSdrClient::connectToEndpoint(const QString& endpoint,
+                                      const QString& password)
 {
+    if (!KiwiSdrProtocol::authPasswordFitsServerLimit(password)) {
+        setState(
+            State::Error,
+            tr("The KiwiSDR password is too long after URL encoding "
+               "(maximum %1 characters).")
+                .arg(KiwiSdrProtocol::kAuthPasswordEncodedMaxLength));
+        return;
+    }
+
     QString host;
     quint16 port = 0;
     if (!parseEndpoint(endpoint, &host, &port)) {
@@ -443,6 +453,7 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     }
 
     m_endpoint = QStringLiteral("%1:%2").arg(host).arg(port);
+    m_password = password;
     m_host = host;
     m_port = port;
     m_webSocketPort = 0;
@@ -1275,7 +1286,7 @@ void KiwiSdrClient::cleanupSockets()
 
 void KiwiSdrClient::sendSoundSetupCommands()
 {
-    sendSoundCommand(QStringLiteral("SET auth t=kiwi p=#"));
+    sendSoundCommand(KiwiSdrProtocol::formatAuthCommand(m_password));
     sendSoundIdentityToServer();
     sendSoundCommand(KiwiSdrProtocol::formatSoundCompressionCommand(
         diagnosticSoundCompressionRequested()));
@@ -1327,7 +1338,7 @@ void KiwiSdrClient::sendSoundSampleRateCommands()
 
 void KiwiSdrClient::sendWaterfallSetupCommands()
 {
-    sendWaterfallCommand(QStringLiteral("SET auth t=kiwi p=#"));
+    sendWaterfallCommand(KiwiSdrProtocol::formatAuthCommand(m_password));
     sendWaterfallIdentityToServer();
     sendWaterfallCommand(QStringLiteral("SERVER DE CLIENT AetherSDR W/F"));
     sendWaterfallCommand(KiwiSdrProtocol::formatWaterfallCompressionCommand(

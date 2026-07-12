@@ -138,9 +138,9 @@ else()
     find_package(Qt6Keychain QUIET)
 endif()
 if(Qt6Keychain_FOUND)
-    message(STATUS "Qt6Keychain found — SmartLink credential persistence enabled")
+    message(STATUS "Qt6Keychain found — credential persistence enabled")
 else()
-    message(STATUS "Qt6Keychain not found — SmartLink credential persistence disabled")
+    message(STATUS "Qt6Keychain not found — credential persistence disabled")
 endif()
 
 # PortAudio (optional fallback for audio)
@@ -540,6 +540,7 @@ set(CORE_SOURCES
     src/core/SmartLinkClient.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
+    src/core/KiwiSdrCredentialStore.cpp
     src/core/KiwiSdrClient.cpp
     src/core/KiwiSdrManager.cpp
     src/core/ReceivePresentationSync.cpp
@@ -2549,6 +2550,16 @@ add_executable(kiwi_sdr_protocol_test
 target_include_directories(kiwi_sdr_protocol_test PRIVATE src)
 target_link_libraries(kiwi_sdr_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_protocol_test COMMAND kiwi_sdr_protocol_test)
+
+add_executable(kiwi_sdr_manager_password_test
+    tests/kiwi_sdr_manager_password_test.cpp
+)
+target_include_directories(kiwi_sdr_manager_password_test PRIVATE src)
+target_link_libraries(kiwi_sdr_manager_password_test PRIVATE
+    aethercore Qt6::Core Qt6::Test)
+set_target_properties(kiwi_sdr_manager_password_test PROPERTIES AUTOMOC ON)
+add_test(NAME kiwi_sdr_manager_password_test
+         COMMAND kiwi_sdr_manager_password_test)
 
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp

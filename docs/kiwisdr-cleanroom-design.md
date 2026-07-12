@@ -171,6 +171,17 @@ black-box observations made in this thread.
   `SET client_type=MicroKiwi`, `SET name=...`, `SET password=...`,
   `SET audio_on=1`, or `SET wf_on=1`; use `SET auth t=kiwi p=...`,
   `SET ident_user=...`, and the stream client marker commands instead.
+- User-provided password-support requirement from 2026-07-12: each configured
+  KiwiSDR receiver may have its own password, stored through AetherSDR's
+  existing per-OS credential-store integration rather than in AppSettings.
+- License-compatible Kiwi server verification from revision
+  `417e2c8add196e879b8cc4eb4a488b35b4bf0df7` (2026-07-10), using only files
+  carrying the GNU Library GPL v2-or-later header: `rx/rx_cmd.cpp` parses
+  `SET auth t=<type> p=<token>`, caps the encoded `p=` token at 256
+  characters, maps a literal `#` to no password, and calls
+  `kiwi_str_decode_inplace()` before comparing the password;
+  `support/str.cpp` implements that decode with `mg_url_decode()`. No Kiwi
+  browser/client source was inspected for this behavior.
 - User-provided protocol correction from 2026-06-18: string values in `SET`
   commands must not contain spaces. The current runtime sends only sanitized
   callsign identity strings and fixed client labels without spaces.
@@ -804,7 +815,15 @@ row delivery on endpoints that return `wf_fps=0` for larger values.
 
 Remaining uncertainties are deliberately conservative:
 
-- Only password-free public receive access is supported.
+- Password-free and user-password-protected receive access are supported.
+  Passwords are UTF-8 percent-encoded into the server's whitespace-delimited
+  `p=` token, and connection setup fails closed if the encoded token exceeds
+  the server's 256-character limit. Per-receiver secrets use the platform
+  credential store when available; save/read/delete failures are surfaced in
+  Radio Setup, while a failed save leaves the entered password usable for the
+  current session. A failed startup read blocks deferred auto-connect rather
+  than silently attempting an empty password. Admin-password access is not
+  requested.
 - Audio still requests uncompressed `SND` via `SET compression=0` by default,
   but diagnostic runs can request compressed `SND` via `SET compression=1`.
   The runtime can safely accept the source-attributed compressed mono SND

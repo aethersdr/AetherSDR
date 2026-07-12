@@ -1,13 +1,16 @@
 #pragma once
 
 #include "KiwiSdrClient.h"
+#include "KiwiSdrCredentialStore.h"
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QVector>
 
 #include <functional>
+#include <memory>
 
 class QTimer;
 class QThread;
@@ -32,11 +35,22 @@ struct KiwiSdrWaterfallDisplayRange {
     bool valid{false};
 };
 
+enum class KiwiSdrPasswordPersistenceState {
+    Loading,
+    NoPassword,
+    Saving,
+    Stored,
+    SessionOnly,
+    Error,
+};
+
 class KiwiSdrManager : public QObject {
     Q_OBJECT
 
 public:
-    explicit KiwiSdrManager(QObject* parent = nullptr);
+    explicit KiwiSdrManager(
+        QObject* parent = nullptr,
+        std::shared_ptr<IKiwiSdrCredentialStore> credentialStore = {});
     ~KiwiSdrManager() override;
 
     QVector<KiwiSdrAntennaProfile> profiles() const { return m_profiles; }
@@ -62,10 +76,16 @@ public:
 
     QString assignedProfileForSlice(int sliceId) const;
     int assignedSliceForProfile(const QString& id) const;
+    QString profilePassword(const QString& id) const;
+    bool isProfilePasswordLoaded(const QString& id) const;
+    KiwiSdrPasswordPersistenceState profilePasswordPersistenceState(
+        const QString& id) const;
+    QString profilePasswordPersistenceDetail(const QString& id) const;
 
 public slots:
     QString addProfile(const QString& name, const QString& endpoint);
     void updateProfile(const KiwiSdrAntennaProfile& profile);
+    void setProfilePassword(const QString& id, const QString& password);
     void removeProfile(const QString& id);
     void connectProfile(const QString& id);
     void disconnectProfile(const QString& id);
@@ -100,6 +120,11 @@ public slots:
 
 signals:
     void profilesChanged();
+    void profilePasswordChanged(const QString& id);
+    void profilePasswordPersistenceChanged(
+        const QString& id,
+        AetherSDR::KiwiSdrPasswordPersistenceState state,
+        const QString& detail);
     void profileStateChanged(const QString& id, AetherSDR::KiwiSdrClient::State state,
                              const QString& detail);
     void profileTelemetryChanged(
@@ -132,6 +157,14 @@ private:
     int profileIndex(const QString& id) const;
     void loadSettings();
     void saveSettings() const;
+    void loadProfilePassword(const QString& id);
+    void deleteProfilePassword(const QString& id);
+    void queueProfilePasswordStore(const QString& id, const QString& password,
+                                   bool profileRemoval);
+    void setProfilePasswordPersistence(
+        const QString& id, KiwiSdrPasswordPersistenceState state,
+        const QString& detail = {});
+    static QString profilePasswordKey(const QString& id);
     bool shouldMaintainProfileConnection(const QString& id) const;
     void ensureClientThread();
     void invokeClient(const QString& id, std::function<void(KiwiSdrClient*)> fn);
@@ -152,8 +185,24 @@ private:
     QHash<QString, QString> m_waterfallDetails;
     QHash<QString, KiwiSdrWaterfallDisplayRange> m_waterfallDisplayRanges;
     QHash<int, QString> m_sliceAssignments;
+    QHash<QString, QString> m_profilePasswords;
+    QHash<QString, quint64> m_profilePasswordRevisions;
+    struct PendingPasswordStore {
+        quint64 revision{0};
+        QString password;
+        bool profileRemoval{false};
+    };
+    QHash<QString, KiwiSdrPasswordPersistenceState>
+        m_profilePasswordPersistenceStates;
+    QHash<QString, QString> m_profilePasswordPersistenceDetails;
+    QSet<QString> m_loadedProfilePasswords;
+    QSet<QString> m_loadingProfilePasswords;
+    QSet<QString> m_pendingPasswordConnects;
+    std::shared_ptr<IKiwiSdrCredentialStore> m_credentialStore;
     QString m_operatorCallsign;
     QThread* m_clientThread{nullptr};
 };
 
 } // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::KiwiSdrPasswordPersistenceState)

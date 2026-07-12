@@ -99,7 +99,8 @@ public:
 public slots:
     void setOperatorCallsign(const QString& callsign);
     void setReceiverControls(const KiwiSdrReceiverControls& controls);
-    void connectToEndpoint(const QString& endpoint);
+    void connectToEndpoint(const QString& endpoint,
+                           const QString& password = {});
     void disconnectFromEndpoint();
     void setTrackedSlice(int sliceId, double frequencyMhz,
                          const QString& mode, int filterLowHz,
@@ -260,6 +261,7 @@ private:
     State m_state{State::Disconnected};
     QString m_stateDetail;
     QString m_endpoint;
+    QString m_password;
     QString m_host;
     QString m_operatorCallsign;
     QString m_lastSoundIdentityCallsign;

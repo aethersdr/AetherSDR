@@ -56,6 +56,27 @@ int main()
 {
     using namespace AetherSDR::KiwiSdrProtocol;
 
+    if (formatAuthCommand(QString())
+        != QStringLiteral("SET auth t=kiwi p=#")) {
+        return fail("empty Kiwi password should use the public sentinel");
+    }
+    if (formatAuthCommand(QStringLiteral("space #100% ü"))
+        != QStringLiteral("SET auth t=kiwi p=space%20%23100%25%20%C3%BC")) {
+        return fail("Kiwi password should use UTF-8 percent encoding");
+    }
+    if (!authPasswordFitsServerLimit(QString(256, QLatin1Char('a')))
+        || formatAuthCommand(QString(256, QLatin1Char('a'))).isEmpty()) {
+        return fail("256 unreserved password characters should fit");
+    }
+    if (authPasswordFitsServerLimit(QString(257, QLatin1Char('a')))
+        || !formatAuthCommand(QString(257, QLatin1Char('a'))).isEmpty()) {
+        return fail("passwords beyond the server token limit should fail closed");
+    }
+    if (!authPasswordFitsServerLimit(QString(85, QLatin1Char(' ')))
+        || authPasswordFitsServerLimit(QString(86, QLatin1Char(' ')))) {
+        return fail("password limit should apply after percent encoding");
+    }
+
     const QByteArray soundFrame =
         QByteArray("SND", 3)
         + QByteArray::fromHex("051234");

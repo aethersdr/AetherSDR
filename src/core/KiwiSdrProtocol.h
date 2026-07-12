@@ -301,6 +301,9 @@ bool diagnosticCompressionFlagEnabled(const QByteArray& value);
 bool diagnosticWaterfallCompressionFlagEnabled(const QByteArray& value);
 QString formatSoundCompressionCommand(bool compressed);
 QString formatWaterfallCompressionCommand(bool compressed);
+constexpr int kAuthPasswordEncodedMaxLength = 256;
+bool authPasswordFitsServerLimit(const QString& password);
+QString formatAuthCommand(const QString& password);
 FrameObservation classifySoundFrame(const QByteArray& frame);
 FrameObservation classifyWaterfallFrame(const QByteArray& frame,
                                         int zoomCap = 14);
