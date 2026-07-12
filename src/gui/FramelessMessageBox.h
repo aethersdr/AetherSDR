@@ -42,7 +42,6 @@ private:
 
     FramelessWindowTitleBar* m_titleBar{nullptr};
     QMargins m_originalMargins;
-    bool m_framelessOn{false};
 };
 
 } // namespace AetherSDR

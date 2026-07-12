@@ -23,7 +23,6 @@ FramelessMessageBox::FramelessMessageBox(QWidget* parent)
 
 void FramelessMessageBox::setFramelessMode(bool on)
 {
-    m_framelessOn = on;
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
     Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;

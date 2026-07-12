@@ -2,6 +2,7 @@
 
 #include <QDialogButtonBox>
 #include <QFile>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QKeySequence>
 #include <QLabel>
@@ -16,6 +17,16 @@
 namespace AetherSDR {
 
 namespace {
+
+// Per-guide geometry key derived from the (stable) help resource path, so two
+// guides open at once persist and restore independent positions instead of
+// sharing one "HelpDialogGeometry" slot and stacking on top of each other.
+QString helpGeometryKey(const QString& resourcePath)
+{
+    const QString stem = QFileInfo(resourcePath).baseName();
+    return stem.isEmpty() ? QStringLiteral("HelpDialogGeometry")
+                          : QStringLiteral("HelpDialogGeometry_") + stem;
+}
 
 const char* kFindEditStyle =
     "QLineEdit {"
@@ -44,7 +55,7 @@ const char* kFindEditNoMatchStyle =
 HelpDialog::HelpDialog(const QString& windowTitle,
                        const QString& resourcePath,
                        QWidget* parent)
-    : PersistentDialog(windowTitle, QStringLiteral("HelpDialogGeometry"), parent)
+    : PersistentDialog(windowTitle, helpGeometryKey(resourcePath), parent)
 {
     theme::setContainer(this, QStringLiteral("dialog/help"));
     buildUI(resourcePath);
