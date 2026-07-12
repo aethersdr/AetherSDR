@@ -168,8 +168,8 @@ static const QList<PublishedAfxPack>& publishedAfxPacks()
         { 120, "9fa30d21c1ec5b914f112a4464d5185234976bd0823dbb99db91480ed4c4620f" }, // Blackwell / RTX 50xx (2.1.0-48k-blackwell model)
 #else
         { 89, "0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67" }, // Ada / RTX 40xx
-        // { 100, "<sha256 of afx-bits-2.1.0-linux-x86_64-sm_100.tar.zst>" }, // Blackwell datacenter
-        // { 120, "<sha256 of afx-bits-2.1.0-linux-x86_64-sm_120.tar.zst>" }, // Blackwell / RTX 50xx
+        { 100, "f7df778320557c70e18d0066904c774d0f1ac0a6085f4e02bf545dfb0351abc0" }, // Blackwell datacenter (2.1.0-48k-sm100 model)
+        { 120, "dae7e1a47ae8a30a651497b3aa1547f528bbe1939689a3f9f46342662aaa26c2" }, // Blackwell / RTX 50xx (2.1.0-48k-sm120 model)
 #endif
     };
     return packs;
