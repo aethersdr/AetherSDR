@@ -339,7 +339,10 @@ wholesale — the per-touchpoint conversion is staged work
 (`docs/architecture/aetherd-touchpoints.md`). The five `mixed` models
 (Radio/Slice/Transmit/Panadapter/Meter) have been split (2.3): their
 SmartSDR status decode now lives in `FlexBackend` behind typed deltas, and
-the models apply normalized signals. The remaining vendor headers are
+the models apply normalized signals. The amp (PGXL) and tuner (TGXL)
+accessory models followed in 2.4 — `AmpModel` was extracted from
+`RadioModel`, and their status decode and command encode now route through
+`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The remaining vendor headers are
 **not** relocated yet — step 2.4 landed the EB3 ratchet (above) that
 freezes today's above-seam vendor coupling and lets it be decoupled
 subsystem-by-subsystem. Converting a touchpoint still follows the claim
@@ -646,3 +649,15 @@ JSON schemas, targeting rules, recipes, gotchas — in
 **[`docs/automation-bridge.md`](docs/automation-bridge.md)**. This is the
 deterministic, cross-OS way to do "snapshot → act → assert" on the native UI
 (issue [#3646](https://github.com/aethersdr/AetherSDR/issues/3646)).
+
+**MCP server (for AI assistants).** The same bridge is also exposed over the
+**Model Context Protocol**, so an MCP-capable assistant can drive AetherSDR
+through schema-validated tools instead of raw JSON. It's enabled from a Radio
+Setup toggle and guarded by token auth; the common verbs (tune, slice, pan,
+connect, record, mark, menu, floors, streams, capture_audio, …) are surfaced as
+first-class typed tools, alongside robustness helpers (`wait_for`,
+`assert_state`, fuzzy `did_you_mean` target resolution), a guided
+`validate_ui_change` prompt, and read-only live-state resources. The same TX
+gate applies — keying verbs stay behind `AETHER_AUTOMATION_ALLOW_TX`. Regenerate
+the verb→tool tables with `tools/gen_bridge_docs.py` (a CI check fails on drift).
+See `docs/automation-bridge.md` for setup and the tool catalog.
