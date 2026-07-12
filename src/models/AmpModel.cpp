@@ -50,10 +50,11 @@ void AmpModel::reset()
 
 void AmpModel::setOperate(bool on)
 {
-    if (m_handle.isEmpty()) return;
-    // FlexLib API: "amplifier set <handle> operate=0|1". The radio relays it to
-    // the PGXL (the only path that works remote/SmartLink).
-    emit commandReady(QString("amplifier set %1 operate=%2").arg(m_handle).arg(on ? 1 : 0));
+    if (m_handle.isEmpty()) return;   // no amp present → nothing to command
+    // Neutral intent. FlexBackend translates it to "amplifier set <handle>
+    // operate=0|1" (radio-relayed — the only path that works remote/SmartLink);
+    // the handle is supplied by RadioModel via invokeExtension's vendor arg.
+    emit operateRequested(on);
 }
 
 }  // namespace AetherSDR

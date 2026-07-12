@@ -2692,6 +2692,12 @@ target_link_libraries(aetherd_tuner_decode_test PRIVATE aethercore Qt6::Core Qt6
 set_target_properties(aetherd_tuner_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_tuner_decode_test COMMAND aetherd_tuner_decode_test)
 
+add_executable(aetherd_amp_tuner_encode_test tests/aetherd_amp_tuner_encode_test.cpp)
+target_include_directories(aetherd_amp_tuner_encode_test PRIVATE src)
+target_link_libraries(aetherd_amp_tuner_encode_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(aetherd_amp_tuner_encode_test PROPERTIES AUTOMOC ON)
+add_test(NAME aetherd_amp_tuner_encode_test COMMAND aetherd_amp_tuner_encode_test)
+
 add_executable(usb_cable_model_test
     tests/usb_cable_model_test.cpp
     src/models/UsbCableModel.cpp

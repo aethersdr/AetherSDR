@@ -131,11 +131,11 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canTransmit = true;
     caps.hasTuner = true;
 
-    // Advertise NO extension namespaces yet: no flex verb is routed through the
-    // seam, and invokeExtension() can't produce a reply. Advertising "flex"
-    // would let a client pre-check the namespace and then hang awaiting an
-    // extensionResult/Error that never comes. "flex" is declared here when the
-    // first amp/tuner/DAX verb converts.
+    // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
+    // autotune verbs are now routed through invokeExtension() (#4092/#4094), and
+    // it honors the async contract — an awaited call (requestId != 0) always
+    // gets exactly one extensionResult/Error, never a hang.
+    caps.extensionNamespaces << QStringLiteral("flex");
     return caps;
 }
 
@@ -183,17 +183,49 @@ void FlexBackend::setKeying(bool key)
     send(QStringLiteral("xmit %1").arg(key ? 1 : 0));
 }
 
-void FlexBackend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/,
-                                  quint64 requestId, const QVariant& /*arg*/)
+void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
+                                  quint64 requestId, const QVariant& arg)
 {
-    // No flex extension verbs are routed through the seam yet. Honor the async
-    // contract by construction: a caller awaiting a reply (requestId != 0) gets
-    // an error, never a hang. Real verbs land with the amp/tuner/DAX touchpoint
-    // conversions.
-    if (requestId != 0) {
-        emit extensionError(requestId,
-                            QStringLiteral("flex: no extension verbs implemented"));
+    // Translate a neutral amp/tuner intent (#4092/#4094) into the SmartSDR relay
+    // wire. The device object handle is a Flex detail carried in the vendor arg
+    // (supplied by RadioModel, which owns handle extraction). Async contract: an
+    // awaited call (requestId != 0) gets exactly one reply, never a hang.
+    const auto fail = [&](const QString& why) {
+        if (requestId != 0)
+            emit extensionError(requestId, why);
+    };
+    if (ns != QLatin1String("flex")) {
+        fail(QStringLiteral("unknown extension namespace: %1").arg(ns));
+        return;
     }
+
+    const QVariantMap a = arg.toMap();
+    const QString handle = a.value(QStringLiteral("handle")).toString();
+    const bool on = a.value(QStringLiteral("on")).toBool();
+    QString cmd;
+    if (verb == QLatin1String("amp.operate")) {
+        if (handle.isEmpty()) { fail(QStringLiteral("flex amp.operate: no handle")); return; }
+        cmd = QStringLiteral("amplifier set %1 operate=%2").arg(handle).arg(on ? 1 : 0);
+    } else if (verb == QLatin1String("tuner.operate")) {
+        if (handle.isEmpty()) { fail(QStringLiteral("flex tuner.operate: no handle")); return; }
+        cmd = QStringLiteral("tgxl set handle=%1 mode=%2").arg(handle).arg(on ? 1 : 0);
+    } else if (verb == QLatin1String("tuner.bypass")) {
+        if (handle.isEmpty()) { fail(QStringLiteral("flex tuner.bypass: no handle")); return; }
+        cmd = QStringLiteral("tgxl set handle=%1 bypass=%2").arg(handle).arg(on ? 1 : 0);
+    } else if (verb == QLatin1String("tuner.autotune")) {
+        if (handle.isEmpty()) { fail(QStringLiteral("flex tuner.autotune: no handle")); return; }
+        cmd = QStringLiteral("tgxl autotune handle=%1").arg(handle);
+    } else {
+        fail(QStringLiteral("unknown flex verb: %1").arg(verb));
+        return;
+    }
+
+    send(cmd);
+    // Fire-and-forget on the wire: the real device state returns asynchronously
+    // via the amplifier/tgxl status decode. Acknowledge dispatch so an awaiting
+    // caller (requestId != 0) completes; our own RadioModel routes pass 0.
+    if (requestId != 0)
+        emit extensionResult(requestId, QVariant(true));
 }
 
 void FlexBackend::decodePanCenterBandwidth(const QString& panId,
@@ -660,7 +692,8 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
     // Stateless translation of the SmartSDR "amplifier <handle> …" wire → AmpDelta
     // (#4094). The presence latch, operate change-gating, and handle matching are
     // the model's job (AmpModel::applyChanges) — this only reports what the wire
-    // said. Command/encode is not here (stays AmpModel::commandReady, step 3).
+    // said. Command/encode is the reverse path — invokeExtension("flex",
+    // "amp.operate", …) below translates AmpModel's neutral intent (#4094).
     AmpDelta d;
     d.handle = handle;
     if (removed) {

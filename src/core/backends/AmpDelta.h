@@ -17,8 +17,9 @@ namespace AetherSDR {
 //
 // The decode is stateless: it carries what the wire reported (a detected power-amp
 // model, its ip, the derived operate flag, the raw telemetry). The model decides
-// what to do with it. Command/encode is NOT here — that stays AmpModel::setOperate
-// → commandReady until the seam gains an encode path (invokeExtension; step 3).
+// what to do with it. Command/encode is NOT here — AmpModel::setOperate emits the
+// neutral operateRequested intent, translated back to the wire by
+// FlexBackend::invokeExtension("flex", "amp.operate", …) (#4094).
 struct AmpDelta {
     QString handle;                        // amplifier handle from the status object
     bool    removed{false};                // "amplifier <handle> removed"

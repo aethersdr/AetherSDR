@@ -114,18 +114,20 @@ int main(int argc, char** argv)
         CHECK(presence.count() == 1 && presence.takeFirst().at(0).toBool() == false);
     }
 
-    // ---- setOperate relays the SmartSDR verb; no-op without a handle ----
+    // ---- setOperate emits the neutral operate intent; no-op without a handle ----
+    // The SmartSDR string is FlexBackend's job now (#4094); the model only signals
+    // operate on/off. (See aetherd_amp_encode_test for the wire translation.)
     {
         AmpModel amp;
-        QSignalSpy cmd(&amp, &AmpModel::commandReady);
-        amp.setOperate(true);                         // no handle yet
-        CHECK(cmd.count() == 0);
+        QSignalSpy req(&amp, &AmpModel::operateRequested);
+        amp.setOperate(true);                         // no handle yet → no intent
+        CHECK(req.count() == 0);
         amp.applyChanges(detected("0x1000", "PowerGeniusXL", "", false));
         amp.setOperate(true);
-        CHECK(cmd.count() == 1);
-        CHECK(cmd.takeFirst().at(0).toString() == "amplifier set 0x1000 operate=1");
+        CHECK(req.count() == 1);
+        CHECK(req.takeFirst().at(0).toBool() == true);
         amp.setOperate(false);
-        CHECK(cmd.takeFirst().at(0).toString() == "amplifier set 0x1000 operate=0");
+        CHECK(req.takeFirst().at(0).toBool() == false);
     }
 
     // ---- reset clears present/handle/operate ----

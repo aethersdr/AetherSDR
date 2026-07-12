@@ -13,9 +13,10 @@ namespace AetherSDR {
 // applyChanges applies exactly the reported fields (change-gated, with the
 // tuning/antenna edge signals). Same contract as the sub-model deltas.
 //
-// Command/encode (operate/bypass/autotune/relay) is NOT here — that stays
-// TunerModel::commandReady until the seam gains an encode path (invokeExtension;
-// step 3). The direct-connection fwd-power/SWR meters are set outside this decode.
+// Command/encode (operate/bypass/autotune) is NOT here — TunerModel emits neutral
+// intents, translated back to the wire by FlexBackend::invokeExtension("flex",
+// "tuner.*", …) (#4092). The direct port-9010 relay/antenna fast-path and the
+// direct-connection fwd-power/SWR meters are set outside this decode.
 struct TunerDelta {
     std::optional<QString> serialNum;    // "serial_num"
     std::optional<QString> model;

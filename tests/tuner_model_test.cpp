@@ -64,6 +64,32 @@ int main(int argc, char** argv)
         CHECK(!t.isTuning() && tun.count() == 1 && tun.takeFirst().at(0).toBool() == false);
     }
 
+    // ---- encode: neutral relay intents; no-op without a handle (#4092) ----
+    // The model emits vendor-neutral intents (no SmartSDR strings); FlexBackend
+    // translates them — see aetherd_amp_tuner_encode_test for the wire form.
+    {
+        TunerModel t;
+        QSignalSpy op(&t, &TunerModel::operateRequested);
+        QSignalSpy by(&t, &TunerModel::bypassRequested);
+        QSignalSpy at(&t, &TunerModel::autotuneRequested);
+
+        // No handle yet (no direct conn) → every relay verb is a no-op.
+        t.setOperate(true); t.setBypass(true); t.autoTune();
+        CHECK(op.count() == 0 && by.count() == 0 && at.count() == 0);
+
+        t.setHandle("0x2000");
+        QSignalSpy st(&t, &TunerModel::stateChanged);
+
+        t.setOperate(true);
+        CHECK(op.count() == 1 && op.takeFirst().at(0).toBool() == true);
+        CHECK(t.isOperate() && st.count() == 1);          // optimistic state update
+        t.setBypass(true);
+        CHECK(by.count() == 1 && by.takeFirst().at(0).toBool() == true);
+        CHECK(t.isBypass() && st.count() == 2);
+        t.autoTune();                                      // no direct conn → relay intent
+        CHECK(at.count() == 1);
+    }
+
     if (g_failures == 0) {
         std::printf("tuner_model_test: all checks passed\n");
         return 0;

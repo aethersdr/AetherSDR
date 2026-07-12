@@ -129,14 +129,16 @@ signals:
 
     // Normalized power-amplifier status delta (aetherd 2.4 — AmpModel decode
     // split, #4094). Typed + present-only; the backend translates the SmartSDR
-    // "amplifier" wire and AmpModel applies the state machine. Command/encode
-    // stays AmpModel::commandReady until the seam gains an encode path (step 3).
+    // "amplifier" wire and AmpModel applies the state machine. Command/encode is
+    // the neutral AmpModel::operateRequested intent, translated back to the wire
+    // by invokeExtension("flex", "amp.operate", …) (#4094).
     void amplifierChanged(const AmpDelta& delta);
 
     // Normalized antenna-tuner status delta (aetherd 2.4 — TunerModel decode
     // split, #4092). Typed + present-only; the backend translates the SmartSDR
     // "atu"/"amplifier"(TunerGeniusXL) wire, TunerModel applies the change-gated
-    // state. Command/encode stays TunerModel::commandReady until step 3.
+    // state. Command/encode is TunerModel's neutral operate/bypass/autotune
+    // intents, translated by invokeExtension("flex", "tuner.*", …) (#4092).
     void tunerChanged(const TunerDelta& delta);
 
     // Normalized radio-global status delta (aetherd RFC 2.3 — RadioModel

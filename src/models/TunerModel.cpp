@@ -68,9 +68,8 @@ void TunerModel::setOperate(bool on)
         qCDebug(lcTuner) << "TunerModel::setOperate: no handle yet, ignoring";
         return;
     }
-    const QString cmd = "tgxl set handle=" + m_handle + " mode=" + (on ? "1" : "0");
-    qCDebug(lcTuner) << "TunerModel:" << cmd;
-    emit commandReady(cmd);
+    // Neutral intent → Flex "tgxl set handle=<h> mode=" wire (via RadioModel).
+    emit operateRequested(on);
     // Optimistic update: reflect the commanded state immediately so the
     // button label stays in sync even before the radio echoes back.
     if (m_operate != on) { m_operate = on; emit stateChanged(); }
@@ -82,9 +81,8 @@ void TunerModel::setBypass(bool on)
         qCDebug(lcTuner) << "TunerModel::setBypass: no handle yet, ignoring";
         return;
     }
-    const QString cmd = "tgxl set handle=" + m_handle + " bypass=" + (on ? "1" : "0");
-    qCDebug(lcTuner) << "TunerModel:" << cmd;
-    emit commandReady(cmd);
+    // Neutral intent → Flex "tgxl set handle=<h> bypass=" wire (via RadioModel).
+    emit bypassRequested(on);
     // Optimistic update: reflect the commanded state immediately so the
     // button label stays in sync even before the radio echoes back.
     if (m_bypass != on) { m_bypass = on; emit stateChanged(); }
@@ -105,9 +103,9 @@ void TunerModel::autoTune()
         qCDebug(lcTuner) << "TunerModel::autoTune: no direct conn and no handle, ignoring";
         return;
     }
-    const QString cmd = "tgxl autotune handle=" + m_handle;
-    qCDebug(lcTuner) << "TunerModel:" << cmd;
-    emit commandReady(cmd);
+    // Neutral intent → Flex "tgxl autotune handle=<h>" wire. RadioModel applies
+    // the TX interlock gate before dispatching (was a commandReady string-sniff).
+    emit autotuneRequested();
 }
 
 void TunerModel::setAntennaA(int ant)

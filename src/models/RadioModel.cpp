@@ -642,15 +642,31 @@ RadioModel::RadioModel(QObject* parent)
     connect(m_panStream, &PanadapterStream::meterDataReady,
             &m_meterModel, &MeterModel::updateValues);
 
-    // Forward tuner commands to the radio — route through tune inhibit check
-    connect(&m_tunerModel, &TunerModel::commandReady, this, [this](const QString& cmd){
-        if (cmd.startsWith("tgxl autotune")) {
-            if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune"))) {
-                return;
-            }
-            applyTuneInhibit();
-        }
-        sendCmd(cmd);
+    // Route tuner relay intents to the radio through the backend seam (#4092).
+    // The model emits neutral intents; FlexBackend translates them to the SmartSDR
+    // "tgxl …" wire. The handle is a Flex detail carried in invokeExtension's
+    // vendor arg (RadioModel owns handle extraction). The direct port-9010
+    // fast-path stays inside TunerModel and never reaches here.
+    connect(&m_tunerModel, &TunerModel::operateRequested, this, [this](bool on){
+        if (m_backend)
+            m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.operate"), 0,
+                                       QVariantMap{{QStringLiteral("handle"), m_tunerModel.handle()},
+                                                   {QStringLiteral("on"), on}});
+    });
+    connect(&m_tunerModel, &TunerModel::bypassRequested, this, [this](bool on){
+        if (m_backend)
+            m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.bypass"), 0,
+                                       QVariantMap{{QStringLiteral("handle"), m_tunerModel.handle()},
+                                                   {QStringLiteral("on"), on}});
+    });
+    connect(&m_tunerModel, &TunerModel::autotuneRequested, this, [this](){
+        // TX interlock gate (was a commandReady string-sniff on "tgxl autotune").
+        if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune")))
+            return;
+        applyTuneInhibit();
+        if (m_backend)
+            m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0,
+                                       QVariantMap{{QStringLiteral("handle"), m_tunerModel.handle()}});
     });
 
     // Forward DAX IQ commands to the radio
@@ -658,10 +674,14 @@ RadioModel::RadioModel(QObject* parent)
         sendCmd(cmd);
     });
 
-    // Forward amplifier (PGXL) commands to the radio — the radio relays "amplifier
-    // set … operate=" to the amp (the path that works remote/SmartLink). #4094.
-    connect(&m_amplifier, &AmpModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+    // Route amplifier (PGXL) operate intent to the radio through the backend seam
+    // (#4094). FlexBackend relays "amplifier set … operate=" to the amp (the path
+    // that works remote/SmartLink); the handle rides in invokeExtension's vendor arg.
+    connect(&m_amplifier, &AmpModel::operateRequested, this, [this](bool on){
+        if (m_backend)
+            m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("amp.operate"), 0,
+                                       QVariantMap{{QStringLiteral("handle"), m_amplifier.handle()},
+                                                   {QStringLiteral("on"), on}});
     });
     // Protocol-log breadcrumb on amp detection, symmetric with the "amplifier
     // removed" log — kept here so AmpModel stays logging-category-free. #4099.
