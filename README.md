@@ -249,6 +249,21 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
 
 ---
 
+## Related projects
+
+- **[Aether-gate](https://github.com/aethersdr/Aether-gate)** — put *any* radio into
+  AetherSDR. A bridge that presents an Icom/Kenwood/Yaesu/Elecraft CAT rig (via
+  [Hamlib](https://hamlib.github.io/)), an Icom LAN rig, or a SoapySDR dongle to
+  AetherSDR as if it were a FlexRadio — live panadapter, waterfall, and
+  frequency/mode control. Receive + control today (no transmit yet). By Nigel
+  Fenton (G0JKN); GPL-3.0-or-later. *(`aethersdr/Aether-gate` tracks upstream
+  [nigelfenton/Aether-gate](https://github.com/nigelfenton/Aether-gate).)*
+
+AetherSDR integrates radios that earn deep native support directly in-engine; the
+gate covers the long tail of legacy/CAT radios and dongles.
+
+---
+
 ## Verifying Downloads
 
 Linux and Windows binaries are GPG-signed. macOS artifacts are Apple notarized. Each release includes `.asc` signatures and `SHA256SUMS.txt`.

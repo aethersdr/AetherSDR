@@ -1,0 +1,47 @@
+name: Mirror Aether-gate
+
+# Keeps the org's copy (aethersdr/Aether-gate) fast-forwarded from its upstream,
+# nigelfenton/Aether-gate, so it stays a current, byte-identical mirror. The
+# mirror content is never modified here — this workflow only pulls upstream into
+# the fork's default branch.
+#
+# Cadence: scheduled runs are best-effort (GitHub can delay or skip them under
+# load), so this is "near-real-time," not instantaneous. Dial the cron below if
+# you want it more/less frequent. True real-time would require an upstream push
+# webhook, which needs the upstream owner's cooperation.
+#
+# Auth: syncing another repo needs write access to it, which the default
+# GITHUB_TOKEN does not have. Add a fine-grained PAT with **Contents: read/write
+# on aethersdr/Aether-gate** as the repo secret MIRROR_SYNC_TOKEN. Until that
+# secret exists the job no-ops (it does not fail), so it won't spam failures.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min (best-effort; not exact)
+  workflow_dispatch: {}       # manual "sync now" button
+
+# We authenticate with MIRROR_SYNC_TOKEN, not GITHUB_TOKEN — drop all default perms.
+permissions: {}
+
+concurrency:
+  group: mirror-aether-gate
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fast-forward aethersdr/Aether-gate from upstream
+        env:
+          GH_TOKEN: ${{ secrets.MIRROR_SYNC_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "MIRROR_SYNC_TOKEN is not set."
+            echo "Add a fine-grained PAT (Contents: read/write on aethersdr/Aether-gate)"
+            echo "as the MIRROR_SYNC_TOKEN secret to enable auto-sync. Skipping."
+            exit 0
+          fi
+          gh repo sync aethersdr/Aether-gate \
+            --source nigelfenton/Aether-gate \
+            --branch main \
+            --force
