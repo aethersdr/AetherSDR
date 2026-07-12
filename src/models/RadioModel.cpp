@@ -1,6 +1,9 @@
 #include "RadioModel.h"
+#include "core/GuiClientIdentityPolicy.h"
 #include "AntennaAliasStore.h"
+#include "BandDefs.h"
 #include "BandSettings.h"
+#include "DeclaredBands.h"
 #include "core/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/AppSettings.h"
@@ -39,6 +42,10 @@ constexpr int kDefaultPanDimensionThreshold = 100;
 constexpr int kSessionRestorePruneDelayMs = 5000;
 constexpr int kWaterfallLineDurationMinMs = 1;
 constexpr int kWaterfallLineDurationMaxMs = 100;
+
+// parseDeclaredBands() moved to DeclaredBands.{h,cpp} so the Principle-VII
+// validation (allow-list against BandDefs, dedup, case-fold) has a light,
+// dependency-free test target (declared_bands_test). Behaviour unchanged.
 
 QString normalizedLicenseFeatureName(const QString& name)
 {
@@ -1743,6 +1750,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_name    = info.name;
     m_model   = info.model;
     m_version = info.version;
+    m_declaredBands = parseDeclaredBands(info.bands);   // empty for real Flex
     m_maxSlices = maxSlicesForModel(m_model);
     if (reloadAntennaAliases())
         emit antennaAliasesChanged();
@@ -2884,22 +2892,20 @@ void RadioModel::onConnected()
 
     // Register as GUI client FIRST — required before subscriptions,
     // especially on WAN/SmartLink where the radio is stricter.
-    const QString clientId = AppSettings::instance().value("GUIClientID").toString();
-
-    disconnectPendingClientsThen([this, clientId] {
+    disconnectPendingClientsThen([this] {
         if (m_wanConn) {
             // On WAN: wait for client ip response before sending client gui.
             // The radio needs time after wan validate to accept GUI registration.
             // multiFLEX conflict on WAN is caught pre-connection via licensedClients.
-            sendCmd("client ip", [this, clientId](int, const QString& body) {
+            sendCmd("client ip", [this](int, const QString& body) {
                 qCDebug(lcProtocol) << "RadioModel: client ip ->" << body.trimmed();
-                registerAsGuiClient(clientId);
+                registerAsGuiClient(AppSettings::instance().effectiveGuiClientId());
             });
         } else {
             // On LAN: peek at radio/client status before sending client gui so we
             // can detect a multiFLEX conflict regardless of what discovery provided.
-            peekForMultiFlexConflictThen([this, clientId] {
-                registerAsGuiClient(clientId);
+            peekForMultiFlexConflictThen([this] {
+                registerAsGuiClient(AppSettings::instance().effectiveGuiClientId());
             });
         }
     });
@@ -3076,6 +3082,7 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
     // 400 ms is enough for the radio's status burst to arrive on a LAN path.
     sendCmd("sub radio all", [this](int, const QString&) {
         sendCmd("sub client all", [this](int, const QString&) {
+            resolveLiveGuiClientIdCollision();
             // Fast path: when multiFLEX is enabled the radio explicitly allows
             // multiple GUI clients, so the conflict check below
             // (!m_multiFlexEnabled && hasOthers) can never fire — there is
@@ -3093,6 +3100,9 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
                 return;
             }
             QTimer::singleShot(400, this, [this] {
+                // On the non-fast path, client status may arrive during the
+                // collection window rather than before the subscription reply.
+                resolveLiveGuiClientIdCollision();
                 const quint32 ours2 = clientHandle();
                 bool hasOthers = false;
                 for (auto it = m_clientInfoMap.cbegin(); it != m_clientInfoMap.cend(); ++it) {
@@ -3126,6 +3136,44 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
             });
         });
     });
+}
+
+void RadioModel::resolveLiveGuiClientIdCollision()
+{
+    AppSettings& settings = AppSettings::instance();
+    const QString effectiveId = settings.effectiveGuiClientId();
+    if (effectiveId.isEmpty()) {
+        return;
+    }
+    for (auto it = m_clientInfoMap.cbegin(); it != m_clientInfoMap.cend(); ++it) {
+        if (it.key() == clientHandle()
+            || it->clientId.compare(effectiveId, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+
+        const QString otherStation = it->station;
+        const bool selectDistinct = GuiClientIdentityPolicy::shouldSelectDistinctId(
+            settings.guiClientIdentityIsTransient(), settings.effectiveStationName(),
+            otherStation, it.key() == m_staleSessionOwnHandle);
+        // Only a handle captured from THIS process's previous connection may
+        // be reclaimed. A same-named station from a fresh process can be a
+        // cloned remote profile and must not be evicted by assumption.
+        if (!selectDistinct) {
+            qCInfo(lcProtocol).noquote()
+                << "RadioModel: reclaiming same-station GUI session"
+                << QStringLiteral("handle=%1").arg(hexId(it.key()))
+                << QStringLiteral("station=%1").arg(otherStation);
+            return;
+        }
+        if (settings.resolveLiveGuiClientIdCollision(otherStation)) {
+            qCWarning(lcProtocol).noquote()
+                << "RadioModel: avoided live duplicate GUI client ID"
+                << QStringLiteral("handle=%1").arg(hexId(it.key()))
+                << QStringLiteral("station=%1").arg(otherStation)
+                << QStringLiteral("new_id=%1").arg(settings.effectiveGuiClientId());
+        }
+        return;
+    }
 }
 
 void RadioModel::resolveMultiFlexConflict(quint32 handle)
@@ -3167,6 +3215,18 @@ void RadioModel::handleForcedClientDisconnect()
     qCWarning(lcProtocol) << "RadioModel: this GUI client was force-disconnected by another client";
     emit forcedDisconnectRequested();
 
+    closeConnectionForTerminalDisconnect();
+}
+
+// Tear down the transport for a radio-initiated terminal disconnect (forced or
+// duplicate-client-id). The radio evicts our GUI-client registration but does
+// not guarantee closing the raw TCP/TLS socket — FlexLib fires an event and
+// leaves the actual disconnect to the client — so we must close it ourselves,
+// or the model is stranded in a half-open "connected" state with dangling
+// streams. Callers set m_intentionalDisconnect first so this does not trip the
+// auto-reconnect loop.
+void RadioModel::closeConnectionForTerminalDisconnect()
+{
     if (m_wanConn) {
         m_wanConn->disconnectFromRadio();
         return;
@@ -3183,6 +3243,27 @@ void RadioModel::handleForcedClientDisconnect()
     } else {
         QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
     }
+}
+
+void RadioModel::handleDuplicateClientIdDisconnect()
+{
+    if (m_forcedDisconnectInProgress) {
+        return;
+    }
+    m_forcedDisconnectInProgress = true;
+    m_intentionalDisconnect = true;
+    m_reconnectTimer.stop();
+    AppSettings::instance().resolveLiveGuiClientIdCollision(
+        QStringLiteral("radio-reported duplicate"));
+    qCWarning(lcProtocol)
+        << "RadioModel: radio disconnected this session because another GUI client used the same ID";
+    emit connectionError(tr("Connection stopped: another AetherSDR client was using this "
+                            "station identity. A distinct identity has been selected; reconnect "
+                            "to continue."));
+    // Close the socket ourselves — the radio does not guarantee a TCP close on
+    // a duplicate-id eviction, and the error above tells the operator to
+    // reconnect, which must start from a fully torn-down connection.
+    closeConnectionForTerminalDisconnect();
 }
 
 void RadioModel::registerAsGuiClient(const QString& clientId)
@@ -3203,12 +3284,12 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         armClientConnectionNoticeSuppression();
         if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel: client gui failed, code" << Qt::hex << code;
-        } else if (!body.trimmed().isEmpty()) {
+        } else if (!body.trimmed().isEmpty()
+                   && !AppSettings::instance().guiClientIdentityIsTransient()) {
             // Save our UUID for session persistence across restarts.
             // The radio restores slices/frequencies for a known UUID.
             auto& s = AppSettings::instance();
-            s.setValue("GUIClientID", body.trimmed());
-            s.save();
+            s.recordPersistentGuiClientIdReply(body.trimmed());
             qCDebug(lcProtocol) << "RadioModel: saved GUIClientID:" << body.trimmed();
         }
 
@@ -4888,7 +4969,7 @@ quint32 RadioModel::ourClientHandle() const { return clientHandle(); }
 
 QString RadioModel::ourStationName() const
 {
-    QString station = AppSettings::instance().value("StationName", "").toString();
+    QString station = AppSettings::instance().effectiveStationName();
     if (station.isEmpty()) {
         station = QSysInfo::machineHostName();
     }
@@ -5308,8 +5389,13 @@ void RadioModel::onStatusReceived(const QString& object,
             QString action = cm.captured(2);  // "disconnected" or empty
 
             if (action == "disconnected") {
-                if (handle == clientHandle() && statusFlagSet(kvs, QStringLiteral("forced")))
-                    handleForcedClientDisconnect();
+                if (handle == clientHandle()) {
+                    if (statusFlagSet(kvs, QStringLiteral("duplicate_client_id"))) {
+                        handleDuplicateClientIdDisconnect();
+                    } else if (statusFlagSet(kvs, QStringLiteral("forced"))) {
+                        handleForcedClientDisconnect();
+                    }
+                }
                 m_clientStations.remove(handle);
                 m_clientInfoMap.remove(handle);
                 m_announcedClientConnections.remove(handle);
@@ -5344,6 +5430,7 @@ void RadioModel::onStatusReceived(const QString& object,
                 bool ptt = kvs.value("local_ptt", "0") == "1";
                 m_clientStations[handle] = station;
                 ClientInfo client;
+                client.clientId = kvs.value(QStringLiteral("client_id")).trimmed();
                 client.station = station;
                 client.program = program;
                 client.source = source;
@@ -6310,6 +6397,19 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
             m_maxSlices = updatedMax;
         }
         changed = true;
+    }
+    if (d.bandsRaw) {
+        // Radio-declared band set (gateway/non-Flex hardware; see
+        // declaredBands()).  Also accepted on the status path so a radio
+        // connected by IP (no discovery packet seen) can still declare. The
+        // raw "bands=" string rides through RadioDelta and is validated here
+        // (parseDeclaredBands + BandDefs) — a model concern, matching how other
+        // text fields decode model-side under aetherd RFC 2.3.
+        const QStringList declared = parseDeclaredBands(*d.bandsRaw);
+        if (declared != m_declaredBands) {
+            m_declaredBands = declared;
+            changed = true;
+        }
     }
     if (d.callsign) {
         if (*d.callsign != m_callsign) {

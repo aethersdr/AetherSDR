@@ -91,6 +91,14 @@ public:
     // a default-constructed value when disconnected — the conditional
     // VHF row will disappear.  Triggers a band-panel rebuild. (#695)
     void setRadioCapabilities(ModelCapabilities caps);
+
+    // Bands the radio itself declared (optional "bands=" discovery/status
+    // key, names from BandDefs).  Non-empty: the band grid is built from
+    // this list instead of the HF layout + model capability flags, so a
+    // gateway presenting non-Flex hardware offers its true band set (e.g.
+    // an IC-9700's 2m/440/23cm).  Empty (all real Flex radios): the grid
+    // is unchanged.  Triggers a band-panel rebuild on change.
+    void setDeclaredBands(const QStringList& bands);
     void syncDaxIqChannel(int channel);
     // Reflect the real WFM demodulator state onto the DAX-panel WFM toggle
     // WITHOUT re-emitting wfmToggleRequested. Self-gated on this menu's slice,
@@ -241,6 +249,7 @@ private:
     // without the caller needing to re-supply the other half. (#695)
     QVector<XvtrBand>  m_lastXvtrBands;
     ModelCapabilities  m_radioCapabilities;
+    QStringList        m_declaredBands;   // radio-declared band set (see setDeclaredBands)
 
     // ANT sub-panel
     QWidget*     m_antPanel{nullptr};

@@ -174,6 +174,14 @@ public:
         return capabilitiesFor(m_model);
     }
 
+    // Bands the radio itself declared via the optional discovery/status
+    // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
+    // for real Flex radios — the band UI then falls back to the model
+    // capability flags.  Lets a gateway presenting non-Flex hardware
+    // (e.g. an Icom IC-9700 shown as a FLEX-6700) offer its true band
+    // set rather than the impersonated model's.
+    QStringList declaredBands() const { return m_declaredBands; }
+
     // Returns true for BigBend/DragonFire-platform radios (8400, 8600,
     // AU-/ML-/MLS-/CL-/CLS- series, RT-2122) that support the extended
     // firmware DSP filters (NRL, NRS, RNN, NRF).  6000-series radios don't
@@ -298,6 +306,7 @@ public:
     bool sliceMayBelongToUs(int sliceId) const;
 
     struct ClientInfo {
+        QString clientId;
         QString station;
         QString program;
         QString source;
@@ -681,6 +690,11 @@ private:
     // sending client gui. Calls continuation() if no conflict is found.
     void peekForMultiFlexConflictThen(std::function<void()> continuation);
     void handleForcedClientDisconnect();
+    void handleDuplicateClientIdDisconnect();
+    // Shared transport teardown for a radio-initiated terminal disconnect
+    // (forced or duplicate-client-id); callers set m_intentionalDisconnect first.
+    void closeConnectionForTerminalDisconnect();
+    void resolveLiveGuiClientIdCollision();
     void applyKnownGuiClients(const QStringList& handles,
                               const QStringList& programs,
                               const QStringList& stations,
@@ -769,6 +783,7 @@ private:
 
     QString     m_name;
     QString     m_model;
+    QStringList m_declaredBands;    // optional "bands=" declaration (see declaredBands())
     int         m_maxSlices{4};
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")

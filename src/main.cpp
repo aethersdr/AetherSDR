@@ -363,6 +363,7 @@ int main(int argc, char* argv[])
     // to LogManager. SHistorySoftEdgeDb migration moved here for the same
     // reason.
     AetherSDR::AppSettings::instance().load();
+    AetherSDR::AppSettings::instance().initializeGuiClientIdentity();
     {
         auto& s = AetherSDR::AppSettings::instance();
         if (s.contains("SHistorySoftEdgeDb")) {

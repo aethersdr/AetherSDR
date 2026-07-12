@@ -1,9 +1,9 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "com.aethersdr.radio",
-  "Version": "1.0.1.0",
+  "Version": "1.0.2.0",
   "Name": "AetherSDR",
-  "Description": "Full AetherSDR radio control via TCI — 43 actions for FlexRadio TX, bands, modes, DSP, audio, and DVK.",
+  "Description": "Full AetherSDR radio control via TCI — 46 actions for FlexRadio TX, bands, modes, DSP, audio, and DVK.",
   "Author": "AetherSDR",
   "URL": "https://github.com/aethersdr/AetherSDR",
   "Icon": "imgs/plugin-icon",
@@ -64,6 +64,51 @@
     { "UUID": "com.aethersdr.radio.rit-toggle", "Name": "RIT Toggle", "Icon": "imgs/plugin-icon", "Controllers": ["Keypad"], "States": [{ "Image": "imgs/plugin-icon", "Title": "RIT" }] },
     { "UUID": "com.aethersdr.radio.xit-toggle", "Name": "XIT Toggle", "Icon": "imgs/plugin-icon", "Controllers": ["Keypad"], "States": [{ "Image": "imgs/plugin-icon", "Title": "XIT" }] },
     { "UUID": "com.aethersdr.radio.dvk-play", "Name": "DVK Play", "Icon": "imgs/plugin-icon", "Controllers": ["Keypad"], "States": [{ "Image": "imgs/plugin-icon", "Title": "PLAY" }] },
-    { "UUID": "com.aethersdr.radio.dvk-record", "Name": "DVK Record", "Icon": "imgs/plugin-icon", "Controllers": ["Keypad"], "States": [{ "Image": "imgs/plugin-icon", "Title": "REC" }] }
+    { "UUID": "com.aethersdr.radio.dvk-record", "Name": "DVK Record", "Icon": "imgs/plugin-icon", "Controllers": ["Keypad"], "States": [{ "Image": "imgs/plugin-icon", "Title": "REC" }] },
+    {
+      "UUID": "com.aethersdr.radio.vfo-tune",
+      "Name": "VFO Tuning",
+      "Icon": "imgs/plugin-icon",
+      "Tooltip": "Turn to tune the VFO; press to change step size",
+      "Controllers": ["Encoder"],
+      "States": [{ "Image": "imgs/plugin-icon", "Title": "VFO" }],
+      "Encoder": {
+        "layout": "$A1",
+        "TriggerDescription": {
+          "Rotate": "Tune VFO frequency",
+          "Push": "Cycle tuning step (10Hz-1MHz)"
+        }
+      }
+    },
+    {
+      "UUID": "com.aethersdr.radio.rf-power-dial",
+      "Name": "RF Power Dial",
+      "Icon": "imgs/plugin-icon",
+      "Tooltip": "Turn to adjust RF power; press to change step size",
+      "Controllers": ["Encoder"],
+      "States": [{ "Image": "imgs/plugin-icon", "Title": "RF Power" }],
+      "Encoder": {
+        "layout": "$A1",
+        "TriggerDescription": {
+          "Rotate": "Adjust RF power",
+          "Push": "Cycle step size (1W/5W)"
+        }
+      }
+    },
+    {
+      "UUID": "com.aethersdr.radio.volume-dial",
+      "Name": "Volume Dial",
+      "Icon": "imgs/plugin-icon",
+      "Tooltip": "Turn to adjust volume; press to toggle mute",
+      "Controllers": ["Encoder"],
+      "States": [{ "Image": "imgs/plugin-icon", "Title": "Volume" }],
+      "Encoder": {
+        "layout": "$A1",
+        "TriggerDescription": {
+          "Rotate": "Adjust volume",
+          "Push": "Toggle mute"
+        }
+      }
+    }
   ]
 }
