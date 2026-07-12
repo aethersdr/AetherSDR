@@ -39,7 +39,6 @@
 #include <QTime>
 #include <QMenu>
 #include <QColor>
-#include <QPalette>
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <functional>
@@ -971,10 +970,14 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     split->setSizes({245, 735});
     body->addWidget(split, 1);
 
-    // Category headers are bold and dimmed (matching the sibling Radio Setup
-    // browser's intent). The dim colour is snapshotted by value so the lambda
-    // need not capture `this` just to reach palette().
-    const QColor categoryTextColor = palette().color(QPalette::Disabled, QPalette::Text);
+    // Category headers are bold and dimmed. Source the dim colour from the same
+    // ThemeManager token system that styles the rest of the tree (a bare
+    // QPalette colour would be decoupled from the theme), resolved once and
+    // captured by value so the lambda needn't capture `this`. The base ::item
+    // QSS rule sets no colour, so this per-item foreground is honoured for the
+    // non-selected header rows.
+    const QColor categoryTextColor =
+        AetherSDR::ThemeManager::instance().color("color.text.secondary");
     auto addCategory = [navigation, categoryTextColor](const QString& name) {
         auto* item = new QTreeWidgetItem(navigation, {name});
         item->setFlags(Qt::ItemIsEnabled);
