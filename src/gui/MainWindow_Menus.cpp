@@ -1070,7 +1070,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Getting Started...", this, [this]() {
         auto* dlg = new HelpDialog("Getting Started", ":/help/getting-started.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1078,7 +1078,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("AetherSDR Help...", this, [this]() {
         auto* dlg = new HelpDialog("AetherSDR Help", ":/help/aethersdr-help.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1093,7 +1093,7 @@ void MainWindow::buildMenuBar()
         m_whatsNewDialog = WhatsNewDialog::showAll(this);
         m_whatsNewDialog->setFramelessMode(
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-        m_persistentDialogs.append(QPointer<PersistentDialog>(m_whatsNewDialog));
+        trackPersistentDialog(m_whatsNewDialog);
     });
     helpMenu->addSeparator();
 
@@ -1102,7 +1102,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Understanding Noise Cancellation...", this, [this]() {
         auto* dlg = new HelpDialog("Understanding Noise Cancellation", ":/help/understanding-noise-cancellation.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1110,7 +1110,7 @@ void MainWindow::buildMenuBar()
     auto* controlsHelpAction = helpMenu->addAction("Configuring AetherSDR Controls...", this, [this]() {
         auto* dlg = new HelpDialog("Configuring AetherSDR Controls", ":/help/configuring-aethersdr-controls.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1119,7 +1119,7 @@ void MainWindow::buildMenuBar()
     auto* dataModesAction = helpMenu->addAction("Configuring Data Modes...", this, [this]() {
         auto* dlg = new HelpDialog("Configuring Data Modes", ":/help/understanding-data-modes.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1148,7 +1148,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Contributing to AetherSDR...", this, [this]() {
         auto* dlg = new HelpDialog("Contributing to AetherSDR", ":/help/contributing-to-aethersdr.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1162,7 +1162,7 @@ void MainWindow::buildMenuBar()
         auto* dlg = new SupportDialog(this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setRadioModel(&m_radioModel);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
     });
@@ -1180,7 +1180,7 @@ void MainWindow::buildMenuBar()
             });
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setWindowModality(Qt::ApplicationModal);
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1208,7 +1208,7 @@ void MainWindow::buildMenuBar()
         vbox->setContentsMargins(16, 16, 16, 16);
         dlg->setBodyLayoutMargins(QMargins(16, 16, 16, 16),
                                   QMargins(16, 14, 16, 16));
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
 
         // Icon
         auto* iconLbl = new QLabel;

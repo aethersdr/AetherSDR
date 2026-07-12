@@ -523,6 +523,7 @@ private:
     // Toggle OS window-chrome on/off. Persists to AppSettings("FramelessWindow").
     // When on, TitleBar provides the drag surface and window-control buttons.
     void setFramelessWindow(bool on);
+    void trackPersistentDialog(PersistentDialog* dialog);
 
     // Lazy-construct + show + raise + activate for a PersistentDialog
     // subclass.  Collapses the ~10-line "if slot raise else new+setAttribute+
@@ -1028,11 +1029,10 @@ private:
 #endif
     QPointer<UlanziDialMapperDialog> m_ulanziMapperDialog;
 
-    // Tracks every PersistentDialog created via showOrRaisePersistent() so
-    // setFramelessWindow() can propagate the frameless toggle without an
-    // explicit per-dialog qobject_cast branch.  QPointer entries auto-null on
-    // dialog destruction (QSet::insert handles deduplication on null QPointer
-    // re-creation by removing them on iteration via removeIf below).
+    // Tracks PersistentDialogs so setFramelessWindow() can propagate the
+    // frameless toggle without explicit per-dialog branches. Registration
+    // prunes null and duplicate QPointers so repeated close/reopen cycles do
+    // not grow the list when the frameless setting is never toggled.
     QList<QPointer<PersistentDialog>> m_persistentDialogs;
 
     // Menus
@@ -1390,7 +1390,7 @@ void MainWindow::showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs)
         dlg->setFramelessMode(
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         slot = dlg;
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
     }
     slot->show();
     slot->raise();

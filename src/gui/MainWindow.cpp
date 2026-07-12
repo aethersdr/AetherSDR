@@ -7478,6 +7478,17 @@ void MainWindow::toggleAppletPanelFloating(bool floating)
     }
 }
 
+void MainWindow::trackPersistentDialog(PersistentDialog* dialog)
+{
+    if (!dialog) {
+        return;
+    }
+    m_persistentDialogs.removeIf([dialog](const QPointer<PersistentDialog>& tracked) {
+        return tracked.isNull() || tracked.data() == dialog;
+    });
+    m_persistentDialogs.append(QPointer<PersistentDialog>(dialog));
+}
+
 void MainWindow::setFramelessWindow(bool on)
 {
     auto& s = AppSettings::instance();

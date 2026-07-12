@@ -104,7 +104,7 @@ void MainWindow::showAx25HfPacketDecodeDialog()
         dlg->setFramelessMode(
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_ax25HfPacketDecodeDialog = dlg;
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
     }
     m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
 #ifdef HAVE_MQTT
@@ -137,7 +137,7 @@ void MainWindow::startKissTncOnStartupIfConfigured()
     dlg->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_ax25HfPacketDecodeDialog = dlg;
-    m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+    trackPersistentDialog(dlg);
 #ifdef HAVE_MQTT
     m_ax25HfPacketDecodeDialog->setMqttClient(m_mqttClient);
 #endif
@@ -1297,7 +1297,7 @@ void MainWindow::showPskReporterMapDialog()
         dlg->setFramelessMode(
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_pskReporterMapDialog = dlg;
-        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        trackPersistentDialog(dlg);
     }
     m_pskReporterMapDialog->show();
     m_pskReporterMapDialog->raise();
