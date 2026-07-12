@@ -158,21 +158,15 @@ struct PublishedAfxPack {
 };
 static const QList<PublishedAfxPack>& publishedAfxPacks()
 {
-    // Uncomment + fill the sha the moment each per-arch archive is built,
-    // load-tested on that GPU, and uploaded to the afx-bits-2.1.0 release
-    // (#4206). Rows for sm_75/sm_86 (Turing/Ampere = RTX 20/30-series) ALSO
-    // require lowering the isAfxCapableGpu() floor below — leave them out
-    // unless BNR is verified on those cards.
+    // Supported set is Ada and later (the isAfxCapableGpu() floor). Uncomment +
+    // fill the sha the moment each per-arch archive is built, load-tested on
+    // that GPU, and uploaded to the afx-bits-2.1.0 release (#4206).
     static const QList<PublishedAfxPack> packs = {
 #if defined(_WIN32)
-        // { 75,  "<sha256 of afx-bits-2.1.0-windows-x86_64-sm_75.zip>"  }, // Turing / RTX 20xx
-        // { 86,  "<sha256 of afx-bits-2.1.0-windows-x86_64-sm_86.zip>"  }, // Ampere / RTX 30xx
         { 89, "55e0a35bed70ade2e3b80d463c660da6b749223a998843f176af7da2d689a899" }, // Ada / RTX 40xx
         // { 100, "<sha256 of afx-bits-2.1.0-windows-x86_64-sm_100.zip>" }, // Blackwell datacenter
         // { 120, "<sha256 of afx-bits-2.1.0-windows-x86_64-sm_120.zip>" }, // Blackwell / RTX 50xx
 #else
-        // { 75,  "<sha256 of afx-bits-2.1.0-linux-x86_64-sm_75.tar.zst>"  }, // Turing / RTX 20xx
-        // { 86,  "<sha256 of afx-bits-2.1.0-linux-x86_64-sm_86.tar.zst>"  }, // Ampere / RTX 30xx
         { 89, "0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67" }, // Ada / RTX 40xx
         // { 100, "<sha256 of afx-bits-2.1.0-linux-x86_64-sm_100.tar.zst>" }, // Blackwell datacenter
         // { 120, "<sha256 of afx-bits-2.1.0-linux-x86_64-sm_120.tar.zst>" }, // Blackwell / RTX 50xx
