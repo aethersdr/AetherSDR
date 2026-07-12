@@ -125,14 +125,21 @@ contributors to self-verify UI changes before requesting review.
      ```
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
 
-**Tools exposed**: `bridge_status` (is the app up? which instance?),
-`dump_tree` (widget tree, with a `filter` arg to prune), `grab_widget`
-(PNG screenshot, returned inline to the model), `invoke` (click/toggle/
-setValue/…), `get_state` (`get` model snapshots), `shortcut`, `get_log`
-(tail app log events — why an action didn't take), `connect` /
-`disconnect` (radio-connection lifecycle), `capture_audio` (RX audio
-tap capture), `floors` (per-pan noise/display floor in dBm), and
-`bridge_command` (raw escape hatch to every other verb below).
+**Tools exposed** (20 typed tools): introspection — `bridge_status`,
+`dump_tree` (with a `filter` arg), `grab_widget` (PNG inline),
+`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`,
+`shortcut`, `tune`, `slice`, `pan`, `record`, `mark`, `window`, `menu`;
+connection — `connect` / `disconnect`; audio — `capture_audio`; and
+`bridge_command` (raw escape hatch for everything else).
+
+The verbs kept behind `bridge_command` on purpose: the low-level widget
+primitives (`close`, `hover`, `tooltip`, `scrollTo`, `drag`, `showMenu`,
+`contextMenu`, `rightClick`, `hitTest`, `clickAt` — `invoke`/`grab`
+cover the common cases), the transmit-keying verbs (`key`, `txtest`,
+`atu`, `cwx`, `testtone`, `txwaterfall` — gated by
+`AETHER_AUTOMATION_ALLOW_TX`, deliberately less convenient), and the
+niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
+`station`, `resize`, `qrz`).
 
 A typical assistant validation loop for a PR:
 `bridge_status` → `dump_tree filter=<your widget>` → `invoke` the
