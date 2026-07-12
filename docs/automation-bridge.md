@@ -128,7 +128,10 @@ contributors to self-verify UI changes before requesting review.
 **Tools exposed**: `bridge_status` (is the app up? which instance?),
 `dump_tree` (widget tree, with a `filter` arg to prune), `grab_widget`
 (PNG screenshot, returned inline to the model), `invoke` (click/toggle/
-setValue/…), `get_state` (`get` model snapshots), `shortcut`, and
+setValue/…), `get_state` (`get` model snapshots), `shortcut`, `get_log`
+(tail app log events — why an action didn't take), `connect` /
+`disconnect` (radio-connection lifecycle), `capture_audio` (RX audio
+tap capture), `floors` (per-pan noise/display floor in dBm), and
 `bridge_command` (raw escape hatch to every other verb below).
 
 A typical assistant validation loop for a PR:

@@ -86,6 +86,30 @@ def test_field_mapping():
     reqs = run_tool("dump_tree", {})
     check("dump_tree sends cmd=dumpTree", reqs[-1].get("cmd") == "dumpTree", str(reqs))
 
+    # Promoted first-class verbs (#4188 area 1) — the registry reads
+    # action/value/path; these must map exactly or the tool is dead.
+    r = run_tool("get_log", {"count": 50, "since": 7})[-1]
+    check("get_log → log tail with count+since",
+          r.get("cmd") == "log" and r.get("action") == "tail"
+          and r.get("value") == "50 since=7", str(r))
+
+    r = run_tool("connect", {"action": "ip", "value": "192.168.50.100"})[-1]
+    check("connect → cmd=connect action+value",
+          r.get("cmd") == "connect" and r.get("action") == "ip"
+          and r.get("value") == "192.168.50.100", str(r))
+
+    r = run_tool("disconnect", {})[-1]
+    check("disconnect → cmd=disconnect", r.get("cmd") == "disconnect", str(r))
+
+    r = run_tool("capture_audio",
+                 {"action": "start", "value": "3000 raw,post"})[-1]
+    check("capture_audio → cmd=audioCapture action+value",
+          r.get("cmd") == "audioCapture" and r.get("action") == "start"
+          and r.get("value") == "3000 raw,post", str(r))
+
+    r = run_tool("floors", {})[-1]
+    check("floors → cmd=floors", r.get("cmd") == "floors", str(r))
+
     reqs = run_tool("bridge_command", {"request": {"cmd": "whoami"}})
     check("bridge_command passes raw request", reqs[-1].get("cmd") == "whoami", str(reqs))
 
