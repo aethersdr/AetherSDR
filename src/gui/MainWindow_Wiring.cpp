@@ -3515,7 +3515,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             unsupportedBandReason = stackKeyResult.unsupportedReason;
         }
 
-        if (stackKey.isEmpty() && m_radioModel.declaredBands().contains(bandName)) {
+        if (stackKey.isEmpty()
+            && m_radioModel.declaredBands().contains(bandName, Qt::CaseInsensitive)) {
             // Radio-declared band (see RadioModel::declaredBands): the radio
             // told us it tunes this natively, so pass the declared name
             // through as the band-stack key — the declaring radio defines
@@ -3531,6 +3532,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             // `440`/`23cm` for the bands the model has no native slot for. A
             // declaring bridge must therefore honour both the bare Flex keys
             // and its declared tokens, per band.
+            //
+            // The same FIRST-wins rule means a user XVTR labelled e.g. "2m"
+            // out-ranks a gateway's declared "2m": resolveBandStackKey()
+            // resolves the XVTR to its X<n> key above and this fallthrough
+            // never runs. That is intentional and consistent with the
+            // XVTR-priority precedent already codified for native bands
+            // (#2342, above) — declared tokens do not override a same-named
+            // user XVTR (#4191, follow-up #2 from the #4027 review).
+            //
+            // The contains() match is CaseInsensitive so a declared-band
+            // selection arriving from a non-UI path (memory-channel recall,
+            // CAT) with off-canonical casing like "23CM" still matches the
+            // canonical BandDefs spelling parseDeclaredBands() stored; UI band
+            // buttons already emit canonical names (#4191, follow-up #3).
             stackKey = bandName;
         }
 

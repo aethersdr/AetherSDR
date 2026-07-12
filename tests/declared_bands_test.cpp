@@ -56,6 +56,15 @@ int main(int argc, char** argv)
     report("all-unknown -> empty list",
            parseDeclaredBands(QStringLiteral("999cm,banana,-1")).isEmpty());
 
+    // LF/MF (2200m / 630m) are non-declarable per #4027's non-goals even
+    // though they are kBands entries — a gateway can't render them as
+    // hardware-band buttons (#4191, follow-up #1).
+    report("LF/MF dropped (2200m,630m -> empty list)",
+           parseDeclaredBands(QStringLiteral("2200m,630m")).isEmpty());
+    report("LF/MF dropped, HF kept (2200m,40m,630m -> [40m])",
+           eq(parseDeclaredBands(QStringLiteral("2200m,40m,630m")),
+              {QStringLiteral("40m")}));
+
     // Dedup.
     report("dedup (440,440 -> [440])",
            eq(parseDeclaredBands(QStringLiteral("440,440")),
