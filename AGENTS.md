@@ -342,8 +342,8 @@ SmartSDR status decode now lives in `FlexBackend` behind typed deltas, and
 the models apply normalized signals. The amp (PGXL) and tuner (TGXL)
 accessory models followed in 2.4 — `AmpModel` was extracted from
 `RadioModel`, and their status decode and command encode now route through
-`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The remaining vendor headers are
-**not** relocated yet — step 2.4 landed the EB3 ratchet (above) that
+`FlexBackend` too (#4099, #4101, #4113, #4192, #4200). The remaining vendor
+headers are **not** relocated yet — step 2.4 landed the EB3 ratchet (above) that
 freezes today's above-seam vendor coupling and lets it be decoupled
 subsystem-by-subsystem. Converting a touchpoint still follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
