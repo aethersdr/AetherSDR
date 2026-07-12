@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
 #include <QMap>
 
 class QCheckBox;
@@ -11,7 +11,7 @@ namespace AetherSDR {
 
 class RadioModel;
 
-class SupportDialog : public QDialog {
+class SupportDialog : public PersistentDialog {
     Q_OBJECT
 
 public:

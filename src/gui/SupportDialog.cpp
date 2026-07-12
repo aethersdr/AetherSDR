@@ -1,4 +1,5 @@
 #include "SupportDialog.h"
+#include "FramelessMessageBox.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
@@ -11,7 +12,6 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
-#include <QMessageBox>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -31,10 +31,10 @@
 namespace AetherSDR {
 
 SupportDialog::SupportDialog(QWidget* parent)
-    : QDialog(parent)
+    : PersistentDialog(QStringLiteral("Support & Diagnostics"),
+                       QStringLiteral("SupportDialogGeometry"), parent)
 {
     theme::setContainer(this, QStringLiteral("dialog/support"));
-    setWindowTitle("Support & Diagnostics");
     setMinimumSize(600, 520);
     resize(680, 600);
     buildUI();
@@ -44,7 +44,7 @@ SupportDialog::SupportDialog(QWidget* parent)
 
 void SupportDialog::buildUI()
 {
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QVBoxLayout(bodyWidget());
     layout->setSpacing(8);
 
     // ── Diagnostic Logging group ──────────────────────────────────────────
@@ -219,7 +219,7 @@ void SupportDialog::resetSettings(QWidget* parent)
         "Continue?")
         .arg(QString("- %1").arg(resetPaths.join("\n- ")));
 
-    if (QMessageBox::question(parent, "Reset Settings", prompt,
+    if (FramelessMessageBox::question(parent, "Reset Settings", prompt,
             QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
         return;
     }
@@ -248,7 +248,7 @@ void SupportDialog::resetSettings(QWidget* parent)
         return;
     }
 
-    QMessageBox::warning(
+    FramelessMessageBox::warning(
         parent, "Reset Settings",
         QString(
             "Some files could not be removed.\n\n"
@@ -274,7 +274,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
     }
     QString bundlePath = SupportBundle::createBundle(radio);
     if (bundlePath.isEmpty()) {
-        QMessageBox::warning(parent, "Error",
+        FramelessMessageBox::warning(parent, "Error",
             "Failed to create support bundle.");
         return;
     }
@@ -335,7 +335,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
     QString prompt = kPromptTemplate.arg(version, qt, os, radioInfo);
     QApplication::clipboard()->setText(prompt);
 
-    QMessageBox dlg(parent);
+    FramelessMessageBox dlg(parent);
     dlg.setWindowTitle("AI-Assisted Bug Report");
     dlg.setIcon(QMessageBox::Information);
     dlg.setText(
@@ -390,7 +390,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         QFileInfo fi(bundlePath);
         QDesktopServices::openUrl(QUrl::fromLocalFile(fi.absolutePath()));
 
-        QMessageBox::information(parent, "Submit Bug Report",
+        FramelessMessageBox::information(parent, "Submit Bug Report",
             QString("Your browser and support folder have been opened.\n\n"
                     "1. Paste the AI's bug report into the GitHub form\n"
                     "2. Drag and drop the support bundle: %1")
@@ -398,7 +398,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
     }
 
     if (openedLLM) {
-        QMessageBox::information(parent, "Prompt Copied",
+        FramelessMessageBox::information(parent, "Prompt Copied",
             "The diagnostic prompt has been copied to your clipboard.\n\n"
             "Paste it into the AI, describe your issue, then come back\n"
             "and click \"Submit Bug Report\" to file it on GitHub.");
@@ -428,13 +428,13 @@ void SupportDialog::sendToSupport()
     setCursor(Qt::ArrowCursor);
 
     if (bundlePath.isEmpty()) {
-        QMessageBox::warning(this, "Support Bundle",
+        FramelessMessageBox::warning(this, "Support Bundle",
             "Failed to create support bundle.\n"
             "Check that the log directory is writable.");
         return;
     }
 
-    QMessageBox::information(this, "Support Bundle Created",
+    FramelessMessageBox::information(this, "Support Bundle Created",
         QString("Support bundle saved to:\n%1\n\n"
                 "Your email client will now open.\n"
                 "Please attach the bundle file and describe the issue.")

@@ -44,11 +44,9 @@ const char* kFindEditNoMatchStyle =
 HelpDialog::HelpDialog(const QString& windowTitle,
                        const QString& resourcePath,
                        QWidget* parent)
-    : QDialog(parent)
+    : PersistentDialog(windowTitle, QStringLiteral("HelpDialogGeometry"), parent)
 {
     theme::setContainer(this, QStringLiteral("dialog/help"));
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    setWindowTitle(windowTitle);
     buildUI(resourcePath);
 }
 
@@ -57,9 +55,10 @@ void HelpDialog::buildUI(const QString& resourcePath)
     resize(760, 680);
     setMinimumSize(520, 420);
 
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QVBoxLayout(bodyWidget());
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+    setBodyLayoutMargins(QMargins(), QMargins());
 
     auto* header = new QWidget(this);
     AetherSDR::ThemeManager::instance().applyStyleSheet(header, "background: {{color.background.0}};");

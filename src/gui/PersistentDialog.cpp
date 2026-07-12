@@ -68,8 +68,17 @@ void PersistentDialog::setFramelessMode(bool on)
 void PersistentDialog::applyBodyLayoutMargins()
 {
     if (m_body && m_body->layout()) {
-        m_body->layout()->setContentsMargins(9, m_framelessOn ? 7 : 9, 9, 9);
+        m_body->layout()->setContentsMargins(
+            m_framelessOn ? m_framelessBodyMargins : m_framedBodyMargins);
     }
+}
+
+void PersistentDialog::setBodyLayoutMargins(const QMargins& framed,
+                                            const QMargins& frameless)
+{
+    m_framedBodyMargins = framed;
+    m_framelessBodyMargins = frameless;
+    applyBodyLayoutMargins();
 }
 
 void PersistentDialog::showEvent(QShowEvent* event)

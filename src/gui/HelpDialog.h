@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
 #include <QString>
 
 class QLabel;
@@ -10,7 +10,7 @@ class QTextBrowser;
 
 namespace AetherSDR {
 
-class HelpDialog : public QDialog {
+class HelpDialog : public PersistentDialog {
     Q_OBJECT
 
 public:

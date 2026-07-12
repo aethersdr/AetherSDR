@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QMargins>
 
 class QCloseEvent;
 class QMoveEvent;
@@ -50,6 +51,10 @@ public:
 
     // Content goes here.  Subclasses install their own QLayout on this widget.
     QWidget* bodyWidget() const { return m_body; }
+    // Override the standard 9 px body inset for dialogs whose content owns a
+    // deliberate edge-to-edge or wider layout.  Call after installing the
+    // body layout; the values are also reapplied after runtime chrome toggles.
+    void setBodyLayoutMargins(const QMargins& framed, const QMargins& frameless);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -69,6 +74,8 @@ private:
     bool                     m_framelessOn{false};
     bool                     m_restoringGeometry{false};
     bool                     m_geometryRestored{false};
+    QMargins                 m_framedBodyMargins{9, 9, 9, 9};
+    QMargins                 m_framelessBodyMargins{9, 7, 9, 9};
 };
 
 } // namespace AetherSDR

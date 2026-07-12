@@ -1,6 +1,6 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
 #include <QJsonObject>
 #include <functional>
 
@@ -14,7 +14,7 @@ namespace AetherSDR {
 class RadioModel;
 class AudioEngine;
 
-class SliceTroubleshootingDialog : public QDialog {
+class SliceTroubleshootingDialog : public PersistentDialog {
     Q_OBJECT
 
 public:

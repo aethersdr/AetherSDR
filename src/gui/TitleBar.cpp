@@ -1,5 +1,7 @@
 #include "TitleBar.h"
+#include "FramelessMessageBox.h"
 #include "GuardedSlider.h"
+#include "PersistentDialog.h"
 #include "core/AppSettings.h"
 
 #include <QFrame>
@@ -977,7 +979,7 @@ void TitleBar::showFeatureRequestDialog()
             auto latestVer = VersionNumber::parse(latest);
             auto currentVer = VersionNumber::parse(QCoreApplication::applicationVersion());
             if (!latestVer.isNull() && currentVer < latestVer) {
-                auto answer = QMessageBox::warning(this, "Outdated Version",
+                auto answer = FramelessMessageBox::warning(this, "Outdated Version",
                     QString("<p>You are running <b>v%1</b> but <b>v%2</b> is available.</p>"
                             "<p>Your issue may already be fixed in the latest release. "
                             "Please update before filing a bug report.</p>"
@@ -1036,23 +1038,24 @@ void TitleBar::showFeatureRequestDialogImpl()
         "[Describe your feature or bug here in plain English]";
 
     // Reuse existing dialog if still open
-    static QPointer<QDialog> sDlg;
-    if (sDlg) {
-        sDlg->raise();
-        sDlg->activateWindow();
+    if (m_issueReporterDialog) {
+        m_issueReporterDialog->raise();
+        m_issueReporterDialog->activateWindow();
         return;
     }
 
-    auto* dlg = new QDialog(this);
-    sDlg = dlg;
-    dlg->setWindowTitle("AI-Assisted Issue Reporter");
+    auto* dlg = new PersistentDialog(QStringLiteral("AI-Assisted Issue Reporter"),
+                                     QStringLiteral("IssueReporterDialogGeometry"), this);
+    m_issueReporterDialog = dlg;
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: {{color.background.0}}; }");
     dlg->setMinimumWidth(620);
 
-    auto* vbox = new QVBoxLayout(dlg);
+    auto* vbox = new QVBoxLayout(dlg->bodyWidget());
     vbox->setSpacing(8);
     vbox->setContentsMargins(16, 16, 16, 16);
+    dlg->setBodyLayoutMargins(QMargins(16, 16, 16, 16),
+                              QMargins(16, 14, 16, 16));
 
     auto* header = new QLabel(
         "<h3 style='color:#c8d8e8;'>AI-Assisted Issue Reporter</h3>"
@@ -1141,6 +1144,13 @@ void TitleBar::showFeatureRequestDialogImpl()
     QApplication::clipboard()->setText(kPrompt);
 
     dlg->show();
+}
+
+void TitleBar::setChildDialogsFramelessMode(bool on)
+{
+    if (m_issueReporterDialog) {
+        m_issueReporterDialog->setFramelessMode(on);
+    }
 }
 
 void TitleBar::setDiscovering(bool active)

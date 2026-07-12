@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QString>
 #include <QVariantMap>
 #include <QWidget>
@@ -16,6 +17,8 @@ class QGraphicsOpacityEffect;
 class QPropertyAnimation;
 
 namespace AetherSDR {
+
+class PersistentDialog;
 
 class TitleBar : public QWidget {
     Q_OBJECT
@@ -85,6 +88,7 @@ signals:
 public:
     // Open the feature-request dialog.  Wired from Help → Submit your idea…
     void showFeatureRequestDialog();
+    void setChildDialogsFramelessMode(bool on);
 
 private:
     void markDragHandle(QWidget* widget);
@@ -116,6 +120,7 @@ private:
     QLabel*      m_dockLeftLbl{nullptr};
     QLabel*      m_dockRightLbl{nullptr};
     QLabel*      m_popOutLbl{nullptr};
+    QPointer<PersistentDialog> m_issueReporterDialog;
     QFrame*      m_dockSep{nullptr};
     bool         m_minimalMode{false};
     bool         m_windowMoveActive{false};

@@ -1,0 +1,105 @@
+#include "FramelessMessageBox.h"
+
+#include "FramelessResizer.h"
+#include "FramelessWindowTitleBar.h"
+#include "core/AppSettings.h"
+
+#include <QLayout>
+#include <QResizeEvent>
+#include <QShowEvent>
+
+namespace AetherSDR {
+
+FramelessMessageBox::FramelessMessageBox(QWidget* parent)
+    : QMessageBox(parent)
+{
+    m_originalMargins = layout()->contentsMargins();
+    m_titleBar = new FramelessWindowTitleBar(windowTitle(), this);
+    m_titleBar->raise();
+    FramelessResizer::install(this);
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+}
+
+void FramelessMessageBox::setFramelessMode(bool on)
+{
+    m_framelessOn = on;
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
+    flags.setFlag(Qt::FramelessWindowHint, on);
+    setWindowFlags(flags);
+    if (wasVisible) {
+        setGeometry(geom);
+    }
+
+    m_titleBar->setVisible(on);
+    const int titleHeight = on ? m_titleBar->sizeHint().height() : 0;
+    layout()->setContentsMargins(m_originalMargins.left(),
+                                 m_originalMargins.top() + titleHeight,
+                                 m_originalMargins.right(),
+                                 m_originalMargins.bottom());
+    positionTitleBar();
+    if (wasVisible) {
+        show();
+    }
+}
+
+void FramelessMessageBox::resizeEvent(QResizeEvent* event)
+{
+    QMessageBox::resizeEvent(event);
+    positionTitleBar();
+}
+
+void FramelessMessageBox::showEvent(QShowEvent* event)
+{
+    m_titleBar->setTitleText(windowTitle());
+    QMessageBox::showEvent(event);
+    positionTitleBar();
+}
+
+void FramelessMessageBox::positionTitleBar()
+{
+    if (m_titleBar) {
+        m_titleBar->setGeometry(0, 0, width(), m_titleBar->sizeHint().height());
+        m_titleBar->raise();
+    }
+}
+
+QMessageBox::StandardButton FramelessMessageBox::showMessage(
+    Icon icon, QWidget* parent, const QString& title, const QString& text,
+    StandardButtons buttons, StandardButton defaultButton)
+{
+    FramelessMessageBox box(parent);
+    box.setIcon(icon);
+    box.setWindowTitle(title);
+    box.setText(text);
+    box.setStandardButtons(buttons);
+    if (defaultButton != NoButton) {
+        box.setDefaultButton(defaultButton);
+    }
+    return static_cast<StandardButton>(box.exec());
+}
+
+QMessageBox::StandardButton FramelessMessageBox::information(
+    QWidget* parent, const QString& title, const QString& text,
+    StandardButtons buttons, StandardButton defaultButton)
+{
+    return showMessage(Information, parent, title, text, buttons, defaultButton);
+}
+
+QMessageBox::StandardButton FramelessMessageBox::warning(
+    QWidget* parent, const QString& title, const QString& text,
+    StandardButtons buttons, StandardButton defaultButton)
+{
+    return showMessage(Warning, parent, title, text, buttons, defaultButton);
+}
+
+QMessageBox::StandardButton FramelessMessageBox::question(
+    QWidget* parent, const QString& title, const QString& text,
+    StandardButtons buttons, StandardButton defaultButton)
+{
+    return showMessage(Question, parent, title, text, buttons, defaultButton);
+}
+
+} // namespace AetherSDR

@@ -1070,7 +1070,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Getting Started...", this, [this]() {
         auto* dlg = new HelpDialog("Getting Started", ":/help/getting-started.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1078,7 +1078,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("AetherSDR Help...", this, [this]() {
         auto* dlg = new HelpDialog("AetherSDR Help", ":/help/aethersdr-help.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1102,7 +1102,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Understanding Noise Cancellation...", this, [this]() {
         auto* dlg = new HelpDialog("Understanding Noise Cancellation", ":/help/understanding-noise-cancellation.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1110,7 +1110,7 @@ void MainWindow::buildMenuBar()
     auto* controlsHelpAction = helpMenu->addAction("Configuring AetherSDR Controls...", this, [this]() {
         auto* dlg = new HelpDialog("Configuring AetherSDR Controls", ":/help/configuring-aethersdr-controls.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1119,7 +1119,7 @@ void MainWindow::buildMenuBar()
     auto* dataModesAction = helpMenu->addAction("Configuring Data Modes...", this, [this]() {
         auto* dlg = new HelpDialog("Configuring Data Modes", ":/help/understanding-data-modes.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1148,7 +1148,7 @@ void MainWindow::buildMenuBar()
     helpMenu->addAction("Contributing to AetherSDR...", this, [this]() {
         auto* dlg = new HelpDialog("Contributing to AetherSDR", ":/help/contributing-to-aethersdr.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
@@ -1162,21 +1162,28 @@ void MainWindow::buildMenuBar()
         auto* dlg = new SupportDialog(this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setRadioModel(&m_radioModel);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
         dlg->show();
         dlg->raise();
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
-        SliceTroubleshootingDialog dlg(&m_radioModel, m_audio, this,
-                                       [this]() { return buildControlDevicesSnapshot(); },
-                                       [this]() {
-                                           QJsonObject renderer;
-                                           renderer["available"] = true;
-                                           renderer["description"] = spectrum()
-                                               ? spectrum()->rendererDescription()
-                                               : QStringLiteral("No active pan");
-                                           return renderer;
-                                       });
-        dlg.exec();
+        auto* dlg = new SliceTroubleshootingDialog(
+            &m_radioModel, m_audio, this,
+            [this]() { return buildControlDevicesSnapshot(); },
+            [this]() {
+                QJsonObject renderer;
+                renderer["available"] = true;
+                renderer["description"] = spectrum()
+                    ? spectrum()->rendererDescription()
+                    : QStringLiteral("No active pan");
+                return renderer;
+            });
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->setWindowModality(Qt::ApplicationModal);
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
     });
     // "Reset Settings" was previously buried inside the Support dialog too.
     // NoRole is required: macOS would otherwise treat the word "Settings" as a
@@ -1190,15 +1197,18 @@ void MainWindow::buildMenuBar()
     });
     helpMenu->addSeparator();
     helpMenu->addAction("About AetherSDR", this, [this]{
-        auto* dlg = new QDialog(this);
+        auto* dlg = new PersistentDialog(QStringLiteral("About AetherSDR"),
+                                         QStringLiteral("AboutDialogGeometry"), this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setWindowTitle("About AetherSDR");
         dlg->setFixedWidth(380);
         AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: {{color.background.0}}; }");
 
-        auto* vbox = new QVBoxLayout(dlg);
+        auto* vbox = new QVBoxLayout(dlg->bodyWidget());
         vbox->setSpacing(8);
         vbox->setContentsMargins(16, 16, 16, 16);
+        dlg->setBodyLayoutMargins(QMargins(16, 16, 16, 16),
+                                  QMargins(16, 14, 16, 16));
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
 
         // Icon
         auto* iconLbl = new QLabel;

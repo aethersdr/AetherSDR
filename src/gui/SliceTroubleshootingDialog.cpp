@@ -383,19 +383,17 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
                                                        QWidget* parent,
                                                        SnapshotProvider controlDevicesProvider,
                                                        SnapshotProvider rendererProvider)
-    : QDialog(parent)
+    : PersistentDialog(QStringLiteral("Slice Troubleshooting"),
+                       QStringLiteral("SliceTroubleshootingDialogGeometry"), parent)
     , m_model(model)
     , m_audio(audio)
     , m_controlDevicesProvider(std::move(controlDevicesProvider))
     , m_rendererProvider(std::move(rendererProvider))
 {
     theme::setContainer(this, QStringLiteral("dialog/sliceTroubleshoot"));
-    setWindowTitle("Slice Troubleshooting");
     setMinimumSize(920, 720);
     resize(980, 760);
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-
-    auto* root = new QVBoxLayout(this);
+    auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(8);
 
     auto* intro = new QLabel(

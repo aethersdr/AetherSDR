@@ -145,6 +145,7 @@
 #include "MeterSlider.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
+#include "FramelessMessageBox.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1159,7 +1160,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_updateChecker = new UpdateChecker(this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this, [this](const QString& ver) {
         const QString current = QCoreApplication::applicationVersion();
-        QMessageBox box(this);
+        FramelessMessageBox box(this);
         box.setWindowTitle("AetherSDR Update Available");
         box.setIcon(QMessageBox::Information);
         box.setText(QString("AetherSDR v%1 is available.").arg(ver));
@@ -1177,11 +1178,11 @@ MainWindow::MainWindow(QWidget* parent)
             QDesktopServices::openUrl(QUrl(UpdateChecker::kReleasesPageUrl));
     });
     connect(m_updateChecker, &UpdateChecker::upToDate, this, [this](const QString& ver) {
-        QMessageBox::information(this, "Check for Updates",
+        FramelessMessageBox::information(this, "Check for Updates",
             QString("AetherSDR is up to date (v%1).").arg(ver));
     });
     connect(m_updateChecker, &UpdateChecker::checkFailed, this, [this]() {
-        QMessageBox::warning(this, "Check for Updates",
+        FramelessMessageBox::warning(this, "Check for Updates",
             "Could not reach GitHub. Check your connection and try again.");
     });
 
@@ -7518,6 +7519,8 @@ void MainWindow::setFramelessWindow(bool on)
         m_appletPanel->containerManager()->setFramelessMode(on);
     if (m_connPanel)
         m_connPanel->setFramelessMode(on);
+    if (m_titleBar)
+        m_titleBar->setChildDialogsFramelessMode(on);
     // RadioSetupDialog frameless propagation flows through the
     // m_persistentDialogs loop below (#2781) — all four entry points use
     // showOrRaisePersistent so the dialog is always tracked there.
