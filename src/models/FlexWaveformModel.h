@@ -35,9 +35,11 @@ public:
 
     // ── Accessors ─────────────────────────────────────────────────────────────
     const QList<FlexWaveformEntry>& waveforms()    const { return m_waveforms; }
+    bool    wfpStatusSeen() const { return m_wfpStatusSeen; }
     bool    wfpPowered()   const { return m_wfpPowered; }
     bool    wfpReady()     const { return m_wfpReady; }
     QString wfpIpAddress() const { return m_wfpIpAddress; }
+    const QList<QMap<QString, QString>>& statusReports() const { return m_statusReports; }
 
     // ── Status parsing (called from RadioModel::onStatusReceived) ─────────────
     // object == "waveform"
@@ -46,6 +48,8 @@ public:
     void handleContainerStatus(const QMap<QString, QString>& kvs);
     // object == "waveform wfp_status"
     void handleWfpStatus(const QMap<QString, QString>& kvs);
+    // object == "waveform status"
+    void handleGenericStatus(const QMap<QString, QString>& kvs);
 
     void clear();
 
@@ -58,13 +62,17 @@ public:
 signals:
     void waveformsChanged();
     void wfpStatusChanged();
+    void statusReportsChanged();
+    void genericStatusReceived(const QMap<QString, QString>& report);
     void commandReady(const QString& cmd);
 
 private:
     QList<FlexWaveformEntry> m_waveforms;
+    bool    m_wfpStatusSeen{false};
     bool    m_wfpPowered{false};
     bool    m_wfpReady{false};
     QString m_wfpIpAddress;
+    QList<QMap<QString, QString>> m_statusReports;
 };
 
 } // namespace AetherSDR

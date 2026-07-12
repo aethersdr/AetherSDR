@@ -81,7 +81,7 @@ class QsoRecorder;
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
 //                                     pan <panId|active> | pans |
-//                                     flags [sliceId|all] | kiwi.
+//                                     flags [sliceId|all] | waveforms | kiwi.
 //                                     With a trailing property name,
 //                                     returns just that field.
 //                                     Assert on state without screenshots.
@@ -91,6 +91,12 @@ class QsoRecorder;
 //                                     method, per-module enabled/available, and
 //                                     tuning values — the client-side counterpart
 //                                     to the radio-side nr/nb/anf in `get slice`.
+//   waveform start dstar          -> start the local AetherDV service (no TX).
+//   waveform stop                 -> stop the local service.
+//   waveform resync               -> request fresh raw slice mode lists.
+//   waveform unregister <name>    -> remove a radio runtime registration;
+//                                     response and raw mode-list verification
+//                                     are exposed through `get waveforms`.
 //   connect list                   -> list currently discovered local radios
 //   connect show                   -> show/raise the Connect to Radio dialog
 //   connect hide                   -> hide the Connect to Radio dialog
@@ -451,6 +457,10 @@ private:
                                const QString& path) const;
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
+    // Digital-voice helper lifecycle and non-keying radio waveform maintenance.
+    // `unregister` is generic by design; legacy names are not retained in the
+    // production cleanup path.
+    QJsonObject doWaveform(const QString& action, const QString& value);
     QJsonObject doConnect(const QString& action, const QString& arg, QLocalSocket* sock);
     QJsonObject doConnectDialog(const QString& action);
     QJsonObject doDisconnect();
@@ -558,6 +568,7 @@ private:
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
+    QJsonObject m_lastWaveformCommand;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on

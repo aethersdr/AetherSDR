@@ -1,0 +1,3 @@
+# AetherSDR - ThumbDV/DV3000U serial access for the active local user.
+# FTDI VID/PID 0403:6015 is the FT230X bridge used by supported ThumbDV units.
+ACTION!="remove", SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", TAG+="uaccess"

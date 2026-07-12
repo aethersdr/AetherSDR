@@ -172,6 +172,7 @@ jobs:
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
             "-DENABLE_NVIDIA_AFX=ON",
+            "-DREQUIRE_SERIALPORT=ON",
             "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
           )
@@ -189,6 +190,9 @@ jobs:
 
       - name: Build
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Test ThumbDV portability paths
+        run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure
 
       - name: sccache stats
         if: always()

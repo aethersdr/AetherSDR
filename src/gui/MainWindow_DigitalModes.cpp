@@ -40,6 +40,9 @@
 #include "core/PipeWireAudioBridge.h"
 #endif
 #include "core/AppSettings.h"
+#include "core/DigitalVoiceFeature.h"
+#include "core/DigitalVoiceWaveformProcess.h"
+#include "core/DigitalVoiceWaveformSettings.h"
 #include "core/aprs/AprsSettings.h"
 #include "core/LogManager.h"
 #include "core/WfmDemodulator.h"
@@ -56,6 +59,33 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::scheduleDigitalVoiceAutoStart()
+{
+    if (!kLocalDigitalVoiceWaveformAvailable
+        || !DigitalVoiceWaveformSettings::autoStart()) {
+        return;
+    }
+
+    QTimer::singleShot(3000, this, [this] {
+        // The helper must reach the radio directly; a SmartLink/WAN session's
+        // advertised LAN address is not a usable transport endpoint.
+        if (!m_radioModel.isConnected() || m_radioModel.isWan()) {
+            return;
+        }
+        m_radioModel.dstarModel().start(
+            m_radioModel.radioAddress(), m_radioModel.callsign());
+    });
+}
+
+void MainWindow::stopDigitalVoiceService(bool waitForExit)
+{
+    if (waitForExit) {
+        DigitalVoiceWaveformProcess::instance().stopAndWait();
+    } else {
+        DigitalVoiceWaveformProcess::instance().stop();
+    }
+}
 
 void MainWindow::showAx25HfPacketDecodeDialog()
 {

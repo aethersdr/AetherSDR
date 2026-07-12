@@ -20,6 +20,7 @@
 #include "core/tnc/KissTncServer.h"
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
+#include "gui/DStarModemPage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -387,6 +388,8 @@ QPushButton* tabButton(const QString& text, bool active, QWidget* parent)
     button->setChecked(active);
     button->setEnabled(active);
     button->setFlat(true);
+    button->setMinimumWidth(0);
+    button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     return button;
 }
 
@@ -850,20 +853,24 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_kissTab = tabButton(QStringLiteral("KISS TNC"), false, tabsFrame);
     m_terminalTab = tabButton(QStringLiteral("Terminal"), false, tabsFrame);
     m_mailboxTab = tabButton(QStringLiteral("Mailbox"), false, tabsFrame);
+    m_dstarTab = tabButton(QStringLiteral("D-STAR"), false, tabsFrame);
     m_ax25Tab->setEnabled(true);
     m_kissTab->setEnabled(true);
     m_terminalTab->setEnabled(true);
     m_mailboxTab->setEnabled(true);
+    m_dstarTab->setEnabled(true);
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
     tabGroup->addButton(m_kissTab, 1);
     tabGroup->addButton(m_terminalTab, 2);
     tabGroup->addButton(m_mailboxTab, 3);
+    tabGroup->addButton(m_dstarTab, 4);
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_kissTab, 1);
     tabs->addWidget(m_terminalTab, 1);
     tabs->addWidget(m_mailboxTab, 1);
+    tabs->addWidget(m_dstarTab, 1);
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
@@ -876,6 +883,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // table. The raw decode log and status row below the stack are shared by
     // all tabs.
     auto* ax25Page = new QWidget(m_tabStack);
+    m_aprsPage = ax25Page;
     auto* ax25PageLayout = new QVBoxLayout(ax25Page);
     ax25PageLayout->setContentsMargins(0, 0, 0, 0);
     ax25PageLayout->setSpacing(10);
@@ -952,9 +960,12 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // KISS TNC page (built lazily into the same stack).
     m_tabStack->addWidget(buildKissTncPage());
     // TNC Terminal page (connected-mode AX.25 client).
-    m_tabStack->addWidget(buildTerminalPage());
+    m_terminalPage = buildTerminalPage();
+    m_tabStack->addWidget(m_terminalPage);
     // Mailbox (PMS) page.
     m_tabStack->addWidget(buildMailboxPage());
+    m_dstarPage = new DStarModemPage(m_radio, m_tabStack);
+    m_tabStack->addWidget(m_dstarPage);
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     m_logFrame = logFrame;
@@ -973,6 +984,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // Slim status bar: MODEM STATUS, GAIN STAGE and PACKET ACTIVITY inline in a
     // single thin strip rather than three tall stacked panels.
     auto* statusBar = panel(QStringLiteral("StatusFrame"), bodyWidget());
+    m_statusBar = statusBar;
     auto* statusBarLayout = new QHBoxLayout(statusBar);
     statusBarLayout->setContentsMargins(14, 6, 14, 6);
     statusBarLayout->setSpacing(10);
@@ -2799,13 +2811,18 @@ void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
     // Activity Debug is on (click the activity trace to toggle), so the
     // station table gets the full viewport in normal operation. Other tabs
     // keep the log panel below their controls.
-    const bool terminal = (index == 2);
-    const bool aprs = (index == 0);
-    const bool logVisible = !terminal && (!aprs || m_diagnosticsDebugEnabled);
+    QWidget* page = m_tabStack ? m_tabStack->widget(index) : nullptr;
+    const bool terminal = page == m_terminalPage;
+    const bool dstar = page == m_dstarPage;
+    const bool aprs = page == m_aprsPage;
+    const bool logVisible = !terminal && !dstar
+        && (!aprs || m_diagnosticsDebugEnabled);
     if (m_logFrame)
         m_logFrame->setVisible(logVisible);
     if (m_txFrame)
-        m_txFrame->setVisible(m_diagnosticsDebugEnabled);
+        m_txFrame->setVisible(!dstar && m_diagnosticsDebugEnabled);
+    if (m_statusBar)
+        m_statusBar->setVisible(!dstar);
     if (auto* root = qobject_cast<QVBoxLayout*>(bodyWidget()->layout())) {
         root->setStretchFactor(m_tabStack, !logVisible ? 1 : (aprs ? 3 : 0));
         if (m_logFrame)

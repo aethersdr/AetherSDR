@@ -62,6 +62,7 @@ public:
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
+    void sendSliceWaveformCommand(int sliceId, const QString& command);
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;

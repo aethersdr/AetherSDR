@@ -25,6 +25,7 @@ class SliceModel : public QObject {
 
 public:
     explicit SliceModel(int id, QObject* parent = nullptr);
+    ~SliceModel() override;
 
     // Getters
     int     sliceId()    const { return m_id; }
@@ -351,6 +352,7 @@ signals:
     // output goes through the TX-inhibit-guarded slice sink. (The other slice
     // commands still use commandReady until they convert.)
     void modeChangeRequested(const QString& mode);
+    void digitalVoiceSliceDisplaced(int sliceId, const QString& previousMode);
 
 public:
     // Filter polarity families (#3434): the single mode→family mapping every
@@ -369,6 +371,7 @@ private:
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")
     double  m_frequency{0.0};
     QString m_mode{"USB"};
+    QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;
     int     m_filterLow{-1500};
     int     m_filterHigh{1500};

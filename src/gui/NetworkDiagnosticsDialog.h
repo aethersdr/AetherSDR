@@ -2,6 +2,7 @@
 
 #include "PersistentDialog.h"
 #include "core/PanadapterStream.h"
+#include "models/DigitalVoiceWaveformHistory.h"
 
 #include <QComboBox>
 #include <QFile>
@@ -19,6 +20,7 @@ class QPlainTextEdit;
 class QPushButton;
 class QTableWidget;
 class QLineEdit;
+class QTreeWidgetItem;
 
 namespace AetherSDR {
 
@@ -56,6 +58,26 @@ struct NetworkDiagnosticsSample {
     quint16 audioPacketClassCode{0};
     int audioStreamCount{0};
     int  adaptiveFpsCap{0};      // 0 = throttle inactive
+    bool digitalVoiceWaveformValid{false};
+    bool digitalVoiceRxValid{false};
+    bool digitalVoiceTxValid{false};
+    int digitalVoiceWaveformObservationCount{0};
+    int digitalVoiceTxObservationCount{0};
+    double digitalVoiceRxSampleRateHz{0.0};
+    double digitalVoiceVitaGapsPerSecond{0.0};
+    double digitalVoiceSourceBlocksPerSecond{0.0};
+    double digitalVoiceTurnaroundMeanUs{0.0};
+    quint64 digitalVoiceTurnaroundMaxUs{0};
+    quint32 digitalVoiceQueueMax{0};
+    double digitalVoiceTxSampleRateHz{0.0};
+    double digitalVoiceTxVitaGapsPerSecond{0.0};
+    quint32 digitalVoiceTxNullFrames{0};
+    quint32 digitalVoiceTxPcmClips{0};
+    quint32 digitalVoiceTxPcmInvalid{0};
+    quint32 digitalVoiceTxSendFailures{0};
+    quint32 digitalVoiceTxQueueMax{0};
+    quint32 digitalVoiceTxTailSamples{0};
+    quint64 digitalVoiceTxTailUs{0};
 };
 
 class NetworkDiagnosticsHistory : public QObject {
@@ -72,6 +94,7 @@ public:
     NetworkDiagnosticsSample latestSample() const;
     const QVector<ThrottleEvent>& throttleEvents() const { return m_throttleEvents; }
     int throttleSessionCount() const { return m_throttleSessionCount; }
+    bool hasDigitalVoiceWaveformTelemetry() const { return m_hasDigitalVoiceWaveformTelemetry; }
 
 private:
     void sampleNow();
@@ -90,6 +113,8 @@ private:
     QVector<ThrottleEvent> m_throttleEvents;
     int    m_throttleSessionCount{0};
     int    m_currentFpsCap{0};  // tracks latest state for sampleNow()
+    DigitalVoiceWaveformHistoryTracker m_digitalVoiceWaveformHistory;
+    bool m_hasDigitalVoiceWaveformTelemetry{false};
 };
 
 class NetworkDiagnosticsDialog : public PersistentDialog {
@@ -144,6 +169,8 @@ private:
     QTimer      m_refreshTimer;
     QTimer      m_logRefreshTimer;
     QComboBox*  m_rangeCombo{nullptr};
+    QWidget* m_digitalVoiceWaveformTab{nullptr};
+    QTreeWidgetItem* m_digitalVoiceWaveformNavigationItem{nullptr};
 
     QLabel* m_statusLabel;
     QLabel* m_targetIpLabel;
@@ -187,6 +214,16 @@ private:
     QLabel* m_overviewLatencyValue{nullptr};
     QLabel* m_overviewLossValue{nullptr};
     QLabel* m_overviewAudioValue{nullptr};
+    QLabel* m_digitalVoiceWaveformModeLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformHealthLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformRateLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformGapLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformSourceLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformTurnaroundLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformQueueLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformTxRateLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformTxQualityLabel{nullptr};
+    QLabel* m_digitalVoiceWaveformTxTailLabel{nullptr};
 
     TimeSeriesGraphWidget* m_overviewLatencyGraph{nullptr};
     TimeSeriesGraphWidget* m_overviewLossGraph{nullptr};
@@ -198,6 +235,8 @@ private:
     TimeSeriesGraphWidget* m_audioGraph{nullptr};
     TimeSeriesGraphWidget* m_audioFeedGraph{nullptr};
     TimeSeriesGraphWidget* m_fpsCapGraph{nullptr};  // Rates tab: adaptive fps-cap step function
+    TimeSeriesGraphWidget* m_digitalVoiceWaveformRateGraph{nullptr};
+    TimeSeriesGraphWidget* m_digitalVoiceWaveformErrorGraph{nullptr};
     QTableWidget* m_audioStreamsTable{nullptr};
 
     // Adaptive-throttle diagnostics UI

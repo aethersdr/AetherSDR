@@ -1,4 +1,5 @@
 #include "SliceModel.h"
+#include "core/DigitalVoiceModeRegistry.h"
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
 
@@ -14,6 +15,11 @@ SliceModel::SliceModel(int id, QObject* parent)
     m_lockedFeedbackTimer.setInterval(kLockedFeedbackMs);
     connect(&m_lockedFeedbackTimer, &QTimer::timeout,
             this, [this] { setLockedFeedbackActive(false); });
+}
+
+SliceModel::~SliceModel()
+{
+    DigitalVoiceModeRegistry::instance().releaseSlice(m_id);
 }
 
 void SliceModel::setLockedFeedbackActive(bool on)
@@ -101,7 +107,47 @@ void SliceModel::tuneAndRecenter(double mhz)
 
 void SliceModel::setMode(const QString& mode)
 {
-    if (m_mode == mode) return;
+    const std::optional<DigitalVoiceModeId> requestedMode =
+        DigitalVoiceModeRegistry::modeForRadioMode(mode);
+    if (m_mode == mode) {
+        if (requestedMode.has_value()) {
+            const DigitalVoiceModeDescriptor& descriptor =
+                DigitalVoiceModeRegistry::descriptor(requestedMode.value());
+            const QString previousMode = m_modeBeforeDigitalVoice.isEmpty()
+                ? descriptor.underlyingMode
+                : m_modeBeforeDigitalVoice;
+            QString error;
+            if (!DigitalVoiceModeRegistry::instance().claimSlice(
+                    requestedMode.value(), m_id, previousMode, &error)) {
+                qWarning().noquote()
+                    << "SliceModel: restored digital-voice mode rejected:" << error;
+            }
+        }
+        return;
+    }
+
+    if (requestedMode.has_value()) {
+        const QString previousMode =
+            DigitalVoiceModeRegistry::modeForRadioMode(m_mode).has_value()
+            ? DigitalVoiceModeRegistry::descriptor(requestedMode.value()).underlyingMode
+            : m_mode;
+        std::optional<DigitalVoiceSliceClaim> displaced;
+        QString error;
+        if (!DigitalVoiceModeRegistry::instance().transferSlice(
+                requestedMode.value(), m_id, previousMode, &displaced, &error)) {
+            qWarning().noquote() << "SliceModel: digital-voice mode rejected:" << error;
+            return;
+        }
+        if (displaced.has_value()) {
+            emit digitalVoiceSliceDisplaced(
+                displaced->sliceId, displaced->previousMode);
+        }
+        m_modeBeforeDigitalVoice = previousMode;
+    } else if (DigitalVoiceModeRegistry::modeForRadioMode(m_mode).has_value()) {
+        DigitalVoiceModeRegistry::instance().releaseSlice(m_id);
+        m_modeBeforeDigitalVoice.clear();
+    }
+
     m_mode = mode;
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
     // and routes it through the TX-inhibit-guarded slice sink.
@@ -884,7 +930,42 @@ void SliceModel::applyChanges(const SliceDelta& d)
     }
     if (d.mode.has_value()) {
         const QString m = *d.mode;
-        if (m_mode != m) {
+        const std::optional<DigitalVoiceModeId> previousMode =
+            DigitalVoiceModeRegistry::modeForRadioMode(m_mode);
+        const std::optional<DigitalVoiceModeId> incomingMode =
+            DigitalVoiceModeRegistry::modeForRadioMode(m);
+        bool acceptIncomingMode = true;
+        if (incomingMode.has_value()) {
+            const DigitalVoiceModeDescriptor& descriptor =
+                DigitalVoiceModeRegistry::descriptor(incomingMode.value());
+            const QString restoreMode = !m_modeBeforeDigitalVoice.isEmpty()
+                ? m_modeBeforeDigitalVoice
+                : (previousMode.has_value() ? descriptor.underlyingMode : m_mode);
+            QString error;
+            if (!DigitalVoiceModeRegistry::instance().claimSlice(
+                    incomingMode.value(), m_id, restoreMode, &error)) {
+                qWarning().noquote()
+                    << "SliceModel: radio reported conflicting digital-voice slice:"
+                    << error;
+                acceptIncomingMode = false;
+                const QString correctedMode = previousMode.has_value()
+                    ? restoreMode
+                    : m_mode;
+                if (m_mode != correctedMode) {
+                    m_mode = correctedMode;
+                    modeChanged_ = true;
+                }
+                m_modeBeforeDigitalVoice.clear();
+                emit modeChangeRequested(correctedMode);
+            } else if (!previousMode.has_value()) {
+                m_modeBeforeDigitalVoice = restoreMode;
+            }
+        } else if (previousMode.has_value()) {
+            DigitalVoiceModeRegistry::instance().releaseSlice(m_id);
+            m_modeBeforeDigitalVoice.clear();
+        }
+
+        if (acceptIncomingMode && m_mode != m) {
             m_mode = m;
             modeChanged_ = true;
         }

@@ -16,6 +16,23 @@ namespace AetherSDR {
 // pan/slice/meter/transmit decoders below (one overloaded carry() family).
 using namespace flexkv;
 
+namespace {
+
+QStringList uniqueCommaList(const QString& value)
+{
+    QStringList result;
+    const QStringList parts = value.split(',', Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        const QString item = part.trimmed();
+        if (!item.isEmpty() && !result.contains(item)) {
+            result.append(item);
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 FlexBackend::FlexBackend(QObject* parent)
     : IRadioBackend(parent)
 {
@@ -174,6 +191,16 @@ void FlexBackend::setSliceMode(int sliceId, const QString& mode)
 void FlexBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 {
     sendSlice(QStringLiteral("filt %1 %2 %3").arg(sliceId).arg(lowHz).arg(highHz));
+}
+
+void FlexBackend::sendSliceWaveformCommand(int sliceId, const QString& command)
+{
+    if (sliceId < 0 || command.trimmed().isEmpty()) {
+        return;
+    }
+    sendSlice(QStringLiteral("slice waveform_cmd %1 %2")
+                  .arg(sliceId)
+                  .arg(command));
 }
 
 void FlexBackend::setKeying(bool key)
@@ -457,8 +484,9 @@ void FlexBackend::decodeSliceStatus(int sliceId, const QMap<QString, QString>& k
     carry(kvs, "mode", d.mode);
     carry(kvs, "filter_lo", d.filterLow);
     carry(kvs, "filter_hi", d.filterHigh);
-    if (kvs.contains(QStringLiteral("mode_list")))
-        d.modeList = kvs.value(QStringLiteral("mode_list")).split(',', Qt::SkipEmptyParts);
+    if (kvs.contains(QStringLiteral("mode_list"))) {
+        d.modeList = uniqueCommaList(kvs.value(QStringLiteral("mode_list")));
+    }
 
     // Core state
     carry(kvs, "active", d.active);

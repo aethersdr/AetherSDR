@@ -34,6 +34,7 @@ class AprsMessagesDialog;
 class AprsMessenger;
 class AprsStationList;
 class AudioEngine;
+class DStarModemPage;
 class HeardList;
 class KissTncServer;
 #ifdef HAVE_MQTT
@@ -186,6 +187,10 @@ private:
     QStackedWidget* m_tabStack{nullptr};
     QAbstractButton* m_ax25Tab{nullptr};
     QAbstractButton* m_kissTab{nullptr};
+    QAbstractButton* m_dstarTab{nullptr};
+    QWidget* m_aprsPage{nullptr};
+    QWidget* m_terminalPage{nullptr};
+    DStarModemPage* m_dstarPage{nullptr};
 #ifdef HAVE_MQTT
     QPointer<MqttClient> m_mqtt;
 #endif
@@ -198,6 +203,7 @@ private:
     QWidget* m_txFrame{nullptr};
     QTextEdit* m_log{nullptr};
     QWidget* m_logFrame{nullptr};
+    QWidget* m_statusBar{nullptr};
     QLabel* m_modemStatusDot{nullptr};
     QLabel* m_modemStatusValue{nullptr};
     QLabel* m_gainStageDot{nullptr};

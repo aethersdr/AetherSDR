@@ -6,6 +6,7 @@
 #include "InteractionSettings.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "models/RadioModel.h"
@@ -535,8 +536,9 @@ void RxApplet::buildUI()
         // Mode selector combo
         m_modeCombo = new GuardedComboBox;
         m_modeCombo->setFixedHeight(20);
-        m_modeCombo->addItems({"USB", "LSB", "CW", "AM", "SAM", "FM",
-                               "NFM", "DFM", "DIGU", "DIGL", "RTTY"});
+        m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(
+            {"USB", "LSB", "CW", "AM", "SAM", "FM",
+             "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"}));
 #ifdef HAVE_RADE
         m_modeCombo->addItem("RADE");
 #endif
@@ -2111,7 +2113,7 @@ void RxApplet::connectSlice(SliceModel* s)
         QSignalBlocker b(m_modeCombo);
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
-        m_modeCombo->addItems(modes);
+        m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(modes));
 #ifdef HAVE_RADE
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");
@@ -2123,7 +2125,7 @@ void RxApplet::connectSlice(SliceModel* s)
         QSignalBlocker b(m_modeCombo);
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
-        m_modeCombo->addItems(s->modeList());
+        m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(s->modeList()));
 #ifdef HAVE_RADE
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");

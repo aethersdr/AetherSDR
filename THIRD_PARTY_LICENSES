@@ -307,3 +307,53 @@ Redistributed / downloaded components:
             The full license texts ship inside the downloaded pack
             (licenses/ + NOTICE.txt) and the user must accept them on first use.
   Source:   https://developer.nvidia.com/maxine  (NGC: nvidia/maxine)
+
+
+18. SmartSDR-DSP ThumbDV Waveform Helper
+-----------------------------------------
+Bundled at third_party/smartsdr-dsp/ as a local helper executable for D-Star
+waveform operation with a ThumbDV/DV3000U attached to the user's computer. The
+import is trimmed to the ThumbDV waveform runtime sources from the public
+`thumbDV_support` branch. The historical FTDI D2XX header, static library,
+Windows GUI, IDE files, and packaged `.ssdr_waveform` binary are not bundled.
+AetherSDR replaces the D2XX calls used by the helper with a POSIX termios serial
+compatibility shim and starts the helper as a separate process. The imported
+OpenDV-derived D-STAR framing/state code and its GPL-2.0-only definitions are
+not distributed; they were replaced by the independently implemented `crdv`
+component described below.
+
+The retained Flex GPLv3 GMSK stream modem uses the 15-tap BT 0.35 Gaussian
+interpolator published by MMDVM. MMDVM is GPL-2.0-or-later, which is compatible
+with this GPL-3.0-or-later work. The attribution and local changes are recorded
+in third_party/smartsdr-dsp/AETHERSDR-PATCHES.md.
+
+  Copyright (C) 2014 FlexRadio Systems
+  License: GPL-3.0-or-later
+  Source:  https://github.com/n5ac/smartsdr-dsp
+  Import:  thumbDV_support commit 762297a7d56f9e37c661c550e4b1cbd8b78091f1
+  Patches: third_party/smartsdr-dsp/AETHERSDR-PATCHES.md
+
+  MMDVM modem: Copyright (C) MMDVM contributors
+  License:     GPL-2.0-or-later
+  Source:      https://github.com/g4klx/MMDVM
+
+
+19. crdv - Clean-Room D-STAR and DV3000 Protocol Core
+------------------------------------------------------
+Bundled at third_party/crdv/ and linked into the local waveform helper. This
+portable C17 library independently implements the non-AMBE D-STAR air framing,
+header protection, slow data, bounded receive parser, parameterized modem
+helpers, DV3000 packet framing, and transport parsers. ThumbDV hardware remains
+responsible for AMBE encode/decode. The library does not key a radio or perform
+I/O.
+
+The implementation team was isolated from AetherSDR and the removed code. Its
+sole project-specific input was a sanitized, public-source-backed functional
+specification. The access log, source citations, attestation, integration
+contract, deterministic test results, and content hash manifest are retained
+inside third_party/crdv/.
+
+  Copyright (C) 2026 AetherSDR contributors
+  License: GPL-3.0-or-later
+  Provenance: third_party/crdv/CLEANROOM_PROVENANCE.md
+  Manifest:   third_party/crdv/CONTENT_SHA256.txt

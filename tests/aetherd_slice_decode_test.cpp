@@ -91,18 +91,22 @@ int main(int argc, char** argv)
         CHECK(*decode(b, {{QStringLiteral("esc"), QStringLiteral("0")}}).esc == false);
     }
 
-    // ---- antenna lists: rx_ant_list precedence, split+trim; mode_list split ----
+    // ---- antenna lists: rx_ant_list precedence, split+trim; mode_list de-dupe ----
     {
         const SliceDelta d = decode(b, {
             {QStringLiteral("rx_ant_list"), QStringLiteral("ANT1, RX_A ,RX_B")},
             {QStringLiteral("ant_list"), QStringLiteral("SHOULD_BE_IGNORED")},
-            {QStringLiteral("mode_list"), QStringLiteral("USB,LSB,CW")},
+            {QStringLiteral("mode_list"), QStringLiteral("USB,LSB,DSTR,DSTR, DSTR,CW")},
         });
         CHECK(d.rxAntennaList.has_value()
               && *d.rxAntennaList == QStringList({QStringLiteral("ANT1"),
                                                   QStringLiteral("RX_A"),
                                                   QStringLiteral("RX_B")}));
-        CHECK(d.modeList.has_value() && d.modeList->size() == 3);
+        CHECK(d.modeList.has_value()
+              && *d.modeList == QStringList({QStringLiteral("USB"),
+                                             QStringLiteral("LSB"),
+                                             QStringLiteral("DSTR"),
+                                             QStringLiteral("CW")}));
     }
 
     // ---- lowercase normalization; play/step_list carried raw ----

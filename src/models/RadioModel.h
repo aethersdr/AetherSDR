@@ -10,6 +10,7 @@
 #include "core/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
 #include "SliceModel.h"
 #include "MeterModel.h"
@@ -26,6 +27,7 @@
 #include "DaxIqModel.h"
 #include "NavtexModel.h"
 #include "FlexWaveformModel.h"
+#include "DStarModel.h"
 #include "MemoryEntry.h"
 #include "ModelCapabilities.h"
 #include "RadioStatusOwnership.h"
@@ -48,6 +50,12 @@ namespace AetherSDR {
 
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
+
+struct LicenseFeatureState {
+    bool    seen{false};
+    bool    enabled{false};
+    QString reason;
+};
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection, processes incoming status messages,
@@ -82,6 +90,11 @@ public:
     UsbCableModel&    usbCableModel()    { return m_usbCableModel; }
     DaxIqModel&       daxIqModel()       { return m_daxIqModel; }
     FlexWaveformModel& flexWaveformModel() { return m_flexWaveformModel; }
+    DStarModel&        dstarModel()        { return m_dstarModel; }
+    const DigitalVoiceWaveformMetrics& digitalVoiceWaveformMetrics() const;
+    DigitalVoiceWaveformHealth digitalVoiceWaveformHealth() const;
+    QString digitalVoiceWaveformHealthName() const;
+    QString digitalVoiceWaveformHealthDetail() const;
     // Power amplifier (PGXL / any non-TGXL amp the radio proxies). Extracted
     // from RadioModel (#4094); consumers bind it like the other sub-models.
     AmpModel&         amplifier()        { return m_amplifier; }
@@ -126,6 +139,10 @@ public:
     QString licenseExpirationDate() const { return m_licenseExpirationDate; }
     QString licenseMaxVersion()     const { return m_licenseMaxVersion; }
     QString licenseSubscription()   const { return m_licenseSubscription; }
+    LicenseFeatureState licenseFeature(const QString& name) const;
+    bool licenseFeatureSeen(const QString& name) const;
+    bool licenseFeatureEnabled(const QString& name) const;
+    QString licenseFeatureReason(const QString& name) const;
 
     QString ip()          const { return m_ip; }
     QString netmask()     const { return m_netmask; }
@@ -346,6 +363,8 @@ public:
 
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
+    QMap<int, QString> rawSliceModeLists() const { return m_rawSliceModeLists; }
+    int rawModeOccurrenceCount(const QString& mode) const;
     int activeTxSliceNum() const;
     void setPanTransmitInhibited(const QString& panId,
                                  bool inhibited,
@@ -441,6 +460,7 @@ public:
 
 signals:
     void infoChanged();
+    void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
     // Emitted whenever the local CW key transitions on/off — funnel for
     // serial CTS/DSR, MIDI Gate, TCI key, CWX, and HID encoder sources.
@@ -449,6 +469,7 @@ signals:
     void cwKeyDownChanged(bool down);
     void sliceAdded(SliceModel* slice);
     void sliceRemoved(int sliceId);
+    void rawSliceModeListsChanged();
     void metersChanged();
     void connectionError(const QString& msg);
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forwarded from
@@ -569,6 +590,11 @@ signals:
     // active=true: all pans are being throttled to fpsCap fps to reduce UDP load.
     // active=false: throttle lifted; receivers should restore user-configured fps.
     void adaptiveThrottleChanged(bool active, int fpsCap);
+    // Local waveform diagnostics are proxied through the model so GUI
+    // consumers do not depend on the helper process implementation.
+    void digitalVoiceWaveformMetricsChanged();
+    void digitalVoiceWaveformHealthChanged();
+    void digitalVoiceWaveformDegradationStarted(const QString& message);
     // Generic status relay — for dialogs that need to listen for specific objects.
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     // Emitted when the radio sends an M-prefix informational, warning, error,
@@ -626,6 +652,9 @@ private:
     void applyMemoryChanges(const MemoryDelta& delta);
     void applyProfileChanges(const ProfileDelta& delta);
     void handleSliceStatus(int id, const QMap<QString, QString>& kvs, bool removed);
+    void scheduleDStarRuntimeConfiguration();
+    void applyPendingDStarRuntimeConfiguration();
+    void syncDigitalVoiceTxSelection(bool force = false);
     void handleMeterStatus(const QString& rawBody);
     void handlePanadapterStatus(const QString& panId, const QMap<QString, QString>& kvs);
     void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
@@ -727,6 +756,7 @@ private:
     UsbCableModel       m_usbCableModel;
     DaxIqModel          m_daxIqModel;
     FlexWaveformModel   m_flexWaveformModel;
+    DStarModel          m_dstarModel{nullptr, true};
 
     // NetCW stream — VITA-49 UDP delivery for low-latency CW keying
     quint32  m_netCwStreamId{0};
@@ -753,6 +783,7 @@ private:
     QString     m_licenseExpirationDate;
     QString     m_licenseMaxVersion;
     QString     m_licenseSubscription;   // e.g. "SmartSDR+", "SmartSDR", "Unknown"
+    QHash<QString, LicenseFeatureState> m_licenseFeatures;
     QString     m_ip;
     QString     m_netmask;
     QString     m_gateway;
@@ -801,6 +832,8 @@ private:
     TransmitModel::PttSource m_pendingTransmitPreflightSource{TransmitModel::PttSource::Mox};
     TransmitModel::PttSource m_interlockNotificationSource{TransmitModel::PttSource::Mox};
     int         m_digitalVoiceTxSliceId{-1};
+    QString     m_lastDigitalVoiceTxSelectionKey;
+    bool        m_dstarRuntimeConfigurationPending{false};
     QString     m_lastInterlockSource;   // last seen interlock source= (#2373)
                                          // SW/MIC/ACC/RCA/TUNE per FlexLib
                                          // v4.2.18 ParsePTTSource. Persists
@@ -887,6 +920,7 @@ private:
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
     void enforceTransmitInhibitForSlice(SliceModel* slice);
+    void selectSoleValidTxAntennaIfNeeded(SliceModel* slice, bool txAntennaStatusReceived);
     bool transmitStartBlockedByInhibit(const QString& key);
     void noteLocalTxSliceEnableIntent(int sliceId);
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
@@ -948,6 +982,7 @@ private:
 
 private:
     QList<SliceModel*> m_slices;
+    QMap<int, QString> m_rawSliceModeLists;
     QMap<int, SliceModel*> m_staleSlices;  // previous session, kept alive for UI reuse
     quint64 m_sessionModelGeneration{0};
     // chassis_serial of the radio the staged session models came from.

@@ -606,6 +606,8 @@ private:
     void showNetworkDiagnosticsDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
+    void scheduleDigitalVoiceAutoStart();
+    void stopDigitalVoiceService(bool waitForExit);
     void showPskReporterMapDialog();
     void startKissTncOnStartupIfConfigured();
     void showFlexControlDialog();

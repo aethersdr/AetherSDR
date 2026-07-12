@@ -1,5 +1,6 @@
 #include "NetworkDiagnosticsDialog.h"
 #include "core/AudioEngine.h"
+#include "core/DigitalVoiceModeRegistry.h"
 #include "core/LogManager.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"   // self-guards on HAVE_WEBSOCKETS
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <utility>
 
 #include <QComboBox>
@@ -341,6 +343,7 @@ public:
         QVector<QPointF> points;
         QString unitSuffix;
         bool    stepFunction{false};  // draw as horizontal-then-vertical steps
+        double  maxConnectGapSeconds{0.0};
     };
 
     struct LegendHit {
@@ -394,6 +397,19 @@ public:
             return;
         }
         m_logScale = on;
+        update();
+    }
+
+    void setFixedYRange(double minimum, double maximum)
+    {
+        if (!std::isfinite(minimum) || !std::isfinite(maximum)
+            || minimum >= maximum) {
+            m_fixedMinY.reset();
+            m_fixedMaxY.reset();
+        } else {
+            m_fixedMinY = minimum;
+            m_fixedMaxY = maximum;
+        }
         update();
     }
 
@@ -453,8 +469,11 @@ protected:
         // regardless of the smallest observed sample.  Log can't plot
         // zero, but the bottom decade label is overridden to "0" below
         // so the axis reads with a familiar zero baseline.
-        double minY = 1.0;
-        if (m_logScale) {
+        double minY = 0.0;
+        if (m_fixedMinY.has_value() && m_fixedMaxY.has_value()) {
+            minY = *m_fixedMinY;
+            maxY = *m_fixedMaxY;
+        } else if (m_logScale) {
             const double exactMax = std::max(maxY, 10.0);
             maxY = std::pow(10.0, std::ceil(std::log10(exactMax)));
             minY = 1.0;
@@ -477,7 +496,7 @@ protected:
             painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
             const double tickValue = m_logScale
                 ? minY * std::pow(10.0, static_cast<double>(i) * std::log10(maxY / minY) / yTicks)
-                : maxY * i / yTicks;
+                : minY + (maxY - minY) * i / yTicks;
             // For the log path, relabel the bottom-most tick as "0" so
             // the axis reads with a familiar zero baseline — values at
             // or below the floor (~1 unit) are functionally silent and
@@ -546,7 +565,10 @@ protected:
                     const double clamped = std::clamp(point.y(), minY, maxY);
                     yRatio = std::log10(clamped / minY) / std::log10(maxY / minY);
                 } else {
-                    yRatio = std::clamp(point.y() / maxY, 0.0, 1.0);
+                    yRatio = std::clamp(
+                        (point.y() - minY) / std::max(0.001, maxY - minY),
+                        0.0,
+                        1.0);
                 }
                 return {plot.left() + plot.width() * xRatio,
                         plot.bottom() - plot.height() * yRatio};
@@ -569,7 +591,15 @@ protected:
                 if (!first)
                     path.lineTo(QPointF(plot.right(), path.currentPosition().y()));
             } else {
+                double previousSeconds = -1.0;
                 for (const QPointF& point : series.points) {
+                    if (series.maxConnectGapSeconds > 0.0
+                        && previousSeconds >= 0.0
+                        && point.x() - previousSeconds > series.maxConnectGapSeconds) {
+                        flushBucket();
+                        hasBucket = false;
+                        first = true;
+                    }
                     const QPointF mapped = mapPoint(point);
                     const int pixel = static_cast<int>(std::round(mapped.x()));
                     if (!hasBucket) {
@@ -581,6 +611,7 @@ protected:
                     }
                     bucketSum += mapped;
                     ++bucketCount;
+                    previousSeconds = point.x();
                 }
                 flushBucket();
             }
@@ -611,7 +642,10 @@ protected:
                 const double clamped = std::clamp(v, minY, maxY);
                 yRatio = std::log10(clamped / minY) / std::log10(maxY / minY);
             } else {
-                yRatio = std::clamp(v / maxY, 0.0, 1.0);
+                yRatio = std::clamp(
+                    (v - minY) / std::max(0.001, maxY - minY),
+                    0.0,
+                    1.0);
             }
             const double y = plot.bottom() - plot.height() * yRatio;
             const QString unitSuffix = series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
@@ -702,6 +736,9 @@ private:
 
     QString formatAxisValue(double value, const QString& suffix) const
     {
+        if (suffix.contains("ksps", Qt::CaseInsensitive)) {
+            return QString("%1 ksps").arg(value, 0, 'f', 2);
+        }
         // kbps already has a metric prefix baked in — scale up to
         // Mbps / Gbps when the value crosses each power of 1000 so the
         // axis reads "3.8 Mbps" rather than the confusing "3.8k kbps".
@@ -843,6 +880,8 @@ private:
     QSet<QString> m_selectedLabels;
     QVector<LegendHit> m_legendHits;
     bool m_logScale{false};
+    std::optional<double> m_fixedMinY;
+    std::optional<double> m_fixedMaxY;
     QVector<QPair<double,double>> m_throttleSpans;
 };
 
@@ -952,7 +991,6 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         item->setToolTip(0, keywords);
         return item;
     };
-
     auto* overviewPage = new QWidget(this);
     auto* overviewLayout = new QGridLayout(overviewPage);
     overviewLayout->setContentsMargins(8, 8, 8, 8);
@@ -1382,6 +1420,96 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         m_audioFeedGraph = new TimeSeriesGraphWidget("RX Audio Stream Rate vs Target", " Hz", audioPage);
         audioLayout->addWidget(m_audioFeedGraph, 1);
     }
+
+    auto* waveformScroll = new QScrollArea(this);
+    waveformScroll->setObjectName(QStringLiteral("DigitalVoiceWaveformDiagnosticsTab"));
+    waveformScroll->setAccessibleName(QStringLiteral("Digital voice diagnostics"));
+    waveformScroll->setWidgetResizable(true);
+    waveformScroll->setFrameShape(QFrame::NoFrame);
+    waveformScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    waveformScroll->verticalScrollBar()->setObjectName(
+        QStringLiteral("DigitalVoiceWaveformScrollBar"));
+    m_digitalVoiceWaveformTab = waveformScroll;
+
+    auto* waveformContent = new QWidget(waveformScroll);
+    waveformContent->setObjectName(QStringLiteral("DigitalVoiceWaveformDiagnosticsContent"));
+    waveformScroll->setWidget(waveformContent);
+
+    auto* waveformLayout = new QVBoxLayout(waveformContent);
+    waveformLayout->setContentsMargins(8, 8, 8, 8);
+    waveformLayout->setSpacing(8);
+    waveformLayout->setSizeConstraint(QLayout::SetMinimumSize);
+
+    auto* waveformSummary = makeDiagnosticsPanel("Digital Voice Delivery");
+    auto* waveformSummaryGrid = new QGridLayout;
+    waveformSummaryGrid->setContentsMargins(0, 0, 0, 0);
+    waveformSummaryGrid->setHorizontalSpacing(24);
+    waveformSummaryGrid->setVerticalSpacing(3);
+    for (int column = 0; column < 3; ++column) {
+        waveformSummaryGrid->setColumnStretch(column, 1);
+    }
+    addDiagnosticsPanelContent(waveformSummary, waveformSummaryGrid);
+
+    auto addWaveformMetric = [waveformSummaryGrid](
+                                 int metricRow,
+                                 int column,
+                                 const QString& title,
+                                 const QString& accessibleName,
+                                 QLabel** valueLabel,
+                                 int valueLines = 1) {
+        auto* titleLabel = new QLabel(title);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            titleLabel,
+            "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+        *valueLabel = new QLabel(QStringLiteral("--"));
+        (*valueLabel)->setAccessibleName(accessibleName);
+        (*valueLabel)->setMinimumHeight(
+            (*valueLabel)->fontMetrics().lineSpacing() * valueLines + 2);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            *valueLabel,
+            "QLabel { color: {{color.text.primary}}; font-weight: 700; }");
+        const int row = metricRow * 2;
+        waveformSummaryGrid->addWidget(titleLabel, row, column);
+        waveformSummaryGrid->addWidget(*valueLabel, row + 1, column);
+    };
+    addWaveformMetric(0, 0, "Mode", "Active digital voice mode",
+                      &m_digitalVoiceWaveformModeLabel);
+    addWaveformMetric(0, 1, "Health", "Digital voice waveform health",
+                      &m_digitalVoiceWaveformHealthLabel);
+    addWaveformMetric(0, 2, "RX sample rate", "Digital voice waveform receive sample rate",
+                      &m_digitalVoiceWaveformRateLabel);
+    addWaveformMetric(1, 0, "VITA sequence gaps", "Digital voice VITA sequence gaps",
+                      &m_digitalVoiceWaveformGapLabel);
+    addWaveformMetric(1, 1, "Inferred source blocks", "D-STAR inferred missing source blocks",
+                      &m_digitalVoiceWaveformSourceLabel);
+    addWaveformMetric(1, 2, "Turnaround", "Digital voice waveform processing turnaround",
+                      &m_digitalVoiceWaveformTurnaroundLabel);
+    addWaveformMetric(2, 0, "RX queue depth", "Digital voice receive processing queue depth",
+                      &m_digitalVoiceWaveformQueueLabel);
+    addWaveformMetric(2, 1, "TX sample rate", "Digital voice transmit sample rate",
+                      &m_digitalVoiceWaveformTxRateLabel);
+    addWaveformMetric(2, 2, "TX encoding", "Digital voice transmit encoding quality",
+                      &m_digitalVoiceWaveformTxQualityLabel, 2);
+    addWaveformMetric(3, 0, "TX pre-roll / drain", "Digital voice transmit pre-roll and drain",
+                      &m_digitalVoiceWaveformTxTailLabel, 2);
+    waveformLayout->addWidget(waveformSummary);
+
+    static constexpr int kDigitalVoiceGraphMinimumHeight = 190;
+    m_digitalVoiceWaveformRateGraph = new TimeSeriesGraphWidget(
+        "Digital Voice Waveform Rate", " ksps", waveformContent);
+    m_digitalVoiceWaveformRateGraph->setMinimumHeight(kDigitalVoiceGraphMinimumHeight);
+    m_digitalVoiceWaveformRateGraph->setFixedYRange(22.0, 24.5);
+    m_digitalVoiceWaveformErrorGraph = new TimeSeriesGraphWidget(
+        "Digital Voice Delivery Errors", "/s", waveformContent);
+    m_digitalVoiceWaveformErrorGraph->setMinimumHeight(kDigitalVoiceGraphMinimumHeight);
+    waveformLayout->addWidget(m_digitalVoiceWaveformRateGraph, 1);
+    waveformLayout->addWidget(m_digitalVoiceWaveformErrorGraph, 1);
+    m_digitalVoiceWaveformNavigationItem = addPage(
+        trendsCategory,
+        m_digitalVoiceWaveformTab,
+        QStringLiteral("Digital Voice"),
+        QStringLiteral("digital voice d-star waveform vita samples gaps delivery rx tx thumbdv"));
+    m_digitalVoiceWaveformNavigationItem->setHidden(true);
 
     QWidget* logsTab = buildLogsTab();
     addPage(supportCategory, logsTab, QStringLiteral("Application Logs"),
@@ -2695,6 +2823,39 @@ void NetworkDiagnosticsHistory::sampleNow()
     }
     sample.adaptiveFpsCap = m_currentFpsCap;
 
+    const DigitalVoiceWaveformHistoryReading waveformReading =
+        m_digitalVoiceWaveformHistory.sample(
+            m_model->digitalVoiceWaveformMetrics(), nowMs, elapsedSeconds);
+    sample.digitalVoiceWaveformValid = waveformReading.valid;
+    sample.digitalVoiceRxValid = waveformReading.rxValid;
+    sample.digitalVoiceTxValid = waveformReading.txValid;
+    if (waveformReading.rxValid) {
+        sample.digitalVoiceWaveformObservationCount = 1;
+        sample.digitalVoiceRxSampleRateHz = waveformReading.rxSampleRateHz;
+        sample.digitalVoiceVitaGapsPerSecond = waveformReading.vitaSequenceGapsPerSecond;
+        sample.digitalVoiceSourceBlocksPerSecond =
+            waveformReading.sourceBlockDeficitsPerSecond;
+        sample.digitalVoiceTurnaroundMeanUs = waveformReading.turnaroundMeanUs;
+        sample.digitalVoiceTurnaroundMaxUs = waveformReading.turnaroundMaxUs;
+        sample.digitalVoiceQueueMax = waveformReading.queueMax;
+    }
+    if (waveformReading.txValid) {
+        sample.digitalVoiceTxObservationCount = 1;
+        sample.digitalVoiceTxSampleRateHz = waveformReading.txSampleRateHz;
+        sample.digitalVoiceTxVitaGapsPerSecond =
+            waveformReading.txVitaSequenceGapsPerSecond;
+        sample.digitalVoiceTxNullFrames = waveformReading.txNullFrames;
+        sample.digitalVoiceTxPcmClips = waveformReading.txPcmClips;
+        sample.digitalVoiceTxPcmInvalid = waveformReading.txPcmInvalid;
+        sample.digitalVoiceTxSendFailures = waveformReading.txSendFailures;
+        sample.digitalVoiceTxQueueMax = waveformReading.txQueueMax;
+        sample.digitalVoiceTxTailSamples = waveformReading.txTailSamples;
+        sample.digitalVoiceTxTailUs = waveformReading.txTailUs;
+    }
+    if (waveformReading.valid) {
+        m_hasDigitalVoiceWaveformTelemetry = true;
+    }
+
     m_lastSampleMs = nowMs;
 
     m_samples.push_back(sample);
@@ -2714,6 +2875,16 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
     int bucketSampleCount = 0;
     auto mergeAverage = [](double current, double incoming, int currentCount) {
         return ((current * currentCount) + incoming) / (currentCount + 1);
+    };
+    auto mergeWeightedAverage = [](double current,
+                                   int currentCount,
+                                   double incoming,
+                                   int incomingCount) {
+        const int totalCount = currentCount + incomingCount;
+        return totalCount <= 0
+            ? 0.0
+            : ((current * currentCount) + (incoming * incomingCount))
+                / totalCount;
     };
     for (const NetworkDiagnosticsSample& sample : m_samples) {
         if (sample.timestampMs < cutoff) {
@@ -2761,6 +2932,115 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
             bucket.audioLastPacketAgeMs = sample.audioLastPacketAgeMs;
             bucket.audioPacketClassCode = sample.audioPacketClassCode;
             bucket.audioStreamCount = sample.audioStreamCount;
+            if (sample.digitalVoiceRxValid) {
+                const int incomingCount =
+                    std::max(1, sample.digitalVoiceWaveformObservationCount);
+                if (!bucket.digitalVoiceRxValid) {
+                    bucket.digitalVoiceWaveformValid = true;
+                    bucket.digitalVoiceRxValid = true;
+                    bucket.digitalVoiceWaveformObservationCount = incomingCount;
+                    bucket.digitalVoiceRxSampleRateHz = sample.digitalVoiceRxSampleRateHz;
+                    bucket.digitalVoiceVitaGapsPerSecond = sample.digitalVoiceVitaGapsPerSecond;
+                    bucket.digitalVoiceSourceBlocksPerSecond = sample.digitalVoiceSourceBlocksPerSecond;
+                    bucket.digitalVoiceTurnaroundMeanUs = sample.digitalVoiceTurnaroundMeanUs;
+                    bucket.digitalVoiceTurnaroundMaxUs = sample.digitalVoiceTurnaroundMaxUs;
+                    bucket.digitalVoiceQueueMax = sample.digitalVoiceQueueMax;
+                } else {
+                    const int currentCount =
+                        std::max(1, bucket.digitalVoiceWaveformObservationCount);
+                    bucket.digitalVoiceRxSampleRateHz = mergeWeightedAverage(
+                        bucket.digitalVoiceRxSampleRateHz,
+                        currentCount,
+                        sample.digitalVoiceRxSampleRateHz,
+                        incomingCount);
+                    bucket.digitalVoiceVitaGapsPerSecond = mergeWeightedAverage(
+                        bucket.digitalVoiceVitaGapsPerSecond,
+                        currentCount,
+                        sample.digitalVoiceVitaGapsPerSecond,
+                        incomingCount);
+                    bucket.digitalVoiceSourceBlocksPerSecond = mergeWeightedAverage(
+                        bucket.digitalVoiceSourceBlocksPerSecond,
+                        currentCount,
+                        sample.digitalVoiceSourceBlocksPerSecond,
+                        incomingCount);
+                    bucket.digitalVoiceTurnaroundMeanUs = mergeWeightedAverage(
+                        bucket.digitalVoiceTurnaroundMeanUs,
+                        currentCount,
+                        sample.digitalVoiceTurnaroundMeanUs,
+                        incomingCount);
+                    bucket.digitalVoiceTurnaroundMaxUs = std::max(
+                        bucket.digitalVoiceTurnaroundMaxUs,
+                        sample.digitalVoiceTurnaroundMaxUs);
+                    bucket.digitalVoiceQueueMax = std::max(
+                        bucket.digitalVoiceQueueMax,
+                        sample.digitalVoiceQueueMax);
+                    bucket.digitalVoiceWaveformObservationCount =
+                        currentCount + incomingCount;
+                }
+            }
+            if (sample.digitalVoiceTxValid) {
+                const int incomingCount =
+                    std::max(1, sample.digitalVoiceTxObservationCount);
+                if (!bucket.digitalVoiceTxValid) {
+                    bucket.digitalVoiceWaveformValid = true;
+                    bucket.digitalVoiceTxValid = true;
+                    bucket.digitalVoiceTxObservationCount = incomingCount;
+                    bucket.digitalVoiceTxSampleRateHz =
+                        sample.digitalVoiceTxSampleRateHz;
+                    bucket.digitalVoiceTxVitaGapsPerSecond =
+                        sample.digitalVoiceTxVitaGapsPerSecond;
+                    bucket.digitalVoiceTxNullFrames =
+                        sample.digitalVoiceTxNullFrames;
+                    bucket.digitalVoiceTxPcmClips =
+                        sample.digitalVoiceTxPcmClips;
+                    bucket.digitalVoiceTxPcmInvalid =
+                        sample.digitalVoiceTxPcmInvalid;
+                    bucket.digitalVoiceTxSendFailures =
+                        sample.digitalVoiceTxSendFailures;
+                    bucket.digitalVoiceTxQueueMax =
+                        sample.digitalVoiceTxQueueMax;
+                    bucket.digitalVoiceTxTailSamples =
+                        sample.digitalVoiceTxTailSamples;
+                    bucket.digitalVoiceTxTailUs = sample.digitalVoiceTxTailUs;
+                } else {
+                    const int currentCount =
+                        std::max(1, bucket.digitalVoiceTxObservationCount);
+                    bucket.digitalVoiceTxSampleRateHz = mergeWeightedAverage(
+                        bucket.digitalVoiceTxSampleRateHz,
+                        currentCount,
+                        sample.digitalVoiceTxSampleRateHz,
+                        incomingCount);
+                    bucket.digitalVoiceTxVitaGapsPerSecond =
+                        mergeWeightedAverage(
+                            bucket.digitalVoiceTxVitaGapsPerSecond,
+                            currentCount,
+                            sample.digitalVoiceTxVitaGapsPerSecond,
+                            incomingCount);
+                    bucket.digitalVoiceTxNullFrames = std::max(
+                        bucket.digitalVoiceTxNullFrames,
+                        sample.digitalVoiceTxNullFrames);
+                    bucket.digitalVoiceTxPcmClips = std::max(
+                        bucket.digitalVoiceTxPcmClips,
+                        sample.digitalVoiceTxPcmClips);
+                    bucket.digitalVoiceTxPcmInvalid = std::max(
+                        bucket.digitalVoiceTxPcmInvalid,
+                        sample.digitalVoiceTxPcmInvalid);
+                    bucket.digitalVoiceTxSendFailures = std::max(
+                        bucket.digitalVoiceTxSendFailures,
+                        sample.digitalVoiceTxSendFailures);
+                    bucket.digitalVoiceTxQueueMax = std::max(
+                        bucket.digitalVoiceTxQueueMax,
+                        sample.digitalVoiceTxQueueMax);
+                    bucket.digitalVoiceTxTailSamples = std::max(
+                        bucket.digitalVoiceTxTailSamples,
+                        sample.digitalVoiceTxTailSamples);
+                    bucket.digitalVoiceTxTailUs = std::max(
+                        bucket.digitalVoiceTxTailUs,
+                        sample.digitalVoiceTxTailUs);
+                    bucket.digitalVoiceTxObservationCount =
+                        currentCount + incomingCount;
+                }
+            }
             ++bucketSampleCount;
         }
     }
@@ -2843,6 +3123,89 @@ static void updateAudioStreamTable(QTableWidget* table,
 void NetworkDiagnosticsDialog::refresh()
 {
     const NetworkDiagnosticsSample sample = m_history ? m_history->latestSample() : NetworkDiagnosticsSample{};
+
+    const bool waveformSeen =
+        (m_history && m_history->hasDigitalVoiceWaveformTelemetry())
+        || m_model->digitalVoiceWaveformHealth() != DigitalVoiceWaveformHealth::Inactive;
+    if (m_digitalVoiceWaveformNavigationItem) {
+        m_digitalVoiceWaveformNavigationItem->setHidden(!waveformSeen);
+    }
+    if (waveformSeen) {
+        const DigitalVoiceWaveformMetrics& metrics = m_model->digitalVoiceWaveformMetrics();
+        const DigitalVoiceWaveformHealth health = m_model->digitalVoiceWaveformHealth();
+        const std::optional<DigitalVoiceModeId> mode =
+            DigitalVoiceModeRegistry::modeForRadioMode(metrics.mode);
+        m_digitalVoiceWaveformModeLabel->setText(
+            mode.has_value()
+                ? DigitalVoiceModeRegistry::descriptor(mode.value()).displayName
+                : (metrics.mode.isEmpty() ? QStringLiteral("--") : metrics.mode));
+        m_digitalVoiceWaveformHealthLabel->setText(m_model->digitalVoiceWaveformHealthName());
+        if (isDegradedDigitalVoiceWaveformHealth(health)) {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_digitalVoiceWaveformHealthLabel,
+                "QLabel { color: {{color.accent.warning}}; font-weight: 700; }");
+        } else {
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_digitalVoiceWaveformHealthLabel,
+                "QLabel { color: {{color.text.primary}}; font-weight: 700; }");
+        }
+
+        if (sample.digitalVoiceRxValid) {
+            m_digitalVoiceWaveformRateLabel->setText(
+                QStringLiteral("%1 ksps")
+                    .arg(sample.digitalVoiceRxSampleRateHz / 1000.0, 0, 'f', 2));
+            m_digitalVoiceWaveformGapLabel->setText(
+                QStringLiteral("%1 total  |  %2/s")
+                    .arg(metrics.vitaSequenceGapsTotal)
+                    .arg(sample.digitalVoiceVitaGapsPerSecond, 0, 'f', 1));
+            m_digitalVoiceWaveformSourceLabel->setText(
+                QStringLiteral("%1 total  |  %2/s")
+                    .arg(metrics.sourceBlockDeficitsTotal)
+                    .arg(sample.digitalVoiceSourceBlocksPerSecond, 0, 'f', 1));
+            m_digitalVoiceWaveformTurnaroundLabel->setText(
+                QStringLiteral("%1 us mean  |  %2 us max")
+                    .arg(sample.digitalVoiceTurnaroundMeanUs, 0, 'f', 1)
+                    .arg(sample.digitalVoiceTurnaroundMaxUs));
+            m_digitalVoiceWaveformQueueLabel->setText(
+                QString::number(sample.digitalVoiceQueueMax));
+        } else {
+            m_digitalVoiceWaveformRateLabel->setText(QStringLiteral("No recent data"));
+            m_digitalVoiceWaveformGapLabel->setText(QStringLiteral("--"));
+            m_digitalVoiceWaveformSourceLabel->setText(QStringLiteral("--"));
+            m_digitalVoiceWaveformTurnaroundLabel->setText(QStringLiteral("--"));
+            m_digitalVoiceWaveformQueueLabel->setText(QStringLiteral("--"));
+        }
+        if (sample.digitalVoiceTxValid) {
+            m_digitalVoiceWaveformTxRateLabel->setText(
+                sample.digitalVoiceTxSampleRateHz > 0.0
+                    ? QStringLiteral("%1 ksps")
+                          .arg(sample.digitalVoiceTxSampleRateHz / 1000.0,
+                               0, 'f', 2)
+                    : QStringLiteral("Measuring"));
+            m_digitalVoiceWaveformTxQualityLabel->setText(
+                QStringLiteral("%1 null  |  %2 underflow  |  %3 overflow\n"
+                               "%4 clipped  |  %5 invalid  |  %6 sequence")
+                    .arg(sample.digitalVoiceTxNullFrames)
+                    .arg(metrics.txAmbeUnderflows)
+                    .arg(metrics.txAmbeOverflows)
+                    .arg(sample.digitalVoiceTxPcmClips)
+                    .arg(sample.digitalVoiceTxPcmInvalid)
+                    .arg(metrics.txAmbeSequenceErrors));
+            m_digitalVoiceWaveformTxTailLabel->setText(
+                QStringLiteral("%1 frames / %2 ms pre-roll\n"
+                               "%3 frames / %4 ms drain  |  %5 timeout  |  %6 dropped")
+                    .arg(metrics.txPreRollFrames)
+                    .arg(metrics.txPreRollDelayMs)
+                    .arg(metrics.txDrainFrames)
+                    .arg(sample.digitalVoiceTxTailUs / 1000.0, 0, 'f', 1)
+                    .arg(metrics.txDrainTimeouts)
+                    .arg(metrics.txDrainDiscardedFrames));
+        } else {
+            m_digitalVoiceWaveformTxRateLabel->setText(QStringLiteral("No recent data"));
+            m_digitalVoiceWaveformTxQualityLabel->setText(QStringLiteral("--"));
+            m_digitalVoiceWaveformTxTailLabel->setText(QStringLiteral("--"));
+        }
+    }
 
     // Status and RTT
     m_statusLabel->setText(m_model->networkQuality());
@@ -3096,6 +3459,63 @@ void NetworkDiagnosticsDialog::updateCharts()
         series.unitSuffix = unitSuffix;
         return series;
     };
+    auto buildWaveformSeries = [&](const QString& label,
+                                   const QColor& color,
+                                   const QString& unitSuffix,
+                                   auto validFor,
+                                   auto valueFor) {
+        TimeSeriesGraphWidget::Series series{label, color, {}, unitSuffix};
+        series.points.reserve(samples.size());
+        series.maxConnectGapSeconds = std::max(
+            2.5, static_cast<double>(bucketMs) / 1000.0 * 1.5);
+        if (bucketMs <= 1000) {
+            for (const NetworkDiagnosticsSample& sample : samples) {
+                if (!validFor(sample)
+                    || sample.timestampMs < cutoffMs
+                    || sample.timestampMs > endMs) {
+                    continue;
+                }
+                const double secondsFromStart =
+                    (sample.timestampMs - cutoffMs) / 1000.0;
+                series.points.push_back(QPointF(
+                    secondsFromStart,
+                    std::max(0.0, static_cast<double>(valueFor(sample)))));
+            }
+        } else {
+            qint64 currentBucket = -1;
+            double bucketSum = 0.0;
+            int bucketCount = 0;
+            auto flushBucket = [&] {
+                if (currentBucket < 0 || bucketCount <= 0) {
+                    return;
+                }
+                const qint64 bucketCenterMs = currentBucket * bucketMs + bucketMs / 2;
+                const double secondsFromStart =
+                    (bucketCenterMs - cutoffMs) / 1000.0;
+                series.points.push_back(
+                    QPointF(secondsFromStart, bucketSum / bucketCount));
+                bucketSum = 0.0;
+                bucketCount = 0;
+            };
+            for (const NetworkDiagnosticsSample& sample : samples) {
+                if (!validFor(sample)
+                    || sample.timestampMs < cutoffMs
+                    || sample.timestampMs > endMs) {
+                    continue;
+                }
+                const qint64 sampleBucket = sample.timestampMs / bucketMs;
+                if (currentBucket != sampleBucket) {
+                    flushBucket();
+                    currentBucket = sampleBucket;
+                }
+                bucketSum += std::max(
+                    0.0, static_cast<double>(valueFor(sample)));
+                ++bucketCount;
+            }
+            flushBucket();
+        }
+        return series;
+    };
 
     QVector<TimeSeriesGraphWidget::Series> latencySeries{
         buildSeriesWithUnit("RTT", QColor("#00b4d8"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.rttMs); }),
@@ -3129,6 +3549,69 @@ void NetworkDiagnosticsDialog::updateCharts()
         buildSeriesWithUnit("Target", QColor("#8aa8c0"), " Hz", [](const NetworkDiagnosticsSample&) {
             return static_cast<double>(AudioEngine::DEFAULT_SAMPLE_RATE);
         })
+    };
+    QVector<TimeSeriesGraphWidget::Series> waveformRateSeries{
+        buildWaveformSeries(
+            "Actual RX",
+            QColor("#56ccf2"),
+            " ksps",
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceRxValid;
+            },
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceRxSampleRateHz / 1000.0;
+            }),
+        buildWaveformSeries(
+            "Actual TX",
+            QColor("#f2c94c"),
+            " ksps",
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceTxValid
+                    && s.digitalVoiceTxSampleRateHz > 0.0;
+            },
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceTxSampleRateHz / 1000.0;
+            }),
+        buildWaveformSeries(
+            "24.00 ksps target",
+            QColor("#8aa8c0"),
+            " ksps",
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceWaveformValid;
+            },
+            [](const NetworkDiagnosticsSample&) { return 24.0; })
+    };
+    QVector<TimeSeriesGraphWidget::Series> waveformErrorSeries{
+        buildWaveformSeries(
+            "VITA sequence gaps",
+            QColor("#f2c94c"),
+            "/s",
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceRxValid;
+            },
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceVitaGapsPerSecond;
+            }),
+        buildWaveformSeries(
+            "Inferred source blocks",
+            QColor("#56ccf2"),
+            "/s",
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceRxValid;
+            },
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceSourceBlocksPerSecond;
+            }),
+        buildWaveformSeries(
+            "TX VITA sequence gaps",
+            QColor("#eb5757"),
+            "/s",
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceTxValid;
+            },
+            [](const NetworkDiagnosticsSample& s) {
+                return s.digitalVoiceTxVitaGapsPerSecond;
+            })
     };
 
     // ── Adaptive throttle spans for amber band ───────────────────────────
@@ -3185,6 +3668,12 @@ void NetworkDiagnosticsDialog::updateCharts()
     m_audioFeedGraph->setThrottleSpans(throttleSpans);
     if (m_fpsCapGraph) {
         m_fpsCapGraph->setSeries({fpsCapSeries}, rangeSeconds);
+    }
+    if (m_digitalVoiceWaveformRateGraph) {
+        m_digitalVoiceWaveformRateGraph->setSeries(waveformRateSeries, rangeSeconds);
+    }
+    if (m_digitalVoiceWaveformErrorGraph) {
+        m_digitalVoiceWaveformErrorGraph->setSeries(waveformErrorSeries, rangeSeconds);
     }
 }
 

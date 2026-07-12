@@ -1,6 +1,8 @@
 #include "AutomationServer.h"
 #include "LogManager.h"
 #include "AppSettings.h"          // StationName (restore the user's real station name)
+#include "DigitalVoiceWaveformProcess.h"
+#include "DigitalVoiceWaveformSettings.h"
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "AudioEngine.h"
 #include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
@@ -2136,7 +2138,8 @@ const QStringList& getModelNames()
         QStringLiteral("meters"),     QStringLiteral("slice"),
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
-        QStringLiteral("tracedebug"), QStringLiteral("kiwi"),
+        QStringLiteral("tracedebug"), QStringLiteral("waveforms"),
+        QStringLiteral("kiwi"),
     };
     return kModels;
 }
@@ -2443,8 +2446,19 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "slice requires an action (add|remove|select|tx|txant|rxant|rxsource)"));
+                        "slice requires an action (add|remove|select|tx|mode|txant|rxant|rxsource)"));
                 return s.doSlice(a.action, a.value);
+            });
+
+        add("waveform", {},
+            "waveform <start|stop|unregister|resync> [args] — digital-voice service",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.action.isEmpty()) {
+                    return err(QStringLiteral(
+                        "waveform requires an action (start|stop|unregister|resync)"));
+                }
+                return s.doWaveform(a.action, a.value);
             });
 
         add("tune", {}, "tune <mhz> — set the active slice frequency",
@@ -3595,6 +3609,341 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("channels"), channels},
                            {QStringLiteral("slices"), sliceDax}};
     }
+    if (model == QLatin1String("waveforms")) {
+        QJsonArray installed;
+        QJsonObject wfp;
+        QJsonArray reports;
+        if (m_radioModel) {
+            const FlexWaveformModel& wf = m_radioModel->flexWaveformModel();
+            for (const FlexWaveformEntry& entry : wf.waveforms()) {
+                installed.append(QJsonObject{
+                    {QStringLiteral("name"), entry.name},
+                    {QStringLiteral("version"), entry.version},
+                    {QStringLiteral("isContainer"), entry.isContainer},
+                    {QStringLiteral("displayName"), entry.displayName()},
+                });
+            }
+            wfp = QJsonObject{
+                {QStringLiteral("seen"), wf.wfpStatusSeen()},
+                {QStringLiteral("powered"), wf.wfpPowered()},
+                {QStringLiteral("ready"), wf.wfpReady()},
+                {QStringLiteral("ipAddress"), wf.wfpIpAddress()},
+            };
+            for (const QMap<QString, QString>& report : wf.statusReports()) {
+                QJsonObject obj;
+                for (auto it = report.cbegin(); it != report.cend(); ++it) {
+                    obj[it.key()] = it.value();
+                }
+                reports.append(obj);
+            }
+        }
+
+        const DigitalVoiceWaveformProcess& process = DigitalVoiceWaveformProcess::instance();
+        const QString radioCallsign = m_radioModel ? m_radioModel->callsign() : QString{};
+        const QString configurationError =
+            DigitalVoiceWaveformSettings::validationError(radioCallsign);
+        const QString executable = DigitalVoiceWaveformProcess::resolveExecutablePath(
+            DigitalVoiceWaveformSettings::executablePath());
+        const DigitalVoiceWaveformMetrics& metrics = process.metrics();
+        const qint64 metricsAgeMs = metrics.valid
+            ? std::max<qint64>(0, QDateTime::currentMSecsSinceEpoch()
+                                     - metrics.timestampMs)
+            : 0;
+        const qint64 txMetricsAgeMs = metrics.txValid
+            ? std::max<qint64>(0, QDateTime::currentMSecsSinceEpoch()
+                                     - metrics.txTimestampMs)
+            : 0;
+
+        QJsonArray modes;
+        const std::optional<DigitalVoiceModeId> activeMode =
+            DigitalVoiceModeRegistry::instance().activeMode();
+        for (const DigitalVoiceModeDescriptor& mode
+             : DigitalVoiceModeRegistry::supportedModes()) {
+            QJsonObject modeSettings;
+            if (mode.id == DigitalVoiceModeId::DStar) {
+                modeSettings = QJsonObject{
+                    {QStringLiteral("myCall"),
+                     DigitalVoiceWaveformSettings::effectiveMyCall(radioCallsign)},
+                    {QStringLiteral("myCallSuffix"),
+                     DigitalVoiceWaveformSettings::myCallSuffix()},
+                    {QStringLiteral("urCall"), DigitalVoiceWaveformSettings::urCall()},
+                    {QStringLiteral("rpt1"), DigitalVoiceWaveformSettings::rpt1()},
+                    {QStringLiteral("rpt2"), DigitalVoiceWaveformSettings::rpt2()},
+                    {QStringLiteral("message"), DigitalVoiceWaveformSettings::message()}
+                };
+            }
+            modes.append(QJsonObject{
+                {QStringLiteral("id"), mode.settingsId},
+                {QStringLiteral("displayName"), mode.displayName},
+                {QStringLiteral("radioMode"), mode.radioMode},
+                {QStringLiteral("underlyingMode"), mode.underlyingMode},
+                {QStringLiteral("waveformName"), mode.waveformName},
+                {QStringLiteral("implemented"), true},
+                {QStringLiteral("active"), activeMode.has_value()
+                     && activeMode.value() == mode.id},
+                {QStringLiteral("settings"), modeSettings}
+            });
+        }
+
+        QJsonArray rawModeLists;
+        int maximumDstrOccurrences = 0;
+        if (m_radioModel) {
+            const QMap<int, QString> rawLists = m_radioModel->rawSliceModeLists();
+            for (auto it = rawLists.cbegin(); it != rawLists.cend(); ++it) {
+                int dstrOccurrences = 0;
+                QJsonArray rawModes;
+                for (const QString& rawMode : it.value().split(
+                         QLatin1Char(','), Qt::SkipEmptyParts)) {
+                    const QString normalized = rawMode.trimmed();
+                    rawModes.append(normalized);
+                    if (normalized.compare(QStringLiteral("DSTR"),
+                                           Qt::CaseInsensitive) == 0) {
+                        ++dstrOccurrences;
+                    }
+                }
+                maximumDstrOccurrences = std::max(
+                    maximumDstrOccurrences, dstrOccurrences);
+                rawModeLists.append(QJsonObject{
+                    {QStringLiteral("sliceId"), it.key()},
+                    {QStringLiteral("raw"), it.value()},
+                    {QStringLiteral("modes"), rawModes},
+                    {QStringLiteral("dstrOccurrences"), dstrOccurrences}
+                });
+            }
+        }
+
+        QJsonObject dstarSnapshot;
+        if (m_radioModel) {
+            const DStarModel& dstar = m_radioModel->dstarModel();
+            const DStarConfiguration config = dstar.configuration(radioCallsign);
+            const DStarRouteRequest route =
+                DStarModel::routeRequestForConfiguration(config);
+            auto originName = [](DStarRouteOrigin origin) {
+                return origin == DStarRouteOrigin::Direct
+                    ? QStringLiteral("direct") : QStringLiteral("repeater");
+            };
+            auto destinationName = [](DStarRouteDestination destination) {
+                switch (destination) {
+                case DStarRouteDestination::LocalCq:
+                    return QStringLiteral("localCq");
+                case DStarRouteDestination::Station:
+                    return QStringLiteral("station");
+                case DStarRouteDestination::RepeaterArea:
+                    return QStringLiteral("repeaterArea");
+                case DStarRouteDestination::Custom:
+                    return QStringLiteral("custom");
+                }
+                return QStringLiteral("custom");
+            };
+            auto verificationName = [](DStarSerialDevice::Verification verification) {
+                switch (verification) {
+                case DStarSerialDevice::Verification::Candidate:
+                    return QStringLiteral("candidate");
+                case DStarSerialDevice::Verification::Probing:
+                    return QStringLiteral("probing");
+                case DStarSerialDevice::Verification::Verified:
+                    return QStringLiteral("verified");
+                case DStarSerialDevice::Verification::Unavailable:
+                    return QStringLiteral("unavailable");
+                }
+                return QStringLiteral("candidate");
+            };
+            QJsonArray serialDevices;
+            for (const DStarSerialDevice& device : dstar.serialDevices()) {
+                serialDevices.append(QJsonObject{
+                    {QStringLiteral("path"), device.path},
+                    {QStringLiteral("label"), device.label},
+                    {QStringLiteral("score"), device.score},
+                    {QStringLiteral("highConfidence"), device.highConfidence},
+                    {QStringLiteral("present"), device.present},
+                    {QStringLiteral("verification"),
+                     verificationName(device.verification)},
+                    {QStringLiteral("detail"), device.detail}
+                });
+            }
+            QJsonArray traffic;
+            const QList<DStarTrafficEntry>& entries = dstar.traffic();
+            const qsizetype first = std::max<qsizetype>(0, entries.size() - 100);
+            for (qsizetype i = first; i < entries.size(); ++i) {
+                const DStarTrafficEntry& entry = entries.at(i);
+                QString direction;
+                switch (entry.direction) {
+                case DStarTrafficDirection::Receive:
+                    direction = QStringLiteral("rx");
+                    break;
+                case DStarTrafficDirection::Transmit:
+                    direction = QStringLiteral("tx");
+                    break;
+                case DStarTrafficDirection::System:
+                    direction = QStringLiteral("system");
+                    break;
+                }
+                traffic.append(QJsonObject{
+                    {QStringLiteral("id"), static_cast<double>(entry.id)},
+                    {QStringLiteral("direction"), direction},
+                    {QStringLiteral("timestampUtc"),
+                     entry.timestampUtc.toString(Qt::ISODateWithMs)},
+                    {QStringLiteral("sliceId"), entry.sliceId},
+                    {QStringLiteral("myCall"), entry.myCall},
+                    {QStringLiteral("myCallSuffix"), entry.myCallSuffix},
+                    {QStringLiteral("urCall"), entry.urCall},
+                    {QStringLiteral("rpt1"), entry.rpt1},
+                    {QStringLiteral("rpt2"), entry.rpt2},
+                    {QStringLiteral("message"), entry.message},
+                    {QStringLiteral("complete"), entry.complete}
+                });
+            }
+            dstarSnapshot = QJsonObject{
+                {QStringLiteral("route"), QJsonObject{
+                    {QStringLiteral("origin"), originName(route.origin)},
+                    {QStringLiteral("destination"),
+                     destinationName(route.destination)},
+                    {QStringLiteral("accessRepeaterCallsign"),
+                     route.accessRepeaterCallsign},
+                    {QStringLiteral("accessRepeaterModule"),
+                     QString(route.accessRepeaterModule)},
+                    {QStringLiteral("destinationCallsign"),
+                     route.destinationCallsign},
+                    {QStringLiteral("destinationRepeaterModule"),
+                     QString(route.destinationRepeaterModule)},
+                    {QStringLiteral("urCall"), config.urCall},
+                    {QStringLiteral("rpt1"), config.rpt1},
+                    {QStringLiteral("rpt2"), config.rpt2}
+                }},
+                {QStringLiteral("message"), config.message},
+                {QStringLiteral("serialDevices"), serialDevices},
+                {QStringLiteral("traffic"), traffic},
+                {QStringLiteral("trafficCount"), entries.size()}
+            };
+        }
+
+        const QJsonObject localDigitalVoice{
+            {QStringLiteral("available"), QFileInfo(executable).isExecutable()},
+            {QStringLiteral("state"), DigitalVoiceWaveformProcess::stateName(process.state())},
+            {QStringLiteral("active"), process.isActive()},
+            {QStringLiteral("activeMode"), activeMode.has_value()
+                 ? DigitalVoiceModeRegistry::descriptor(activeMode.value()).displayName
+                 : QString{}},
+            {QStringLiteral("activeSliceId"),
+             DigitalVoiceModeRegistry::instance().activeSliceId()},
+            {QStringLiteral("status"), process.statusText()},
+            {QStringLiteral("lastError"), process.lastError()},
+            {QStringLiteral("registrationName"), process.registrationName()},
+            {QStringLiteral("registrationVerified"), process.registrationVerified()},
+            {QStringLiteral("health"), DigitalVoiceWaveformProcess::healthName(
+                 process.health())},
+            {QStringLiteral("healthDetail"), process.healthDetail()},
+            {QStringLiteral("metricsValid"), metrics.valid},
+            {QStringLiteral("txMetricsValid"), metrics.txValid},
+            {QStringLiteral("metricsMode"), metrics.mode},
+            {QStringLiteral("metricsAgeMs"), metricsAgeMs},
+            {QStringLiteral("txMetricsAgeMs"), txMetricsAgeMs},
+            {QStringLiteral("rxRateHz"), metrics.rxSampleRateHz},
+            {QStringLiteral("vitaGaps"), static_cast<double>(
+                 metrics.vitaSequenceGapsTotal)},
+            {QStringLiteral("vitaGapsLatest"), static_cast<int>(
+                 metrics.vitaSequenceGaps)},
+            {QStringLiteral("inferredSourceBlocks"), static_cast<double>(
+                 metrics.sourceBlockDeficitsTotal)},
+            {QStringLiteral("inferredSourceBlocksLatest"), static_cast<int>(
+                 metrics.sourceBlockDeficits)},
+            {QStringLiteral("turnaroundMeanUs"), metrics.turnaroundMeanUs},
+            {QStringLiteral("turnaroundMaxUs"), static_cast<double>(
+                 metrics.turnaroundMaxUs)},
+            {QStringLiteral("queueMax"), static_cast<int>(metrics.queueMax)},
+            {QStringLiteral("txRateHz"), metrics.txSampleRateHz},
+            {QStringLiteral("txVitaGaps"), static_cast<double>(
+                 metrics.txVitaSequenceGapsTotal)},
+            {QStringLiteral("txVitaGapsLatest"), static_cast<int>(
+                 metrics.txVitaSequenceGaps)},
+            {QStringLiteral("txNullFrames"), static_cast<double>(
+                 metrics.txNullFramesTotal)},
+            {QStringLiteral("txNullFramesLatest"), static_cast<int>(
+                 metrics.txNullFrames)},
+            {QStringLiteral("txPcmClips"), static_cast<double>(
+                 metrics.txPcmClipsTotal)},
+            {QStringLiteral("txPcmInvalid"), static_cast<double>(
+                 metrics.txPcmInvalidTotal)},
+            {QStringLiteral("txSendFailures"), static_cast<double>(
+                 metrics.txSendFailuresTotal)},
+            {QStringLiteral("txQueueMax"), static_cast<int>(metrics.txQueueMax)},
+            {QStringLiteral("txTailSamples"), static_cast<int>(
+                 metrics.txTailSamples)},
+            {QStringLiteral("txTailUs"), static_cast<double>(metrics.txTailUs)},
+            {QStringLiteral("txPreRollFrames"), static_cast<int>(
+                 metrics.txPreRollFrames)},
+            {QStringLiteral("txPreRollDelayMs"), static_cast<int>(
+                 metrics.txPreRollDelayMs)},
+            {QStringLiteral("txAmbeQueueMax"), static_cast<int>(
+                 metrics.txAmbeQueueMax)},
+            {QStringLiteral("txAmbeUnderflows"), static_cast<double>(
+                 metrics.txAmbeUnderflowsTotal)},
+            {QStringLiteral("txAmbeUnderflowsLatest"), static_cast<int>(
+                 metrics.txAmbeUnderflows)},
+            {QStringLiteral("txAmbeOverflows"), static_cast<double>(
+                 metrics.txAmbeOverflowsTotal)},
+            {QStringLiteral("txAmbeOverflowsLatest"), static_cast<int>(
+                 metrics.txAmbeOverflows)},
+            {QStringLiteral("txAmbeSequenceErrors"), static_cast<double>(
+                 metrics.txAmbeSequenceErrorsTotal)},
+            {QStringLiteral("txAmbeSequenceErrorsLatest"), static_cast<int>(
+                 metrics.txAmbeSequenceErrors)},
+            {QStringLiteral("txVocoderSubmitFailures"), static_cast<double>(
+                 metrics.txVocoderSubmitFailuresTotal)},
+            {QStringLiteral("txVocoderSubmitFailuresLatest"), static_cast<int>(
+                 metrics.txVocoderSubmitFailures)},
+            {QStringLiteral("txVocoderPendingMax"), static_cast<int>(
+                 metrics.txVocoderPendingMax)},
+            {QStringLiteral("txDrainFrames"), static_cast<int>(
+                 metrics.txDrainFrames)},
+            {QStringLiteral("txDrainTimeouts"), static_cast<double>(
+                 metrics.txDrainTimeoutsTotal)},
+            {QStringLiteral("txDrainTimeoutsLatest"), static_cast<int>(
+                 metrics.txDrainTimeouts)},
+            {QStringLiteral("txDrainDiscardedFrames"), static_cast<double>(
+                 metrics.txDrainDiscardedFramesTotal)},
+            {QStringLiteral("txDrainDiscardedFramesLatest"), static_cast<int>(
+                 metrics.txDrainDiscardedFrames)},
+            {QStringLiteral("metricsGeneration"), static_cast<double>(
+                 metrics.generation)},
+            {QStringLiteral("metricsSequence"), static_cast<double>(
+                 metrics.reportSequence)},
+            {QStringLiteral("autoStart"), DigitalVoiceWaveformSettings::autoStart()},
+            {QStringLiteral("backend"), DigitalVoiceWaveformSettings::backendLabel(
+                 DigitalVoiceWaveformSettings::backend())},
+            {QStringLiteral("serialPort"), DigitalVoiceWaveformSettings::serialPort()},
+            {QStringLiteral("executable"), executable},
+            {QStringLiteral("configurationValid"), configurationError.isEmpty()},
+            {QStringLiteral("configurationError"), configurationError},
+            {QStringLiteral("modes"), modes},
+            {QStringLiteral("dstar"), dstarSnapshot}
+        };
+
+        QJsonObject data{
+            {QStringLiteral("installed"), installed},
+            {QStringLiteral("wfp"), wfp},
+            {QStringLiteral("statusReports"), reports},
+            {QStringLiteral("localDigitalVoice"), localDigitalVoice},
+            {QStringLiteral("rawModeLists"), rawModeLists},
+            {QStringLiteral("maximumDstrOccurrencesPerSlice"),
+             maximumDstrOccurrences},
+            {QStringLiteral("lastCommand"), m_lastWaveformCommand}
+        };
+        const QString requestedProperty = property.isEmpty() ? selector : property;
+        if (!requestedProperty.isEmpty()) {
+            if (!data.contains(requestedProperty)) {
+                return err(QStringLiteral("unknown property '") + requestedProperty
+                           + QStringLiteral("' for waveforms"));
+            }
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), requestedProperty},
+                               {QStringLiteral("value"), data.value(requestedProperty)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("waveforms"), data}};
+    }
     if (model == QLatin1String("panstats")) {
         // Per-panadapter frame-cost counters from every SpectrumWidget, for
         // before/after rendering-cost proofs without a profiler attach.
@@ -3945,6 +4294,103 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         {QStringLiteral("model"), model},
         {model, data},   // keyed by model name: "radio" / "slice" / "pan"
     };
+}
+
+QJsonObject AutomationServer::doWaveform(const QString& action,
+                                         const QString& value)
+{
+    const QString normalizedAction = action.trimmed().toLower();
+    DigitalVoiceWaveformProcess& process = DigitalVoiceWaveformProcess::instance();
+
+    if (normalizedAction == QLatin1String("start")) {
+        if (!m_radioModel || !m_radioModel->isConnected()) {
+            return err(QStringLiteral("no connected radio available"));
+        }
+        const QString requestedMode = value.trimmed();
+        if (!requestedMode.isEmpty()
+                && requestedMode.compare(QStringLiteral("dstar"),
+                                         Qt::CaseInsensitive) != 0
+                && requestedMode.compare(QStringLiteral("d-star"),
+                                         Qt::CaseInsensitive) != 0) {
+            return err(QStringLiteral("unsupported digital-voice mode '" )
+                       + requestedMode + QStringLiteral("'"));
+        }
+        const bool accepted = process.startForRadio(
+            m_radioModel->radioAddress(), m_radioModel->callsign());
+        return QJsonObject{
+            {QStringLiteral("ok"), accepted},
+            {QStringLiteral("state"), DigitalVoiceWaveformProcess::stateName(process.state())},
+            {QStringLiteral("status"), process.statusText()},
+            {QStringLiteral("registration"), process.registrationName()},
+            {QStringLiteral("error"), process.lastError()}
+        };
+    }
+
+    if (normalizedAction == QLatin1String("stop")) {
+        process.stop();
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("state"), DigitalVoiceWaveformProcess::stateName(process.state())}
+        };
+    }
+
+    if (normalizedAction == QLatin1String("resync")) {
+        if (!m_radioModel || !m_radioModel->isConnected()) {
+            return err(QStringLiteral("no connected radio available"));
+        }
+        m_radioModel->sendCommand(QStringLiteral("sub slice all"));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("pending"), true}};
+    }
+
+    if (normalizedAction == QLatin1String("unregister")) {
+        if (!m_radioModel || !m_radioModel->isConnected()) {
+            return err(QStringLiteral("no connected radio available"));
+        }
+        const QString name = value.trimmed();
+        static const QRegularExpression safeName(
+            QStringLiteral(R"(^[A-Za-z0-9_.-]{1,64}$)"));
+        if (!safeName.match(name).hasMatch()) {
+            return err(QStringLiteral("unregister requires a safe waveform name"));
+        }
+        if (process.isActive()
+                && name.compare(process.registrationName(), Qt::CaseInsensitive) == 0) {
+            return err(QStringLiteral("stop the active digital-voice service first"));
+        }
+
+        m_lastWaveformCommand = QJsonObject{
+            {QStringLiteral("action"), QStringLiteral("unregister")},
+            {QStringLiteral("name"), name},
+            {QStringLiteral("pending"), true},
+            {QStringLiteral("timestampMs"), QDateTime::currentMSecsSinceEpoch()}
+        };
+        QPointer<AutomationServer> self(this);
+        m_radioModel->sendCmdPublic(
+            QStringLiteral("waveform remove %1").arg(name),
+            [self, name](int code, const QString& body) {
+                if (!self) {
+                    return;
+                }
+                self->m_lastWaveformCommand = QJsonObject{
+                    {QStringLiteral("action"), QStringLiteral("unregister")},
+                    {QStringLiteral("name"), name},
+                    {QStringLiteral("pending"), false},
+                    {QStringLiteral("code"), code},
+                    {QStringLiteral("body"), body},
+                    {QStringLiteral("timestampMs"), QDateTime::currentMSecsSinceEpoch()}
+                };
+                if (code == 0 && self->m_radioModel
+                        && self->m_radioModel->isConnected()) {
+                    self->m_radioModel->sendCommand(QStringLiteral("sub slice all"));
+                }
+            });
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("pending"), true},
+                           {QStringLiteral("name"), name}};
+    }
+
+    return err(QStringLiteral("unknown waveform action '" )
+               + action + QStringLiteral("'"));
 }
 
 QJsonObject AutomationServer::doConnect(const QString& action,
@@ -4565,6 +5011,51 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         }
         return m_sliceCenterLockHandler(id, parseBool(state));
     }
+    if (action == QLatin1String("mode")) {
+        const QString requestedMode = arg.trimmed().toUpper();
+        if (requestedMode.isEmpty()) {
+            return err(QStringLiteral("slice mode requires a mode name (e.g. USB or DSTR)"));
+        }
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) {
+                s = candidate;
+                break;
+            }
+        }
+        if (!s && !radio->slices().isEmpty()) {
+            s = radio->slices().first();
+        }
+        if (!s) {
+            return err(QStringLiteral("no slice available to set mode on"));
+        }
+
+        const QStringList modes = s->modeList();
+        bool supported = modes.isEmpty();
+        for (const QString& mode : modes) {
+            if (mode.compare(requestedMode, Qt::CaseInsensitive) == 0) {
+                supported = true;
+                break;
+            }
+        }
+        if (!supported) {
+            return err(QStringLiteral("mode '") + requestedMode
+                       + QStringLiteral("' not in mode list: ")
+                       + modes.join(QLatin1Char(',')));
+        }
+
+        const bool unchanged = s->mode().compare(requestedMode, Qt::CaseInsensitive) == 0;
+        if (!unchanged) {
+            s->setMode(requestedMode);
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("mode")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("mode"), requestedMode},
+                           {QStringLiteral("unchanged"), unchanged},
+                           {QStringLiteral("requested"), !unchanged}};
+    }
     if (action == QLatin1String("txant") || action == QLatin1String("rxant")) {
         // Set the transmit/receive antenna port deterministically. The GUI
         // controls are QMenu::exec() popups an invoke() can't drive without
@@ -4643,7 +5134,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("sliceCount"), radio->slices().size()}};
     }
     return err(QStringLiteral("unknown slice action: ") + action
-               + QStringLiteral(" (add|remove|select|tx|diversity|centerlock|"
+               + QStringLiteral(" (add|remove|select|tx|mode|diversity|centerlock|"
                                 "txant|rxant|rxsource|fixture|clearfixture)"));
 }
 

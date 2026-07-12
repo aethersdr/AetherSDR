@@ -1295,6 +1295,9 @@ void MainWindow::buildMenuBar()
             "<p style='font-size:10px; color:#6a8090;'>"
             "SmartSDR protocol &copy; FlexRadio Systems</p>"
             "<p style='font-size:10px; color:#6a8090;'>"
+            "D-STAR is a registered trademark of Icom Inc.<br>"
+            "AetherSDR is not affiliated with or endorsed by Icom Inc.</p>"
+            "<p style='font-size:10px; color:#6a8090;'>"
             "HF propagation forecasts provided by "
             "<a href='https://www.hamqsl.com/' style='color:#8aa8c0;'>hamqsl.com</a></p>"
             "</div>");

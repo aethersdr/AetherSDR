@@ -1111,6 +1111,12 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::showPanadapterInterlockNotification);
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
+    connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
+            this, [this](const QString& message) {
+        if (!message.isEmpty()) {
+            statusBar()->showMessage(message, 10000);
+        }
+    });
 
     // Local CW sidetone — every key source (serial, MIDI, TCI, CWX, HID)
     // funnels through RadioModel::sendCwKey/sendCwPaddle, which emits
@@ -3038,6 +3044,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // reported on Maestro (#3079).
     m_tgxlConn.disconnect();
     m_pgxlConn.disconnect();
+
+    // Same reason as the TGXL/PGXL sockets above: the D-STAR helper is stopped
+    // by the queued RadioModel::connectionStateChanged(false) handler, which
+    // does not run during close (the event loop isn't pumped here). Without an
+    // explicit stop, quitting while the radio is connected orphans the helper
+    // subprocess — it keeps holding the ThumbDV serial port and can block the
+    // next AetherSDR launch from reacquiring it.
+    stopDigitalVoiceService(true);
 
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
@@ -5076,6 +5090,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             });
         }
 #endif
+        scheduleDigitalVoiceAutoStart();
         // Auto-connect DX cluster if enabled
         {
             auto& cs = AppSettings::instance();
@@ -5178,6 +5193,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         updateTMate2Status();
 #endif
     } else {
+        stopDigitalVoiceService(false);
+
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
         // stay connected through brief reconnects, higher channels stop cleanly.
         applyCatPortCount();  // catPortTargetCount() returns 1 when !connected

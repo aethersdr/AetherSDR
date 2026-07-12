@@ -29,6 +29,13 @@ Usage:
     python tools/automation_probe.py connect local first
     python tools/automation_probe.py connect wait 30000
     python tools/automation_probe.py get sync
+    python tools/automation_probe.py whoami
+    python tools/automation_probe.py mark before-test
+    python tools/automation_probe.py key ptt on
+    python tools/automation_probe.py key ptt off
+    python tools/automation_probe.py slice mode DSTR
+    python tools/automation_probe.py waveform start dstar
+    python tools/automation_probe.py waveform unregister ExampleName
     python tools/automation_probe.py grab SpectrumWidget /tmp/pan.png
     python tools/automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png
     python tools/automation_probe.py panmessage add 0 kiwi 0 "Waiting|Queued"
@@ -369,6 +376,8 @@ MAPPERS = {
     "resize": _map_resize,
     "connect": _map_action_value("connect needs <list|show|hide|local|ip|wait> [args]"),
     "slice": _map_action_value("slice needs an action"),
+    "waveform": _map_action_value(
+        "waveform needs <start|stop|unregister|resync> [args]"),
     "pan": _map_action_value("pan needs <create|add|center|close|remove> [value]"),
     "layout": _map_action_value("layout needs <rearrange <id> | get>"),
     "record": _map_action_value(),
@@ -399,6 +408,8 @@ def main():
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
                "  automation_probe.py hover E\n"
                "  automation_probe.py tooltip E\n"
+               "  automation_probe.py menu open Tools\n"
+               "  automation_probe.py close WaveformsDialog\n"
                "  automation_probe.py hitTest SpectrumWidget 80 80\n"
                "  automation_probe.py rightClick 'Panadapter spectrum display'\n"
                "  automation_probe.py clickAt 1420 210          # global point (dumpTree geometry)\n"

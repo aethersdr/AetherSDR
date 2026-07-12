@@ -267,3 +267,4 @@ See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructio
 AetherSDR is free and open-source software licensed under the [GNU General Public License v3](LICENSE).
 
 *AetherSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems.*
+*D-STAR is a registered trademark of Icom Inc. AetherSDR is not affiliated with or endorsed by Icom Inc.*

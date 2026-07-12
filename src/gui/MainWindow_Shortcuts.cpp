@@ -32,6 +32,7 @@
 #include "MainWindowShortcutState.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
+#include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "models/SliceModel.h"
@@ -804,9 +805,9 @@ void MainWindow::registerShortcutActions()
     }
 
     // ── Mode ────────────────────────────────────────────────────────────
-    static const char* modes[] = {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM", "DFM", "DIGU", "DIGL", "RTTY"};
-    for (const char* mode : modes) {
-        QString m = mode;
+    const QStringList modes = filterUnavailableDigitalVoiceModes(
+        {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
+    for (const QString& m : modes) {
         m_shortcutManager.registerAction(
             QString("mode_%1").arg(m.toLower()), m, "Mode",
             QKeySequence(), [this, m]() {

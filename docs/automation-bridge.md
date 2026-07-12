@@ -219,12 +219,13 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get clients`](#get-clients) | Radio client roster + foreign-pan-write forensics (#3977). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
+| | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | | [`get txtimer`](#get-txtimer) | Status-bar transmit-timer state (visible/running/holding/fading/elapsed). |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
-| | [`slice <action>`](#slice) | add/remove/select/tx/diversity/centerlock/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/mode/diversity/centerlock/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -567,6 +568,7 @@ connects).
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
 | `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
+| `waveforms` | — | installed legacy/Docker waveforms, WFP state, local Digital Voice service/mode configuration and delivery metrics, raw radio `mode_list` values, duplicate counts, last maintenance response, and recent `waveform status` reports |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
@@ -613,6 +615,50 @@ end is `radio_index + nChars - 1`). ESC mid-macro ([`cwx stop`](#cwx) / `clearBu
 `cwxEndIndex` to `-1` so an aborted macro never triggers a spurious release. A
 trailing property narrows it: `get cwx cwxEndIndex` → `{"value":14}`. Fields are
 zero/`-1`/idle until a radio connects.
+
+`get waveforms localDigitalVoice` includes the local helper's lifecycle,
+implemented mode descriptors, registration name/verification, exclusive active
+slice, persisted service settings, nested D-STAR routing, and delivery telemetry:
+`health`, `healthDetail`, `metricsMode`, `metricsValid`, `metricsAgeMs`,
+`rxRateHz`, cumulative and latest-window `vitaGaps` / `inferredSourceBlocks`,
+turnaround, queue depth, and metric generation/sequence. TX observations expose
+`txMetricsValid`, `txMetricsAgeMs`, `txRateHz`, cumulative and latest-window
+`txVitaGaps` / `txNullFrames`, PCM clip/invalid counts, send failures, queue
+depth, and tail samples/time. Version 3 TX telemetry also exposes
+`txPreRollFrames`, `txPreRollDelayMs`, `txAmbeQueueMax`, cumulative and latest
+AMBE underflow/overflow/sequence errors, vocoder submit failures and pending
+depth, plus drain frames/timeouts/discarded frames. These fields distinguish
+true VITA transport loss from D-STAR source-block deficits and TX
+encoder/pre-roll/drain faults.
+
+The nested `dstar` object exposes the friendly `route` selection (direct or
+repeater origin, local CQ/station/repeater-area/custom destination, callsigns,
+and separate repeater module letters), detected `serialDevices`, the latest 100
+timestamped RX/TX `traffic` entries, and the full persisted `trafficCount`.
+These reads are passive. Use generic `invoke` against the named D-STAR tab
+controls to test configuration; no D-STAR configuration control keys TX.
+
+The complete snapshot also includes `rawModeLists` and
+`maximumDstrOccurrencesPerSlice`. The latter must be `1` after a successful
+registration migration; unlike the UI mode combo, these values are captured
+before backend deduplication.
+
+### `waveform` - local service and registration maintenance
+
+These actions never key the transmitter and do not require
+`AETHER_AUTOMATION_ALLOW_TX`:
+
+```text
+waveform start dstar
+waveform stop
+waveform resync
+waveform unregister <safe-registration-name>
+```
+
+`unregister` returns as soon as the command is queued. Poll `get waveforms`
+until `lastCommand.pending` is false, require `lastCommand.code == 0`, then
+poll the raw mode lists after the automatic slice-status resync. The verb is
+generic; the bridge does not embed or preserve an old registration name.
 
 ### `get panstats`
 Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
@@ -840,8 +886,8 @@ recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
 ### `slice`
-Slice lifecycle, diversity, Center Lock, TX assignment, antennas, and receive
-source. All actions are RX/config — none keys the transmitter.
+Slice lifecycle, mode, diversity, Center Lock, TX assignment, antennas, and
+receive source. All actions are RX/config — none keys the transmitter.
 `add`/`remove`/`tx`/`diversity` are async (radio-authoritative); re-poll
 `get slices`.
 
@@ -851,6 +897,9 @@ source. All actions are RX/config — none keys the transmitter.
 
 → {"cmd":"slice","action":"tx","value":"1"}
 ← {"ok":true,"slice":"tx","id":1,"requested":true}
+
+→ {"cmd":"slice","action":"mode","value":"DSTR"}
+← {"ok":true,"slice":"mode","id":0,"mode":"DSTR","requested":true}
 ```
 
 | `action` | `value` | effect |
@@ -859,6 +908,7 @@ source. All actions are RX/config — none keys the transmitter.
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
+| `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
 | `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |

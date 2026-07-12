@@ -281,6 +281,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     modeRow->setSpacing(8);
 
     m_localModeBtn = new QCommandLinkButton(this);
+    m_localModeBtn->setObjectName(QStringLiteral("connectionLocalModeButton"));
     configureModeButton(m_localModeBtn,
                         "On This Network",
                         "Recommended for new users when the radio and computer are on the same LAN.",
@@ -288,6 +289,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     modeRow->addWidget(m_localModeBtn);
 
     m_smartLinkModeBtn = new QCommandLinkButton(this);
+    m_smartLinkModeBtn->setObjectName(QStringLiteral("connectionSmartLinkModeButton"));
     configureModeButton(m_smartLinkModeBtn,
                         "Remote with SmartLink",
                         "Use FlexRadio SmartLink when the radio is away from this computer.",
@@ -295,6 +297,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     modeRow->addWidget(m_smartLinkModeBtn);
 
     m_manualModeBtn = new QCommandLinkButton(this);
+    m_manualModeBtn->setObjectName(QStringLiteral("connectionManualModeButton"));
     configureModeButton(m_manualModeBtn,
                         "Connect by IP",
                         "Best for VPN or routed station access when you already know the radio IP.",

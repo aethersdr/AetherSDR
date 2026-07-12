@@ -79,7 +79,22 @@ bool inflateRawDeflate(const QByteArray& compressed, qsizetype expectedSize,
 
 QMap<QString, QByteArray> readZipEntries(const QByteArray& zip, QString* error)
 {
+    return readZipEntries(zip, error, ZipReadLimits{});
+}
+
+QMap<QString, QByteArray> readZipEntries(const QByteArray& zip,
+                                         QString* error,
+                                         const ZipReadLimits& limits)
+{
     QMap<QString, QByteArray> entries;
+    if (error) {
+        error->clear();
+    }
+    if (limits.maxEntries < 0
+        || limits.maxEntryUncompressedBytes > limits.maxTotalUncompressedBytes) {
+        setZipError(error, QStringLiteral("Invalid ZIP safety limits."));
+        return entries;
+    }
     if (zip.size() < 22 || !zip.startsWith("PK")) {
         setZipError(error, QStringLiteral("Package is not a ZIP-format .ssdr_cfg file."));
         return entries;
@@ -101,22 +116,41 @@ QMap<QString, QByteArray> readZipEntries(const QByteArray& zip, QString* error)
         return entries;
     }
 
+    const quint16 diskNumber = readLe16(zip, eocd + 4);
+    const quint16 centralDirectoryDisk = readLe16(zip, eocd + 6);
+    const quint16 diskEntryCount = readLe16(zip, eocd + 8);
     const quint16 entryCount = readLe16(zip, eocd + 10);
     const quint32 centralDirSize = readLe32(zip, eocd + 12);
     const quint32 centralDirOffset = readLe32(zip, eocd + 16);
-    if (centralDirOffset + centralDirSize > quint32(zip.size())) {
+    if (diskNumber != 0U || centralDirectoryDisk != 0U
+        || diskEntryCount != entryCount) {
+        setZipError(error, QStringLiteral("Multi-disk ZIP packages are not supported."));
+        return entries;
+    }
+    if (static_cast<qsizetype>(entryCount) > limits.maxEntries) {
+        setZipError(error, QStringLiteral("ZIP package contains too many entries."));
+        return entries;
+    }
+    const quint64 centralDirEnd = static_cast<quint64>(centralDirOffset)
+        + static_cast<quint64>(centralDirSize);
+    if (centralDirEnd > static_cast<quint64>(zip.size())
+        || centralDirEnd > static_cast<quint64>(eocd)) {
         setZipError(error, QStringLiteral("ZIP central directory is outside the package."));
         return entries;
     }
 
     qsizetype offset = centralDirOffset;
+    quint64 totalUncompressedBytes = 0U;
     for (quint16 i = 0; i < entryCount; ++i) {
-        if (offset + 46 > zip.size() || readLe32(zip, offset) != 0x02014b50) {
+        if (offset < 0
+            || static_cast<quint64>(offset) + 46U > centralDirEnd
+            || readLe32(zip, offset) != 0x02014b50) {
             setZipError(error, QStringLiteral("Invalid ZIP central directory entry."));
             entries.clear();
             return entries;
         }
 
+        const quint16 flags = readLe16(zip, offset + 8);
         const quint16 method = readLe16(zip, offset + 10);
         const quint32 expectedCrc = readLe32(zip, offset + 16);
         const quint32 compressedSize = readLe32(zip, offset + 20);
@@ -126,10 +160,34 @@ QMap<QString, QByteArray> readZipEntries(const QByteArray& zip, QString* error)
         const quint16 commentLen = readLe16(zip, offset + 32);
         const quint32 localOffset = readLe32(zip, offset + 42);
 
-        if (offset + 46 + nameLen + extraLen + commentLen > zip.size()
-            || localOffset + 30 > quint32(zip.size())
+        const quint64 centralEntryEnd = static_cast<quint64>(offset) + 46U
+            + static_cast<quint64>(nameLen)
+            + static_cast<quint64>(extraLen)
+            + static_cast<quint64>(commentLen);
+        if (centralEntryEnd > centralDirEnd
+            || static_cast<quint64>(localOffset) + 30U
+                > static_cast<quint64>(zip.size())
             || readLe32(zip, localOffset) != 0x04034b50) {
             setZipError(error, QStringLiteral("Invalid ZIP entry header."));
+            entries.clear();
+            return entries;
+        }
+        if ((flags & 0x0001U) != 0U) {
+            setZipError(error, QStringLiteral("Encrypted ZIP entries are not supported."));
+            entries.clear();
+            return entries;
+        }
+        if (static_cast<quint64>(uncompressedSize)
+                > limits.maxEntryUncompressedBytes
+            || totalUncompressedBytes
+                > limits.maxTotalUncompressedBytes
+                    - static_cast<quint64>(uncompressedSize)) {
+            setZipError(error, QStringLiteral("ZIP package exceeds the uncompressed safety limit."));
+            entries.clear();
+            return entries;
+        }
+        if (method == 0U && compressedSize != uncompressedSize) {
+            setZipError(error, QStringLiteral("Stored ZIP entry has inconsistent sizes."));
             entries.clear();
             return entries;
         }
@@ -137,14 +195,26 @@ QMap<QString, QByteArray> readZipEntries(const QByteArray& zip, QString* error)
         const QString name = QString::fromUtf8(zip.constData() + offset + 46, nameLen);
         const quint16 localNameLen = readLe16(zip, localOffset + 26);
         const quint16 localExtraLen = readLe16(zip, localOffset + 28);
-        const quint32 dataOffset = localOffset + 30 + localNameLen + localExtraLen;
-        if (dataOffset + compressedSize > quint32(zip.size())) {
+        const quint64 dataOffset = static_cast<quint64>(localOffset) + 30U
+            + static_cast<quint64>(localNameLen)
+            + static_cast<quint64>(localExtraLen);
+        if (dataOffset + static_cast<quint64>(compressedSize)
+                > static_cast<quint64>(zip.size())
+            || localNameLen != nameLen
+            || QByteArray(zip.constData() + localOffset + 30, localNameLen)
+                != QByteArray(zip.constData() + offset + 46, nameLen)) {
             setZipError(error, QStringLiteral("ZIP entry data is outside the package."));
             entries.clear();
             return entries;
         }
+        if (entries.contains(name)) {
+            setZipError(error, QStringLiteral("ZIP package contains duplicate entry names."));
+            entries.clear();
+            return entries;
+        }
 
-        const QByteArray compressed = zip.mid(dataOffset, compressedSize);
+        const QByteArray compressed = zip.mid(static_cast<qsizetype>(dataOffset),
+                                              compressedSize);
         QByteArray data;
         if (method == 0) {
             data = compressed;
@@ -168,7 +238,8 @@ QMap<QString, QByteArray> readZipEntries(const QByteArray& zip, QString* error)
         }
 
         entries.insert(name, data);
-        offset += 46 + nameLen + extraLen + commentLen;
+        totalUncompressedBytes += static_cast<quint64>(uncompressedSize);
+        offset = static_cast<qsizetype>(centralEntryEnd);
     }
 
     return entries;

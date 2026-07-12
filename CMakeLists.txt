@@ -25,6 +25,7 @@ option(REQUIRE_SERIALPORT "Fail if Qt6 SerialPort is not found (use for release 
 option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release builds)" OFF)
 option(ENABLE_LIQUID_DSP "Build with liquid-dsp toolkit support" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
+option(ENABLE_DSTAR "Build the local D-STAR waveform helper (vendored smartsdr-dsp/ThumbDV)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
@@ -562,6 +563,11 @@ set(CORE_SOURCES
     src/core/PgxlConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
+    src/core/WaveformUploadState.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+    src/core/DigitalVoiceWaveformTelemetry.cpp
+    src/core/DigitalVoiceWaveformProcess.cpp
     src/core/DvkWavTransfer.cpp
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
@@ -664,6 +670,8 @@ set(MODEL_SOURCES
     src/models/DvkModel.cpp
     src/models/NavtexModel.cpp
     src/models/FlexWaveformModel.cpp
+    src/models/DStarModel.cpp
+    src/models/DigitalVoiceWaveformHistory.cpp
     src/models/BandSettings.cpp
     src/models/BandPlanManager.cpp
     src/models/XvtrPolicy.cpp
@@ -717,6 +725,7 @@ set(GUI_SOURCES
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/DStarModemPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
     src/gui/FlexControlDialog.cpp
@@ -1154,6 +1163,370 @@ endif()
 # of this ecosystem-standard approach).
 if(DEFINED ENV{SOURCE_DATE_EPOCH})
     message(STATUS "Reproducible build: honoring SOURCE_DATE_EPOCH=$ENV{SOURCE_DATE_EPOCH}")
+endif()
+
+if((UNIX OR WIN32) AND ENABLE_DSTAR)
+    target_compile_definitions(AetherSDR PRIVATE AETHER_ENABLE_DIGITAL_VOICE_HELPER)
+
+    set(DIGITAL_VOICE_WAVEFORM_DIR "${CMAKE_SOURCE_DIR}/third_party/smartsdr-dsp")
+    set(CRDV_DIR "${CMAKE_SOURCE_DIR}/third_party/crdv")
+    add_library(aether_crdv STATIC
+        ${CRDV_DIR}/src/air.c
+        ${CRDV_DIR}/src/config.c
+        ${CRDV_DIR}/src/control.c
+        ${CRDV_DIR}/src/dv3000.c
+        ${CRDV_DIR}/src/modem.c
+        ${CRDV_DIR}/src/vita.c)
+    add_library(crdv::crdv ALIAS aether_crdv)
+    target_include_directories(aether_crdv PUBLIC ${CRDV_DIR}/include)
+    target_compile_features(aether_crdv PUBLIC c_std_17)
+    set_target_properties(aether_crdv PROPERTIES
+        C_EXTENSIONS OFF
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF)
+    if(MSVC)
+        target_compile_options(aether_crdv PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(aether_crdv PRIVATE
+            -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
+        target_link_libraries(aether_crdv PUBLIC m)
+    endif()
+    set(DIGITAL_VOICE_WAVEFORM_SOURCES
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_dstar_protocol.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/cmd_basics.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/cmd_engine.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_buffer_queue.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_ipv4_source_filter.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_smartsdr_command.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_tcp_frame_buffer.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_vita_packet_validator.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/discovery_client.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_mode_registry.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_slice_ownership.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_tx_gate.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_transmit_state.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_tx_output.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_tx_stream.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_waveform_metrics.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/hal_buffer.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/hal_listener.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/hal_vita.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/io_utils.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/sched_waveform.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/smartsdr_dsp_api.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/status_processor.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/traffic_cop.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/utils.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/vita_packet_sequence.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/vita_output.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/bit_pattern_matcher.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/gmsk_modem.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/thumbDV.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/aether_vocoder_backend.cpp
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/aether_sem_compat.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/aether_serial_compat.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/circular_buffer.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/main.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/resampler.c
+    )
+
+    add_executable(aether-dv-waveform ${DIGITAL_VOICE_WAVEFORM_SOURCES})
+    set_target_properties(aether-dv-waveform PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
+    target_compile_definitions(aether-dv-waveform PRIVATE _DEFAULT_SOURCE)
+    if(WIN32)
+        target_compile_definitions(aether-dv-waveform PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            _WINSOCK_DEPRECATED_NO_WARNINGS)
+    endif()
+    target_include_directories(aether-dv-waveform BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV
+        ${CMAKE_SOURCE_DIR}/third_party/crdv/include
+    )
+    find_package(Threads REQUIRED)
+    target_link_libraries(aether-dv-waveform PRIVATE Threads::Threads crdv::crdv)
+    if(NOT WIN32)
+        target_link_libraries(aether-dv-waveform PRIVATE m)
+    endif()
+    if(WIN32)
+        target_link_libraries(aether-dv-waveform PRIVATE ws2_32)
+    endif()
+    if(APPLE)
+        target_link_libraries(aether-dv-waveform PRIVATE "-framework IOKit")
+        set(DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR "${CMAKE_BINARY_DIR}/AetherSDR.app/Contents/MacOS")
+    else()
+        set(DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR "${CMAKE_BINARY_DIR}")
+    endif()
+    set_target_properties(aether-dv-waveform PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR}"
+    )
+    if(NOT MSVC)
+        target_compile_options(aether-dv-waveform PRIVATE -w)
+    endif()
+    add_custom_command(TARGET aether-dv-waveform POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DIGITAL_VOICE_WAVEFORM_DIR}/config/AetherDV.cfg"
+            "$<TARGET_FILE_DIR:aether-dv-waveform>/AetherDV.cfg"
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:aether-dv-waveform>/aether-dstar-waveform"
+            "$<TARGET_FILE_DIR:aether-dv-waveform>/aether-dstar-waveform.exe"
+            "$<TARGET_FILE_DIR:aether-dv-waveform>/ThumbDV.cfg"
+        COMMENT "Copying AetherDV waveform manifest"
+    )
+    add_test(NAME aether_dv_waveform_no_args
+        COMMAND ${CMAKE_COMMAND}
+            -DHELPER=$<TARGET_FILE:aether-dv-waveform>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_digital_voice_waveform_no_args.cmake
+    )
+
+    function(aether_enable_digital_voice_test_sanitizers target)
+        if(NOT WIN32 AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+            target_compile_options(${target} PRIVATE
+                -fsanitize=address,undefined
+                -fno-omit-frame-pointer)
+            target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+        endif()
+    endfunction()
+
+    add_executable(crdv_cleanroom_test
+        third_party/crdv/tests/test_main.c)
+    target_link_libraries(crdv_cleanroom_test PRIVATE crdv::crdv)
+    aether_enable_digital_voice_test_sanitizers(crdv_cleanroom_test)
+    add_test(NAME crdv_cleanroom_test COMMAND crdv_cleanroom_test)
+    add_test(NAME crdv_manifest_test
+        COMMAND ${CMAKE_COMMAND}
+            -DCRDV_DIR=${CRDV_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_crdv_manifest.cmake)
+
+    add_executable(crdv_quarantined_test
+        third_party/crdv/tests/quarantined_acceptance.c)
+    target_link_libraries(crdv_quarantined_test PRIVATE crdv::crdv)
+    add_test(NAME crdv_quarantined_test COMMAND crdv_quarantined_test)
+    set_tests_properties(crdv_quarantined_test PROPERTIES SKIP_RETURN_CODE 77)
+
+    add_executable(digital_voice_protocol_test
+        tests/digital_voice_protocol_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_ipv4_source_filter.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_smartsdr_command.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_tcp_frame_buffer.c)
+    target_include_directories(digital_voice_protocol_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    if(WIN32)
+        target_link_libraries(digital_voice_protocol_test PRIVATE ws2_32)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(digital_voice_protocol_test)
+    add_test(NAME digital_voice_protocol_test COMMAND digital_voice_protocol_test)
+
+    add_executable(digital_voice_buffer_queue_test
+        tests/digital_voice_buffer_queue_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_buffer_queue.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/hal_buffer.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/utils.c)
+    target_compile_definitions(digital_voice_buffer_queue_test PRIVATE _DEFAULT_SOURCE)
+    target_include_directories(digital_voice_buffer_queue_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    target_link_libraries(digital_voice_buffer_queue_test PRIVATE Threads::Threads)
+    if(NOT WIN32)
+        target_link_libraries(digital_voice_buffer_queue_test PRIVATE m)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(digital_voice_buffer_queue_test)
+    add_test(NAME digital_voice_buffer_queue_test COMMAND digital_voice_buffer_queue_test)
+
+    add_executable(digital_voice_slice_ownership_test
+        tests/digital_voice_slice_ownership_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_slice_ownership.c)
+    target_include_directories(digital_voice_slice_ownership_test PRIVATE
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    aether_enable_digital_voice_test_sanitizers(digital_voice_slice_ownership_test)
+    add_test(NAME digital_voice_slice_ownership_test
+        COMMAND digital_voice_slice_ownership_test)
+
+    add_executable(dstar_modem_test
+        tests/dstar_modem_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_dstar_protocol.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_smartsdr_command.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/utils.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/bit_pattern_matcher.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/gmsk_modem.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/circular_buffer.c
+    )
+    target_compile_definitions(dstar_modem_test PRIVATE _DEFAULT_SOURCE)
+    target_include_directories(dstar_modem_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV
+        ${CMAKE_SOURCE_DIR}/third_party/crdv/include)
+    target_link_libraries(dstar_modem_test PRIVATE Threads::Threads crdv::crdv)
+    if(NOT WIN32)
+        target_link_libraries(dstar_modem_test PRIVATE m)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(dstar_modem_test)
+    add_test(NAME dstar_modem_test COMMAND dstar_modem_test)
+
+    add_executable(dstar_transmit_state_test
+        tests/dstar_transmit_state_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_transmit_state.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_tx_output.c)
+    target_include_directories(dstar_transmit_state_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    target_link_libraries(dstar_transmit_state_test PRIVATE Threads::Threads)
+    if(NOT WIN32)
+        target_link_libraries(dstar_transmit_state_test PRIVATE m)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(dstar_transmit_state_test)
+    add_test(NAME dstar_transmit_state_test COMMAND dstar_transmit_state_test)
+
+    add_executable(digital_voice_tx_gate_test
+        tests/digital_voice_tx_gate_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_tx_gate.c)
+    target_include_directories(digital_voice_tx_gate_test PRIVATE
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    aether_enable_digital_voice_test_sanitizers(digital_voice_tx_gate_test)
+    add_test(NAME digital_voice_tx_gate_test COMMAND digital_voice_tx_gate_test)
+
+    add_executable(vita_packet_admission_test
+        tests/vita_packet_admission_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_vita_packet_validator.c)
+    target_include_directories(vita_packet_admission_test PRIVATE
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface
+        ${CMAKE_SOURCE_DIR}/third_party/crdv/include)
+    target_link_libraries(vita_packet_admission_test PRIVATE crdv::crdv)
+    aether_enable_digital_voice_test_sanitizers(vita_packet_admission_test)
+    add_test(NAME vita_packet_admission_test COMMAND vita_packet_admission_test)
+
+    add_executable(dstar_tx_path_test
+        tests/dstar_tx_path_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_smartsdr_command.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_dstar_protocol.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_tx_gate.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_transmit_state.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_tx_stream.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/utils.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/vita_output.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/bit_pattern_matcher.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/gmsk_modem.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/circular_buffer.c)
+    target_compile_definitions(dstar_tx_path_test PRIVATE _DEFAULT_SOURCE)
+    target_include_directories(dstar_tx_path_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV
+        ${CMAKE_SOURCE_DIR}/third_party/crdv/include)
+    target_link_libraries(dstar_tx_path_test PRIVATE Threads::Threads crdv::crdv)
+    if(NOT WIN32)
+        target_link_libraries(dstar_tx_path_test PRIVATE m)
+    endif()
+    if(WIN32)
+        target_link_libraries(dstar_tx_path_test PRIVATE ws2_32)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(dstar_tx_path_test)
+    add_test(NAME dstar_tx_path_test COMMAND dstar_tx_path_test)
+
+    add_executable(vita_packet_count_test
+        tests/vita_packet_count_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/vita_packet_sequence.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/vita_output.c)
+    target_compile_definitions(vita_packet_count_test PRIVATE _DEFAULT_SOURCE)
+    target_include_directories(vita_packet_count_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    aether_enable_digital_voice_test_sanitizers(vita_packet_count_test)
+    if(WIN32)
+        target_link_libraries(vita_packet_count_test PRIVATE ws2_32)
+    endif()
+    add_test(NAME vita_packet_count_test COMMAND vita_packet_count_test)
+
+    add_executable(dstar_waveform_metrics_test
+        tests/dstar_waveform_metrics_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/dstar_waveform_metrics.c)
+    target_include_directories(dstar_waveform_metrics_test PRIVATE
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface)
+    if(NOT WIN32)
+        target_link_libraries(dstar_waveform_metrics_test PRIVATE m)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(dstar_waveform_metrics_test)
+    add_test(NAME dstar_waveform_metrics_test COMMAND dstar_waveform_metrics_test)
+
+    add_executable(digital_voice_mode_registry_test
+        tests/digital_voice_mode_registry_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/aether_smartsdr_command.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/digital_voice_mode_registry.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/utils.c)
+    target_compile_definitions(digital_voice_mode_registry_test PRIVATE _DEFAULT_SOURCE)
+    target_include_directories(digital_voice_mode_registry_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface
+        ${CMAKE_SOURCE_DIR}/third_party/crdv/include)
+    target_link_libraries(digital_voice_mode_registry_test PRIVATE
+        Threads::Threads crdv::crdv)
+    if(WIN32)
+        target_link_libraries(digital_voice_mode_registry_test PRIVATE ws2_32)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(digital_voice_mode_registry_test)
+    add_test(NAME digital_voice_mode_registry_test COMMAND digital_voice_mode_registry_test)
+
+    add_executable(thumbdv_queue_test
+        tests/thumbdv_queue_test.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/hal_buffer.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface/utils.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/thumbDV.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/aether_sem_compat.c
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/aether_serial_compat.c)
+    target_compile_definitions(thumbdv_queue_test PRIVATE
+        _DEFAULT_SOURCE
+        AETHER_DSTAR_TESTING)
+    target_include_directories(thumbdv_queue_test BEFORE PRIVATE
+        $<$<BOOL:${WIN32}>:${DIGITAL_VOICE_WAVEFORM_DIR}/compat/windows>
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/compat
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/include
+        ${DIGITAL_VOICE_WAVEFORM_DIR}
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/SmartSDR_Interface
+        ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV)
+    target_link_libraries(thumbdv_queue_test PRIVATE Threads::Threads)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(thumbdv_queue_test PRIVATE util)
+    endif()
+    if(APPLE)
+        target_link_libraries(thumbdv_queue_test PRIVATE "-framework IOKit")
+    endif()
+    if(WIN32)
+        target_link_libraries(thumbdv_queue_test PRIVATE ws2_32)
+    endif()
+    aether_enable_digital_voice_test_sanitizers(thumbdv_queue_test)
+    add_test(NAME thumbdv_queue_test COMMAND thumbdv_queue_test)
+
+    add_dependencies(AetherSDR aether-dv-waveform)
 endif()
 
 # Windows: GUI app (no console window) + icon resource
@@ -1872,6 +2245,7 @@ add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 add_executable(slice_model_letter_test
     tests/slice_model_letter_test.cpp
     src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(slice_model_letter_test PRIVATE src)
 target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
@@ -2033,6 +2407,7 @@ add_executable(qso_recorder_slice_lifetime_test
     src/core/AsyncLogWriter.cpp
     src/core/Resampler.cpp
     src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
     src
@@ -2048,6 +2423,14 @@ target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
+add_executable(waveform_upload_state_test
+    tests/waveform_upload_state_test.cpp
+    src/core/WaveformUploadState.cpp
+)
+target_include_directories(waveform_upload_state_test PRIVATE src)
+target_link_libraries(waveform_upload_state_test PRIVATE Qt6::Core)
+add_test(NAME waveform_upload_state_test COMMAND waveform_upload_state_test)
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -2060,6 +2443,20 @@ else()
     target_link_libraries(zip_archive_test PRIVATE zlibstatic)
 endif()
 add_test(NAME zip_archive_test COMMAND zip_archive_test)
+
+add_executable(legacy_waveform_package_test
+    tests/legacy_waveform_package_test.cpp
+    src/core/LegacyWaveformPackage.cpp
+    src/core/ZipArchive.cpp
+)
+target_include_directories(legacy_waveform_package_test PRIVATE src)
+target_link_libraries(legacy_waveform_package_test PRIVATE Qt6::Core)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(legacy_waveform_package_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(legacy_waveform_package_test PRIVATE zlibstatic)
+endif()
+add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 
 # Pins the filter-before-merge invariant on the license-class-aware overload
 # of BandPlanManager::contiguousRegionsForBand (PR #3050, closing #2649). (#3060)
@@ -2127,6 +2524,7 @@ add_executable(adaptive_engine_test
     src/core/AdaptiveFilterEngine.cpp
     src/core/OccupiedRegion.cpp
     src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
 )
 target_include_directories(adaptive_engine_test PRIVATE src)
@@ -2263,6 +2661,48 @@ add_executable(flex_waveform_model_test
 )
 target_include_directories(flex_waveform_model_test PRIVATE src)
 target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME flex_waveform_model_test COMMAND flex_waveform_model_test)
+
+add_executable(digital_voice_waveform_process_test
+    tests/digital_voice_waveform_process_test.cpp
+    src/core/DigitalVoiceWaveformTelemetry.cpp
+    src/core/DigitalVoiceWaveformProcess.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+    src/models/DigitalVoiceWaveformHistory.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(digital_voice_waveform_process_test PRIVATE src)
+target_link_libraries(digital_voice_waveform_process_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME digital_voice_waveform_process_test COMMAND digital_voice_waveform_process_test)
+
+add_executable(digital_voice_slice_lifecycle_test
+    tests/digital_voice_slice_lifecycle_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(digital_voice_slice_lifecycle_test PRIVATE src)
+target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core)
+add_test(NAME digital_voice_slice_lifecycle_test COMMAND digital_voice_slice_lifecycle_test)
+
+add_executable(dstar_model_test
+    tests/dstar_model_test.cpp
+    src/models/DStarModel.cpp
+    src/core/DigitalVoiceWaveformTelemetry.cpp
+    src/core/DigitalVoiceWaveformProcess.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(dstar_model_test PRIVATE src)
+target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network)
+if(Qt6SerialPort_FOUND)
+    target_compile_definitions(dstar_model_test PRIVATE HAVE_SERIALPORT)
+    target_link_libraries(dstar_model_test PRIVATE Qt6::SerialPort)
+endif()
+add_test(NAME dstar_model_test COMMAND dstar_model_test)
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
@@ -2378,6 +2818,7 @@ add_executable(antenna_alias_test
     tests/antenna_alias_test.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
     src/core/AppSettings.cpp
 )
 target_include_directories(antenna_alias_test PRIVATE src)
@@ -2827,6 +3268,7 @@ add_executable(flex_control_dialog_size_test
     src/gui/SliceLabel.cpp
     src/gui/DragValuePopup.cpp
     src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/ThemeManager.cpp
     src/core/AppSettings.cpp
@@ -3009,10 +3451,34 @@ if(APPLE)
     install(TARGETS AetherSDR
         BUNDLE DESTINATION .
     )
+    # BUNDLE installation copies the existing app directory. Remove the
+    # superseded helper if an incremental build tree still contains it.
+    install(CODE [[
+        file(REMOVE
+            "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/aether-dstar-waveform"
+            "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/aether-dstar-waveform.exe"
+            "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/ThumbDV.cfg")
+    ]])
+    if(TARGET aether-dv-waveform)
+        install(PROGRAMS "$<TARGET_FILE:aether-dv-waveform>"
+            DESTINATION AetherSDR.app/Contents/MacOS
+        )
+        install(FILES third_party/smartsdr-dsp/config/AetherDV.cfg
+            DESTINATION AetherSDR.app/Contents/MacOS
+        )
+    endif()
 else()
     install(TARGETS AetherSDR
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
+    if(TARGET aether-dv-waveform)
+        install(TARGETS aether-dv-waveform
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+        install(FILES third_party/smartsdr-dsp/config/AetherDV.cfg
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
@@ -3028,4 +3494,9 @@ else()
     install(FILES packaging/linux/aethersdr.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        install(FILES packaging/linux/70-aethersdr-thumbdv.rules
+            DESTINATION lib/udev/rules.d
+        )
+    endif()
 endif()

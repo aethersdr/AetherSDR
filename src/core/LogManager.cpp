@@ -73,7 +73,7 @@ LogManager::LogManager()
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
         {"aether.ax25",       "AetherModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
-        {"aether.waveform",   "Waveform",    "Docker waveform image install upload"},
+        {"aether.waveform",   "Waveform",    "Docker waveform image install upload and local waveform helper lifecycle"},
         {"aether.kiwisdr",    "KiwiSDR",     "KiwiSDR remote RX antennas: connect, handshake, audio/waterfall negotiation, reconnect, profile lifecycle"},
         {"aether.kiwisdr.audio", "KiwiSDR Audio/DSP", "Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default)"},
         {"aether.automation", "Automation Bridge", "Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER_AUTOMATION only)"},

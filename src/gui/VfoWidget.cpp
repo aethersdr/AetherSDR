@@ -10,6 +10,7 @@
 #include "RxApplet.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/DigitalVoiceFeature.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "models/RadioModel.h"
@@ -2257,8 +2258,9 @@ void VfoWidget::buildTabContent()
         m_modeCombo = new GuardedComboBox;
         m_modeCombo->setFixedHeight(26);
         // Default modes — replaced dynamically when slice connects and sends mode_list
-        m_modeCombo->addItems({"USB", "LSB", "CW", "AM", "SAM", "FM",
-                                "NFM", "DFM", "DIGU", "DIGL", "RTTY"});
+        m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(
+            {"USB", "LSB", "CW", "AM", "SAM", "FM",
+             "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"}));
 #ifdef HAVE_RADE
         m_modeCombo->addItem("RADE");
 #endif
@@ -2333,8 +2335,10 @@ void VfoWidget::buildTabContent()
             btn->setContextMenuPolicy(Qt::CustomContextMenu);
             connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
                 QMenu menu;
-                for (const char* m : {"USB", "LSB", "SSB", "CW", "AM", "SAM",
-                                      "FM", "NFM", "DFM", "RTTY", "DIGU", "DIGL", "DIG"}) {
+                const QStringList modes = filterUnavailableDigitalVoiceModes(
+                    {"USB", "LSB", "SSB", "CW", "AM", "SAM",
+                     "FM", "NFM", "DFM", "DSTR", "RTTY", "DIGU", "DIGL", "DIG"});
+                for (const QString& m : modes) {
                     menu.addAction(m, [this, i, m] {
                         m_quickModeAssign[i] = m;
                         AppSettings::instance().setValue(
@@ -3932,7 +3936,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         QSignalBlocker sb(m_modeCombo);
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
-        m_modeCombo->addItems(modes);
+        m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(modes));
 #ifdef HAVE_RADE
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");
@@ -3945,7 +3949,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         QSignalBlocker sb(m_modeCombo);
         QString cur = m_modeCombo->currentText();
         m_modeCombo->clear();
-        m_modeCombo->addItems(m_slice->modeList());
+        m_modeCombo->addItems(filterUnavailableDigitalVoiceModes(m_slice->modeList()));
 #ifdef HAVE_RADE
         if (m_modeCombo->findText("RADE") < 0)
             m_modeCombo->addItem("RADE");

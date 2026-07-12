@@ -71,6 +71,18 @@ int main(int argc, char** argv)
         report("installedList: empty entry skipped", m.waveforms().size() == 2);
     }
 
+    // ── installed_list — tolerate double DEL emitted by some legacy packages ─
+    {
+        FlexWaveformModel m;
+
+        const QString list = QString("ThumbDV") + QChar(0x7F) + QChar(0x7F) + "v1.2.0";
+        m.handleInstalledList(makeKvs({{"installed_list", list}}));
+
+        report("installedList: double DEL entry retained", m.waveforms().size() == 1);
+        report("installedList: double DEL name", m.waveforms()[0].name == "ThumbDV");
+        report("installedList: double DEL version", m.waveforms()[0].version == "v1.2.0");
+    }
+
     // ── container add ──────────────────────────────────────────────────────
     {
         FlexWaveformModel m;
@@ -108,6 +120,7 @@ int main(int argc, char** argv)
         m.handleWfpStatus(makeKvs({{"power", "on"}, {"ready", "true"}, {"ipaddr", "192.168.1.10"}}));
 
         report("wfpStatus: wfpStatusChanged emitted",       spy.size() == 1);
+        report("wfpStatus: status seen",                    m.wfpStatusSeen());
         report("wfpStatus: power=on → wfpPowered=true",     m.wfpPowered());
         report("wfpStatus: ready=true → wfpReady=true",     m.wfpReady());
         report("wfpStatus: ipaddr stored",                  m.wfpIpAddress() == "192.168.1.10");
@@ -125,13 +138,53 @@ int main(int argc, char** argv)
         m.handleInstalledList(makeKvs({{"installed_list", QString("X") + QChar(0x7F) + "1"}}));
         m.handleWfpStatus(makeKvs({{"power", "on"}, {"ready", "true"}, {"ipaddr", "10.0.0.1"}}));
         m.handleContainerStatus(makeKvs({{"name", "C"}, {"version", "1"}}));
+        m.handleGenericStatus(makeKvs({{"name", "ExampleWaveform"}, {"phase", "complete"}}));
 
         m.clear();
 
         report("clear: waveforms empty",                    m.waveforms().isEmpty());
+        report("clear: status reports empty",               m.statusReports().isEmpty());
+        report("clear: wfpStatusSeen false",                !m.wfpStatusSeen());
         report("clear: wfpPowered false",                   !m.wfpPowered());
         report("clear: wfpReady false",                     !m.wfpReady());
         report("clear: wfpIpAddress empty",                 m.wfpIpAddress().isEmpty());
+    }
+
+    // ── generic waveform status reports are retained for diagnostics ───────
+    {
+        FlexWaveformModel m;
+        QSignalSpy spy(&m, &FlexWaveformModel::statusReportsChanged);
+
+        m.handleGenericStatus(makeKvs({
+            {"name", "ExampleWaveform"},
+            {"phase", "handshake"},
+            {"result", "success"},
+            {"backend", "termios"},
+        }));
+
+        report("genericStatus: statusReportsChanged emitted", spy.size() == 1);
+        report("genericStatus: one report retained", m.statusReports().size() == 1);
+        report("genericStatus: report phase retained",
+               m.statusReports().constFirst().value("phase") == "handshake");
+        report("genericStatus: report result retained",
+               m.statusReports().constFirst().value("result") == "success");
+    }
+
+    // ── command names are protocol-safe tokens ─────────────────────────────
+    {
+        FlexWaveformModel m;
+        QSignalSpy spy(&m, &FlexWaveformModel::commandReady);
+
+        m.requestRestart(QStringLiteral("ThumbDV"));
+        report("command: safe name emits command", spy.size() == 1);
+        report("command: restart command text",
+               spy.takeFirst().at(0).toString() == QStringLiteral("waveform restart ThumbDV"));
+
+        m.requestRemoveContainer(QStringLiteral("Bad\nName"));
+        report("command: newline name rejected", spy.isEmpty());
+
+        m.requestUninstall(QStringLiteral("Bad Name"));
+        report("command: whitespace name rejected", spy.isEmpty());
     }
 
     if (g_failed == 0)

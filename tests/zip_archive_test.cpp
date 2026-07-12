@@ -21,6 +21,14 @@ quint16 readLe16(const QByteArray& bytes, qsizetype offset)
     return quint16(p[0]) | (quint16(p[1]) << 8);
 }
 
+void writeLe32(QByteArray& bytes, qsizetype offset, quint32 value)
+{
+    bytes[offset] = static_cast<char>(value & 0xffU);
+    bytes[offset + 1] = static_cast<char>((value >> 8U) & 0xffU);
+    bytes[offset + 2] = static_cast<char>((value >> 16U) & 0xffU);
+    bytes[offset + 3] = static_cast<char>((value >> 24U) & 0xffU);
+}
+
 } // namespace
 
 int main()
@@ -86,6 +94,44 @@ int main()
     ok &= expect(dRoundTrip.contains(QStringLiteral("empty.txt"))
                  && dRoundTrip.value(QStringLiteral("empty.txt")).isEmpty(),
                  "deflated ZIP round-trip preserves empty files");
+
+    {
+        QByteArray oversized = AetherSDR::writeDeflatedZip({
+            {QStringLiteral("small.txt"), QByteArray("small")},
+        });
+        const qsizetype central = oversized.indexOf(QByteArray::fromHex("504b0102"));
+        ok &= expect(central >= 0, "oversized-entry fixture has central directory");
+        if (central >= 0) {
+            writeLe32(oversized, central + 24, 128U * 1024U * 1024U);
+            AetherSDR::ZipReadLimits limits;
+            limits.maxEntryUncompressedBytes = 1024;
+            limits.maxTotalUncompressedBytes = 2048;
+            QString limitError;
+            ok &= expect(AetherSDR::readZipEntries(oversized, &limitError, limits).isEmpty()
+                         && limitError.contains(QStringLiteral("safety limit")),
+                         "reader rejects declared expansion before allocating it");
+        }
+    }
+
+    {
+        const QByteArray duplicates = AetherSDR::writeStoredZip({
+            {QStringLiteral("same.txt"), QByteArray("first")},
+            {QStringLiteral("same.txt"), QByteArray("second")},
+        });
+        QString duplicateError;
+        ok &= expect(AetherSDR::readZipEntries(duplicates, &duplicateError).isEmpty()
+                     && duplicateError.contains(QStringLiteral("duplicate")),
+                     "reader rejects duplicate entry names");
+    }
+
+    {
+        AetherSDR::ZipReadLimits limits;
+        limits.maxEntries = 1;
+        QString countError;
+        ok &= expect(AetherSDR::readZipEntries(zip, &countError, limits).isEmpty()
+                     && countError.contains(QStringLiteral("too many entries")),
+                     "reader enforces the entry-count limit");
+    }
 
     return ok ? 0 : 1;
 }
