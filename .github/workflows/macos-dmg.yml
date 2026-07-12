@@ -202,6 +202,20 @@ jobs:
             codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$fw"
           done
 
+          # 2b. Sign any extra helper executables in Contents/MacOS/ (e.g.
+          # aether-dv-waveform, the D-STAR ThumbDV helper). The bundle sign in
+          # step 3 runs without --deep, and these aren't .dylib or frameworks,
+          # so without this they reach notarization unsigned — no Developer ID,
+          # no secure timestamp, no hardened runtime — and Apple rejects the
+          # whole archive. Skip the bundle's main executable (step 3 signs it).
+          find "$APP/Contents/MacOS" -maxdepth 1 -type f ! -name AetherSDR -print0 |
+            while IFS= read -r -d '' bin; do
+              if file "$bin" | grep -q "Mach-O"; then
+                echo "Signing helper executable: $bin"
+                codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$bin"
+              fi
+            done
+
           # 3. Sign the main app bundle last (no --deep)
           codesign --force --options runtime --timestamp \
             --entitlements packaging/macos/AetherSDR.entitlements \
