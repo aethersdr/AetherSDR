@@ -753,6 +753,12 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
             QTreeWidgetItem* next = previous && m_navigation->itemAbove(current) == previous
                 ? m_navigation->itemBelow(current)
                 : m_navigation->itemAbove(current);
+            // Arrowing up onto the topmost "RADIO" header has nothing above it,
+            // so itemAbove() is null and the highlight would rest on the header.
+            // Clamp to the first child page below instead (#4183).
+            if (!next || !next->parent()) {
+                next = m_navigation->itemBelow(current);
+            }
             if (next && next->parent()) {
                 m_navigation->setCurrentItem(next);
             }
@@ -787,9 +793,16 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
             category->setHidden(!anyVisible);
             category->setExpanded(true);
         }
-        if (firstVisible
-            && (!m_navigation->currentItem() || m_navigation->currentItem()->isHidden())) {
-            m_navigation->setCurrentItem(firstVisible);
+        // Stash the first match but do NOT make it current here: selecting it
+        // fires currentItemChanged → buildDeferredTab, which would eagerly
+        // construct and hardware-probe deferred pages (Audio, Serial,
+        // Peripherals) on every keystroke — the probe-on-navigate deferral
+        // #1776 exists to avoid. Enter commits the highlight instead (#4183).
+        m_searchFirstMatch = firstVisible;
+    });
+    connect(search, &QLineEdit::returnPressed, this, [this] {
+        if (m_searchFirstMatch && !m_searchFirstMatch->isHidden()) {
+            m_navigation->setCurrentItem(m_searchFirstMatch);
         }
     });
     auto* findAction = new QAction(this);

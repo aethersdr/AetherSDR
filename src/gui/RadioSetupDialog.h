@@ -126,6 +126,10 @@ private:
     QLabel* m_pageTitle{nullptr};
     QHash<QString, int> m_pageIndexes;
     QHash<int, QTreeWidgetItem*> m_pageItems;
+    // First visible navigation match for the current search text (#4183).
+    // Stashed by the search filter and committed on Enter, so typing highlights
+    // the match without eagerly building deferred, hardware-probing pages.
+    QTreeWidgetItem* m_searchFirstMatch{nullptr};
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;
     QLabel* m_flexControlStatusLabel{nullptr};
