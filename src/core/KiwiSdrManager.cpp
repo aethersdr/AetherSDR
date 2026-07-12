@@ -329,6 +329,14 @@ void KiwiSdrManager::setProfilePassword(const QString& id,
     }
 
     const bool changed = m_profilePasswords.value(id) != password;
+    const bool retryAfterError =
+        profilePasswordPersistenceState(id)
+        == KiwiSdrPasswordPersistenceState::Error;
+    if (!changed && m_loadedProfilePasswords.contains(id)
+        && !retryAfterError) {
+        return;
+    }
+
     m_profilePasswordRevisions.insert(
         id, m_profilePasswordRevisions.value(id) + 1);
     m_profilePasswords.insert(id, password);

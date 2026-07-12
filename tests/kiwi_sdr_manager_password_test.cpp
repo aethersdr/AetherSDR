@@ -146,6 +146,13 @@ int main(int argc, char** argv)
             return fail("latest password revision did not win");
         }
 
+        manager.setProfilePassword(first, "replacement");
+        if (store->pendingCount() != 0
+            || manager.profilePasswordPersistenceState(first)
+                != KiwiSdrPasswordPersistenceState::Stored) {
+            return fail("unchanged stored password queued another write");
+        }
+
         manager.setProfilePassword(first, "cannot-save");
         store->completeNext(
             {KiwiSdrCredentialResultCode::Error, {}, "keychain locked"});
@@ -155,6 +162,19 @@ int main(int argc, char** argv)
             || !manager.profilePasswordPersistenceDetail(first)
                     .contains("keychain locked")) {
             return fail("write failure did not preserve the session password and surface an error");
+        }
+
+        manager.setProfilePassword(first, "cannot-save");
+        if (store->pendingCount() != 1
+            || store->next().type != FakeCredentialStore::OperationType::Write
+            || manager.profilePasswordPersistenceState(first)
+                != KiwiSdrPasswordPersistenceState::Saving) {
+            return fail("unchanged password could not retry after a storage error");
+        }
+        store->completeNext({});
+        if (manager.profilePasswordPersistenceState(first)
+            != KiwiSdrPasswordPersistenceState::Stored) {
+            return fail("password retry did not restore stored state");
         }
 
         manager.setProfilePassword(second, "remove-me");

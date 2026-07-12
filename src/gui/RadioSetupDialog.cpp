@@ -4046,16 +4046,22 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 + kCheckBoxIndicator);
             rowLayout->addWidget(autoCheck, 3, 0, Qt::AlignLeft);
 
+            auto committed = std::make_shared<bool>(false);
             auto commitNewRow = [this, nameEdit, endpointEdit, passwordEdit,
-                                 autoCheck] {
+                                 autoCheck, committed] {
+                if (*committed) {
+                    return;
+                }
                 const QString name = nameEdit->text().trimmed();
                 const QString endpoint =
                     KiwiSdrClient::normalizeEndpoint(endpointEdit->text());
                 if (name.isEmpty() || endpoint.isEmpty()) {
                     return;
                 }
+                *committed = true;
                 const QString id = m_kiwiSdrManager->addProfile(name, endpoint);
                 if (id.isEmpty()) {
+                    *committed = false;
                     return;
                 }
                 m_kiwiSdrManager->setProfilePassword(id, passwordEdit->text());
