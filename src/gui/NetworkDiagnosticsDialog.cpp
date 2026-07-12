@@ -39,6 +39,7 @@
 #include <QTime>
 #include <QMenu>
 #include <QColor>
+#include <QPalette>
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <functional>
@@ -970,9 +971,14 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     split->setSizes({245, 735});
     body->addWidget(split, 1);
 
-    auto addCategory = [navigation](const QString& name) {
+    // Category headers are bold and dimmed (matching the sibling Radio Setup
+    // browser's intent). The dim colour is snapshotted by value so the lambda
+    // need not capture `this` just to reach palette().
+    const QColor categoryTextColor = palette().color(QPalette::Disabled, QPalette::Text);
+    auto addCategory = [navigation, categoryTextColor](const QString& name) {
         auto* item = new QTreeWidgetItem(navigation, {name});
         item->setFlags(Qt::ItemIsEnabled);
+        item->setForeground(0, categoryTextColor);
         QFont font = item->font(0);
         font.setBold(true);
         item->setFont(0, font);
@@ -1545,9 +1551,17 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
             return;
         }
         if (!current->parent()) {
-            QTreeWidgetItem* next = previous && navigation->itemAbove(current) == previous
-                ? navigation->itemBelow(current)
-                : navigation->itemAbove(current);
+            const bool movingDown = previous && navigation->itemAbove(current) == previous;
+            QTreeWidgetItem* next = movingDown ? navigation->itemBelow(current)
+                                               : navigation->itemAbove(current);
+            // At a list edge the directional neighbour is null (e.g. arrow-up
+            // onto the first category, whose itemAbove() is null) — fall back
+            // to the nearest page in the opposite direction so the highlight
+            // never strands on a header with no page shown.
+            if (!next || !next->parent()) {
+                next = movingDown ? navigation->itemAbove(current)
+                                  : navigation->itemBelow(current);
+            }
             if (next && next->parent()) {
                 navigation->setCurrentItem(next);
             }
