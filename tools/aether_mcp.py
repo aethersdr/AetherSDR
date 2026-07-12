@@ -536,7 +536,7 @@ def handle_tool(name, args):
             try:
                 timeout = max(timeout, int(args["value"]) / 1000 + 10)
             except (ValueError, TypeError):
-                pass
+                pass  # non-numeric wait value → keep the default timeout
         return text_result(bridge_request(req, timeout=timeout))
 
     if name == "disconnect":
@@ -557,14 +557,8 @@ def handle_tool(name, args):
         return text_result(bridge_request(
             {"cmd": "tune", "value": str(args["mhz"])}))
 
-    if name in ("slice", "record"):
+    if name in ("slice", "record", "pan"):
         req = {"cmd": name, "action": args["action"]}
-        if args.get("value"):
-            req["value"] = str(args["value"])
-        return text_result(bridge_request(req))
-
-    if name == "pan":
-        req = {"cmd": "pan", "action": args["action"]}
         if args.get("value"):
             req["value"] = str(args["value"])
         return text_result(bridge_request(req))
