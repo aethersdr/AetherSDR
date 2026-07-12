@@ -125,10 +125,13 @@ contributors to self-verify UI changes before requesting review.
      ```
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
 
-**Tools exposed** (20 typed tools): introspection — `bridge_status`,
+**Tools exposed** (22 typed tools): introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline),
-`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`,
+`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`
+(on a target-not-found failure it appends `did_you_mean` candidates),
 `shortcut`, `tune`, `slice`, `pan`, `record`, `mark`, `window`, `menu`;
+assert/await — `assert_state` / `wait_for` (read a model property and
+check/await a value — validation reads as pass/fail, not a manual diff);
 connection — `connect` / `disconnect`; audio — `capture_audio`; and
 `bridge_command` (raw escape hatch for everything else).
 
@@ -141,10 +144,16 @@ cover the common cases), the transmit-keying verbs (`key`, `txtest`,
 niche/complex ones (`dss`, `layout`, `scale`, `panmessage`, `tci`,
 `station`, `resize`, `qrz`).
 
+**Prompts and resources.** The server also exposes an MCP **prompt**,
+`validate_ui_change` (the loop below as a guided workflow — pass your
+`widget` and `change`), and read-only **resources** that pull live state
+as context without a tool round-trip: `aethersdr://widget-tree`,
+`aethersdr://state/radio`, `.../slices`, `.../pans`, `aethersdr://verbs`.
+
 A typical assistant validation loop for a PR:
 `bridge_status` → `dump_tree filter=<your widget>` → `invoke` the
-control you changed → `get_state` to assert the model reacted →
-`grab_widget` for a visual check.
+control you changed → `assert_state` / `wait_for` on the model property
+that should have changed → `grab_widget` for a visual check.
 
 **Access token.** Enabling the bridge in Radio Setup → Network mints a
 random token (stored in your OS secret store via QtKeychain — macOS

@@ -36,6 +36,7 @@ Env:
 """
 
 import base64
+import difflib
 import glob
 import json
 import os
@@ -398,6 +399,34 @@ TOOLS = [
         }},
     },
     {
+        "name": "wait_for",
+        "description": (
+            "Poll a model property until it equals `expected` or `timeout_s` "
+            "elapses — for awaiting async state (radio connected, a slice "
+            "active) instead of guessing a sleep. Same model/selector/property "
+            "as get_state. Returns matched:true/false with the last value."),
+        "inputSchema": {"type": "object", "properties": {
+            "model": {"type": "string"},
+            "property": {"type": "string"},
+            "expected": {"type": "string", "description": "value to wait for"},
+            "selector": {"type": "string"},
+            "timeout_s": {"type": "number", "description": "default 10, max 120"},
+        }, "required": ["model", "property", "expected"]},
+    },
+    {
+        "name": "assert_state",
+        "description": (
+            "One-shot assertion: read a model property and compare to "
+            "`expected`, returning pass:true/false plus the actual value — so "
+            "an agent's validation reads as a clean check, not a manual diff."),
+        "inputSchema": {"type": "object", "properties": {
+            "model": {"type": "string"},
+            "property": {"type": "string"},
+            "expected": {"type": "string"},
+            "selector": {"type": "string"},
+        }, "required": ["model", "property", "expected"]},
+    },
+    {
         "name": "bridge_command",
         "description": (
             "Raw escape hatch for the verbs without a dedicated tool — "
@@ -427,6 +456,80 @@ def text_result(obj):
 
 def error_result(msg):
     return {"content": [{"type": "text", "text": f"Error: {msg}"}], "isError": True}
+
+
+# ── Robustness helpers (#4188 area 4) ────────────────────────────────────────
+
+def _values_equal(actual, expected):
+    """Loose compare: JSON values arrive typed, `expected` arrives as text."""
+    if actual is None:
+        return False
+    if isinstance(actual, bool):
+        return str(actual).lower() == str(expected).strip().lower()
+    if isinstance(actual, (int, float)):
+        try:
+            return float(actual) == float(expected)
+        except (ValueError, TypeError):
+            return str(actual) == str(expected)
+    return str(actual).strip() == str(expected).strip()
+
+
+def _get_property(model, selector, prop, timeout=REQUEST_TIMEOUT_S):
+    """`get <model> [selector] <property>` → the raw {ok, property, value} dict."""
+    req = {"cmd": "get", "model": model, "property": prop}
+    if selector:
+        req["selector"] = str(selector)
+    return bridge_request(req, timeout=timeout)
+
+
+_RESOLVE_ERR_HINTS = ("no widget", "not found", "could not", "no match",
+                      "unresolved", "resolve", "unknown target", "no such")
+
+
+def _collect_widget_labels(node, out):
+    """Gather objectName / accessibleName / class strings from a dumpTree node."""
+    if not isinstance(node, dict):
+        return
+    for k in ("objectName", "accessibleName", "class", "text"):
+        v = node.get(k)
+        if isinstance(v, str) and v.strip():
+            out.add(v.strip())
+    for child in (node.get("children") or []):
+        _collect_widget_labels(child, out)
+
+
+def _suggest_targets(target, limit=5):
+    """Fuzzy-match a failed target against the live widget tree → candidates."""
+    try:
+        tree = bridge_request({"cmd": "dumpTree"}, timeout=15)
+    except Exception:  # noqa: BLE001 — suggestions are best-effort
+        return []
+    labels = set()
+    for root in (tree.get("roots") or []) if isinstance(tree, dict) else []:
+        _collect_widget_labels(root, labels)
+    if not labels:
+        return []
+    lc = {s.lower(): s for s in labels}
+    hits = difflib.get_close_matches(str(target).lower(), list(lc), n=limit, cutoff=0.4)
+    # De-dup while preserving the original-cased label.
+    seen, out = set(), []
+    for h in hits:
+        s = lc[h]
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _maybe_suggest(resp, target):
+    """If `resp` is a target-resolution failure, append did_you_mean candidates."""
+    if not isinstance(resp, dict) or resp.get("ok"):
+        return resp
+    err = str(resp.get("error", "")).lower()
+    if not any(h in err for h in _RESOLVE_ERR_HINTS):
+        return resp
+    sugg = _suggest_targets(target)
+    return dict(resp, did_you_mean=sugg) if sugg else resp
 
 
 def handle_tool(name, args):
@@ -502,7 +605,9 @@ def handle_tool(name, args):
         req = {"cmd": "invoke", "target": args["target"], "action": args["action"]}
         if args.get("value") is not None:
             req["value"] = str(args["value"])
-        return text_result(bridge_request(req))
+        # On a target-resolution failure, append fuzzy candidates from the tree
+        # so the agent doesn't have to dump_tree and guess again.
+        return text_result(_maybe_suggest(bridge_request(req), args["target"]))
 
     if name == "get_state":
         req = {"cmd": "get", "model": args["model"]}
@@ -586,6 +691,37 @@ def handle_tool(name, args):
             req["action"] = str(args["scope"])
         return text_result(bridge_request(req))
 
+    if name == "assert_state":
+        resp = _get_property(args["model"], args.get("selector"), args["property"])
+        if isinstance(resp, dict) and "error" in resp:
+            return text_result({"pass": False, "error": resp["error"]})
+        actual = resp.get("value") if isinstance(resp, dict) else None
+        return text_result({"pass": _values_equal(actual, args["expected"]),
+                            "actual": actual, "expected": args["expected"]})
+
+    if name == "wait_for":
+        expected = args["expected"]
+        timeout = max(0.0, min(float(args.get("timeout_s", 10)), 120.0))
+        deadline = time.monotonic() + timeout
+        interval, actual, last_err = 0.5, None, None
+        while True:
+            resp = _get_property(args["model"], args.get("selector"),
+                                 args["property"])
+            if isinstance(resp, dict) and "error" in resp:
+                last_err = resp["error"]        # keep polling — property may
+            else:                               # not exist until state arrives
+                actual = resp.get("value") if isinstance(resp, dict) else None
+                if _values_equal(actual, expected):
+                    return text_result({"matched": True, "value": actual,
+                                        "expected": expected})
+            if time.monotonic() >= deadline:
+                out = {"matched": False, "value": actual, "expected": expected,
+                       "timeout_s": timeout}
+                if last_err and actual is None:
+                    out["last_error"] = last_err
+                return text_result(out)
+            time.sleep(interval)
+
     if name == "bridge_command":
         req = args.get("request")
         if not isinstance(req, dict) or "cmd" not in req:
@@ -594,6 +730,88 @@ def handle_tool(name, args):
         return text_result(bridge_request(req, timeout=timeout))
 
     return error_result(f"Unknown tool: {name}")
+
+
+# ── MCP prompts (#4188 area 3) ───────────────────────────────────────────────
+# Server-provided, reusable workflows so every assistant gets the validation
+# loop out of the box instead of reinventing it.
+
+PROMPTS = [
+    {
+        "name": "validate_ui_change",
+        "description": ("Guided workflow to validate a UI change against the "
+                        "running app using this server's tools."),
+        "arguments": [
+            {"name": "widget", "description": "the control/widget you changed "
+             "(objectName or accessibleName)", "required": False},
+            {"name": "change", "description": "one line on what should now be "
+             "different", "required": False},
+        ],
+    },
+]
+
+
+def prompt_get(name, arguments):
+    if name != "validate_ui_change":
+        return None
+    widget = (arguments or {}).get("widget") or "<your widget>"
+    change = (arguments or {}).get("change") or "<what should be different>"
+    text = (
+        f"Validate this AetherSDR change against the running app: {change}\n\n"
+        "Drive it with the MCP tools, don't guess:\n"
+        f"1. `bridge_status` — confirm the app is up and which instance.\n"
+        f"2. `dump_tree` with filter=\"{widget}\" — find the control's exact "
+        "target name (objectName / accessibleName).\n"
+        f"3. `invoke` that target to exercise the change (or `tune`/`slice`/"
+        "`pan` for a radio-level intent). If the target isn't found, use the "
+        "`did_you_mean` candidates it returns.\n"
+        "4. `assert_state` (or `wait_for` if it's async) on the model property "
+        "that should have changed — e.g. get_state model=slice property=... — "
+        "so the check reads pass/fail, not a manual diff.\n"
+        f"5. `grab_widget` target=\"{widget}\" for a visual confirmation.\n\n"
+        "Report the assert_state result and attach the grab. Keep TX out of it "
+        "unless the change is specifically a transmit path."
+    )
+    return {"description": "Validate a UI change against the running app",
+            "messages": [{"role": "user",
+                          "content": {"type": "text", "text": text}}]}
+
+
+# ── MCP resources (#4188 area 3) ─────────────────────────────────────────────
+# Read-only live state the model can pull as context without a tool round-trip.
+# Each read fetches fresh from the bridge.
+
+RESOURCES = [
+    {"uri": "aethersdr://widget-tree", "name": "Widget tree",
+     "description": "ARIA-style snapshot of the whole widget hierarchy",
+     "mimeType": "application/json"},
+    {"uri": "aethersdr://state/radio", "name": "Radio state",
+     "description": "get radio — connection, model, callsign, …",
+     "mimeType": "application/json"},
+    {"uri": "aethersdr://state/slices", "name": "Slices",
+     "description": "get slices — all receiver slices", "mimeType": "application/json"},
+    {"uri": "aethersdr://state/pans", "name": "Panadapters",
+     "description": "get pans — all panadapters", "mimeType": "application/json"},
+    {"uri": "aethersdr://verbs", "name": "Bridge verb catalog",
+     "description": "every bridge verb with aliases + help", "mimeType": "application/json"},
+]
+
+_RESOURCE_REQUESTS = {
+    "aethersdr://widget-tree": {"cmd": "dumpTree"},
+    "aethersdr://state/radio": {"cmd": "get", "model": "radio"},
+    "aethersdr://state/slices": {"cmd": "get", "model": "slices"},
+    "aethersdr://state/pans": {"cmd": "get", "model": "pans"},
+    "aethersdr://verbs": {"cmd": "verbs"},
+}
+
+
+def resource_read(uri):
+    req = _RESOURCE_REQUESTS.get(uri)
+    if req is None:
+        return None
+    data = bridge_request(req)
+    return {"contents": [{"uri": uri, "mimeType": "application/json",
+                          "text": json.dumps(data, indent=2)}]}
 
 
 # --------------------------------------------------------------------------
@@ -624,7 +842,7 @@ def main():
         if method == "initialize":
             resp = {"jsonrpc": "2.0", "id": mid, "result": {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
                 "serverInfo": SERVER_INFO}}
         elif method == "notifications/initialized":
             continue
@@ -639,6 +857,35 @@ def main():
             except Exception as e:  # noqa: BLE001 — surface to the model
                 result = error_result(str(e))
             resp = {"jsonrpc": "2.0", "id": mid, "result": result}
+        elif method == "prompts/list":
+            resp = {"jsonrpc": "2.0", "id": mid, "result": {"prompts": PROMPTS}}
+        elif method == "prompts/get":
+            params = msg.get("params") or {}
+            got = prompt_get(params.get("name"), params.get("arguments"))
+            if got is None:
+                resp = {"jsonrpc": "2.0", "id": mid,
+                        "error": {"code": -32602,
+                                  "message": f"unknown prompt: {params.get('name')}"}}
+            else:
+                resp = {"jsonrpc": "2.0", "id": mid, "result": got}
+        elif method == "resources/list":
+            resp = {"jsonrpc": "2.0", "id": mid, "result": {"resources": RESOURCES}}
+        elif method == "resources/read":
+            params = msg.get("params") or {}
+            try:
+                got = resource_read(params.get("uri"))
+            except Exception as e:  # noqa: BLE001 — bridge may be down
+                got = None
+                read_err = str(e)
+            else:
+                read_err = None
+            if got is None:
+                resp = {"jsonrpc": "2.0", "id": mid,
+                        "error": {"code": -32602,
+                                  "message": read_err or
+                                  f"unknown resource: {params.get('uri')}"}}
+            else:
+                resp = {"jsonrpc": "2.0", "id": mid, "result": got}
         elif mid is not None:
             resp = {"jsonrpc": "2.0", "id": mid,
                     "error": {"code": -32601, "message": f"Unknown: {method}"}}

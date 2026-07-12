@@ -210,10 +210,106 @@ def test_jsonrpc_robustness():
     check("loop keeps serving after bad input", len(served) == 1, str(resps))
 
 
+def test_robustness_tools():
+    # assert_state / wait_for read a `get <model> property` and compare `value`.
+    captured = []
+
+    def fake(obj, timeout=None):
+        captured.append(obj)
+        if obj.get("cmd") == "get":
+            return {"ok": True, "property": obj.get("property"), "value": "42"}
+        return {"ok": True}
+
+    orig = aether_mcp.bridge_request
+    aether_mcp.bridge_request = fake
+    try:
+        captured.clear()
+        r = json.loads(aether_mcp.handle_tool(
+            "assert_state", {"model": "slice", "selector": "active",
+                             "property": "gain", "expected": "42"}
+        )["content"][0]["text"])
+        req = captured[-1]
+        check("assert_state → get model/selector/property",
+              req.get("cmd") == "get" and req.get("model") == "slice"
+              and req.get("selector") == "active" and req.get("property") == "gain",
+              str(req))
+        check("assert_state pass on equal value (42==42)", r.get("pass") is True, str(r))
+
+        r = json.loads(aether_mcp.handle_tool(
+            "assert_state", {"model": "slice", "property": "gain", "expected": "9"}
+        )["content"][0]["text"])
+        check("assert_state fail on mismatch (42!=9)",
+              r.get("pass") is False and r.get("actual") == "42", str(r))
+
+        r = json.loads(aether_mcp.handle_tool(
+            "wait_for", {"model": "slice", "property": "gain",
+                         "expected": "42", "timeout_s": 2}
+        )["content"][0]["text"])
+        check("wait_for matches immediately when value already equal",
+              r.get("matched") is True and r.get("value") == "42", str(r))
+    finally:
+        aether_mcp.bridge_request = orig
+
+
+def test_fuzzy_suggest():
+    # A resolution-failure response gets did_you_mean candidates from the tree.
+    def fake(obj, timeout=None):
+        if obj.get("cmd") == "invoke":
+            return {"ok": False, "error": "no widget matches 'Mastr volume'"}
+        if obj.get("cmd") == "dumpTree":
+            return {"ok": True, "roots": [
+                {"objectName": "root", "children": [
+                    {"accessibleName": "Master volume"},
+                    {"accessibleName": "Headphone volume"}]}]}
+        return {"ok": True}
+
+    orig = aether_mcp.bridge_request
+    aether_mcp.bridge_request = fake
+    try:
+        r = json.loads(aether_mcp.handle_tool(
+            "invoke", {"target": "Mastr volume", "action": "click"}
+        )["content"][0]["text"])
+        check("invoke failure appends did_you_mean",
+              "Master volume" in (r.get("did_you_mean") or []), str(r))
+    finally:
+        aether_mcp.bridge_request = orig
+
+
+def test_prompts_and_resources():
+    caps = drive_main([json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize"})])[0]["result"]["capabilities"]
+    check("initialize advertises prompts+resources",
+          "prompts" in caps and "resources" in caps, str(caps))
+
+    pl = drive_main([json.dumps(
+        {"jsonrpc": "2.0", "id": 2, "method": "prompts/list"})])[0]["result"]["prompts"]
+    check("prompts/list has validate_ui_change",
+          any(p["name"] == "validate_ui_change" for p in pl), str(pl))
+
+    pg = drive_main([json.dumps(
+        {"jsonrpc": "2.0", "id": 3, "method": "prompts/get",
+         "params": {"name": "validate_ui_change", "arguments": {"widget": "W"}}})])[0]
+    check("prompts/get returns messages",
+          "messages" in pg.get("result", {}), str(pg))
+
+    rl = drive_main([json.dumps(
+        {"jsonrpc": "2.0", "id": 4, "method": "resources/list"})])[0]["result"]["resources"]
+    check("resources/list includes widget-tree",
+          any(x["uri"] == "aethersdr://widget-tree" for x in rl), str(rl))
+
+    bad = drive_main([json.dumps(
+        {"jsonrpc": "2.0", "id": 5, "method": "prompts/get",
+         "params": {"name": "nope"}})])[0]
+    check("unknown prompt → error", "error" in bad, str(bad))
+
+
 if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
     test_jsonrpc_robustness()
+    test_robustness_tools()
+    test_fuzzy_suggest()
+    test_prompts_and_resources()
     if _failures:
         print(f"\n{len(_failures)} FAILED: {_failures}")
         sys.exit(1)
