@@ -98,6 +98,12 @@ private:
                 QString::fromLatin1(kKeychainService));
         }
         job->setKey(key);
+        // Auto-delete the job after it finishes, matching every other QKeychain
+        // user in the tree (SmartLinkClient, CallsignLookupService,
+        // AutomationBridgeSettings). Otherwise the job leaks — and because the
+        // finished handler captures a shared_ptr to this store, a leaked job
+        // would pin the whole credential store alive for the process lifetime.
+        job->setAutoDelete(true);
 
         const std::shared_ptr<KeychainKiwiSdrCredentialStore> self =
             shared_from_this();
