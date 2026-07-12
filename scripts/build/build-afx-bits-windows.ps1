@@ -33,7 +33,11 @@
 .PARAMETER Arch
     Target SM architecture. Currently the app's pack is per-arch and the manifest
     pins one zip per arch — pick the one matching the test GPU. Valid: sm_75,
-    sm_86, sm_89, sm_100.
+    sm_86, sm_89, sm_100, sm_120.
+    sm_120 is consumer Blackwell (RTX 50-series, e.g. RTX 5060 Ti / 5090). It
+    reuses NVIDIA's 'blackwell' denoiser model — NvAFX_Load builds the TensorRT
+    engine on-device with the bundled TRT 10.9, which supports sm_120. Verify on
+    a 50-series card that NvAFX_Load succeeds before pinning + publishing (#3933).
 
 .PARAMETER OutDir
     Where the staged tree and final .zip are written.
@@ -53,7 +57,7 @@ param(
     [string]$SdkDir,
 
     [Parameter()]
-    [ValidateSet('sm_75','sm_86','sm_89','sm_100')]
+    [ValidateSet('sm_75','sm_86','sm_89','sm_100','sm_120')]
     [string]$Arch = 'sm_89',
 
     [Parameter()]
@@ -87,6 +91,7 @@ $archTag = switch ($Arch) {
     'sm_86'  { 'ampere' }
     'sm_89'  { 'ada' }
     'sm_100' { 'blackwell' }
+    'sm_120' { 'blackwell' }   # consumer Blackwell (RTX 50-series) reuses the blackwell model
 }
 Log "Target arch: $Arch (NGC tag: $archTag)"
 
