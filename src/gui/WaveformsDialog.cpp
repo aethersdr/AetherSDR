@@ -6,6 +6,7 @@
 #include "core/WaveformInstaller.h"
 #include "models/FlexWaveformModel.h"
 #include "models/RadioModel.h"
+#include "gui/WaveformInstallGate.h"   // #4210 pure Docker-install gate policy
 
 #include <QAction>
 #include <QCheckBox>
@@ -62,11 +63,8 @@ struct WfpSupportUiState {
     bool supported{false};
 };
 
-bool isKnownNonWfpPlatform(RadioPlatform platform)
-{
-    return platform == RadioPlatform::Microburst
-        || platform == RadioPlatform::DeepEddy;
-}
+// isKnownNonWfpPlatform() and the DockerWaveformInstallBlocker gate policy live
+// in gui/WaveformInstallGate.h so they're unit-testable (#4210).
 
 WfpSupportUiState wfpSupportUiState(const RadioModel* radioModel)
 {
@@ -135,31 +133,34 @@ QString wfpRuntimeStatusText(const FlexWaveformModel& wfModel)
 QString dockerInstallBlockerText(const RadioModel* radioModel,
                                  const FlexWaveformModel& wfModel)
 {
-    // Gate the Docker install action on live WFP runtime state plus the genuine
-    // hard-incompatibility platform check only. Do NOT additionally require the
-    // "wfp" license feature to report enabled=1 (#4210 regression from #4186):
-    // that flag reflects a SmartSDR+/EA-style entitlement, not whether the radio
-    // will accept a file-upload install — the two are decoupled on some
-    // firmware/license configs, so a radio with WFP powered+ready (and even a
-    // Docker waveform already installed and running) could report the feature
-    // disabled and be wrongly blocked. wfpSupportUiState()/the "WFP Support" pill
-    // stay as-is for informational display; they just don't gate the action.
-    if (!radioModel || !radioModel->isConnected()) {
+    // Gate on the radio's live WFP runtime state plus the genuine no-WFP-hardware
+    // platform check only — not the "wfp" license feature (#4210; the policy and
+    // its rationale live in WaveformInstallGate.h). wfpSupportUiState()/the "WFP
+    // Support" pill stay informational and do not gate the action. This maps the
+    // pure gate result to the user-facing message.
+    const bool connected = radioModel && radioModel->isConnected();
+    const RadioPlatform platform = radioModel
+        ? radioModel->capabilities().platform
+        : RadioPlatform::Unknown;
+    switch (dockerWaveformInstallBlocker(connected, platform,
+                                         wfModel.wfpStatusSeen(),
+                                         wfModel.wfpPowered(),
+                                         wfModel.wfpReady())) {
+    case DockerWaveformInstallBlocker::None:
+        return {};
+    case DockerWaveformInstallBlocker::NotConnected:
         return QObject::tr(
             "Connect to a radio before installing Docker waveform images.");
-    }
-    if (isKnownNonWfpPlatform(radioModel->capabilities().platform)) {
+    case DockerWaveformInstallBlocker::UnsupportedPlatform:
         return QObject::tr(
             "This radio platform does not support on-radio Docker waveform "
             "deployment.");
-    }
-    if (!wfModel.wfpStatusSeen()) {
-        return QObject::tr("WFP runtime status has not been reported by this radio.");
-    }
-    if (!wfModel.wfpPowered() || !wfModel.wfpReady()) {
+    case DockerWaveformInstallBlocker::RuntimeStatusUnknown:
+        return QObject::tr(
+            "WFP runtime status has not been reported by this radio.");
+    case DockerWaveformInstallBlocker::WfpNotReady:
         return wfpRuntimeStatusText(wfModel);
     }
-
     return {};
 }
 

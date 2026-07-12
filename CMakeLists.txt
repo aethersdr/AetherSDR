@@ -2673,6 +2673,14 @@ target_include_directories(flex_waveform_model_test PRIVATE src)
 target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME flex_waveform_model_test COMMAND flex_waveform_model_test)
 
+# Docker-waveform install gate policy (#4210) — header-only, pure logic.
+add_executable(waveform_install_gate_test
+    tests/waveform_install_gate_test.cpp
+)
+target_include_directories(waveform_install_gate_test PRIVATE src)
+target_link_libraries(waveform_install_gate_test PRIVATE Qt6::Core)
+add_test(NAME waveform_install_gate_test COMMAND waveform_install_gate_test)
+
 add_executable(digital_voice_waveform_process_test
     tests/digital_voice_waveform_process_test.cpp
     src/core/DigitalVoiceWaveformTelemetry.cpp
