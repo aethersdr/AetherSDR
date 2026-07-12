@@ -214,9 +214,10 @@ void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
                                   quint64 requestId, const QVariant& arg)
 {
     // Translate a neutral amp/tuner intent (#4092/#4094) into the SmartSDR relay
-    // wire. The device object handle is a Flex detail carried in the vendor arg
-    // (supplied by RadioModel, which owns handle extraction). Async contract: an
-    // awaited call (requestId != 0) gets exactly one reply, never a hang.
+    // wire. The device object handle is a Flex detail resolved from this backend's
+    // own decode-side state (m_ampHandle/m_tunerHandle, #4198) — the intent no
+    // longer carries it. Async contract: an awaited call (requestId != 0) gets
+    // exactly one reply, never a hang.
     const auto fail = [&](const QString& why) {
         if (requestId != 0)
             emit extensionError(requestId, why);
@@ -226,22 +227,20 @@ void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
         return;
     }
 
-    const QVariantMap a = arg.toMap();
-    const QString handle = a.value(QStringLiteral("handle")).toString();
-    const bool on = a.value(QStringLiteral("on")).toBool();
+    const bool on = arg.toMap().value(QStringLiteral("on")).toBool();
     QString cmd;
     if (verb == QLatin1String("amp.operate")) {
-        if (handle.isEmpty()) { fail(QStringLiteral("flex amp.operate: no handle")); return; }
-        cmd = QStringLiteral("amplifier set %1 operate=%2").arg(handle).arg(on ? 1 : 0);
+        if (m_ampHandle.isEmpty()) { fail(QStringLiteral("flex amp.operate: no amp handle")); return; }
+        cmd = QStringLiteral("amplifier set %1 operate=%2").arg(m_ampHandle).arg(on ? 1 : 0);
     } else if (verb == QLatin1String("tuner.operate")) {
-        if (handle.isEmpty()) { fail(QStringLiteral("flex tuner.operate: no handle")); return; }
-        cmd = QStringLiteral("tgxl set handle=%1 mode=%2").arg(handle).arg(on ? 1 : 0);
+        if (m_tunerHandle.isEmpty()) { fail(QStringLiteral("flex tuner.operate: no tuner handle")); return; }
+        cmd = QStringLiteral("tgxl set handle=%1 mode=%2").arg(m_tunerHandle).arg(on ? 1 : 0);
     } else if (verb == QLatin1String("tuner.bypass")) {
-        if (handle.isEmpty()) { fail(QStringLiteral("flex tuner.bypass: no handle")); return; }
-        cmd = QStringLiteral("tgxl set handle=%1 bypass=%2").arg(handle).arg(on ? 1 : 0);
+        if (m_tunerHandle.isEmpty()) { fail(QStringLiteral("flex tuner.bypass: no tuner handle")); return; }
+        cmd = QStringLiteral("tgxl set handle=%1 bypass=%2").arg(m_tunerHandle).arg(on ? 1 : 0);
     } else if (verb == QLatin1String("tuner.autotune")) {
-        if (handle.isEmpty()) { fail(QStringLiteral("flex tuner.autotune: no handle")); return; }
-        cmd = QStringLiteral("tgxl autotune handle=%1").arg(handle);
+        if (m_tunerHandle.isEmpty()) { fail(QStringLiteral("flex tuner.autotune: no tuner handle")); return; }
+        cmd = QStringLiteral("tgxl autotune handle=%1").arg(m_tunerHandle);
     } else {
         fail(QStringLiteral("unknown flex verb: %1").arg(verb));
         return;
@@ -725,10 +724,20 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
     AmpDelta d;
     d.handle = handle;
     if (removed) {
+        // Drop the cached handle for the encode path (#4198) when the device it
+        // names goes away. TGXL removal also arrives on the amplifier-removed
+        // wire (routed here by RadioModel), so clear whichever handle matches.
+        if (handle == m_ampHandle) m_ampHandle.clear();
+        if (handle == m_tunerHandle) m_tunerHandle.clear();
         d.removed = true;
         emit amplifierChanged(d);
         return;
     }
+    // RadioModel routes only power amps (PGXL) into this decode, so the handle is
+    // the amp's — cache it for the encode path (#4198). Ignore the placeholder
+    // handle a first status can carry before the real one is assigned.
+    if (!handle.isEmpty() && handle != QLatin1String("0x00000000"))
+        m_ampHandle = handle;
     // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
     // the tuner and routes to TunerModel, not here.
     if (!model.isEmpty() && model != QLatin1String("TunerGeniusXL")) {
@@ -749,8 +758,13 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
     emit amplifierChanged(d);
 }
 
-void FlexBackend::decodeTunerStatus(const QMap<QString, QString>& kvs)
+void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, QString>& kvs)
 {
+    // Cache the TGXL handle for the encode path (#4198). RadioModel passes the
+    // handle it already extracted+sanitized (never the 0x00000000 placeholder),
+    // so the tuner intents no longer carry a Flex identifier through the seam.
+    if (!handle.isEmpty() && handle != QLatin1String("0x00000000"))
+        m_tunerHandle = handle;
     // Present-only, strict parity with the prior TunerModel::applyStatus: bools
     // are "1"-equality, ints are unguarded toInt() (matching val.toInt()), text
     // is verbatim. The change-gating / edge signals live in TunerModel::applyChanges.
@@ -778,6 +792,14 @@ void FlexBackend::decodeTunerStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains(QStringLiteral("one_by_three")))
         d.oneByThree = (kvs.value(QStringLiteral("one_by_three")) == QLatin1String("1"));
     emit tunerChanged(d);
+}
+
+void FlexBackend::clearExtensionHandles()
+{
+    // #4198: forget the amp/tuner encode handles on disconnect/reset so a stale
+    // handle can't survive into a reconnect (possibly a different radio).
+    m_ampHandle.clear();
+    m_tunerHandle.clear();
 }
 
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)

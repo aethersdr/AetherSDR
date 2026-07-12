@@ -19,7 +19,7 @@ static int g_failures = 0;
 static TunerDelta decode(FlexBackend& b, const QMap<QString, QString>& kvs)
 {
     QSignalSpy spy(&b, &IRadioBackend::tunerChanged);
-    b.decodeTunerStatus(kvs);
+    b.decodeTunerStatus(QStringLiteral("0x2000"), kvs);   // handle unused by these delta-field checks (#4198)
     if (spy.count() != 1) return {};
     return spy.takeFirst().at(0).value<TunerDelta>();
 }

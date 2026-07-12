@@ -716,20 +716,18 @@ RadioModel::RadioModel(QObject* parent)
 
     // Route tuner relay intents to the radio through the backend seam (#4092).
     // The model emits neutral intents; FlexBackend translates them to the SmartSDR
-    // "tgxl …" wire. The handle is a Flex detail carried in invokeExtension's
-    // vendor arg (RadioModel owns handle extraction). The direct port-9010
+    // "tgxl …" wire, resolving the TGXL handle from its own decode-side state
+    // (#4198) — the intent carries no Flex identifier. The direct port-9010
     // fast-path stays inside TunerModel and never reaches here.
     connect(&m_tunerModel, &TunerModel::operateRequested, this, [this](bool on){
         if (m_backend)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.operate"), 0,
-                                       QVariantMap{{QStringLiteral("handle"), m_tunerModel.handle()},
-                                                   {QStringLiteral("on"), on}});
+                                       QVariantMap{{QStringLiteral("on"), on}});
     });
     connect(&m_tunerModel, &TunerModel::bypassRequested, this, [this](bool on){
         if (m_backend)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.bypass"), 0,
-                                       QVariantMap{{QStringLiteral("handle"), m_tunerModel.handle()},
-                                                   {QStringLiteral("on"), on}});
+                                       QVariantMap{{QStringLiteral("on"), on}});
     });
     connect(&m_tunerModel, &TunerModel::autotuneRequested, this, [this](){
         // TX interlock gate (was a commandReady string-sniff on "tgxl autotune").
@@ -737,8 +735,7 @@ RadioModel::RadioModel(QObject* parent)
             return;
         applyTuneInhibit();
         if (m_backend)
-            m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0,
-                                       QVariantMap{{QStringLiteral("handle"), m_tunerModel.handle()}});
+            m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("tuner.autotune"), 0);
     });
 
     // Forward DAX IQ commands to the radio
@@ -748,12 +745,12 @@ RadioModel::RadioModel(QObject* parent)
 
     // Route amplifier (PGXL) operate intent to the radio through the backend seam
     // (#4094). FlexBackend relays "amplifier set … operate=" to the amp (the path
-    // that works remote/SmartLink); the handle rides in invokeExtension's vendor arg.
+    // that works remote/SmartLink), resolving the amp handle from its own
+    // decode-side state (#4198) — the intent carries no Flex identifier.
     connect(&m_amplifier, &AmpModel::operateRequested, this, [this](bool on){
         if (m_backend)
             m_backend->invokeExtension(QStringLiteral("flex"), QStringLiteral("amp.operate"), 0,
-                                       QVariantMap{{QStringLiteral("handle"), m_amplifier.handle()},
-                                                   {QStringLiteral("on"), on}});
+                                       QVariantMap{{QStringLiteral("on"), on}});
     });
     // Protocol-log breadcrumb on amp detection, symmetric with the "amplifier
     // removed" log — kept here so AmpModel stays logging-category-free. #4099.
@@ -3788,6 +3785,7 @@ void RadioModel::onDisconnected()
     m_tunerModel.setHandle({});       // clear TGXL presence
     m_xvtrList.clear();
     m_amplifier.reset();              // clear PGXL presence/operate (#4094)
+    if (m_flexBackend) m_flexBackend->clearExtensionHandles();  // drop cached encode handles (#4198)
     m_fullDuplex = false;
     // Reset to false so the next connect's skip-peek fast path requires the
     // radio's mf_enable status to actually arrive before treating multiFLEX
@@ -5966,7 +5964,7 @@ void RadioModel::onStatusReceived(const QString& object,
             m_tunerModel.setHandle(m.captured(1));
         if (m_flexBackend) m_flexBackend->decodeAtuStatus(kvs);   // radio's own ATU → TransmitModel
         if (m_tunerModel.isPresent() && m_flexBackend)
-            m_flexBackend->decodeTunerStatus(kvs);                // external TGXL → TunerModel (#4092)
+            m_flexBackend->decodeTunerStatus(m_tunerModel.handle(), kvs);  // external TGXL → TunerModel (#4092/#4198)
         return;
     }
 
@@ -6044,7 +6042,7 @@ void RadioModel::onStatusReceived(const QString& object,
                     m_tunerModel.setHandle(handle);
                     m_meterModel.setTgxlHandle(handle.toUInt(nullptr, 0));
                 }
-                if (m_flexBackend) m_flexBackend->decodeTunerStatus(kvs);   // #4092
+                if (m_flexBackend) m_flexBackend->decodeTunerStatus(m_tunerModel.handle(), kvs);   // #4092/#4198
             }
             // Power amplifier (PGXL / any non-TGXL amp) → AmpModel. `else` of the
             // tuner branch: a TGXL status is already routed above and would only
