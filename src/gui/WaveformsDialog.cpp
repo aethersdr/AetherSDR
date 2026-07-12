@@ -135,11 +135,24 @@ QString wfpRuntimeStatusText(const FlexWaveformModel& wfModel)
 QString dockerInstallBlockerText(const RadioModel* radioModel,
                                  const FlexWaveformModel& wfModel)
 {
-    const WfpSupportUiState support = wfpSupportUiState(radioModel);
-    if (!support.supported) {
-        return QObject::tr("%1: %2").arg(support.label, support.hint);
+    // Gate the Docker install action on live WFP runtime state plus the genuine
+    // hard-incompatibility platform check only. Do NOT additionally require the
+    // "wfp" license feature to report enabled=1 (#4210 regression from #4186):
+    // that flag reflects a SmartSDR+/EA-style entitlement, not whether the radio
+    // will accept a file-upload install — the two are decoupled on some
+    // firmware/license configs, so a radio with WFP powered+ready (and even a
+    // Docker waveform already installed and running) could report the feature
+    // disabled and be wrongly blocked. wfpSupportUiState()/the "WFP Support" pill
+    // stay as-is for informational display; they just don't gate the action.
+    if (!radioModel || !radioModel->isConnected()) {
+        return QObject::tr(
+            "Connect to a radio before installing Docker waveform images.");
     }
-
+    if (isKnownNonWfpPlatform(radioModel->capabilities().platform)) {
+        return QObject::tr(
+            "This radio platform does not support on-radio Docker waveform "
+            "deployment.");
+    }
     if (!wfModel.wfpStatusSeen()) {
         return QObject::tr("WFP runtime status has not been reported by this radio.");
     }
