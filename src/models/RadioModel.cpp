@@ -457,8 +457,17 @@ RadioModel::RadioModel(QObject* parent)
         if (state == DigitalVoiceWaveformProcess::State::Running) {
             m_dstarRuntimeConfigurationPending = true;
             syncDigitalVoiceTxSelection(true);
+            applyPendingDStarRuntimeConfiguration();
         }
     });
+    connect(&DigitalVoiceModeRegistry::instance(),
+            &DigitalVoiceModeRegistry::activeSliceChanged,
+            this,
+            [this](int) {
+        m_lastDigitalVoiceTxSelectionKey.clear();
+        syncDigitalVoiceTxSelection(true);
+        applyPendingDStarRuntimeConfiguration();
+    }, Qt::QueuedConnection);
 
     const QString digitalVoiceDir =
         QFileInfo(AppSettings::instance().filePath()).absolutePath()

@@ -2712,7 +2712,7 @@ add_executable(digital_voice_slice_lifecycle_test
     src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(digital_voice_slice_lifecycle_test PRIVATE src)
-target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core)
+target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME digital_voice_slice_lifecycle_test COMMAND digital_voice_slice_lifecycle_test)
 
 add_executable(dstar_model_test
@@ -2726,7 +2726,7 @@ add_executable(dstar_model_test
     src/core/AppSettings.cpp
 )
 target_include_directories(dstar_model_test PRIVATE src)
-target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(dstar_model_test PRIVATE HAVE_SERIALPORT)
     target_link_libraries(dstar_model_test PRIVATE Qt6::SerialPort)

@@ -2,6 +2,7 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QSignalSpy>
 
 #include <iostream>
 
@@ -27,6 +28,8 @@ int main(int argc, char** argv)
     registry.deactivateMode(DigitalVoiceModeId::DStar);
     ok &= expect(registry.activateMode(DigitalVoiceModeId::DStar),
                  "D-STAR service activates");
+    QSignalSpy activeSliceSpy(&registry,
+                              &DigitalVoiceModeRegistry::activeSliceChanged);
 
     SliceModel first(1);
     first.setMode(QStringLiteral("LSB"));
@@ -36,6 +39,9 @@ int main(int argc, char** argv)
                  && initialClaim->sliceId == 1
                  && initialClaim->previousMode == QStringLiteral("LSB"),
                  "slice claim retains the operator's previous mode");
+    ok &= expect(activeSliceSpy.size() == 1
+                 && activeSliceSpy.takeFirst().at(0).toInt() == 1,
+                 "slice claim announces the controlled slice");
 
     SliceModel second(2);
     int correctionCount = 0;
@@ -80,6 +86,9 @@ int main(int argc, char** argv)
     second.setMode(stoppedClaim->previousMode);
     ok &= expect(second.mode() == QStringLiteral("FM"),
                  "controlled slice restores without being removed");
+    ok &= expect(!activeSliceSpy.isEmpty()
+                 && activeSliceSpy.constLast().at(0).toInt() == -1,
+                 "service stop announces that no slice is controlled");
 
     ok &= expect(registry.activateMode(DigitalVoiceModeId::DStar),
                  "service reactivates");

@@ -68,17 +68,24 @@ bool DigitalVoiceModeRegistry::activateMode(DigitalVoiceModeId id, QString* erro
 std::optional<DigitalVoiceSliceClaim> DigitalVoiceModeRegistry::deactivateMode(
     DigitalVoiceModeId id)
 {
-    QMutexLocker locker(&m_mutex);
-    if (!m_activeMode.has_value() || m_activeMode.value() != id) {
-        return std::nullopt;
-    }
     std::optional<DigitalVoiceSliceClaim> claim;
-    if (m_activeSliceId >= 0) {
-        claim = DigitalVoiceSliceClaim{id, m_activeSliceId, m_previousMode};
+    bool releasedSlice = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_activeMode.has_value() || m_activeMode.value() != id) {
+            return std::nullopt;
+        }
+        if (m_activeSliceId >= 0) {
+            claim = DigitalVoiceSliceClaim{id, m_activeSliceId, m_previousMode};
+            releasedSlice = true;
+        }
+        m_activeMode.reset();
+        m_activeSliceId = -1;
+        m_previousMode.clear();
     }
-    m_activeMode.reset();
-    m_activeSliceId = -1;
-    m_previousMode.clear();
+    if (releasedSlice) {
+        emit activeSliceChanged(-1);
+    }
     return claim;
 }
 
@@ -104,43 +111,57 @@ bool DigitalVoiceModeRegistry::transferSlice(
     std::optional<DigitalVoiceSliceClaim>* displaced,
     QString* error)
 {
-    QMutexLocker locker(&m_mutex);
-    if (!m_activeMode.has_value() || m_activeMode.value() != id) {
-        if (error) {
-            *error = QStringLiteral("The requested digital-voice mode is not running");
-        }
-        return false;
-    }
-    if (m_activeSliceId >= 0 && m_activeSliceId != sliceId) {
-        if (displaced == nullptr) {
+    bool changedSlice = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_activeMode.has_value() || m_activeMode.value() != id) {
             if (error) {
-                *error = QStringLiteral("Digital voice is already active on slice %1")
-                    .arg(m_activeSliceId);
+                *error = QStringLiteral("The requested digital-voice mode is not running");
             }
             return false;
         }
-        *displaced = DigitalVoiceSliceClaim{id, m_activeSliceId, m_previousMode};
-    } else if (displaced != nullptr) {
-        displaced->reset();
+        if (m_activeSliceId >= 0 && m_activeSliceId != sliceId) {
+            if (displaced == nullptr) {
+                if (error) {
+                    *error = QStringLiteral("Digital voice is already active on slice %1")
+                        .arg(m_activeSliceId);
+                }
+                return false;
+            }
+            *displaced = DigitalVoiceSliceClaim{id, m_activeSliceId, m_previousMode};
+        } else if (displaced != nullptr) {
+            displaced->reset();
+        }
+        QString restoreMode = previousMode.trimmed().toUpper();
+        if (restoreMode.isEmpty() || modeForRadioMode(restoreMode).has_value()) {
+            restoreMode = descriptor(id).underlyingMode;
+        }
+        const bool moved = m_activeSliceId >= 0 && m_activeSliceId != sliceId;
+        changedSlice = m_activeSliceId != sliceId;
+        m_activeSliceId = sliceId;
+        if (m_previousMode.isEmpty() || moved) {
+            m_previousMode = restoreMode;
+        }
     }
-    QString restoreMode = previousMode.trimmed().toUpper();
-    if (restoreMode.isEmpty() || modeForRadioMode(restoreMode).has_value()) {
-        restoreMode = descriptor(id).underlyingMode;
-    }
-    const bool moved = m_activeSliceId >= 0 && m_activeSliceId != sliceId;
-    m_activeSliceId = sliceId;
-    if (m_previousMode.isEmpty() || moved) {
-        m_previousMode = restoreMode;
+    if (changedSlice) {
+        emit activeSliceChanged(sliceId);
     }
     return true;
 }
 
 void DigitalVoiceModeRegistry::releaseSlice(int sliceId)
 {
-    QMutexLocker locker(&m_mutex);
-    if (m_activeSliceId == sliceId) {
-        m_activeSliceId = -1;
-        m_previousMode.clear();
+    bool releasedSlice = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_activeSliceId == sliceId) {
+            m_activeSliceId = -1;
+            m_previousMode.clear();
+            releasedSlice = true;
+        }
+    }
+    if (releasedSlice) {
+        emit activeSliceChanged(-1);
     }
 }
 

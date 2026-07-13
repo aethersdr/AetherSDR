@@ -3,6 +3,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QAccessible>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
@@ -58,6 +59,7 @@ QLabel#DStarPanelTitle {
 }
 QLabel#DStarModeLabel,
 QLabel#DStarMuted,
+QLabel#dstarSliceState,
 QLabel#DStarTrafficMeta {
     color: #8d99ad;
     background: transparent;
@@ -282,7 +284,8 @@ void DStarModemPage::buildHeader()
     layout->addWidget(m_serviceState);
 
     m_sliceState = new QLabel(tr("No DSTR slice"), frame);
-    m_sliceState->setObjectName(QStringLiteral("DStarMuted"));
+    m_sliceState->setObjectName(QStringLiteral("dstarSliceState"));
+    m_sliceState->setAccessibleName(tr("D-STAR slice"));
     m_sliceState->setMinimumWidth(150);
     m_sliceState->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     layout->addWidget(m_sliceState);
@@ -780,14 +783,20 @@ void DStarModemPage::refreshService()
     m_executableEdit->setReadOnly(lockServiceFields);
     m_browseButton->setEnabled(!lockServiceFields);
 
+    QString sliceText;
     const int sliceId = model.activeSliceId();
     SliceModel* slice = sliceId >= 0 ? m_radio->slice(sliceId) : nullptr;
     if (slice) {
-        m_sliceState->setText(tr("Slice %1  %2 MHz")
+        sliceText = tr("Slice %1  %2 MHz")
             .arg(slice->letter())
-            .arg(displayFrequency(slice->frequency())));
+            .arg(displayFrequency(slice->frequency()));
     } else {
-        m_sliceState->setText(tr("No DSTR slice"));
+        sliceText = tr("No DSTR slice");
+    }
+    if (m_sliceState->text() != sliceText) {
+        m_sliceState->setText(sliceText);
+        QAccessibleEvent event(m_sliceState, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
     }
     m_footerState->setText(state.toUpper());
 }
