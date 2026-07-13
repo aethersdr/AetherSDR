@@ -1,15 +1,22 @@
 #include "ShortcutDialog.h"
 #include "KeyboardMapWidget.h"
+#include "core/ShortcutFileTransfer.h"
 #include "core/ShortcutManager.h"
 
 #include <QBoxLayout>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QDate>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStandardPaths>
 #include <QTableWidget>
 #include "core/ThemeManager.h"
 
@@ -153,7 +160,27 @@ void ShortcutDialog::buildUI()
     // ── Bottom buttons ──────────────────────────────────────────────────
     auto* bottomRow = new QHBoxLayout;
 
+    auto* importBtn = new QPushButton("Import...");
+    importBtn->setAutoDefault(false);
+    importBtn->setObjectName(QStringLiteral("shortcutImportButton"));
+    importBtn->setAccessibleName(QStringLiteral("Import keyboard shortcuts"));
+    importBtn->setAccessibleDescription(
+        QStringLiteral("Import an AetherSDR keyboard shortcut CSV backup"));
+    connect(importBtn, &QPushButton::clicked, this, &ShortcutDialog::importShortcuts);
+    bottomRow->addWidget(importBtn);
+
+    auto* exportBtn = new QPushButton("Export...");
+    exportBtn->setAutoDefault(false);
+    exportBtn->setObjectName(QStringLiteral("shortcutExportButton"));
+    exportBtn->setAccessibleName(QStringLiteral("Export keyboard shortcuts"));
+    exportBtn->setAccessibleDescription(
+        QStringLiteral("Export keyboard shortcuts to a portable CSV backup"));
+    connect(exportBtn, &QPushButton::clicked, this, &ShortcutDialog::exportShortcuts);
+    bottomRow->addWidget(exportBtn);
+
     auto* resetAllBtn = new QPushButton("Reset All to Defaults");
+    resetAllBtn->setObjectName(QStringLiteral("shortcutResetAllButton"));
+    resetAllBtn->setAccessibleName(QStringLiteral("Reset all shortcuts to defaults"));
     connect(resetAllBtn, &QPushButton::clicked, this, [this]() {
         auto r = QMessageBox::question(this, "Reset Shortcuts",
             "Reset all keyboard shortcuts to their defaults?");
@@ -172,6 +199,81 @@ void ShortcutDialog::buildUI()
     bottomRow->addWidget(closeBtn);
 
     root->addLayout(bottomRow);
+}
+
+void ShortcutDialog::importShortcuts()
+{
+    QString startDirectory = QStandardPaths::writableLocation(
+        QStandardPaths::DocumentsLocation);
+    if (startDirectory.isEmpty()) {
+        startDirectory = QDir::homePath();
+    }
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("Import Keyboard Shortcuts"), startDirectory,
+        QStringLiteral("CSV Files (*.csv)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const ShortcutImportResult result = ShortcutFileTransfer::importFromFile(*m_mgr, path);
+    if (!result.ok()) {
+        QMessageBox box(QMessageBox::Warning, QStringLiteral("Import Keyboard Shortcuts"),
+                        QStringLiteral("No shortcuts were imported from %1.")
+                            .arg(QFileInfo(path).fileName()),
+                        QMessageBox::Ok, this);
+        box.setDetailedText(result.errors.join(QLatin1Char('\n')));
+        box.exec();
+        return;
+    }
+
+    populateTable(m_filterEdit->text(), m_categoryFilter->currentText());
+    updateSelectedKeyInfo();
+
+    QMessageBox box(result.unknownActions.isEmpty() ? QMessageBox::Information
+                                                    : QMessageBox::Warning,
+                    QStringLiteral("Import Keyboard Shortcuts"),
+                    QStringLiteral("Imported %1 shortcut actions from %2.")
+                        .arg(result.importedCount)
+                        .arg(QFileInfo(path).fileName()),
+                    QMessageBox::Ok, this);
+    if (!result.unknownActions.isEmpty()) {
+        box.setInformativeText(
+            QStringLiteral("%1 actions are not available in this AetherSDR release and were skipped.")
+                .arg(result.unknownActions.size()));
+        box.setDetailedText(result.unknownActions.join(QLatin1Char('\n')));
+    }
+    box.exec();
+}
+
+void ShortcutDialog::exportShortcuts()
+{
+    QString directory = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    if (directory.isEmpty()) {
+        directory = QDir::homePath();
+    }
+    const QString version = QCoreApplication::applicationVersion().isEmpty()
+        ? QStringLiteral("unknown")
+        : QCoreApplication::applicationVersion();
+    const QString fileName = QStringLiteral("AetherSDR_Shortcuts_%1_v%2.csv")
+                                 .arg(QDate::currentDate().toString(QStringLiteral("yyyyMMdd")),
+                                      version);
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Export Keyboard Shortcuts"),
+        QDir(directory).filePath(fileName), QStringLiteral("CSV Files (*.csv)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const ShortcutExportResult result = ShortcutFileTransfer::exportToFile(*m_mgr, path);
+    if (!result.ok()) {
+        QMessageBox::warning(this, QStringLiteral("Export Keyboard Shortcuts"), result.error);
+        return;
+    }
+    QMessageBox::information(
+        this, QStringLiteral("Export Keyboard Shortcuts"),
+        QStringLiteral("Exported %1 shortcut actions to %2.")
+            .arg(result.exportedCount)
+            .arg(QFileInfo(path).fileName()));
 }
 
 void ShortcutDialog::populateTable(const QString& filter, const QString& category)

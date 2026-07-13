@@ -28,6 +28,8 @@ private:
     void assignAction(const QString& actionId);
     void clearSelected();
     void resetSelected();
+    void importShortcuts();
+    void exportShortcuts();
     void updateSelectedKeyInfo();
 
     ShortcutManager* m_mgr;

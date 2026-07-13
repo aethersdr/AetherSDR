@@ -2,10 +2,281 @@
 #include "AppSettings.h"
 #include <QHash>
 #include <QRegularExpression>
+#include <QSet>
+#include <QStringConverter>
 #include <QWidget>
 #include <QDebug>
 
 namespace AetherSDR {
+
+namespace {
+
+constexpr qsizetype kMaxShortcutCsvBytes = 1024 * 1024;
+constexpr int kMaxShortcutCsvRows = 4096;
+constexpr int kMaxShortcutCsvFieldLength = 512;
+constexpr int kShortcutCsvSchemaVersion = 1;
+
+const QStringList kShortcutCsvHeader{
+    QStringLiteral("FORMAT_VERSION"),
+    QStringLiteral("ACTION_ID"),
+    QStringLiteral("ACTION_NAME"),
+    QStringLiteral("CATEGORY"),
+    QStringLiteral("SHORTCUT"),
+    QStringLiteral("CUSTOMIZED"),
+};
+
+struct ShortcutCsvRow {
+    int lineNumber{0};
+    QStringList fields;
+};
+
+struct ParsedShortcutRow {
+    int lineNumber{0};
+    QString actionId;
+    QString actionName;
+    QKeySequence shortcut;
+    bool customized{false};
+};
+
+QString csvEscape(QString value)
+{
+    if (value.contains(QLatin1Char(',')) || value.contains(QLatin1Char('"'))
+        || value.contains(QLatin1Char('\n')) || value.contains(QLatin1Char('\r'))) {
+        value.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        return QLatin1Char('"') + value + QLatin1Char('"');
+    }
+    return value;
+}
+
+bool appendCsvField(ShortcutCsvRow& row, QString& field, QStringList& errors)
+{
+    if (field.size() > kMaxShortcutCsvFieldLength) {
+        errors << QStringLiteral("Line %1: a field exceeds %2 characters.")
+                      .arg(row.lineNumber)
+                      .arg(kMaxShortcutCsvFieldLength);
+        return false;
+    }
+    row.fields << field;
+    field.clear();
+    return true;
+}
+
+QList<ShortcutCsvRow> parseCsvRows(const QByteArray& bytes, QStringList& errors)
+{
+    QList<ShortcutCsvRow> rows;
+    if (bytes.size() > kMaxShortcutCsvBytes) {
+        errors << QStringLiteral("Shortcut CSV exceeds the 1 MiB size limit.");
+        return rows;
+    }
+
+    QStringDecoder decoder(QStringDecoder::Utf8);
+    QString text = decoder.decode(bytes);
+    if (decoder.hasError()) {
+        errors << QStringLiteral("Shortcut CSV is not valid UTF-8.");
+        return rows;
+    }
+    if (!text.isEmpty() && text.front() == QChar(0xfeff)) {
+        text.remove(0, 1);
+    }
+
+    ShortcutCsvRow row;
+    row.lineNumber = 1;
+    QString field;
+    bool inQuotes = false;
+    bool afterQuote = false;
+    int lineNumber = 1;
+
+    auto finishRow = [&]() -> bool {
+        if (!appendCsvField(row, field, errors)) {
+            return false;
+        }
+        const bool blank = row.fields.size() == 1 && row.fields.constFirst().isEmpty();
+        if (!blank) {
+            rows << row;
+            if (rows.size() > kMaxShortcutCsvRows + 1) {
+                errors << QStringLiteral("Shortcut CSV exceeds the %1-row limit.")
+                              .arg(kMaxShortcutCsvRows);
+                return false;
+            }
+        }
+        row = ShortcutCsvRow{};
+        row.lineNumber = lineNumber + 1;
+        afterQuote = false;
+        return true;
+    };
+
+    for (int i = 0; i < text.size(); ++i) {
+        const QChar ch = text.at(i);
+        if (inQuotes) {
+            if (ch == QLatin1Char('"')) {
+                if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('"')) {
+                    field += QLatin1Char('"');
+                    ++i;
+                } else {
+                    inQuotes = false;
+                    afterQuote = true;
+                }
+            } else {
+                field += ch;
+                if (ch == QLatin1Char('\n')) {
+                    ++lineNumber;
+                } else if (ch == QLatin1Char('\r')
+                           && (i + 1 >= text.size()
+                               || text.at(i + 1) != QLatin1Char('\n'))) {
+                    ++lineNumber;
+                }
+            }
+            continue;
+        }
+
+        if (afterQuote && ch != QLatin1Char(',') && ch != QLatin1Char('\r')
+            && ch != QLatin1Char('\n')) {
+            errors << QStringLiteral("Line %1: unexpected character after a quoted field.")
+                          .arg(lineNumber);
+            return {};
+        }
+        if (ch == QLatin1Char('"')) {
+            if (!field.isEmpty() || afterQuote) {
+                errors << QStringLiteral("Line %1: unexpected quote in an unquoted field.")
+                              .arg(lineNumber);
+                return {};
+            }
+            inQuotes = true;
+            continue;
+        }
+        if (ch == QLatin1Char(',')) {
+            if (!appendCsvField(row, field, errors)) {
+                return {};
+            }
+            afterQuote = false;
+            continue;
+        }
+        if (ch == QLatin1Char('\r') || ch == QLatin1Char('\n')) {
+            if (!finishRow()) {
+                return {};
+            }
+            if (ch == QLatin1Char('\r') && i + 1 < text.size()
+                && text.at(i + 1) == QLatin1Char('\n')) {
+                ++i;
+            }
+            ++lineNumber;
+            row.lineNumber = lineNumber;
+            continue;
+        }
+        field += ch;
+    }
+
+    if (inQuotes) {
+        errors << QStringLiteral("Line %1: unterminated quoted field.").arg(row.lineNumber);
+        return {};
+    }
+    if (!field.isEmpty() || !row.fields.isEmpty()) {
+        finishRow();
+    }
+    return rows;
+}
+
+QList<ParsedShortcutRow> parseShortcutCsv(const QByteArray& bytes, QStringList& errors)
+{
+    const QList<ShortcutCsvRow> rows = parseCsvRows(bytes, errors);
+    if (!errors.isEmpty()) {
+        return {};
+    }
+    if (rows.isEmpty()) {
+        errors << QStringLiteral("Shortcut CSV is empty.");
+        return {};
+    }
+
+    QHash<QString, int> columns;
+    for (int i = 0; i < rows.constFirst().fields.size(); ++i) {
+        const QString name = rows.constFirst().fields.at(i).trimmed().toUpper();
+        if (name.isEmpty() || columns.contains(name)) {
+            errors << QStringLiteral("Line 1: empty or duplicate column name '%1'.").arg(name);
+            return {};
+        }
+        columns.insert(name, i);
+    }
+    for (const QString& required : kShortcutCsvHeader) {
+        if (!columns.contains(required)) {
+            errors << QStringLiteral("Line 1: missing required column %1.").arg(required);
+        }
+    }
+    if (!errors.isEmpty()) {
+        return {};
+    }
+
+    QList<ParsedShortcutRow> parsed;
+    QHash<QString, int> actionLines;
+    QHash<QString, QString> customizedKeyOwners;
+    const QRegularExpression actionIdPattern(QStringLiteral("^[A-Za-z0-9_]+$"));
+    for (int i = 1; i < rows.size(); ++i) {
+        const ShortcutCsvRow& row = rows.at(i);
+        const auto value = [&row, &columns](const QString& name) {
+            const int index = columns.value(name, -1);
+            return index >= 0 && index < row.fields.size() ? row.fields.at(index).trimmed()
+                                                           : QString();
+        };
+
+        bool schemaOk = false;
+        const int schemaVersion = value(QStringLiteral("FORMAT_VERSION")).toInt(&schemaOk);
+        const QString actionId = value(QStringLiteral("ACTION_ID"));
+        const QString actionName = value(QStringLiteral("ACTION_NAME"));
+        const QString shortcutText = value(QStringLiteral("SHORTCUT"));
+        const QString customizedText = value(QStringLiteral("CUSTOMIZED")).toLower();
+        const bool customized = customizedText == QLatin1String("true")
+            || customizedText == QLatin1String("1")
+            || customizedText == QLatin1String("yes");
+        const bool customizedValid = customized || customizedText == QLatin1String("false")
+            || customizedText == QLatin1String("0")
+            || customizedText == QLatin1String("no");
+
+        if (!schemaOk || schemaVersion < 1) {
+            errors << QStringLiteral("Line %1: FORMAT_VERSION must be a positive integer.")
+                          .arg(row.lineNumber);
+        } else if (!actionIdPattern.match(actionId).hasMatch()) {
+            errors << QStringLiteral("Line %1: invalid ACTION_ID '%2'.")
+                          .arg(row.lineNumber)
+                          .arg(actionId);
+        } else if (actionName.isEmpty()) {
+            errors << QStringLiteral("Line %1: ACTION_NAME is required.").arg(row.lineNumber);
+        } else if (!customizedValid) {
+            errors << QStringLiteral("Line %1: CUSTOMIZED must be True or False.")
+                          .arg(row.lineNumber);
+        }
+        if (actionLines.contains(actionId)) {
+            errors << QStringLiteral("Line %1: duplicate ACTION_ID '%2' (first on line %3).")
+                          .arg(row.lineNumber)
+                          .arg(actionId)
+                          .arg(actionLines.value(actionId));
+        } else {
+            actionLines.insert(actionId, row.lineNumber);
+        }
+
+        const QKeySequence shortcut = QKeySequence::fromString(
+            shortcutText, QKeySequence::PortableText);
+        if (!shortcutText.isEmpty() && shortcut.isEmpty()) {
+            errors << QStringLiteral("Line %1: invalid portable shortcut '%2'.")
+                          .arg(row.lineNumber)
+                          .arg(shortcutText);
+        }
+        if (customized && !shortcut.isEmpty()) {
+            const QString canonical = shortcut.toString(QKeySequence::PortableText);
+            if (customizedKeyOwners.contains(canonical)) {
+                errors << QStringLiteral("Line %1: shortcut '%2' is customized for both %3 and %4.")
+                              .arg(row.lineNumber)
+                              .arg(canonical, customizedKeyOwners.value(canonical), actionName);
+            } else {
+                customizedKeyOwners.insert(canonical, actionName);
+            }
+        }
+
+        parsed << ParsedShortcutRow{row.lineNumber, actionId, actionName,
+                                    shortcut, customized};
+    }
+    return errors.isEmpty() ? parsed : QList<ParsedShortcutRow>{};
+}
+
+} // namespace
 
 ShortcutManager::ShortcutManager(QObject* parent)
     : QObject(parent)
@@ -100,6 +371,11 @@ void ShortcutManager::loadBindings()
     // load. Persisting it would be indistinguishable from a user clear and would
     // pin the loser to "" forever — suppressing a future release's default once
     // the colliding registration is fixed (#3964 review).
+    normalizeDuplicateBindings();
+}
+
+void ShortcutManager::normalizeDuplicateBindings()
+{
     QHash<QString, int> ownerByKey;
     for (int i = 0; i < m_actions.size(); ++i) {
         auto& action = m_actions[i];
@@ -150,6 +426,128 @@ void ShortcutManager::saveBindings()
         }
     }
     s.save();
+}
+
+QByteArray ShortcutManager::exportBindingsCsv() const
+{
+    QStringList lines;
+    lines.reserve(m_actions.size() + 1);
+    lines << kShortcutCsvHeader.join(QLatin1Char(','));
+    for (const Action& action : m_actions) {
+        const QStringList fields{
+            QString::number(kShortcutCsvSchemaVersion),
+            action.id,
+            action.displayName,
+            action.category,
+            action.currentKey.toString(QKeySequence::PortableText),
+            action.persisted ? QStringLiteral("True") : QStringLiteral("False"),
+        };
+        QStringList escaped;
+        escaped.reserve(fields.size());
+        for (const QString& field : fields) {
+            escaped << csvEscape(field);
+        }
+        lines << escaped.join(QLatin1Char(','));
+    }
+    return lines.join(QStringLiteral("\r\n")).toUtf8() + QByteArray("\r\n");
+}
+
+ShortcutImportResult ShortcutManager::importBindingsCsv(const QByteArray& bytes)
+{
+    ShortcutImportResult result;
+    const QList<ParsedShortcutRow> records = parseShortcutCsv(bytes, result.errors);
+    if (!result.ok()) {
+        return result;
+    }
+
+    struct PendingBinding {
+        int actionIndex{-1};
+        QKeySequence key;
+        bool customized{false};
+    };
+    QList<PendingBinding> pending;
+    QHash<int, int> importedActionLines;
+
+    for (const ParsedShortcutRow& record : records) {
+        int actionIndex = -1;
+        for (int i = 0; i < m_actions.size(); ++i) {
+            if (m_actions.at(i).id == record.actionId) {
+                actionIndex = i;
+                break;
+            }
+        }
+
+        // Stable ids are authoritative. The exact human-readable name is a
+        // conservative fallback for a release that renamed an internal id;
+        // ambiguous display names remain unknown instead of guessing.
+        if (actionIndex < 0) {
+            int nameMatch = -1;
+            for (int i = 0; i < m_actions.size(); ++i) {
+                if (m_actions.at(i).displayName != record.actionName) {
+                    continue;
+                }
+                if (nameMatch >= 0) {
+                    nameMatch = -1;
+                    break;
+                }
+                nameMatch = i;
+            }
+            actionIndex = nameMatch;
+        }
+
+        if (actionIndex < 0) {
+            result.unknownActions << QStringLiteral("%1 (%2)")
+                                         .arg(record.actionName, record.actionId);
+            continue;
+        }
+        if (importedActionLines.contains(actionIndex)) {
+            result.errors << QStringLiteral(
+                "Line %1 maps to the same local action as line %2 (%3).")
+                                 .arg(record.lineNumber)
+                                 .arg(importedActionLines.value(actionIndex))
+                                 .arg(m_actions.at(actionIndex).displayName);
+            continue;
+        }
+        importedActionLines.insert(actionIndex, record.lineNumber);
+        pending << PendingBinding{
+            actionIndex,
+            record.customized ? record.shortcut : m_actions.at(actionIndex).defaultKey,
+            record.customized,
+        };
+    }
+    if (!result.ok()) {
+        return result;
+    }
+
+    // Apply only after the whole file has parsed and resolved successfully.
+    // Imported customizations win collisions with actions absent from an older
+    // backup. Then run the same duplicate normalization used at startup so a
+    // customized binding also wins over a default restored by a later CSV row.
+    QSet<int> importedActionIndexes;
+    for (const PendingBinding& binding : pending) {
+        importedActionIndexes.insert(binding.actionIndex);
+    }
+    for (const PendingBinding& binding : pending) {
+        if (!binding.customized || binding.key.isEmpty()) {
+            continue;
+        }
+        for (int i = 0; i < m_actions.size(); ++i) {
+            if (!importedActionIndexes.contains(i)
+                && m_actions.at(i).currentKey == binding.key) {
+                m_actions[i].currentKey = QKeySequence();
+            }
+        }
+    }
+    for (const PendingBinding& binding : pending) {
+        Action& target = m_actions[binding.actionIndex];
+        target.currentKey = binding.key;
+        target.persisted = binding.customized;
+    }
+    normalizeDuplicateBindings();
+    result.importedCount = pending.size();
+    saveBindings();
+    emit bindingsChanged();
+    return result;
 }
 
 void ShortcutManager::rebuildShortcuts(QWidget* parent,

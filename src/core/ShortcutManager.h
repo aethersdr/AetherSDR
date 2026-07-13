@@ -1,13 +1,23 @@
 #pragma once
 
 #include <QObject>
+#include <QByteArray>
 #include <QKeySequence>
 #include <QShortcut>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <functional>
 
 namespace AetherSDR {
+
+struct ShortcutImportResult {
+    int importedCount{0};
+    QStringList unknownActions;
+    QStringList errors;
+
+    bool ok() const { return errors.isEmpty(); }
+};
 
 class ShortcutManager : public QObject {
     Q_OBJECT
@@ -48,6 +58,12 @@ public:
     void loadBindings();
     void saveBindings();
 
+    // Portable backup format. Rows identify actions by stable id and also carry
+    // their human-readable names so imports can fall back across an id rename.
+    // QKeySequence::PortableText keeps modifier names cross-platform.
+    QByteArray exportBindingsCsv() const;
+    ShortcutImportResult importBindingsCsv(const QByteArray& bytes);
+
     // Create/destroy QShortcuts on the target widget.
     // guardFn is called before each handler — return false to suppress.
     void rebuildShortcuts(QWidget* parent,
@@ -72,6 +88,8 @@ signals:
     void bindingsChanged();
 
 private:
+    void normalizeDuplicateBindings();
+
     QVector<Action> m_actions;
     QVector<QShortcut*> m_shortcuts;
 };

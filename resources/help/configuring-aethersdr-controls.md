@@ -115,6 +115,26 @@ The shortcut editor is designed to be beginner friendly:
 5. Use **Reset to Default** to put one shortcut back.
 6. Use **Reset All to Defaults** if you want to start over.
 
+### Backing up or cloning shortcuts
+
+Use **Export...** to save the complete shortcut setup as a CSV file, then use
+**Import...** on another AetherSDR machine to apply it. The file identifies
+each capability with both a stable action ID and its readable action name, and
+stores key combinations in a cross-platform form.
+
+Shortcut backups are release-tolerant:
+
+- An older release imports every action it recognizes and reports newer,
+  unavailable actions as skipped.
+- A newer release leaves actions that did not exist in an older backup alone.
+- Actions that were using defaults adopt the importing release's defaults,
+  while your customized and explicitly cleared bindings are restored exactly.
+- A malformed backup is rejected before any shortcuts are changed.
+
+Keep the original exported file if you move temporarily to an older release;
+the skipped rows remain in that file for use when you return to a release that
+supports them.
+
 ### Good first customizations
 
 If you are new to keyboard control, these are good first shortcuts to add:
