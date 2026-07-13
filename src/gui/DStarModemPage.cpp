@@ -1,9 +1,10 @@
 #include "DStarModemPage.h"
 
+#include "DStarAccessibility.h"
+
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
-#include <QAccessible>
 #include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
@@ -283,9 +284,9 @@ void DStarModemPage::buildHeader()
     m_serviceState->setMinimumWidth(78);
     layout->addWidget(m_serviceState);
 
-    m_sliceState = new QLabel(tr("No DSTR slice"), frame);
+    m_sliceState = new QLabel(frame);
     m_sliceState->setObjectName(QStringLiteral("dstarSliceState"));
-    m_sliceState->setAccessibleName(tr("D-STAR slice"));
+    updateDStarSliceStateLabel(m_sliceState, tr("No DSTR slice"));
     m_sliceState->setMinimumWidth(150);
     m_sliceState->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     layout->addWidget(m_sliceState);
@@ -793,11 +794,7 @@ void DStarModemPage::refreshService()
     } else {
         sliceText = tr("No DSTR slice");
     }
-    if (m_sliceState->text() != sliceText) {
-        m_sliceState->setText(sliceText);
-        QAccessibleEvent event(m_sliceState, QAccessible::NameChanged);
-        QAccessible::updateAccessibility(&event);
-    }
+    updateDStarSliceStateLabel(m_sliceState, sliceText);
     m_footerState->setText(state.toUpper());
 }
 

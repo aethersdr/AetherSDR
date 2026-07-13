@@ -727,6 +727,7 @@ set(GUI_SOURCES
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
@@ -2732,6 +2733,16 @@ if(Qt6SerialPort_FOUND)
     target_link_libraries(dstar_model_test PRIVATE Qt6::SerialPort)
 endif()
 add_test(NAME dstar_model_test COMMAND dstar_model_test)
+
+add_executable(dstar_accessibility_test
+    tests/dstar_accessibility_test.cpp
+    src/gui/DStarAccessibility.cpp
+)
+target_include_directories(dstar_accessibility_test PRIVATE src)
+target_link_libraries(dstar_accessibility_test PRIVATE Qt6::Widgets)
+add_test(NAME dstar_accessibility_test COMMAND dstar_accessibility_test)
+set_tests_properties(dstar_accessibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
