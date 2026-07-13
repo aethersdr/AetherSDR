@@ -1291,9 +1291,18 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
             "$<TARGET_FILE_DIR:aether-dv-waveform>/aether-dstar-waveform"
             "$<TARGET_FILE_DIR:aether-dv-waveform>/aether-dstar-waveform.exe"
             "$<TARGET_FILE_DIR:aether-dv-waveform>/ThumbDV.cfg"
-            "$<TARGET_FILE_DIR:aether-dv-waveform>/AetherDV.cfg"
         COMMENT "Copying AetherDV waveform manifest"
     )
+    if(APPLE)
+        # Clear a stale AetherDV.cfg left in the OLD Contents/MacOS/ location by
+        # an incremental build tree from before the move to Contents/Resources/.
+        # Apple-only: elsewhere RUNTIME_DIR == CONFIG_DIR == ${CMAKE_BINARY_DIR},
+        # so removing it there would delete the manifest just staged above.
+        add_custom_command(TARGET aether-dv-waveform POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E rm -f
+                "${DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR}/AetherDV.cfg"
+        )
+    endif()
     add_test(NAME aether_dv_waveform_no_args
         COMMAND ${CMAKE_COMMAND}
             -DHELPER=$<TARGET_FILE:aether-dv-waveform>
