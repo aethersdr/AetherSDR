@@ -2422,6 +2422,16 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
+# Hardware-free state-machine coverage for the default-on TX capture health
+# summary. Reproduces the Qt pull-mode Active -> Idle/full-buffer signature and
+# verifies anomaly rate limiting without requiring PipeWire or an audio device.
+add_executable(tx_capture_health_test
+    tests/tx_capture_health_test.cpp
+)
+target_include_directories(tx_capture_health_test PRIVATE src)
+target_link_libraries(tx_capture_health_test PRIVATE Qt6::Core)
+add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
+
 # Regression test for #4003 — QsoRecorder must not dereference a SliceModel that
 # was freed (reconnect prune) before recording starts. QPointer auto-nulls the
 # reference; the test deletes the slice and asserts the metadata is cleared.

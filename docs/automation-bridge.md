@@ -602,6 +602,16 @@ chunks dispatched to Receive Presentation Sync analysis, while
 that were captured for automation but skipped because no KiwiSDR audio source
 was active.
 
+The TX input endpoint also exposes default-on capture-health evidence for TCI
+handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
+`source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
+`idle_during_tci_transitions`, `post_tci_local_tx_while_idle`, and
+`last_mic_read_age_ms`. `saturation_observed` is deliberately conservative: it
+requires a source that was previously Active to become Idle while TCI is fresh,
+after at least one microphone callback was suppressed, with unread bytes still
+buffered. The same evidence is summarized in the default Audio Summary support
+log without enabling verbose audio logging.
+
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
 on. Firmware never emits `cwx queue=`, so the client detects a drained CWX buffer
