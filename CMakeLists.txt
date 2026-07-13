@@ -1267,8 +1267,14 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
     if(APPLE)
         target_link_libraries(aether-dv-waveform PRIVATE "-framework IOKit")
         set(DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR "${CMAKE_BINARY_DIR}/AetherSDR.app/Contents/MacOS")
+        # AetherDV.cfg is a metadata manifest, not a Mach-O, so it must live in
+        # Contents/Resources/ — codesign rejects a non-executable in MacOS/
+        # ("code object is not signed at all"). The helper is env-var driven and
+        # never reads the .cfg, so this is purely its packaging location.
+        set(DIGITAL_VOICE_WAVEFORM_CONFIG_DIR "${CMAKE_BINARY_DIR}/AetherSDR.app/Contents/Resources")
     else()
         set(DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR "${CMAKE_BINARY_DIR}")
+        set(DIGITAL_VOICE_WAVEFORM_CONFIG_DIR "${CMAKE_BINARY_DIR}")
     endif()
     set_target_properties(aether-dv-waveform PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${DIGITAL_VOICE_WAVEFORM_RUNTIME_DIR}"
@@ -1277,13 +1283,15 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
         target_compile_options(aether-dv-waveform PRIVATE -w)
     endif()
     add_custom_command(TARGET aether-dv-waveform POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${DIGITAL_VOICE_WAVEFORM_CONFIG_DIR}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${DIGITAL_VOICE_WAVEFORM_DIR}/config/AetherDV.cfg"
-            "$<TARGET_FILE_DIR:aether-dv-waveform>/AetherDV.cfg"
+            "${DIGITAL_VOICE_WAVEFORM_CONFIG_DIR}/AetherDV.cfg"
         COMMAND ${CMAKE_COMMAND} -E rm -f
             "$<TARGET_FILE_DIR:aether-dv-waveform>/aether-dstar-waveform"
             "$<TARGET_FILE_DIR:aether-dv-waveform>/aether-dstar-waveform.exe"
             "$<TARGET_FILE_DIR:aether-dv-waveform>/ThumbDV.cfg"
+            "$<TARGET_FILE_DIR:aether-dv-waveform>/AetherDV.cfg"
         COMMENT "Copying AetherDV waveform manifest"
     )
     add_test(NAME aether_dv_waveform_no_args
@@ -3507,14 +3515,17 @@ if(APPLE)
         file(REMOVE
             "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/aether-dstar-waveform"
             "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/aether-dstar-waveform.exe"
-            "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/ThumbDV.cfg")
+            "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/ThumbDV.cfg"
+            "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/AetherSDR.app/Contents/MacOS/AetherDV.cfg")
     ]])
     if(TARGET aether-dv-waveform)
         install(PROGRAMS "$<TARGET_FILE:aether-dv-waveform>"
             DESTINATION AetherSDR.app/Contents/MacOS
         )
+        # The manifest is not a Mach-O; keep it out of MacOS/ (codesign) — see
+        # the POST_BUILD note above.
         install(FILES third_party/smartsdr-dsp/config/AetherDV.cfg
-            DESTINATION AetherSDR.app/Contents/MacOS
+            DESTINATION AetherSDR.app/Contents/Resources
         )
     endif()
 else()
