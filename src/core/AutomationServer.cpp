@@ -440,7 +440,7 @@ QJsonObject describeWidget(const QWidget* w)
         }
     }
 
-    // The VU applet's custom-painted cross-needle meter publishes its live
+    // The PWR applet's custom-painted cross-needle meter publishes its live
     // mechanics as dynamic properties. Surface them generically so bridge
     // validation can prove the two calibrated movements and SWR intersection
     // without coupling the core automation server to a gui/ header.
