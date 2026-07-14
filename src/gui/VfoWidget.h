@@ -383,6 +383,7 @@ private:
     void updateTxBadgeStyle(bool isTx);
     void showTab(int index);
     void closeActiveTab();  // close any open DSP/Mode/... tab panel
+    void updateDspTabAccent();
     void updateFreqLabel();
     bool cancelDirectEntry();
     void updateFilterLabel();
