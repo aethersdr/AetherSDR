@@ -27,6 +27,8 @@ namespace AetherSDR {
 class SliceModel;
 class RxApplet;
 class SMeterWidget;
+class CrossNeedleMeterApplet;
+class CrossNeedleMeterWidget;
 class TunerApplet;
 class AmpApplet;
 class TxApplet;
@@ -77,6 +79,15 @@ public:
 
     RxApplet*     rxApplet()      { return m_rxApplet; }
     SMeterWidget* sMeterWidget()  { return m_sMeter; }
+    CrossNeedleMeterWidget* crossNeedleMeterWidget() const;
+    void setMeterTxValues(float forwardWatts, float swr);
+    void setStandardMeterTxValues(float forwardWatts, float swr);
+    void setCrossNeedleDirectionalValues(float forwardWatts,
+                                         float reflectedWatts,
+                                         float swr,
+                                         bool reflectedPowerMeasured);
+    void setMeterTransmitting(bool transmitting);
+    void setMeterPowerScale(int maxWatts, bool amplifierActive);
     TunerApplet*  tunerApplet()   { return m_tunerApplet; }
     AmpApplet*    ampApplet()     { return m_ampApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
@@ -244,6 +255,8 @@ private:
                                     const QString& appletKey,
                                     bool hardwareVisible);
     void markHardwareConditional(const QString& id);
+    void persistVuMeterSettings() const;
+    void showStandardMeterContextMenu(QWidget* source, const QPoint& position);
     static const int kFavoriteCount = 5;
 
     ContainerManager* m_containerMgr{nullptr};
@@ -255,6 +268,11 @@ private:
     ContainerWidget* m_sMeterContainer{nullptr};
     QPushButton*     m_vuBtn{nullptr};
     SMeterWidget*    m_sMeter{nullptr};
+    CrossNeedleMeterApplet* m_crossNeedleApplet{nullptr};
+    int              m_vuTxSelect{0};
+    int              m_vuRxSelect{0};
+    bool             m_vuPeakHoldEnabled{false};
+    QString          m_vuPeakDecayRate{QStringLiteral("Medium")};
     RxApplet*    m_rxApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};

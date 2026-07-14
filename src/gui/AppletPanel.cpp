@@ -6,6 +6,9 @@
 #include "ComboStyle.h"
 #include "RxApplet.h"
 #include "SMeterWidget.h"
+#include "CrossNeedleMeterApplet.h"
+#include "CrossNeedleMeterSettings.h"
+#include "VuMeterSettings.h"
 #include "TunerApplet.h"
 #include "AmpApplet.h"
 #include "TxApplet.h"
@@ -70,13 +73,79 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QScopeGuard>
+#include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "FavoritesPickerDialog.h"
 
 namespace AetherSDR {
 
+namespace {
+
+namespace MeterSettings = VuMeterSettingsCodec;
+namespace PowerMeterSettings = CrossNeedleMeterSettingsCodec;
+
+MeterSettings::Snapshot loadVuMeterSettings()
+{
+    AppSettings& appSettings = AppSettings::instance();
+    if (appSettings.contains(MeterSettings::kSettingsKey)) {
+        const QByteArray raw =
+            appSettings.value(MeterSettings::kSettingsKey, QString())
+                .toString().toUtf8();
+        QString error;
+        MeterSettings::LegacyCrossNeedle legacyCrossNeedle;
+        const MeterSettings::Snapshot settings =
+            MeterSettings::decode(raw, &error, &legacyCrossNeedle);
+        if (!error.isEmpty()) {
+            qCWarning(lcGui).noquote()
+                << "AppletPanel: ignoring invalid VuMeter settings:"
+                << error;
+        } else if (legacyCrossNeedle.present) {
+            // Version 1 temporarily combined both meters. Move its theme into
+            // the independent PWR feature object and rewrite VuMeter as the
+            // standard-only version 2 object. Queue every value before one
+            // save so the AppSettings document changes atomically.
+            if (!appSettings.contains(PowerMeterSettings::kSettingsKey)) {
+                const PowerMeterSettings::Snapshot powerSettings =
+                    PowerMeterSettings::migrateLegacyTheme(
+                        legacyCrossNeedle.faceTheme);
+                appSettings.setValue(PowerMeterSettings::kSettingsKey,
+                                     PowerMeterSettings::encode(powerSettings));
+            }
+            appSettings.setValue(MeterSettings::kSettingsKey,
+                                 MeterSettings::encode(settings));
+            appSettings.save();
+        }
+        return settings;
+    }
+
+    // One-time migration into the packed, versioned client-visual settings
+    // object. After this point all meter choices are committed together.
+    const int legacyTxSelect =
+        appSettings.value(QStringLiteral("SMeter_TxSelect"), 0).toInt();
+    const int legacyRxSelect =
+        appSettings.value(QStringLiteral("SMeter_RxSelect"), 0).toInt();
+    const bool legacyPeakHoldEnabled =
+        appSettings.value(QStringLiteral("PeakHoldEnabled"), QStringLiteral("False"))
+            .toString() == QStringLiteral("True");
+    const QString legacyDecay =
+        appSettings.value(QStringLiteral("PeakDecayRate"),
+                          QStringLiteral("Medium")).toString();
+    const MeterSettings::Snapshot settings = MeterSettings::migrateLegacy(
+        legacyTxSelect, legacyRxSelect, legacyPeakHoldEnabled, legacyDecay);
+    appSettings.setValue(MeterSettings::kSettingsKey,
+                         MeterSettings::encode(settings));
+    appSettings.remove(QStringLiteral("SMeter_TxSelect"));
+    appSettings.remove(QStringLiteral("SMeter_RxSelect"));
+    appSettings.remove(QStringLiteral("PeakHoldEnabled"));
+    appSettings.remove(QStringLiteral("PeakDecayRate"));
+    appSettings.save();
+    return settings;
+}
+
+} // namespace
+
 const QStringList AppletPanel::kDefaultOrder = {
-    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS"
+    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -282,132 +351,35 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     contentLayout->setSpacing(0);
 
     m_sMeter = new SMeterWidget(sMeterContent);
+    m_sMeter->setObjectName(QStringLiteral("standardSMeter"));
     m_sMeter->setAccessibleName("S-Meter");
-    m_sMeter->setAccessibleDescription("Signal strength meter, shows S-units or TX power");
+    m_sMeter->setAccessibleDescription(
+        "Signal strength meter, shows S-units or TX power");
+    m_sMeter->setContextMenuPolicy(Qt::CustomContextMenu);
     contentLayout->addWidget(m_sMeter);
 
-    // ── S-meter config → right-click context menu on the gauge ────────────
-    // The applet body is just the gauge now; TX/RX meter select, peak-hold
-    // toggle, decay speed, and reset all live in the right-click menu so the
-    // VU applet stays compact. The menu reads/writes the same AppSettings keys
-    // (SMeter_TxSelect/RxSelect, PeakHoldEnabled, PeakDecayRate) it always has,
-    // so state survives and stays in sync.
+    const MeterSettings::Snapshot meterSettings = loadVuMeterSettings();
+    m_vuTxSelect = meterSettings.txSelect;
+    m_vuRxSelect = meterSettings.rxSelect;
+    m_vuPeakHoldEnabled = meterSettings.peakHoldEnabled;
+    m_vuPeakDecayRate = meterSettings.peakDecayRate;
 
-    // Apply decay preset: also sets the hold time (Fast=200ms, Medium=500ms, Slow=1000ms)
-    auto applyDecayPreset = [this](const QString& rate) {
-        m_sMeter->setPeakDecayRate(rate);
-        if (rate == "Fast")        m_sMeter->setPeakHoldTimeMs(200);
-        else if (rate == "Slow")   m_sMeter->setPeakHoldTimeMs(1000);
-        else                       m_sMeter->setPeakHoldTimeMs(500);
-    };
-
-    static const QStringList kTxMeterItems{"Power", "SWR", "Level", "Compression"};
-    static const QStringList kRxMeterItems{"S-Meter", "S-Meter Peak"};
-    static const QStringList kDecayItems{"Fast", "Medium", "Slow"};
-
-    // Restore saved state onto the gauge at startup (#809, #840).
-    {
-        auto& s = AppSettings::instance();
-        const int txIdx = qBound(0, s.value("SMeter_TxSelect", 0).toInt(),
-                                 static_cast<int>(kTxMeterItems.size()) - 1);
-        const int rxIdx = qBound(0, s.value("SMeter_RxSelect", 0).toInt(),
-                                 static_cast<int>(kRxMeterItems.size()) - 1);
-        m_sMeter->setTxMode(kTxMeterItems[txIdx]);
-        m_sMeter->setRxMode(kRxMeterItems[rxIdx]);
-        m_sMeter->setPeakHoldEnabled(s.value("PeakHoldEnabled", "False") == "True");
-        applyDecayPreset(s.value("PeakDecayRate", "Medium").toString());
+    m_sMeter->setTxMode(MeterSettings::txMeterItems()[m_vuTxSelect]);
+    m_sMeter->setRxMode(MeterSettings::rxMeterItems()[m_vuRxSelect]);
+    m_sMeter->setPeakHoldEnabled(m_vuPeakHoldEnabled);
+    m_sMeter->setPeakDecayRate(m_vuPeakDecayRate);
+    if (m_vuPeakDecayRate == QStringLiteral("Fast")) {
+        m_sMeter->setPeakHoldTimeMs(200);
+    } else if (m_vuPeakDecayRate == QStringLiteral("Slow")) {
+        m_sMeter->setPeakHoldTimeMs(1000);
+    } else {
+        m_sMeter->setPeakHoldTimeMs(500);
     }
 
-    m_sMeter->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_sMeter, &QWidget::customContextMenuRequested, this,
-            [this, applyDecayPreset](const QPoint& pos) {
-        auto& s = AppSettings::instance();
-        QMenu menu(m_sMeter);
-
-        // Section header rows. QMenu::addSection() doesn't render its text under
-        // the app's menu styling (only the separator shows), so use a disabled
-        // QWidgetAction + styled QLabel so the section titles are always visible.
-        bool firstHeader = true;
-        auto addHeader = [&menu, &firstHeader](const QString& text) {
-            if (!firstHeader)
-                menu.addSeparator();
-            firstHeader = false;
-            auto* lbl = new QLabel(text);
-            lbl->setStyleSheet(
-                "color:#8090a0; font-size:10px; font-weight:bold; "
-                "padding:4px 8px 2px 8px;");
-            auto* wa = new QWidgetAction(&menu);
-            wa->setDefaultWidget(lbl);
-            wa->setEnabled(false);
-            menu.addAction(wa);
-        };
-
-        // TX Select (exclusive)
-        addHeader("TX Select");
-        auto* txGroup = new QActionGroup(&menu);
-        const int txCur = s.value("SMeter_TxSelect", 0).toInt();
-        for (int i = 0; i < kTxMeterItems.size(); ++i) {
-            QAction* a = menu.addAction(kTxMeterItems[i]);
-            a->setCheckable(true);
-            a->setChecked(i == txCur);
-            txGroup->addAction(a);
-            connect(a, &QAction::triggered, this, [this, i] {
-                m_sMeter->setTxMode(kTxMeterItems[i]);
-                AppSettings::instance().setValue("SMeter_TxSelect", i);
-                AppSettings::instance().save();
+    connect(m_sMeter, &QWidget::customContextMenuRequested,
+            this, [this](const QPoint& position) {
+                showStandardMeterContextMenu(m_sMeter, position);
             });
-        }
-
-        // RX Select (exclusive)
-        addHeader("RX Select");
-        auto* rxGroup = new QActionGroup(&menu);
-        const int rxCur = s.value("SMeter_RxSelect", 0).toInt();
-        for (int i = 0; i < kRxMeterItems.size(); ++i) {
-            QAction* a = menu.addAction(kRxMeterItems[i]);
-            a->setCheckable(true);
-            a->setChecked(i == rxCur);
-            rxGroup->addAction(a);
-            connect(a, &QAction::triggered, this, [this, i] {
-                m_sMeter->setRxMode(kRxMeterItems[i]);
-                AppSettings::instance().setValue("SMeter_RxSelect", i);
-                AppSettings::instance().save();
-            });
-        }
-
-        // Peak Hold (toggle)
-        addHeader("Peak Hold");
-        QAction* peakAct = menu.addAction("Enabled");
-        peakAct->setCheckable(true);
-        peakAct->setChecked(s.value("PeakHoldEnabled", "False") == "True");
-        connect(peakAct, &QAction::toggled, this, [this](bool on) {
-            m_sMeter->setPeakHoldEnabled(on);
-            AppSettings::instance().setValue("PeakHoldEnabled", on ? "True" : "False");
-            AppSettings::instance().save();
-        });
-
-        // Decay speed (exclusive)
-        addHeader("Decay speed");
-        auto* decayGroup = new QActionGroup(&menu);
-        const QString decayCur = s.value("PeakDecayRate", "Medium").toString();
-        for (const QString& d : kDecayItems) {
-            QAction* a = menu.addAction(d);
-            a->setCheckable(true);
-            a->setChecked(d == decayCur);
-            decayGroup->addAction(a);
-            connect(a, &QAction::triggered, this, [this, d, applyDecayPreset] {
-                applyDecayPreset(d);
-                AppSettings::instance().setValue("PeakDecayRate", d);
-                AppSettings::instance().save();
-            });
-        }
-
-        // Reset Peak Hold
-        menu.addSeparator();
-        QAction* rstAct = menu.addAction("Reset Peak Hold");
-        connect(rstAct, &QAction::triggered, m_sMeter, &SMeterWidget::resetPeak);
-
-        menu.exec(m_sMeter->mapToGlobal(pos));
-    });
 
     // One-shot migration: legacy Applet_ANLG visibility key → Applet_VU.
     // Run before reading Applet_VU so the first launch after upgrade
@@ -700,7 +672,31 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         }
     }
 
-    // Create all applets — row 1: core, row 2: accessories/conditional
+    // Create all applets — row 1: core, row 2: accessories/conditional.
+    // PWR is independent from the fixed VU container and participates in the
+    // normal order/float/visibility system. Keep it first so enabling it places
+    // it directly below the S-meter, but leave it off until the user opts in.
+    // Its bar button remains visible through defaultButtonOrder().
+    m_crossNeedleApplet = new CrossNeedleMeterApplet;
+    {
+        AppletEntry powerEntry = makeEntry("PWR", "Power & SWR",
+                                           m_crossNeedleApplet, false,
+                                           m_drawer, m_drawerLayout);
+        if (ContainerWidget* container =
+                qobject_cast<ContainerWidget*>(powerEntry.widget)) {
+            // 640x427 meter face plus the container's fixed 18px title bar.
+            // Saved geometry takes over after the user resizes it.
+            container->setDefaultFloatingSize(QSize(640, 445));
+            connect(container, &ContainerWidget::dockModeChanged,
+                    m_crossNeedleApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        m_crossNeedleApplet->setFloating(
+                            mode == ContainerWidget::DockMode::Floating);
+                    });
+        }
+        m_appletOrder.append(powerEntry);
+    }
+
     m_rxApplet = new RxApplet;
     m_appletOrder.append(makeEntry("RX", "RX Controls", m_rxApplet, true, m_drawer, m_drawerLayout));
 
@@ -971,6 +967,147 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // Float-state restore for individual applets happens per-entry in
     // makeEntry via the legacy FloatingApplet_<id>_IsFloating migration;
     // no separate loop needed.
+}
+
+CrossNeedleMeterWidget* AppletPanel::crossNeedleMeterWidget() const
+{
+    return m_crossNeedleApplet ? m_crossNeedleApplet->meterWidget() : nullptr;
+}
+
+void AppletPanel::setMeterTxValues(float forwardWatts, float swr)
+{
+    setStandardMeterTxValues(forwardWatts, swr);
+    m_crossNeedleApplet->setTxMeters(forwardWatts, swr);
+}
+
+void AppletPanel::setStandardMeterTxValues(float forwardWatts, float swr)
+{
+    m_sMeter->setTxMeters(forwardWatts, swr);
+}
+
+void AppletPanel::setCrossNeedleDirectionalValues(
+    float forwardWatts, float reflectedWatts, float swr,
+    bool reflectedPowerMeasured)
+{
+    if (reflectedPowerMeasured) {
+        m_crossNeedleApplet->setTxPowers(forwardWatts, reflectedWatts);
+    } else {
+        m_crossNeedleApplet->setTxMeters(forwardWatts, swr);
+    }
+}
+
+void AppletPanel::setMeterTransmitting(bool transmitting)
+{
+    m_sMeter->setTransmitting(transmitting);
+    m_crossNeedleApplet->setTransmitting(transmitting);
+}
+
+void AppletPanel::setMeterPowerScale(int maxWatts, bool amplifierActive)
+{
+    m_sMeter->setPowerScale(maxWatts, amplifierActive);
+    m_crossNeedleApplet->setPowerScale(maxWatts, amplifierActive);
+}
+
+void AppletPanel::persistVuMeterSettings() const
+{
+    MeterSettings::Snapshot settings;
+    settings.txSelect = m_vuTxSelect;
+    settings.rxSelect = m_vuRxSelect;
+    settings.peakHoldEnabled = m_vuPeakHoldEnabled;
+    settings.peakDecayRate = m_vuPeakDecayRate;
+
+    AppSettings& appSettings = AppSettings::instance();
+    appSettings.setValue(MeterSettings::kSettingsKey,
+                         MeterSettings::encode(settings));
+    appSettings.save();
+}
+
+void AppletPanel::showStandardMeterContextMenu(QWidget* source,
+                                               const QPoint& position)
+{
+    QMenu menu(source);
+
+    bool firstHeader = true;
+    const auto addHeader = [&menu, &firstHeader](const QString& text) {
+        if (!firstHeader) {
+            menu.addSeparator();
+        }
+        firstHeader = false;
+        QLabel* label = new QLabel(text);
+        label->setStyleSheet(
+            "color:#8090a0; font-size:10px; font-weight:bold; "
+            "padding:4px 8px 2px 8px;");
+        QWidgetAction* action = new QWidgetAction(&menu);
+        action->setDefaultWidget(label);
+        action->setEnabled(false);
+        menu.addAction(action);
+    };
+
+    addHeader(QStringLiteral("TX Select"));
+    QActionGroup* txGroup = new QActionGroup(&menu);
+    for (int i = 0; i < MeterSettings::txMeterItems().size(); ++i) {
+        QAction* action = menu.addAction(MeterSettings::txMeterItems()[i]);
+        action->setCheckable(true);
+        action->setChecked(i == m_vuTxSelect);
+        txGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, i]() {
+            m_vuTxSelect = i;
+            m_sMeter->setTxMode(MeterSettings::txMeterItems()[i]);
+            persistVuMeterSettings();
+        });
+    }
+
+    addHeader(QStringLiteral("RX Select"));
+    QActionGroup* rxGroup = new QActionGroup(&menu);
+    for (int i = 0; i < MeterSettings::rxMeterItems().size(); ++i) {
+        QAction* action = menu.addAction(MeterSettings::rxMeterItems()[i]);
+        action->setCheckable(true);
+        action->setChecked(i == m_vuRxSelect);
+        rxGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, i]() {
+            m_vuRxSelect = i;
+            m_sMeter->setRxMode(MeterSettings::rxMeterItems()[i]);
+            persistVuMeterSettings();
+        });
+    }
+
+    addHeader(QStringLiteral("Peak Hold"));
+    QAction* peakAction = menu.addAction(QStringLiteral("Enabled"));
+    peakAction->setCheckable(true);
+    peakAction->setChecked(m_vuPeakHoldEnabled);
+    connect(peakAction, &QAction::toggled, this, [this](bool enabled) {
+        m_vuPeakHoldEnabled = enabled;
+        m_sMeter->setPeakHoldEnabled(enabled);
+        persistVuMeterSettings();
+    });
+
+    addHeader(QStringLiteral("Decay speed"));
+    QActionGroup* decayGroup = new QActionGroup(&menu);
+    for (const QString& decay : MeterSettings::decayItems()) {
+        QAction* action = menu.addAction(decay);
+        action->setCheckable(true);
+        action->setChecked(decay == m_vuPeakDecayRate);
+        decayGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, decay]() {
+            m_vuPeakDecayRate = decay;
+            m_sMeter->setPeakDecayRate(decay);
+            if (decay == QStringLiteral("Fast")) {
+                m_sMeter->setPeakHoldTimeMs(200);
+            } else if (decay == QStringLiteral("Slow")) {
+                m_sMeter->setPeakHoldTimeMs(1000);
+            } else {
+                m_sMeter->setPeakHoldTimeMs(500);
+            }
+            persistVuMeterSettings();
+        });
+    }
+
+    menu.addSeparator();
+    QAction* resetAction = menu.addAction(QStringLiteral("Reset Peak Hold"));
+    connect(resetAction, &QAction::triggered,
+            m_sMeter, &SMeterWidget::resetPeak);
+
+    menu.exec(source->mapToGlobal(position));
 }
 
 void AppletPanel::rebuildStackOrder()
@@ -1372,9 +1509,9 @@ QStringList AppletPanel::defaultButtonOrder() const
     // until the matching device is detected.  updateHardwareAvailability()
     // auto-adds them when MainWindow reports the hardware as present,
     // and the user's explicit Hidden choice is respected from then on.
-    QStringList out = {"VU", "RX", "TX", "P/CW", "WAVE"};
+    QStringList out = {"VU", "PWR", "RX", "TX", "P/CW"};
     const QStringList rest = {
-        "LCK", "PHNE", "EQ", "TXDSP",
+        "LCK", "PHNE", "EQ", "WAVE", "TXDSP",
         "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "SS", "MQTT"
     };
     for (const auto& id : rest)

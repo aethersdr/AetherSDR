@@ -70,6 +70,7 @@ public:
     // Convenience: forward power in watts.
     float fwdPower() const { return m_fwdPower; }
     float fwdPowerInstant() const { return m_fwdPowerInstant; }
+    float reflectedPower() const { return m_reflectedPower; }
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }
 
     // Convenience: SWR.
@@ -79,10 +80,12 @@ public:
     // Timestamp of the last TX meter sample (milliseconds since epoch).
     qint64 txMetersUpdatedAtMs() const { return m_lastTxMeterUpdateMs; }
     qint64 fwdPowerUpdatedAtMs() const { return m_lastFwdPowerUpdateMs; }
+    qint64 reflectedPowerUpdatedAtMs() const { return m_lastReflectedPowerUpdateMs; }
     qint64 swrUpdatedAtMs() const { return m_lastSwrUpdateMs; }
     qint64 tgxlFwdPowerUpdatedAtMs() const { return m_lastTgxlFwdPowerUpdateMs; }
     qint64 tgxlSwrUpdatedAtMs() const { return m_lastTgxlSwrUpdateMs; }
     bool hasRecentTxMeters(qint64 maxAgeMs) const;
+    bool hasRecentReflectedPower(qint64 maxAgeMs) const;
 
     // Convenience: mic peak level (dBFS) and radio-provided compression (dB).
     float micPeak()  const { return m_micPeak; }
@@ -119,6 +122,15 @@ signals:
 
     // Emitted when TX meters change (power, SWR).
     void txMetersChanged(float fwdPower, float swr);
+
+    // Independent directional-coupler readings for a physical cross-needle
+    // display. Forward power is the raw FWDPWR sample so both movements receive
+    // one layer of identical GUI ballistics. reflectedPowerMeasured is false
+    // when REFPWR is unavailable/stale and the consumer must derive it from SWR.
+    void directionalPowerMetersChanged(float forwardPower,
+                                       float reflectedPower,
+                                       float swr,
+                                       bool reflectedPowerMeasured);
 
     // Emitted on every FWDPWR sample with the raw pre-smoothed value (watts).
     // Consumers (e.g. TxApplet's PEP peak-hold tick) want the instant peak
@@ -177,6 +189,7 @@ private:
     int m_manifestSliceContext{-1};
     int m_activeTxSlice{-1};
     int m_fwdPwrIdx{-1};     // "FWDPWR"
+    int m_refPwrIdx{-1};     // "REFPWR"
     int m_swrIdx{-1};        // "SWR"
     int m_micPeakIdx{-1};    // "COD-" / "MICPEAK" (hardware mic)
     int m_micLevelIdx{-1};   // "COD-" / "MIC" (hardware mic RX level)
@@ -200,9 +213,11 @@ private:
     float m_sLevel{-130.0f};
     float m_fwdPower{0.0f};
     float m_fwdPowerInstant{0.0f};
+    float m_reflectedPower{0.0f};
     float m_swr{1.0f};
     qint64 m_lastTxMeterUpdateMs{0};
     qint64 m_lastFwdPowerUpdateMs{0};
+    qint64 m_lastReflectedPowerUpdateMs{0};
     qint64 m_lastSwrUpdateMs{0};
     float m_micPeak{-50.0f};
     float m_compPeak{0.0f};       // radio-provided compression amount, 0..25 dB

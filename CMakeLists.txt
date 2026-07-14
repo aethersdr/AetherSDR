@@ -776,6 +776,11 @@ set(GUI_SOURCES
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/SMeterWidget.cpp
+    src/gui/CrossNeedleMeterGeometry.cpp
+    src/gui/CrossNeedleMeterWidget.cpp
+    src/gui/CrossNeedleMeterApplet.cpp
+    src/gui/CrossNeedleMeterSettings.cpp
+    src/gui/VuMeterSettings.cpp
     src/gui/TunerApplet.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
@@ -2800,6 +2805,24 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
+# Approved V12 cross-needle meter construction: versioned face resource,
+# two-pivot mechanics, SWR math/guide registration, RX parking and rendering.
+qt_add_resources(CROSS_NEEDLE_METER_TEST_RESOURCES resources/resources.qrc)
+add_executable(cross_needle_meter_test
+    tests/cross_needle_meter_test.cpp
+    src/gui/CrossNeedleMeterGeometry.cpp
+    src/gui/CrossNeedleMeterWidget.cpp
+    ${CROSS_NEEDLE_METER_TEST_RESOURCES}
+)
+target_include_directories(cross_needle_meter_test PRIVATE src)
+target_link_libraries(cross_needle_meter_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(cross_needle_meter_test PROPERTIES AUTOMOC ON)
+add_test(NAME cross_needle_meter_test COMMAND cross_needle_meter_test)
+set_tests_properties(cross_needle_meter_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
@@ -3109,6 +3132,16 @@ if(UNIX)
     target_link_libraries(meter_model_test PRIVATE pthread)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME meter_model_test COMMAND meter_model_test)
+
+add_executable(vu_meter_settings_test
+    tests/vu_meter_settings_test.cpp
+    src/gui/CrossNeedleMeterSettings.cpp
+    src/gui/VuMeterSettings.cpp
+)
+target_include_directories(vu_meter_settings_test PRIVATE src)
+target_link_libraries(vu_meter_settings_test PRIVATE Qt6::Core)
+add_test(NAME vu_meter_settings_test COMMAND vu_meter_settings_test)
 
 # aetherd RFC step 2.2b regression guard: FlexBackend ctor/dtor thread ownership
 # + #502 teardown ordering. FlexBackend pulls RadioConnection/PanadapterStream
@@ -3432,6 +3465,9 @@ target_link_libraries(container_widget_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
+add_test(NAME container_widget_test COMMAND container_widget_test)
+set_tests_properties(container_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp

@@ -11,6 +11,7 @@ namespace AetherSDR {
 namespace {
 
 constexpr qint64 kCompressionSummaryLogIntervalMs = 500;
+constexpr qint64 kDirectionalMeterFreshnessMs = 500;
 constexpr int kMinTxWaveformSourceIndex = 8;
 
 float compressionValueForGauge(float compPeakDb)
@@ -95,6 +96,8 @@ void MeterModel::defineMeter(const MeterDef& def)
         m_escLevelIdxBySlice[def.sourceIndex] = def.index;
     else if (def.source.startsWith("TX") && def.name == "FWDPWR")
         m_fwdPwrIdx = def.index;
+    else if (def.source.startsWith("TX") && def.name == "REFPWR")
+        m_refPwrIdx = def.index;
     else if (def.source.startsWith("TX") && def.name == "SWR")
         m_swrIdx = def.index;
     else if (def.name == "MICPEAK")
@@ -180,6 +183,11 @@ void MeterModel::removeMeter(int index)
         }
     }
     if (index == m_fwdPwrIdx)   m_fwdPwrIdx = -1;
+    if (index == m_refPwrIdx) {
+        m_refPwrIdx = -1;
+        m_reflectedPower = 0.0f;
+        m_lastReflectedPowerUpdateMs = 0;
+    }
     if (index == m_swrIdx)      m_swrIdx = -1;
     if (index == m_micPeakIdx)   m_micPeakIdx = -1;
     if (index == m_micLevelIdx)  m_micLevelIdx = -1;
@@ -237,6 +245,7 @@ void MeterModel::clear()
     m_manifestSliceContext = -1;
     m_activeTxSlice = -1;
     m_fwdPwrIdx = -1;
+    m_refPwrIdx = -1;
     m_swrIdx = -1;
     m_micPeakIdx = -1;
     m_micLevelIdx = -1;
@@ -258,9 +267,11 @@ void MeterModel::clear()
     m_sLevel = -130.0f;
     m_fwdPower = 0.0f;
     m_fwdPowerInstant = 0.0f;
+    m_reflectedPower = 0.0f;
     m_swr = 1.0f;
     m_lastTxMeterUpdateMs = 0;
     m_lastFwdPowerUpdateMs = 0;
+    m_lastReflectedPowerUpdateMs = 0;
     m_lastSwrUpdateMs = 0;
     m_micPeak = -50.0f;
     clearCompressionState();
@@ -417,6 +428,16 @@ bool MeterModel::hasRecentTxMeters(qint64 maxAgeMs) const
     return now - m_lastTxMeterUpdateMs <= maxAgeMs;
 }
 
+bool MeterModel::hasRecentReflectedPower(qint64 maxAgeMs) const
+{
+    if (m_refPwrIdx < 0 || m_lastReflectedPowerUpdateMs <= 0 || maxAgeMs < 0) {
+        return false;
+    }
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    return now - m_lastReflectedPowerUpdateMs <= maxAgeMs;
+}
+
 void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals)
 {
     const int n = qMin(ids.size(), vals.size());
@@ -424,6 +445,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
     const int activeCompPeakIdx = compPeakIndexForActiveTxSlice();
     // sLevelChanged is emitted per-slice inline in the loop below
     bool txChanged = false;
+    bool directionalChanged = false;
     bool fwdInstantChanged = false;
     bool micChanged = false;
     bool hwAlcChangedFlag = false;
@@ -471,6 +493,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             float watts = std::pow(10.0f, v / 10.0f) / 1000.0f;
             m_fwdPowerInstant = watts;
             fwdInstantChanged = true;
+            directionalChanged = true;
             // Smooth: fast attack (α=0.5) to track peaks, slow decay (α=0.15)
             // for stable display without jitter (#980)
             if (m_fwdPower < 0.01f) {
@@ -480,11 +503,19 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
                 m_fwdPower = alpha * watts + (1.0f - alpha) * m_fwdPower;
             }
             txChanged = true;
+        } else if (idx == m_refPwrIdx) {
+            m_lastTxMeterUpdateMs = packetUpdatedMs;
+            m_lastReflectedPowerUpdateMs = m_lastTxMeterUpdateMs;
+            // REFPWR is an independent directional-coupler reading in dBm.
+            // Preserve it as watts rather than reconstructing it from SWR.
+            m_reflectedPower = std::pow(10.0f, v / 10.0f) / 1000.0f;
+            directionalChanged = true;
         } else if (idx == m_swrIdx) {
             m_lastTxMeterUpdateMs = packetUpdatedMs;
             m_lastSwrUpdateMs = m_lastTxMeterUpdateMs;
             m_swr = v;
             txChanged = true;
+            directionalChanged = true;
         } else if (idx == m_micPeakIdx) {
             m_micPeak = v;
             micChanged = true;
@@ -541,6 +572,16 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
     // sLevelChanged is now emitted per-slice inline above
     if (txChanged)
         emit txMetersChanged(m_fwdPower, m_swr);
+    if (directionalChanged) {
+        const bool reflectedPowerMeasured = m_refPwrIdx >= 0
+            && m_lastReflectedPowerUpdateMs > 0
+            && packetUpdatedMs - m_lastReflectedPowerUpdateMs
+                <= kDirectionalMeterFreshnessMs;
+        emit directionalPowerMetersChanged(m_fwdPowerInstant,
+                                           m_reflectedPower,
+                                           m_swr,
+                                           reflectedPowerMeasured);
+    }
     // Separate signal carries the raw pre-smoothed sample so consumers
     // can compute PEP peak-hold without re-tracking the smoothing
     // ballistics. (#2561)

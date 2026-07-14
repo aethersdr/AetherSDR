@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QSize>
 #include <QString>
 #include <QWidget>
 
@@ -96,6 +97,11 @@ public:
     // already provides an outer titlebar — avoids stacking two.
     void setTitleBarVisible(bool visible);
 
+    // Optional first-float size for content that needs more room than its
+    // docked size hint. Saved user geometry still wins on later floats.
+    void setDefaultFloatingSize(const QSize& size) { m_defaultFloatingSize = size; }
+    QSize defaultFloatingSize() const { return m_defaultFloatingSize; }
+
     // Returns the widget that should be inserted into a parent layout
     // when this container is panel-docked.  Currently that's just
     // `this` — kept as a separate API so future phases can introduce
@@ -156,6 +162,7 @@ private:
     QWidget*           m_content{nullptr};
     DockMode           m_dockMode{DockMode::PanelDocked};
     bool               m_visible{true};
+    QSize              m_defaultFloatingSize;
     QHash<QWidget*, int> m_savedMaxWidths;  // child → docked maximumWidth (#3451)
 };
 

@@ -206,6 +206,56 @@ void testRemovingAdjacentMetersDoesNotClearCompPeak()
            model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 11.0f));
 }
 
+void testDirectionalPowerUsesDirectReflectedMeter()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(9, "REFPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    bool emitted = false;
+    bool reflectedPowerMeasured = false;
+    float forwardWatts = 0.0f;
+    float reflectedWatts = 0.0f;
+    float swr = 0.0f;
+    QObject::connect(&model, &MeterModel::directionalPowerMetersChanged,
+                     [&emitted, &forwardWatts, &reflectedWatts, &swr,
+                      &reflectedPowerMeasured](float forward, float reflected,
+                                               float ratio, bool measured) {
+        emitted = true;
+        forwardWatts = forward;
+        reflectedWatts = reflected;
+        swr = ratio;
+        reflectedPowerMeasured = measured;
+    });
+
+    model.updateValues({8, 9, 10},
+                       {rawDb(50.0f), rawDb(36.0206f), rawDb(1.5f)});
+
+    report("REFPWR is converted from dBm to measured watts",
+           emitted && reflectedPowerMeasured
+               && nearlyEqual(forwardWatts, 100.0f)
+               && nearlyEqual(reflectedWatts, 4.0f)
+               && nearlyEqual(model.reflectedPower(), 4.0f)
+               && nearlyEqual(swr, 1.5f)
+               && model.hasRecentReflectedPower(500));
+
+    model.removeMeter(9);
+    emitted = false;
+    reflectedPowerMeasured = true;
+    model.updateValues({8, 10}, {rawDb(50.0f), rawDb(1.5f)});
+
+    report("missing REFPWR requests calculated fallback",
+           emitted && !reflectedPowerMeasured
+               && nearlyEqual(model.reflectedPower(), 0.0f)
+               && !model.hasRecentReflectedPower(500));
+
+    model.clear();
+    report("disconnect clears reflected-power state",
+           nearlyEqual(model.reflectedPower(), 0.0f)
+               && model.reflectedPowerUpdatedAtMs() == 0);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -221,6 +271,7 @@ int main(int argc, char** argv)
     testAfterEqAndScMicDoNotAffectCompression();
     testRemovingCompPeakMarksCompressionUnavailable();
     testRemovingAdjacentMetersDoesNotClearCompPeak();
+    testDirectionalPowerUsesDirectReflectedMeter();
 
     return g_failed == 0 ? 0 : 1;
 }
