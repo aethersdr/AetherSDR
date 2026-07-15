@@ -4,7 +4,8 @@
 // every QMenu/QAction in the menu bar, their enable/disable wiring, and the
 // inline lambdas they trigger (~70 connects).
 //
-// Pure code motion from MainWindow.cpp — same class, no header changes.
+// The community-credits subsystem lives in Contribute.cpp; this TU retains
+// only the About-dialog button and its connection.
 
 #include "MainWindow.h"
 
@@ -15,6 +16,7 @@
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
 #include "ClientChainApplet.h"
+#include "Contribute.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
 #include "MainWindowHelpers.h"
@@ -43,15 +45,18 @@
 #include "models/SliceModel.h"
 
 #include <QActionGroup>
+#include <QColor>
 #include <QCoreApplication>
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QFrame>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenuBar>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -1134,7 +1139,7 @@ void MainWindow::buildMenuBar()
         QDesktopServices::openUrl(QUrl("https://www.aethersdr.com"));
     });
     helpMenu->addAction("Donate to AetherSDR", this, []() {
-        QDesktopServices::openUrl(QUrl("https://opencollective.com/aethersdr"));
+        QDesktopServices::openUrl(QUrl("https://www.aethersdr.com/#sponsor"));
     });
     helpMenu->addAction(QString::fromUtf8("Submit your Idea... \xF0\x9F\x92\xA1"),
                         this, [this]() {
@@ -1291,6 +1296,21 @@ void MainWindow::buildMenuBar()
         sep2->setFrameShape(QFrame::HLine);
         AetherSDR::ThemeManager::instance().applyStyleSheet(sep2, "color: {{color.background.2}};");
         vbox->addWidget(sep2);
+
+        auto* communityCreditsButton = new QPushButton(QStringLiteral("Play Community Credits..."));
+        communityCreditsButton->setAccessibleName(QStringLiteral("Play AetherSDR community credits"));
+        communityCreditsButton->setAccessibleDescription(
+            QStringLiteral("Opens an animated thank-you to contributors and Open Collective supporters with music."));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            communityCreditsButton,
+            "QPushButton { background: {{color.background.1}}; color: {{color.accent.bright}}; "
+            "border: 1px solid {{color.accent}}; border-radius: 4px; padding: 7px 18px; "
+            "font-weight: bold; }"
+            "QPushButton:hover { background: {{color.background.2}}; }");
+        vbox->addWidget(communityCreditsButton, 0, Qt::AlignCenter);
+        connect(communityCreditsButton, &QPushButton::clicked, this, [this] {
+            showOrRaisePersistent(m_contributeDialog);
+        });
 
         // Footer
         auto* footer = new QLabel(
