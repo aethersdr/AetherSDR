@@ -171,6 +171,20 @@ void testFloatingWidthPolicy()
            body2->maximumWidth() == QWIDGETSIZE_MAX);
 }
 
+void testDefaultFloatingSize()
+{
+    ContainerWidget c("sized", "Sized");
+    c.setContent(new QLabel("payload"));
+    c.setDefaultFloatingSize(QSize(640, 445));
+
+    FloatingContainerWindow win;
+    win.takeContainer(&c);
+    win.restoreAndEnsureVisible(nullptr);
+    report("container-specific first-float size overrides generic fallback",
+           win.size() == QSize(640, 445));
+    win.releaseContainer();
+}
+
 void testCloseSignal()
 {
     ContainerWidget c("id", "T");
@@ -203,6 +217,7 @@ int main(int argc, char** argv)
     testVisibilitySignal();
     testFloatDockCycle();
     testFloatingWidthPolicy();
+    testDefaultFloatingSize();
     testCloseSignal();
     testTitlebarCloseButtonToggle();
 

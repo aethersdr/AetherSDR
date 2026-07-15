@@ -831,7 +831,7 @@ void MainWindow::wireRadioModel()
             m_panApplet->spectrumWidget()->setTransmitting(tx);
         // S-Meter: use raw interlock state so Level/Compression modes work
         // during VOX/hardware CW without the effectiveTx power threshold (#877)
-        m_appletPanel->sMeterWidget()->setTransmitting(tx);
+        m_appletPanel->setMeterTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);

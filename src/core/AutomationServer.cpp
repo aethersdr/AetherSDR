@@ -440,6 +440,62 @@ QJsonObject describeWidget(const QWidget* w)
         }
     }
 
+    // The PWR applet's custom-painted cross-needle meter publishes its live
+    // mechanics as dynamic properties. Surface them generically so bridge
+    // validation can prove the two calibrated movements and SWR intersection
+    // without coupling the core automation server to a gui/ header.
+    {
+        const QVariant meterStyle = w->property("meterStyle");
+        if (meterStyle.isValid()) {
+            o[QStringLiteral("meterStyle")] = meterStyle.toString();
+        }
+        const QVariant faceTheme = w->property("faceTheme");
+        if (faceTheme.isValid()) {
+            o[QStringLiteral("faceTheme")] = faceTheme.toString();
+        }
+        const QVariant designVersion = w->property("geometryDesignVersion");
+        if (designVersion.isValid()) {
+            o[QStringLiteral("geometryDesignVersion")] = designVersion.toInt();
+            o[QStringLiteral("forwardWatts")] =
+                w->property("forwardWatts").toDouble();
+            o[QStringLiteral("reflectedWatts")] =
+                w->property("reflectedWatts").toDouble();
+            o[QStringLiteral("reflectedPowerSource")] =
+                w->property("reflectedPowerSource").toString();
+            o[QStringLiteral("swr")] = w->property("swr").toDouble();
+            o[QStringLiteral("rangeMultiplier")] =
+                w->property("rangeMultiplier").toDouble();
+            o[QStringLiteral("transmitting")] =
+                w->property("transmitting").toBool();
+            o[QStringLiteral("effectiveActive")] =
+                w->property("effectiveActive").toBool();
+            o[QStringLiteral("automationFixture")] =
+                w->property("automationFixture").toBool();
+            o[QStringLiteral("forwardAngleRadians")] =
+                w->property("forwardAngleRadians").toDouble();
+            o[QStringLiteral("reflectedAngleRadians")] =
+                w->property("reflectedAngleRadians").toDouble();
+            o[QStringLiteral("intersectionX")] =
+                w->property("intersectionX").toDouble();
+            o[QStringLiteral("intersectionY")] =
+                w->property("intersectionY").toDouble();
+            o[QStringLiteral("nearestSwrGuide")] =
+                w->property("nearestSwrGuide").toString();
+            o[QStringLiteral("nearestGuideDistancePx")] =
+                w->property("nearestGuideDistancePx").toDouble();
+            o[QStringLiteral("displayedForwardWatts")] =
+                w->property("displayedForwardWatts").toDouble();
+            o[QStringLiteral("displayedReflectedWatts")] =
+                w->property("displayedReflectedWatts").toDouble();
+            o[QStringLiteral("displayedForwardAngleRadians")] =
+                w->property("displayedForwardAngleRadians").toDouble();
+            o[QStringLiteral("displayedReflectedAngleRadians")] =
+                w->property("displayedReflectedAngleRadians").toDouble();
+            o[QStringLiteral("needleAnimationActive")] =
+                w->property("needleAnimationActive").toBool();
+        }
+    }
+
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {
@@ -1695,6 +1751,11 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
         {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
         {QStringLiteral("fwdPowerAgeMs"),   age(m->fwdPowerUpdatedAtMs())},
+        {QStringLiteral("reflectedPower"),  m->reflectedPower()},
+        {QStringLiteral("reflectedPowerAgeMs"),
+         age(m->reflectedPowerUpdatedAtMs())},
+        {QStringLiteral("reflectedPowerMeasured"),
+         m->hasRecentReflectedPower(500)},
         {QStringLiteral("swr"),             m->swr()},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C

@@ -4223,7 +4223,7 @@ void MainWindow::wireMeters()
             this, [this](float fwd, float swr) {
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
-        m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
+        m_appletPanel->setStandardMeterTxValues(fwd, swr);
 #ifdef HAVE_HIDAPI
         m_tmate2TxWatts = fwd;
         if (m_radioModel.transmitModel().isTransmitting()) {
@@ -4232,10 +4232,21 @@ void MainWindow::wireMeters()
         }
 #endif
     });
+    connect(&m_radioModel.meterModel(),
+            &MeterModel::directionalPowerMetersChanged,
+            this, [this](float fwd, float reflected, float swr,
+                         bool reflectedPowerMeasured) {
+        if (m_radioModel.amplifier().present()
+            && m_radioModel.amplifier().operate()) {
+            return;
+        }
+        m_appletPanel->setCrossNeedleDirectionalValues(
+            fwd, reflected, swr, reflectedPowerMeasured);
+    });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            m_appletPanel->sMeterWidget(), &SMeterWidget::setTransmitting);
+            m_appletPanel, &AppletPanel::setMeterTransmitting);
 
     // ── Tuner: MeterModel TX meters → TunerApplet gauges ────────────────
     // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
@@ -4339,10 +4350,10 @@ void MainWindow::wireMeters()
             }
             // Ensure S-Meter is in TX mode when PGXL reports transmitting
             if (kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->sMeterWidget()->setTransmitting(true);
+                m_appletPanel->setMeterTransmitting(true);
             else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->sMeterWidget()->setTransmitting(false);
-            m_appletPanel->sMeterWidget()->setTxMeters(watts, swr);
+                m_appletPanel->setMeterTransmitting(false);
+            m_appletPanel->setMeterTxValues(watts, swr);
 #ifdef HAVE_HIDAPI
             m_tmate2TxWatts = watts;
             if (m_radioModel.transmitModel().isTransmitting()) {
@@ -4421,7 +4432,7 @@ void MainWindow::wireMeters()
                             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->sMeterWidget()->setPowerScale(maxW, ampActive);
+        m_appletPanel->setMeterPowerScale(maxW, ampActive);
         m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
@@ -4485,7 +4496,7 @@ void MainWindow::wireMeters()
         // exciter output when it's STANDBY (txMetersChanged already handles that
         // path, so we just stop overriding it here).
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) {
-            m_appletPanel->sMeterWidget()->setTxMeters(fwdPwr, swr);
+            m_appletPanel->setMeterTxValues(fwdPwr, swr);
 #ifdef HAVE_HIDAPI
             m_tmate2TxWatts = fwdPwr;
             if (m_radioModel.transmitModel().isTransmitting()) {
