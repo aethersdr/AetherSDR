@@ -14,6 +14,11 @@ namespace AetherSDR {
 // non-declarable per #4027's non-goals, even though they are kBands entries
 // (see the isDeclarable() firewall in DeclaredBands.cpp). An empty/absent
 // value yields an empty list, which is the real-Flex path (band UI unchanged).
+//
+// A short alias table also accepts conventional spellings (e.g. "70cm") and
+// resolves them to the canonical kBands name ("440"), so gateways need not
+// know AE's naming quirks. Aliases only ever map to names already in kBands,
+// so the allow-list guarantee above is unchanged (see kBandAliases in the .cpp).
 QStringList parseDeclaredBands(const QString& csv);
 
 } // namespace AetherSDR
