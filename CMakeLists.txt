@@ -1803,7 +1803,7 @@ if (USE_SYSTEM_RTMIDI)
     if(PkgConfig_FOUND)
         pkg_check_modules(rtmidi REQUIRED IMPORTED_TARGET rtmidi)
     endif()
-    target_link_libraries(aethercore PRIVATE PkgConfig::rtmidi)
+    target_link_libraries(aethercore PUBLIC PkgConfig::rtmidi)
 else()
     target_sources(aethercore PRIVATE third_party/rtmidi/RtMidi.cpp)
     # PUBLIC: MidiControlManager.h includes RtMidi.h
