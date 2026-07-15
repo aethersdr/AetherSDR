@@ -1,8 +1,9 @@
 // Hardware-free regression test for default-on TX capture health summaries.
 // It pins the strong PipeWire/Qt pull-mode signature without requiring an
-// audio device: initial Idle is healthy; Active -> Idle after suppressed TCI
-// callbacks with unread bytes is saturation; later local TX attempts are
-// counted and each anomaly class is reported only once per source lifecycle.
+// audio device: initial Idle is healthy; a full buffer is saturation even when
+// PipeWire keeps reporting Active; Active -> Idle with unread bytes remains a
+// fallback; later local TX attempts are counted and each anomaly class is
+// reported only once per source lifecycle.
 
 #include "core/TxCaptureHealthTracker.h"
 
@@ -41,42 +42,52 @@ int main()
            "Active marks the source as having delivered capture data");
     tracker.recordMicRead(25);
 
-    tracker.recordSuppressedCallback(4096);
-    tracker.recordSuppressedCallback(8192);
-    expect(tracker.observeState(CaptureState::Idle, true, 8192)
+    expect(tracker.recordSuppressedCallback(4096, 8192) == Event::None,
+           "partially filled Active capture remains healthy");
+    expect(tracker.recordSuppressedCallback(8192, 8192)
                == Event::BufferSaturatedDuringTci,
-           "Active to Idle with suppressed callbacks and unread bytes reports saturation");
-    expect(tracker.observeState(CaptureState::Idle, true, 8192) == Event::None,
-           "unchanged Idle state does not repeat the saturation record");
+           "full buffer reports saturation while capture remains Active");
+    expect(tracker.recordSuppressedCallback(8192, 8192) == Event::None,
+           "repeated full callbacks do not repeat the saturation record");
 
-    expect(tracker.recordLocalTxAttempt(CaptureState::Idle, true, false, true, 8192)
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, true, false, true, 8192, 8192)
                == Event::None,
            "local TX while TCI audio is fresh is not classified as post-TCI");
-    expect(tracker.recordLocalTxAttempt(CaptureState::Idle, true, false, false, 8192)
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, true, false, false, 8192, 8192)
                == Event::LocalTxWhileSaturated,
-           "first post-TCI local TX against saturated capture emits an anomaly");
-    expect(tracker.recordLocalTxAttempt(CaptureState::Idle, true, false, false, 8192)
+           "first post-TCI local TX against full Active capture emits an anomaly");
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, true, false, false, 8192, 8192)
                == Event::None,
            "later stalled local TX attempts are counted without log spam");
-    expect(tracker.recordLocalTxAttempt(CaptureState::Idle, false, false, false, 8192)
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, false, false, false, 8192, 8192)
                == Event::None,
            "another client's TX is not attributed to the local capture source");
-    expect(tracker.recordLocalTxAttempt(CaptureState::Idle, true, true, false, 8192)
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, true, true, false, 8192, 8192)
                == Event::None,
            "local DAX TX is not classified as stalled microphone capture");
 
     const TxCaptureHealthTracker::Snapshot snapshot = tracker.snapshot(1000);
     expect(snapshot.sourceWasActive && snapshot.saturationObserved,
            "summary preserves the strong saturation signature");
-    expect(snapshot.tciSuppressedCallbacks == 2
+    expect(snapshot.tciSuppressedCallbacks == 3
                && snapshot.suppressedBufferPeakBytes == 8192,
            "summary reports suppressed callback count and peak unread bytes");
-    expect(snapshot.idleDuringTciTransitions == 1,
-           "summary counts one Active-to-Idle transition during TCI");
-    expect(snapshot.postTciLocalTxWhileIdle == 2,
+    expect(snapshot.fullBufferDuringTciObservations == 2,
+           "summary counts direct full-buffer observations during TCI");
+    expect(snapshot.idleDuringTciTransitions == 0,
+           "Active PipeWire saturation does not require an Idle transition");
+    expect(snapshot.postTciLocalTxWhileSaturated == 2,
            "summary counts every post-TCI stalled local TX attempt");
     expect(snapshot.lastMicReadAgeMs == 975,
            "summary reports age of the last successful microphone read");
+
+    TxCaptureHealthTracker idleFallback;
+    idleFallback.reset(CaptureState::Active, 0);
+    expect(idleFallback.recordSuppressedCallback(4096, 0) == Event::None,
+           "unknown capacity does not invent a full-buffer event");
+    expect(idleFallback.observeState(CaptureState::Idle, true, 4096)
+               == Event::BufferSaturatedDuringTci,
+           "Active-to-Idle with unread bytes remains a saturation fallback");
 
     std::printf("\n%d of %d TX capture health tests failed.\n", g_failed, g_total);
     return g_failed == 0 ? 0 : 1;

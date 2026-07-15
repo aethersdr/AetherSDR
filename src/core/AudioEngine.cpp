@@ -2532,9 +2532,11 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     tx["source_was_active"] = txHealth.sourceWasActive;
     tx["saturation_observed"] = txHealth.saturationObserved;
     tx["tci_suppressed_callbacks"] = static_cast<double>(txHealth.tciSuppressedCallbacks);
+    tx["full_buffer_during_tci_observations"] =
+        static_cast<double>(txHealth.fullBufferDuringTciObservations);
     tx["idle_during_tci_transitions"] = static_cast<double>(txHealth.idleDuringTciTransitions);
-    tx["post_tci_local_tx_while_idle"] =
-        static_cast<double>(txHealth.postTciLocalTxWhileIdle);
+    tx["post_tci_local_tx_while_saturated"] =
+        static_cast<double>(txHealth.postTciLocalTxWhileSaturated);
     tx["last_mic_read_age_ms"] = txHealth.lastMicReadAgeMs >= 0
         ? QJsonValue(static_cast<double>(txHealth.lastMicReadAgeMs))
         : QJsonValue();
@@ -7013,7 +7015,8 @@ void AudioEngine::recordTxCaptureLocalTxAttempt()
         m_transmitting.load(std::memory_order_acquire),
         m_daxTxMode.load(std::memory_order_acquire),
         tciAudioFresh(),
-        txCaptureBufferedBytes());
+        txCaptureBufferedBytes(),
+        txCaptureBufferCapacityBytes());
     if (event != TxCaptureHealthTracker::Event::None) {
         logTxCaptureHealthEvent(event);
     }
@@ -7038,8 +7041,9 @@ void AudioEngine::logTxCaptureHealthSummary(const QString& reason, bool anomaly)
     const TxCaptureHealthTracker::Snapshot health =
         m_txCaptureHealth.snapshot(txCaptureNowMs());
     if (!anomaly && health.tciSuppressedCallbacks == 0
+        && health.fullBufferDuringTciObservations == 0
         && health.idleDuringTciTransitions == 0
-        && health.postTciLocalTxWhileIdle == 0) {
+        && health.postTciLocalTxWhileSaturated == 0) {
         return;
     }
 
@@ -7062,8 +7066,9 @@ void AudioEngine::logTxCaptureHealthSummary(const QString& reason, bool anomaly)
     summary.lastMicReadAgeMs = health.lastMicReadAgeMs;
     summary.tciSuppressedCallbacks = health.tciSuppressedCallbacks;
     summary.suppressedBufferPeakBytes = health.suppressedBufferPeakBytes;
+    summary.fullBufferDuringTciObservations = health.fullBufferDuringTciObservations;
     summary.idleDuringTciTransitions = health.idleDuringTciTransitions;
-    summary.postTciLocalTxWhileIdle = health.postTciLocalTxWhileIdle;
+    summary.postTciLocalTxWhileSaturated = health.postTciLocalTxWhileSaturated;
     summary.sourceWasActive = health.sourceWasActive;
     summary.saturationObserved = health.saturationObserved;
     AudioSummaryLogger::logTxCaptureHealth(summary, anomaly);
@@ -7568,7 +7573,11 @@ void AudioEngine::onTxAudioReady()
     // produces continuous ambient packets. The 200 ms window comfortably
     // covers the 50 ms TCI frame cadence.
     if (tciAudioFresh()) {
-        m_txCaptureHealth.recordSuppressedCallback(txCaptureBufferedBytes());
+        const TxCaptureHealthTracker::Event event = m_txCaptureHealth.recordSuppressedCallback(
+            txCaptureBufferedBytes(), txCaptureBufferCapacityBytes());
+        if (event != TxCaptureHealthTracker::Event::None) {
+            logTxCaptureHealthEvent(event);
+        }
         if (m_audioSource) {
             observeTxCaptureState(m_audioSource->state());
         }

@@ -65,8 +65,9 @@ struct TxCaptureHealthSummary {
     qint64 lastMicReadAgeMs{-1};
     quint64 tciSuppressedCallbacks{0};
     qint64 suppressedBufferPeakBytes{0};
+    quint64 fullBufferDuringTciObservations{0};
     quint64 idleDuringTciTransitions{0};
-    quint64 postTciLocalTxWhileIdle{0};
+    quint64 postTciLocalTxWhileSaturated{0};
     bool sourceWasActive{false};
     bool saturationObserved{false};
 };

@@ -605,12 +605,13 @@ was active.
 The TX input endpoint also exposes default-on capture-health evidence for TCI
 handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 `source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
-`idle_during_tci_transitions`, `post_tci_local_tx_while_idle`, and
-`last_mic_read_age_ms`. `saturation_observed` is deliberately conservative: it
-requires a source that was previously Active to become Idle while TCI is fresh,
-after at least one microphone callback was suppressed, with unread bytes still
-buffered. The same evidence is summarized in the default Audio Summary support
-log without enabling verbose audio logging.
+`full_buffer_during_tci_observations`, `idle_during_tci_transitions`,
+`post_tci_local_tx_while_saturated`, and `last_mic_read_age_ms`.
+`saturation_observed` is set when the capture buffer reaches its reported
+capacity during TCI suppression. An Active-to-Idle transition with suppressed
+callbacks and unread bytes remains a fallback for backends that do not expose a
+useful capacity. The same evidence is summarized in the default Audio Summary
+support log without enabling verbose audio logging.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies

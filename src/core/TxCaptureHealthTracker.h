@@ -7,10 +7,11 @@
 namespace AetherSDR {
 
 // Hardware-free state machine for TX capture observability. QAudioSource starts
-// in Idle on some backends, so Idle alone is not a fault: the strong signature
-// is Active -> Idle after TCI callbacks were suppressed while unread bytes
-// remain. Keeping this policy separate makes the field diagnostic testable
-// without an audio device or PipeWire server.
+// in Idle on some backends, so Idle alone is not a fault. PipeWire can also keep
+// reporting Active after its pull device fills, so capacity exhaustion is the
+// primary signature; Active -> Idle with unread bytes remains a fallback when a
+// backend does not report a useful capacity. Keeping this policy separate makes
+// the field diagnostic testable without an audio device or PipeWire server.
 class TxCaptureHealthTracker {
 public:
     enum class CaptureState {
@@ -31,8 +32,9 @@ public:
         qint64 lastMicReadAgeMs{-1};
         quint64 tciSuppressedCallbacks{0};
         qint64 suppressedBufferPeakBytes{0};
+        quint64 fullBufferDuringTciObservations{0};
         quint64 idleDuringTciTransitions{0};
-        quint64 postTciLocalTxWhileIdle{0};
+        quint64 postTciLocalTxWhileSaturated{0};
         bool sourceWasActive{false};
         bool saturationObserved{false};
     };
@@ -47,15 +49,27 @@ public:
         m_stalledLocalTxReported = false;
         m_tciSuppressedCallbacks = 0;
         m_suppressedBufferPeakBytes = 0;
+        m_fullBufferDuringTciObservations = 0;
         m_idleDuringTciTransitions = 0;
-        m_postTciLocalTxWhileIdle = 0;
+        m_postTciLocalTxWhileSaturated = 0;
     }
 
-    void recordSuppressedCallback(qint64 bufferedBytes)
+    Event recordSuppressedCallback(qint64 bufferedBytes, qint64 bufferCapacityBytes)
     {
         ++m_tciSuppressedCallbacks;
         m_suppressedBufferPeakBytes = std::max(m_suppressedBufferPeakBytes,
                                                 std::max<qint64>(0, bufferedBytes));
+
+        if (!bufferIsFull(bufferedBytes, bufferCapacityBytes)) {
+            return Event::None;
+        }
+
+        ++m_fullBufferDuringTciObservations;
+        if (m_saturationReported) {
+            return Event::None;
+        }
+        m_saturationReported = true;
+        return Event::BufferSaturatedDuringTci;
     }
 
     void recordMicRead(qint64 nowMs)
@@ -94,20 +108,27 @@ public:
                                bool localTxOwned,
                                bool daxTxMode,
                                bool tciAudioFresh,
-                               qint64 bufferedBytes)
+                               qint64 bufferedBytes,
+                               qint64 bufferCapacityBytes)
     {
+        const bool sourceRunning = state == CaptureState::Active
+            || state == CaptureState::Idle;
+        const bool saturated = m_saturationReported
+            || (m_tciSuppressedCallbacks > 0
+                && bufferIsFull(bufferedBytes, bufferCapacityBytes));
         const bool stalled = localTxOwned
             && !daxTxMode
             && !tciAudioFresh
-            && state == CaptureState::Idle
+            && sourceRunning
             && m_sourceWasActive
-            && m_tciSuppressedCallbacks > 0
+            && saturated
             && bufferedBytes > 0;
         if (!stalled) {
             return Event::None;
         }
 
-        ++m_postTciLocalTxWhileIdle;
+        m_saturationReported = true;
+        ++m_postTciLocalTxWhileSaturated;
         if (m_stalledLocalTxReported) {
             return Event::None;
         }
@@ -124,14 +145,20 @@ public:
             : -1;
         out.tciSuppressedCallbacks = m_tciSuppressedCallbacks;
         out.suppressedBufferPeakBytes = m_suppressedBufferPeakBytes;
+        out.fullBufferDuringTciObservations = m_fullBufferDuringTciObservations;
         out.idleDuringTciTransitions = m_idleDuringTciTransitions;
-        out.postTciLocalTxWhileIdle = m_postTciLocalTxWhileIdle;
+        out.postTciLocalTxWhileSaturated = m_postTciLocalTxWhileSaturated;
         out.sourceWasActive = m_sourceWasActive;
         out.saturationObserved = m_saturationReported;
         return out;
     }
 
 private:
+    static bool bufferIsFull(qint64 bufferedBytes, qint64 bufferCapacityBytes)
+    {
+        return bufferCapacityBytes > 0 && bufferedBytes >= bufferCapacityBytes;
+    }
+
     qint64 m_startedAtMs{0};
     qint64 m_lastMicReadMs{-1};
     CaptureState m_lastState{CaptureState::Stopped};
@@ -140,8 +167,9 @@ private:
     bool m_stalledLocalTxReported{false};
     quint64 m_tciSuppressedCallbacks{0};
     qint64 m_suppressedBufferPeakBytes{0};
+    quint64 m_fullBufferDuringTciObservations{0};
     quint64 m_idleDuringTciTransitions{0};
-    quint64 m_postTciLocalTxWhileIdle{0};
+    quint64 m_postTciLocalTxWhileSaturated{0};
 };
 
 } // namespace AetherSDR
