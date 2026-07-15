@@ -7601,6 +7601,20 @@ void AudioEngine::onTxAudioReady()
         if (event != TxCaptureHealthTracker::Event::None) {
             logTxCaptureHealthEvent(event);
         }
+#ifdef Q_OS_LINUX
+        // Qt/PipeWire capture is edge-driven: leaving the pull device unread
+        // fills its ring, after which no new readyRead edge arrives to resume
+        // PC Audio when TCI stops (#4230). Keep consuming the Linux source but
+        // discard these samples so only TCI audio reaches the radio. Windows
+        // and macOS retain their existing behavior until equivalent evidence
+        // exists for those backends.
+        if (m_micDevice) {
+            const QByteArray discarded = m_micDevice->readAll();
+            if (!discarded.isEmpty()) {
+                m_txCaptureHealth.recordMicRead(txCaptureNowMs());
+            }
+        }
+#endif
         if (m_audioSource) {
             observeTxCaptureState(m_audioSource->state());
         }
