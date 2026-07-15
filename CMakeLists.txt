@@ -3586,7 +3586,7 @@ else()
         )
         if(LINUX)
             install(FILES packaging/linux/70-aethersdr-thumbdv.rules
-                DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d
+                DESTINATION lib/udev/rules.d
             )
         endif()
     endif()
