@@ -1432,6 +1432,11 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioInfoLabel->setText(m_radioModel.model());
         if (m_radioVersionLabel && !m_radioModel.version().isEmpty())
             m_radioVersionLabel->setText(m_radioModel.version());
+        // Also refresh the station/nickname label: the nickname can be corrected
+        // by the async "info" reply after connect, and this handler previously
+        // updated only model + version, leaving a stale station name on screen.
+        if (m_stationLabel && !m_radioModel.nickname().isEmpty())
+            setStatusBarStationText(m_stationLabel, m_radioModel.nickname());
     });
 
     // Propagate late-arriving SmartSDR+ subscription + dual-SCU diversity
@@ -5277,6 +5282,15 @@ void MainWindow::onConnectionStateChanged(bool connected)
 #endif
         audioStopRx();
         audioStopTx();
+        // Clear the cached DAX-TX stream id on connection loss. RadioModel already
+        // resets its own dax_tx state on disconnect, but AudioEngine::m_txStreamId
+        // was left holding the OLD id — so after a reconnect the AX.25 modem's
+        // "create the stream only if txStreamId()==0" guard saw a stale non-zero
+        // id, skipped ensureDaxTxStream(), and pumped modem audio to a dead stream
+        // (bare carrier, no modulation). Resetting it here makes the next transmit
+        // re-create the DAX-TX stream on the new connection.
+        if (m_audio)
+            m_audio->setTxStreamId(0);
 
         for (auto it = m_panFpsReconcileConnections.begin();
              it != m_panFpsReconcileConnections.end(); ++it) {

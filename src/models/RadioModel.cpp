@@ -1767,6 +1767,14 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_name    = info.name;
     m_model   = info.model;
     m_version = info.version;
+    // Seed nickname/callsign from the discovery packet so the status-bar station
+    // label is correct the instant onConnectionStateChanged(true) reads it. These
+    // were previously only set later from the async "info" reply, so on connect
+    // the label showed a STALE m_nickname — blank on the first connect, or the
+    // PREVIOUSLY connected radio's name (it is never cleared on disconnect). The
+    // async reply still refreshes them if they differ.
+    m_nickname = info.nickname;
+    m_callsign = info.callsign;
     m_declaredBands = parseDeclaredBands(info.bands);   // empty for real Flex
     m_maxSlices = maxSlicesForModel(m_model);
     if (reloadAntennaAliases())
