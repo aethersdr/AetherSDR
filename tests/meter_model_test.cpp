@@ -256,6 +256,26 @@ void testDirectionalPowerUsesDirectReflectedMeter()
                && model.reflectedPowerUpdatedAtMs() == 0);
 }
 
+void testNativeSwrRemainsRadioProvidedAtLowPower()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    float emittedSwr = 0.0f;
+    QObject::connect(&model, &MeterModel::txMetersChanged,
+                     [&emittedSwr](float, float swr) {
+        emittedSwr = swr;
+    });
+
+    model.updateValues({8, 10}, {rawDb(6.1f), rawDb(1.0859375f)});
+
+    report("MeterModel preserves the radio-native SWR sample at low power",
+           nearlyEqual(model.fwdPowerInstant(), 0.004f)
+               && nearlyEqual(model.swr(), 1.0859375f)
+               && nearlyEqual(emittedSwr, 1.0859375f));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -272,6 +292,7 @@ int main(int argc, char** argv)
     testRemovingCompPeakMarksCompressionUnavailable();
     testRemovingAdjacentMetersDoesNotClearCompPeak();
     testDirectionalPowerUsesDirectReflectedMeter();
+    testNativeSwrRemainsRadioProvidedAtLowPower();
 
     return g_failed == 0 ? 0 : 1;
 }

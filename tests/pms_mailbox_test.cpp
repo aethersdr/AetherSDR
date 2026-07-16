@@ -2,6 +2,8 @@
 // Personal Mailbox System (PMS). These exercise the protocol layer in isolation
 // (no DSP / radio), driving the mailbox exactly as a remote caller's TNC would.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/pms/PmsMailbox.h"
 #include "core/tnc/Ax25.h"
 #include "core/tnc/Ax25Connection.h"
@@ -359,14 +361,17 @@ int main(int argc, char** argv)
     // repeatable and never touches a live operator's mailbox. AppSettings derives
     // its path from the home/config location, so redirect those before the
     // singleton is first used.
-    const QString tmpHome = QDir::tempPath() + QStringLiteral("/aether_pms_test_home");
-    QDir(tmpHome).removeRecursively();
-    QDir().mkpath(tmpHome);
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-pms-mailbox-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     // PmsMailbox honours AETHER_PMS_DIR for its JSON store; point it at the clean
     // temp dir so the test is repeatable and never touches a real mailbox.
-    qputenv("AETHER_PMS_DIR", (tmpHome + QStringLiteral("/pms")).toUtf8());
+    qputenv("AETHER_PMS_DIR",
+            (settingsProfile.path() + QStringLiteral("/pms")).toUtf8());
 
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     testAddress();
     testFrameRoundTrip();
     testConnection();

@@ -82,6 +82,9 @@ public:
     CrossNeedleMeterWidget* crossNeedleMeterWidget() const;
     void setMeterTxValues(float forwardWatts, float swr);
     void setStandardMeterTxValues(float forwardWatts, float swr);
+    void setStandardRadioMeterTxValues(float forwardWatts,
+                                       float forwardWattsInstant,
+                                       float swr);
     void setCrossNeedleDirectionalValues(float forwardWatts,
                                          float reflectedWatts,
                                          float swr,
@@ -273,6 +276,7 @@ private:
     int              m_vuRxSelect{0};
     bool             m_vuPeakHoldEnabled{false};
     QString          m_vuPeakDecayRate{QStringLiteral("Medium")};
+    QString          m_vuFaceTheme{QStringLiteral("aether-default")};
     RxApplet*    m_rxApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};

@@ -4270,7 +4270,8 @@ void MainWindow::wireMeters()
             this, [this](float fwd, float swr) {
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
-        m_appletPanel->setStandardMeterTxValues(fwd, swr);
+        m_appletPanel->setStandardRadioMeterTxValues(
+            fwd, m_radioModel.meterModel().fwdPowerInstant(), swr);
 #ifdef HAVE_HIDAPI
         m_tmate2TxWatts = fwd;
         if (m_radioModel.transmitModel().isTransmitting()) {

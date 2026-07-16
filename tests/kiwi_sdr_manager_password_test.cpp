@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/KiwiSdrManager.h"
 
@@ -87,23 +88,11 @@ void clearProfiles()
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir settingsHome;
-    if (!settingsHome.isValid()) {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-kiwi-password-test"));
+    if (!settingsProfile.isValid()) {
         return fail("could not create isolated settings home");
     }
-    qputenv("CFFIXED_USER_HOME", settingsHome.path().toUtf8());
-    qputenv("XDG_CONFIG_HOME", settingsHome.path().toUtf8());
     QCoreApplication app(argc, argv);
-    const QString configDir =
-        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-        + "/AetherSDR";
-    QDir().mkpath(configDir);
-    QFile settingsFile(configDir + "/AetherSDR.settings");
-    if (!settingsFile.open(QIODevice::WriteOnly | QIODevice::Text)
-        || settingsFile.write("<Settings></Settings>\n") < 0) {
-        return fail("could not initialize isolated AppSettings file");
-    }
-    settingsFile.close();
     AppSettings::instance().load();
     clearProfiles();
 

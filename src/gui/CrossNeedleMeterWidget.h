@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AnalogMeterFaceTheme.h"
 #include "CrossNeedleMeterGeometry.h"
 #include "MeterSmoother.h"
 
@@ -43,6 +44,7 @@ class CrossNeedleMeterWidget : public QWidget {
     double rangeMultiplier() const { return m_rangeMultiplier; }
     bool isTransmitting() const { return m_transmitting; }
     bool reflectedPowerMeasured() const { return m_reflectedPowerMeasured; }
+    bool rangeLegendVisible() const { return m_rangeLegendVisible; }
     FaceTheme faceTheme() const { return m_faceTheme; }
     QString faceThemeId() const;
     const CrossNeedleMeterGeometry &geometry() const { return m_geometry; }
@@ -54,6 +56,7 @@ class CrossNeedleMeterWidget : public QWidget {
     void setTransmitting(bool transmitting);
     void setPowerScale(int maxWatts, bool amplifierActive);
     void setFaceTheme(FaceTheme theme);
+    void setRangeLegendVisible(bool visible);
 
     // Test fixture used only by the in-process automation bridge. AppletPanel
     // exposes it only when AETHER_AUTOMATION is set; production UI cannot call
@@ -85,6 +88,7 @@ class CrossNeedleMeterWidget : public QWidget {
     void drawCenteredText(QPainter &painter, const QPointF &center, const QString &text) const;
     void drawCenteredMultilineText(QPainter &painter, const QPointF &center,
                                    const QString &text) const;
+    AnalogMeterFaceTheme analogFaceTheme() const;
     void drawRotatedText(QPainter &painter, const QPointF &center, const QString &text,
                          double degrees) const;
     void updateTargets(bool snap);
@@ -92,6 +96,7 @@ class CrossNeedleMeterWidget : public QWidget {
     void publishAutomationProperties();
 
     CrossNeedleMeterGeometry m_geometry;
+    AnalogMeterFaceThemeCatalog m_faceThemes;
     MeterSmoother m_forwardSmoother;
     MeterSmoother m_reflectedSmoother;
     QTimer m_animationTimer;
@@ -109,6 +114,7 @@ class CrossNeedleMeterWidget : public QWidget {
     double m_rangeMultiplier{10.0};
     bool m_transmitting{false};
     bool m_reflectedPowerMeasured{false};
+    bool m_rangeLegendVisible{true};
     bool m_automationFixture{false};
     FaceTheme m_faceTheme{FaceTheme::DarkRoomUplight};
 };

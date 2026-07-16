@@ -776,6 +776,9 @@ set(GUI_SOURCES
     src/gui/RxApplet.cpp
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
+    src/gui/RadioSwrValidityFilter.cpp
+    src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
@@ -2293,6 +2296,30 @@ target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
 
+# AppSettings persistence safety. Each scenario is a separate process because
+# AppSettings is a process-wide singleton and load state must not leak between
+# cases.
+add_executable(app_settings_safety_test
+    tests/app_settings_safety_test.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(app_settings_safety_test PRIVATE src)
+target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core)
+foreach(APP_SETTINGS_SCENARIO
+        save-before-load
+        load-then-save
+        first-run
+        count-guard
+        backup-recovery
+        missing-live-temp
+        missing-live-backup
+        missing-live-corrupt
+        failed-load)
+    add_test(
+        NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
+        COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
+endforeach()
+
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
     src/models/PanadapterModel.cpp
@@ -2827,6 +2854,7 @@ add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 qt_add_resources(CROSS_NEEDLE_METER_TEST_RESOURCES resources/resources.qrc)
 add_executable(cross_needle_meter_test
     tests/cross_needle_meter_test.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
     ${CROSS_NEEDLE_METER_TEST_RESOURCES}
@@ -2838,6 +2866,29 @@ target_link_libraries(cross_needle_meter_test PRIVATE
 set_target_properties(cross_needle_meter_test PROPERTIES AUTOMOC ON)
 add_test(NAME cross_needle_meter_test COMMAND cross_needle_meter_test)
 set_tests_properties(cross_needle_meter_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Versioned standard S-meter face: responsive geometry, calibrated mappings,
+# resource validation/fallback, and offscreen rendering of every meter mode.
+add_executable(s_meter_geometry_test
+    tests/s_meter_geometry_test.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
+    src/gui/RadioSwrValidityFilter.cpp
+    src/gui/SMeterGeometry.cpp
+    src/gui/SMeterWidget.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${CROSS_NEEDLE_METER_TEST_RESOURCES}
+)
+target_include_directories(s_meter_geometry_test PRIVATE src)
+target_link_libraries(s_meter_geometry_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(s_meter_geometry_test PROPERTIES AUTOMOC ON)
+add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
+set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,

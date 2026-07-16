@@ -218,6 +218,11 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   TUs; new feature code goes in a sibling, NOT `MainWindow.cpp` — see
   [Adding code to MainWindow](#adding-code-to-mainwindow)
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
+- `CrossNeedleMeterGeometry` — PWR applet's cross-needle power/SWR face math.
+  **Before touching the response model, SWR-contour construction, or label
+  placement, read [`docs/cross-needle-meter-math.md`](docs/cross-needle-meter-math.md)** —
+  the authoritative model + decision record (it exists because these formulas
+  have churned when edited without a shared spec).
 
 **Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.

@@ -27,6 +27,18 @@ const QStringList& decayItems()
     return items;
 }
 
+const QStringList& faceThemeItems()
+{
+    static const QStringList items{
+        kAetherTheme, kClassicTheme, kUplightTheme, kDarkTheme};
+    return items;
+}
+
+QString normalizeFaceTheme(const QString& theme)
+{
+    return faceThemeItems().contains(theme) ? theme : kAetherTheme;
+}
+
 QString encode(const Snapshot& settings)
 {
     QJsonObject standard;
@@ -34,6 +46,7 @@ QString encode(const Snapshot& settings)
     standard.insert(QStringLiteral("rxSelect"), settings.rxSelect);
     standard.insert(QStringLiteral("peakHoldEnabled"), settings.peakHoldEnabled);
     standard.insert(QStringLiteral("peakDecayRate"), settings.peakDecayRate);
+    standard.insert(QStringLiteral("faceTheme"), normalizeFaceTheme(settings.faceTheme));
 
     QJsonObject root;
     root.insert(QStringLiteral("version"), kVersion);
@@ -65,7 +78,7 @@ Snapshot decode(const QByteArray& encoded, QString* error,
 
     const QJsonObject root = document.object();
     const int version = root.value(QStringLiteral("version")).toInt();
-    if (version != 1 && version != kVersion) {
+    if (version != 1 && version != 2 && version != kVersion) {
         if (error) {
             *error = QStringLiteral("unsupported VuMeter settings version");
         }
@@ -93,6 +106,10 @@ Snapshot decode(const QByteArray& encoded, QString* error,
     const QString decay = standard.value(QStringLiteral("peakDecayRate")).toString();
     if (decayItems().contains(decay)) {
         settings.peakDecayRate = decay;
+    }
+    if (version >= 3) {
+        settings.faceTheme = normalizeFaceTheme(
+            standard.value(QStringLiteral("faceTheme")).toString());
     }
     return settings;
 }

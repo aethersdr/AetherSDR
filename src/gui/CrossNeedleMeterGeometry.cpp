@@ -1,14 +1,19 @@
 #include "CrossNeedleMeterGeometry.h"
 
 #include <QFile>
+#include <QFont>
+#include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QIODevice>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 namespace AetherSDR {
 
@@ -43,61 +48,6 @@ QVector<double> readDoubles(const QJsonValue &value) {
     return result;
 }
 
-QVector<double> monotoneTangents(const QVector<double> &values,
-                                 const QVector<double> &outputs) {
-    const int count = values.size();
-    if (count < 2 || outputs.size() != count) {
-        return {};
-    }
-
-    QVector<double> intervals(count - 1);
-    QVector<double> slopes(count - 1);
-    for (int i = 0; i + 1 < count; ++i) {
-        intervals[i] = values[i + 1] - values[i];
-        if (!(intervals[i] > 0.0)) {
-            return {};
-        }
-        slopes[i] = (outputs[i + 1] - outputs[i]) / intervals[i];
-    }
-
-    QVector<double> tangents(count);
-    if (count == 2) {
-        tangents[0] = slopes[0];
-        tangents[1] = slopes[0];
-        return tangents;
-    }
-
-    for (int i = 1; i + 1 < count; ++i) {
-        if (slopes[i - 1] * slopes[i] <= 0.0) {
-            tangents[i] = 0.0;
-            continue;
-        }
-        const double firstWeight = 2.0 * intervals[i] + intervals[i - 1];
-        const double secondWeight = intervals[i] + 2.0 * intervals[i - 1];
-        tangents[i] = (firstWeight + secondWeight) /
-                      (firstWeight / slopes[i - 1] + secondWeight / slopes[i]);
-    }
-
-    const auto endpointTangent = [](double firstInterval, double secondInterval,
-                                    double firstSlope, double secondSlope) {
-        double tangent = ((2.0 * firstInterval + secondInterval) * firstSlope -
-                          firstInterval * secondSlope) /
-                         (firstInterval + secondInterval);
-        if (tangent * firstSlope <= 0.0) {
-            return 0.0;
-        }
-        if (firstSlope * secondSlope < 0.0 &&
-            std::abs(tangent) > 3.0 * std::abs(firstSlope)) {
-            tangent = 3.0 * firstSlope;
-        }
-        return tangent;
-    };
-    tangents[0] = endpointTangent(intervals[0], intervals[1], slopes[0], slopes[1]);
-    tangents[count - 1] = endpointTangent(intervals[count - 2], intervals[count - 3],
-                                          slopes[count - 2], slopes[count - 3]);
-    return tangents;
-}
-
 QStringList readStrings(const QJsonValue &value) {
     QStringList result;
     const QJsonArray a = value.toArray();
@@ -118,8 +68,19 @@ CrossNeedleMeterGeometry::Scale readScale(const QJsonObject &o) {
     scale.startRadians = o.value(QStringLiteral("start_radians")).toDouble();
     scale.endRadians = o.value(QStringLiteral("end_radians")).toDouble();
     scale.values = readDoubles(o.value(QStringLiteral("values")));
-    scale.anglesRadians = readDoubles(o.value(QStringLiteral("angles_radians")));
-    scale.angleTangents = monotoneTangents(scale.values, scale.anglesRadians);
+    scale.referenceAnglesRadians =
+        readDoubles(o.value(QStringLiteral("reference_angles_radians")));
+    const QJsonObject response = o.value(QStringLiteral("response")).toObject();
+    scale.responseModel = response.value(QStringLiteral("model")).toString();
+    scale.responseStartRadians =
+        response.value(QStringLiteral("start_radians")).toDouble();
+    scale.responseEndRadians =
+        response.value(QStringLiteral("end_radians")).toDouble();
+    scale.responseCoefficients =
+        readDoubles(response.value(QStringLiteral("coefficients")));
+    scale.maximumReferenceErrorPixels =
+        response.value(QStringLiteral("maximum_reference_error_pixels"))
+            .toDouble(scale.maximumReferenceErrorPixels);
     scale.labels = readStrings(o.value(QStringLiteral("labels")));
     scale.minorSubdivisions = o.value(QStringLiteral("minor_subdivisions")).toInt(1);
     scale.labelOffset = o.value(QStringLiteral("label_offset")).toDouble(34.0);
@@ -423,6 +384,15 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
 
     geometry.forwardScale = readScale(root.value(QStringLiteral("forward_scale")).toObject());
     geometry.reflectedScale = readScale(root.value(QStringLiteral("reflected_scale")).toObject());
+    const auto deriveTickAngles = [](Scale &scale) {
+        scale.anglesRadians.clear();
+        scale.anglesRadians.reserve(scale.values.size());
+        for (const double value : scale.values) {
+            scale.anglesRadians.append(CrossNeedleMeterGeometry::angleForValue(scale, value));
+        }
+    };
+    deriveTickAngles(geometry.forwardScale);
+    deriveTickAngles(geometry.reflectedScale);
 
     const QJsonObject titles = root.value(QStringLiteral("titles")).toObject();
     const QJsonObject forwardTitle = titles.value(QStringLiteral("forward")).toObject();
@@ -463,6 +433,20 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
         swr.value(QStringLiteral("guide_width")).toDouble(geometry.swrStyle.guideWidth);
     geometry.swrStyle.label =
         readColor(swr.value(QStringLiteral("label_rgba")), geometry.swrStyle.label);
+    geometry.swrStyle.graphClearance =
+        swr.value(QStringLiteral("graph_clearance"))
+            .toDouble(geometry.swrStyle.graphClearance);
+    geometry.swrStyle.maskGap =
+        swr.value(QStringLiteral("mask_gap")).toDouble(geometry.swrStyle.maskGap);
+    geometry.swrStyle.curveSamples =
+        swr.value(QStringLiteral("curve_samples")).toInt(geometry.swrStyle.curveSamples);
+    geometry.swrStyle.labelArcFraction =
+        swr.value(QStringLiteral("label_arc_fraction")).toDouble(geometry.swrStyle.labelArcFraction);
+    geometry.swrStyle.labelDeclutterStep =
+        swr.value(QStringLiteral("label_declutter_step"))
+            .toDouble(geometry.swrStyle.labelDeclutterStep);
+    geometry.swrStyle.labelBoxPadding =
+        swr.value(QStringLiteral("label_box_padding")).toDouble(geometry.swrStyle.labelBoxPadding);
     const QJsonArray guides = swr.value(QStringLiteral("guides")).toArray();
     geometry.swrGuides.reserve(guides.size());
     for (const QJsonValue &value : guides) {
@@ -475,11 +459,6 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
                             swrValue.toString() == QStringLiteral("infinity")
                         ? std::numeric_limits<double>::infinity()
                         : swrValue.toDouble();
-        guide.visibleUpper = readPoint(o.value(QStringLiteral("visible_upper")));
-        guide.registeredDatum = readPoint(o.value(QStringLiteral("registered_datum")));
-        guide.hiddenLower = readPoint(o.value(QStringLiteral("hidden_lower")));
-        guide.quadraticA = o.value(QStringLiteral("quadratic_a")).toDouble();
-        guide.labelCenter = readPoint(o.value(QStringLiteral("label_center")));
         geometry.swrGuides.append(guide);
     }
 
@@ -555,8 +534,8 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::load(QIODevice &device, QStri
 
 CrossNeedleMeterGeometry CrossNeedleMeterGeometry::fallback() {
     CrossNeedleMeterGeometry geometry;
-    geometry.formatVersion = 1;
-    geometry.designVersion = 12;
+    geometry.formatVersion = 6;
+    geometry.designVersion = 19;
     geometry.rangeLabel = QStringLiteral("RANGE  20 W x1   200 W x10   2 kW x100");
     geometry.forwardTitle = {QStringLiteral("FORWARD"), QPointF(180.0, 545.0), -58.0};
     geometry.reflectedTitle = {QStringLiteral("REFLECTED"), QPointF(1320.0, 545.0), 58.0};
@@ -565,9 +544,18 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::fallback() {
     geometry.forwardScale.startRadians = -2.922529943067865;
     geometry.forwardScale.endRadians = -1.6309954106531042;
     geometry.forwardScale.values = {0.0, 20.0};
-    geometry.forwardScale.anglesRadians = {-2.922529943067865, -1.7009954106531042};
-    geometry.forwardScale.angleTangents =
-        monotoneTangents(geometry.forwardScale.values, geometry.forwardScale.anglesRadians);
+    geometry.forwardScale.referenceAnglesRadians = {-2.922529943067865,
+                                                     -1.7009954106531042};
+    geometry.forwardScale.responseModel = QStringLiteral("concave_bernstein_v1");
+    geometry.forwardScale.responseStartRadians = -2.922529943067865;
+    geometry.forwardScale.responseEndRadians = -1.7009954106531042;
+    geometry.forwardScale.responseCoefficients = {
+        0.0, 0.4833365491938737, 0.6144073900045368,
+        0.7454782308151997, 0.8727391154075999, 1.0};
+    geometry.forwardScale.maximumReferenceErrorPixels = 1.0;
+    geometry.forwardScale.anglesRadians = {
+        angleForValue(geometry.forwardScale, 0.0),
+        angleForValue(geometry.forwardScale, 20.0)};
     geometry.forwardScale.labels = {QStringLiteral("0"), QStringLiteral("20")};
     geometry.forwardScale.minorSubdivisions = 5;
     geometry.reflectedScale.center = QPointF(401.0, 1057.0);
@@ -575,16 +563,23 @@ CrossNeedleMeterGeometry CrossNeedleMeterGeometry::fallback() {
     geometry.reflectedScale.startRadians = -0.21906271052192816;
     geometry.reflectedScale.endRadians = -1.510597242936689;
     geometry.reflectedScale.values = {0.0, 4.0};
-    geometry.reflectedScale.anglesRadians = {-0.21906271052192816, -1.440597242936689};
-    geometry.reflectedScale.angleTangents =
-        monotoneTangents(geometry.reflectedScale.values, geometry.reflectedScale.anglesRadians);
+    geometry.reflectedScale.referenceAnglesRadians = {-0.21906271052192816,
+                                                       -1.440597242936689};
+    geometry.reflectedScale.responseModel = QStringLiteral("concave_bernstein_v1");
+    geometry.reflectedScale.responseStartRadians = -0.21906271052192816;
+    geometry.reflectedScale.responseEndRadians = -1.440597242936689;
+    geometry.reflectedScale.responseCoefficients = {
+        0.0, 0.26723624915834737, 0.5344724983166947,
+        0.7871286394467959, 0.8935643197233979, 1.0};
+    geometry.reflectedScale.maximumReferenceErrorPixels = 1.0;
+    geometry.reflectedScale.anglesRadians = {
+        angleForValue(geometry.reflectedScale, 0.0),
+        angleForValue(geometry.reflectedScale, 4.0)};
     geometry.reflectedScale.labels = {QStringLiteral("0"), QStringLiteral("4")};
     geometry.reflectedScale.minorSubdivisions = 2;
-    geometry.swrGuides = {
-        {QStringLiteral("1.5"), QStringLiteral("1.5"), 1.5,
-         QPointF(1049.4649081096002, 591.025257178578), QPointF(957.5, 880.0),
-         QPointF(887.4859925937714, 1100.0), -0.000102863228292,
-         QPointF(1095.0, 690.0)}};
+    geometry.swrStyle.graphClearance = 60.0;
+    geometry.swrStyle.curveSamples = 128;
+    geometry.swrGuides = {{QStringLiteral("1.5"), QStringLiteral("1.5"), 1.5}};
     geometry.mask.boundary = {{52.0, 904.0},   {250.0, 904.0},  {500.0, 900.0},
                               {650.0, 880.0},  {750.0, 872.0},  {850.0, 880.0},
                               {1000.0, 900.0}, {1250.0, 904.0}, {1448.0, 904.0}};
@@ -599,7 +594,7 @@ bool CrossNeedleMeterGeometry::isValid(QString *error) const {
         return false;
     };
 
-    if (formatVersion != 1) {
+    if (formatVersion != 6) {
         return fail(QStringLiteral("unsupported cross-needle geometry format version"));
     }
     if (designVersion <= 0) {
@@ -676,19 +671,87 @@ bool CrossNeedleMeterGeometry::isValid(QString *error) const {
         return fail(QStringLiteral("cross-needle needle material is invalid"));
     }
     const auto validScale = [](const Scale &scale) {
-        return finitePoint(scale.center) && scale.radius > 0.0 && std::isfinite(scale.radius) &&
-               scale.values.size() >= 2 && scale.values.size() == scale.anglesRadians.size() &&
-               scale.values.size() == scale.angleTangents.size() &&
-               scale.values.size() == scale.labels.size() &&
-               std::is_sorted(scale.values.cbegin(), scale.values.cend()) &&
-               std::all_of(scale.anglesRadians.cbegin(), scale.anglesRadians.cend(),
-                           [](double angle) { return std::isfinite(angle); }) &&
-               std::all_of(scale.angleTangents.cbegin(), scale.angleTangents.cend(),
-                           [](double tangent) { return std::isfinite(tangent); }) &&
-               scale.minorSubdivisions >= 1;
+        if (!finitePoint(scale.center) || !(scale.radius > 0.0) ||
+            !std::isfinite(scale.radius) || scale.values.size() < 2 ||
+            scale.values.size() != scale.anglesRadians.size() ||
+            scale.values.size() != scale.referenceAnglesRadians.size() ||
+            scale.responseModel != QStringLiteral("concave_bernstein_v1") ||
+            scale.responseCoefficients.size() != 6 ||
+            scale.values.size() != scale.labels.size() || scale.minorSubdivisions < 1) {
+            return false;
+        }
+        const bool anglesIncrease =
+            scale.anglesRadians.last() > scale.anglesRadians.first();
+        for (int index = 1; index < scale.values.size(); ++index) {
+            if (!(scale.values[index] > scale.values[index - 1]) ||
+                !std::isfinite(scale.anglesRadians[index]) ||
+                !std::isfinite(scale.referenceAnglesRadians[index]) ||
+                ((scale.anglesRadians[index] > scale.anglesRadians[index - 1]) !=
+                 anglesIncrease) ||
+                ((scale.referenceAnglesRadians[index] >
+                  scale.referenceAnglesRadians[index - 1]) != anglesIncrease)) {
+                return false;
+            }
+        }
+        if (!std::isfinite(scale.anglesRadians.first()) ||
+            !std::isfinite(scale.referenceAnglesRadians.first()) ||
+            !std::isfinite(scale.responseStartRadians) ||
+            !std::isfinite(scale.responseEndRadians) ||
+            scale.responseEndRadians == scale.responseStartRadians ||
+            (scale.responseEndRadians > scale.responseStartRadians) != anglesIncrease ||
+            !(scale.maximumReferenceErrorPixels > 0.0) ||
+            !std::isfinite(scale.maximumReferenceErrorPixels) ||
+            std::abs(scale.responseCoefficients.first()) > 1e-12 ||
+            std::abs(scale.responseCoefficients.last() - 1.0) > 1e-12) {
+            return false;
+        }
+        for (int index = 0; index < scale.responseCoefficients.size(); ++index) {
+            const double coefficient = scale.responseCoefficients[index];
+            if (!std::isfinite(coefficient) || coefficient < 0.0 || coefficient > 1.0 ||
+                (index > 0 &&
+                 coefficient + 1e-12 < scale.responseCoefficients[index - 1])) {
+                return false;
+            }
+        }
+        // Concave control polygon (non-positive second differences): sensitivity
+        // decreases with power, so calibration noise cannot knot the contours.
+        for (int index = 0; index + 2 < scale.responseCoefficients.size(); ++index) {
+            const double secondDifference = scale.responseCoefficients[index + 2] -
+                                            2.0 * scale.responseCoefficients[index + 1] +
+                                            scale.responseCoefficients[index];
+            if (secondDifference > 1e-12) {
+                return false;
+            }
+        }
+        for (int index = 0; index < scale.values.size(); ++index) {
+            if (std::abs(CrossNeedleMeterGeometry::angleForValue(
+                             scale, scale.values[index]) -
+                         scale.anglesRadians[index]) > 1e-12) {
+                return false;
+            }
+        }
+        return true;
     };
     if (!validScale(forwardScale) || !validScale(reflectedScale)) {
         return fail(QStringLiteral("cross-needle power scale arrays are invalid"));
+    }
+    const auto scaleFitIsValid = [](const Scale &scale) {
+        // The needle parks on the printed zero (angled rest), so every tick
+        // including 0 is constrained by the photographed calibration.
+        for (int index = 0; index < scale.values.size(); ++index) {
+            const double fittedAngle =
+                CrossNeedleMeterGeometry::angleForValue(scale, scale.values[index]);
+            const double errorPixels =
+                std::abs(fittedAngle - scale.referenceAnglesRadians[index]) * scale.radius;
+            if (!std::isfinite(errorPixels) ||
+                errorPixels > scale.maximumReferenceErrorPixels) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!scaleFitIsValid(forwardScale) || !scaleFitIsValid(reflectedScale)) {
+        return fail(QStringLiteral("cross-needle movement fit exceeds tick tolerance"));
     }
     if (!std::isfinite(scaleOverlap.reflectedGapCenterRadians) ||
         !(scaleOverlap.reflectedGapHalfSpanRadians > 0.0 &&
@@ -697,70 +760,152 @@ bool CrossNeedleMeterGeometry::isValid(QString *error) const {
         !(scaleOverlap.reflectedGapWidth > 0.0)) {
         return fail(QStringLiteral("cross-needle scale overlap is invalid"));
     }
-    if (swrGuides.isEmpty()) {
-        return fail(QStringLiteral("cross-needle SWR guide set is empty"));
+    if (swrGuides.isEmpty() || !(swrStyle.graphClearance > 0.0) ||
+        swrStyle.graphClearance >= std::min(forwardScale.radius, reflectedScale.radius) ||
+        swrStyle.curveSamples < 32 || swrStyle.curveSamples > 1024 ||
+        !(swrStyle.labelArcFraction > 0.0) || !(swrStyle.labelArcFraction <= 1.0) ||
+        !(swrStyle.labelDeclutterStep > 0.0) || !std::isfinite(swrStyle.labelDeclutterStep) ||
+        !(swrStyle.labelBoxPadding >= 0.0) || !std::isfinite(swrStyle.labelBoxPadding) ||
+        !(swrStyle.maskGap >= 0.0) || !std::isfinite(swrStyle.maskGap)) {
+        return fail(QStringLiteral("cross-needle SWR construction settings are invalid"));
     }
+    bool validMaskBoundary = mask.boundary.size() >= 3;
+    double previousMaskX = -std::numeric_limits<double>::infinity();
+    double maximumMaskY = -std::numeric_limits<double>::infinity();
+    for (const QPointF &point : mask.boundary) {
+        validMaskBoundary = validMaskBoundary && finitePoint(point) &&
+                            point.x() >= 0.0 && point.x() <= canvasWidth &&
+                            point.y() >= 0.0 && point.y() <= canvasHeight &&
+                            point.x() > previousMaskX;
+        previousMaskX = point.x();
+        maximumMaskY = std::max(maximumMaskY, point.y());
+    }
+    for (qsizetype index = 0; index < mask.boundary.size(); ++index) {
+        const QPointF &left = mask.boundary[index];
+        const QPointF &right = mask.boundary[mask.boundary.size() - 1 - index];
+        validMaskBoundary = validMaskBoundary &&
+                            std::abs(left.x() + right.x() - canvasWidth) <= 0.01 &&
+                            std::abs(left.y() - right.y()) <= 0.01;
+    }
+    if (!validMaskBoundary || !std::isfinite(mask.bottomY) ||
+        mask.bottomY < maximumMaskY || mask.bottomY > canvasHeight ||
+        mask.label.trimmed().isEmpty() || !finitePoint(mask.labelCenter) ||
+        mask.labelCenter.x() < 0.0 || mask.labelCenter.x() > canvasWidth ||
+        mask.labelCenter.y() < 0.0 || mask.labelCenter.y() > canvasHeight) {
+        return fail(QStringLiteral("cross-needle lower mask is invalid"));
+    }
+    swrLabelCenterCache.clear();
+    swrLabelCenterCacheFontKey.clear();
+    swrLabelPlacementError.clear();
+    QFont swrLabelFont;
+    if (QGuiApplication::instance()) {
+        swrLabelFont = QGuiApplication::font();
+    }
+    swrLabelFont.setPixelSize(typography.swrNumberPixels);
+    swrLabelFont.setBold(true);
     for (const SwrGuide &guide : swrGuides) {
         const bool validSwr = guide.swr > 1.0;
-        const bool validConstruction =
-            finitePoint(guide.visibleUpper) && finitePoint(guide.registeredDatum) &&
-            finitePoint(guide.hiddenLower) && std::isfinite(guide.quadraticA) &&
-            guide.visibleUpper.y() > 0.0 && guide.visibleUpper.y() < canvasHeight &&
-            guide.visibleUpper.y() < guide.registeredDatum.y() &&
-            guide.registeredDatum.y() < guide.hiddenLower.y();
         const bool validLabel =
-            guide.displayLabel.isEmpty() ||
-            (finitePoint(guide.labelCenter) && guide.labelCenter.x() > 0.0 &&
-             guide.labelCenter.x() < canvasWidth && guide.labelCenter.y() > 0.0 &&
-             guide.labelCenter.y() < canvasHeight);
-        const double visibleYSpan = guide.registeredDatum.y() - guide.visibleUpper.y();
-        const double maximumVisibleBulge =
-            std::abs(guide.quadraticA) * visibleYSpan * visibleYSpan / 4.0;
-        if (guide.label.isEmpty() || !validSwr || !validConstruction || !validLabel ||
-            maximumVisibleBulge > 6.01) {
+            guide.displayLabel.isEmpty() || !guide.displayLabel.trimmed().isEmpty();
+        if (guide.label.isEmpty() || !validSwr || !validLabel) {
             return fail(QStringLiteral("cross-needle SWR guide '%1' is invalid").arg(guide.label));
         }
         const QPainterPath path = swrGuidePath(guide);
-        if (path.elementCount() != 7 || path.elementAt(0).type != QPainterPath::MoveToElement ||
-            path.elementAt(1).type != QPainterPath::CurveToElement ||
-            path.elementAt(4).type != QPainterPath::CurveToElement) {
-            return fail(QStringLiteral("cross-needle SWR guide '%1' path is invalid")
-                            .arg(guide.label));
+        if (path.elementCount() != swrStyle.curveSamples + 1 ||
+            path.elementAt(0).type != QPainterPath::MoveToElement ||
+            !finitePoint(path.currentPosition())) {
+            return fail(QStringLiteral("cross-needle SWR guide '%1' path is invalid "
+                                       "(%2 of %3 samples)")
+                            .arg(guide.label)
+                            .arg(path.elementCount())
+                            .arg(swrStyle.curveSamples + 1));
+        }
+        if (!guide.displayLabel.isEmpty()) {
+            const QPointF labelCenter = swrGuideLabelCenter(guide, swrLabelFont);
+            if (!swrLabelPlacementError.isEmpty()) {
+                return fail(swrLabelPlacementError);
+            }
+            if (!finitePoint(labelCenter) || labelCenter.x() <= 0.0 ||
+                labelCenter.x() >= canvasWidth || labelCenter.y() <= 0.0 ||
+                labelCenter.y() >= canvasHeight) {
+                return fail(QStringLiteral("cross-needle SWR guide '%1' label is outside the face")
+                                .arg(guide.label));
+            }
         }
     }
-    if (mask.boundary.size() < 3) {
-        return fail(QStringLiteral("cross-needle lower mask is invalid"));
+    if (!swrLabelPlacementError.isEmpty()) {
+        return fail(swrLabelPlacementError);
     }
     return true;
 }
 
-double CrossNeedleMeterGeometry::interpolate(const Scale &scale, double value) {
-    if (scale.values.size() < 2 || scale.values.size() != scale.anglesRadians.size() ||
-        scale.values.size() != scale.angleTangents.size()) {
+double CrossNeedleMeterGeometry::angleForValue(const Scale &scale, double value) {
+    if (scale.values.size() < 2 || scale.responseCoefficients.size() != 6) {
         return 0.0;
     }
-    const double clamped = std::clamp(value, scale.values.first(), scale.values.last());
-    const auto upper = std::lower_bound(scale.values.cbegin(), scale.values.cend(), clamped);
-    if (upper == scale.values.cbegin()) {
-        return scale.anglesRadians.first();
+    const double span = scale.values.last() - scale.values.first();
+    const double normalizedPower =
+        span > 0.0 ? std::clamp((value - scale.values.first()) / span, 0.0, 1.0) : 0.0;
+    return angleForNormalizedPower(scale, normalizedPower);
+}
+
+double CrossNeedleMeterGeometry::angleForNormalizedPower(const Scale &scale,
+                                                         double normalizedPower) {
+    if (scale.responseCoefficients.size() != 6) {
+        return scale.responseStartRadians;
     }
-    if (upper == scale.values.cend()) {
-        return scale.anglesRadians.last();
+    // Degree-5 Bernstein in normalized POWER (concave, square-root-like),
+    // evaluated by de Casteljau. normalizedPower 0 maps to the angled
+    // printed-zero rest. Callers pass values in [0, 1] for live/tick use;
+    // SWR-contour construction passes values > 1 to extrapolate a movement a
+    // little past full scale so every contour can reach the common termination
+    // envelope (see swrGuidePath / docs/cross-needle-meter-math.md D1).
+    std::array<double, 6> work{};
+    std::copy(scale.responseCoefficients.cbegin(), scale.responseCoefficients.cend(),
+              work.begin());
+    for (int remaining = static_cast<int>(scale.responseCoefficients.size()) - 1;
+         remaining > 0; --remaining) {
+        for (int index = 0; index < remaining; ++index) {
+            work[index] = std::lerp(work[index], work[index + 1], normalizedPower);
+        }
     }
-    const int upperIndex = static_cast<int>(std::distance(scale.values.cbegin(), upper));
-    const int lowerIndex = upperIndex - 1;
-    const double span = scale.values[upperIndex] - scale.values[lowerIndex];
-    const double fraction = (clamped - scale.values[lowerIndex]) / span;
-    const double fractionSquared = fraction * fraction;
-    const double fractionCubed = fractionSquared * fraction;
-    const double lowerBasis = 2.0 * fractionCubed - 3.0 * fractionSquared + 1.0;
-    const double lowerTangentBasis = fractionCubed - 2.0 * fractionSquared + fraction;
-    const double upperBasis = -2.0 * fractionCubed + 3.0 * fractionSquared;
-    const double upperTangentBasis = fractionCubed - fractionSquared;
-    return lowerBasis * scale.anglesRadians[lowerIndex] +
-           lowerTangentBasis * span * scale.angleTangents[lowerIndex] +
-           upperBasis * scale.anglesRadians[upperIndex] +
-           upperTangentBasis * span * scale.angleTangents[upperIndex];
+    return std::lerp(scale.responseStartRadians, scale.responseEndRadians, work[0]);
+}
+
+double CrossNeedleMeterGeometry::printedAngleForIndex(const Scale &scale, int index) {
+    if (index < 0 || index >= scale.anglesRadians.size()) {
+        return 0.0;
+    }
+    // The needle parks on the printed zero, so every tick (including 0) uses
+    // the calibrated movement angle directly.
+    return scale.anglesRadians[index];
+}
+
+double CrossNeedleMeterGeometry::inverseInterpolate(const Scale &scale,
+                                                    double angleRadians) {
+    if (scale.values.size() < 2 || scale.values.size() != scale.anglesRadians.size() ||
+        scale.responseCoefficients.size() != 6) {
+        return 0.0;
+    }
+
+    const bool increasing = scale.anglesRadians.last() > scale.anglesRadians.first();
+    const double minimumAngle =
+        std::min(scale.anglesRadians.first(), scale.anglesRadians.last());
+    const double maximumAngle =
+        std::max(scale.anglesRadians.first(), scale.anglesRadians.last());
+    const double target = std::clamp(angleRadians, minimumAngle, maximumAngle);
+    double lower = scale.values.first();
+    double upper = scale.values.last();
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        const double middle = (lower + upper) * 0.5;
+        const double angle = angleForValue(scale, middle);
+        if ((angle < target) == increasing) {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    return (lower + upper) * 0.5;
 }
 
 QPointF CrossNeedleMeterGeometry::pointOnScale(const Scale &scale, double angleRadians) {
@@ -769,12 +914,12 @@ QPointF CrossNeedleMeterGeometry::pointOnScale(const Scale &scale, double angleR
 
 double CrossNeedleMeterGeometry::forwardAngle(double forwardWatts, double multiplier) const {
     const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.0;
-    return interpolate(forwardScale, std::max(0.0, forwardWatts) / safeMultiplier);
+    return angleForValue(forwardScale, std::max(0.0, forwardWatts) / safeMultiplier);
 }
 
 double CrossNeedleMeterGeometry::reflectedAngle(double reflectedWatts, double multiplier) const {
     const double safeMultiplier = multiplier > 0.0 ? multiplier : 1.0;
-    return interpolate(reflectedScale, std::max(0.0, reflectedWatts) / safeMultiplier);
+    return angleForValue(reflectedScale, std::max(0.0, reflectedWatts) / safeMultiplier);
 }
 
 QPointF CrossNeedleMeterGeometry::forwardTip(double forwardWatts, double multiplier) const {
@@ -816,44 +961,342 @@ QPointF CrossNeedleMeterGeometry::needleIntersection(double forwardWatts, double
 
 QPainterPath CrossNeedleMeterGeometry::swrGuidePath(const SwrGuide &guide) const {
     QPainterPath path;
-    const double visibleYSpan = guide.registeredDatum.y() - guide.visibleUpper.y();
-    const double hiddenYSpan = guide.hiddenLower.y() - guide.registeredDatum.y();
-    if (!(visibleYSpan > 0.0 && hiddenYSpan > 0.0)) {
+    if (!(guide.swr > 1.0) || swrStyle.curveSamples < 2) {
         return path;
     }
 
-    // Port of the approved V12 construction. The visible source-traced
-    // quadratic is represented exactly as a cubic Hermite segment. Its end
-    // tangent then feeds the concealed Hermite continuation, so there is no
-    // splice at the mask boundary and no mechanically invented S-curve.
-    const double visibleChordSlope =
-        (guide.registeredDatum.x() - guide.visibleUpper.x()) / visibleYSpan;
-    const double upperSlope = visibleChordSlope - guide.quadraticA * visibleYSpan;
-    const double datumSlope = visibleChordSlope + guide.quadraticA * visibleYSpan;
-    const double lowerSlope =
-        (guide.hiddenLower.x() - guide.registeredDatum.x()) / hiddenYSpan;
+    // A cross-needle SWR guide is the locus of intersections produced by a
+    // constant reflected/forward power ratio. Sample in detector-voltage
+    // space, not power space: the movement input is proportional to sqrt(P),
+    // and uniform voltage steps avoid over-tessellating one part of a curve
+    // while starving another.
+    const double ratio = std::isinf(guide.swr)
+                             ? 1.0
+                             : std::pow((guide.swr - 1.0) / (guide.swr + 1.0), 2.0);
+    const double forwardMaximum = forwardScale.values.last();
+    const double reflectedMaximum = reflectedScale.values.last();
 
-    path.moveTo(guide.visibleUpper);
-    path.cubicTo(
-        guide.visibleUpper + QPointF(upperSlope * visibleYSpan / 3.0,
-                                     visibleYSpan / 3.0),
-        guide.registeredDatum - QPointF(datumSlope * visibleYSpan / 3.0,
-                                        visibleYSpan / 3.0),
-        guide.registeredDatum);
-    path.cubicTo(
-        guide.registeredDatum + QPointF(datumSlope * hiddenYSpan / 3.0,
-                                        hiddenYSpan / 3.0),
-        guide.hiddenLower - QPointF(lowerSlope * hiddenYSpan / 3.0,
-                                    hiddenYSpan / 3.0),
-        guide.hiddenLower);
+    // Every contour terminates on ONE common boundary: a fixed clearance short
+    // of whichever power arc is nearer. Low-SWR crossings reach that boundary
+    // only a little past full forward scale, so we extend the movement angles
+    // slightly past unity (angleForNormalizedPower, unclamped) to get there.
+    // This makes the whole SWR family a consistent fan parallel to the arcs
+    // (see docs/cross-needle-meter-math.md D1). Live needles are unaffected.
+    const auto point = [this, ratio, forwardMaximum, reflectedMaximum](double voltage) {
+        const double forwardNormalized = voltage * voltage;
+        const double reflectedNormalized =
+            forwardNormalized * forwardMaximum * ratio / reflectedMaximum;
+        return lineIntersection(
+            forwardScale.center,
+            pointOnScale(forwardScale,
+                         angleForNormalizedPower(forwardScale, forwardNormalized)),
+            reflectedScale.center,
+            pointOnScale(reflectedScale,
+                         angleForNormalizedPower(reflectedScale, reflectedNormalized)));
+    };
+    const auto reachesGraphEnvelope = [this](const QPointF &p) {
+        const double forwardDistance =
+            std::hypot(p.x() - forwardScale.center.x(), p.y() - forwardScale.center.y());
+        const double reflectedDistance =
+            std::hypot(p.x() - reflectedScale.center.x(), p.y() - reflectedScale.center.y());
+        return forwardDistance >= forwardScale.radius - swrStyle.graphClearance ||
+               reflectedDistance >= reflectedScale.radius - swrStyle.graphClearance;
+    };
+
+    // Cap on how far past full scale a movement may be extrapolated to reach
+    // the boundary (~2.5x full-scale power). Step outward from the hidden
+    // convergence to the FIRST envelope crossing, then bisect for precision.
+    constexpr double kMaxVoltage = 1.6;
+    double endingVoltage = kMaxVoltage;
+    double previous = 0.0;
+    constexpr int kProbe = 256;
+    for (int i = 1; i <= kProbe; ++i) {
+        const double v = kMaxVoltage * static_cast<double>(i) / kProbe;
+        if (reachesGraphEnvelope(point(v))) {
+            double lower = previous;
+            double upper = v;
+            for (int iteration = 0; iteration < 48; ++iteration) {
+                const double middle = (lower + upper) * 0.5;
+                if (reachesGraphEnvelope(point(middle))) {
+                    upper = middle;
+                } else {
+                    lower = middle;
+                }
+            }
+            endingVoltage = (lower + upper) * 0.5;
+            break;
+        }
+        previous = v;
+    }
+
+    // The needles rest on their printed zeros (angled rest), so voltage 0 is a
+    // well-defined crossing: the single hidden convergence just below the mask
+    // that every contour fans from. Start the path there and sweep to the
+    // common boundary.
+    for (int sample = 0; sample <= swrStyle.curveSamples; ++sample) {
+        const double fraction =
+            static_cast<double>(sample) / static_cast<double>(swrStyle.curveSamples);
+        const QPointF p = point(endingVoltage * fraction);
+        if (!std::isfinite(p.x()) || !std::isfinite(p.y())) {
+            return {};
+        }
+        if (sample == 0) {
+            path.moveTo(p);
+        } else {
+            path.lineTo(p);
+        }
+    }
     return path;
 }
 
-QPointF CrossNeedleMeterGeometry::swrGuideLabelCenter(const SwrGuide &guide) const {
+double CrossNeedleMeterGeometry::maskBoundaryY(double x) const {
+    if (mask.boundary.isEmpty()) {
+        return mask.bottomY;
+    }
+    if (x <= mask.boundary.first().x()) {
+        return mask.boundary.first().y();
+    }
+    for (int index = 1; index < mask.boundary.size(); ++index) {
+        const QPointF &first = mask.boundary[index - 1];
+        const QPointF &second = mask.boundary[index];
+        if (x <= second.x()) {
+            if (second.x() == first.x()) {
+                return std::min(first.y(), second.y());
+            }
+            const double fraction = (x - first.x()) / (second.x() - first.x());
+            return first.y() + (second.y() - first.y()) * fraction;
+        }
+    }
+    return mask.boundary.last().y();
+}
+
+QRectF CrossNeedleMeterGeometry::swrLabelBox(
+    const QPointF &center, const SwrGuide &guide, const QFont &labelFont) const
+{
+    const QString display = guide.displayLabel == QStringLiteral("infinity")
+                                ? QString::fromUtf8("\xe2\x88\x9e")
+                                : guide.displayLabel;
+    QRectF box;
+    if (QGuiApplication::instance()) {
+        // Match the rendered number exactly (same font, size, weight, and the
+        // small background inset the painter and tests use) so a declutter
+        // decision made here is the one the device sees.
+        box = QFontMetricsF(labelFont)
+                  .boundingRect(display)
+                  .adjusted(-3.0, -2.0, 3.0, 2.0);
+    } else {
+        // Headless fallback: a proportional estimate a touch larger than the
+        // glyphs, so decisions stay conservative without a font available.
+        const double pixels = static_cast<double>(typography.swrNumberPixels);
+        double width = 0.0;
+        for (const QChar character : display) {
+            width += character == QLatin1Char('.') ? 0.36 * pixels
+                     : display == QString::fromUtf8("\xe2\x88\x9e") ? 1.05 * pixels
+                                                                    : 0.62 * pixels;
+        }
+        box = QRectF(0.0, 0.0, width + 6.0, 1.30 * pixels);
+    }
+    box.moveCenter(center);
+    return box;
+}
+
+QVector<QPointF> CrossNeedleMeterGeometry::swrLabelCenters(const QFont &labelFont) const {
+    const QString fontKey = labelFont.key();
+    if (swrLabelCenterCache.size() == swrGuides.size() &&
+        swrLabelCenterCacheFontKey == fontKey) {
+        return swrLabelCenterCache;
+    }
+    swrLabelPlacementError.clear();
+    // Every number rides its own contour: the anchor is a fraction
+    // (labelArcFraction) of that contour's VISIBLE arc length, then decluttered.
+    // No per-guide coordinates.
+    QVector<QPointF> centers(swrGuides.size(),
+                             QPointF(std::numeric_limits<double>::quiet_NaN(),
+                                     std::numeric_limits<double>::quiet_NaN()));
+    QVector<QPainterPath> paths(swrGuides.size());
+    for (int index = 0; index < swrGuides.size(); ++index) {
+        paths[index] = swrGuidePath(swrGuides[index]);
+    }
+
+    const auto pointAtDistance = [](const QPainterPath &path, double target, QPointF *tangent) {
+        if (path.isEmpty()) {
+            return QPointF(std::numeric_limits<double>::quiet_NaN(),
+                           std::numeric_limits<double>::quiet_NaN());
+        }
+        double traversed = 0.0;
+        QPointF first = path.elementAt(0);
+        for (int element = 1; element < path.elementCount(); ++element) {
+            const QPointF second = path.elementAt(element);
+            const double segment = std::hypot(second.x() - first.x(), second.y() - first.y());
+            if (traversed + segment >= target && segment > 1e-12) {
+                if (tangent) {
+                    *tangent = (second - first) / segment;
+                }
+                return first + (second - first) * ((target - traversed) / segment);
+            }
+            traversed += segment;
+            first = second;
+        }
+        QPointF finalTangent(0.0, -1.0);
+        if (path.elementCount() >= 2) {
+            const QPointF before = path.elementAt(path.elementCount() - 2);
+            const QPointF end = path.currentPosition();
+            const double segment = std::hypot(end.x() - before.x(), end.y() - before.y());
+            finalTangent = segment > 1e-12 ? (end - before) / segment : QPointF(0.0, -1.0);
+        }
+        if (tangent) {
+            *tangent = finalTangent;
+        }
+        return path.currentPosition() + finalTangent * std::max(0.0, target - traversed);
+    };
+
+    QVector<QRectF> powerNumberBoxes;
+    if (QGuiApplication::instance()) {
+        QFont scaleFont = labelFont;
+        scaleFont.setPixelSize(typography.scaleNumberPixels);
+        scaleFont.setWeight(QFont::Medium);
+        const QFontMetricsF metrics(scaleFont);
+        const auto appendScaleBoxes = [&](const Scale &scale) {
+            for (int index = 0; index < scale.labels.size(); ++index) {
+                if (scale.labels[index].isEmpty()) {
+                    continue;
+                }
+                const double angle = printedAngleForIndex(scale, index);
+                const QPointF radial(std::cos(angle), std::sin(angle));
+                const QPointF center = pointOnScale(scale, angle) + radial * scale.labelOffset;
+                QRectF box = metrics.boundingRect(scale.labels[index]);
+                box.moveCenter(center);
+                powerNumberBoxes.append(box);
+            }
+        };
+        appendScaleBoxes(forwardScale);
+        appendScaleBoxes(reflectedScale);
+    }
+
+    const double gap = swrStyle.labelBoxPadding;
+    QVector<QRectF> placed;
+    placed.reserve(swrGuides.size());
+    for (int index = 0; index < swrGuides.size(); ++index) {
+        const SwrGuide &guide = swrGuides[index];
+        const auto boxClears = [&](const QPointF &candidate) {
+            const QRectF box = swrLabelBox(candidate, guide, labelFont);
+            if (!(box.bottom() + 3.0 < maskBoundaryY(box.left()) &&
+                  box.bottom() + 3.0 < maskBoundaryY(box.center().x()) &&
+                  box.bottom() + 3.0 < maskBoundaryY(box.right()) &&
+                  box.left() > frame.faceInset && box.right() < canvasWidth - frame.faceInset &&
+                  box.top() > frame.faceInset && box.bottom() < mask.bottomY)) {
+                return false;
+            }
+            const QRectF spaced = box.adjusted(-gap, -gap, gap, gap);
+            for (const QRectF &other : placed) {
+                if (spaced.intersects(other)) {
+                    return false;
+                }
+            }
+            for (const QRectF &powerBox : powerNumberBoxes) {
+                if (spaced.intersects(powerBox)) {
+                    return false;
+                }
+            }
+            for (int other = 0; other < paths.size(); ++other) {
+                if (other != index && paths[other].intersects(spaced)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // Anchor within the VISIBLE portion of the contour (above the mask):
+        // walk from the mask crossing a fraction of the visible arc length, so
+        // short low-SWR contours and long high-SWR contours label in the same
+        // relative near-the-outer-end region rather than in the hidden crowd.
+        double totalLength = 0.0;
+        double visibleStart = -1.0;
+        for (int element = 1; element < paths[index].elementCount(); ++element) {
+            const QPointF a = paths[index].elementAt(element - 1);
+            const QPointF b = paths[index].elementAt(element);
+            if (visibleStart < 0.0 && b.y() < maskBoundaryY(b.x())) {
+                visibleStart = totalLength;
+            }
+            totalLength += std::hypot(b.x() - a.x(), b.y() - a.y());
+        }
+        if (visibleStart < 0.0) {
+            visibleStart = 0.0;
+        }
+        const double baseDistance =
+            visibleStart + swrStyle.labelArcFraction * (totalLength - visibleStart);
+        bool found = false;
+        for (int attempt = 0; attempt <= 256; ++attempt) {
+            const int magnitude = (attempt + 1) / 2;
+            const int direction = attempt == 0 ? 0 : (attempt % 2 == 1 ? 1 : -1);
+            // No upper clamp: distances beyond the contour length extrapolate
+            // along the upper tangent, letting a crowded low-SWR label (e.g.
+            // 1.1, whose visible stub is too short to host a box) ride up its
+            // own continuation into open space while staying nearest itself.
+            const double distance = std::max(
+                baseDistance + direction * magnitude * swrStyle.labelDeclutterStep, 0.0);
+            QPointF tangent;
+            const QPointF anchor = pointAtDistance(paths[index], distance, &tangent);
+            const QPointF normal(-tangent.y(), tangent.x());
+            for (int normalAttempt = 0; normalAttempt <= 128; ++normalAttempt) {
+                const int normalMagnitude = (normalAttempt + 1) / 2;
+                const int normalDirection =
+                    normalAttempt == 0 ? 0 : (normalAttempt % 2 == 1 ? 1 : -1);
+                const QPointF candidate =
+                    anchor + normal * (normalDirection * normalMagnitude *
+                                       swrStyle.labelDeclutterStep);
+                if (boxClears(candidate)) {
+                    centers[index] = candidate;
+                    placed.append(swrLabelBox(candidate, guide, labelFont));
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                break;
+            }
+        }
+        if (!found) {
+            swrLabelPlacementError =
+                QStringLiteral("cross-needle SWR guide '%1' has no collision-free label position")
+                    .arg(guide.label);
+            break;
+        }
+    }
+    swrLabelCenterCache = centers;
+    swrLabelCenterCacheFontKey = fontKey;
+    return centers;
+}
+
+QPointF CrossNeedleMeterGeometry::swrGuideLabelCenter(
+    const SwrGuide &guide, const QFont &labelFont) const
+{
     if (guide.displayLabel.isEmpty()) {
         return {};
     }
-    return guide.labelCenter;
+    const QVector<QPointF> centers = swrLabelCenters(labelFont);
+    for (int index = 0; index < swrGuides.size(); ++index) {
+        if (swrGuides[index].label == guide.label) {
+            return centers[index];
+        }
+    }
+    return {};
+}
+
+QPointF CrossNeedleMeterGeometry::swrGuideUpperEndpoint(const SwrGuide &guide) const {
+    return swrGuidePath(guide).currentPosition();
+}
+
+QPointF CrossNeedleMeterGeometry::powerReadingsAtIntersection(
+    const QPointF &point, double rangeMultiplier) const {
+    const double safeMultiplier = rangeMultiplier > 0.0 ? rangeMultiplier : 1.0;
+    const double forwardAngleRadians =
+        std::atan2(point.y() - forwardScale.center.y(),
+                   point.x() - forwardScale.center.x());
+    const double reflectedAngleRadians =
+        std::atan2(point.y() - reflectedScale.center.y(),
+                   point.x() - reflectedScale.center.x());
+    return QPointF(inverseInterpolate(forwardScale, forwardAngleRadians) * safeMultiplier,
+                   inverseInterpolate(reflectedScale, reflectedAngleRadians) * safeMultiplier);
 }
 
 double CrossNeedleMeterGeometry::distanceToGuide(const QPointF &point,

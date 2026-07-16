@@ -8,6 +8,7 @@
 #include <QVector>
 
 class QIODevice;
+class QFont;
 
 namespace AetherSDR {
 
@@ -17,6 +18,11 @@ namespace AetherSDR {
 // This class validates that resource and owns the mechanical mappings used by
 // both the painter and tests: non-linear scale interpolation, concealed-pivot
 // needle rays, constant-SWR curves, and their intersection.
+//
+// BEFORE changing the response model, contour construction, or label placement,
+// read docs/cross-needle-meter-math.md. It is the authoritative model + decision
+// record: which geometry choices are settled and why. Reshaping the physics
+// without updating that doc (and the tests) is how this component churns.
 class CrossNeedleMeterGeometry {
   public:
     struct Frame {
@@ -170,10 +176,29 @@ class CrossNeedleMeterGeometry {
         double startRadians{0.0};
         double endRadians{0.0};
         QVector<double> values;
+        // Runtime calibration angles are derived from the response below.
+        // The photographed reference angles remain separate evidence: they
+        // guide the fit but never compete with the response used by ticks,
+        // needles, and SWR construction.
         QVector<double> anglesRadians;
-        // Derived monotone-cubic tangents. They preserve every calibrated
-        // tick while avoiding visible elbows between adjacent intervals.
-        QVector<double> angleTangents;
+        QVector<double> referenceAnglesRadians;
+        // A normalized degree-5 Bernstein response maps normalized power
+        // [0, 1] to needle deflection [0, 1]. Its non-decreasing, concave
+        // control polygon gives natural square-root-like compression (a real
+        // D'Arsonval movement + sqrt watt scale) while forbidding repeated
+        // acceleration, so calibration noise cannot knot the SWR contours.
+        // The response starts at the ANGLED printed-zero rest position
+        // (responseStartRadians == the "0" tick angle == startRadians): at
+        // zero power each needle parks on its printed 0 mark, pointing up into
+        // the dial exactly like a real cross-needle meter, so the low-SWR
+        // contours stay visible and rise at a shallow angle. One response
+        // drives printed ticks, live needles, inverse readings, and every SWR
+        // contour. See docs/cross-needle-meter-math.md, Decision D1.
+        QString responseModel{QStringLiteral("concave_bernstein_v1")};
+        double responseStartRadians{0.0};
+        double responseEndRadians{0.0};
+        QVector<double> responseCoefficients;
+        double maximumReferenceErrorPixels{30.0};
         QStringList labels;
         int minorSubdivisions{1};
         double labelOffset{34.0};
@@ -182,7 +207,7 @@ class CrossNeedleMeterGeometry {
     struct Title {
         QString text;
         QPointF center;
-        // Authored with the same sign convention as the V12 proof generator.
+        // Authored with the same image-space sign convention as the proof renderer.
         double rotationDegrees{0.0};
     };
 
@@ -199,23 +224,39 @@ class CrossNeedleMeterGeometry {
     struct SwrGuide {
         QString label;
         QString displayLabel;
-        // V12 source-registered construction: a restrained quadratic from
-        // the traced upper endpoint to the y=880 datum, then a C1 Hermite
-        // continuation behind the lower mask. These fields intentionally
-        // preserve the physical face instead of recomputing a different fan
-        // from the movement calibration.
+        // Semantic constant-SWR construction. The path is generated from the
+        // two calibrated movement maps; the number's position is then derived
+        // (see swrLabelCenters) rather than authored per guide.
         double swr{1.0};
-        QPointF visibleUpper;
-        QPointF registeredDatum;
-        QPointF hiddenLower;
-        double quadraticA{0.0};
-        QPointF labelCenter;
     };
 
     struct SwrStyle {
         QColor guide{161, 74, 58, 230};
         double guideWidth{3.2};
         QColor label{45, 45, 42};
+        // Common termination envelope: EVERY contour ends this far short of
+        // whichever power arc is nearer, so the SWR family is a consistent fan
+        // (design 19). Low-SWR contours extend a little past full scale to
+        // reach it; see swrGuidePath and docs/cross-needle-meter-math.md D1.
+        double graphClearance{60.0};
+        // Trim each contour's lower (leading) end this many design pixels above
+        // the mask boundary, leaving a visible gap between the line and the
+        // mask like the real meter face. Purely a render trim; the geometry
+        // path is unchanged.
+        double maskGap{14.0};
+        int curveSamples{128};
+        // Derived SWR-number placement. Every label rides its own contour,
+        // anchored at labelArcFraction of that contour's visible arc length.
+        // Crowded labels move along their own path by a deterministic declutter
+        // step until their boxes clear neighbours and the mask.
+        // These are the ONLY placement knobs — no per-guide hand-tuning.
+        // labelArcFraction is the fraction of each contour's own arc length
+        // (measured from the hidden convergence) at which its number anchors,
+        // so short low-SWR contours and long high-SWR contours are labeled in
+        // the same relative near-the-outer-end region.
+        double labelArcFraction{0.88};
+        double labelDeclutterStep{3.0};
+        double labelBoxPadding{2.0};
     };
 
     struct NeedleStyle {
@@ -289,25 +330,46 @@ class CrossNeedleMeterGeometry {
 
     double forwardAngle(double forwardWatts, double rangeMultiplier) const;
     double reflectedAngle(double reflectedWatts, double rangeMultiplier) const;
+    static double angleForValue(const Scale &scale, double value);
+    // Bernstein movement angle for an already-normalized power. Not clamped to
+    // [0, 1]: SWR-contour construction passes slightly-over-unity values to
+    // extend a movement a little past full scale. Live needles/ticks always
+    // pass clamped values via angleForValue.
+    static double angleForNormalizedPower(const Scale &scale, double normalizedPower);
     QPointF forwardTip(double forwardWatts, double rangeMultiplier) const;
     QPointF reflectedTip(double reflectedWatts, double rangeMultiplier) const;
     QPointF needleIntersection(double forwardWatts, double reflectedWatts,
                                double rangeMultiplier) const;
 
     QPainterPath swrGuidePath(const SwrGuide &guide) const;
-    QPointF swrGuideLabelCenter(const SwrGuide &guide) const;
+    QPointF swrGuideLabelCenter(const SwrGuide &guide, const QFont &labelFont) const;
+    QPointF swrGuideUpperEndpoint(const SwrGuide &guide) const;
+    QPointF powerReadingsAtIntersection(const QPointF &point,
+                                        double rangeMultiplier = 1.0) const;
     double distanceToGuide(const QPointF &point, const SwrGuide &guide) const;
     QString nearestGuideLabel(const QPointF &point, double *distance = nullptr) const;
 
     static double reflectedPowerWatts(double forwardWatts, double swr);
     static double swrFromPowers(double forwardWatts, double reflectedWatts);
     static double rangeMultiplierFor(int maxWatts, bool amplifierActive);
+    static double printedAngleForIndex(const Scale &scale, int index);
 
   private:
-    static double interpolate(const Scale &scale, double value);
+    static double inverseInterpolate(const Scale &scale, double angleRadians);
     static QPointF pointOnScale(const Scale &scale, double angleRadians);
     static QPointF lineIntersection(const QPointF &firstOrigin, const QPointF &firstTip,
                                     const QPointF &secondOrigin, const QPointF &secondTip);
+    // Deterministic derived placement of all SWR numbers, in guide order.
+    // Result is memoized by the exact rendered font: the geometry is immutable
+    // after load, while a widget or application font change must recompute the
+    // collision layout before the static face is rebuilt.
+    QVector<QPointF> swrLabelCenters(const QFont &labelFont) const;
+    mutable QVector<QPointF> swrLabelCenterCache;
+    mutable QString swrLabelCenterCacheFontKey;
+    mutable QString swrLabelPlacementError;
+    QRectF swrLabelBox(const QPointF &center, const SwrGuide &guide,
+                       const QFont &labelFont) const;
+    double maskBoundaryY(double x) const;
 };
 
 } // namespace AetherSDR

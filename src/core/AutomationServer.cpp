@@ -440,11 +440,27 @@ QJsonObject describeWidget(const QWidget* w)
         }
     }
 
-    // The PWR applet's custom-painted cross-needle meter publishes its live
-    // mechanics as dynamic properties. Surface them generically so bridge
-    // validation can prove the two calibrated movements and SWR intersection
-    // without coupling the core automation server to a gui/ header.
+    // The custom-painted analog meters publish their live mechanics as dynamic
+    // properties. Surface them generically so bridge validation can prove the
+    // standard meter's native SWR filtering and the PWR applet's two calibrated
+    // movements without coupling the core automation server to gui/ headers.
     {
+        const QVariant txSwrSource = w->property("txSwrSource");
+        if (txSwrSource.isValid()) {
+            o[QStringLiteral("txSwrSource")] = txSwrSource.toString();
+            o[QStringLiteral("txSwr")] = w->property("txSwr").toDouble();
+            o[QStringLiteral("txSwrRaw")] = w->property("txSwrRaw").toDouble();
+            o[QStringLiteral("txSwrForwardWatts")] =
+                w->property("txSwrForwardWatts").toDouble();
+            o[QStringLiteral("txSwrPowerEnvelopeWatts")] =
+                w->property("txSwrPowerEnvelopeWatts").toDouble();
+            o[QStringLiteral("txSwrMinimumForwardWatts")] =
+                w->property("txSwrMinimumForwardWatts").toDouble();
+            o[QStringLiteral("txSwrHeld")] = w->property("txSwrHeld").toBool();
+            o[QStringLiteral("txMode")] = w->property("txMode").toString();
+            o[QStringLiteral("transmitting")] =
+                w->property("transmitting").toBool();
+        }
         const QVariant meterStyle = w->property("meterStyle");
         if (meterStyle.isValid()) {
             o[QStringLiteral("meterStyle")] = meterStyle.toString();
@@ -465,6 +481,8 @@ QJsonObject describeWidget(const QWidget* w)
             o[QStringLiteral("swr")] = w->property("swr").toDouble();
             o[QStringLiteral("rangeMultiplier")] =
                 w->property("rangeMultiplier").toDouble();
+            o[QStringLiteral("rangeLegendVisible")] =
+                w->property("rangeLegendVisible").toBool();
             o[QStringLiteral("transmitting")] =
                 w->property("transmitting").toBool();
             o[QStringLiteral("effectiveActive")] =

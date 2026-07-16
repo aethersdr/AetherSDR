@@ -10,6 +10,8 @@
 // (freq 0 / empty mode), so the built filename drops the freq/mode components.
 // That is deterministic with the fix and impossible to satisfy with the bug.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/QsoRecorder.h"
 #include "models/SliceModel.h"
 
@@ -54,7 +56,12 @@ static void configure(QsoRecorder& rec, const QString& dir)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-qso-recorder-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     QTemporaryDir tmp;
     EXPECT_TRUE(tmp.isValid());
 

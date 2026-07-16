@@ -8,6 +8,7 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QJsonDocument>
 #include <QLabel>
 #include <QMenu>
 #include <QVBoxLayout>
@@ -108,21 +109,32 @@ void CrossNeedleMeterApplet::loadSettings()
                             .value(MeterSettings::kSettingsKey, QString())
                             .toString();
     MeterSettings::Snapshot settings;
+    bool rewriteSettings = false;
     if (!raw.isEmpty()) {
         QString error;
         settings = MeterSettings::decode(raw.toUtf8(), &error);
         if (!error.isEmpty()) {
             qCWarning(lcGui).noquote()
                 << "CrossNeedleMeterApplet: ignoring invalid settings:" << error;
+        } else {
+            const int storedVersion =
+                QJsonDocument::fromJson(raw.toUtf8()).object()
+                    .value(QStringLiteral("version")).toInt();
+            rewriteSettings = storedVersion < MeterSettings::kVersion;
         }
     }
     setFaceTheme(settings.faceTheme, false);
+    setRangeLegendVisible(settings.showRange, false);
+    if (rewriteSettings) {
+        persistSettings();
+    }
 }
 
 void CrossNeedleMeterApplet::persistSettings() const
 {
     MeterSettings::Snapshot settings;
     settings.faceTheme = m_faceTheme;
+    settings.showRange = m_rangeLegendVisible;
     AppSettings& appSettings = AppSettings::instance();
     appSettings.setValue(MeterSettings::kSettingsKey,
                          MeterSettings::encode(settings));
@@ -141,6 +153,16 @@ void CrossNeedleMeterApplet::setFaceTheme(const QString& theme, bool persist)
     }
     m_meter->setFaceTheme(faceTheme);
     setProperty("crossNeedleFaceTheme", m_faceTheme);
+    if (persist) {
+        persistSettings();
+    }
+}
+
+void CrossNeedleMeterApplet::setRangeLegendVisible(bool visible, bool persist)
+{
+    m_rangeLegendVisible = visible;
+    m_meter->setRangeLegendVisible(visible);
+    setProperty("crossNeedleRangeLegendVisible", visible);
     if (persist) {
         persistSettings();
     }
@@ -191,6 +213,16 @@ void CrossNeedleMeterApplet::showContextMenu(const QPoint& position)
     faceThemeGroup->addAction(darkThemeAction);
     connect(darkThemeAction, &QAction::triggered, this, [this]() {
         setFaceTheme(MeterSettings::kDarkTheme, true);
+    });
+
+    menu.addSeparator();
+    addHeader(tr("Display"));
+    QAction* showRangeAction = menu.addAction(tr("Show Range"));
+    showRangeAction->setObjectName(QStringLiteral("crossNeedleShowRangeAction"));
+    showRangeAction->setCheckable(true);
+    showRangeAction->setChecked(m_rangeLegendVisible);
+    connect(showRangeAction, &QAction::toggled, this, [this](bool checked) {
+        setRangeLegendVisible(checked, true);
     });
 
     if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {

@@ -1,6 +1,7 @@
 // Phase 2 tests — ContainerManager lifecycle, factory, persistence.
 // Headless via QApplication with offscreen platform.
 
+#include "TestSettingsProfile.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "core/AppSettings.h"
@@ -137,7 +138,12 @@ void testSaveRestoreRoundTrip()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-container-manager-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("Container system Phase 2 manager tests\n\n");
 
     testCreateAndLookup();
