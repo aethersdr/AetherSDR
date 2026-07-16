@@ -7853,46 +7853,58 @@ void MainWindow::showPanadapterInterlockNotification(const QString& message,
 
 // ─── Keyboard Shortcuts ───────────────────────────────────────────────────────
 
-void MainWindow::updateKeyerAvailability(const QString& mode)
+void MainWindow::updateKeyerAvailability(const QString& activeMode)
 {
     static const QString kActive   = "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }";
     static const QString kAvail    = "QLabel { color: #404858; font-weight: bold; font-size: 24px; }";
     static const QString kDisabled = "QLabel { color: #252530; font-weight: bold; font-size: 24px; }";
 
-    bool isCw  = (mode == "CW" || mode == "CWL");
-    bool isSsb = (mode == "USB" || mode == "LSB" || mode == "AM" || mode == "SAM"
-                  || mode == "FM" || mode == "NFM" || mode == "DFM");
+    const bool activeIsCw = (activeMode == "CW" || activeMode == "CWL");
+    const bool activeIsSsb = (activeMode == "USB" || activeMode == "LSB"
+                              || activeMode == "AM" || activeMode == "SAM"
+                              || activeMode == "FM" || activeMode == "NFM"
+                              || activeMode == "DFM");
+
+    QString txMode;
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (slice && slice->isTxSlice()) {
+            txMode = slice->mode();
+            break;
+        }
+    }
+    const bool txIsCw = (txMode == "CW" || txMode == "CWL");
 
     // F1-F12 / Esc ApplicationShortcuts: enable the set that matches the
     // active slice's mode, regardless of panel visibility.  The two sets
     // are mutually exclusive so Qt never sees two enabled shortcuts for
     // the same key and won't emit activatedAmbiguously (#2464, #2582).
-    if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(isCw);
-    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(isSsb);
+    if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(activeIsCw);
+    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(activeIsSsb);
 
-    // CWX: available in CW modes only
-    m_cwxIndicator->setEnabled(isCw);
-    if (!isCw && m_cwxPanel->isVisible()) {
+    // CWX sends on the radio's TX slice (FlexLib CWX::getTXFrequency), so
+    // availability follows that slice rather than the selected RX slice.
+    m_cwxIndicator->setEnabled(txIsCw);
+    if (!txIsCw && m_cwxPanel->isVisible()) {
         m_cwxPanel->hide();
         m_cwxIndicator->setStyleSheet(kDisabled);
     } else if (m_cwxPanel->isVisible()) {
         m_cwxIndicator->setStyleSheet(kActive);
     } else {
-        m_cwxIndicator->setStyleSheet(isCw ? kAvail : kDisabled);
+        m_cwxIndicator->setStyleSheet(txIsCw ? kAvail : kDisabled);
     }
-    m_cwxIndicator->setCursor(isCw ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    m_cwxIndicator->setCursor(txIsCw ? Qt::PointingHandCursor : Qt::ArrowCursor);
 
     // DVK: available in voice modes (SSB, AM, FM — not DIGU/DIGL)
-    m_dvkIndicator->setEnabled(isSsb);
-    if (!isSsb && m_dvkPanel->isVisible()) {
+    m_dvkIndicator->setEnabled(activeIsSsb);
+    if (!activeIsSsb && m_dvkPanel->isVisible()) {
         m_dvkPanel->hide();
         m_dvkIndicator->setStyleSheet(kDisabled);
     } else if (m_dvkPanel->isVisible()) {
         m_dvkIndicator->setStyleSheet(kActive);
     } else {
-        m_dvkIndicator->setStyleSheet(isSsb ? kAvail : kDisabled);
+        m_dvkIndicator->setStyleSheet(activeIsSsb ? kAvail : kDisabled);
     }
-    m_dvkIndicator->setCursor(isSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    m_dvkIndicator->setCursor(activeIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
 }
 
 void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz)
