@@ -2887,6 +2887,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doShortcut(a.target.isEmpty() ? a.id : a.target);
             });
 
+        add("midi", {}, "midi cc <0-127> — inject a learned VFO Tune Knob CC event",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doMidi(a.action, a.value);
+            });
+
         add("menu", {}, "menu list | open <name> — menu-bar menus",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
@@ -6160,6 +6166,47 @@ QJsonObject AutomationServer::doShortcut(const QString& id) const
         {QStringLiteral("ok"), true},
         {QStringLiteral("shortcut"), id},
         {QStringLiteral("fired"), true},
+    };
+}
+
+QJsonObject AutomationServer::doMidi(const QString& action, const QString& value) const
+{
+    if (action.compare(QStringLiteral("cc"), Qt::CaseInsensitive) != 0) {
+        return err(QStringLiteral("midi requires 'cc <0-127>'"));
+    }
+
+    bool okValue = false;
+    const int ccValue = value.toInt(&okValue);
+    if (!okValue || ccValue < 0 || ccValue > 127) {
+        return err(QStringLiteral("midi cc value must be an integer from 0 to 127"));
+    }
+
+    QWidget* mw = primaryTopLevelWindow();
+    if (!mw) {
+        return err(QStringLiteral("no main window to dispatch MIDI CC"));
+    }
+
+    int result = -1;
+    const bool invoked = QMetaObject::invokeMethod(
+        mw, "injectMidiVfoCcForAutomation", Qt::DirectConnection,
+        Q_RETURN_ARG(int, result), Q_ARG(int, ccValue));
+    if (!invoked) {
+        return err(QStringLiteral("MIDI automation injection is unavailable"));
+    }
+    if (result == 1) {
+        return err(QStringLiteral("MIDI support is unavailable in this build"));
+    }
+    if (result != 0) {
+        return err(QStringLiteral("MIDI CC value was rejected"));
+    }
+
+    qCInfo(lcAutomation).noquote() << "MIDI VFO CC injected:" << ccValue;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("midi"), QStringLiteral("cc")},
+        {QStringLiteral("value"), ccValue},
+        {QStringLiteral("paramId"), QStringLiteral("rx.tuneKnob")},
+        {QStringLiteral("accepted"), true},
     };
 }
 

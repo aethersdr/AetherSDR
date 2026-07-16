@@ -1292,6 +1292,27 @@ void MainWindow::refreshStreamDeckLabels()
 }
 #endif
 
+int MainWindow::injectMidiVfoCcForAutomation(int value)
+{
+    if (value < 0 || value > 127) {
+        return 2;
+    }
+#ifdef HAVE_MIDI
+    if (!m_midiControl) {
+        return 1;
+    }
+
+    bool accepted = false;
+    const bool invoked = QMetaObject::invokeMethod(
+        m_midiControl, "injectVfoCcForAutomation", Qt::BlockingQueuedConnection,
+        Q_RETURN_ARG(bool, accepted), Q_ARG(int, value));
+    return invoked && accepted ? 0 : 1;
+#else
+    Q_UNUSED(value)
+    return 1;
+#endif
+}
+
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 {
     if (steps == 0)

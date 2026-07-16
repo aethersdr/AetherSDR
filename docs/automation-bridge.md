@@ -274,6 +274,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
 | | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
+| | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
@@ -1487,6 +1488,21 @@ needs key **release** edges. The bridge replies with a distinct
 truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
 included) need no flag.
 
+### `midi`
+Inject one MIDI Control Change value through the same learned VFO Tune Knob
+relative decoder used by physical controllers. This focused automation surface
+does not create or persist a binding and is RX-only.
+
+```json
+→ {"cmd":"midi","action":"cc","value":"65"}
+← {"ok":true,"midi":"cc","value":65,"paramId":"rx.tuneKnob","accepted":true}
+```
+
+Bare form: `midi cc 65`. Use `get slice active` before and after the injection
+to assert that center-64 values 65 and 63 move exactly one configured tuning
+step in opposite directions. The controller manager coalesces events for 20 ms,
+so callers should wait briefly before reading the resulting slice frequency.
+
 ### `pan`
 Panadapter lifecycle — create or tear down a pan regardless of how it was opened.
 
@@ -2387,7 +2403,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 51 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 52 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2437,6 +2453,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
+| `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |

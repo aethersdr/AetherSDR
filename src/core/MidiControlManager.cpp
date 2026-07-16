@@ -204,13 +204,31 @@ void MidiControlManager::clearBindings()
 {
     m_bindings.clear();
     m_bindingIndex.clear();
+    m_relativeCcEncodings.clear();
 }
 
 void MidiControlManager::rebuildIndex()
 {
     m_bindingIndex.clear();
+    m_relativeCcEncodings.clear();
     for (int i = 0; i < m_bindings.size(); ++i)
         m_bindingIndex[m_bindings[i].key()] = i;
+}
+
+bool MidiControlManager::injectVfoCcForAutomation(int value)
+{
+    if (value < 0 || value > 127) {
+        return false;
+    }
+
+    MidiBinding binding;
+    binding.channel = 0;
+    binding.msgType = MidiBinding::CC;
+    binding.number = 0;
+    binding.paramId = QStringLiteral("rx.tuneKnob");
+    binding.relative = true;
+    dispatchRelativeCc(binding, value);
+    return true;
 }
 
 // ── MIDI Learn ──────────────────────────────────────────────────────────────
@@ -371,21 +389,13 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
 
     // ── Relative knob mode: decode delta and accumulate ────────────────
     //
-    // Explicit-relative bindings (user picked Relative in MIDI Learn) are
-    // assumed to use two's-complement encoding — that's what the relative
-    // flag has always meant, and overloading it with a binary-mode override
-    // for the VFO would silently flip CCW pulses (data2=127, two's-complement
-    // -1) to CW for users with existing two's-complement encoders bound to
-    // the VFO knob.  Binary-mode encoders (data2 ∈ {0, 127}) instead fall
-    // through to the backward-compat Tier 1 below, which handles them
-    // without requiring the relative flag.
+    // Learned VFO bindings auto-detect the two common encodings from the first
+    // directional value: 1/127 remains two's-complement, while the distinctive
+    // 63/65 pair selects center-64. Other relative parameters retain the
+    // established two's-complement behavior. Binary-mode encoders fall through
+    // to the backward-compat Tier 1 below when not explicitly marked relative.
     if (binding.relative && msgType == MidiBinding::CC) {
-        int delta = relativeCcDelta(data2);
-        if (binding.inverted) delta = -delta;
-
-        accumulateRelativeStep(binding.paramId, delta);
-
-        emit paramValueChanged(binding.paramId, delta > 0 ? 1.0f : 0.0f);
+        dispatchRelativeCc(binding, data2);
         return;
     }
 
@@ -466,6 +476,29 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
     }
 
     emit paramValueChanged(binding.paramId, value);
+}
+
+void MidiControlManager::dispatchRelativeCc(const MidiBinding& binding, int value)
+{
+    int delta = 0;
+    if (isVfoTuneKnobParamId(binding.paramId)) {
+        MidiRelativeCcEncoding& encoding = m_relativeCcEncodings[binding.key()];
+        const MidiRelativeCcDecodeResult result = decodeMidiRelativeCc(value, encoding);
+        encoding = result.encoding;
+        delta = result.delta;
+    } else {
+        delta = relativeCcDelta(value);
+    }
+
+    if (binding.inverted) {
+        delta = -delta;
+    }
+    if (delta == 0) {
+        return;
+    }
+
+    accumulateRelativeStep(binding.paramId, delta);
+    emit paramValueChanged(binding.paramId, delta > 0 ? 1.0f : 0.0f);
 }
 
 // ── Relative knob coalescing ───────────────────────────────────────────────

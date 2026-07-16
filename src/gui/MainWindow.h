@@ -215,6 +215,10 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // Inject one learned VFO-knob CC value through MidiControlManager for
+    // automation proof. Returns 0 on acceptance, 1 if MIDI is unavailable,
+    // and 2 for an out-of-range MIDI value.
+    Q_INVOKABLE int injectMidiVfoCcForAutomation(int value);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationSetCenterLock(int sliceId, bool enabled);
     QJsonObject automationTune(double mhz, int sliceId = -1);

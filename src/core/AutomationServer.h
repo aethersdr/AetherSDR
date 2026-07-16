@@ -568,6 +568,9 @@ private:
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
     QJsonObject doShortcut(const QString& id) const;
+    // Inject a learned VFO Tune Knob MIDI CC value through the controller
+    // decoder. Automation-only, RX-only, and never persists a binding.
+    QJsonObject doMidi(const QString& action, const QString& value) const;
     // Resolve the top-level window a window-scoped verb (resize/window) acts on:
     // the target's window() if given, else the QMainWindow (or first visible real
     // top-level). Shared by doResize and doWindow.

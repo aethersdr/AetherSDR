@@ -4128,6 +4128,12 @@ target_include_directories(midi_settings_test PRIVATE src)
 target_link_libraries(midi_settings_test PRIVATE Qt6::Core)
 add_test(NAME midi_settings_test COMMAND midi_settings_test)
 
+add_executable(midi_relative_cc_decoder_test
+    tests/midi_relative_cc_decoder_test.cpp
+)
+target_include_directories(midi_relative_cc_decoder_test PRIVATE src)
+add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_test)
+
 add_executable(transmit_model_test
     tests/transmit_model_test.cpp
     src/models/TransmitModel.cpp
