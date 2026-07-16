@@ -72,10 +72,14 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     root->addWidget(m_table, 1);
     m_table->hide();
 
-    // "MEM+" button anchored at the bottom of the panel — outside the
-    // scrolling table so it stays visible regardless of scroll position.
-    // Style matches the spectrum overlay menu buttons it replaces.
+    // Keep the list action at the top of the panel, immediately above the
+    // scrolling rows. The bottom of this fixed-height drawer can be clipped
+    // by short panadapters, but its top remains visible.
     m_addBtn = new QPushButton(QStringLiteral("Add Memory"), this);
+    m_addBtn->setObjectName(QStringLiteral("memoryAddButton"));
+    m_addBtn->setAccessibleName(QStringLiteral("Add Memory"));
+    m_addBtn->setAccessibleDescription(
+        QStringLiteral("Save the current slice on this panadapter as a memory."));
     m_addBtn->setFixedHeight(22);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_addBtn, "QPushButton { background: rgba(20, 30, 45, 240); "
         "border: 1px solid rgba(255, 255, 255, 40); border-radius: 2px; "
@@ -83,7 +87,7 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
         "QPushButton:hover { background: rgba(0, 112, 192, 180); "
         "border: 1px solid {{color.accent.dim}}; }");
     m_addBtn->setToolTip("Save the current slice on this panadapter as a memory.");
-    root->addWidget(m_addBtn, 0);
+    root->insertWidget(0, m_addBtn, 0);
     connect(m_addBtn, &QPushButton::clicked, this,
             &MemoryBrowsePanel::quickAddRequested);
 
