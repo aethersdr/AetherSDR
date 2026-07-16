@@ -5,6 +5,7 @@
 
 #include "AetherDspWidget.h"
 #include "FramelessMoveHelper.h"
+#include "FramelessResizer.h"
 #include "StripChainWidget.h"
 #include "StripRxChainWidget.h"
 #include "ClientEqApplet.h"
@@ -54,14 +55,9 @@
 #include <QStackedWidget>
 #include <QStandardPaths>
 #include <QVBoxLayout>
-#include <QWindow>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
-
-namespace {
-constexpr int kResizeMargin = 6;
-}
 
 AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window)
@@ -94,9 +90,9 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     }
     resize(1140, initialHeight);
 
-    // Track mouse without buttons pressed so the resize cursor updates
-    // while hovering the bare margin around the embedded grid.
-    setMouseTracking(true);
+    // Listen at the native-window boundary so edge presses still reach the
+    // resize handler when the child-heavy strip content covers every margin.
+    FramelessResizer::install(this);
 
     // Outer layout has zero margins so the title bar can run edge-to-edge
     // across the whole window (matching the applet ContainerTitleBar).
@@ -843,72 +839,6 @@ void AetherialAudioStrip::hideEvent(QHideEvent* ev)
     s.setValue("AetherialStripVisible", "False");
     s.save();
     QWidget::hideEvent(ev);
-}
-
-Qt::Edges AetherialAudioStrip::edgesAt(const QPoint& pos) const
-{
-    if (!(windowFlags() & Qt::FramelessWindowHint))
-        return {};
-    if (isMaximized() || isFullScreen())
-        return {};
-
-    Qt::Edges edges;
-    if (pos.x() <= kResizeMargin)
-        edges |= Qt::LeftEdge;
-    else if (pos.x() >= width() - kResizeMargin)
-        edges |= Qt::RightEdge;
-    if (pos.y() <= kResizeMargin)
-        edges |= Qt::TopEdge;
-    else if (pos.y() >= height() - kResizeMargin)
-        edges |= Qt::BottomEdge;
-    return edges;
-}
-
-void AetherialAudioStrip::updateResizeCursor(const QPoint& pos)
-{
-    const Qt::Edges edges = edgesAt(pos);
-    Qt::CursorShape shape = Qt::ArrowCursor;
-    // Two diagonals → SizeFDiag (↘↖); the other two → SizeBDiag (↙↗).
-    if ((edges & (Qt::LeftEdge | Qt::TopEdge))     == (Qt::LeftEdge | Qt::TopEdge)
-        || (edges & (Qt::RightEdge | Qt::BottomEdge)) == (Qt::RightEdge | Qt::BottomEdge)) {
-        shape = Qt::SizeFDiagCursor;
-    } else if ((edges & (Qt::RightEdge | Qt::TopEdge))    == (Qt::RightEdge | Qt::TopEdge)
-        ||     (edges & (Qt::LeftEdge | Qt::BottomEdge)) == (Qt::LeftEdge | Qt::BottomEdge)) {
-        shape = Qt::SizeBDiagCursor;
-    } else if (edges & (Qt::LeftEdge | Qt::RightEdge)) {
-        shape = Qt::SizeHorCursor;
-    } else if (edges & (Qt::TopEdge | Qt::BottomEdge)) {
-        shape = Qt::SizeVerCursor;
-    }
-    setCursor(shape);
-}
-
-void AetherialAudioStrip::mouseMoveEvent(QMouseEvent* ev)
-{
-    if (!(ev->buttons() & Qt::LeftButton))
-        updateResizeCursor(ev->pos());
-    QWidget::mouseMoveEvent(ev);
-}
-
-void AetherialAudioStrip::mousePressEvent(QMouseEvent* ev)
-{
-    if (ev->button() == Qt::LeftButton) {
-        const Qt::Edges edges = edgesAt(ev->pos());
-        if (edges) {
-            if (auto* h = windowHandle()) {
-                h->startSystemResize(edges);
-                ev->accept();
-                return;
-            }
-        }
-    }
-    QWidget::mousePressEvent(ev);
-}
-
-void AetherialAudioStrip::leaveEvent(QEvent* ev)
-{
-    setCursor(Qt::ArrowCursor);
-    QWidget::leaveEvent(ev);
 }
 
 bool AetherialAudioStrip::eventFilter(QObject* obj, QEvent* ev)
