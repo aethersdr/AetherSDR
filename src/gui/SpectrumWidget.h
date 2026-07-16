@@ -389,7 +389,9 @@ public:
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
 
     // ── Display control setters ───────────────────────────────────────────
-    // FFT controls (save to AppSettings on each change)
+    // FFT processing controls are radio-owned. These setters update the local
+    // view only; MainWindow sends explicit operator changes and live radio
+    // status updates the same fields without creating a feedback loop.
     void setFftAverage(int frames);
     void setFftWeightedAvg(bool on);
     void setFftFps(int fps);
@@ -420,7 +422,8 @@ public:
         return m_draggingPan;
     }
 
-    // Waterfall controls (save to AppSettings on each change)
+    // Client-rendered waterfall controls persist locally except line_duration,
+    // which is radio-owned and is updated from live status.
     void setWfColorGain(int gain);
     void setWfBlackLevel(int level);
     void setWfAutoBlack(bool on);
@@ -843,6 +846,7 @@ private:
                                           const QSize& historySize);
     void saveCurrentWaterfallStreamState();
     void restoreCurrentWaterfallStreamState();
+    void discardRetainedHistory(WaterfallStreamState& state);
     WaterfallStreamState& activeKiwiWaterfallState();
     const WaterfallStreamState* activeKiwiWaterfallStateConst() const;
     bool beginWaterfallStreamWrite(bool kiwiStream);
@@ -859,6 +863,11 @@ private:
                                bool updateLiveSurface = true);
     void appendLatestDssWaterfallRow(double frameCenterMhz = -1.0,
                                      double frameBandwidthMhz = -1.0);
+    void pushDssLiveRow(DssRenderer& dss, const QVector<float>& binsDbm,
+                        bool hiddenStream);
+    void retainDssHistoryRow(DssRenderer& dss, const QVector<float>& binsDbm,
+                             double centerMhz, double bandwidthMhz,
+                             float fallbackDbm, bool hiddenStream);
     float dssHistoryFallbackDbm() const;
     void appendVisibleRow(const QRgb* rowData);
     int waterfallHistoryCapacityRows() const;
@@ -1003,6 +1012,11 @@ private:
     WaterfallStreamState m_nativeWaterfallState;
     WaterfallStreamState m_kiwiWaterfallState;
     QHash<QString, WaterfallStreamState> m_kiwiProfileWaterfallStates;
+    // True while the current waterfall state is the operator-visible source.
+    // Hidden Flex/Kiwi updates temporarily swap their state into the current
+    // fields; instrumentation and retention policy need to distinguish that
+    // background work from visible work (#4081).
+    bool m_waterfallWriteVisible{true};
     QString m_kiwiSdrWaterfallProfileId;
     QVector<float> m_kiwiSdrLastWaterfallBins;
     double m_kiwiSdrLastWaterfallCenterMhz{0.0};
@@ -1620,6 +1634,23 @@ private:
         quint64 overlayRebuildUs{0};
         quint64 overlayUploadBytes{0};    // static+bg texture bytes uploaded
         quint64 wfUploadBytes{0};         // waterfall texture bytes uploaded
+        quint64 nativeWaterfallCalls{0};  // native VITA waterfall updates
+        quint64 nativeWaterfallUs{0};
+        quint64 nativeWaterfallHiddenCalls{0};
+        quint64 kiwiWaterfallCalls{0};    // Kiwi waterfall updates
+        quint64 kiwiWaterfallUs{0};
+        quint64 kiwiWaterfallHiddenCalls{0};
+        quint64 waterfallVisibleRows{0};
+        quint64 waterfallVisibleRowUs{0};
+        quint64 waterfallHistoryRows{0};
+        quint64 waterfallHistoryRowUs{0};
+        quint64 waterfallHiddenHistoryRows{0};
+        quint64 dssLiveRows{0};
+        quint64 dssLiveUs{0};
+        quint64 dssHiddenLiveRows{0};
+        quint64 dssHistoryRows{0};
+        quint64 dssHistoryUs{0};
+        quint64 dssHiddenHistoryRows{0};
         quint64 paintEvents{0};           // software-path paints
         quint64 paintUs{0};
         QHash<QByteArray, quint64> dirtyCauses;  // why the overlay rebuilt

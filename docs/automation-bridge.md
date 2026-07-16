@@ -253,6 +253,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get flags`](#get) | VFO flag attachment state for slice-to-pan assertions. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
+| | [`get renderstats`](#get-renderstats) | Combined 2D/3D pan, waterfall, DSS, scheduler, and WAVE profiling snapshot. |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
 | | [`get clients`](#get-clients) | Radio client roster, GUI IDs + foreign-pan-write forensics (#3977/#4166). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
@@ -683,6 +684,36 @@ until `lastCommand.pending` is false, require `lastCommand.code == 0`, then
 poll the raw mode lists after the automatic slice-status resync. The verb is
 generic; the bridge does not embed or preserve an old registration name.
 
+### `get renderstats`
+
+Combined rendering-analysis snapshot for before/after automation. It returns
+every `panstats` entry, every WAVE/strip `wavestats` entry, the shared pan
+scheduler, and non-overlapping headline totals. The totals cover measured
+GUI-thread FFT ingest, native/Kiwi waterfall ingest, GPU frame preparation,
+software fallback painting, and WAVE painting. DSS timings are reported
+separately because they are a subset of FFT/waterfall ingest.
+
+```json
+→ {"cmd":"get","model":"renderstats","selector":"reset"}
+← {"ok":true,"model":"renderstats",
+   "totals":{"panCount":1,"visiblePanCount":1,"waveScopeCount":1,
+     "fftFramesPerSec":24.9,"gpuFramesPerSec":25.1,
+     "fftIngestMsPerSec":4.2,"nativeWaterfallUpdateMsPerSec":3.8,
+     "gpuFrameMsPerSec":2.7,"wavePaintMsPerSec":0.0,
+     "measuredMainThreadMsPerSec":10.7,
+     "hiddenWaterfallUpdatesPerSec":0.0,
+     "hiddenDssHistoryRowsPerSec":0.0,
+     "waterfallAllocatedBytes":102760448,
+     "dssAllocatedBytes":37847040},
+   "pans":[...],"scopes":[...],"renderScheduler":{...}}
+```
+
+Use `get renderstats reset`, wait for a fixed observation interval, then read
+`get renderstats reset` again. This gives disjoint samples across pan, waterfall,
+3DSS, scheduler, and WAVE counters with one command. `measuredMainThreadMsPerSec`
+is instrumented GUI-thread work, not whole-process CPU percentage; use it for
+causal comparisons while keeping the radio/display configuration fixed.
+
 ### `get panstats`
 Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
 each pan spends preparing frames, split by pipeline section, for before/after
@@ -713,6 +744,10 @@ cost a few integer adds per frame.
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
 | `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
+| `nativeWaterfall*` / `kiwiWaterfall*` | source-specific ingest rate and GUI-thread cost; `HiddenUpdates` identifies background Flex/Kiwi work |
+| `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained RGB-history write rates/cost; `waterfallHiddenHistoryRowsPerSec` exposes hidden-source retention |
+| `dssLiveRows*` / `dssHistoryRows*` | 96-row live 3D surface work versus deep retained scrollback work; hidden subsets expose #4081 amplification |
+| `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage, including hidden-source retained history |
 | `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
 | `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 

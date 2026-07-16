@@ -168,6 +168,25 @@ int testMovedFromHistoryCapacityRebuild()
     return 0;
 }
 
+int testZeroCapacityReleasesRetainedHistory()
+{
+    DssRenderer renderer;
+    renderer.setHistoryCapacityRows(24);
+    renderer.appendHistoryRow(rowWithPeak(128), 14.0, 1.0, -200.0f);
+    if (renderer.historyStorageBytes() == 0 || renderer.historyRowCount() != 1) {
+        return fail("retained DSS history should allocate before release");
+    }
+
+    renderer.setHistoryCapacityRows(0);
+    if (renderer.historyCapacityRows() != 0
+        || renderer.historyRowCount() != 0
+        || renderer.historyStorageBytes() != 0) {
+        return fail("zero DSS history capacity must release all retained storage");
+    }
+
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -188,6 +207,9 @@ int main()
         return rc;
     }
     if (int rc = testMovedFromHistoryCapacityRebuild(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testZeroCapacityReleasesRetainedHistory(); rc != 0) {
         return rc;
     }
 

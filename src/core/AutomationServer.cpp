@@ -2202,6 +2202,7 @@ const QStringList& getModelNames()
         QStringLiteral("meters"),     QStringLiteral("slice"),
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
+        QStringLiteral("renderstats"),
         QStringLiteral("tracedebug"), QStringLiteral("waveforms"),
         QStringLiteral("kiwi"),
     };
@@ -4013,6 +4014,157 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("waveforms"), data}};
     }
+    if (model == QLatin1String("renderstats")) {
+        // One profiling snapshot for all panadapter, waterfall, 3DSS, shared
+        // scheduler, and WAVE-scope work. This deliberately reuses the widget
+        // snapshots instead of exposing GUI headers through the core bridge.
+        // `get renderstats reset` returns the interval and atomically starts a
+        // fresh one across every participating widget.
+        const bool reset = selector == QLatin1String("reset")
+            || property == QLatin1String("reset");
+        QJsonArray pans;
+        QJsonArray scopes;
+        QVariantMap schedulerStats;
+        bool haveSchedulerStats = false;
+        QSet<QWidget*> seen;
+
+        double fftFramesPerSec = 0.0;
+        double gpuFramesPerSec = 0.0;
+        double fftIngestMsPerSec = 0.0;
+        double gpuFrameMsPerSec = 0.0;
+        double softwarePaintMsPerSec = 0.0;
+        double nativeWaterfallUpdatesPerSec = 0.0;
+        double nativeWaterfallUpdateMsPerSec = 0.0;
+        double kiwiWaterfallUpdatesPerSec = 0.0;
+        double kiwiWaterfallUpdateMsPerSec = 0.0;
+        double hiddenWaterfallUpdatesPerSec = 0.0;
+        double dssLiveRowsPerSec = 0.0;
+        double dssLiveMsPerSec = 0.0;
+        double dssHistoryRowsPerSec = 0.0;
+        double dssHistoryMsPerSec = 0.0;
+        double hiddenDssLiveRowsPerSec = 0.0;
+        double hiddenDssHistoryRowsPerSec = 0.0;
+        double waterfallAllocatedBytes = 0.0;
+        double dssAllocatedBytes = 0.0;
+        int visiblePanCount = 0;
+
+        for (QWidget* w : findWidgetsByClass(QStringLiteral("SpectrumWidget"))) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "panstatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset))) {
+                continue;
+            }
+            pans.append(QJsonObject::fromVariantMap(snap));
+            if (snap.value(QStringLiteral("visible")).toBool()) {
+                ++visiblePanCount;
+            }
+            auto number = [&snap](const char* key) {
+                return snap.value(QString::fromLatin1(key)).toDouble();
+            };
+            fftFramesPerSec += number("fftFramesPerSec");
+            gpuFramesPerSec += number("gpuFramesPerSec");
+            fftIngestMsPerSec += number("ingestMsPerSec");
+            gpuFrameMsPerSec += number("gpuFrameMsPerSec");
+            softwarePaintMsPerSec += number("paintMsPerSec");
+            nativeWaterfallUpdatesPerSec += number("nativeWaterfallUpdatesPerSec");
+            nativeWaterfallUpdateMsPerSec += number("nativeWaterfallUpdateMsPerSec");
+            kiwiWaterfallUpdatesPerSec += number("kiwiWaterfallUpdatesPerSec");
+            kiwiWaterfallUpdateMsPerSec += number("kiwiWaterfallUpdateMsPerSec");
+            hiddenWaterfallUpdatesPerSec +=
+                number("nativeWaterfallHiddenUpdatesPerSec")
+                + number("kiwiWaterfallHiddenUpdatesPerSec");
+            dssLiveRowsPerSec += number("dssLiveRowsPerSec");
+            dssLiveMsPerSec += number("dssLiveMsPerSec");
+            dssHistoryRowsPerSec += number("dssHistoryRowsPerSec");
+            dssHistoryMsPerSec += number("dssHistoryMsPerSec");
+            hiddenDssLiveRowsPerSec += number("dssHiddenLiveRowsPerSec");
+            hiddenDssHistoryRowsPerSec += number("dssHiddenHistoryRowsPerSec");
+            waterfallAllocatedBytes += number("waterfallAllocatedBytes");
+            dssAllocatedBytes += number("dssAllocatedBytes");
+
+            if (!haveSchedulerStats) {
+                QVariantMap scheduler;
+                if (QMetaObject::invokeMethod(w, "renderSchedulerStatsSnapshot",
+                                              Qt::DirectConnection,
+                                              Q_RETURN_ARG(QVariantMap, scheduler),
+                                              Q_ARG(bool, reset))) {
+                    schedulerStats = scheduler;
+                    haveSchedulerStats =
+                        scheduler.value(QStringLiteral("enabled")).toBool();
+                }
+            }
+        }
+
+        seen.clear();
+        double wavePaintMsPerSec = 0.0;
+        double wavePaintsPerSec = 0.0;
+        double waveAppendsPerSec = 0.0;
+        for (QWidget* w : findWidgetsByClass(QStringLiteral("WaveformWidget"))) {
+            if (seen.contains(w)) {
+                continue;
+            }
+            seen.insert(w);
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "wavestatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset))) {
+                continue;
+            }
+            scopes.append(QJsonObject::fromVariantMap(snap));
+            wavePaintMsPerSec += snap.value(QStringLiteral("paintMsPerSec")).toDouble();
+            wavePaintsPerSec += snap.value(QStringLiteral("paintsPerSec")).toDouble();
+            waveAppendsPerSec += snap.value(QStringLiteral("appendsPerSec")).toDouble();
+        }
+
+        const double measuredMainThreadMsPerSec =
+            fftIngestMsPerSec + nativeWaterfallUpdateMsPerSec
+            + kiwiWaterfallUpdateMsPerSec + gpuFrameMsPerSec
+            + softwarePaintMsPerSec + wavePaintMsPerSec;
+        QJsonObject totals{
+            {QStringLiteral("panCount"), pans.size()},
+            {QStringLiteral("visiblePanCount"), visiblePanCount},
+            {QStringLiteral("waveScopeCount"), scopes.size()},
+            {QStringLiteral("fftFramesPerSec"), fftFramesPerSec},
+            {QStringLiteral("gpuFramesPerSec"), gpuFramesPerSec},
+            {QStringLiteral("fftIngestMsPerSec"), fftIngestMsPerSec},
+            {QStringLiteral("gpuFrameMsPerSec"), gpuFrameMsPerSec},
+            {QStringLiteral("softwarePaintMsPerSec"), softwarePaintMsPerSec},
+            {QStringLiteral("nativeWaterfallUpdatesPerSec"), nativeWaterfallUpdatesPerSec},
+            {QStringLiteral("nativeWaterfallUpdateMsPerSec"), nativeWaterfallUpdateMsPerSec},
+            {QStringLiteral("kiwiWaterfallUpdatesPerSec"), kiwiWaterfallUpdatesPerSec},
+            {QStringLiteral("kiwiWaterfallUpdateMsPerSec"), kiwiWaterfallUpdateMsPerSec},
+            {QStringLiteral("hiddenWaterfallUpdatesPerSec"), hiddenWaterfallUpdatesPerSec},
+            {QStringLiteral("dssLiveRowsPerSec"), dssLiveRowsPerSec},
+            {QStringLiteral("dssLiveMsPerSec"), dssLiveMsPerSec},
+            {QStringLiteral("dssHistoryRowsPerSec"), dssHistoryRowsPerSec},
+            {QStringLiteral("dssHistoryMsPerSec"), dssHistoryMsPerSec},
+            {QStringLiteral("hiddenDssLiveRowsPerSec"), hiddenDssLiveRowsPerSec},
+            {QStringLiteral("hiddenDssHistoryRowsPerSec"), hiddenDssHistoryRowsPerSec},
+            {QStringLiteral("wavePaintsPerSec"), wavePaintsPerSec},
+            {QStringLiteral("wavePaintMsPerSec"), wavePaintMsPerSec},
+            {QStringLiteral("waveAppendsPerSec"), waveAppendsPerSec},
+            {QStringLiteral("measuredMainThreadMsPerSec"), measuredMainThreadMsPerSec},
+            {QStringLiteral("waterfallAllocatedBytes"), waterfallAllocatedBytes},
+            {QStringLiteral("dssAllocatedBytes"), dssAllocatedBytes},
+        };
+        QJsonObject out{{QStringLiteral("ok"), true},
+                        {QStringLiteral("model"), model},
+                        {QStringLiteral("pans"), pans},
+                        {QStringLiteral("scopes"), scopes},
+                        {QStringLiteral("totals"), totals}};
+        if (haveSchedulerStats) {
+            out[QStringLiteral("renderScheduler")] =
+                QJsonObject::fromVariantMap(schedulerStats);
+        }
+        return out;
+    }
     if (model == QLatin1String("panstats")) {
         // Per-panadapter frame-cost counters from every SpectrumWidget, for
         // before/after rendering-cost proofs without a profiler attach.
@@ -4344,7 +4496,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|tracedebug|clients|kiwi|wavestats)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|flags|panstats|renderstats|tracedebug|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {

@@ -2073,6 +2073,71 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 }
 
+void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
+                                      PanadapterModel* pan)
+{
+    if (!applet || !pan) {
+        return;
+    }
+    SpectrumWidget* sw = applet->spectrumWidget();
+    if (!sw) {
+        return;
+    }
+
+    const QString panId = applet->panId();
+    QVector<QMetaObject::Connection> oldConnections =
+        m_panDisplayStatusConnections.take(panId);
+    for (const QMetaObject::Connection& connection : oldConnections) {
+        QObject::disconnect(connection);
+    }
+
+    QVector<QMetaObject::Connection> connections;
+    connections.reserve(4);
+    connections.append(connect(
+        pan, &PanadapterModel::averageReported,
+        sw, [sw](int average) {
+            if (average >= 0) {
+                sw->setFftAverage(average);
+            }
+        }));
+    connections.append(connect(
+        pan, &PanadapterModel::weightedAverageReported,
+        sw, [sw](bool weighted) {
+            sw->setFftWeightedAvg(weighted);
+        }));
+    connections.append(connect(
+        pan, &PanadapterModel::fpsReported,
+        sw, [this, sw](int fps) {
+            // The adaptive cap is transient client transport state. Preserve
+            // the pre-cap radio value in the UI so the existing lift path can
+            // restore it without turning the cap into profile state.
+            if (!m_adaptiveThrottleActive && fps > 0) {
+                sw->setFftFps(fps);
+            }
+        }));
+    connections.append(connect(
+        pan, &PanadapterModel::waterfallLineDurationReported,
+        sw, [this, sw](int lineDurationMs) {
+            if (!m_adaptiveThrottleActive && lineDurationMs > 0) {
+                sw->setWfLineDuration(lineDurationMs);
+            }
+        }));
+    m_panDisplayStatusConnections.insert(panId, connections);
+
+    // Reclaimed pans already hold their latest status and do not necessarily
+    // emit a new report after reconnect. Seed the view immediately.
+    if (pan->average() >= 0) {
+        sw->setFftAverage(pan->average());
+    }
+    sw->setFftWeightedAvg(pan->weightedAverage());
+    if (!m_adaptiveThrottleActive && pan->fps() > 0) {
+        sw->setFftFps(pan->fps());
+    }
+    if (!m_adaptiveThrottleActive && pan->waterfallLineDuration() > 0) {
+        sw->setWfLineDuration(pan->waterfallLineDuration());
+    }
+}
+
 
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
@@ -2340,7 +2405,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // correct radio-reported range via the pendingDbm guard. (#3034)
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
-        wirePanReconcilers(applet, pan);
+        wirePanDisplayStatus(applet, pan);
     }
     syncTxWaterfallSliceToSpectrums();
 
@@ -3086,19 +3151,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
         // Persist all defaults to AppSettings
         auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayFftAverage"),          "0");
-        s.setValue(sw->settingsKey("DisplayFftFps"),              "25");
         s.setValue(sw->settingsKey("DisplayFftFillAlpha"),        "0.70");
         s.setValue(sw->settingsKey("DisplayFftFillColor"),        "#00e5ff");
         s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "2.0");
-        s.setValue(sw->settingsKey("DisplayFftWeightedAvg"),      "False");
         s.setValue(sw->settingsKey("DisplayFftHeatMap"),          "True");
         s.setValue(sw->settingsKey("DisplayWfColorScheme"),       "0");
         s.setValue(sw->settingsKey("DisplayWfColorGain"),         "50");
         s.setValue(sw->settingsKey("DisplayWfBlackLevel"),        "15");
         s.setValue(sw->settingsKey("DisplayWfAutoBlack"),         "True");
         s.setValue(sw->settingsKey("DisplayWfAutoBlackRadioSide"), "False");
-        s.setValue(sw->settingsKey("DisplayWfLineDuration"),      "100");
         s.setValue(sw->settingsKey("WaterfallBlankingEnabled"),   "False");
         s.setValue(sw->settingsKey("WaterfallBlankingThreshold"), "1.15");
         s.setValue(sw->settingsKey("WaterfallBlankingMode"),      "0");

@@ -2184,6 +2184,23 @@ void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)
     }
 }
 
+void SpectrumOverlayMenu::syncPanProcessingSettings(int avg, int fps,
+                                                     bool weightedAvg)
+{
+    if (!m_avgSlider || !m_fpsSlider || !m_weightedAvgBtn) {
+        return;
+    }
+
+    const QSignalBlocker avgBlocker(m_avgSlider);
+    const QSignalBlocker fpsBlocker(m_fpsSlider);
+    const QSignalBlocker weightedBlocker(m_weightedAvgBtn);
+    m_avgSlider->setValue(avg);
+    m_avgLabel->setText(QString::number(avg));
+    m_fpsSlider->setValue(fps);
+    m_fpsLabel->setText(QString::number(fps));
+    m_weightedAvgBtn->setChecked(weightedAvg);
+}
+
 void SpectrumOverlayMenu::syncDssFloorDepth(int dB)
 {
     if (!m_dssFloorSlider) {

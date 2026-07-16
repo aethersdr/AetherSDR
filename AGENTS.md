@@ -467,7 +467,7 @@ document why.
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which writes
 an XML file at `~/.config/AetherSDR/AetherSDR.settings`. Key names use
-PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftAverage`). Boolean
+PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
 values are stored as `"True"` / `"False"` strings.
 
 ```cpp
@@ -501,11 +501,13 @@ the radio does NOT save.
 
 **Radio-authoritative (do NOT persist):** frequency, mode, filter, step size,
 AGC, squelch, DSP flags, antennas, TX power, panadapter *count* and per-pan
-state (center, bandwidth, min/max dBm, etc.).
+state (center, bandwidth, min/max dBm, FFT average/FPS/weighted-average, and
+waterfall line duration).
 
 **Client-authoritative (persist in AppSettings):** window geometry, layout
 arrangement (`PanadapterLayout`, applet order/visibility), client-side DSP
-(NR2/RN2/NR4/DFNR), UI preferences, display preferences, spot settings.
+(NR2/RN2/NR4/DFNR), UI preferences, client-only display appearance
+preferences, spot settings.
 
 **Why:** When both persist the same setting, they fight on reconnect. The
 radio's GUIClientID session restore is always more current than our saved state.

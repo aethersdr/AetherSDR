@@ -43,10 +43,10 @@ public:
     void setKiwiSdrManager(KiwiSdrManager* manager);
     void setRadioModel(RadioModel* model);
 
-    // Sync Display sub-panel controls with saved settings.  The Black slider
-    // displays `black` while autoBlack is off and `autoBlackOffset` while it
-    // is on; both values are stored internally so toggling the AUTO button
-    // swaps the slider position without losing either preference.
+    // Sync the complete Display sub-panel. Radio-owned values are supplied by
+    // live status; client-rendered values come from AppSettings. The Black
+    // slider displays `black` while autoBlack is off and `autoBlackOffset`
+    // while it is on.
     void syncDisplaySettings(int avg, int fps, int fillPct, bool weightedAvg,
                              const QColor& fillColor, int gain, int black,
                              bool autoBlack, int autoBlackOffset, int rate,
@@ -58,6 +58,10 @@ public:
                              int renderMode = 0,
                              int dssFloorDepth = 6,
                              int dssGain = 70);
+    // Update only the radio-owned pan processing controls from live status.
+    // Signal blockers keep status echoes from generating commands back to the
+    // radio.
+    void syncPanProcessingSettings(int avg, int fps, bool weightedAvg);
     void syncWfLineDuration(int rate);
     void syncKiwiWaterfallSettings(int minDbm, int maxDbm, bool autoScale,
                                    int rate);

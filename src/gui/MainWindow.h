@@ -471,11 +471,7 @@ private:
     };
     void scheduleKiwiSdrUiSync(int flags);
     void wirePanadapter(PanadapterApplet* applet);
-    void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
-    void schedulePanFpsReconcile(const QString& panId, int reportedFps);
-    void schedulePanAverageReconcile(const QString& panId, int reportedAverage);
-    void schedulePanWeightedAvgReconcile(const QString& panId, bool reportedWeighted);
-    void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
+    void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message,
@@ -1161,46 +1157,14 @@ private:
     QWidget*    m_appletPanelFloatWindow{nullptr};
     void floatAppletPanel();
     void dockAppletPanel();
-    bool m_displaySettingsPushed{false};  // one-shot: push saved display settings after pan created
+    bool m_displaySettingsPushed{false};  // one-shot: push client-rendered settings after pan creation
     bool m_applyingLayout{false};        // true during layout tear-down/recreate — suppresses panadapterAdded handler
-    struct PanFpsReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};
-    };
-    QHash<QString, PanFpsReconcileState> m_panFpsReconcile;
-    QHash<QString, QMetaObject::Connection> m_panFpsReconcileConnections;
-    // FFT averaging reconcile (#4001) — mirrors the fps reconcile so a global
-    // profile / band switch that adopts the profile's stored average/weighted
-    // value gets the user's desired value re-asserted once the write-hold
-    // releases. Averaging is NOT adaptively throttled, so no throttle guard.
-    struct PanAverageReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};
-    };
-    QHash<QString, PanAverageReconcileState> m_panAverageReconcile;
-    QHash<QString, QMetaObject::Connection> m_panAverageReconcileConnections;
-    struct PanWeightedAvgReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};   // 0/1 last-sent weighted_average flag
-    };
-    QHash<QString, PanWeightedAvgReconcileState> m_panWeightedAvgReconcile;
-    QHash<QString, QMetaObject::Connection> m_panWeightedAvgReconcileConnections;
-    bool m_adaptiveThrottleActive{false}; // fps/wf reconcile suppressed while true
+    // Live radio status drives the four profile-owned processing controls.
+    // Keeping the connections per pan lets reconnect/reclaim replace them
+    // atomically without accumulating duplicate status handlers.
+    QHash<QString, QVector<QMetaObject::Connection>> m_panDisplayStatusConnections;
+    bool m_adaptiveThrottleActive{false}; // fps/wf status held as restore targets while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
-    struct WaterfallLineDurationReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};
-    };
-    QHash<QString, WaterfallLineDurationReconcileState> m_wfLineDurationReconcile;
-    QHash<QString, QMetaObject::Connection> m_wfLineDurationReconcileConnections;
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
     // User layout choices should suppress startup rearrange, but still allow
