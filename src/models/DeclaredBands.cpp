@@ -2,6 +2,8 @@
 
 #include "BandDefs.h"
 
+#include <string_view>
+
 namespace AetherSDR {
 
 namespace {
@@ -31,7 +33,8 @@ constexpr bool isDeclarable(const BandDef& def)
 // new band — so it cannot introduce anything the band UI doesn't already have,
 // and the resolved name still runs the isDeclarable + kBands allow-list below.
 // Kept deliberately minimal: only real-world mismatches that have actually been
-// observed from a gateway (currently just 70cm; see Aether-gate PRs #14/#15).
+// observed from a gateway (currently just 70cm; the same class of mismatch was
+// patched per-adapter in Aether-gate PRs #14/#15/#16 — this fixes it once here).
 struct BandAlias {
     const char* alias;
     const char* canonical;
@@ -39,6 +42,25 @@ struct BandAlias {
 constexpr BandAlias kBandAliases[] = {
     {"70cm", "440"},   // UHF: every ham + gateway spells it 70cm; AE names it 440
 };
+
+// Enforce the security invariant at COMPILE TIME: every alias's canonical must
+// name an existing kBands entry. This makes Principle VII hold by construction
+// (an alias can only ever be a second spelling of a real band) rather than by
+// review — a future typo'd or renamed canonical fails the build instead of
+// silently dropping the band.
+constexpr bool aliasCanonicalsExist()
+{
+    for (const auto& a : kBandAliases) {
+        bool found = false;
+        for (const auto& def : kBands)
+            if (std::string_view(def.name) == a.canonical) { found = true; break; }
+        if (!found)
+            return false;
+    }
+    return true;
+}
+static_assert(aliasCanonicalsExist(),
+              "every kBandAliases canonical must name an existing kBands entry");
 
 // If `name` is a known alias, return its canonical kBands spelling; otherwise
 // return `name` unchanged. Case-insensitive on the alias key.
