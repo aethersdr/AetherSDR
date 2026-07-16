@@ -3134,6 +3134,27 @@ endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME meter_model_test COMMAND meter_model_test)
 
+add_executable(health_applet_test
+    tests/health_applet_test.cpp
+    src/gui/HealthApplet.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(health_applet_test PRIVATE src)
+target_link_libraries(health_applet_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(UNIX)
+    target_link_libraries(health_applet_test PRIVATE pthread)
+endif()
+set_target_properties(health_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME health_applet_test COMMAND health_applet_test)
+set_tests_properties(health_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(vu_meter_settings_test
     tests/vu_meter_settings_test.cpp
     src/gui/CrossNeedleMeterSettings.cpp
