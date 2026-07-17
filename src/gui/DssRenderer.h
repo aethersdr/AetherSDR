@@ -42,6 +42,14 @@ public:
     // Maps a dBm value to an RGB colour using the host's panadapter palette.
     using PaletteFn = std::function<QRgb(float dbm)>;
 
+    struct RowStats {
+        float minDbm{0.0f};
+        float maxDbm{0.0f};
+        int finiteBins{0};
+        int minValueBins{0};
+        int longestFlatRunBins{0};
+    };
+
     // Push one freshly-decoded FFT row (any bin count, dBm). Peak-preserving
     // downsample to kCols and store it as the newest (front) trace.
     void pushRow(const QVector<float>& binsDbm);
@@ -93,6 +101,7 @@ public:
     int rowCount() const { return m_count; }     // valid rows (0..kRows)
     int headRing() const { return m_head; }       // ring index of the newest row
     const float* rowDataRing(int ringIndex) const { return m_rows[ringIndex].data(); }
+    RowStats rowStats(int age, float epsilonDb = 0.01f) const;
     quint64 rowGeneration() const { return m_rowGeneration; }
 
     // Increments on every cache rebuild — lets the GPU path upload the texture

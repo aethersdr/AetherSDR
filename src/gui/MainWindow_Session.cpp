@@ -1628,6 +1628,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
     m_automation->setTuneHandler(
         [this](double mhz) { return automationTune(mhz); });
+    m_automation->setTargetTuneHandler(
+        [this](double mhz) { return automationTargetTune(mhz); });
+    m_automation->setMemoryActivateHandler(
+        [this](int memoryIndex, const QString& preferredPanId) {
+            return automationActivateMemory(memoryIndex, preferredPanId);
+        });
     m_automation->setReceiveSyncSnapshotHandler(
         [this]() { return automationReceiveSyncSnapshot(); });
     m_automation->setKiwiSdrSnapshotHandler(
