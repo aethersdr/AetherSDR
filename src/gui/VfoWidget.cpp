@@ -2641,16 +2641,25 @@ void VfoWidget::updateDspTabAccent()
         return;
     }
 
+    const auto activeWhenAvailable = [](const QPushButton* button, bool active) {
+        return active && button && !button->isHidden();
+    };
     const bool radioDspActive = m_slice
-        && (m_slice->nbOn() || m_slice->nrOn() || m_slice->anfOn()
-            || m_slice->nrlOn() || m_slice->nrsOn() || m_slice->rnnOn()
-            || m_slice->nrfOn() || m_slice->anflOn() || m_slice->anftOn()
-            || m_slice->apfOn());
-    const bool noiseReductionActive = radioDspActive || m_aetherDspActive;
+        && (activeWhenAvailable(m_nbBtn, m_slice->nbOn())
+            || activeWhenAvailable(m_nrBtn, m_slice->nrOn())
+            || activeWhenAvailable(m_anfBtn, m_slice->anfOn())
+            || activeWhenAvailable(m_nrlBtn, m_slice->nrlOn())
+            || activeWhenAvailable(m_nrsBtn, m_slice->nrsOn())
+            || activeWhenAvailable(m_rnnBtn, m_slice->rnnOn())
+            || activeWhenAvailable(m_nrfBtn, m_slice->nrfOn())
+            || activeWhenAvailable(m_anflBtn, m_slice->anflOn())
+            || activeWhenAvailable(m_anftBtn, m_slice->anftOn())
+            || activeWhenAvailable(m_apfBtn, m_slice->apfOn()));
+    const bool dspActive = radioDspActive || m_aetherDspActive;
     QPushButton* dspTabButton = m_tabBtns[1];
 
-    const QString accessibleName = noiseReductionActive
-        ? tr("DSP settings (noise reduction active)")
+    const QString accessibleName = dspActive
+        ? tr("DSP settings (DSP active)")
         : tr("DSP settings");
     if (dspTabButton->accessibleName() != accessibleName) {
         dspTabButton->setAccessibleName(accessibleName);
@@ -2661,7 +2670,7 @@ void VfoWidget::updateDspTabAccent()
     // Cyan remains the unambiguous open-panel state. Green is the persistent
     // closed-panel cue that at least one radio or client DSP is engaged.
     if (m_activeTab != 1) {
-        dspTabButton->setStyleSheet(noiseReductionActive
+        dspTabButton->setStyleSheet(dspActive
                                         ? kTabLblDspActive
                                         : kTabLblNormal);
     }
@@ -4077,6 +4086,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_nrlBtn->setVisible(!isFm);
         // 8000-series-only firmware DSP filters — shared rule (#2177)
         updateExtendedDspVisibility();
+        updateDspTabAccent();
         relayoutDspGrid();
         updateFilterLabel();
         if (m_tabStack->isVisible()) relayoutToCurrentContent();
@@ -4592,7 +4602,6 @@ void VfoWidget::syncFromSlice()
     syncDsp(m_anflBtn, m_slice->anflOn());
     syncDsp(m_anftBtn, m_slice->anftOn());
     syncDsp(m_apfBtn, m_slice->apfOn());
-    updateDspTabAccent();
 
     // Shared DSP-level slider — pick the highest-priority enabled DSP.
     refreshDspLevelTarget();
@@ -4613,7 +4622,8 @@ void VfoWidget::syncFromSlice()
     m_rttyContainer->setVisible(isRtty);
     bool isCw = (m_slice->mode() == "CW" || m_slice->mode() == "CWL");
     bool isDig = (m_slice->mode() == "DIGL" || m_slice->mode() == "DIGU" || m_slice->mode() == "NT");
-    bool isFm = (m_slice->mode() == "FM" || m_slice->mode() == "NFM");
+    bool isFm = (m_slice->mode() == "FM" || m_slice->mode() == "NFM"
+                 || m_slice->mode() == "DFM");
     m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
     m_apfBtn->setVisible(isCw);
     m_anfBtn->setVisible(!isRtty && !isCw && !isDig && !isFm);
@@ -4650,6 +4660,7 @@ void VfoWidget::syncFromSlice()
         m_digOffsetLabel->setText(QString::number(off));
     }
     relayoutDspGrid();
+    updateDspTabAccent();
 
     // APF level
     {
