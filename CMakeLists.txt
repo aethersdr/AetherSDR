@@ -149,7 +149,7 @@ if(PkgConfig_FOUND)
     pkg_check_modules(PORTAUDIO portaudio-2.0)
 endif()
 
-# FFTW3 (required for NR2 spectral noise reduction)
+# FFTW3 (required by vendored WDSP; also used by NR2 spectral noise reduction)
 # Windows: run scripts/setup/setup-fftw.ps1 first to download prebuilt DLLs
 # Linux:   apt install libfftw3-dev
 # macOS:   brew install fftw
@@ -161,7 +161,7 @@ if(WIN32)
         set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
     else()
-        message(WARNING "FFTW3 not found. Run scripts/setup/setup-fftw.ps1 to download it. NR2 will use fallback FFT.")
+        message(WARNING "FFTW3 not found. Run scripts/setup/setup-fftw.ps1; vendored WDSP requires it.")
     endif()
 else()
     if(PkgConfig_FOUND)
@@ -489,6 +489,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
@@ -1073,6 +1074,10 @@ endif()
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
+# WDSP 2.00 is an engine-only dependency for raw-IQ radio backends. Its C API,
+# platform shims, and FFTW dependency remain private to aethercore.
+add_subdirectory(third_party/wdsp EXCLUDE_FROM_ALL)
+
 # aetherd RFC step 1: engine static library — src/core + src/models
 # plus the vendored C/C++ sources those engine files compile against
 # (rnnoise, ggmorse, RADE, specbleach; mosquitto/rtmidi are appended below in
@@ -1087,6 +1092,7 @@ add_library(aethercore STATIC
     ${RADE_SOURCES}
     ${SPECBLEACH_SOURCES}
 )
+target_link_libraries(aethercore PRIVATE aether::wdsp)
 
 add_executable(AetherSDR
     src/main.cpp
@@ -2226,6 +2232,10 @@ endforeach()
 # ── Unit test harnesses ──────────────────────────────────────────────────────
 # Standalone DSP smoke tests. Built alongside the main target so they share
 # the same toolchain and warning flags. Run manually with ./build/<target>.
+
+add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
+target_link_libraries(wdsp_channel_test PRIVATE aethercore)
+add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
 add_executable(client_eq_test
     tests/client_eq_test.cpp
