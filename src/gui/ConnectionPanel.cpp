@@ -200,6 +200,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
         "QListWidget { background: #09111b; border: 1px solid {{color.background.2}}; border-radius: 4px; "
         "color: {{color.text.primary}}; padding: 2px; }"
+        "QListWidget QScrollBar:vertical { background: #09111b; width: 12px; margin: 0; }"
+        "QListWidget QScrollBar::handle:vertical { background: #304050; border-radius: 5px; min-height: 24px; }"
+        "QListWidget QScrollBar::add-line:vertical, QListWidget QScrollBar::sub-line:vertical { height: 0; }"
         "QPushButton { padding: 5px 12px; }");
 
     const QString editStyle =
@@ -336,7 +339,17 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_radioList->setSelectionMode(QAbstractItemView::SingleSelection);
     m_radioList->setWordWrap(true);
     m_radioList->setSpacing(2);
-    m_radioList->setMinimumHeight(220);
+    // Bound the list height so it scrolls internally when more radios are
+    // discovered than fit — otherwise on a small display (e.g. a 1024x600 Pi
+    // panel) the list grew past the dialog and the Connect button and lower
+    // radios became unreachable. Keep a modest minimum, cap the maximum, and
+    // force the vertical scrollbar so overflow is always reachable (some
+    // themes render an as-needed bar invisibly). Mirrors the WAN list below.
+    m_radioList->setMinimumHeight(120);
+    m_radioList->setMaximumHeight(240);
+    m_radioList->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_radioList->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_radioList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     localGroupLayout->addWidget(m_radioList);
     localListLayout->addWidget(localGroup, 1);
 
