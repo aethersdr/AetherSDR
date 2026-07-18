@@ -13,6 +13,9 @@
 #include <limits>
 
 #if defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX  // Windows.h max macro breaks std::max/numeric_limits::max.
+#endif
 #include <windows.h>
 #include <psapi.h>
 #elif defined(Q_OS_MAC)
