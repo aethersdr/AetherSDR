@@ -71,7 +71,9 @@ AETHER_AUTOMATION_SOCKET=aethersdr-4166 \
 GUI client UUID, so concurrent worktrees do not displace one another through
 the radio's duplicate-client takeover behavior. If it is omitted, the socket,
 automation label, or PID is used in that order. `AETHER_AUTOMATION_AGENT_NAME`
-sets the station label shown to other Multi-Flex clients; it is display-only
+sets the station label shown to other Multi-Flex clients; the legacy
+`AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
+followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
@@ -1776,7 +1778,8 @@ its own per-pid socket + discovery entry).
 → {"cmd":"whoami"}
 ← {"ok":true,"pid":34758,"name":"aethersdr-automation-34758",
    "socket":"/var/folders/…/aethersdr-automation-34758",
-   "label":"","station":"Claude","txAllowed":false,"version":"26.6.5"}
+   "label":"","station":"Automation","agentName":"Automation",
+   "txAllowed":false,"version":"26.6.5"}
 ```
 
 `txAllowed` reports whether `AETHER_AUTOMATION_ALLOW_TX` is set for this process —
