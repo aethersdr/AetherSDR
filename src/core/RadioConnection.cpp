@@ -1,5 +1,6 @@
 #include "RadioConnection.h"
 #include "LogManager.h"
+#include "core/backends/sim/SimBackend.h"
 
 #include <QEventLoop>
 #include <QNetworkProxy>
@@ -97,10 +98,38 @@ void RadioConnection::init()
 
 void RadioConnection::connectToRadio(const RadioInfo& info)
 {
+    if (isDemoTarget(info)) {
+        // Demo radio: no socket — play the radio's part locally (RFC #4288).
+        startSyntheticDemoConnect();
+        return;
+    }
     connectToHost(info.address, info.port,
                   info.bindSettings.mode,
                   info.bindSettings.bindAddress,
                   info.sessionBindAddress);
+}
+
+bool RadioConnection::isDemoTarget(const RadioInfo& info)
+{
+    return info.serial == SimBackend::demoSerial();
+}
+
+void RadioConnection::startSyntheticDemoConnect()
+{
+    m_syntheticDemo = true;
+    setState(ConnectionState::Connecting);
+    // Drive the connect sequence asynchronously (like a real socket connect),
+    // so callers that expect connectToRadio() to return before `connected`
+    // fires behave identically. Mirrors the real V-line then H-line order:
+    // versionReceived, then a nonzero handle + connected().
+    QTimer::singleShot(0, this, [this]() {
+        if (!m_syntheticDemo) return;   // disconnected before we ran
+        emit versionReceived(QStringLiteral("1.4.0.0"));
+        m_handle = 0xDE30'0001u;        // stable, nonzero synthetic client handle
+        setState(ConnectionState::Connected);
+        if (m_heartbeat) m_heartbeat->start();
+        emit connected();
+    });
 }
 
 void RadioConnection::connectToHost(const QHostAddress& address,
@@ -166,6 +195,14 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 void RadioConnection::disconnectFromRadio()
 {
     if (m_heartbeat) m_heartbeat->stop();
+    if (m_syntheticDemo) {
+        // Demo teardown: no socket to close — just drop state and notify.
+        m_syntheticDemo = false;
+        m_handle = 0;
+        setState(ConnectionState::Disconnected);
+        emit disconnected();
+        return;
+    }
     if (m_socket && m_socket->state() != QAbstractSocket::UnconnectedState) {
         writeDisconnectMarker();
         m_socket->disconnectFromHost();
@@ -221,6 +258,16 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
 
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
 {
+    if (m_syntheticDemo) {
+        // Demo radio: acknowledge every command with an OK response (code 0) so
+        // the GUI-client handshake (sub pan all, client gui, …) completes. The
+        // demo doesn't model command effects; the panadapter/slice state it needs
+        // is pushed via synthetic status lines, not command replies. (RFC #4288)
+        if (isConnected()) {
+            emit commandResponse(seq, 0, QString());
+        }
+        return;
+    }
     if (!isConnected() || !m_socket) return;
 
     const QByteArray data = CommandParser::buildCommand(seq, command);

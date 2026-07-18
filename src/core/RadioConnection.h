@@ -83,6 +83,15 @@ private slots:
 private:
     void processLine(const QString& line);
     void setState(ConnectionState s);
+
+    // Demo mode (RFC #4288, Stage 2): when the connect target is the synthetic
+    // demo radio, RadioConnection plays the radio's part locally instead of
+    // dialing a socket — it assigns a handle, emits connected/versionReceived,
+    // answers every writeCommand with an OK response, and (Stage 3) emits the
+    // display-pan status. This keeps the whole RadioModel connect flow unchanged;
+    // the only cost is these small demo branches in the wire class.
+    void startSyntheticDemoConnect();
+    static bool isDemoTarget(const RadioInfo& info);
     bool sendCommandAndWait(quint32 seq, const QString& command, int timeoutMs);
     void writeDisconnectMarker();
     int  kernelRttMs() const;   // read smoothed RTT from kernel TCP_INFO
@@ -93,6 +102,7 @@ private:
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     std::atomic<quint32> m_handle{0};
+    bool m_syntheticDemo{false};   // true while connected to the demo radio
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;  // fallback when kernel TCP_INFO unavailable
 
