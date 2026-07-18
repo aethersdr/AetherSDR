@@ -490,6 +490,7 @@ endif()
 set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
+    src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
@@ -3255,6 +3256,18 @@ if(UNIX)
 endif()
 set_target_properties(sim_backend_test PROPERTIES AUTOMOC ON)
 add_test(NAME sim_backend_test COMMAND sim_backend_test)
+
+# Demo-mode signal engine — pure pattern generator (RFC #4288, Phase 2a).
+add_executable(spectrum_pattern_test
+    tests/spectrum_pattern_test.cpp
+    src/core/backends/sim/SpectrumPatternGenerator.cpp
+)
+target_include_directories(spectrum_pattern_test PRIVATE src)
+target_link_libraries(spectrum_pattern_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(spectrum_pattern_test PRIVATE pthread)
+endif()
+add_test(NAME spectrum_pattern_test COMMAND spectrum_pattern_test)
 
 add_executable(vu_meter_settings_test
     tests/vu_meter_settings_test.cpp
