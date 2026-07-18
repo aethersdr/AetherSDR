@@ -128,13 +128,22 @@ void RadioConnection::startSyntheticDemoConnect()
         m_handle = 0xDE30'0001u;        // stable, nonzero synthetic client handle
         setState(ConnectionState::Connected);
         if (m_heartbeat) m_heartbeat->start();
+
+        // Radio-global status BEFORE connected(): it carries the nickname the
+        // status bar reads, and MainWindow sets that label synchronously in its
+        // connected() handler — so nickname() must already be populated by then
+        // (there is no later nickname-change signal to refresh it). (RFC #4288)
+        emitSyntheticStatus(QStringLiteral(
+            "SDE300001|radio slices=1 panadapters=1 nickname=Demo "
+            "callsign=DEMO model=AetherSDR-Demo"));
+
         emit connected();
 
-        // Push the radio-authoritative status that makes AE build the panadapter,
-        // its waterfall, and a slice — the same lines a real Flex sends after
-        // `sub pan all`. Delayed slightly so RadioModel's onConnected() handshake
-        // (which subscribes) has run first. client_handle matches our synthetic
-        // handle so ownership is Claimed. Format/ids per flex-sim/PROTOCOL.md.
+        // Then the pan/waterfall/slice status that builds the panadapter — the
+        // same lines a real Flex sends after `sub pan all`. Delayed slightly so
+        // RadioModel's onConnected() handshake (which subscribes) has run first.
+        // client_handle matches our handle so ownership is Claimed. Format/ids
+        // per flex-sim/PROTOCOL.md.
         QTimer::singleShot(400, this, [this]() {
             if (!m_syntheticDemo) return;
             emitSyntheticStatus(QStringLiteral(
