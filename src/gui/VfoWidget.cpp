@@ -1253,9 +1253,6 @@ void VfoWidget::buildUI()
         btn->setFixedHeight(24);
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFocusPolicy(Qt::TabFocus);
-        if (i == 1) {
-            btn->setObjectName(QStringLiteral("dspTabButton"));
-        }
         connect(btn, &QPushButton::clicked, this, [this, i]() { showTab(i); });
         if (i == 0) {
             // Right-click on speaker tab toggles mute directly
@@ -2555,15 +2552,8 @@ void VfoWidget::closeActiveTab()
         m_tabStack->hide();
     }
     const int closedTab = m_activeTab;
-    if (closedTab < m_tabBtns.size()) {
-        m_tabBtns[closedTab]->setChecked(false);
-    }
     m_activeTab = -1;
-    if (closedTab == 1) {
-        updateDspTabAccent();
-    } else if (closedTab < m_tabBtns.size()) {
-        m_tabBtns[closedTab]->setStyleSheet(kTabLblNormal);
-    }
+    deactivateTabButton(closedTab);
 }
 
 // Open or close the S-Meter / SmartMTR selector.  Single source of truth for
@@ -2604,23 +2594,13 @@ void VfoWidget::showTab(int index)
         // Toggle off — collapse content
         const int closedTab = m_activeTab;
         m_tabStack->hide();
-        m_tabBtns[closedTab]->setChecked(false);
         m_activeTab = -1;
-        if (closedTab == 1) {
-            updateDspTabAccent();
-        } else {
-            m_tabBtns[closedTab]->setStyleSheet(kTabLblNormal);
-        }
+        deactivateTabButton(closedTab);
     } else {
         if (m_activeTab >= 0) {
             const int closedTab = m_activeTab;
-            m_tabBtns[closedTab]->setChecked(false);
             m_activeTab = -1;
-            if (closedTab == 1) {
-                updateDspTabAccent();
-            } else {
-                m_tabBtns[closedTab]->setStyleSheet(kTabLblNormal);
-            }
+            deactivateTabButton(closedTab);
         }
         m_activeTab = index;
         m_tabBtns[index]->setStyleSheet(kTabLblActive);
@@ -2670,9 +2650,31 @@ void VfoWidget::updateDspTabAccent()
     // Cyan remains the unambiguous open-panel state. Green is the persistent
     // closed-panel cue that at least one radio or client DSP is engaged.
     if (m_activeTab != 1) {
-        dspTabButton->setStyleSheet(dspActive
-                                        ? kTabLblDspActive
-                                        : kTabLblNormal);
+        // Guard the repaint like the accessible name above: a single radio
+        // status packet re-runs this up to 9x (SliceModel::applyChanges emits
+        // the DSP signals unconditionally), and setStyleSheet() forces a full
+        // style recompute even when the accent is unchanged.
+        const QString& target = dspActive ? kTabLblDspActive : kTabLblNormal;
+        if (dspTabButton->styleSheet() != target) {
+            dspTabButton->setStyleSheet(target);
+        }
+    }
+}
+
+// Drop a just-closed tab button back to its resting style. The caller must
+// already have cleared m_activeTab so the DSP tab (index 1) resolves its
+// persistent closed-panel accent here; every other tab returns to the plain
+// label style.
+void VfoWidget::deactivateTabButton(int closedTab)
+{
+    if (closedTab < 0 || closedTab >= m_tabBtns.size()) {
+        return;
+    }
+    m_tabBtns[closedTab]->setChecked(false);
+    if (closedTab == 1) {
+        updateDspTabAccent();
+    } else {
+        m_tabBtns[closedTab]->setStyleSheet(kTabLblNormal);
     }
 }
 
