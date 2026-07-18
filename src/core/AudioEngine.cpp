@@ -2514,6 +2514,8 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     rx["sample_format"] = rxRunning ? QStringLiteral("Float") : QString();
     rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE) : QJsonValue();
     rx["buffer_bytes"] = static_cast<double>(m_rxBufferBytes.load());
+    rx["buffer_capacity_bytes"] = rxRunning
+        ? static_cast<double>(m_audioSink->bufferSize()) : 0.0;
     rx["buffer_peak_bytes"] = static_cast<double>(m_rxBufferPeakBytes.load());
     rx["underrun_count"] = static_cast<double>(m_rxBufferUnderrunCount.load());
     QJsonObject presentation;

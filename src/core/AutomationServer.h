@@ -20,6 +20,7 @@ class QWebSocket;
 #include <vector>
 
 #include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
+#include "MemoryTelemetry.h"
 
 class QLocalServer;
 class QLocalSocket;
@@ -495,6 +496,12 @@ private:
     //                     waterfall the client view had already purged.
     //   streams reset   — clear the Layer-A orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
+    // Cross-platform process + subsystem memory profiler. `start` samples on a
+    // bounded main-thread timer; `report`/`stop` return deltas, slopes, fit
+    // confidence, object-class growth, and raw samples on request.
+    QJsonObject doMemory(const QString& action, const QString& value);
+    QJsonObject memorySnapshot() const;
+    void recordMemorySample();
     QJsonObject doTci(const QString& action, const QString& value);
     QJsonObject doAudioCapture(const QString& action,
                                const QString& arg,
@@ -702,6 +709,11 @@ private:
         bool complete{false};
     };
     std::vector<std::shared_ptr<ConnectWait>> m_connectWaits;
+
+    QTimer* m_memoryTimer{nullptr};
+    QElapsedTimer m_memoryClock;
+    MemoryTelemetrySeries m_memorySeries;
+    qint64 m_memoryLastSampleMs{-1};
 };
 
 } // namespace AetherSDR

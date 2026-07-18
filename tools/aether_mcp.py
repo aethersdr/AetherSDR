@@ -429,6 +429,25 @@ TOOLS = [
         }},
     },
     {
+        "name": "memory_profile",
+        "description": (
+            "Cross-platform process and subsystem memory telemetry. snapshot "
+            "reads current OS/allocator totals and tracked panadapter, audio, "
+            "radio-model, GUI, and automation state. start samples on a bounded "
+            "timer; report/stop return deltas, bytes-per-hour slopes, fit "
+            "confidence, growth suspects, and QObject class-count growth. "
+            "samples includes the retained raw time series."),
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["snapshot", "start", "sample", "status",
+                                "report", "samples", "stop", "reset"]},
+            "interval_ms": {"type": "integer",
+                            "description": "start only; 250..3600000, default 5000"},
+            "max_samples": {"type": "integer",
+                            "description": "start only; 2..10000, default 10000"},
+        }, "required": ["action"]},
+    },
+    {
         "name": "wait_for",
         "description": (
             "Poll a model property until it equals `expected` or `timeout_s` "
@@ -752,6 +771,20 @@ def handle_tool(name, args):
         req = {"cmd": "streams"}
         if args.get("scope"):
             req["action"] = str(args["scope"])
+        return text_result(bridge_request(req))
+
+    if name == "memory_profile":
+        req = {"cmd": "memory", "action": args["action"]}
+        if args["action"] == "start":
+            values = []
+            if args.get("interval_ms") is not None:
+                values.append(str(int(args["interval_ms"])))
+            elif args.get("max_samples") is not None:
+                values.append("5000")
+            if args.get("max_samples") is not None:
+                values.append(str(int(args["max_samples"])))
+            if values:
+                req["value"] = " ".join(values)
         return text_result(bridge_request(req))
 
     if name == "assert_state":

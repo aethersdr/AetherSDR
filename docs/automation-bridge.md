@@ -1774,6 +1774,81 @@ the default Layer-A inventory and `radio`/`inventory` reads remain available;
 tally, while `resync`/`refresh` send the `sub pan all` subscription command to
 the radio.
 
+### `memory`
+Cross-platform process and subsystem memory profiling for long-running leak
+investigations. An instant snapshot combines the operating system's native
+process counters with explicitly sized application buffers and lightweight
+QObject lifecycle inventories:
+
+```json
+→ {"cmd":"memory","action":"snapshot"}
+← {"ok":true,"schemaVersion":1,
+   "process":{"residentMetric":"physicalFootprint","residentBytes":412876800,
+              "privateBytes":355205120,"allocatorInUseBytes":287309824,
+              "trackedSubsystemBytes":94781440,"unattributedResidentBytes":318095360},
+   "subsystems":{
+     "panadapter":{"trackedBytes":89128960,"estimatedGpuBytes":7549747,
+                   "objectCount":143,"classes":{"SpectrumWidget":1},"details":{"panCount":1}},
+     "audio":{"trackedBytes":65536,"objectCount":42},
+     "radioModels":{"trackedBytes":0,"objectCount":71},
+     "gui":{"trackedBytes":0,"objectCount":2610},
+     "automation":{"trackedBytes":5586944,"objectCount":12}}}
+```
+
+`residentMetric` deliberately follows the number operators see in the native
+task monitor: Working Set on Windows, physical footprint on macOS, and VmRSS on
+Linux. `privateBytes`, allocator counters, virtual size, thread count, and
+handle count appear where that OS exposes them. They are useful within one OS;
+they are not byte-for-byte comparable across operating systems.
+
+The sampler is bounded and off until explicitly started:
+
+```text
+memory start 5000 10000   # sample every 5 s, retain at most 10,000 points
+memory status             # current snapshot + compact trend report
+memory sample             # force an extra point now
+memory report             # compact report, no raw points
+memory samples            # compact report + retained raw points
+memory stop               # final point + compact report
+memory reset              # stop and release the retained series
+```
+
+JSON requests use `action` and, for `start`, `value: "<intervalMs>
+<maxSamples>"`. The interval is bounded to 250–3,600,000 ms and retention to
+2–10,000 samples so the profiler cannot become the leak. Five-second sampling
+holds about 13.8 hours; use 30–60 seconds for multi-day runs.
+
+Each byte/count trend reports `first`, `last`, `delta`, `min`, `max`, a linear
+per-hour slope, and `rSquared`. `sustainedGrowth` is a triage heuristic only: at
+least six samples over at least one minute, ≥4 MiB net byte growth, positive
+slope, and R² ≥0.5. `growthSuspects` collects metrics meeting that bar;
+`classCountGrowth` shows retained or released QObject classes by subsystem.
+Correlate the two:
+
+- rising `subsystem.panadapter.trackedBytes` identifies retained waterfall/3DSS
+  buffers;
+- a growing `SpectrumWidget`/panadapter class count identifies lifecycle leaks;
+- rising process resident/private bytes with flat tracked subsystems points to
+  an uninstrumented native, allocator, Qt, driver, or GPU allocation;
+- a positive slope with low R² is usually warm-up/cache/noise, not proof of a
+  leak. Extend the run and reproduce the same slope before fixing anything.
+
+Tracked subsystem bytes are deliberately honest lower bounds. They do not claim
+to attribute every heap allocation, and GPU surface estimates are excluded from
+resident attribution. GUI object counts include panadapter objects, so object
+counts are scoped diagnostics and are not additive.
+
+Use the companion driver for unattended runs; it writes the final report and
+raw series atomically, records the bridge identity, and warns when the process
+has the independent TX-automation rail armed (the soak itself is read-only):
+
+```bash
+python3 tools/memory_soak.py --duration 300 --interval 5 \
+  --output /tmp/aethersdr-memory-5m.json
+```
+
+The MCP server exposes the same surface as `memory_profile`.
+
 ### `txwaterfall`
 Toggle the radio's **show-TX-in-waterfall** display flag (`transmit set
 show_tx_in_waterfall`), which gates whether keyed-up TX renders FFT-derived rows
@@ -2403,7 +2478,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 52 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 53 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2445,6 +2520,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `memory` | — | memory <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |

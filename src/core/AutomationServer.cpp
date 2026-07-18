@@ -14,6 +14,7 @@
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
+#include "MemoryTelemetry.h"
 
 #include <QAction>
 #include <QLocalServer>
@@ -49,10 +50,12 @@
 #include <QTimer>
 #include <QDateTime>
 #include <QTime>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 // Best-effort value extraction for common control types.
 #include <QAbstractButton>
@@ -731,6 +734,65 @@ QList<QWidget*> findWidgetsByClass(const QString& cls)
     for (QWidget* tlw : tops)
         collectByClass(tlw, cls, out);
     return out;
+}
+
+struct ObjectInventory {
+    int count{0};
+    QMap<QString, int> classes;
+};
+
+void collectObjectInventory(const QObject* object,
+                            QSet<const QObject*>& seen,
+                            ObjectInventory& inventory)
+{
+    if (!object || seen.contains(object)) {
+        return;
+    }
+    seen.insert(object);
+    ++inventory.count;
+    inventory.classes[QString::fromUtf8(object->metaObject()->className())]++;
+    for (const QObject* child : object->children()) {
+        collectObjectInventory(child, seen, inventory);
+    }
+}
+
+ObjectInventory inventoryFor(const QList<QObject*>& roots)
+{
+    ObjectInventory inventory;
+    QSet<const QObject*> seen;
+    for (const QObject* root : roots) {
+        collectObjectInventory(root, seen, inventory);
+    }
+    return inventory;
+}
+
+ObjectInventory inventoryForObjectThread(QObject* root)
+{
+    if (!root) {
+        return {};
+    }
+    QThread* owner = root->thread();
+    if (!owner || owner == QThread::currentThread() || !owner->isRunning()) {
+        return inventoryFor(QList<QObject*>{root});
+    }
+
+    ObjectInventory inventory;
+    const bool invoked = QMetaObject::invokeMethod(
+        root,
+        [root, &inventory]() {
+            inventory = inventoryFor(QList<QObject*>{root});
+        },
+        Qt::BlockingQueuedConnection);
+    return invoked ? inventory : ObjectInventory{};
+}
+
+QJsonObject inventoryClassesJson(const ObjectInventory& inventory)
+{
+    QJsonObject classes;
+    for (auto it = inventory.classes.constBegin(); it != inventory.classes.constEnd(); ++it) {
+        classes.insert(it.key(), it.value());
+    }
+    return classes;
 }
 
 // Map a UI pan index (SpectrumWidget::panIndex) to the radio stream panId by
@@ -2019,6 +2081,12 @@ void AutomationServer::stop()
         m_logDrain->deleteLater();
         m_logDrain = nullptr;
     }
+    if (m_memoryTimer) {
+        m_memoryTimer->stop();
+    }
+    m_memorySeries.clear();
+    m_memoryClock.invalidate();
+    m_memoryLastSampleMs = -1;
     m_logSubscribers.clear();
     for (const std::shared_ptr<ConnectWait>& wait : m_connectWaits) {
         if (!wait) {
@@ -2797,6 +2865,15 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doStreams(a.action);
+            });
+
+        add("memory", {},
+            "memory <snapshot|start|sample|status|report|samples|stop|reset> [intervalMs maxSamples]",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doMemory(a.action.isEmpty() ? QStringLiteral("snapshot")
+                                                     : a.action,
+                                  a.value);
             });
 
         add("tci", {},
@@ -8198,6 +8275,327 @@ QJsonObject AutomationServer::doStreams(const QString& action)
         {QStringLiteral("orphanStreams"), orphans},
         {QStringLiteral("orphanCount"), orphans.size()},
     };
+}
+
+QJsonObject AutomationServer::memorySnapshot() const
+{
+    const ProcessMemorySnapshot processSnapshot = ProcessMemorySnapshot::capture();
+    QJsonObject process = processSnapshot.toJson();
+    QJsonObject subsystems;
+
+    // Panadapter display buffers are explicitly accounted by SpectrumWidget's
+    // existing render telemetry. GPU memory is a conservative lower-bound
+    // estimate for one RGBA color surface per pan; QRhi/backend staging and
+    // driver allocations remain in the deliberately-visible unattributed gap.
+    QList<QObject*> panRoots;
+    QJsonArray pans;
+    quint64 panTrackedBytes = 0;
+    quint64 panEstimatedGpuBytes = 0;
+    int visiblePanCount = 0;
+    QSet<QWidget*> seenPans;
+    const QList<QWidget*> spectrumWidgets =
+        findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+    for (QWidget* widget : spectrumWidgets) {
+        if (!widget || seenPans.contains(widget)) {
+            continue;
+        }
+        seenPans.insert(widget);
+        panRoots.append(widget);
+
+        QVariantMap variant;
+        if (!QMetaObject::invokeMethod(widget, "panstatsSnapshot",
+                                       Qt::DirectConnection,
+                                       Q_RETURN_ARG(QVariantMap, variant),
+                                       Q_ARG(bool, false))) {
+            continue;
+        }
+        const QJsonObject pan = QJsonObject::fromVariantMap(variant);
+        pans.append(pan);
+        panTrackedBytes += static_cast<quint64>(
+            variant.value(QStringLiteral("waterfallAllocatedBytes")).toDouble());
+        panTrackedBytes += static_cast<quint64>(
+            variant.value(QStringLiteral("dssAllocatedBytes")).toDouble());
+        if (variant.value(QStringLiteral("visible")).toBool()) {
+            ++visiblePanCount;
+        }
+        const double dpr = variant.value(QStringLiteral("dpr")).toDouble();
+        const double width = variant.value(QStringLiteral("widthPx")).toDouble();
+        const double height = variant.value(QStringLiteral("heightPx")).toDouble();
+        if (dpr > 0.0 && width > 0.0 && height > 0.0) {
+            panEstimatedGpuBytes += static_cast<quint64>(
+                std::ceil(width * dpr) * std::ceil(height * dpr) * 4.0);
+        }
+    }
+    const ObjectInventory panObjects = inventoryFor(panRoots);
+    QJsonObject panDetails{
+        {QStringLiteral("panCount"), pans.size()},
+        {QStringLiteral("visiblePanCount"), visiblePanCount},
+        {QStringLiteral("pans"), pans},
+    };
+    if (m_radioModel && m_radioModel->panStream()) {
+        PanadapterStream* stream = m_radioModel->panStream();
+        panDetails[QStringLiteral("registeredPanStreams")] =
+            stream->registeredPanStreams().size();
+        panDetails[QStringLiteral("registeredWaterfallStreams")] =
+            stream->registeredWfStreams().size();
+        panDetails[QStringLiteral("orphanStreamCount")] =
+            stream->orphanStreams().size();
+        panDetails[QStringLiteral("kernelReceiveBufferBytes")] =
+            stream->grantedReceiveBufferBytes();
+    }
+    subsystems[QStringLiteral("panadapter")] = QJsonObject{
+        {QStringLiteral("trackedBytes"), static_cast<double>(panTrackedBytes)},
+        {QStringLiteral("estimatedGpuBytes"),
+         static_cast<double>(panEstimatedGpuBytes)},
+        {QStringLiteral("objectCount"), panObjects.count},
+        {QStringLiteral("classes"), inventoryClassesJson(panObjects)},
+        {QStringLiteral("details"), panDetails},
+    };
+
+    QList<QObject*> audioRoots;
+    QJsonArray audioEndpoints;
+    quint64 audioTrackedBytes = 0;
+    if (m_audioEngine) {
+        audioRoots.append(m_audioEngine);
+        audioEndpoints = m_audioEngine->audioEndpointDiagnostics();
+        for (const QJsonValue& value : audioEndpoints) {
+            const QJsonObject endpoint = value.toObject();
+            const double capacity = endpoint.value(
+                QStringLiteral("buffer_capacity_bytes")).toDouble(-1.0);
+            audioTrackedBytes += static_cast<quint64>(capacity >= 0.0
+                ? capacity
+                : endpoint.value(QStringLiteral("buffer_bytes")).toDouble(0.0));
+        }
+    }
+    const ObjectInventory audioObjects = audioRoots.isEmpty()
+        ? ObjectInventory{} : inventoryForObjectThread(audioRoots.constFirst());
+    subsystems[QStringLiteral("audio")] = QJsonObject{
+        {QStringLiteral("trackedBytes"), static_cast<double>(audioTrackedBytes)},
+        {QStringLiteral("objectCount"), audioObjects.count},
+        {QStringLiteral("classes"), inventoryClassesJson(audioObjects)},
+        {QStringLiteral("details"), QJsonObject{
+            {QStringLiteral("endpoints"), audioEndpoints},
+        }},
+    };
+
+    QList<QObject*> radioRoots;
+    if (m_radioModel) {
+        radioRoots.append(m_radioModel);
+    }
+    const ObjectInventory radioObjects = inventoryFor(radioRoots);
+    subsystems[QStringLiteral("radioModels")] = QJsonObject{
+        {QStringLiteral("trackedBytes"), 0.0},
+        {QStringLiteral("objectCount"), radioObjects.count},
+        {QStringLiteral("classes"), inventoryClassesJson(radioObjects)},
+    };
+
+    QList<QObject*> guiRoots;
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        guiRoots.append(widget);
+    }
+    const ObjectInventory guiObjects = inventoryFor(guiRoots);
+    subsystems[QStringLiteral("gui")] = QJsonObject{
+        {QStringLiteral("trackedBytes"), 0.0},
+        {QStringLiteral("objectCount"), guiObjects.count},
+        {QStringLiteral("classes"), inventoryClassesJson(guiObjects)},
+        {QStringLiteral("details"), QJsonObject{
+            {QStringLiteral("topLevelWidgetCount"), guiRoots.size()},
+        }},
+    };
+
+    quint64 automationTrackedBytes = m_memorySeries.estimatedStorageBytes();
+    int logRingEvents = 0;
+    {
+        QMutexLocker lock(&m_logMutex);
+        logRingEvents = static_cast<int>(m_logRing.size());
+        automationTrackedBytes += static_cast<quint64>(m_logRing.size())
+            * sizeof(LogEvent);
+        for (const LogEvent& event : m_logRing) {
+            automationTrackedBytes += static_cast<quint64>(
+                event.wall.capacity() + event.cat.capacity() + event.msg.capacity())
+                * sizeof(QChar);
+        }
+    }
+    for (auto it = m_buffers.constBegin(); it != m_buffers.constEnd(); ++it) {
+        automationTrackedBytes += static_cast<quint64>(it.value().capacity());
+    }
+    const ObjectInventory automationObjects =
+        inventoryFor(QList<QObject*>{const_cast<AutomationServer*>(this)});
+    subsystems[QStringLiteral("automation")] = QJsonObject{
+        {QStringLiteral("trackedBytes"), static_cast<double>(automationTrackedBytes)},
+        {QStringLiteral("objectCount"), automationObjects.count},
+        {QStringLiteral("classes"), inventoryClassesJson(automationObjects)},
+        {QStringLiteral("details"), QJsonObject{
+            {QStringLiteral("logRingEvents"), logRingEvents},
+            {QStringLiteral("clientBufferCount"), m_buffers.size()},
+            {QStringLiteral("profilerStorageBytesEstimate"),
+             static_cast<double>(m_memorySeries.estimatedStorageBytes())},
+        }},
+    };
+
+    quint64 trackedBytes = 0;
+    for (auto it = subsystems.constBegin(); it != subsystems.constEnd(); ++it) {
+        trackedBytes += static_cast<quint64>(
+            it.value().toObject().value(QStringLiteral("trackedBytes")).toDouble());
+    }
+    process[QStringLiteral("trackedSubsystemBytes")] = static_cast<double>(trackedBytes);
+    process[QStringLiteral("unattributedResidentBytes")] = static_cast<double>(
+        processSnapshot.residentBytes > trackedBytes
+            ? processSnapshot.residentBytes - trackedBytes : 0);
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("schemaVersion"), 1},
+        {QStringLiteral("timestampUtc"),
+         QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {QStringLiteral("process"), process},
+        {QStringLiteral("subsystems"), subsystems},
+        {QStringLiteral("objectCountsOverlap"), true},
+        {QStringLiteral("limitations"), QJsonArray{
+            QStringLiteral("trackedBytes covers explicitly-sized buffers, not every allocation"),
+            QStringLiteral("GUI includes panadapter objects, so subsystem object counts are scoped and non-additive"),
+            QStringLiteral("estimatedGpuBytes is a lower-bound surface estimate and is excluded from resident attribution"),
+            QStringLiteral("OS memory fields use platform-native accounting and are not byte-for-byte comparable across operating systems"),
+        }},
+    };
+}
+
+void AutomationServer::recordMemorySample()
+{
+    if (!m_memoryClock.isValid()) {
+        m_memoryClock.start();
+    }
+    const qint64 elapsedMs = m_memoryClock.elapsed();
+    m_memorySeries.addSnapshot(elapsedMs, memorySnapshot());
+    m_memoryLastSampleMs = elapsedMs;
+}
+
+QJsonObject AutomationServer::doMemory(const QString& action, const QString& value)
+{
+    const QString normalized = action.trimmed().toLower();
+    if (normalized == QLatin1String("snapshot")) {
+        QJsonObject snapshot = memorySnapshot();
+        snapshot[QStringLiteral("action")] = QStringLiteral("snapshot");
+        snapshot[QStringLiteral("running")] = m_memoryTimer && m_memoryTimer->isActive();
+        return snapshot;
+    }
+
+    if (normalized == QLatin1String("start")) {
+        const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        int intervalMs = 5000;
+        int maxSamples = 10000;
+        if (!parts.isEmpty()) {
+            bool ok = false;
+            intervalMs = parts.constFirst().toInt(&ok);
+            if (!ok || intervalMs < 250 || intervalMs > 3600000) {
+                return err(QStringLiteral(
+                    "memory start intervalMs must be 250..3600000"));
+            }
+        }
+        if (parts.size() >= 2) {
+            bool ok = false;
+            maxSamples = parts.at(1).toInt(&ok);
+            if (!ok || maxSamples < 2 || maxSamples > 10000) {
+                return err(QStringLiteral(
+                    "memory start maxSamples must be 2..10000"));
+            }
+        }
+        if (parts.size() > 2) {
+            return err(QStringLiteral(
+                "memory start accepts only intervalMs and maxSamples"));
+        }
+
+        if (!m_memoryTimer) {
+            m_memoryTimer = new QTimer(this);
+            connect(m_memoryTimer, &QTimer::timeout,
+                    this, &AutomationServer::recordMemorySample);
+        }
+        m_memoryTimer->stop();
+        m_memorySeries.clear();
+        m_memorySeries.setMaxSamples(maxSamples);
+        m_memoryClock.restart();
+        m_memoryLastSampleMs = -1;
+        recordMemorySample();
+        m_memoryTimer->start(intervalMs);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("start")},
+            {QStringLiteral("running"), true},
+            {QStringLiteral("intervalMs"), intervalMs},
+            {QStringLiteral("maxSamples"), maxSamples},
+            {QStringLiteral("report"), m_memorySeries.report(false)},
+        };
+    }
+
+    if (normalized == QLatin1String("sample")) {
+        if (!m_memoryClock.isValid()) {
+            m_memorySeries.clear();
+            m_memoryClock.start();
+            m_memoryLastSampleMs = -1;
+        }
+        recordMemorySample();
+        QJsonObject snapshot = memorySnapshot();
+        snapshot[QStringLiteral("action")] = QStringLiteral("sample");
+        snapshot[QStringLiteral("sampleCount")] = m_memorySeries.sampleCount();
+        return snapshot;
+    }
+
+    if (normalized == QLatin1String("status")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("status")},
+            {QStringLiteral("running"), m_memoryTimer && m_memoryTimer->isActive()},
+            {QStringLiteral("intervalMs"), m_memoryTimer ? m_memoryTimer->interval() : 0},
+            {QStringLiteral("report"), m_memorySeries.report(false)},
+            {QStringLiteral("snapshot"), memorySnapshot()},
+        };
+    }
+
+    if (normalized == QLatin1String("report")
+        || normalized == QLatin1String("samples")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), normalized},
+            {QStringLiteral("running"), m_memoryTimer && m_memoryTimer->isActive()},
+            {QStringLiteral("report"),
+             m_memorySeries.report(normalized == QLatin1String("samples"))},
+        };
+    }
+
+    if (normalized == QLatin1String("stop")) {
+        if (m_memoryTimer) {
+            m_memoryTimer->stop();
+        }
+        if (m_memoryClock.isValid()
+            && (m_memoryLastSampleMs < 0
+                || m_memoryClock.elapsed() - m_memoryLastSampleMs >= 100)) {
+            recordMemorySample();
+        }
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("stop")},
+            {QStringLiteral("running"), false},
+            {QStringLiteral("report"), m_memorySeries.report(false)},
+            {QStringLiteral("snapshot"), memorySnapshot()},
+        };
+    }
+
+    if (normalized == QLatin1String("reset")) {
+        if (m_memoryTimer) {
+            m_memoryTimer->stop();
+        }
+        m_memorySeries.clear();
+        m_memoryClock.invalidate();
+        m_memoryLastSampleMs = -1;
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("reset")},
+            {QStringLiteral("running"), false},
+        };
+    }
+
+    return err(QStringLiteral(
+        "memory requires snapshot|start|sample|status|report|samples|stop|reset"));
 }
 
 QJsonObject AutomationServer::doAudioCapture(const QString& action,

@@ -557,6 +557,7 @@ set(CORE_SOURCES
     src/core/AetherClockSettings.cpp
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
+    src/core/MemoryTelemetry.cpp
     src/core/RigctlProtocol.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
@@ -3986,6 +3987,14 @@ if(UNIX)
 endif()
 set_target_properties(perf_telemetry_test PROPERTIES AUTOMOC ON)
 add_test(NAME perf_telemetry_test COMMAND perf_telemetry_test)
+
+add_executable(memory_telemetry_test
+    tests/memory_telemetry_test.cpp
+    src/core/MemoryTelemetry.cpp
+)
+target_include_directories(memory_telemetry_test PRIVATE src)
+target_link_libraries(memory_telemetry_test PRIVATE Qt6::Core)
+add_test(NAME memory_telemetry_test COMMAND memory_telemetry_test)
 
 add_executable(memory_recall_policy_test
     tests/memory_recall_policy_test.cpp
