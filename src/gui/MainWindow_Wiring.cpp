@@ -20,6 +20,7 @@
 #include "MainWindow.h"
 
 #include "AetherDspWidget.h"
+#include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AppletPanel.h"
 #include "MainWindowHelpers.h"
@@ -2102,23 +2103,32 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }));
     connections.append(connect(
         pan, &PanadapterModel::weightedAverageReported,
-        sw, [sw](bool weighted) {
-            sw->setFftWeightedAvg(weighted);
+        sw, [sw, pan](bool weighted) {
+            // Guard on "known" like the other three fields, so an unreported
+            // value doesn't paint a definitive unchecked box (#4261).
+            if (pan->weightedAverageKnown()) {
+                sw->setFftWeightedAvg(weighted);
+            }
         }));
     connections.append(connect(
         pan, &PanadapterModel::fpsReported,
         sw, [this, sw](int fps) {
-            // The adaptive cap is transient client transport state. Preserve
-            // the pre-cap radio value in the UI so the existing lift path can
-            // restore it without turning the cap into profile state.
-            if (!m_adaptiveThrottleActive && fps > 0) {
+            // The adaptive cap is transient client transport state: suppress only
+            // the cap's own echo so the pre-cap radio value stays the restore
+            // target, but let a genuine radio/profile update through even while
+            // throttled (#4261 — otherwise it's lost when the throttle lifts).
+            if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                            m_adaptiveFpsCap, fps)) {
                 sw->setFftFps(fps);
             }
         }));
     connections.append(connect(
         pan, &PanadapterModel::waterfallLineDurationReported,
         sw, [this, sw](int lineDurationMs) {
-            if (!m_adaptiveThrottleActive && lineDurationMs > 0) {
+            if (applyThrottledDisplayReport(
+                    m_adaptiveThrottleActive,
+                    m_radioModel.adaptiveWfMsForCap(m_adaptiveFpsCap),
+                    lineDurationMs)) {
                 sw->setWfLineDuration(lineDurationMs);
             }
         }));
@@ -2129,11 +2139,17 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     if (pan->average() >= 0) {
         sw->setFftAverage(pan->average());
     }
-    sw->setFftWeightedAvg(pan->weightedAverage());
-    if (!m_adaptiveThrottleActive && pan->fps() > 0) {
+    if (pan->weightedAverageKnown()) {
+        sw->setFftWeightedAvg(pan->weightedAverage());
+    }
+    if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                    m_adaptiveFpsCap, pan->fps())) {
         sw->setFftFps(pan->fps());
     }
-    if (!m_adaptiveThrottleActive && pan->waterfallLineDuration() > 0) {
+    if (applyThrottledDisplayReport(
+            m_adaptiveThrottleActive,
+            m_radioModel.adaptiveWfMsForCap(m_adaptiveFpsCap),
+            pan->waterfallLineDuration())) {
         sw->setWfLineDuration(pan->waterfallLineDuration());
     }
 }

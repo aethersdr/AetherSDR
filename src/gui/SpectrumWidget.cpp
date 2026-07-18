@@ -6025,9 +6025,16 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     m_bins = *spectrumBins;
 
     if (m_kiwiSdrWaterfallActive) {
-        // Keep the cached Flex FFT trace current for an immediate source
-        // switch, then stop. Hidden Flex frames must not drive fallback
-        // waterfall rows or schedule QRhi redraws for the visible Kiwi view.
+        // The cached Flex FFT trace (m_bins, updated above) stays current for an
+        // immediate source switch. Warm the small hidden-Flex DSS live ring too,
+        // so switching back to Flex shows current 3D history instead of an old
+        // surface that refills over ~96 frames (#4081). The deep retained DSS
+        // history is already released for hidden sources (capacity 0), so
+        // pushDssRowForWaterfallStream() keeps only the small live surface warm
+        // and retains no scrollback (#4083). Then stop: hidden Flex frames must
+        // not drive fallback waterfall rows or schedule QRhi redraws for the
+        // visible Kiwi view.
+        pushDssRowForWaterfallStream(false, m_bins);
         return;
     }
 

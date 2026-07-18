@@ -512,6 +512,15 @@ preferences, spot settings.
 **Why:** When both persist the same setting, they fight on reconnect. The
 radio's GUIClientID session restore is always more current than our saved state.
 
+**Anti-pattern (recurring — see #4261):** Do not write a radio-echoed status
+value into a setter that *also* persists it to `AppSettings`. That makes the
+client re-assert stale state on reconnect / profile load and fight the radio —
+the exact class of bug behind #2465, #4126, #4081, #4083, and #4261. For a
+radio-authoritative field, route status straight to the display (a plain member
++ signal) and never call `AppSettings::setValue()` in its setter. When a display
+setter genuinely persists (e.g. waterfall *appearance*: color gain, black
+level), that value must be client-only — never a value the radio also echoes.
+
 ### GUI↔Radio Sync (No Feedback Loops)
 
 - Model setters emit `commandReady(cmd)` → `RadioModel` sends to radio

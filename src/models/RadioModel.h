@@ -499,8 +499,9 @@ signals:
     // Emitted when a previous-session pan model is reclaimed on reconnect
     // instead of created fresh. The applet/widget wiring from the original
     // panadapterAdded survives (model and widget both outlive the disconnect),
-    // but connections MainWindow tears down at disconnect (per-pan FPS and
-    // waterfall line-duration reconcilers) must be re-established from this.
+    // but connections MainWindow tears down at disconnect (the per-pan
+    // radio-status display connections wired by wirePanDisplayStatus(), #4261)
+    // must be re-established from this.
     void panadapterReclaimed(PanadapterModel* pan);
     void panadapterRemoved(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
@@ -1084,7 +1085,7 @@ private:
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
     void applyAdaptiveFrameRate(NetState newState, NetState oldState);
     static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
-    int  adaptiveWfMsForCap(int fpsCap) const;
+    // adaptiveWfMsForCap() moved to the public network-diagnostics section (#4261).
     void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
@@ -1139,6 +1140,10 @@ public:
     int     maxPingRtt()       const { return m_maxPingRtt; }
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
+    // Waterfall line-duration the adaptive throttle caps to for a given fps cap.
+    // Public so MainWindow can recognize (and suppress) that cap's own status
+    // echo while distinguishing it from a real radio/profile update (#4261).
+    int     adaptiveWfMsForCap(int fpsCap) const;
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }
