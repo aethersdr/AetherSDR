@@ -30,9 +30,10 @@ public:
 private:
     void refreshGps(bool reportArrived);
     void updateClockAndAges();
+    void updateNtpServerTip();
     void requestAddress(double latitude, double longitude, bool force);
-    void copyCoordinates();
-    void copyLocationSummary();
+    void copyGridSquare();
+    void copyAddress();
     bool currentPosition(double& latitude, double& longitude) const;
 
     RadioModel* m_radioModel{nullptr};
@@ -53,6 +54,8 @@ private:
     QLabel* m_speedLabel{nullptr};
     QLabel* m_courseLabel{nullptr};
     QLabel* m_addressLabel{nullptr};
+    QPushButton* m_copyGridSquareButton{nullptr};
+    QPushButton* m_copyAddressButton{nullptr};
     QPushButton* m_refreshAddressButton{nullptr};
 
     QLabel* m_trackedLabel{nullptr};
@@ -70,6 +73,7 @@ private:
     QLabel* m_timeZoneLabel{nullptr};
     QLabel* m_radioGpsTimeLabel{nullptr};
     QLabel* m_clockAgreementLabel{nullptr};
+    QLabel* m_ntpServerTipLabel{nullptr};
 
     QElapsedTimer m_reportAge;
     qint64 m_lockBeganMs{0};

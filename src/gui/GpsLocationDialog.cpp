@@ -13,6 +13,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHostAddress>
 #include <QLabel>
 #include <QLocale>
 #include <QProgressBar>
@@ -20,7 +21,6 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSizePolicy>
-#include <QStringList>
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -171,6 +171,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
         "QLabel[gpsRole='metricValue'] { color: {{color.text.primary}}; font-size: 18px; font-weight: 700; }"
         "QLabel[gpsRole='value'] { color: {{color.text.primary}}; font-size: 13px; font-weight: 600; }"
         "QLabel[gpsRole='muted'] { color: {{color.text.secondary}}; font-size: 11px; }"
+        "QLabel[gpsRole='tip'] { color: {{color.text.primary}}; background: {{color.background.2}}; border: 1px solid {{color.border.subtle}}; border-radius: 6px; padding: 8px; font-size: 12px; }"
         "QPushButton { color: {{color.text.primary}}; background: {{color.background.2}}; border: 1px solid {{color.border.strong}}; border-radius: 5px; padding: 5px 10px; }"
         "QPushButton:hover, QPushButton:focus { border-color: {{color.border.accent}}; }"
         "QPushButton:pressed { background: {{color.background.3}}; }"
@@ -274,18 +275,19 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     auto* actions = new QHBoxLayout;
     actions->setContentsMargins(0, 6, 0, 0);
     actions->setSpacing(8);
-    auto* copyCoordinatesButton = makeActionButton(
-        tr("Copy coordinates"), QStringLiteral("gpsCopyCoordinates"),
-        tr("Copy decimal latitude and longitude to the clipboard"), locationGroup);
-    connect(copyCoordinatesButton, &QPushButton::clicked,
-            this, &GpsLocationDialog::copyCoordinates);
-    actions->addWidget(copyCoordinatesButton);
-    auto* copySummaryButton = makeActionButton(
-        tr("Copy location summary"), QStringLiteral("gpsCopyLocationSummary"),
-        tr("Copy grid, coordinates, altitude, and mapped address"), locationGroup);
-    connect(copySummaryButton, &QPushButton::clicked,
-            this, &GpsLocationDialog::copyLocationSummary);
-    actions->addWidget(copySummaryButton);
+    m_copyGridSquareButton = makeActionButton(
+        tr("Copy Gridsquare"), QStringLiteral("gpsCopyGridSquare"),
+        tr("Copy the Maidenhead grid square to the clipboard"), locationGroup);
+    connect(m_copyGridSquareButton, &QPushButton::clicked,
+            this, &GpsLocationDialog::copyGridSquare);
+    actions->addWidget(m_copyGridSquareButton);
+    m_copyAddressButton = makeActionButton(
+        tr("Copy address"), QStringLiteral("gpsCopyAddress"),
+        tr("Copy the nearest mapped address to the clipboard"), locationGroup);
+    m_copyAddressButton->setEnabled(false);
+    connect(m_copyAddressButton, &QPushButton::clicked,
+            this, &GpsLocationDialog::copyAddress);
+    actions->addWidget(m_copyAddressButton);
     m_refreshAddressButton = makeActionButton(
         tr("Refresh address"), QStringLiteral("gpsRefreshAddress"),
         tr("Send the current GPS coordinates for an online address lookup"), locationGroup);
@@ -418,7 +420,17 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     timeNote->setWordWrap(true);
     timeNote->setAccessibleName(tr("GPS date source explanation"));
     timeLayout->addWidget(timeNote, 6, 0, 1, 2);
-    timeLayout->setRowStretch(7, 1);
+    m_ntpServerTipLabel = new QLabel(timeGroup);
+    m_ntpServerTipLabel->setObjectName(QStringLiteral("gpsNtpServerTip"));
+    m_ntpServerTipLabel->setProperty("gpsRole", QStringLiteral("tip"));
+    m_ntpServerTipLabel->setWordWrap(true);
+    m_ntpServerTipLabel->setTextInteractionFlags(
+        Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+    m_ntpServerTipLabel->setAccessibleName(tr("Radio NTP server tip"));
+    m_ntpServerTipLabel->setAccessibleDescription(
+        tr("Local FLEX-8000 NTP server address; use it only on a trusted network"));
+    timeLayout->addWidget(m_ntpServerTipLabel, 7, 0, 1, 2);
+    timeLayout->setRowStretch(8, 1);
     root->addWidget(timeGroup, 2, 1);
 
     auto* footer = new QHBoxLayout;
@@ -440,6 +452,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                 }
                 m_resolvedAddress = address;
                 m_addressLabel->setText(address);
+                m_copyAddressButton->setEnabled(!address.isEmpty());
                 m_refreshAddressButton->setEnabled(true);
             });
     connect(m_addressResolver, &LocationAddressResolver::failed,
@@ -450,6 +463,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                     return;
                 }
                 m_addressLabel->setText(reason);
+                m_copyAddressButton->setEnabled(false);
                 m_refreshAddressButton->setEnabled(true);
             });
 
@@ -458,6 +472,8 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                 [this] { refreshGps(true); });
         connect(m_radioModel, &RadioModel::oscillatorChanged, this,
                 [this] { refreshGps(false); });
+        connect(m_radioModel, &RadioModel::infoChanged,
+                this, &GpsLocationDialog::updateNtpServerTip);
     }
 
     m_clockTimer = new QTimer(this);
@@ -468,6 +484,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
 
     refreshGps(false);
     updateClockAndAges();
+    updateNtpServerTip();
 }
 
 bool GpsLocationDialog::currentPosition(double& latitude, double& longitude) const
@@ -522,6 +539,7 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
     m_frequencyErrorLabel->setText(displayValue(m_radioModel->gpsFreqError()));
 
     m_gridLabel->setText(displayValue(m_radioModel->gpsGrid()).toUpper());
+    m_copyGridSquareButton->setEnabled(!m_radioModel->gpsGrid().trimmed().isEmpty());
     m_altitudeLabel->setText(displayValue(m_radioModel->gpsAltitude()));
     m_speedLabel->setText(displayValue(m_radioModel->gpsSpeed()));
     const QString track = displayValue(m_radioModel->gpsTrack());
@@ -553,6 +571,7 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
         m_latitudeLabel->setText(QStringLiteral("—"));
         m_longitudeLabel->setText(QStringLiteral("—"));
         m_addressLabel->setText(tr("Waiting for a valid GPS fix"));
+        m_copyAddressButton->setEnabled(false);
         m_refreshAddressButton->setEnabled(false);
     }
 
@@ -563,6 +582,32 @@ void GpsLocationDialog::refreshGps(bool reportArrived)
     }
     m_wasGpsLocked = locked;
     updateClockAndAges();
+    updateNtpServerTip();
+}
+
+void GpsLocationDialog::updateNtpServerTip()
+{
+    if (m_radioModel == nullptr || m_ntpServerTipLabel == nullptr) {
+        return;
+    }
+
+    const QHostAddress address = m_radioModel->radioAddress();
+    const RadioInfo radioInfo = m_radioModel->lastRadioInfo();
+    const bool canReachLocalNtp = m_radioModel->capabilities().hasNtpServer
+        && !m_radioModel->isWan()
+        && !radioInfo.isRouted
+        && !address.isNull();
+    m_ntpServerTipLabel->setVisible(canReachLocalNtp);
+    if (!canReachLocalNtp) {
+        m_ntpServerTipLabel->clear();
+        return;
+    }
+
+    m_ntpServerTipLabel->setText(
+        tr("Did you know? You can use your radio as an NTP server when satellite "
+           "lock is active. Set your time server to %1. Use it only on a trusted "
+           "local network.")
+            .arg(address.toString()));
 }
 
 void GpsLocationDialog::requestAddress(double latitude, double longitude, bool force)
@@ -580,6 +625,7 @@ void GpsLocationDialog::requestAddress(double latitude, double longitude, bool f
     m_addressQueryLongitude = longitude;
     m_resolvedAddress.clear();
     m_addressLabel->setText(tr("Looking up nearest mapped address…"));
+    m_copyAddressButton->setEnabled(false);
     m_refreshAddressButton->setEnabled(false);
     m_addressResolver->resolve(latitude, longitude);
 }
@@ -664,38 +710,20 @@ void GpsLocationDialog::updateClockAndAges()
     }
 }
 
-void GpsLocationDialog::copyCoordinates()
+void GpsLocationDialog::copyGridSquare()
 {
-    if (!m_hasPosition) {
+    if (m_radioModel == nullptr || m_radioModel->gpsGrid().trimmed().isEmpty()) {
         return;
     }
-    QApplication::clipboard()->setText(
-        QStringLiteral("%1, %2")
-            .arg(m_latitude, 0, 'f', 6)
-            .arg(m_longitude, 0, 'f', 6));
+    QApplication::clipboard()->setText(m_radioModel->gpsGrid().trimmed().toUpper());
 }
 
-void GpsLocationDialog::copyLocationSummary()
+void GpsLocationDialog::copyAddress()
 {
-    if (m_radioModel == nullptr) {
+    if (m_resolvedAddress.isEmpty()) {
         return;
     }
-    QStringList parts;
-    if (!m_radioModel->gpsGrid().isEmpty()) {
-        parts << m_radioModel->gpsGrid().toUpper();
-    }
-    if (m_hasPosition) {
-        parts << QStringLiteral("%1, %2")
-                     .arg(m_latitude, 0, 'f', 6)
-                     .arg(m_longitude, 0, 'f', 6);
-    }
-    if (!m_radioModel->gpsAltitude().isEmpty()) {
-        parts << m_radioModel->gpsAltitude();
-    }
-    if (!m_resolvedAddress.isEmpty()) {
-        parts << m_resolvedAddress;
-    }
-    QApplication::clipboard()->setText(parts.join(QStringLiteral(" · ")));
+    QApplication::clipboard()->setText(m_resolvedAddress);
 }
 
 } // namespace AetherSDR
