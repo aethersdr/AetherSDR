@@ -148,7 +148,7 @@ void RadioConnection::startSyntheticDemoConnect()
                 "black_level=15 color_gain=50"));
             emitSyntheticStatus(QStringLiteral(
                 "SDE300001|slice 0 client_handle=0xDE300001 pan=0x40000000 "
-                "freq=14.100000 mode=USB in_use=1 active=1"));
+                "RF_frequency=14.100000 mode=USB in_use=1 active=1"));
         });
     });
 }

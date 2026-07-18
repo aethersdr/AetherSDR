@@ -304,6 +304,9 @@ void PanadapterStream::tickSyntheticDemo()
         m_syntheticElapsedS, m_syntheticFrameIndex);
 
     emit spectrumReady(m_syntheticPanStreamId, bins, /*emittedNs*/ 0);
+    // Mark data as flowing so RadioModel's UDP-health watchdog doesn't warn that
+    // no spectrum arrived — the demo delivers frames here, just not over UDP.
+    m_hasReceivedPacket = true;
 
     m_syntheticElapsedS += 0.05;   // 50 ms/tick
     ++m_syntheticFrameIndex;
