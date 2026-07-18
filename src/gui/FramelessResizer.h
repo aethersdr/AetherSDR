@@ -28,20 +28,26 @@ namespace AetherSDR {
 class FramelessResizer : public QObject {
     Q_OBJECT
 public:
-    static void install(QWidget* window, int margin = 6);
+    // `topMoveReserve`: height (px) of an edge-to-edge move handle (e.g. a title
+    // bar) at the top of the window. The top strip is reserved for the window's
+    // own move handling instead of the top-edge resize zone, so a title-bar grab
+    // isn't stolen by the resizer (#4266). 0 (default) keeps the full top edge
+    // resizable — the behavior for adopters that inset their title bar.
+    static void install(QWidget* window, int margin = 6, int topMoveReserve = 0);
     ~FramelessResizer() override;
 
 protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
-    explicit FramelessResizer(QWidget* window, int margin);
+    explicit FramelessResizer(QWidget* window, int margin, int topMoveReserve);
     Qt::Edges edgesAt(const QPoint& windowPos) const;
     void enterEdgeZone(Qt::Edges edges);
     void leaveEdgeZone();
 
     QWidget*  m_window{nullptr};
     int       m_margin{6};
+    int       m_topMoveReserve{0};
     bool      m_cursorOverridden{false};
     Qt::Edges m_lastEdges{};
 };

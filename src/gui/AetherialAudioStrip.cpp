@@ -59,6 +59,12 @@
 
 namespace AetherSDR {
 
+namespace {
+// Edge-to-edge title-bar height. Reserved from the frameless resize edge so a
+// title-bar grab starts a move, not a top-edge resize (#4266).
+constexpr int kTitleBarHeight = 18;
+}
+
 AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window)
     , m_audio(engine)
@@ -92,7 +98,9 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
 
     // Listen at the native-window boundary so edge presses still reach the
     // resize handler when the child-heavy strip content covers every margin.
-    FramelessResizer::install(this);
+    // Reserve the edge-to-edge title-bar strip for moves so a title-bar grab
+    // isn't stolen by the top-edge resize zone (#4266).
+    FramelessResizer::install(this, 6, kTitleBarHeight);
 
     // Outer layout has zero margins so the title bar can run edge-to-edge
     // across the whole window (matching the applet ContainerTitleBar).
@@ -110,7 +118,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // it shares with the docked applet panels.
     {
         m_titleBar = new QWidget(this);
-        m_titleBar->setFixedHeight(18);
+        m_titleBar->setFixedHeight(kTitleBarHeight);
         m_titleBar->setAttribute(Qt::WA_StyledBackground, true);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleBar, "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             "stop:0 #5a7494, stop:0.5 #384e68, stop:1 {{color.background.1}}); "
