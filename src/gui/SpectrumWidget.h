@@ -867,7 +867,7 @@ private:
                         bool hiddenStream);
     void retainDssHistoryRow(DssRenderer& dss, const QVector<float>& binsDbm,
                              double centerMhz, double bandwidthMhz,
-                             float fallbackDbm, bool hiddenStream);
+                             float fallbackDbm);
     float dssHistoryFallbackDbm() const;
     void appendVisibleRow(const QRgb* rowData);
     int waterfallHistoryCapacityRows() const;
@@ -1644,13 +1644,11 @@ private:
         quint64 waterfallVisibleRowUs{0};
         quint64 waterfallHistoryRows{0};
         quint64 waterfallHistoryRowUs{0};
-        quint64 waterfallHiddenHistoryRows{0};
         quint64 dssLiveRows{0};
         quint64 dssLiveUs{0};
-        quint64 dssHiddenLiveRows{0};
+        quint64 dssHiddenLiveRows{0};   // hidden-Flex DSS live-ring warming (#4081)
         quint64 dssHistoryRows{0};
         quint64 dssHistoryUs{0};
-        quint64 dssHiddenHistoryRows{0};
         quint64 paintEvents{0};           // software-path paints
         quint64 paintUs{0};
         QHash<QByteArray, quint64> dirtyCauses;  // why the overlay rebuilt

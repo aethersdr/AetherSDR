@@ -931,16 +931,12 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         m_panStats.waterfallHistoryRows / secs;
     m[QStringLiteral("waterfallHistoryRowMsPerSec")] =
         msPerSec(m_panStats.waterfallHistoryRowUs);
-    m[QStringLiteral("waterfallHiddenHistoryRowsPerSec")] =
-        m_panStats.waterfallHiddenHistoryRows / secs;
     m[QStringLiteral("dssLiveRowsPerSec")] = m_panStats.dssLiveRows / secs;
     m[QStringLiteral("dssLiveMsPerSec")] = msPerSec(m_panStats.dssLiveUs);
     m[QStringLiteral("dssHiddenLiveRowsPerSec")] =
         m_panStats.dssHiddenLiveRows / secs;
     m[QStringLiteral("dssHistoryRowsPerSec")] = m_panStats.dssHistoryRows / secs;
     m[QStringLiteral("dssHistoryMsPerSec")] = msPerSec(m_panStats.dssHistoryUs);
-    m[QStringLiteral("dssHiddenHistoryRowsPerSec")] =
-        m_panStats.dssHiddenHistoryRows / secs;
     m[QStringLiteral("paintsPerSec")] = m_panStats.paintEvents / secs;
     m[QStringLiteral("paintMsPerSec")] = msPerSec(m_panStats.paintUs);
 
@@ -3986,7 +3982,7 @@ void SpectrumWidget::appendDssHistoryRow(const QVector<float>& binsDbm,
         ? frameBandwidthMhz
         : m_bandwidthMhz;
     retainDssHistoryRow(m_dss, binsDbm, stampCenterMhz, stampBandwidthMhz,
-                        dssHistoryFallbackDbm(), !m_waterfallWriteVisible);
+                        dssHistoryFallbackDbm());
 }
 
 void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
@@ -4019,9 +4015,11 @@ void SpectrumWidget::retainDssHistoryRow(DssRenderer& dss,
                                          const QVector<float>& binsDbm,
                                          double centerMhz,
                                          double bandwidthMhz,
-                                         float fallbackDbm,
-                                         bool hiddenStream)
+                                         float fallbackDbm)
 {
+    // Hidden sources release their retained DSS history (capacity 0), so this
+    // early-returns for them and only the visible source retains scrollback —
+    // there is deliberately no "hidden history" to count (#4081/#4083).
     if (dss.historyCapacityRows() <= 0) {
         return;
     }
@@ -4030,9 +4028,6 @@ void SpectrumWidget::retainDssHistoryRow(DssRenderer& dss,
     dss.appendHistoryRow(binsDbm, centerMhz, bandwidthMhz, fallbackDbm);
     m_panStats.dssHistoryUs += static_cast<quint64>(timer.nsecsElapsed() / 1000);
     ++m_panStats.dssHistoryRows;
-    if (hiddenStream) {
-        ++m_panStats.dssHiddenHistoryRows;
-    }
 }
 
 void SpectrumWidget::appendLatestDssWaterfallRow(double frameCenterMhz,
@@ -4115,9 +4110,8 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs,
     m_panStats.waterfallHistoryRowUs +=
         static_cast<quint64>(timer.nsecsElapsed() / 1000);
     ++m_panStats.waterfallHistoryRows;
-    if (!m_waterfallWriteVisible) {
-        ++m_panStats.waterfallHiddenHistoryRows;
-    }
+    // No hidden-history counter: appendHistoryRow early-returns for a hidden
+    // source above, so RGB history is only ever written for the visible one.
 }
 
 // Copy one history scanline into the viewport, remapping its columns from the
@@ -9189,7 +9183,7 @@ void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
         ? kKiwiSdrWaterfallMinDbm
         : m_refLevel - m_dynamicRange;
     retainDssHistoryRow(dss, binsDbm, stampCenterMhz, stampBandwidthMhz,
-                        fallbackDbm, true);
+                        fallbackDbm);
 }
 
 void SpectrumWidget::resetDssUploadState()
