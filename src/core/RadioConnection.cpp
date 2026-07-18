@@ -259,13 +259,20 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
 {
     if (m_syntheticDemo) {
-        // Demo radio: acknowledge every command with an OK response (code 0) so
-        // the GUI-client handshake (sub pan all, client gui, …) completes. The
-        // demo doesn't model command effects; the panadapter/slice state it needs
-        // is pushed via synthetic status lines, not command replies. (RFC #4288)
-        if (isConnected()) {
-            emit commandResponse(seq, 0, QString());
+        if (!isConnected()) return;
+        // Keepalive: RadioModel pings the radio and force-disconnects after 5
+        // unanswered pings. A ping is answered via pingRttMeasured (which resets
+        // the miss counter), NOT a generic command response — so answer it that
+        // way with a plausible tiny RTT. (RFC #4288)
+        if (command.startsWith(QStringLiteral("ping"))) {
+            emit pingRttMeasured(1);
+            return;
         }
+        // Every other command: acknowledge OK (code 0) so the GUI-client
+        // handshake (sub pan all, client gui, …) completes. The demo doesn't
+        // model command effects; panadapter/slice state is pushed via synthetic
+        // status lines, not command replies.
+        emit commandResponse(seq, 0, QString());
         return;
     }
     if (!isConnected() || !m_socket) return;
