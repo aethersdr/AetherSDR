@@ -1206,6 +1206,7 @@ bool RadioModel::automationApplyGpsFixture(const GpsDelta& delta,
                                            const QString& referenceState,
                                            const QString& referenceSetting,
                                            bool referenceLocked,
+                                           const QString& ntpServerAddress,
                                            QString* error)
 {
     if (isConnected()) {
@@ -1219,6 +1220,7 @@ bool RadioModel::automationApplyGpsFixture(const GpsDelta& delta,
     m_oscState = referenceState;
     m_oscSetting = referenceSetting;
     m_oscLocked = referenceLocked;
+    m_automationGpsNtpServerAddress = ntpServerAddress;
     emit oscillatorChanged();
     return true;
 }
@@ -1784,6 +1786,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
     clearAutomationSliceFixtures();
+    m_automationGpsNtpServerAddress.clear();
 
     m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
@@ -1818,6 +1821,7 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
 
     clearAutomationSliceFixtures();
+    m_automationGpsNtpServerAddress.clear();
 
     // Disconnect any stale signal connections from a previous WAN session
     if (m_wanConn)
@@ -6373,6 +6377,18 @@ void RadioModel::onStatusReceived(const QString& object,
 QString RadioModel::serial() const
 {
     return m_lastInfo.serial;
+}
+
+QString RadioModel::gpsNtpServerAddress() const
+{
+    if (!m_automationGpsNtpServerAddress.isEmpty()) {
+        return m_automationGpsNtpServerAddress;
+    }
+    if (!capabilities().hasNtpServer || isWan() || m_lastInfo.isRouted
+        || m_lastInfo.address.isNull()) {
+        return {};
+    }
+    return m_lastInfo.address.toString();
 }
 
 LicenseFeatureState RadioModel::licenseFeature(const QString& name) const

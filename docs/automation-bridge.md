@@ -1004,16 +1004,19 @@ never sends a radio command.
 ← {"ok":true,"gps":"fixture","profile":"6000","snapshot":{"status":"Locked","latitude":"N 34 13.464",…}}
 
 → {"cmd":"gps","action":"fixture","value":"8000"}
-← {"ok":true,"gps":"fixture","profile":"8000","snapshot":{"status":"Locked","latitude":"36.839213333",…}}
+← {"ok":true,"gps":"fixture","profile":"8000","snapshot":{"status":"Locked","latitude":"34.224400000","ntpServerAddress":"192.0.2.80",…}}
 
 → {"cmd":"gps","action":"clearfixture"}
 ← {"ok":true,"gps":"clearfixture"}
 ```
 
-The `6000` profile exercises the hemisphere/degrees/decimal-minutes form seen
-from a FLEX-6700 GPSDO. The `8000` profile exercises decimal degrees and the
-`track` (course-over-ground) field captured from FLEX-8600 firmware 4.2.18.
-Use `get gps` or `dumpTree` after injecting to assert model or widget state.
+Both profiles use the public Mount Wilson Observatory location so screenshots
+are safe to share. The `6000` profile exercises the hemisphere/degrees/decimal-
+minutes form seen from a FLEX-6700 GPSDO. The `8000` profile exercises decimal
+degrees and the `track` (course-over-ground) field captured from FLEX-8600
+firmware 4.2.18, plus the reserved TEST-NET-1 address `192.0.2.80` for testing
+the 8000-series NTP tip. Use `get gps` or `dumpTree` after injecting to assert
+model or widget state.
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as

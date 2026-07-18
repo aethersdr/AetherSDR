@@ -162,6 +162,7 @@ public:
     QString gpsSpeed()     const { return m_gpsSpeed; }
     QString gpsTrack()     const { return m_gpsTrack; }
     QString gpsFreqError() const { return m_gpsFreqError; }
+    QString gpsNtpServerAddress() const;
 
     // Max slices reported by radio
     int maxSlices() const { return m_maxSlices; }
@@ -401,6 +402,7 @@ public:
                                    const QString& referenceState,
                                    const QString& referenceSetting,
                                    bool referenceLocked,
+                                   const QString& ntpServerAddress,
                                    QString* error = nullptr);
 
     // High-level actions
@@ -913,6 +915,7 @@ private:
     QString m_gpsSpeed;
     QString m_gpsTrack;
     QString m_gpsFreqError;
+    QString m_automationGpsNtpServerAddress;
 
     // Per-band TX settings (from "transmit band" and "interlock band" status)
     struct TxBandInfo {

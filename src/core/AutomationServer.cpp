@@ -1497,6 +1497,7 @@ QJsonObject gpsSnapshot(const RadioModel* r)
         {QStringLiteral("speed"), r->gpsSpeed()},
         {QStringLiteral("course"), r->gpsTrack()},
         {QStringLiteral("frequencyError"), r->gpsFreqError()},
+        {QStringLiteral("ntpServerAddress"), r->gpsNtpServerAddress()},
         {QStringLiteral("referenceSetting"), r->oscSetting()},
         {QStringLiteral("referenceActual"), r->oscState()},
         {QStringLiteral("referenceLocked"), r->oscLocked()},
@@ -5438,7 +5439,8 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
         delta.freqError = QString();
         QString error;
         if (!m_radioModel->automationApplyGpsFixture(
-                delta, QString(), QStringLiteral("auto"), false, &error)) {
+                delta, QString(), QStringLiteral("auto"), false, QString(),
+                &error)) {
             return err(error);
         }
         return QJsonObject{{QStringLiteral("ok"), true},
@@ -5476,20 +5478,24 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
         delta.lon = QStringLiteral("W 118 03.450");
         delta.freqError = QStringLiteral("18 ppb");
     } else {
-        // Firmware 4.2.18 clean-room capture: decimal coordinates and course
-        // over ground from a FLEX-8600 GPS status report.
+        // Exercise the decimal-coordinate and course fields from the
+        // FLEX-8600 wire format while keeping shareable visual-test artifacts
+        // pinned to the public Mount Wilson Observatory. Parser tests retain
+        // the exact clean-room firmware 4.2.18 capture values.
         delta.tracked = 8;
         delta.visible = 28;
-        delta.grid = QStringLiteral("DM06bu");
-        delta.altitude = QStringLiteral("81 m");
-        delta.lat = QStringLiteral("36.839213333");
-        delta.lon = QStringLiteral("-119.898366667");
+        delta.grid = QStringLiteral("DM04xf");
+        delta.altitude = QStringLiteral("1742 m");
+        delta.lat = QStringLiteral("34.224400000");
+        delta.lon = QStringLiteral("-118.057500000");
         delta.track = QStringLiteral("273.4");
         delta.freqError = QStringLiteral("274 ppb");
     }
     QString error;
     if (!m_radioModel->automationApplyGpsFixture(
             delta, QStringLiteral("gpsdo"), QStringLiteral("auto"), true,
+            profile == QLatin1String("8000")
+                ? QStringLiteral("192.0.2.80") : QString(),
             &error)) {
         return err(error);
     }

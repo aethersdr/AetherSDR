@@ -13,7 +13,6 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
-#include <QHostAddress>
 #include <QLabel>
 #include <QLocale>
 #include <QProgressBar>
@@ -276,7 +275,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     actions->setContentsMargins(0, 6, 0, 0);
     actions->setSpacing(8);
     m_copyGridSquareButton = makeActionButton(
-        tr("Copy Gridsquare"), QStringLiteral("gpsCopyGridSquare"),
+        tr("Copy gridsquare"), QStringLiteral("gpsCopyGridSquare"),
         tr("Copy the Maidenhead grid square to the clipboard"), locationGroup);
     connect(m_copyGridSquareButton, &QPushButton::clicked,
             this, &GpsLocationDialog::copyGridSquare);
@@ -591,12 +590,8 @@ void GpsLocationDialog::updateNtpServerTip()
         return;
     }
 
-    const QHostAddress address = m_radioModel->radioAddress();
-    const RadioInfo radioInfo = m_radioModel->lastRadioInfo();
-    const bool canReachLocalNtp = m_radioModel->capabilities().hasNtpServer
-        && !m_radioModel->isWan()
-        && !radioInfo.isRouted
-        && !address.isNull();
+    const QString address = m_radioModel->gpsNtpServerAddress();
+    const bool canReachLocalNtp = !address.isEmpty();
     m_ntpServerTipLabel->setVisible(canReachLocalNtp);
     if (!canReachLocalNtp) {
         m_ntpServerTipLabel->clear();
@@ -607,7 +602,7 @@ void GpsLocationDialog::updateNtpServerTip()
         tr("Did you know? You can use your radio as an NTP server when satellite "
            "lock is active. Set your time server to %1. Use it only on a trusted "
            "local network.")
-            .arg(address.toString()));
+            .arg(address));
 }
 
 void GpsLocationDialog::requestAddress(double latitude, double longitude, bool force)
