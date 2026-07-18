@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PacketLossConcealment.h"
+#include "core/backends/sim/SpectrumPatternGenerator.h"
 
 #include <QObject>
 #include <QUdpSocket>
@@ -358,6 +359,17 @@ private:
     QElapsedTimer             m_orphanClock;   // monotonic source for lastSeenMs
     QUdpSocket*     m_socket{nullptr};
     quint16         m_localPort{0};
+
+    // Demo mode (RFC #4288, Stage 3): when the connection is the synthetic demo
+    // radio there is no UDP source, so instead of binding a socket we run a timer
+    // that generates FFT lines with SpectrumPatternGenerator and emits
+    // spectrumReady() for the demo pan stream — exactly the signal the real UDP
+    // path would emit, so all downstream widget wiring is unchanged.
+    QTimer*  m_syntheticTimer{nullptr};
+    quint32  m_syntheticPanStreamId{0};
+    double   m_syntheticElapsedS{0.0};
+    quint64  m_syntheticFrameIndex{0};
+    void tickSyntheticDemo();
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling

@@ -33,6 +33,7 @@ public:
 
     ConnectionState state() const       { return m_state.load(); }
     quint32 clientHandle() const        { return m_handle; }
+    bool isSyntheticDemo() const        { return m_syntheticDemo; }  // RFC #4288
     bool isConnected() const            { return m_state.load() == ConnectionState::Connected; }
     QHostAddress radioAddress() const   { return m_radioAddr; }
     QHostAddress localAddress() const   { return m_localAddr; }
@@ -91,6 +92,7 @@ private:
     // display-pan status. This keeps the whole RadioModel connect flow unchanged;
     // the only cost is these small demo branches in the wire class.
     void startSyntheticDemoConnect();
+    void emitSyntheticStatus(const QString& line);
     static bool isDemoTarget(const RadioInfo& info);
     bool sendCommandAndWait(quint32 seq, const QString& command, int timeoutMs);
     void writeDisconnectMarker();

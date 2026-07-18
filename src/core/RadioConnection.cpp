@@ -129,7 +129,39 @@ void RadioConnection::startSyntheticDemoConnect()
         setState(ConnectionState::Connected);
         if (m_heartbeat) m_heartbeat->start();
         emit connected();
+
+        // Push the radio-authoritative status that makes AE build the panadapter,
+        // its waterfall, and a slice — the same lines a real Flex sends after
+        // `sub pan all`. Delayed slightly so RadioModel's onConnected() handshake
+        // (which subscribes) has run first. client_handle matches our synthetic
+        // handle so ownership is Claimed. Format/ids per flex-sim/PROTOCOL.md.
+        QTimer::singleShot(400, this, [this]() {
+            if (!m_syntheticDemo) return;
+            emitSyntheticStatus(QStringLiteral(
+                "SDE300001|display pan 0x40000000 client_handle=0xDE300001 "
+                "waterfall=0x42000000 center=14.100 bandwidth=0.200 "
+                "min_dbm=-140 max_dbm=-20 x_pixels=1024 y_pixels=700 fps=25 "
+                "ant_list=ANT1"));
+            emitSyntheticStatus(QStringLiteral(
+                "SDE300001|display waterfall 0x42000000 client_handle=0xDE300001 "
+                "panadapter=0x40000000 line_duration=100 auto_black=1 "
+                "black_level=15 color_gain=50"));
+            emitSyntheticStatus(QStringLiteral(
+                "SDE300001|slice 0 client_handle=0xDE300001 pan=0x40000000 "
+                "freq=14.100000 mode=USB in_use=1 active=1"));
+        });
     });
+}
+
+void RadioConnection::emitSyntheticStatus(const QString& line)
+{
+    // Parse the raw status line into (object, kvs) exactly as the real receive
+    // path does, then emit statusReceived — so RadioModel sees an identical
+    // payload to a live radio's. (RFC #4288 Stage 3)
+    const ParsedMessage msg = CommandParser::parseLine(line);
+    if (msg.type == MessageType::Status) {
+        emit statusReceived(msg.object, msg.kvs);
+    }
 }
 
 void RadioConnection::connectToHost(const QHostAddress& address,

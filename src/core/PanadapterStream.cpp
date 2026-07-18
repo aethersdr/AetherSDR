@@ -158,6 +158,9 @@ void PanadapterStream::init()
 
 bool PanadapterStream::isRunning() const
 {
+    if (m_syntheticTimer && m_syntheticTimer->isActive()) {
+        return true;   // demo mode has no socket (RFC #4288)
+    }
     return m_socket && m_socket->state() == QAbstractSocket::BoundState;
 }
 
@@ -203,6 +206,22 @@ void PanadapterStream::setReceiveBufferSizeBytes(int bytes)
 bool PanadapterStream::start(RadioConnection* conn)
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
+
+    if (conn && conn->isSyntheticDemo()) {
+        // Demo radio: no UDP source. Generate FFT lines locally and emit
+        // spectrumReady() on the demo pan stream, so the existing widget wiring
+        // paints them exactly as it would real radio frames. (RFC #4288 Stage 3)
+        m_syntheticPanStreamId = 0x40000000u;   // matches the display-pan status id
+        m_syntheticElapsedS = 0.0;
+        m_syntheticFrameIndex = 0;
+        if (!m_syntheticTimer) {
+            m_syntheticTimer = new QTimer(this);
+            connect(m_syntheticTimer, &QTimer::timeout,
+                    this, &PanadapterStream::tickSyntheticDemo);
+        }
+        m_syntheticTimer->start(50);   // ~20 fps
+        return true;
+    }
 
     resetAudioStreamStats();
 
@@ -266,6 +285,28 @@ bool PanadapterStream::start(RadioConnection* conn)
 
     m_conn = conn;
     return true;
+}
+
+void PanadapterStream::tickSyntheticDemo()
+{
+    // One synthetic FFT line for the demo pan. The pattern generator (Phase 2a)
+    // produces per-bin dBm values; emit them as if a real UDP frame had decoded,
+    // keyed by the demo pan stream id so the widget wiring matches it. (RFC #4288)
+    SpectrumPatternGenerator::Geometry geo;
+    geo.bins = 1024;
+    geo.minDbm = -140.0;
+    geo.maxDbm = -20.0;
+    geo.spanHz = 200000.0;      // matches the demo pan bandwidth (0.2 MHz)
+    geo.signalWidthHz = 12000.0;
+
+    const QVector<float> bins = SpectrumPatternGenerator::generate(
+        SpectrumPatternGenerator::Pattern::CalTones, geo,
+        m_syntheticElapsedS, m_syntheticFrameIndex);
+
+    emit spectrumReady(m_syntheticPanStreamId, bins, /*emittedNs*/ 0);
+
+    m_syntheticElapsedS += 0.05;   // 50 ms/tick
+    ++m_syntheticFrameIndex;
 }
 
 bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
@@ -394,6 +435,9 @@ void PanadapterStream::stop()
     }
     if (m_routedPrimeTimer) {
         m_routedPrimeTimer->stop();
+    }
+    if (m_syntheticTimer) {
+        m_syntheticTimer->stop();   // demo (RFC #4288)
     }
     m_isWanMode = false;
     m_wanRegistered = false;
