@@ -431,16 +431,10 @@ void AppSettings::initializeGuiClientIdentity()
         m_effectiveGuiClientId =
             GuiClientIdentityPolicy::automationClientId(m_automationIdentity);
         m_guiClientIdentityTransient = true;
-        m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_AGENT_NAME").trimmed();
-        if (m_automationAgentName.isEmpty()) {
-            m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_STATION").trimmed();
-        }
-        if (m_automationAgentName.isEmpty()) {
-            m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_LABEL").trimmed();
-        }
-        if (m_automationAgentName.isEmpty()) {
-            m_automationAgentName = QStringLiteral("Automation");
-        }
+        m_automationAgentName = GuiClientIdentityPolicy::automationAgentName(
+            qEnvironmentVariable("AETHER_AUTOMATION_AGENT_NAME"),
+            qEnvironmentVariable("AETHER_AUTOMATION_STATION"),
+            qEnvironmentVariable("AETHER_AUTOMATION_LABEL"));
         m_effectiveStationName =
             GuiClientIdentityPolicy::protocolSafeStation(m_automationAgentName);
         return;

@@ -71,7 +71,9 @@ AETHER_AUTOMATION_SOCKET=aethersdr-4166 \
 GUI client UUID, so concurrent worktrees do not displace one another through
 the radio's duplicate-client takeover behavior. If it is omitted, the socket,
 automation label, or PID is used in that order. `AETHER_AUTOMATION_AGENT_NAME`
-sets the station label shown to other Multi-Flex clients; it is display-only
+sets the station label shown to other Multi-Flex clients; the legacy
+`AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
+followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
@@ -126,7 +128,8 @@ contributors to self-verify UI changes before requesting review.
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
 
 **Tools exposed** (22 typed tools): introspection — `bridge_status`,
-`dump_tree` (with a `filter` arg), `grab_widget` (PNG inline),
+`dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
+`path` for where the PNG is written, else a temp file),
 `get_state`, `get_log`, `floors`, `streams`; driving — `invoke`
 (on a target-not-found failure it appends `did_you_mean` candidates),
 `shortcut`, `tune`, `slice`, `pan`, `record`, `mark`, `window`, `menu`;
@@ -1810,7 +1813,8 @@ its own per-pid socket + discovery entry).
 → {"cmd":"whoami"}
 ← {"ok":true,"pid":34758,"name":"aethersdr-automation-34758",
    "socket":"/var/folders/…/aethersdr-automation-34758",
-   "label":"","station":"Claude","txAllowed":false,"version":"26.6.5"}
+   "label":"","station":"Automation","agentName":"Automation",
+   "txAllowed":false,"version":"26.6.5"}
 ```
 
 `txAllowed` reports whether `AETHER_AUTOMATION_ALLOW_TX` is set for this process —

@@ -295,7 +295,7 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         {"ANT",       1, nullptr},   // 3 — toggleAntPanel
         {"Display",   4, nullptr},   // 4 — toggleDisplayPanel
         {"Memory",    5, nullptr},   // 6 — toggleMemoryPanel
-        // MEM+ moved into MemoryBrowsePanel (bottom button — doesn't scroll).
+        // Add Memory lives at the top of MemoryBrowsePanel, outside the scrolling rows.
         {"DAX",       3, nullptr},   // 6 — toggleDaxPanel
     };
 

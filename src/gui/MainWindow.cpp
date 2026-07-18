@@ -3055,6 +3055,28 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // next AetherSDR launch from reacquiring it.
     stopDigitalVoiceService(true);
 
+    // Restore the Flex slice mute for any active KiwiSDR audio replacement
+    // before we exit. The replacement mutes the radio slice (audio_mute=1) so
+    // only the Kiwi stream is heard; with the radio's auto_save enabled that
+    // muted state is persisted, so a slice left replaced comes up silent on the
+    // next launch — KiwiSDR is client-side only and is not reselected, leaving a
+    // plain, muted Flex slice the user must manually unmute (#4158). Restoring
+    // the pre-Kiwi mute here clears that. Done before the UI teardown below so
+    // the radio connection is still open to receive the command.
+    if (m_kiwiSdrManager) {
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (!slice || !slice->externalReceiveReplacementActive()) {
+                continue;
+            }
+            const int sliceId = slice->sliceId();
+            const bool restoreMute =
+                m_kiwiSdrVirtualPreviousMute.contains(sliceId)
+                    ? m_kiwiSdrVirtualPreviousMute.take(sliceId)
+                    : slice->flexAudioMute();
+            slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
+        }
+    }
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
@@ -4307,16 +4329,17 @@ void MainWindow::buildUI()
     };
 
     // Automation indicator chip — visible ONLY when the agent automation bridge
-    // is active (AETHER_AUTOMATION). Mirrors the per-client station name the
-    // bridge announces to the radio (AETHER_AUTOMATION_STATION, default
-    // "Claude") so the operator can see at a glance that an agent is driving.
+    // is active (AETHER_AUTOMATION). Uses the canonical AppSettings automation
+    // agent name so the chip and tooltip match the identity announced to the
+    // radio. Legacy environment names are resolved by AppSettings. (#3646)
     // Kept deliberately separate from the station-nickname label so it never
-    // fights radio status updates. (#3646)
+    // fights radio status updates.
     if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
-        const QString agent = qEnvironmentVariableIsSet("AETHER_AUTOMATION_STATION")
-            ? qEnvironmentVariable("AETHER_AUTOMATION_STATION")
-            : QStringLiteral("Claude");
+        const QString agent = AppSettings::instance().automationAgentName();
         m_automationChip = new QLabel(QStringLiteral("\U0001F916 ") + agent);
+        m_automationChip->setObjectName(QStringLiteral("automationChip"));
+        m_automationChip->setAccessibleName(
+            QStringLiteral("Agent automation bridge active: %1").arg(agent));
         m_automationChip->setStyleSheet(
             "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
             " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
@@ -6430,6 +6453,17 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
     for (auto* slice : slices) {
         if (!slice || slice->panId() != panId || slice->audioMute())
             continue;
+
+        // A KiwiSDR-replaced slice shows unmuted (the Kiwi stream is the audio)
+        // but the Flex slice must stay muted on the radio. Its visible
+        // audioMute() is false, so without this guard a band-change reassert
+        // would blast audio_mute=0 and fight the replacement (the status parser
+        // re-mutes it, but that is a needless round-trip and a brief unmute
+        // glitch). Retaining the Kiwi across a band change (#4158) requires
+        // leaving these muted. flexAudioMute() carries the true radio mute.
+        if (slice->externalReceiveReplacementActive()) {
+            continue;
+        }
 
         // The model already shows unmuted, so SliceModel::setAudioMute(false)
         // would no-op. Send the command directly to rebuild radio audio routing.

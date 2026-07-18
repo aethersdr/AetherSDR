@@ -216,6 +216,10 @@ TOOLS = [
             "target": {"type": "string"},
             "selector": {"type": "string",
                          "description": "pan index, only for pan/pan-visible/pan-composite"},
+            "path": {"type": "string",
+                     "description": ("output PNG path; defaults to a temp file. The "
+                                     "returned JSON's `path` is authoritative — the app "
+                                     "may normalize it")},
         }, "required": ["target"]},
     },
     {
@@ -579,8 +583,9 @@ def handle_tool(name, args):
 
     if name == "grab_widget":
         target = args["target"]
-        out = os.path.join(tempfile.gettempdir(),
-                           f"aether-mcp-grab-{int(time.time())}.png")
+        out = (args.get("path")
+               or os.path.join(tempfile.gettempdir(),
+                               f"aether-mcp-grab-{int(time.time())}.png"))
         req = {"cmd": "grab", "target": target, "path": out}
         if args.get("selector"):
             req["selector"] = str(args["selector"])

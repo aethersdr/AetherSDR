@@ -569,7 +569,11 @@ void RxApplet::buildUI()
         });
         m_freqRow->addWidget(m_modeCombo);
 
-        m_freqStack = new QStackedWidget;
+        // Parent the stack explicitly before registering scoped styles.  Qt
+        // does not reparent widgets in nested layouts until layout activation,
+        // so an unparented stack makes its children resolve root theme tokens
+        // at startup and miss the applet/rx scope (#4159).
+        m_freqStack = new QStackedWidget(this);
         m_freqStack->setFixedHeight(34);
 
         m_freqLabel = new QLabel("0.000.000");

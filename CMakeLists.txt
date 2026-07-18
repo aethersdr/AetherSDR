@@ -727,6 +727,7 @@ set(GUI_SOURCES
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
@@ -2325,6 +2326,12 @@ add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
 
+# KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
+add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)
+target_include_directories(kiwi_rebind_tracker_test PRIVATE src)
+target_link_libraries(kiwi_rebind_tracker_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_rebind_tracker_test COMMAND kiwi_rebind_tracker_test)
+
 add_executable(declared_bands_test
     tests/declared_bands_test.cpp
     src/models/DeclaredBands.cpp
@@ -2739,7 +2746,7 @@ add_executable(digital_voice_slice_lifecycle_test
     src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(digital_voice_slice_lifecycle_test PRIVATE src)
-target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core)
+target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME digital_voice_slice_lifecycle_test COMMAND digital_voice_slice_lifecycle_test)
 
 add_executable(dstar_model_test
@@ -2753,12 +2760,22 @@ add_executable(dstar_model_test
     src/core/AppSettings.cpp
 )
 target_include_directories(dstar_model_test PRIVATE src)
-target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(dstar_model_test PRIVATE HAVE_SERIALPORT)
     target_link_libraries(dstar_model_test PRIVATE Qt6::SerialPort)
 endif()
 add_test(NAME dstar_model_test COMMAND dstar_model_test)
+
+add_executable(dstar_accessibility_test
+    tests/dstar_accessibility_test.cpp
+    src/gui/DStarAccessibility.cpp
+)
+target_include_directories(dstar_accessibility_test PRIVATE src)
+target_link_libraries(dstar_accessibility_test PRIVATE Qt6::Widgets)
+add_test(NAME dstar_accessibility_test COMMAND dstar_accessibility_test)
+set_tests_properties(dstar_accessibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp

@@ -35,6 +35,23 @@ int main()
     check(GuiClientIdentityPolicy::protocolSafeStation(QString(80, 'x')).size() <= 48,
           "station name is bounded");
 
+    check(GuiClientIdentityPolicy::automationAgentName(
+              QStringLiteral(" Codex "), QStringLiteral("Legacy"), QStringLiteral("Label"))
+              == QStringLiteral("Codex"),
+          "explicit automation agent name wins and is trimmed");
+    check(GuiClientIdentityPolicy::automationAgentName(
+              QStringLiteral(" "), QStringLiteral(" Legacy "), QStringLiteral("Label"))
+              == QStringLiteral("Legacy"),
+          "legacy automation station remains compatible");
+    check(GuiClientIdentityPolicy::automationAgentName(
+              QString(), QStringLiteral(" "), QStringLiteral(" Bridge label "))
+              == QStringLiteral("Bridge label"),
+          "automation label is the final configured fallback");
+    check(GuiClientIdentityPolicy::automationAgentName(
+              QString(), QString(), QStringLiteral(" "))
+              == QStringLiteral("Automation"),
+          "automation agent name has a neutral default");
+
     check(!GuiClientIdentityPolicy::shouldSelectDistinctId(
               false, QStringLiteral("Desk"), QStringLiteral("desk"), true),
           "known same-station persistent predecessor is reclaimed");

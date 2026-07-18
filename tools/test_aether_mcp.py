@@ -15,6 +15,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -82,6 +83,14 @@ def test_field_mapping():
     r = reqs[0]
     check("grab_widget sends cmd=grab + target",
           r.get("cmd") == "grab" and r.get("target") == "SpectrumWidget", str(r))
+    check("grab_widget default path lands in the temp dir",
+          r.get("path", "").startswith(tempfile.gettempdir()), str(r))
+
+    reqs = run_tool("grab_widget", {"target": "SpectrumWidget",
+                                    "path": "/tmp/shot.png"})
+    r = reqs[0]
+    check("grab_widget honors caller-supplied path (#4249)",
+          r.get("path") == "/tmp/shot.png", str(r))
 
     reqs = run_tool("dump_tree", {})
     check("dump_tree sends cmd=dumpTree", reqs[-1].get("cmd") == "dumpTree", str(reqs))

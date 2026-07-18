@@ -4352,10 +4352,14 @@ void VfoWidget::updateTxBadgeStyle(bool isTx)
 
 void VfoWidget::updateSplitBadge(bool isTxSlice, bool isRxSplit)
 {
+    // Relabel unconditionally from the slice's current role: the click handler
+    // dispatches on this text, so a stale "SWAP" after the split pair is torn
+    // down (or after roles flip via swap) would keep emitting swapRequested()
+    // and Split could never be re-enabled (#4051).
+    m_splitBadge->setText(isTxSlice ? "SWAP" : "SPLIT");
     if (isTxSlice) {
         // TX slice in split pair — show SWAP button
         m_splitBadge->show();
-        m_splitBadge->setText("SWAP");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_splitBadge, "QPushButton { background: {{color.background.1}}; color: #80c0ff; border: none; "
             "border-radius: 2px; font-size: 11px; font-weight: bold; "
             "padding: 0px 3px; }"
