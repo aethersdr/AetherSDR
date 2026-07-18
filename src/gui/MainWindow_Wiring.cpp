@@ -27,6 +27,7 @@
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
+#include "GpsLocationDialog.h"
 #include "RxApplet.h"
 #include "AmpApplet.h"
 #include "HealthApplet.h"
@@ -178,6 +179,11 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 }
 
 } // namespace
+
+void MainWindow::showGpsLocationDialog()
+{
+    showOrRaisePersistent(m_gpsLocationDialog, &m_radioModel);
+}
 
 int MainWindow::centerLockSliceForPan(const QString& panId) const
 {

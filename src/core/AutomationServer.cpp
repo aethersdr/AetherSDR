@@ -1481,6 +1481,28 @@ QJsonObject radioSnapshot(const RadioModel* r)
     };
 }
 
+QJsonObject gpsSnapshot(const RadioModel* r)
+{
+    return QJsonObject{
+        {QStringLiteral("available"), r->hasGpsHardware()
+             || !r->gpsStatus().isEmpty()},
+        {QStringLiteral("status"), r->gpsStatus()},
+        {QStringLiteral("tracked"), r->gpsTracked()},
+        {QStringLiteral("visible"), r->gpsVisible()},
+        {QStringLiteral("grid"), r->gpsGrid()},
+        {QStringLiteral("altitude"), r->gpsAltitude()},
+        {QStringLiteral("latitude"), r->gpsLat()},
+        {QStringLiteral("longitude"), r->gpsLon()},
+        {QStringLiteral("utcTime"), r->gpsTime()},
+        {QStringLiteral("speed"), r->gpsSpeed()},
+        {QStringLiteral("course"), r->gpsTrack()},
+        {QStringLiteral("frequencyError"), r->gpsFreqError()},
+        {QStringLiteral("referenceSetting"), r->oscSetting()},
+        {QStringLiteral("referenceActual"), r->oscState()},
+        {QStringLiteral("referenceLocked"), r->oscLocked()},
+    };
+}
+
 // TX-chain state (TransmitModel) — RF power, mic/processor, VOX/AM/DEXP, CW, ATU
 // and APD. Lets a QA scenario assert that a TX/Phone/CW applet control actually
 // reached the radio model, not just the widget (#3646 QA finding 2). Read-only:
@@ -2220,6 +2242,7 @@ const QStringList& getModelNames()
         QStringLiteral("meters"),     QStringLiteral("slice"),
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
+        QStringLiteral("gps"),
         QStringLiteral("renderstats"),
         QStringLiteral("tracedebug"), QStringLiteral("waveforms"),
         QStringLiteral("kiwi"),
@@ -2531,6 +2554,17 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                     return err(QStringLiteral(
                         "slice requires an action (add|remove|select|tx|mode|txant|rxant|rxsource)"));
                 return s.doSlice(a.action, a.value);
+            });
+
+        add("gps", {},
+            "gps <fixture|clearfixture> [6000|8000] — disconnected GPS test data",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.action.isEmpty()) {
+                    return err(QStringLiteral(
+                        "gps requires an action (fixture|clearfixture)"));
+                }
+                return s.doGps(a.action, a.value);
             });
 
         add("waveform", {},
@@ -4413,6 +4447,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
 
     if (model == QLatin1String("radio")) {
         data = radioSnapshot(radio);
+    } else if (model == QLatin1String("gps")) {
+        data = gpsSnapshot(radio);
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel());
     } else if (model == QLatin1String("cwx")) {
@@ -5375,6 +5411,93 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
     return err(QStringLiteral("unknown slice action: ") + action
                + QStringLiteral(" (add|remove|select|tx|mode|diversity|centerlock|"
                                 "txant|rxant|rxsource|fixture|clearfixture)"));
+}
+
+QJsonObject AutomationServer::doGps(const QString& action, const QString& format)
+{
+    if (!m_radioModel) {
+        return err(QStringLiteral("no radio model available"));
+    }
+    if (m_radioModel->isConnected()) {
+        return err(QStringLiteral(
+            "gps fixtures are disconnected-only; disconnect from the radio first"));
+    }
+
+    GpsDelta delta;
+    if (action == QLatin1String("clearfixture")) {
+        delta.status = QString();
+        delta.tracked = 0;
+        delta.visible = 0;
+        delta.grid = QString();
+        delta.altitude = QString();
+        delta.lat = QString();
+        delta.lon = QString();
+        delta.time = QString();
+        delta.speed = QString();
+        delta.track = QString();
+        delta.freqError = QString();
+        QString error;
+        if (!m_radioModel->automationApplyGpsFixture(
+                delta, QString(), QStringLiteral("auto"), false, &error)) {
+            return err(error);
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("gps"), QStringLiteral("clearfixture")}};
+    }
+    if (action != QLatin1String("fixture")) {
+        return err(QStringLiteral(
+            "unknown gps action: ") + action
+            + QStringLiteral(" (fixture|clearfixture)"));
+    }
+
+    const QString profile = format.trimmed().toLower();
+    if (profile != QLatin1String("6000")
+        && profile != QLatin1String("8000")) {
+        return err(QStringLiteral("gps fixture requires 6000 or 8000"));
+    }
+
+    delta.status = QStringLiteral("Locked");
+    delta.time = QDateTime::currentDateTimeUtc().time()
+                     .toString(QStringLiteral("HH:mm:ss'Z'"));
+    delta.speed = QStringLiteral("0 kts");
+    delta.track = QString();
+    if (profile == QLatin1String("6000")) {
+        // Live FLEX-6700 GPSDO captures use hemisphere + degrees + decimal
+        // minutes. The dashboard intentionally consumes that radio text via
+        // the same parseGpsCoordinate() path as production status.
+        delta.tracked = 9;
+        delta.visible = 12;
+        // Use the public Mount Wilson Observatory for shareable visual-test
+        // artifacts; the coordinate parser unit test retains the exact live
+        // FLEX-6700 capture values.
+        delta.grid = QStringLiteral("DM04xf");
+        delta.altitude = QStringLiteral("1742 m");
+        delta.lat = QStringLiteral("N 34 13.464");
+        delta.lon = QStringLiteral("W 118 03.450");
+        delta.freqError = QStringLiteral("18 ppb");
+    } else {
+        // Firmware 4.2.18 clean-room capture: decimal coordinates and course
+        // over ground from a FLEX-8600 GPS status report.
+        delta.tracked = 8;
+        delta.visible = 28;
+        delta.grid = QStringLiteral("DM06bu");
+        delta.altitude = QStringLiteral("81 m");
+        delta.lat = QStringLiteral("36.839213333");
+        delta.lon = QStringLiteral("-119.898366667");
+        delta.track = QStringLiteral("273.4");
+        delta.freqError = QStringLiteral("274 ppb");
+    }
+    QString error;
+    if (!m_radioModel->automationApplyGpsFixture(
+            delta, QStringLiteral("gpsdo"), QStringLiteral("auto"), true,
+            &error)) {
+        return err(error);
+    }
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("gps"), QStringLiteral("fixture")},
+                       {QStringLiteral("profile"), profile},
+                       {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────

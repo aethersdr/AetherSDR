@@ -486,6 +486,9 @@ private:
     // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
     // RX/config only; none of these key the transmitter.
     QJsonObject doSlice(const QString& action, const QString& arg);
+    // Disconnected-only GPS status fixtures for the 6000-series
+    // hemisphere/minutes format and 8000-series decimal-degree format.
+    QJsonObject doGps(const QString& action, const QString& format);
     QJsonObject doTune(const QString& value);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
     // route to RadioModel::setTransmit — the exact calls the space-bar PTT filter

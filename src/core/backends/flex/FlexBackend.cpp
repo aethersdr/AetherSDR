@@ -881,7 +881,7 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 {
     // Flex GPS status: '#'-separated key=value tokens, keys case-insensitive.
     //   "status=..#tracked=8#visible=11#grid=..#altitude=644 m#lat=..#lon=..
-    //    #time=..#speed=0 kts#freq_error=0 ppb"
+    //    #time=..#speed=0 kts#track=0.0#freq_error=0 ppb"
     // A token with no '=' (or an empty key, eq<1) is skipped, verbatim from the
     // old RadioModel::handleGpsStatus. We map into a QMap and lean on the shared
     // carriers so the numeric counts are ok-guarded present-only.
@@ -903,6 +903,11 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
     carry(kvs, "lon", d.lon);
     carry(kvs, "time", d.time);
     carry(kvs, "speed", d.speed);
+    // Firmware 4.2.18 includes course-over-ground as `track` even though the
+    // current FlexLib GPS property surface ignores it.  This was verified in
+    // a clean-room FLEX-8600 status capture; preserving it lets portable and
+    // mobile stations see every value the radio actually reports.
+    carry(kvs, "track", d.track);
     carry(kvs, "freq_error", d.freqError);
     emit gpsChanged(d);
 }

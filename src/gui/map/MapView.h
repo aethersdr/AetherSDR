@@ -49,6 +49,11 @@ public:
     // here. Also draws/updates the home station marker when showMarker.
     void setHomePosition(double lat, double lon, const QString& label = {},
                          bool showMarker = true);
+    // Latitude span used by resetToHome(); longitude uses twice this span to
+    // fit a typical landscape widget. The default remains the broad HF-path
+    // view used by PSK Reporter, while compact location maps can request a
+    // neighbourhood-scale view.
+    void setHomeSpanDegrees(double spanDegrees);
     bool hasHomePosition() const { return m_hasHome; }
 
     void setMarkers(const QVector<Marker>& markers);
@@ -113,6 +118,7 @@ private:
     QString m_homeLabel;
     bool   m_hasHome{false};
     bool   m_firstShow{true};
+    double m_homeSpanDeg{30.0};
 
     // Zoom / recenter overlay buttons (upper-right).
     QToolButton* m_zoomInBtn{nullptr};

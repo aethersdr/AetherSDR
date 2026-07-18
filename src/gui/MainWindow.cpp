@@ -4490,7 +4490,25 @@ void MainWindow::buildUI()
     };
 
     // GPS satellites (top) + lock status (bottom) stacked
-    auto* gpsStack = new QWidget;
+    auto* gpsStack = new QPushButton;
+    gpsStack->setObjectName(QStringLiteral("gpsStatusButton"));
+    gpsStack->setAutoDefault(false);
+    gpsStack->setDefault(false);
+    gpsStack->setCursor(Qt::PointingHandCursor);
+    gpsStack->setFocusPolicy(Qt::TabFocus);
+    gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
+    gpsStack->setAccessibleName(QStringLiteral("GPS and station location"));
+    gpsStack->setAccessibleDescription(
+        QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
+    ThemeManager::instance().applyStyleSheet(gpsStack, QStringLiteral(
+        "QPushButton { background: transparent; border: 1px solid transparent; "
+        "border-radius: 4px; padding: 1px 5px; }"
+        "QPushButton:hover { background: {{color.background.1}}; "
+        "border-color: {{color.border.strong}}; }"
+        "QPushButton:focus { border-color: {{color.border.accent}}; }"
+        "QPushButton:pressed { background: {{color.background.2}}; }"));
+    connect(gpsStack, &QPushButton::clicked,
+            this, &MainWindow::showGpsLocationDialog);
     reserveTelemetryStack(gpsStack, {
         QStringLiteral("GPS: 12/12"),
         QStringLiteral("Ref: Ext 10M"),
@@ -4502,9 +4520,11 @@ void MainWindow::buildUI()
     gpsVbox->setSpacing(0);
     gpsVbox->setAlignment(Qt::AlignVCenter);
     m_gpsLabel = new QLabel("");
+    m_gpsLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     applyStatusBarCompactLabelStyle(m_gpsLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsLabel->setAlignment(Qt::AlignCenter);
     m_gpsStatusLabel = new QLabel("");
+    m_gpsStatusLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     applyStatusBarCompactLabelStyle(m_gpsStatusLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsStatusLabel->setAlignment(Qt::AlignCenter);
     gpsVbox->addWidget(m_gpsLabel);

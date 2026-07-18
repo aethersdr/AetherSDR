@@ -1202,6 +1202,27 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
     return true;
 }
 
+bool RadioModel::automationApplyGpsFixture(const GpsDelta& delta,
+                                           const QString& referenceState,
+                                           const QString& referenceSetting,
+                                           bool referenceLocked,
+                                           QString* error)
+{
+    if (isConnected()) {
+        if (error) {
+            *error = QStringLiteral(
+                "GPS fixture is only available while disconnected");
+        }
+        return false;
+    }
+    applyGpsChanges(delta);
+    m_oscState = referenceState;
+    m_oscSetting = referenceSetting;
+    m_oscLocked = referenceLocked;
+    emit oscillatorChanged();
+    return true;
+}
+
 bool RadioModel::automationRemoveSliceFixture(int sliceId, QString* error)
 {
     auto fail = [error](const QString& message) {
@@ -6741,6 +6762,7 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     if (d.lon)       m_gpsLon       = *d.lon;
     if (d.time)      m_gpsTime      = *d.time;
     if (d.speed)     m_gpsSpeed     = *d.speed;
+    if (d.track)     m_gpsTrack     = *d.track;
     if (d.freqError) m_gpsFreqError = *d.freqError;
 
     emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,

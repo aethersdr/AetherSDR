@@ -552,6 +552,7 @@ set(CORE_SOURCES
     src/core/PotaClient.cpp
     src/core/PropForecastClient.cpp
     src/core/PskReporterClient.cpp
+    src/core/LocationAddressResolver.cpp
     src/core/MqttAntennaAlias.cpp
     src/core/MqttSettings.cpp
     src/core/AutomationBridgeSettings.cpp
@@ -705,6 +706,7 @@ set(GUI_SOURCES
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathItem.cpp
     src/gui/PskReporterMapDialog.cpp
+    src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp
@@ -3282,6 +3284,16 @@ target_include_directories(aetherd_residual_decode_test PRIVATE src)
 target_link_libraries(aetherd_residual_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherd_residual_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_residual_decode_test COMMAND aetherd_residual_decode_test)
+
+add_executable(location_address_resolver_test
+    tests/location_address_resolver_test.cpp
+)
+target_include_directories(location_address_resolver_test PRIVATE src)
+target_link_libraries(location_address_resolver_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+set_target_properties(location_address_resolver_test PROPERTIES AUTOMOC ON)
+add_test(NAME location_address_resolver_test COMMAND location_address_resolver_test)
 
 add_executable(amp_model_test tests/amp_model_test.cpp)
 target_include_directories(amp_model_test PRIVATE src)

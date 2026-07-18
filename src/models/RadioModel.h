@@ -160,6 +160,7 @@ public:
     QString gpsLon()       const { return m_gpsLon; }
     QString gpsTime()      const { return m_gpsTime; }
     QString gpsSpeed()     const { return m_gpsSpeed; }
+    QString gpsTrack()     const { return m_gpsTrack; }
     QString gpsFreqError() const { return m_gpsFreqError; }
 
     // Max slices reported by radio
@@ -396,6 +397,11 @@ public:
                                      QString* error = nullptr);
     bool automationRemoveSliceFixture(int sliceId,
                                       QString* error = nullptr);
+    bool automationApplyGpsFixture(const GpsDelta& delta,
+                                   const QString& referenceState,
+                                   const QString& referenceSetting,
+                                   bool referenceLocked,
+                                   QString* error = nullptr);
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
@@ -905,6 +911,7 @@ private:
     QString m_gpsLon;
     QString m_gpsTime;
     QString m_gpsSpeed;
+    QString m_gpsTrack;
     QString m_gpsFreqError;
 
     // Per-band TX settings (from "transmit band" and "interlock band" status)
