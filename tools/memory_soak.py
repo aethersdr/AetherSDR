@@ -54,6 +54,47 @@ def progress_line(status, remaining):
             f"remaining={max(0, int(remaining)):4d}s")
 
 
+def parse_frequencies(value):
+    if not value:
+        return []
+    frequencies = []
+    for token in value.split(","):
+        try:
+            frequency = float(token.strip())
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(
+                f"invalid frequency '{token.strip()}'") from error
+        if not math.isfinite(frequency) or not 0.001 <= frequency <= 1300.0:
+            raise argparse.ArgumentTypeError(
+                f"frequency {token.strip()} must be 0.001 .. 1300 MHz")
+        frequencies.append(frequency)
+    if not frequencies:
+        raise argparse.ArgumentTypeError("frequency list must not be empty")
+    return frequencies
+
+
+def tune_for_soak(bridge, frequency, elapsed):
+    label = f"memory-soak tune {frequency:.6f} MHz"
+    marker = bridge.request({"cmd": "mark", "value": label})
+    tuned = bridge.request({"cmd": "tune", "value": f"{frequency:.6f}"})
+    centered = bridge.request({"cmd": "pan", "action": "center",
+                               "value": f"{frequency:.6f}"})
+    event = {
+        "elapsedSeconds": elapsed,
+        "frequencyMhz": frequency,
+        "marker": marker,
+        "tune": tuned,
+        "panCenter": centered,
+    }
+    ok = tuned.get("ok", False) and centered.get("ok", False)
+    print(f"frequency cycle: {frequency:.6f} MHz "
+          f"({'ok' if ok else 'FAILED'})", flush=True)
+    if not ok:
+        print(f"  tune={tuned} panCenter={centered}", file=sys.stderr,
+              flush=True)
+    return event
+
+
 def main():
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     parser = argparse.ArgumentParser(
@@ -65,6 +106,13 @@ def main():
     parser.add_argument("--progress", type=float, default=30.0,
                         help="progress print cadence in seconds (default 30)")
     parser.add_argument("--socket", help="override bridge socket / pipe")
+    parser.add_argument(
+        "--tune-frequencies", type=parse_frequencies, default=[],
+        metavar="MHZ[,MHZ...]",
+        help="cycle RX frequencies during the soak (first tune is immediate)")
+    parser.add_argument(
+        "--tune-interval", type=float, default=600.0,
+        help="seconds between frequency changes (default 600)")
     parser.add_argument(
         "--output",
         default=os.path.join(tempfile.gettempdir(),
@@ -78,6 +126,8 @@ def main():
         parser.error("--interval must be 0.25 .. 3600 seconds")
     if not 1.0 <= args.progress <= 3600.0:
         parser.error("--progress must be 1 .. 3600 seconds")
+    if not 1.0 <= args.tune_interval <= 24 * 3600.0:
+        parser.error("--tune-interval must be 1 second .. 24 hours")
 
     interval_ms = int(round(args.interval * 1000.0))
     max_samples = int(math.ceil(args.duration / args.interval)) + 2
@@ -97,7 +147,7 @@ def main():
         sys.exit(f"error: bridge identity check failed: {bridge_info}")
     if bridge_info.get("txAllowed"):
         print("warning: this bridge reports TX automation enabled; "
-              "the memory soak remains read-only", file=sys.stderr)
+              "the memory soak never invokes TX", file=sys.stderr)
     started_wall = dt.datetime.now(dt.timezone.utc)
     started = bridge.request({"cmd": "memory", "action": "start",
                               "value": f"{interval_ms} {max_samples}"})
@@ -107,14 +157,30 @@ def main():
 
     print(f"memory soak: {args.duration:.0f}s at {args.interval:.2f}s "
           f"({max_samples} samples max)")
-    deadline = time.monotonic() + args.duration
-    next_progress = time.monotonic()
+    started_monotonic = time.monotonic()
+    deadline = started_monotonic + args.duration
+    next_progress = started_monotonic
+    next_tune = started_monotonic if args.tune_frequencies else math.inf
+    tune_index = 0
+    tune_events = []
+    if args.tune_frequencies:
+        rendered = ", ".join(f"{value:.6f}" for value in args.tune_frequencies)
+        print(f"frequency cycle: every {args.tune_interval:.0f}s across "
+              f"{rendered} MHz")
     interrupted = False
     try:
         while True:
             now = time.monotonic()
             if now >= deadline:
                 break
+            if now >= next_tune:
+                frequency = args.tune_frequencies[
+                    tune_index % len(args.tune_frequencies)]
+                tune_events.append(tune_for_soak(
+                    bridge, frequency, now - started_monotonic))
+                tune_index += 1
+                next_tune = started_monotonic + (
+                    tune_index * args.tune_interval)
             if now >= next_progress:
                 status = bridge.request({"cmd": "memory", "action": "status"})
                 print(progress_line(status, deadline - now), flush=True)
@@ -133,6 +199,9 @@ def main():
         "finishedUtc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "requestedDurationSeconds": args.duration,
         "sampleIntervalMs": interval_ms,
+        "tuneIntervalSeconds": args.tune_interval,
+        "tuneFrequenciesMhz": args.tune_frequencies,
+        "tuneEvents": tune_events,
         "interrupted": interrupted,
         "bridge": bridge_info,
         "start": started,

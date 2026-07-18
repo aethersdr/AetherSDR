@@ -1840,12 +1840,28 @@ counts are scoped diagnostics and are not additive.
 
 Use the companion driver for unattended runs; it writes the final report and
 raw series atomically, records the bridge identity, and warns when the process
-has the independent TX-automation rail armed (the soak itself is read-only):
+has the independent TX-automation rail armed (the soak never invokes TX):
 
 ```bash
 python3 tools/memory_soak.py --duration 300 --interval 5 \
   --output /tmp/aethersdr-memory-5m.json
 ```
+
+For a repeatable cross-band soak, the driver can also cycle the active slice
+and panadapter through RX frequencies. The first frequency is applied
+immediately, each change is marked in the bridge log, and the tune responses
+are retained in the output JSON alongside the memory series:
+
+```bash
+python3 tools/memory_soak.py --duration 3600 --interval 5 \
+  --tune-interval 600 \
+  --tune-frequencies 3.573,7.074,14.074,21.074,28.074,50.313 \
+  --output aethersdr-memory-1h.json
+```
+
+`tune` and `pan center` are RX/config-only bridge actions; this cycle never
+keys the transmitter. A refused VFO lock or pan-center request is printed as a
+failure and preserved in `tuneEvents` rather than being silently ignored.
 
 The MCP server exposes the same surface as `memory_profile`.
 
