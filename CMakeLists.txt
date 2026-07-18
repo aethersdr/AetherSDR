@@ -489,6 +489,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
@@ -3239,6 +3240,21 @@ set_target_properties(health_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). Self-contained: the
+# backend speaks no wire, so it links only the class under test + Qt6::Core.
+add_executable(sim_backend_test
+    tests/sim_backend_test.cpp
+    src/core/backends/sim/SimBackend.cpp
+    src/core/backends/IRadioBackend.h   # header-only Q_OBJECT — AUTOMOC needs it for the base vtable/signals
+)
+target_include_directories(sim_backend_test PRIVATE src)
+target_link_libraries(sim_backend_test PRIVATE Qt6::Core Qt6::Test)
+if(UNIX)
+    target_link_libraries(sim_backend_test PRIVATE pthread)
+endif()
+set_target_properties(sim_backend_test PROPERTIES AUTOMOC ON)
+add_test(NAME sim_backend_test COMMAND sim_backend_test)
 
 add_executable(vu_meter_settings_test
     tests/vu_meter_settings_test.cpp
