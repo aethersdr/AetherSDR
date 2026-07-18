@@ -2441,6 +2441,22 @@ QAudioFormat AudioEngine::makeFormat() const
 
 QJsonArray AudioEngine::audioEndpointDiagnostics() const
 {
+    QThread* const ownerThread = thread();
+    if (ownerThread && ownerThread != QThread::currentThread()) {
+        if (!ownerThread->isRunning()) {
+            return {};
+        }
+
+        QJsonArray endpoints;
+        const bool invoked = QMetaObject::invokeMethod(
+            const_cast<AudioEngine*>(this),
+            [this, &endpoints]() {
+                endpoints = audioEndpointDiagnostics();
+            },
+            Qt::BlockingQueuedConnection);
+        return invoked ? endpoints : QJsonArray{};
+    }
+
     const auto outputDescription = [this]() {
         const QAudioDevice dev = m_outputDevice.isNull()
             ? QMediaDevices::defaultAudioOutput()
@@ -7038,6 +7054,13 @@ void AudioEngine::logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event)
 
 void AudioEngine::logTxCaptureHealthSummary(const QString& reason, bool anomaly)
 {
+    // TCI server diagnostics use lcCat today. Keep these support summaries
+    // opt-in with the same Help -> Support debug toggle; warnings must not make
+    // the capture-health instrumentation default-on by bypassing that choice.
+    if (!lcCat().isDebugEnabled()) {
+        return;
+    }
+
     const TxCaptureHealthTracker::Snapshot health =
         m_txCaptureHealth.snapshot(txCaptureNowMs());
     if (!anomaly && health.tciSuppressedCallbacks == 0

@@ -2427,7 +2427,7 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
-# Hardware-free state-machine coverage for the default-on TX capture health
+# Hardware-free state-machine coverage for the opt-in TX capture health
 # summary. Reproduces the Qt pull-mode Active -> Idle/full-buffer signature and
 # verifies anomaly rate limiting without requiring PipeWire or an audio device.
 add_executable(tx_capture_health_test

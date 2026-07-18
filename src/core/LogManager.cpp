@@ -52,7 +52,7 @@ LogManager::LogManager()
         {"aether.connection", "Connection / Commands", "Raw TCP command channel lines: TX commands, RX responses, and socket state"},
         {"aether.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling and model status updates"},
         {"aether.audio",      "Audio",        "RX/TX audio, device negotiation, volume"},
-        {"aether.audio.summary", "Audio Summary", "Default support log summaries for audio routing, negotiation, and TX capture health"},
+        {"aether.audio.summary", "Audio Summary", "Default support log summaries for audio routing and sink/source negotiation"},
         {"aether.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
         {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},

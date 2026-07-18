@@ -602,7 +602,7 @@ chunks dispatched to Receive Presentation Sync analysis, while
 that were captured for automation but skipped because no KiwiSDR audio source
 was active.
 
-The TX input endpoint also exposes default-on capture-health evidence for TCI
+The TX input endpoint also exposes in-memory capture-health evidence for TCI
 handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 `source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
 `full_buffer_during_tci_observations`, `idle_during_tci_transitions`,
@@ -610,8 +610,9 @@ handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
 `saturation_observed` is set when the capture buffer reaches its reported
 capacity during TCI suppression. An Active-to-Idle transition with suppressed
 callbacks and unread bytes remains a fallback for backends that do not expose a
-useful capacity. The same evidence is summarized in the default Audio Summary
-support log without enabling verbose audio logging.
+useful capacity. The same evidence is written to the Audio Summary support log
+only when Help → Support's **CAT/rigctld** logging toggle (the category used by
+TCI debug logging) is enabled; TX capture-health summaries are off by default.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies

@@ -45,6 +45,7 @@ public:
         m_lastMicReadMs = -1;
         m_lastState = initialState;
         m_sourceWasActive = initialState == CaptureState::Active;
+        m_currentlySaturated = false;
         m_saturationReported = false;
         m_stalledLocalTxReported = false;
         m_tciSuppressedCallbacks = 0;
@@ -65,6 +66,7 @@ public:
         }
 
         ++m_fullBufferDuringTciObservations;
+        m_currentlySaturated = true;
         if (m_saturationReported) {
             return Event::None;
         }
@@ -75,6 +77,10 @@ public:
     void recordMicRead(qint64 nowMs)
     {
         m_lastMicReadMs = nowMs;
+        // A successful consume proves the pull device is making progress again.
+        // Preserve the lifecycle-level observation/rate limit, but do not use a
+        // historical saturation to classify later healthy TX attempts.
+        m_currentlySaturated = false;
     }
 
     Event observeState(CaptureState state, bool tciAudioFresh, qint64 bufferedBytes)
@@ -97,6 +103,7 @@ public:
         }
 
         ++m_idleDuringTciTransitions;
+        m_currentlySaturated = true;
         if (m_saturationReported) {
             return Event::None;
         }
@@ -113,7 +120,7 @@ public:
     {
         const bool sourceRunning = state == CaptureState::Active
             || state == CaptureState::Idle;
-        const bool saturated = m_saturationReported
+        const bool saturated = m_currentlySaturated
             || (m_tciSuppressedCallbacks > 0
                 && bufferIsFull(bufferedBytes, bufferCapacityBytes));
         const bool stalled = localTxOwned
@@ -127,6 +134,7 @@ public:
             return Event::None;
         }
 
+        m_currentlySaturated = true;
         m_saturationReported = true;
         ++m_postTciLocalTxWhileSaturated;
         if (m_stalledLocalTxReported) {
@@ -163,6 +171,7 @@ private:
     qint64 m_lastMicReadMs{-1};
     CaptureState m_lastState{CaptureState::Stopped};
     bool m_sourceWasActive{false};
+    bool m_currentlySaturated{false};
     bool m_saturationReported{false};
     bool m_stalledLocalTxReported{false};
     quint64 m_tciSuppressedCallbacks{0};

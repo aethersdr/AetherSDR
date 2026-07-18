@@ -1,4 +1,4 @@
-// Hardware-free regression test for default-on TX capture health summaries.
+// Hardware-free regression test for opt-in TX capture health summaries.
 // It pins the strong PipeWire/Qt pull-mode signature without requiring an
 // audio device: initial Idle is healthy; a full buffer is saturation even when
 // PipeWire keeps reporting Active; Active -> Idle with unread bytes remains a
@@ -80,6 +80,21 @@ int main()
            "summary counts every post-TCI stalled local TX attempt");
     expect(snapshot.lastMicReadAgeMs == 975,
            "summary reports age of the last successful microphone read");
+
+    tracker.recordMicRead(1100);
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, true, false, false, 1024, 8192)
+               == Event::None,
+           "successful microphone consumption clears current saturation");
+    const TxCaptureHealthTracker::Snapshot recovered = tracker.snapshot(1200);
+    expect(recovered.saturationObserved
+               && recovered.postTciLocalTxWhileSaturated == 2,
+           "recovery preserves history without inflating stalled TX counts");
+
+    expect(tracker.recordLocalTxAttempt(CaptureState::Active, true, false, false, 8192, 8192)
+               == Event::None,
+           "a later real saturation is counted but remains rate-limited");
+    expect(tracker.snapshot(1300).postTciLocalTxWhileSaturated == 3,
+           "post-recovery count advances only for a newly full buffer");
 
     TxCaptureHealthTracker idleFallback;
     idleFallback.reset(CaptureState::Active, 0);
