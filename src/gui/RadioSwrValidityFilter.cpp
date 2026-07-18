@@ -86,6 +86,11 @@ RadioSwrValidityFilter::Result RadioSwrValidityFilter::update(
                 clearTimedConfirmations();
             } else {
                 held = true;
+                // rawSwr >= 1.0 here, so this sample breaks any run of
+                // below-unity sentinels: reset that window (but keep the
+                // recovery window advancing) so an interrupted sub-1.0 streak
+                // cannot later peg the meter to full scale on a stale start.
+                m_belowUnityStartedAtMs = -1;
             }
             m_lowSwrCandidateSamples = 0;
         } else {

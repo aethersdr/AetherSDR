@@ -8,6 +8,12 @@ namespace AetherSDR {
 // power. The forward-power envelope attacks immediately and releases with
 // elapsed time, so brief modulation gaps cannot force SWR toward 1 while a
 // sustained lower-power operating point eventually becomes authoritative.
+//
+// Note on AGENTS.md "use MeterSmoother": the forward-power envelope here is a
+// trust GATE (is there enough measurable carrier to believe this SWR sample?),
+// not display smoothing — it never smooths the number shown on the meter. The
+// displayed SWR is passed through verbatim once the gate accepts it, so this is
+// deliberately outside the MeterSmoother rule, which governs the value drawn.
 class RadioSwrValidityFilter {
 public:
     struct Result {

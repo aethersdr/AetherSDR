@@ -373,6 +373,35 @@ void testRadioSwrValidityFilterAdaptsToSustainedLowerPower()
            "reset filter ignores an unpowered first SWR sample");
 }
 
+void testRadioSwrValidityFilterInterruptedBelowUnityDoesNotPeg()
+{
+    // Regression: a run of below-unity sentinels that is broken by a genuine
+    // in-range reading must NOT peg the meter to full scale. The below-unity
+    // confirmation window has to restart when the streak is interrupted,
+    // otherwise a stale start time can fire the peg on a non-continuous run.
+    AetherSDR::RadioSwrValidityFilter filter;
+
+    // Latch a 5.0 fault at full power.
+    filter.update(100.0f, 5.0f, 0, 6.0f);
+
+    // A sub-unity sentinel under a weak carrier opens the below-unity window.
+    AetherSDR::RadioSwrValidityFilter::Result result =
+        filter.update(10.0f, 0.5f, 100, 6.0f);
+    expect(result.held && near(result.displayedSwr, 5.0),
+           "one below-unity sample under weak power is held, not pegged");
+
+    // A genuine 2.0 reading in the twilight zone interrupts the sentinel run.
+    result = filter.update(10.0f, 2.0f, 200, 6.0f);
+    expect(result.held && near(result.displayedSwr, 5.0),
+           "an interrupting in-range recovery sample is held");
+
+    // A later below-unity sample — long after the first one — must not peg to
+    // full scale, because the interrupting reading restarted the window.
+    result = filter.update(10.0f, 0.5f, 500, 6.0f);
+    expect(result.held && near(result.displayedSwr, 5.0),
+           "an interrupted below-unity streak cannot peg the meter to full scale");
+}
+
 bool sameTicks(const QVector<AetherSDR::SMeterGeometry::Tick>& first,
                const QVector<AetherSDR::SMeterGeometry::Tick>& second)
 {
@@ -1008,6 +1037,7 @@ int main(int argc, char** argv)
     testAccessibilityAnnouncements();
     testRadioSwrValidityFilter();
     testRadioSwrValidityFilterAdaptsToSustainedLowerPower();
+    testRadioSwrValidityFilterInterruptedBelowUnityDoesNotPeg();
     expect(meter.sizePolicy().verticalPolicy() == QSizePolicy::Fixed,
            "docked widget keeps its compact fixed-height policy");
     meter.setFloating(true);
