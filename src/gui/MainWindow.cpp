@@ -1920,6 +1920,11 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_titleBar) m_titleBar->setDiscovering(true);
     m_discovery.startListening();
 
+    // Demo mode (RFC #4288, Stage 1): surface a synthetic "AetherSDR Demo"
+    // entry in the connect list so a user with no radio can connect to it.
+    // (Phase 3 will gate this behind the Help toggle + persist on/off.)
+    if (m_connPanel) m_connPanel->addDemoRadio();
+
     const bool automationNoAutoConnect =
         qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT");
     const bool autoConnectToLastRadio =

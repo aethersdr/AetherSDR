@@ -1,5 +1,6 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
+#include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
@@ -1099,6 +1100,34 @@ void ConnectionPanel::onRadioLost(const QString& serial)
     }
 
     updateLocalPageState();
+}
+
+void ConnectionPanel::addDemoRadio()
+{
+    RadioInfo demo;
+    // Impersonate a FLEX so AE's model/band logic treats it like a normal radio;
+    // the nickname carries the unmistakable "not on the air" label. The serial is
+    // SimBackend::demoSerial() so the backend factory can recognize this target.
+    demo.name = QStringLiteral("FLEX-6700");
+    demo.model = SimBackend::demoModelName();
+    demo.serial = SimBackend::demoSerial();
+    demo.version = QStringLiteral("0.0.0.0");
+    demo.nickname = QStringLiteral("Simulator (not on the air)");
+    demo.callsign = QStringLiteral("DEMO");
+    demo.address = QHostAddress(QHostAddress::LocalHost);   // synthetic; never dialed
+    demo.port = 4992;
+    demo.status = QStringLiteral("Available");
+    demo.isSystemModel = false;
+    demo.multiFlexEnabled = false;
+
+    // Reuse the normal discovery ingest path (dedupes by serial), so the demo
+    // entry behaves exactly like a discovered radio in the list.
+    onRadioDiscovered(demo);
+}
+
+void ConnectionPanel::removeDemoRadio()
+{
+    onRadioLost(SimBackend::demoSerial());
 }
 
 void ConnectionPanel::onListSelectionChanged()

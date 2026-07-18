@@ -59,6 +59,13 @@ public slots:
     void onRadioUpdated(const RadioInfo& radio);
     void onRadioLost(const QString& serial);
 
+    // Demo mode (RFC #4288): inject a synthetic "AetherSDR Demo — Simulator"
+    // entry into the local radio list so a user with no radio can connect to it
+    // and see the app work. Deduped by serial via onRadioDiscovered, so calling
+    // it repeatedly is safe. removeDemoRadio() takes it back out (Help toggle).
+    void addDemoRadio();
+    void removeDemoRadio();
+
     // SmartLink
     void setSmartLinkClient(SmartLinkClient* client);
 
