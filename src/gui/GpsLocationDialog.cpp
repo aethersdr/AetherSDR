@@ -161,6 +161,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     ThemeManager::instance().applyStyleSheet(this, QStringLiteral(
         "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
         "QScrollArea, QScrollArea > QWidget > QWidget { background: {{color.background.0}}; border: none; }"
+        "QWidget#gpsAddressColumn { background: transparent; }"
         "QLabel { background: transparent; }"
         "QFrame[gpsHeader='true'] { background: {{color.background.1}}; border: 1px solid {{color.border.strong}}; border-radius: 10px; }"
         "QFrame[gpsMetricCard='true'] { background: {{color.background.0}}; border: 1px solid {{color.border.subtle}}; border-radius: 7px; }"
@@ -254,6 +255,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     addressTitle->setProperty("gpsRole", QStringLiteral("fieldTitle"));
     locationLayout->addWidget(addressTitle, 8, 0, Qt::AlignTop);
     auto* addressColumn = new QWidget(locationGroup);
+    addressColumn->setObjectName(QStringLiteral("gpsAddressColumn"));
     auto* addressLayout = new QVBoxLayout(addressColumn);
     addressLayout->setContentsMargins(0, 0, 0, 0);
     addressLayout->setSpacing(4);
@@ -370,7 +372,7 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
                      tr("Duration of the current GPS lock while this window is open"));
     addReadoutRow(satelliteLayout, 9, tr("GPS lock duration"), m_lockDurationLabel);
     auto* apiNote = new QLabel(
-        tr("SmartSDR reports aggregate tracked/visible counts, but not individual "
+        tr("AetherSDR reports aggregate tracked/visible counts, but not individual "
            "satellite IDs, azimuth, elevation, or signal strength. Orbital positions "
            "are therefore intentionally not estimated."), satelliteGroup);
     apiNote->setObjectName(QStringLiteral("gpsSatelliteApiNote"));
@@ -382,13 +384,13 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     root->addWidget(satelliteGroup, 2, 0);
 
     auto* timeGroup = new QGroupBox(content);
-    timeGroup->setAccessibleName(tr("Time"));
+    timeGroup->setAccessibleName(tr("Satellite Time"));
     auto* timeLayout = new QGridLayout(timeGroup);
     timeLayout->setContentsMargins(14, 12, 14, 12);
     timeLayout->setHorizontalSpacing(14);
     timeLayout->setVerticalSpacing(9);
     timeLayout->setColumnStretch(1, 1);
-    timeLayout->addWidget(makeSectionTitle(tr("Time"), timeGroup), 0, 0, 1, 2);
+    timeLayout->addWidget(makeSectionTitle(tr("Satellite Time"), timeGroup), 0, 0, 1, 2);
     m_utcTimeLabel = new QLabel;
     configureReadout(m_utcTimeLabel, QStringLiteral("gpsUtcTime"), tr("Current UTC time"));
     addReadoutRow(timeLayout, 1, tr("UTC / GMT"), m_utcTimeLabel);
@@ -409,7 +411,9 @@ GpsLocationDialog::GpsLocationDialog(RadioModel* radioModel, QWidget* parent)
     addReadoutRow(timeLayout, 5, tr("Clock agreement"), m_clockAgreementLabel);
     auto* timeNote = new QLabel(
         tr("The radio GPS feed supplies UTC time-of-day but no date. UTC/local dates "
-           "above therefore come from the computer clock."), timeGroup);
+           "above therefore come from the computer clock. Use Clock agreement as a "
+           "coarse guide when interpreting FT8 time differential (DT), and keep the "
+           "computer synchronized with NTP for precise operation."), timeGroup);
     timeNote->setProperty("gpsRole", QStringLiteral("muted"));
     timeNote->setWordWrap(true);
     timeNote->setAccessibleName(tr("GPS date source explanation"));
@@ -605,20 +609,38 @@ void GpsLocationDialog::updateClockAndAges()
             radioTime = QTime::fromString(m_radioModel->gpsTime(), QStringLiteral("HH:mm:ssZ"));
         }
         if (radioTime.isValid() && statusIsLocked(m_radioModel->gpsStatus())) {
-            int delta = utc.time().secsTo(radioTime);
-            if (delta > 12 * 3600) {
-                delta -= 24 * 3600;
-            } else if (delta < -12 * 3600) {
-                delta += 24 * 3600;
+            // The radio reports only whole-second GPS time. Advance that last
+            // sample by its telemetry age before comparing it with the computer,
+            // otherwise a healthy but infrequent GPS status update looks many
+            // seconds slow. Milliseconds expose the same signed estimate in the
+            // units commonly used while diagnosing FT8 DT; the UI note retains
+            // the whole-second source-precision caveat.
+            const qint64 reportAgeMs = m_reportAge.isValid() ? m_reportAge.elapsed() : 0;
+            const QTime estimatedRadioTime = radioTime.addMSecs(reportAgeMs);
+            qint64 deltaMs = utc.time().msecsTo(estimatedRadioTime);
+            constexpr qint64 kHalfDayMs = 12LL * 60 * 60 * 1000;
+            constexpr qint64 kDayMs = 24LL * 60 * 60 * 1000;
+            if (deltaMs > kHalfDayMs) {
+                deltaMs -= kDayMs;
+            } else if (deltaMs < -kHalfDayMs) {
+                deltaMs += kDayMs;
             }
-            if (std::abs(delta) <= 1) {
-                m_clockAgreementLabel->setText(tr("Radio and computer agree to the displayed second"));
-            } else if (delta > 0) {
+
+            const qint64 absoluteDeltaMs = std::abs(deltaMs);
+            const QString secondsText = locale.toString(
+                static_cast<double>(absoluteDeltaMs) / 1000.0, 'f', 3);
+            const QString millisecondsText = locale.toString(absoluteDeltaMs);
+            if (deltaMs > 0) {
                 m_clockAgreementLabel->setText(
-                    tr("Radio GPS is approximately %1 s ahead").arg(delta));
+                    tr("Radio GPS is approximately %1 seconds ahead (%2 ms)")
+                        .arg(secondsText, millisecondsText));
+            } else if (deltaMs < 0) {
+                m_clockAgreementLabel->setText(
+                    tr("Radio GPS is approximately %1 seconds behind (%2 ms)")
+                        .arg(secondsText, millisecondsText));
             } else {
                 m_clockAgreementLabel->setText(
-                    tr("Radio GPS is approximately %1 s behind").arg(-delta));
+                    tr("Radio GPS and computer agree (0.000 seconds; 0 ms)"));
             }
         } else {
             m_clockAgreementLabel->setText(tr("Unavailable until the GPS is locked"));
