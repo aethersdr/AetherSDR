@@ -91,6 +91,9 @@ private slots:
     void onManualAdvancedToggled(bool checked);
 
 private:
+    // Keep the demo entry sorted last so real radios take precedence (RFC #4288).
+    void moveDemoRadioToBottom();
+
     enum ConnectionMode {
         LocalMode = 0,
         SmartLinkMode = 1,

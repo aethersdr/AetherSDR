@@ -1074,7 +1074,39 @@ void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)
     m_radioList->addItem(formatLocalRadioLabel(radio));
     if (m_radioList->count() == 1)
         m_radioList->setCurrentRow(0);
+
+    // Demo mode: keep the synthetic entry sorted LAST so a real radio always
+    // takes precedence in the list and the demo never gets in the way (RFC
+    // #4288). If a real radio was just added while the demo is present, move the
+    // demo to the bottom. (No-op when the entry being added IS the demo.)
+    if (radio.serial != SimBackend::demoSerial()) {
+        moveDemoRadioToBottom();
+    }
     updateLocalPageState();
+}
+
+void ConnectionPanel::moveDemoRadioToBottom()
+{
+    const QString demoSerial = SimBackend::demoSerial();
+    for (int i = 0; i < m_radios.size(); ++i) {
+        if (m_radios[i].serial != demoSerial) {
+            continue;
+        }
+        if (i == m_radios.size() - 1) {
+            return;   // already last
+        }
+        const bool wasSelected = m_radioList->currentRow() == i;
+        const RadioInfo demo = m_radios.takeAt(i);
+        delete m_radioList->takeItem(i);
+        m_radios.append(demo);
+        m_radioList->addItem(formatLocalRadioLabel(demo));
+        // A real radio outranks the demo: never leave the demo auto-selected
+        // once something real is present.
+        if (wasSelected && m_radioList->count() > 1) {
+            m_radioList->setCurrentRow(0);
+        }
+        return;
+    }
 }
 
 void ConnectionPanel::onRadioUpdated(const RadioInfo& radio)
