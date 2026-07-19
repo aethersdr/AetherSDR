@@ -112,6 +112,12 @@ public:
 
     QSize sizeHint() const override { return {800, 300}; }
     int spectrumPixelHeight() const;
+    // Waterfall pane height in pixels. MUST be the single source of truth for
+    // both the waterfall QImage row count (resizeEvent) and the destination
+    // rect drawWaterfall() blits into (paintEvent): computing it two different
+    // ways lets integer truncation make them disagree by a pixel, which shows
+    // up as a static horizontal band the scrolling waterfall passes through.
+    int waterfallPixelHeight() const;
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
