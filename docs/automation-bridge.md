@@ -782,6 +782,9 @@ cost a few integer adds per frame.
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
 | `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
+| `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
+| `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
 | `nativeWaterfall*` / `kiwiWaterfall*` | source-specific ingest rate and GUI-thread cost; `HiddenUpdates` identifies background Flex/Kiwi work |
 | `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained RGB-history write rates/cost (RGB history is written only for the visible source) |

@@ -940,6 +940,16 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
     m[QStringLiteral("overlayRebuildMsPerSec")] = msPerSec(m_panStats.overlayRebuildUs);
     m[QStringLiteral("overlayUploadBytesPerSec")] =
         static_cast<double>(m_panStats.overlayUploadBytes) / secs;
+    m[QStringLiteral("previewOverlayTransformsPerSec")] =
+        m_panStats.previewOverlayTransforms / secs;
+    m[QStringLiteral("previewOverlayCommitRefreshes")] =
+        static_cast<qulonglong>(m_panStats.previewOverlayCommitRefreshes);
+    m[QStringLiteral("previewScaleRefreshesPerSec")] =
+        m_panStats.previewScaleRefreshes / secs;
+    m[QStringLiteral("previewScalePaintMsPerSec")] =
+        msPerSec(m_panStats.previewScalePaintUs);
+    m[QStringLiteral("previewScaleUploadBytesPerSec")] =
+        static_cast<double>(m_panStats.previewScaleUploadBytes) / secs;
     m[QStringLiteral("wfUploadBytesPerSec")] =
         static_cast<double>(m_panStats.wfUploadBytes) / secs;
     m[QStringLiteral("nativeWaterfallUpdatesPerSec")] =
@@ -1079,6 +1089,10 @@ QVariantMap SpectrumWidget::automationDssSnapshot() const
         static_cast<qulonglong>(m_frequencyPreviewRemappedDssRows);
     m[QStringLiteral("frequencyPreviewSuppressedViewportRebuilds")] =
         static_cast<qulonglong>(m_frequencyPreviewSuppressedViewportRebuilds);
+    m[QStringLiteral("frequencyPreviewOverlayTransformCount")] =
+        static_cast<qulonglong>(m_frequencyPreviewOverlayTransformCount);
+    m[QStringLiteral("frequencyPreviewOverlayCommitRefreshCount")] =
+        static_cast<qulonglong>(m_frequencyPreviewOverlayCommitRefreshCount);
     m[QStringLiteral("frequencyPreviewCommitLastMs")] =
         static_cast<double>(m_frequencyPreviewCommitLastNs) / 1000000.0;
     m[QStringLiteral("frequencyPreviewCommitMaxMs")] =
@@ -1204,6 +1218,8 @@ QVariantMap SpectrumWidget::automationDssReset(bool kiwiStream)
     m_frequencyPreviewNativeVisibleRows = 0;
     m_frequencyPreviewRemappedDssRows = 0;
     m_frequencyPreviewSuppressedViewportRebuilds = 0;
+    m_frequencyPreviewOverlayTransformCount = 0;
+    m_frequencyPreviewOverlayCommitRefreshCount = 0;
     m_frequencyPreviewCommitLastNs = 0;
     m_frequencyPreviewCommitMaxNs = 0;
     m_frequencyRangeCommandCount = 0;
@@ -1496,6 +1512,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
+    // SpectrumWidget paints every output pixel, including the background under
+    // its internally-composited transparent overlay textures.  Tell QWidget's
+    // repaint manager it does not need to paint ancestors or siblings behind
+    // this QRhiWidget whenever a 60 Hz data/preview frame is presented.
+    setAttribute(Qt::WA_OpaquePaintEvent);
     setAccessibleName(tr("Panadapter spectrum display"));
 #ifdef AETHER_GPU_SPECTRUM
     // Explicitly request Metal on macOS.
@@ -1534,8 +1555,6 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
                       "or AETHER_NO_GPU=1 to work around (#1233)";
     }
 #  endif
-#else
-    setAttribute(Qt::WA_OpaquePaintEvent);
 #endif
     setSpectrumCursor(Qt::CrossCursor);
     setMouseTracking(true);
@@ -4781,6 +4800,17 @@ bool SpectrumWidget::updateFrequencyPreview(double oldCenterMhz,
         }
         m_frequencyPreviewBaseCenterMhz = oldCenterMhz;
         m_frequencyPreviewBaseBandwidthMhz = oldBandwidthMhz;
+        // A clean texture represents the old frame. If it was already dirty,
+        // the first preview render will rasterize at the new frame before the
+        // dirty flag is frozen, so use that as the overlay transform base.
+        bool overlayDirty = false;
+#ifdef AETHER_GPU_SPECTRUM
+        overlayDirty = m_overlayStaticDirty;
+#endif
+        m_frequencyPreviewOverlayBaseCenterMhz = overlayDirty
+            ? newCenterMhz : oldCenterMhz;
+        m_frequencyPreviewOverlayBaseBandwidthMhz = overlayDirty
+            ? newBandwidthMhz : oldBandwidthMhz;
         m_frequencyPreviewActive = true;
     }
 
@@ -4792,10 +4822,20 @@ bool SpectrumWidget::updateFrequencyPreview(double oldCenterMhz,
 
 void SpectrumWidget::scheduleFrequencyPreviewFrame()
 {
-    // Rebuild frequency-dependent overlays at the same coalesced cadence as
-    // GPU/data presentation instead of issuing an immediate paint per mouse or
-    // trackpad event.
-    markOverlayDirty("frequencyPreview", false);
+    // The drag-start QPainter overlay remains resident on the GPU. The preview
+    // shader remaps its frequency-canvas pixels alongside the waterfall/3D
+    // data, avoiding two full-widget rasterizations and texture uploads for
+    // every input frame. commitFrequencyPreview() lands one exact CPU overlay.
+#ifdef AETHER_GPU_SPECTRUM
+    if (!m_ovPreviewPipeline || !m_ovPreviewSrb || !m_ovPreviewUbo) {
+        markOverlayDirty("frequencyPreviewFallback", false);
+    } else {
+        // Unlike the full marker/chrome textures, this is only a narrow strip.
+        // Repaint it at presentation cadence so its labels remain exact while
+        // the frequency marker layer moves entirely on the GPU.
+        m_frequencyScalePreviewNeedsUpload = true;
+    }
+#endif
     coalescedUpdate();
 }
 
@@ -4847,6 +4887,15 @@ void SpectrumWidget::commitFrequencyPreview()
     m_frequencyPreviewBaseBandwidthMhz = targetBandwidthMhz;
     m_frequencyPreviewTargetCenterMhz = targetCenterMhz;
     m_frequencyPreviewTargetBandwidthMhz = targetBandwidthMhz;
+    m_frequencyPreviewOverlayBaseCenterMhz = targetCenterMhz;
+    m_frequencyPreviewOverlayBaseBandwidthMhz = targetBandwidthMhz;
+#ifdef AETHER_GPU_SPECTRUM
+    m_frequencyScalePreviewNeedsUpload = false;
+#endif
+    ++m_frequencyPreviewOverlayCommitRefreshCount;
+    ++m_panStats.previewOverlayCommitRefreshes;
+    markOverlayDirty("frequencyPreviewCommit", false);
+    coalescedUpdate();
 }
 
 void SpectrumWidget::clearFrequencyPreview()
@@ -4856,6 +4905,11 @@ void SpectrumWidget::clearFrequencyPreview()
     m_frequencyPreviewBaseBandwidthMhz = m_bandwidthMhz;
     m_frequencyPreviewTargetCenterMhz = m_centerMhz;
     m_frequencyPreviewTargetBandwidthMhz = m_bandwidthMhz;
+    m_frequencyPreviewOverlayBaseCenterMhz = m_centerMhz;
+    m_frequencyPreviewOverlayBaseBandwidthMhz = m_bandwidthMhz;
+#ifdef AETHER_GPU_SPECTRUM
+    m_frequencyScalePreviewNeedsUpload = false;
+#endif
 }
 
 void SpectrumWidget::requestFrequencyRangeChange(double centerMhz,
@@ -10310,6 +10364,16 @@ void SpectrumWidget::initOverlayPipeline()
     });
     m_ovSrb->create();
 
+    m_ovFrequencyGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(pw, ph));
+    m_ovFrequencyGpuTex->create();
+    m_ovFrequencySrb = r->newShaderResourceBindings();
+    m_ovFrequencySrb->setBindings({
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage,
+            m_ovFrequencyGpuTex, m_ovSampler),
+    });
+    m_ovFrequencySrb->create();
+
     QShader vs = loadShader(":/shaders/resources/shaders/overlay.vert.qsb");
     QShader fs = loadShader(":/shaders/resources/shaders/overlay.frag.qsb");
     if (!vs.isValid() || !fs.isValid()) {
@@ -10354,8 +10418,51 @@ void SpectrumWidget::initOverlayPipeline()
 
     m_ovPipeline->create();
 
+    // Frequency-preview overlay path. Unlike m_ovPipeline (also reused by the
+    // screen-space, background, and cached 3D layers), this pipeline has a small
+    // uniform block that remaps the frequency-overlay texture. It stays at the
+    // drag-start frame while band/spot/slice geometry follows the live GPU data.
+    m_ovPreviewUbo = r->newBuffer(
+        QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 8 * sizeof(float));
+    const bool previewUboReady = m_ovPreviewUbo->create();
+    m_ovPreviewSrb = r->newShaderResourceBindings();
+    m_ovPreviewSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::FragmentStage, m_ovPreviewUbo),
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage,
+            m_ovFrequencyGpuTex, m_ovSampler),
+    });
+    const bool previewSrbReady = m_ovPreviewSrb->create();
+    const QShader previewFs = loadShader(
+        ":/shaders/resources/shaders/overlay_frequency_preview.frag.qsb");
+    if (previewUboReady && previewSrbReady && previewFs.isValid()) {
+        m_ovPreviewPipeline = r->newGraphicsPipeline();
+        m_ovPreviewPipeline->setShaderStages({
+            {QRhiShaderStage::Vertex, vs},
+            {QRhiShaderStage::Fragment, previewFs},
+        });
+        m_ovPreviewPipeline->setVertexInputLayout(layout);
+        m_ovPreviewPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+        m_ovPreviewPipeline->setShaderResourceBindings(m_ovPreviewSrb);
+        m_ovPreviewPipeline->setRenderPassDescriptor(
+            renderTarget()->renderPassDescriptor());
+        m_ovPreviewPipeline->setTargetBlends({blend});
+        if (!m_ovPreviewPipeline->create()) {
+            delete m_ovPreviewPipeline;
+            m_ovPreviewPipeline = nullptr;
+        }
+    }
+    if (!m_ovPreviewPipeline) {
+        qWarning() << "SpectrumWidget: frequency-preview overlay pipeline unavailable;"
+                      " falling back to CPU overlay refreshes";
+    }
+
     m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
     m_overlayStatic.setDevicePixelRatio(dpr);
+    m_overlayFrequency = QImage(
+        pw, ph, QImage::Format_RGBA8888_Premultiplied);
+    m_overlayFrequency.setDevicePixelRatio(dpr);
 
     // Background-image layer — parallel texture + SRB so the same overlay
     // pipeline can paint a separate quad BEFORE the FFT pass.  The image
@@ -10690,6 +10797,7 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     // false from the previous render cycle, leaving the overlay invisible.
     m_overlayStaticDirty = true;
     m_overlayNeedsUpload = true;
+    m_overlayFrequencyNeedsUpload = true;
 
     // Re-apply cursor and mouse tracking now that the native surface exists.
     setCursor(cursor());
@@ -10997,6 +11105,40 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         ++m_frequencyPreviewPresentCount;
     }
 
+    if (m_ovPreviewPipeline && m_ovPreviewSrb && m_ovPreviewUbo) {
+        float overlayScale = 1.0f;
+        float overlayOffset = 0.0f;
+        float overlayPreview = 0.0f;
+        const FrequencyPreviewTransform overlayTransform =
+            frequencyPreviewTransform(
+                FrequencyFrame{m_frequencyPreviewOverlayBaseCenterMhz,
+                               m_frequencyPreviewOverlayBaseBandwidthMhz},
+                FrequencyFrame{m_frequencyPreviewTargetCenterMhz,
+                               m_frequencyPreviewTargetBandwidthMhz});
+        if (m_frequencyPreviewActive && overlayTransform.valid) {
+            overlayScale = static_cast<float>(overlayTransform.scale);
+            overlayOffset = static_cast<float>(overlayTransform.offset);
+            overlayPreview = 1.0f;
+            ++m_frequencyPreviewOverlayTransformCount;
+            ++m_panStats.previewOverlayTransforms;
+        }
+
+        const float logicalW = static_cast<float>(std::max(1, w));
+        const float logicalH = static_cast<float>(std::max(1, h));
+        const float previewUniforms[8] = {
+            overlayScale,
+            overlayOffset,
+            overlayPreview,
+            static_cast<float>(specContentW) / logicalW,
+            static_cast<float>(specH) / logicalH,
+            static_cast<float>(wfY) / logicalH,
+            static_cast<float>(wfContentW) / logicalW,
+            0.0f,
+        };
+        batch->updateDynamicBuffer(
+            m_ovPreviewUbo, 0, sizeof(previewUniforms), previewUniforms);
+    }
+
     // Render overlays — split into static (on state change) and dynamic (every frame)
     {
         // Resize overlay images if needed
@@ -11006,12 +11148,34 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         if (!resizePreview && m_overlayStatic.size() != QSize(pw, ph)) {
             m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
             m_overlayStatic.setDevicePixelRatio(dpr);
+            m_overlayFrequency = QImage(
+                pw, ph, QImage::Format_RGBA8888_Premultiplied);
+            m_overlayFrequency.setDevicePixelRatio(dpr);
             m_ovGpuTex->setPixelSize(QSize(pw, ph));
             m_ovGpuTex->create();
             m_ovSrb->setBindings({
                 QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_ovGpuTex, m_ovSampler),
             });
             m_ovSrb->create();
+            m_ovFrequencyGpuTex->setPixelSize(QSize(pw, ph));
+            m_ovFrequencyGpuTex->create();
+            m_ovFrequencySrb->setBindings({
+                QRhiShaderResourceBinding::sampledTexture(
+                    1, QRhiShaderResourceBinding::FragmentStage,
+                    m_ovFrequencyGpuTex, m_ovSampler),
+            });
+            m_ovFrequencySrb->create();
+            if (m_ovPreviewSrb && m_ovPreviewUbo) {
+                m_ovPreviewSrb->setBindings({
+                    QRhiShaderResourceBinding::uniformBuffer(
+                        0, QRhiShaderResourceBinding::FragmentStage,
+                        m_ovPreviewUbo),
+                    QRhiShaderResourceBinding::sampledTexture(
+                        1, QRhiShaderResourceBinding::FragmentStage,
+                        m_ovFrequencyGpuTex, m_ovSampler),
+                });
+                m_ovPreviewSrb->create();
+            }
             // Background layer mirrors the resize so its texture stays the
             // same pixel size as the framebuffer.
             m_overlayBg = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
@@ -11034,6 +11198,62 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         QElapsedTimer panStatsOvTimer;
         if (panStatsOvRebuild)
             panStatsOvTimer.start();
+
+        // Keep the center frequency scale exact during the GPU preview without
+        // repainting either full-pan overlay. This strip is typically only a
+        // few dozen pixels tall; upload it directly into the screen-space
+        // texture at the divider's destination row.
+        const bool refreshFrequencyScalePreview =
+            m_frequencyPreviewActive
+            && m_frequencyScalePreviewNeedsUpload
+            && !rebuildStaticOverlay
+            && !resizePreview;
+        if (refreshFrequencyScalePreview) {
+            QElapsedTimer previewScaleTimer;
+            previewScaleTimer.start();
+            const int scaleBandH = DIVIDER_H + freqScaleH();
+            const QSize scalePixelSize(
+                pw, static_cast<int>(scaleBandH * dpr));
+            if (m_frequencyScalePreviewImage.size() != scalePixelSize) {
+                m_frequencyScalePreviewImage = QImage(
+                    scalePixelSize,
+                    QImage::Format_RGBA8888_Premultiplied);
+                m_frequencyScalePreviewImage.setDevicePixelRatio(dpr);
+            }
+            m_frequencyScalePreviewImage.fill(Qt::transparent);
+            {
+                QPainter scalePainter(&m_frequencyScalePreviewImage);
+                scalePainter.setRenderHint(QPainter::Antialiasing, false);
+                scalePainter.fillRect(
+                    0, 0, w, DIVIDER_H,
+                    AetherSDR::ThemeManager::instance().color(
+                        "color.background.2"));
+                drawFreqScale(
+                    scalePainter,
+                    QRect(0, DIVIDER_H, w, freqScaleH()));
+            }
+
+            m_panStats.previewScalePaintUs += static_cast<quint64>(
+                previewScaleTimer.nsecsElapsed() / 1000);
+            ++m_panStats.previewScaleRefreshes;
+            const quint64 previewBytes = static_cast<quint64>(
+                m_frequencyScalePreviewImage.sizeInBytes());
+            m_panStats.previewScaleUploadBytes += previewBytes;
+            m_panStats.overlayUploadBytes += previewBytes;
+
+            QRhiTextureSubresourceUploadDescription scaleDesc(
+                m_frequencyScalePreviewImage);
+            scaleDesc.setDestinationTopLeft(
+                QPoint(0, static_cast<int>(specH * dpr)));
+            batch->uploadTexture(
+                m_ovGpuTex,
+                QRhiTextureUploadEntry(0, 0, scaleDesc));
+            if (perfEnabled) {
+                PerfTelemetry::instance().recordGpuUpload(
+                    PerfTelemetry::GpuUploadKind::Overlay);
+            }
+            m_frequencyScalePreviewNeedsUpload = false;
+        }
 
         // Background-image layer — kept separate from the static overlay so
         // it can render BELOW the FFT trace (parity with software paint).
@@ -11071,28 +11291,33 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             m_overlayBgNeedsUpload = true;
         }
 
-        // Static overlay: only repaint when state changes (markOverlayDirty).
+        // Static overlays: only repaint when state changes (markOverlayDirty).
+        // Frequency-anchored elements live in their own texture so the preview
+        // shader can move them without also distorting screen-space controls.
         if (rebuildStaticOverlay) {
+            m_overlayFrequency.fill(Qt::transparent);
+            QPainter frequencyPainter(&m_overlayFrequency);
+            frequencyPainter.setRenderHint(QPainter::Antialiasing, false);
+
+            if (m_bandPlanFontSize > 0) {
+                drawBandPlan(frequencyPainter, specRect);
+            }
+            drawTnfMarkers(frequencyPainter, specRect);
+            if (m_showSpots || m_showSHistory) {
+                drawSpotMarkers(frequencyPainter, specRect);
+            }
+            drawSwrSweep(frequencyPainter, specRect);
+            drawSliceMarkers(frequencyPainter, specRect, wfRect);
+            drawOffScreenSlices(frequencyPainter, specRect);
+
             m_overlayStatic.fill(Qt::transparent);
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
 
-            // #3606: grid moved to the background layer (composites below the
-            // FFT trace). The static overlay composites ABOVE the trace, so only
-            // markers/scales/band-plan that belong on top of the peaks stay here.
-            if (m_bandPlanFontSize > 0)
-                drawBandPlan(p, specRect);
-
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
-            drawTnfMarkers(p, specRect);
-            if (m_showSpots || m_showSHistory)
-                drawSpotMarkers(p, specRect);
-            drawSwrSweep(p, specRect);
-            drawSliceMarkers(p, specRect, wfRect);
             drawSmartMtrValueLabels(p);
-            drawOffScreenSlices(p, specRect);
 
             // The auto-SQL floor and squelch line are anchored to the 2D
             // dynamic-range y-axis, which doesn't map onto the 3D surface — only
@@ -11256,6 +11481,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
 
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
+            m_overlayFrequencyNeedsUpload = true;
+            m_frequencyScalePreviewNeedsUpload = false;
         }
 
         if (panStatsOvRebuild) {
@@ -11272,6 +11499,20 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             if (perfEnabled)
                 PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
             m_overlayNeedsUpload = false;
+        }
+        if (m_overlayFrequencyNeedsUpload && !resizePreview) {
+            QRhiTextureSubresourceUploadDescription frequencyDesc(
+                m_overlayFrequency);
+            batch->uploadTexture(
+                m_ovFrequencyGpuTex,
+                QRhiTextureUploadEntry(0, 0, frequencyDesc));
+            m_panStats.overlayUploadBytes += static_cast<quint64>(
+                m_overlayFrequency.sizeInBytes());
+            if (perfEnabled) {
+                PerfTelemetry::instance().recordGpuUpload(
+                    PerfTelemetry::GpuUploadKind::Overlay);
+            }
+            m_overlayFrequencyNeedsUpload = false;
         }
         if (m_overlayBgNeedsUpload && !resizePreview) {
             QRhiTextureSubresourceUploadDescription bgDesc(m_overlayBg);
@@ -11641,8 +11882,29 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         cb->draw(4);
     }
 
-    // Draw overlay quad — on top of FFT fill/line
-    if (m_ovPipeline) {
+    // Frequency-anchored overlay geometry follows the preview transform. When
+    // the preview shader is unavailable, the CPU fallback refreshes this
+    // texture at the target frame and the ordinary overlay pipeline draws it.
+    QRhiGraphicsPipeline* frequencyOverlayPipeline =
+        m_frequencyPreviewActive && m_ovPreviewPipeline
+            ? m_ovPreviewPipeline : m_ovPipeline;
+    QRhiShaderResourceBindings* frequencyOverlaySrb =
+        m_frequencyPreviewActive && m_ovPreviewPipeline
+            ? m_ovPreviewSrb : m_ovFrequencySrb;
+    if (frequencyOverlayPipeline && frequencyOverlaySrb) {
+        cb->setGraphicsPipeline(frequencyOverlayPipeline);
+        cb->setShaderResources(frequencyOverlaySrb);
+        cb->setViewport({0, 0,
+            static_cast<float>(outputSize.width()),
+            static_cast<float>(outputSize.height())});
+        const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
+        cb->setVertexInput(0, 1, &vbuf);
+        cb->draw(4);
+    }
+
+    // Screen-space chrome stays fixed above the transformed markers: frequency
+    // and amplitude scales, SQL lines, cursor/status text, and time controls.
+    if (m_ovPipeline && m_ovSrb) {
         cb->setGraphicsPipeline(m_ovPipeline);
         cb->setShaderResources(m_ovSrb);
         cb->setViewport({0, 0,
@@ -11764,6 +12026,11 @@ void SpectrumWidget::releaseResources()
 
     delete m_ovPipeline;     m_ovPipeline = nullptr;
     delete m_ovSrb;          m_ovSrb = nullptr;
+    delete m_ovFrequencySrb; m_ovFrequencySrb = nullptr;
+    delete m_ovFrequencyGpuTex; m_ovFrequencyGpuTex = nullptr;
+    delete m_ovPreviewPipeline; m_ovPreviewPipeline = nullptr;
+    delete m_ovPreviewSrb;      m_ovPreviewSrb = nullptr;
+    delete m_ovPreviewUbo;      m_ovPreviewUbo = nullptr;
     delete m_ovVbo;          m_ovVbo = nullptr;
     delete m_ovGpuTex;       m_ovGpuTex = nullptr;
     delete m_ovSampler;      m_ovSampler = nullptr;

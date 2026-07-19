@@ -1780,6 +1780,7 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/texturedquad_rowframes.frag
             resources/shaders/overlay.vert
             resources/shaders/overlay.frag
+            resources/shaders/overlay_frequency_preview.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
             resources/shaders/panscope.frag

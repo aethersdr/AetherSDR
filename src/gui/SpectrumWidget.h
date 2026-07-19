@@ -1315,12 +1315,16 @@ private:
     double m_frequencyPreviewBaseBandwidthMhz{0.0};
     double m_frequencyPreviewTargetCenterMhz{0.0};
     double m_frequencyPreviewTargetBandwidthMhz{0.0};
+    double m_frequencyPreviewOverlayBaseCenterMhz{0.0};
+    double m_frequencyPreviewOverlayBaseBandwidthMhz{0.0};
     quint64 m_frequencyPreviewUpdateCount{0};
     quint64 m_frequencyPreviewPresentCount{0};
     quint64 m_frequencyPreviewCommitCount{0};
     quint64 m_frequencyPreviewNativeVisibleRows{0};
     quint64 m_frequencyPreviewRemappedDssRows{0};
     quint64 m_frequencyPreviewSuppressedViewportRebuilds{0};
+    quint64 m_frequencyPreviewOverlayTransformCount{0};
+    quint64 m_frequencyPreviewOverlayCommitRefreshCount{0};
     QVector<float> m_frequencyPreviewDssScratch;
     qint64 m_frequencyPreviewCommitLastNs{0};
     qint64 m_frequencyPreviewCommitMaxNs{0};
@@ -1623,17 +1627,29 @@ private:
     double m_wfFrameReferenceCenterMhz{0.0};
     QVector<float> m_wfFrameUpload;  // RGBA32F staging, four floats per row
 
-    // Overlay GPU resources (QPainter → QImage → texture)
-    // Static: grid, band plan, scales, slice markers, TNF, spots (repainted on state change)
-    // Dynamic: FFT spectrum line (repainted every frame)
+    // Overlay GPU resources (QPainter → QImage → texture). Screen-space
+    // chrome and frequency-anchored markers use separate textures so only the
+    // latter is remapped during a pan/zoom preview.
     QRhiGraphicsPipeline* m_ovPipeline{nullptr};
     QRhiShaderResourceBindings* m_ovSrb{nullptr};
+    QRhiShaderResourceBindings* m_ovFrequencySrb{nullptr};
+    QRhiTexture* m_ovFrequencyGpuTex{nullptr};
+    // The frequency-overlay preview pipeline reuses the drag-start texture and
+    // remaps its frequency-canvas pixels in the fragment shader. Fixed chrome
+    // remains in the unmodified screen-space texture above it.
+    QRhiGraphicsPipeline* m_ovPreviewPipeline{nullptr};
+    QRhiShaderResourceBindings* m_ovPreviewSrb{nullptr};
+    QRhiBuffer* m_ovPreviewUbo{nullptr};
     QRhiBuffer* m_ovVbo{nullptr};
     QRhiTexture* m_ovGpuTex{nullptr};
     QRhiSampler* m_ovSampler{nullptr};
-    QImage m_overlayStatic;     // grid, band plan, scales, markers — drawn ABOVE FFT
+    QImage m_overlayStatic;     // screen-space chrome — drawn ABOVE FFT
+    QImage m_overlayFrequency;  // frequency-anchored markers — drawn ABOVE FFT
+    QImage m_frequencyScalePreviewImage;  // narrow partial-upload staging strip
     bool m_overlayStaticDirty{true};
     bool m_overlayNeedsUpload{true};
+    bool m_overlayFrequencyNeedsUpload{true};
+    bool m_frequencyScalePreviewNeedsUpload{false};
 
     // Background-image layer — kept separate from m_overlayStatic so it can
     // render BELOW the FFT trace (parity with the software paint path).  Same
@@ -1720,6 +1736,11 @@ private:
         quint64 overlayRebuilds{0};       // static+bg QPainter repaints
         quint64 overlayRebuildUs{0};
         quint64 overlayUploadBytes{0};    // static+bg texture bytes uploaded
+        quint64 previewOverlayTransforms{0};
+        quint64 previewOverlayCommitRefreshes{0};
+        quint64 previewScaleRefreshes{0};
+        quint64 previewScalePaintUs{0};
+        quint64 previewScaleUploadBytes{0};
         quint64 wfUploadBytes{0};         // waterfall texture bytes uploaded
         quint64 nativeWaterfallCalls{0};  // native VITA waterfall updates
         quint64 nativeWaterfallUs{0};
@@ -1758,6 +1779,18 @@ private:
     // dirty-cause breakdown — annotate call sites that can fire at frame rate.
     void markOverlayDirty(const char* cause = nullptr, bool scheduleUpdate = true) {
 #ifdef AETHER_GPU_SPECTRUM
+        // While a frequency preview is active, the drag-start overlay texture
+        // is the immutable source for the GPU remap. Defer unrelated overlay
+        // changes until commitFrequencyPreview() performs the exact final
+        // rebuild; repainting here would change the source frame underneath
+        // the transform and reintroduce the full-image interaction cost.
+        if (m_frequencyPreviewActive && m_ovPreviewPipeline
+            && m_ovPreviewSrb && m_ovPreviewUbo) {
+            if (scheduleUpdate) {
+                update();
+            }
+            return;
+        }
         if (!m_overlayStaticDirty)
             m_panStats.noteDirty(cause);
         m_overlayStaticDirty = true;
