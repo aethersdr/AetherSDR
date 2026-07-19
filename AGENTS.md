@@ -174,9 +174,10 @@ cmake --build build -j$(nproc)
 *once before* `cmake` to fetch the prebuilt `libdeepfilter` for your
 platform; configure will otherwise report `DFNR ... disabled — library
 not found` and gate the feature off. CI runs this step automatically
-(cached) in every build workflow, so release binaries always ship DFNR;
-it is a manual prereq only for local dev builds. NR still works without
-it via NR4 (libspecbleach).
+(cached) in the release-build workflows, so shipped binaries always
+include DFNR; it is a manual prereq only for local dev builds. NR still
+works without it — RN2 (RNNoise) is bundled and always built, needing no
+setup.
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
