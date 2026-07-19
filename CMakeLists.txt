@@ -563,6 +563,8 @@ set(CORE_SOURCES
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
+    src/core/AcomProtocol.cpp
+    src/core/AcomConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -758,6 +760,7 @@ set(GUI_SOURCES
     src/gui/PanFloatingWindow.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
+    src/gui/AcomApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -2815,6 +2818,14 @@ target_link_libraries(dstar_accessibility_test PRIVATE Qt6::Widgets)
 add_test(NAME dstar_accessibility_test COMMAND dstar_accessibility_test)
 set_tests_properties(dstar_accessibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(acom_protocol_test
+    tests/acom_protocol_test.cpp
+    src/core/AcomProtocol.cpp
+)
+target_include_directories(acom_protocol_test PRIVATE src)
+target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
+add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp

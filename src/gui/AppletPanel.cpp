@@ -11,6 +11,7 @@
 #include "VuMeterSettings.h"
 #include "TunerApplet.h"
 #include "AmpApplet.h"
+#include "AcomApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -733,6 +734,18 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // ACOM S-series amplifier — independent of AMP (PGXL): a station can
+    // have both a radio-relayed PGXL and a direct-connected ACOM amplifier
+    // at once. See docs/architecture/acom-600s-amplifier-design.md.
+    m_acomApplet = new AcomApplet;
+    {
+        auto entry = makeEntry("ACOM", "ACOM Amplifier", m_acomApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_acomBtn = entry.btn;
+        markHardwareConditional("ACOM");
+        m_appletOrder.append(entry);
+    }
+
     m_txApplet = new TxApplet;
     m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
 
@@ -1369,6 +1382,12 @@ void AppletPanel::setTunerVisible(bool visible)
 void AppletPanel::setAmpVisible(bool visible)
 {
     updateHardwareAvailability("AMP", "Applet_AMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setAcomVisible(bool visible)
+{
+    updateHardwareAvailability("ACOM", "Applet_ACOM", visible);
     applyBarLayout();
 }
 

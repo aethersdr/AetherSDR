@@ -30,6 +30,7 @@
 #include "GpsLocationDialog.h"
 #include "RxApplet.h"
 #include "AmpApplet.h"
+#include "AcomApplet.h"
 #include "HealthApplet.h"
 #include "MeterApplet.h"
 #include "ProfileSwitcherApplet.h"
@@ -3717,7 +3718,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager);
+                              m_kiwiSdrManager, &m_acomConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -4418,10 +4419,18 @@ void MainWindow::wireMeters()
         m_tgxlConn.setAutoReconnect(ar);
         m_pgxlConn.setAutoReconnect(ar);
         m_antennaGenius.setAutoReconnect(ar);
+        m_acomConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // ACOM deliberately does NOT route through AmpModel — it has its own
+    // dedicated AcomApplet talking straight to AcomConnection (commands and
+    // telemetry alike), so AmpModel stays 100% PGXL/Flex-relay-only. Wiring
+    // ACOM into AmpModel's shared presence signal previously caused the AMP
+    // (PGXL) panel to appear whenever ACOM connected, since AmpModel::present()
+    // couldn't distinguish "PGXL relayed" from "ACOM direct". See
+    // docs/architecture/acom-600s-amplifier-design.md.
     // Also attempt connection when TGXL IP arrives (may come after presence)
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, [this]() {
         auto* tuner = &m_radioModel.tunerModel();
@@ -4549,6 +4558,119 @@ void MainWindow::wireMeters()
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
         m_radioModel.amplifier().setOperate(on);
     });
+
+    // ── ACOM S-series amplifier — serial or ser2net, no FlexRadio relay ─────
+    // See docs/architecture/acom-600s-amplifier-design.md. All signal wiring
+    // happens before the startup auto-connect trigger at the bottom of this
+    // block — connectSerial() can call onTransportUp() synchronously (unlike
+    // connectNetwork(), which waits on the TCP handshake), so wiring after
+    // triggering auto-connect would silently miss the first connected()/
+    // modelChanged() emission on every app start with a saved serial config.
+    connect(&m_acomConn, &AcomConnection::connected, this, [this]() {
+        auto* acom = m_appletPanel->acomApplet();
+        // Source label from the live transport, not the persisted
+        // ConnectionMode setting — the two can diverge (mode combo switched in
+        // Radio Setup without a reconnect), which would mislabel an active
+        // serial link as "NETWORK". See AcomConnection::sourceLabel().
+        acom->setSource(m_acomConn.sourceLabel());
+        acom->setConnected(true);
+        m_appletPanel->setAcomVisible(true);
+    });
+    connect(&m_acomConn, &AcomConnection::disconnected, this, [this]() {
+        m_appletPanel->acomApplet()->setConnected(false);
+        m_appletPanel->setAcomVisible(false);
+    });
+    connect(m_appletPanel->acomApplet(), &AcomApplet::clearFaultClicked, this, [this]() {
+        m_acomConn.clearFaults();
+    });
+    connect(m_appletPanel->acomApplet(), &AcomApplet::operateToggled, this, [this](bool on) {
+        m_acomConn.setOperate(on);
+    });
+    connect(m_appletPanel->acomApplet(), &AcomApplet::offClicked, this, [this]() {
+        m_acomConn.powerOff();
+    });
+
+    // Gauge ranges (and the temperature-offset used per telemetry frame below)
+    // re-apply every time the effective model changes — at connect ("default"
+    // = 600S, our one confirmed model), when a SystemConfig reply confirms a
+    // model ("confirmed"), and whenever observed forward power outgrows the
+    // current tier ("auto-scaled"). See design doc §6 for why there's no
+    // model-selector dropdown driving this instead.
+    connect(&m_acomConn, &AcomConnection::modelChanged, this,
+            [this](const QString& model, const QString& reason) {
+        const auto& spec = AetherSDR::Acom::modelSpec(model);
+        auto* acom = m_appletPanel->acomApplet();
+        acom->setPowerRange(spec.nominalForwardW, spec.maxForwardW);
+        acom->setReflectedRange(spec.nominalReflectedW, spec.maxReflectedW);
+        acom->setDiagnosticTooltip(QStringLiteral("Scaled for %1 (%2)").arg(model, reason));
+    });
+    // SystemConfig (0x11) is one-shot diagnostic info — firmware/serial/the
+    // raw amplifierType byte — surfaced so a user with an unrecognized model
+    // can report it back to the project (design doc §6's "help us confirm").
+    connect(&m_acomConn, &AcomConnection::systemConfigReceived, this,
+            [this](const AetherSDR::Acom::SystemConfig& cfg) {
+        auto* acom = m_appletPanel->acomApplet();
+        const QString modelGuess = AetherSDR::Acom::modelNameForAmplifierType(cfg.amplifierType);
+        const QString identity = modelGuess.isEmpty()
+            ? QStringLiteral("type %1 (unrecognized)").arg(cfg.amplifierType)
+            : modelGuess;
+        acom->setDiagnosticTooltip(QStringLiteral(
+            "Detected: %1 · FW %2.%3 · S/N %4\nUnrecognized type? Please report it — "
+            "see docs/architecture/acom-600s-amplifier-design.md")
+            .arg(identity)
+            .arg(cfg.fwVersion)
+            .arg(cfg.fwSubVersion)
+            .arg(cfg.serialNumberHex));
+    });
+
+    connect(&m_acomConn, &AcomConnection::telemetryUpdated, this,
+            [this](const AetherSDR::Acom::Telemetry& t) {
+        auto* acom = m_appletPanel->acomApplet();
+        const QString effectiveModel = m_acomConn.currentModel();
+        const auto& spec = AetherSDR::Acom::modelSpec(effectiveModel);
+
+        acom->setForwardPower(static_cast<float>(t.forwardPowerW));
+        acom->setReflectedPower(static_cast<float>(t.reflectedPowerW));
+        acom->setSwr(t.swr_x100 / 100.0f);
+        acom->setDrainCurrent(t.id1_mA / 1000.0f);
+        acom->setDrainVoltage(t.hv1_x10V / 10.0f);
+        acom->setTemp(static_cast<float>(t.paTempRaw) - static_cast<float>(spec.temperatureOffset));
+        acom->setBand(AetherSDR::Acom::bandName(t.activeBand));
+        acom->setUptime(t.systemClockSec);
+        acom->setMode(t.mode);
+        acom->setFaultText(t.errorCode == 0xFF
+            ? QString()
+            : AetherSDR::Acom::errorCodeName(t.errorCode));
+        acom->setClearFaultEnabled(t.errorCode != 0xFF);
+    });
+
+    // Startup auto-connect from saved Peripherals settings — deliberately
+    // last in this block (see the comment above). Unlike PGXL/TGXL (which
+    // auto-connect when the *radio* reports their IP), the ACOM has no
+    // radio-side presence signal at all — the saved setting is the only
+    // trigger there will ever be.
+    {
+        const QString mode = PeripheralSettings::deviceString("Acom", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        if (mode == "Network") {
+            const QString ip = PeripheralSettings::deviceString("Acom", "ManualIp");
+            const int port = PeripheralSettings::deviceInt("Acom", "ManualPort", 7000);
+            if (!ip.isEmpty())
+                m_acomConn.connectNetwork(ip, static_cast<quint16>(port));
+        }
+#ifdef HAVE_SERIALPORT
+        else {
+            const QString port = PeripheralSettings::deviceString("Acom", "SerialPort");
+            if (!port.isEmpty())
+                m_acomConn.connectSerial(port);
+        }
+#endif
+    }
 
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.
     // All three power gauges (TxApplet, TunerApplet, SMeterWidget) update together.
