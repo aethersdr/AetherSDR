@@ -131,15 +131,16 @@ public:
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
     void setRenderScheduler(PanadapterRenderScheduler* scheduler);
-    // macOS: whether the pan gets its own native NSView. QRhiWidget is only
-    // enabled with Qt 6.7+, where the composited child-widget path is available,
-    // so keep the cheaper single-window path as the default. The native path is
-    // retained as an escape hatch for platform-specific QRhi regressions.
+    // macOS: whether the pan gets its own native NSView (historical default —
+    // #714). AETHER_PAN_NO_NATIVE_WINDOW=1 opts out to validate the cheaper
+    // composited path (no per-present raster flushSubWindow blend). Keep the
+    // native path as the production default because current Qt/macOS versions
+    // can otherwise leave a QRhiWidget inside a raster top-level window with no
+    // Metal surface, producing a transparent panadapter.
     static bool nativeWindowPreferred() {
-        static const bool native =
-            qEnvironmentVariableIntValue("AETHER_PAN_NATIVE_WINDOW") == 1
-            && qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") != 1;
-        return native;
+        static const bool noNative =
+            qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1;
+        return !noNative;
     }
     // macOS: apply the native-window isolation policy as one unit — request the
     // native Metal leaf (WA_NativeWindow) *and* block ancestor promotion
