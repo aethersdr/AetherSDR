@@ -9615,7 +9615,9 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 {
     SPECTRUM_BASE_CLASS::resizeEvent(ev);
     ++m_resizeEventCount;
-    commitFrequencyPreview();
+    if (m_frequencyPreviewActive) {
+        commitFrequencyPreview();
+    }
 
     // Keep every size-dependent buffer at the last completed size while the
     // window is moving. QRhiWidget scales that fixed color buffer to the
