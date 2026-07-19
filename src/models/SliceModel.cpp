@@ -761,10 +761,16 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     const int previousReceiveSquelchLevel = receiveSquelchLevel();
     const bool previousExternalAutoSquelch = m_externalReceiveAutoSquelch;
     if (active) {
-        m_externalReceiveAudioGain = m_audioGain;
-        m_externalReceiveAudioPan = m_audioPan;
-        m_externalReceiveAudioMute = false;
-        m_externalReceiveAudioReplacement = true;
+        // Only snapshot the Flex gain/pan on the false→true transition. Calling
+        // this again while replacement is already active (e.g. switching from
+        // one Kiwi RX source to another) must not clobber the external volume
+        // the user has since adjusted — see #4300.
+        if (!m_externalReceiveAudioReplacement) {
+            m_externalReceiveAudioGain = m_audioGain;
+            m_externalReceiveAudioPan = m_audioPan;
+            m_externalReceiveAudioMute = false;
+            m_externalReceiveAudioReplacement = true;
+        }
         if (!m_audioMute) {
             m_audioMute = true;
             sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
