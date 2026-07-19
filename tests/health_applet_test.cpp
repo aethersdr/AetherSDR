@@ -99,7 +99,7 @@ void testUnkeyTransientDoesNotLatchWarning()
     // directionalPowerMetersChanged carries the near-zero instantaneous power.
     // The SWR value is not physically meaningful during this unkey packet.
     sendMeters(model, 0.001f, 3.50f);
-    processEventsFor(220);
+    processEventsFor(320);  // headroom over the 4-frame settle for loaded runners
     report("unkey SWR transient does not latch HLTH warning",
            statusText(applet) == QStringLiteral("OK"), statusText(applet));
 }

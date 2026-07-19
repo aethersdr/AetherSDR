@@ -124,6 +124,8 @@ private:
     bool m_paused{false};
     MeterSource m_swrAdmissionSource{MeterSource::None};
     qint64 m_lastAdmittedSwrSampleMs{0};
+    int m_swrInactiveFrames{0};
+    int m_swrSourceMismatchFrames{0};
     int m_activeFrames{0};
     int m_idleFrames{0};
     int m_incidentCooldownFrames{0};
