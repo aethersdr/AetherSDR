@@ -29,7 +29,15 @@ void report(const char* name, bool ok)
 QByteArray readAll(const QString& path)
 {
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly))
+    // Read back with QIODevice::Text to mirror how AsyncLogWriter WRITES the
+    // file (it opens with QIODevice::Text so log files get native line endings).
+    // Without the matching flag this read is asymmetric: on Windows the writer
+    // emits "\r\n" while every expectation in this file is written as "\n", so
+    // each exact-match assertion failed on the platform's line-ending
+    // translation rather than on anything the writer got wrong. Text mode here
+    // normalises "\r\n" back to "\n" on read, making the comparisons
+    // line-ending agnostic on Windows and unchanged on POSIX.
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
         return {};
     return f.readAll();
 }
