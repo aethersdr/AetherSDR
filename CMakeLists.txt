@@ -1777,6 +1777,7 @@ if(AETHER_GPU_SPECTRUM)
         FILES
             resources/shaders/texturedquad.vert
             resources/shaders/texturedquad.frag
+            resources/shaders/texturedquad_rowframes.frag
             resources/shaders/overlay.vert
             resources/shaders/overlay.frag
             resources/shaders/spectrum.vert
@@ -2651,6 +2652,13 @@ add_executable(dss_renderer_test
 target_include_directories(dss_renderer_test PRIVATE src)
 target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
+
+add_executable(spectrum_preview_logic_test
+    tests/spectrum_preview_logic_test.cpp
+)
+target_include_directories(spectrum_preview_logic_test PRIVATE src)
+target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
+add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
 add_executable(kiwi_sdr_redirect_policy_test
     tests/kiwi_sdr_redirect_policy_test.cpp
