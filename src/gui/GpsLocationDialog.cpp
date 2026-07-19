@@ -40,9 +40,19 @@ QString displayValue(const QString& value)
 bool statusIsLocked(QString status)
 {
     status = status.trimmed().toLower();
-    return status.contains(QStringLiteral("lock"))
-        && !status.contains(QStringLiteral("unlock"))
-        && !status.contains(QStringLiteral("no lock"));
+    if (!status.contains(QLatin1String("lock"))) {
+        return false;
+    }
+    // Reject every negative phrasing that still contains "lock" — the radio's
+    // exact status vocabulary varies by firmware, so match intent rather than a
+    // single literal: "unlocked", "no lock", "not locked", "lock lost",
+    // "loss of lock", etc. all mean not-locked.
+    for (const char* negative : {"unlock", "no lock", "not lock", "lost", "loss"}) {
+        if (status.contains(QLatin1String(negative))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 QString referenceName(QString value)

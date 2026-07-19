@@ -2202,7 +2202,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 46 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 47 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|

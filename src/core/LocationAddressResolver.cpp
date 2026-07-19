@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLocale>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrlQuery>
@@ -19,6 +20,10 @@ constexpr int kMinimumRequestIntervalMs = 1000;
 constexpr int kRequestTimeoutMs = 10000;
 constexpr qint64 kMaximumResponseBytes = 256 * 1024;
 constexpr int kMaximumAddressCharacters = 1024;
+// Bounds the in-memory jitter cache: a stationary station never approaches
+// this, while a mobile station moving through many 11 m cells won't grow it
+// without limit over a long session.
+constexpr int kMaximumCacheEntries = 512;
 constexpr const char* kDefaultBaseUrl = "https://nominatim.openstreetmap.org/reverse";
 
 bool validCoordinate(double latitude, double longitude)
@@ -123,7 +128,13 @@ void LocationAddressResolver::startRequest(double latitude, double longitude)
             .arg(QCoreApplication::applicationVersion())
             .toUtf8());
     request.setRawHeader("Accept", "application/json");
-    request.setRawHeader("Accept-Language", qgetenv("LANG"));
+    // A BCP-47 language tag ("en-US"), not the raw POSIX locale ("en_US.UTF-8")
+    // which is not a valid Accept-Language value and would be ignored.
+    QString languageTag = QLocale::system().name();  // e.g. "en_US"
+    languageTag.replace(QLatin1Char('_'), QLatin1Char('-'));
+    if (!languageTag.isEmpty() && languageTag != QLatin1String("C")) {
+        request.setRawHeader("Accept-Language", languageTag.toLatin1());
+    }
     request.setTransferTimeout(kRequestTimeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -133,6 +144,17 @@ void LocationAddressResolver::startRequest(double latitude, double longitude)
     m_reply = reply;
     reply->setProperty("gpsLatitude", latitude);
     reply->setProperty("gpsLongitude", longitude);
+
+    // Enforce the response-size cap DURING transfer, not just after: a chunked
+    // response with no Content-Length would otherwise buffer unbounded in memory
+    // before the post-hoc read() check. Aborting here bounds memory to the cap;
+    // finished() then runs with OperationCanceledError and the failure path.
+    connect(reply, &QNetworkReply::downloadProgress, this,
+            [reply](qint64 received, qint64 total) {
+        if (received > kMaximumResponseBytes || total > kMaximumResponseBytes) {
+            reply->abort();
+        }
+    });
 
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         const double latitude = reply->property("gpsLatitude").toDouble();
@@ -163,6 +185,12 @@ void LocationAddressResolver::startRequest(double latitude, double longitude)
             if (address.isEmpty()) {
                 failure = tr("No mapped address was found for this location");
             } else {
+                // Bound the jitter cache — clear wholesale on overflow rather
+                // than tracking per-entry age (this is a coalescing cache, not
+                // an LRU: dropping it just re-issues a lookup on the next fix).
+                if (m_cache.size() >= kMaximumCacheEntries) {
+                    m_cache.clear();
+                }
                 m_cache.insert(cacheKey(latitude, longitude), address);
                 emit resolved(latitude, longitude, address);
             }
