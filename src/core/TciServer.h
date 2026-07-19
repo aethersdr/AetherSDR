@@ -162,6 +162,7 @@ private:
     void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
                               int trx, int channel);
     void broadcastSliceFrequencies(SliceModel* slice);
+    void publishActiveTrx();
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
@@ -244,6 +245,12 @@ private:
     QWebSocketServer* m_server{nullptr};
     QList<ClientState> m_clients;
     QSet<int>         m_tciDaxSlices;   // slice IDs where we auto-assigned DAX (#1331)
+    int               m_activeTrx{-1};  // TRX holding GUI focus; -1 = not yet observed (#4160)
+    // The focused slice by identity. trx is positional and shifts when an
+    // earlier slice is removed, so the pointer is what survives renumbering;
+    // QPointer clears if the slice is destroyed (#4160).
+    QPointer<SliceModel> m_activeSlice;
+    QString           m_activeLetter;   // focused slice's display letter (#4160)
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;

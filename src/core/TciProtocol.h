@@ -72,7 +72,27 @@ public:
     // TciServer directly (same pattern as pendingMasterVolume).
     int pendingTxGain() const { return m_pendingTxGain; }
 
+    // Which TCI TRX currently holds GUI focus (#4160). TciServer owns this
+    // value and pushes it in — it cannot be derived reliably by scanning
+    // slices for isActive(): SliceModel::setActive() sets the new slice's
+    // flag optimistically (SliceModel.cpp, #3854 review) while the outgoing
+    // slice keeps its flag until the radio echoes active=0, so for one round
+    // trip TWO slices report active and a scan returns whichever comes first
+    // in slice order. -1 = not yet known, in which case the scan is used as
+    // the startup fallback (before any focus change has been observed).
+    void setActiveSlice(int trx, const QString& letter)
+    {
+        m_activeTrx = trx;
+        m_activeLetter = letter;
+    }
+    int activeTrx() const { return m_activeTrx; }
+
 private:
+    // Resolves the focused slice into its trx and display letter, falling
+    // back to a slice scan while m_activeTrx is -1. Returns false when there
+    // is no model or no slice reports active.
+    bool resolveActiveSlice(int& trx, QString& letter) const;
+
     // Command handlers — return response string or empty
     QString cmdVfo(const QStringList& args, bool isSet);
     QString cmdModulation(const QStringList& args, bool isSet);
@@ -104,6 +124,7 @@ private:
     // AetherSDR extensions (DVK record/play)
     QString cmdRxRecord(const QStringList& args, bool isSet);
     QString cmdRxPlay(const QStringList& args, bool isSet);
+    QString cmdActiveSlice(const QStringList& args);
     QString cmdSpot(const QStringList& args);
     QString cmdSpotDelete(const QStringList& args);
     QString cmdSpotClear();
@@ -147,6 +168,12 @@ public:
     static QString smartsdrToTci(const QString& mode);
     static QString tciToSmartSDR(const QString& mode);
 
+    // Slice display letter for `active_slice` (#4160), public for the same
+    // reason. `index_letter` is radio-supplied, and a stray ',' or ';' in it
+    // would corrupt the TCI framing for every client, so it is reduced to the
+    // short alphanumeric label it is meant to be (Principle VII).
+    static QString sanitizeSliceLetter(const QString& letter);
+
     // Map a slice to its contiguous TCI TRX index (0..N-1) within the
     // owned-slice list.  Falls back to the raw Flex sliceId() if the
     // slice is not in the model's list.
@@ -174,6 +201,8 @@ private:
     std::optional<TrxRequest> m_trxRequest;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
+    int         m_activeTrx{-1};             // -1 = focus not yet known (#4160)
+    QString     m_activeLetter;              // focused slice's display letter (#4160)
     bool        m_started{false};  // client sent START
 };
 

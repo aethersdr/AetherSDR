@@ -27,6 +27,37 @@ int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
     return index >= 0 ? index : slice->sliceId();
 }
 
+QString TciProtocol::sanitizeSliceLetter(const QString& letter)
+{
+    QString clean;
+    for (const QChar c : letter) {
+        if (c.isLetterOrNumber())
+            clean.append(c);
+    }
+    return clean.left(2);
+}
+
+bool TciProtocol::resolveActiveSlice(int& trx, QString& letter) const
+{
+    if (m_activeTrx >= 0) {
+        trx = m_activeTrx;
+        letter = m_activeLetter;
+        return true;
+    }
+    // Startup fallback only: no focus change has been observed yet, so no
+    // optimistic-set window can be open and a scan is unambiguous.
+    if (!m_model)
+        return false;
+    for (auto* s : m_model->slices()) {
+        if (s && s->isActive()) {
+            trx = tciTrxForSlice(m_model, s);
+            letter = sanitizeSliceLetter(s->letter());
+            return true;
+        }
+    }
+    return false;
+}
+
 long long TciProtocol::mhzToHz(double mhz)
 {
     return static_cast<long long>(std::round(mhz * 1e6));
@@ -300,6 +331,17 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("volume:%1;")
                      .arg(volumeDbFromPercent(
                          AppSettings::instance().value("MasterVolume", "100").toInt()));
+
+        // Which slice holds GUI focus (#4160) — AetherSDR extension. Without
+        // it a control surface learns focus only from the next change event,
+        // so every dial it owns targets trx 0 until the operator happens to
+        // switch slices. Emitted pre-READY with the rest of the state dump.
+        int activeTrx = -1;
+        QString activeLetter;
+        if (resolveActiveSlice(activeTrx, activeLetter)) {
+            burst += QStringLiteral("active_slice:%1,%2;")
+                         .arg(activeTrx).arg(activeLetter);
+        }
     }
 
     // ── Phase 3: Audio / IQ stream configuration ──────────────────────
@@ -436,6 +478,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "rx_record")        return cmdRxRecord(args, isSet);
     if (name == "rx_play")          return cmdRxPlay(args, isSet);
     if (name == "tx_gain")          return cmdTxGain(args, isSet);
+    if (name == "active_slice")     return cmdActiveSlice(args);
 
     // Unknown command — ignore silently per TCI spec
     return {};
@@ -1763,6 +1806,29 @@ QString TciProtocol::cmdDiguOffset(const QStringList& args, bool isSet)
 }
 
 // ── Focus / TX frequency ───────────────────────────────────────────────────
+
+// `active_slice:<trx>;` — AetherSDR extension (#4160). Read-only: reports
+// which slice holds GUI focus so a control surface can follow the operator
+// instead of hardcoding trx 0.
+//
+// Not to be confused with `set_in_focus` below — that is the inverse
+// direction (a client asking us to raise our window).
+//
+// SET is deliberately ignored. Focus is GUI-owned; letting a remote client
+// steal it would change default UX for every connected surface, which is
+// RFC territory (GOVERNANCE.md, "What requires an RFC"). Silent ignore
+// matches the TCI convention for commands the server does not honor.
+// The GET form takes no arguments, so anything present is a SET attempt.
+// Branch on args rather than the shared 2+-args isSet heuristic, which is
+// built for `trx,value` commands — the same shape cmdVolume uses.
+QString TciProtocol::cmdActiveSlice(const QStringList& args)
+{
+    if (!args.isEmpty()) return {};   // SET — ignored, see above
+    int trx = -1;
+    QString letter;
+    if (!resolveActiveSlice(trx, letter)) return {};
+    return QStringLiteral("active_slice:%1,%2;").arg(trx).arg(letter);
+}
 
 QString TciProtocol::cmdSetInFocus()
 {

@@ -219,6 +219,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 abortTciPtt();
             }
             m_tciDaxSlices.remove(sliceId);
+            // Removal renumbers every later slice's trx (#4160).
+            publishActiveTrx();
             auto* ps = m_model ? m_model->panStream() : nullptr;
             if (!ps) return;
             for (int ch = 1; ch <= 4; ++ch) {
@@ -421,6 +423,50 @@ void TciServer::broadcastMasterVolume(int pct)
                   .arg(TciProtocol::volumeDbFromPercent(pct)));
 }
 
+// Recompute the focused TRX and tell clients if it moved (#4160).
+//
+// Called both when focus changes and when a slice is removed. The removal
+// case is the non-obvious one: trx is a positional index, so removing a
+// slice renumbers every later slice, but the focused slice itself emits
+// nothing — it never lost focus. Without this the tracked trx (and every
+// client seeded from it) silently points at the wrong slice.
+//
+// Unlike vfo:/modulation:, active_slice has no follow-up event that would
+// self-correct: once only one slice remains the operator cannot switch
+// focus at all, so a stale value would persist indefinitely.
+//
+// Runs even with no clients connected — focus and slice count both change
+// freely before anyone connects, and m_activeTrx seeds each new client's
+// init burst.
+void TciServer::publishActiveTrx()
+{
+    int trx = -1;
+    QString letter;
+    // Resolved from the remembered slice rather than a scan: during a focus
+    // switch SliceModel::setActive() sets the incoming slice optimistically
+    // while the outgoing one keeps its flag until the radio echoes active=0,
+    // so a scan can transiently see two active slices (#3854 review).
+    if (m_activeSlice && m_model && m_model->slices().contains(m_activeSlice)) {
+        trx = TciProtocol::tciTrxForSlice(m_model, m_activeSlice);
+        letter = TciProtocol::sanitizeSliceLetter(m_activeSlice->letter());
+    }
+
+    // Letter is part of the dedupe: the radio can relabel a slice without
+    // focus moving (MultiFlex reassignment, #2606), and a controller showing
+    // "Slice A" must not keep showing it after the radio calls it B.
+    if (trx == m_activeTrx && letter == m_activeLetter) return;
+    m_activeTrx = trx;
+    m_activeLetter = letter;
+    for (auto& c : m_clients) {
+        if (c.protocol) c.protocol->setActiveSlice(trx, letter);
+    }
+    // trx < 0 means the focused slice is gone and nothing has claimed focus
+    // yet; stay silent rather than announce a slice that does not exist. The
+    // radio's next activeChanged brings us back.
+    if (trx >= 0 && !m_clients.isEmpty())
+        broadcast(QStringLiteral("active_slice:%1,%2;").arg(trx).arg(letter));
+}
+
 void TciServer::setTxGain(float gain)
 {
     const float clamped = std::clamp(gain, 0.0f, 1.0f);
@@ -483,6 +529,11 @@ void TciServer::onNewConnection()
         ws->setMaxAllowedIncomingFrameSize(kMaxWsMessageBytes);
 
         auto* protocol = new TciProtocol(m_model, &m_routingState);
+        // Seed GUI focus so this client's init burst and any `active_slice`
+        // GET report the current slice, not a stale scan (#4160). Stays -1
+        // if no focus change has been observed yet, in which case the
+        // protocol falls back to scanning.
+        protocol->setActiveSlice(m_activeTrx, m_activeLetter);
 
         ClientState cs;
         cs.socket = ws;
@@ -2147,6 +2198,43 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         broadcast(QStringLiteral("lock:%1,%2;")
                       .arg(trx).arg(locked ? "true" : "false"));
     });
+
+    // GUI focus → `active_slice:trx;` broadcast (#4160). Control surfaces
+    // (Elgato / StreamController / Ulanzi) otherwise hardcode trx 0 and every
+    // dial keeps addressing slice A no matter what the operator selected.
+    //
+    // Only the true edge is relayed. A slice losing focus also emits
+    // activeChanged(false), and the gaining slice's true edge is the
+    // authoritative event — relaying the false edge would emit a second,
+    // wrong active_slice for the outgoing trx.
+    //
+    // The focused slice is remembered by identity, not by trx: trx is
+    // positional, so a later slice removal renumbers it (see
+    // publishActiveTrx()).
+    connect(slice, &SliceModel::activeChanged, this, [this, slice](bool active) {
+        if (!active) return;
+        m_activeSlice = slice;
+        publishActiveTrx();
+    });
+
+    // The radio can relabel a slice without focus moving (MultiFlex
+    // reassignment, #2606). Re-announce so a controller showing "Slice A"
+    // does not keep showing it after the radio calls it something else.
+    connect(slice, &SliceModel::letterChanged, this, [this, slice](const QString&) {
+        if (slice != m_activeSlice) return;
+        publishActiveTrx();
+    });
+
+    // Seed from current state — the activeChanged edge above is not enough.
+    // RadioModel decodes the radio's slice status (applying active=1, which
+    // emits activeChanged) BEFORE it emits sliceAdded, and sliceAdded is what
+    // triggers this wiring. So for every newly added slice the focus edge has
+    // already fired by the time we connect, and nothing re-fires it: adding a
+    // slice made it active in the GUI while TCI kept reporting the old one.
+    if (slice->isActive()) {
+        m_activeSlice = slice;
+        publishActiveTrx();
+    }
 
     // Per-slice audioGain → `rx_volume:trx,N;` broadcast. Without this,
     // a GUI change to a slice's audio level was invisible to TCI clients;
