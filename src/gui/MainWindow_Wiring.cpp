@@ -1328,8 +1328,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         syncTxWaterfallSliceToSpectrums();
         updateSplitState();
 
-        SliceModel* active = activeSlice();
-        updateKeyerAvailability(active ? active->mode() : QString());
+        // TX flag just moved — keyer availability follows the TX slice (#4173).
+        updateKeyerAvailability();
 
         // Active follows TX slice (#1351) — switch the displayed/active slice
         // when an external program (e.g. WSJT-X) moves the TX flag
@@ -1384,12 +1384,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
             }
         }
 
-        // Shortcuts follow the selected slice, while CWX availability follows
-        // the TX slice. Re-evaluate when either slice changes mode (#4173).
-        if (s->sliceId() == m_activeSliceId || s->isTxSlice()) {
-            SliceModel* active = activeSlice();
-            updateKeyerAvailability(active ? active->mode() : QString());
-        }
+        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice,
+        // so re-evaluate only when the TX slice changes mode (#4173).
+        if (s->isTxSlice())
+            updateKeyerAvailability();
 #ifdef HAVE_RADE
         if (mode.startsWith("FDV"))
             activateFdvDisplay(s->sliceId());

@@ -372,6 +372,10 @@ public:
 
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
+    // The slice that transmits (IsTransmitSlice), or nullptr if none. Mirrors
+    // FlexLib's TX-slice scan (CWX::getTXFrequency, CWX.cs:186) — keyer/CWX
+    // targeting follows this slice, not the selected RX slice.
+    SliceModel* txSlice() const;
     QMap<int, QString> rawSliceModeLists() const { return m_rawSliceModeLists; }
     int rawModeOccurrenceCount(const QString& mode) const;
     int activeTxSliceNum() const;
@@ -930,7 +934,6 @@ private:
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     void applyTuneInhibit();    // suppress selected TX outputs before tune
     void restoreTuneInhibit();  // re-enable TX outputs after tune
-    SliceModel* txSlice() const;
     QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
