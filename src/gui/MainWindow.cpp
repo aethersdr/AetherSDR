@@ -1435,7 +1435,7 @@ MainWindow::MainWindow(QWidget* parent)
         // Also refresh the station/nickname label: the nickname can be corrected
         // by the async "info" reply after connect, and this handler previously
         // updated only model + version, leaving a stale station name on screen.
-        if (m_stationLabel && !m_radioModel.nickname().isEmpty())
+        if (!m_radioModel.nickname().isEmpty())
             setStatusBarStationText(m_stationLabel, m_radioModel.nickname());
     });
 

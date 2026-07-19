@@ -3811,6 +3811,13 @@ void RadioModel::onDisconnected()
         m_staleSessionSerial = m_chassisSerial;
     m_chassisSerial.clear();
     m_callsign.clear();
+    // Clear the nickname here too, not just on the connectToRadio() seeding
+    // path: connectViaWan() takes no RadioInfo and the LAN auto-reconnect timer
+    // calls m_connection->connectToRadio(m_lastInfo) directly, both bypassing
+    // RadioModel::connectToRadio(). Clearing on the disconnect side closes all
+    // three paths at once, so a reconnect can never show the previous radio's
+    // station label while the async info reply is in flight. (#4260 review)
+    m_nickname.clear();
     m_region.clear();
     m_rxAudio = {};
     m_netCwStreamId = 0;
