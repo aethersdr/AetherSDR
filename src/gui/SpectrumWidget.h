@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <QHash>
 #include <QWidget>
@@ -18,6 +19,7 @@
 
 #include "DssRenderer.h"
 #include "SpectrumPreviewLogic.h"
+#include "WaterfallHistoryBuffer.h"
 
 class QVariantAnimation;
 class QSoundEffect;
@@ -839,7 +841,7 @@ private:
         int wfWriteRow{0};
         QVector<double> visibleRowCenterMhz;
         QVector<double> visibleRowBwMhz;
-        QImage waterfallHistory;
+        WaterfallHistoryBuffer waterfallHistory;
         QVector<qint64> historyTimestamps;
         int historyWriteRow{0};
         int historyRowCount{0};
@@ -848,7 +850,7 @@ private:
         QVector<double> historyRowBwMhz;
         bool live{true};
         int rowsSinceRateChange{0};
-        QVector<QRgb> prevTileScanline;
+        QVector<quint8> prevTileLevels;
         QVector<float> kiwiFftTrace;
         QVector<quint8> kiwiFftFallbackSeedMask;
         QVector<float> kiwiLastWaterfallBins;
@@ -883,7 +885,7 @@ private:
     const WaterfallStreamState* activeKiwiWaterfallStateConst() const;
     bool beginWaterfallStreamWrite(bool kiwiStream);
     void endWaterfallStreamWrite(bool kiwiStream, bool visibleStream);
-    void appendHistoryRow(const QRgb* rowData, qint64 timestampMs,
+    void appendHistoryRow(const quint8* intensityData, qint64 timestampMs,
                           double frameCenterMhz = -1.0,
                           double frameBandwidthMhz = -1.0);
     void appendDssHistoryRow(const QVector<float>& binsDbm,
@@ -1008,6 +1010,12 @@ private:
     QRgb dbmToRgb(float dbm) const;
     QRgb kiwiSdrLevelToRgb(float level) const;
     QRgb intensityToRgb(float intensity) const;  // for native waterfall tiles
+    float dbmToWaterfallLevel(float dbm) const;
+    float kiwiSdrWaterfallLevel(float level) const;
+    float intensityToWaterfallLevel(float intensity) const;
+    QRgb waterfallLevelToRgb(float level) const;
+    static quint8 encodeWaterfallLevel(float level);
+    std::array<QRgb, 256> waterfallHistoryColorLut() const;
     // 3DSS surface colour for a normalised strength s in [0,1] (0 = noise floor,
     // 1 = ref). The full colormap gradient, gamma-shaped by the "3D Gain"
     // control. Shared by the GPU LUT bake and the CPU fallback so both paths
@@ -1242,7 +1250,7 @@ private:
     // flattening the entire live texture into one pan/zoom frame.
     QVector<double> m_wfVisibleRowCenterMhz;
     QVector<double> m_wfVisibleRowBwMhz;
-    QImage m_waterfallHistory;
+    WaterfallHistoryBuffer m_waterfallHistory;
     QTimer* m_resizeBufferSettleTimer{nullptr};
     quint64 m_resizeEventCount{0};
     quint64 m_resizeBufferCommitCount{0};
@@ -1258,11 +1266,9 @@ private:
     int    m_wfHistoryRowCount{0};
     int    m_wfHistoryOffsetRows{0};
     // Per-row frequency frame: each history row records the center/bandwidth it
-    // was captured at (parallel to m_wfHistoryTimestamps). The full history image
-    // (up to ~24k rows, ~0.5 GB at ultrawide widths) is therefore never globally
-    // reprojected on a pan — instead rebuildWaterfallViewport remaps only the
-    // ~700 visible rows from their own frame to the requested viewport on live
-    // pan/zoom changes and time-scrollback.
+    // was captured at (parallel to m_wfHistoryTimestamps). Pixel history is a
+    // lazy, chunked 8-bit normalized-intensity ring rather than an eager RGB32
+    // image. rebuildWaterfallViewport remaps and colorizes only visible rows.
     QVector<double> m_wfHistoryRowCenterMhz;
     QVector<double> m_wfHistoryRowBwMhz;
     bool   m_wfLive{true};
@@ -1283,7 +1289,7 @@ private:
     // Before the first native tile, or after a rate change, hold fallback
     // briefly so fast previews do not flash FFT rows while native data catches up.
     qint64 m_nativeWaterfallFallbackHoldUntilMs{0};
-    QVector<QRgb> m_prevTileScanline;  // previous tile row for interpolation
+    QVector<quint8> m_prevTileLevels;  // previous normalized row for interpolation
 
     static constexpr float SMOOTH_ALPHA    = 0.35f;
     // Fraction of the panadapter area (above freq scale) used for spectrum
@@ -1477,7 +1483,7 @@ private:
     float m_wfBlankerRing[WF_BLANKER_N]{};
     int   m_wfBlankerRingIdx{0};
     int   m_wfBlankerRingCount{0};
-    QVector<QRgb> m_wfLastGoodRow;
+    QVector<quint8> m_wfLastGoodLevels;
     int  m_bandPlanFontSize{6};  // 0 = off
     bool m_bandPlanShowSpots{true};
     BandPlanManager* m_bandPlanMgr{nullptr};

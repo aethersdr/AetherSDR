@@ -742,7 +742,7 @@ separately because they are a subset of FFT/waterfall ingest.
      "measuredMainThreadMsPerSec":10.7,
      "hiddenWaterfallUpdatesPerSec":0.0,
      "hiddenDssHistoryRowsPerSec":0.0,
-     "waterfallAllocatedBytes":102760448,
+     "waterfallAllocatedBytes":583680,
      "dssAllocatedBytes":37847040},
    "pans":[...],"scopes":[...],"renderScheduler":{...}}
 ```
@@ -787,9 +787,9 @@ cost a few integer adds per frame.
 | `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
 | `nativeWaterfall*` / `kiwiWaterfall*` | source-specific ingest rate and GUI-thread cost; `HiddenUpdates` identifies background Flex/Kiwi work |
-| `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained RGB-history write rates/cost (RGB history is written only for the visible source) |
+| `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained compact-intensity-history write rates/cost (history is written only for the visible source) |
 | `dssLiveRows*` / `dssHistoryRows*` | 96-row live 3D surface work versus deep retained scrollback work; `dssHiddenLiveRowsPerSec` exposes the hidden-Flex live-ring warming (#4081) — hidden sources retain no deep history |
-| `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage, including hidden-source retained history |
+| `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage; waterfall history is counted by actually allocated lazy chunks, not logical capacity |
 | `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
 | `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 
