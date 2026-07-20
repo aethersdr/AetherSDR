@@ -16,6 +16,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/CenterLockRebindTracker.h"
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
@@ -496,6 +497,7 @@ private:
         KiwiSdrUiSyncPanadapterStates = 0x08,
     };
     void scheduleKiwiSdrUiSync(int flags);
+    void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
@@ -997,12 +999,12 @@ private:
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
     QSet<QString>    m_kiwiSdrFlexDisplayPans;
-    // Retains a KiwiSDR replacement across the slice remove->re-add a FLEX
-    // band-stack recall performs (band_persistence drops+re-creates the slice
-    // with the same id at the new band). The tracker is the pure policy; the
-    // grace window itself is a QTimer::singleShot in onSliceRemoved. (#4158)
+    // Retain client-side receiver state across the slice teardown/rebuild a
+    // FLEX band-stack recall performs. The trackers are pure lifecycle policy;
+    // MainWindow owns their side effects and shared grace window.
     KiwiRebindTracker    m_kiwiRebind;
-    static constexpr int kKiwiSdrRebindGraceMs = 1500;
+    CenterLockRebindTracker m_centerLockRebind;
+    static constexpr int kBandRecallRecreateGraceMs = 1500;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1353,6 +1355,8 @@ private:
     void saveCenterLockSettings() const;
     void persistCenterLockForSlice(const SliceModel* slice);
     void restoreCenterLockForPan(const QString& panId);
+    void showCenterLockReleaseNotification(const QString& panId,
+                                           const QString& detail);
     void setCenterLockForSlice(SliceModel* slice, bool on);
     void setCenterLockForPan(const QString& panId, int sliceId, bool on,
                              bool persist = true);

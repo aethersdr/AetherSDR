@@ -2712,6 +2712,12 @@ target_include_directories(kiwi_rebind_tracker_test PRIVATE src)
 target_link_libraries(kiwi_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_rebind_tracker_test COMMAND kiwi_rebind_tracker_test)
 
+# Center Lock band-recall re-bind policy — header-only, pure logic.
+add_executable(center_lock_rebind_tracker_test tests/center_lock_rebind_tracker_test.cpp)
+target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
+target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
+add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
+
 add_executable(declared_bands_test
     tests/declared_bands_test.cpp
     src/models/DeclaredBands.cpp
