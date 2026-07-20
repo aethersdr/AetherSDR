@@ -81,6 +81,18 @@ namespace {
 
 constexpr int kDssMaxIncrementalUploadRows = 8;
 
+#ifdef AETHER_GPU_SPECTRUM
+QSize evenAlignedRhiSize(QSize size)
+{
+    if (size.isEmpty()) {
+        return {};
+    }
+    size.rwidth() += size.width() & 1;
+    size.rheight() += size.height() & 1;
+    return size;
+}
+#endif
+
 constexpr int dssFillVerticesPerRow()
 {
     return (DssRenderer::kCols - 1) * 6;
@@ -862,12 +874,34 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("colorBufferH")] = fixed.height();
     // What an even-aligned pin *should* be for the current size — lets a test
     // assert the #4091 alignment without recomputing the formula itself.
-    const int expW = static_cast<int>(std::ceil(width() * dpr));
-    const int expH = static_cast<int>(std::ceil(height() * dpr));
-    m[QStringLiteral("expectedEvenW")] = expW + (expW & 1);
-    m[QStringLiteral("expectedEvenH")] = expH + (expH & 1);
+    const QSize expected = evenAlignedRhiSize(
+        QSize(static_cast<int>(std::ceil(width() * dpr)),
+              static_cast<int>(std::ceil(height() * dpr))));
+    m[QStringLiteral("expectedEvenW")] = expected.width();
+    m[QStringLiteral("expectedEvenH")] = expected.height();
     m[QStringLiteral("evenAligned")] =
         !autoSized && (fixed.width() % 2 == 0) && (fixed.height() % 2 == 0);
+    const QSize overlaySize = m_ovGpuTex ? m_ovGpuTex->pixelSize() : QSize();
+    const QSize backgroundSize = m_bgGpuTex ? m_bgGpuTex->pixelSize() : QSize();
+    const QSize waterfallTextureSize =
+        m_wfGpuTex ? m_wfGpuTex->pixelSize() : QSize();
+    const QSize waterfallImageSize = m_waterfall.size();
+    m[QStringLiteral("overlayTextureW")] = overlaySize.width();
+    m[QStringLiteral("overlayTextureH")] = overlaySize.height();
+    m[QStringLiteral("backgroundTextureW")] = backgroundSize.width();
+    m[QStringLiteral("backgroundTextureH")] = backgroundSize.height();
+    m[QStringLiteral("waterfallTextureW")] = waterfallTextureSize.width();
+    m[QStringLiteral("waterfallTextureH")] = waterfallTextureSize.height();
+    m[QStringLiteral("waterfallImageW")] = waterfallImageSize.width();
+    m[QStringLiteral("waterfallImageH")] = waterfallImageSize.height();
+    m[QStringLiteral("waterfallTextureMatchesImage")] =
+        !waterfallImageSize.isEmpty() && waterfallTextureSize == waterfallImageSize;
+    m[QStringLiteral("fullFrameTexturesEvenAligned")] =
+        !overlaySize.isEmpty() && !backgroundSize.isEmpty()
+        && (overlaySize.width() % 2 == 0) && (overlaySize.height() % 2 == 0)
+        && (backgroundSize.width() % 2 == 0) && (backgroundSize.height() % 2 == 0);
+    m[QStringLiteral("fullFrameTexturesMatchColorBuffer")] =
+        !autoSized && overlaySize == fixed && backgroundSize == fixed;
 #else
     m[QStringLiteral("gpu")] = false;
 #endif
@@ -8913,16 +8947,26 @@ void SpectrumWidget::updateFixedColorBufferSize()
     // its scale from renderTarget()->pixelSize(), not width()×dpr, so the
     // ≤1 px overshoot is invisible.
     const qreal dpr = devicePixelRatioF();
-    QSize devicePx(static_cast<int>(std::ceil(width() * dpr)),
-                   static_cast<int>(std::ceil(height() * dpr)));
+    const QSize devicePx = evenAlignedRhiSize(
+        QSize(static_cast<int>(std::ceil(width() * dpr)),
+              static_cast<int>(std::ceil(height() * dpr))));
     if (devicePx.isEmpty()) {
         return;
     }
-    devicePx.rwidth()  += devicePx.width()  & 1;
-    devicePx.rheight() += devicePx.height() & 1;
     if (fixedColorBufferSize() != devicePx) {
         setFixedColorBufferSize(devicePx);
     }
+}
+
+QSize SpectrumWidget::fullFrameTextureSize() const
+{
+    QSize devicePx = renderTarget() ? renderTarget()->pixelSize() : QSize();
+    if (devicePx.isEmpty()) {
+        const qreal dpr = devicePixelRatioF();
+        devicePx = QSize(static_cast<int>(std::ceil(width() * dpr)),
+                         static_cast<int>(std::ceil(height() * dpr)));
+    }
+    return evenAlignedRhiSize(devicePx.expandedTo(QSize(64, 64)));
 }
 #endif
 
@@ -9489,8 +9533,18 @@ void SpectrumWidget::initWaterfallPipeline()
     m_wfUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 16);
     m_wfUbo->create();
 
-    m_wfGpuTexW = qMax(contentWidth(), 64);  // rows rasterize at content width (#3482)
-    m_wfGpuTexH = qMax(m_waterfall.height(), 64);
+    // A top-level reparent preserves the CPU waterfall until the new window's
+    // resize settles. Size the replacement texture for that retained image,
+    // not the new (still provisional) content width: initRhiResources() uploads
+    // the full image immediately below. Uploading the old wide image into the
+    // smaller floating-window texture is rejected by QRhi and can crash the
+    // D3D11 backend (#4319). The normal render path resizes both once the new
+    // geometry is authoritative.
+    const QSize waterfallSize = m_waterfall.isNull()
+        ? QSize(qMax(contentWidth(), 64), 64)
+        : m_waterfall.size().expandedTo(QSize(64, 64));
+    m_wfGpuTexW = waterfallSize.width();
+    m_wfGpuTexH = waterfallSize.height();
     m_wfGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(m_wfGpuTexW, m_wfGpuTexH));
     m_wfGpuTex->create();
 
@@ -9542,11 +9596,10 @@ void SpectrumWidget::initOverlayPipeline()
     m_ovVbo = r->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer, sizeof(kQuadData));
     m_ovVbo->create();
 
-    int w = qMax(width(), 64);
-    int h = qMax(height(), 64);
     const qreal dpr = devicePixelRatioF();
-    const int pw = static_cast<int>(w * dpr);
-    const int ph = static_cast<int>(h * dpr);
+    const QSize fullFramePx = fullFrameTextureSize();
+    const int pw = fullFramePx.width();
+    const int ph = fullFramePx.height();
     m_ovGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(pw, ph));
     m_ovGpuTex->create();
 
@@ -10113,8 +10166,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     {
         // Resize overlay images if needed
         const qreal dpr = devicePixelRatioF();
-        const int pw = static_cast<int>(w * dpr);
-        const int ph = static_cast<int>(h * dpr);
+        // Match the pinned QRhi color buffer exactly. The old width*dpr
+        // truncation produced 1919-pixel RGBA textures at the fractional DPR
+        // in #4319; pop-out recreated them and opening a slice uploaded into
+        // them, reaching the same old-Intel D3D11 crash class as #4091.
+        const QSize fullFramePx = fullFrameTextureSize();
+        const int pw = fullFramePx.width();
+        const int ph = fullFramePx.height();
         if (m_overlayStatic.size() != QSize(pw, ph)) {
             m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
             m_overlayStatic.setDevicePixelRatio(dpr);
