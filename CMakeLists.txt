@@ -491,6 +491,7 @@ set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
+    src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
@@ -3247,6 +3248,7 @@ set_tests_properties(health_applet_test PROPERTIES
 add_executable(sim_backend_test
     tests/sim_backend_test.cpp
     src/core/backends/sim/SimBackend.cpp
+    src/core/backends/sim/NoiseMixer.cpp    # SimBackend holds a NoiseMixer member (Phase 2b audio)
     src/core/backends/IRadioBackend.h   # header-only Q_OBJECT — AUTOMOC needs it for the base vtable/signals
 )
 target_include_directories(sim_backend_test PRIVATE src)
@@ -3268,6 +3270,17 @@ if(UNIX)
     target_link_libraries(spectrum_pattern_test PRIVATE pthread)
 endif()
 add_test(NAME spectrum_pattern_test COMMAND spectrum_pattern_test)
+
+add_executable(noise_mixer_test
+    tests/noise_mixer_test.cpp
+    src/core/backends/sim/NoiseMixer.cpp
+)
+target_include_directories(noise_mixer_test PRIVATE src)
+target_link_libraries(noise_mixer_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(noise_mixer_test PRIVATE pthread)
+endif()
+add_test(NAME noise_mixer_test COMMAND noise_mixer_test)
 
 add_executable(vu_meter_settings_test
     tests/vu_meter_settings_test.cpp

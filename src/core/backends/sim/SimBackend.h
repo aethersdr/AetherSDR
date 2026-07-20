@@ -4,6 +4,7 @@
 #include <QVector>
 
 #include "core/backends/IRadioBackend.h"
+#include "core/backends/sim/NoiseMixer.h"
 
 namespace AetherSDR {
 
@@ -56,6 +57,18 @@ private:
     // the radio-global delta (model/nickname/slices) and one active slice on a
     // sensible default frequency/mode. Phase 2 grows this into the pan + meters.
     void emitInitialState();
+
+    // Phase 2b (audio) forward-reference. NoiseMixer is the synthesized-RX-audio
+    // engine (white/pink/qrn/birdie/… + TNF/ANF notch); mixFrame() produces the
+    // 24 kHz float the demo radio would deliver, and spectrum() the matching
+    // panadapter render. It is BUILT AND UNIT-TESTED standalone (noise_mixer_test)
+    // but NOT yet driven here: a frame tick emitting audioFrameReady()/
+    // spectrumFrameReady() waits on the seam's audio CONSUMER, which isn't wired
+    // yet (nothing connects to IRadioBackend::audioFrameReady). When it is, a
+    // QTimer at the frame rate calls emit audioFrameReady(toStereoBytes(
+    // m_audio.mixFrame())) — RX audio straight into AE's NR chain, no DSP change.
+    // Kept muted while keyed (Principle VI): a demo radio never sounds live on TX.
+    NoiseMixer m_audio;
 
     bool   m_connected{false};
     double m_sliceFreqMhz{14.100};   // default: 20 m, a lively demo band
