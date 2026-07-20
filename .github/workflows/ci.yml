@@ -90,14 +90,16 @@ jobs:
             libmosquitto-dev \
             libliquid-dev
 
-      - name: Checkout 
+      - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Configure
-        run: cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DENABLE_RADE=OFF
+        run: |
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DENABLE_RADE=OFF
 
       - name: Build
-        run: cmake --build build
+        run: |
+          cmake --build build -j$(nproc)
 
   # Cross-platform build check — runs on every PR (no path gating).
   #
