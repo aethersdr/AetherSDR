@@ -85,7 +85,7 @@ constexpr int kDssMaxIncrementalUploadRows = 8;
 QSize evenAlignedRhiSize(QSize size)
 {
     if (size.isEmpty()) {
-        return {};
+        return size;
     }
     size.rwidth() += size.width() & 1;
     size.rheight() += size.height() & 1;
