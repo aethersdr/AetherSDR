@@ -1424,6 +1424,19 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
 action is RX/config only; none keys the transmitter.
 
+Floating and docking use the production pan title-bar control rather than a
+radio lifecycle command. Target its stable object name through the pan scope;
+the same toggle works in both states:
+
+```json
+→ {"cmd":"invoke","target":"pan 1/panFloatToggle","action":"click"}
+← {"ok":true,"target":"pan 1/panFloatToggle","action":"click"}
+```
+
+Re-poll `layout get` and assert `floatingCount` / `dockedCount` after each
+transition. The control's accessible name also changes between
+`Pop out panadapter` and `Dock panadapter` for semantic snapshots.
+
 ### `layout`
 Drive the panadapter **splitter layout** directly, decoupled from how many
 panadapters the radio has granted.

@@ -70,9 +70,11 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     // Pop-out / Dock button (⬈ when docked, ↩ when floating)
     m_popOutBtn = new QPushButton("\u2b08");  // ⬈
+    m_popOutBtn->setObjectName(QStringLiteral("panFloatToggle"));
+    m_popOutBtn->setAccessibleName(tr("Pop out panadapter"));
     m_popOutBtn->setFixedSize(16, 14);
     m_popOutBtn->setStyleSheet(btnStyle + "QPushButton { font-size: 11px; }");
-    m_popOutBtn->setToolTip("Pop out panadapter");
+    m_popOutBtn->setToolTip(tr("Pop out panadapter"));
     m_popOutBtn->hide();  // hidden in single-pan mode
     connect(m_popOutBtn, &QPushButton::clicked, this, [this]() {
         if (m_isFloating) {
@@ -546,8 +548,11 @@ void PanadapterApplet::setFloatingState(bool floating)
 {
     m_isFloating = floating;
     if (m_popOutBtn) {
+        const QString actionName = floating ? tr("Dock panadapter")
+                                            : tr("Pop out panadapter");
         m_popOutBtn->setText(floating ? "\u21a9" : "\u2b08");  // ↩ or ⬈
-        m_popOutBtn->setToolTip(floating ? "Dock panadapter" : "Pop out panadapter");
+        m_popOutBtn->setAccessibleName(actionName);
+        m_popOutBtn->setToolTip(actionName);
         m_popOutBtn->setVisible(true);  // always visible when floating
     }
     // When floating, always show close (to dock via window close)

@@ -881,10 +881,13 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("expectedEvenH")] = expected.height();
     m[QStringLiteral("evenAligned")] =
         !autoSized && (fixed.width() % 2 == 0) && (fixed.height() % 2 == 0);
-    const QSize overlaySize = m_ovGpuTex ? m_ovGpuTex->pixelSize() : QSize();
-    const QSize backgroundSize = m_bgGpuTex ? m_bgGpuTex->pixelSize() : QSize();
+    // QSize() is already (-1,-1); keep the JSON sentinel explicit so the
+    // automation contract cannot be mistaken for a real zero-sized texture.
+    const QSize unsetTextureSize(-1, -1);
+    const QSize overlaySize = m_ovGpuTex ? m_ovGpuTex->pixelSize() : unsetTextureSize;
+    const QSize backgroundSize = m_bgGpuTex ? m_bgGpuTex->pixelSize() : unsetTextureSize;
     const QSize waterfallTextureSize =
-        m_wfGpuTex ? m_wfGpuTex->pixelSize() : QSize();
+        m_wfGpuTex ? m_wfGpuTex->pixelSize() : unsetTextureSize;
     const QSize waterfallImageSize = m_waterfall.size();
     m[QStringLiteral("overlayTextureW")] = overlaySize.width();
     m[QStringLiteral("overlayTextureH")] = overlaySize.height();
