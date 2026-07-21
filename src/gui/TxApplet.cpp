@@ -518,12 +518,16 @@ void TxApplet::syncFromModel()
 
     m_updatingFromModel = true;
 
-    if (m_rfPowerSlider->value() != m_model->rfPower())
+    if (!m_rfPowerSlider->isSliderDown()
+        && m_rfPowerSlider->value() != m_model->rfPower()) {
         m_rfPowerSlider->setValue(m_model->rfPower());
+    }
     m_rfPowerLabel->setText(QString::number(m_model->rfPower()));
 
-    if (m_tunePowerSlider->value() != m_model->tunePower())
+    if (!m_tunePowerSlider->isSliderDown()
+        && m_tunePowerSlider->value() != m_model->tunePower()) {
         m_tunePowerSlider->setValue(m_model->tunePower());
+    }
     m_tunePowerLabel->setText(QString::number(m_model->tunePower()));
 
     // Active profile — update combo selection
