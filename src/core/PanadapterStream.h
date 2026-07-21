@@ -208,6 +208,12 @@ public:
     // tone shifts and zero-beats like a real signal, and its waterfall position
     // slides — both derived from the same RF relationship. (RFC #4288)
     Q_INVOKABLE void setDemoVfoMhz(double vfoMhz);
+
+    // Demo slice mode. USB: birdie pitch = carrier - VFO (carrier ABOVE the VFO is
+    // audible). LSB inverts it: pitch = VFO - carrier (carrier BELOW is audible).
+    // So switching sideband makes a carrier on the "wrong" side go silent, like a
+    // real receiver. (RFC #4288)
+    Q_INVOKABLE void setDemoMode(const QString& mode);
     // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
     // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
     int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }
@@ -384,7 +390,8 @@ private:
     // that generates FFT lines with SpectrumPatternGenerator and emits
     // spectrumReady() for the demo pan stream — exactly the signal the real UDP
     // path would emit, so all downstream widget wiring is unchanged.
-    QTimer*  m_syntheticTimer{nullptr};
+    QTimer*  m_syntheticTimer{nullptr};       // display: ~20 fps
+    QTimer*  m_syntheticAudioTimer{nullptr};  // audio: fast precise ~10 ms stream
     quint32  m_syntheticPanStreamId{0};
     double   m_syntheticElapsedS{0.0};
     quint64  m_syntheticFrameIndex{0};
@@ -399,7 +406,12 @@ private:
     // the carrier ~1.2 kHz above the 14.100 MHz demo VFO (the classic birdie).
     double m_demoVfoMhz{14.100};
     double m_demoBirdieCarrierMhz{14.100 + 1200.0 / 1.0e6};
-    void tickSyntheticDemo();
+    bool   m_demoLsb{false};       // true when the demo slice mode is a lower sideband
+    QVector<float> m_demoAudioBuf; // rolling mono buffer: emit EXACTLY 50 ms/tick,
+                                   // carrying the sub-frame remainder so audio
+                                   // production stays sample-locked (no warble)
+    void tickSyntheticDemo();     // display + meters (50 ms)
+    void tickSyntheticAudio();    // RX audio stream (10 ms, precise)
     void updateBirdieFromVfo();   // recompute the birdie audio Hz from carrier-VFO
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range

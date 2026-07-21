@@ -1454,6 +1454,11 @@ MainWindow::MainWindow(QWidget* parent)
                 QMetaObject::invokeMethod(ps, "setDemoVfoMhz",
                     Qt::QueuedConnection, Q_ARG(double, mhz));
         });
+        connect(conn, &RadioConnection::demoModeChanged, this, [this](const QString& m) {
+            if (auto* ps = m_radioModel.panStream())
+                QMetaObject::invokeMethod(ps, "setDemoMode",
+                    Qt::QueuedConnection, Q_ARG(QString, m));
+        });
     }
     connect(m_appletPanel->rxApplet(), &RxApplet::directEntryCommitted,
             this, [this](double mhz, const QString& source) {

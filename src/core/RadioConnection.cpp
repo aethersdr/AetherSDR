@@ -4,6 +4,7 @@
 
 #include <QEventLoop>
 #include <QNetworkProxy>
+#include <QTimer>
 
 #ifdef Q_OS_LINUX
 #include <netinet/in.h>
@@ -324,11 +325,55 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 bool ok = false;
                 const double mhz = parts.at(3).toDouble(&ok);
                 if (ok) {
-                    emitSyntheticStatus(
+                    // Async echo (see the mode/filter note below) — avoids any
+                    // synchronous re-entrancy into SliceModel from writeCommand.
+                    const QString line =
                         QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 "
-                                       "RF_frequency=%1").arg(mhz, 0, 'f', 6));
+                                       "RF_frequency=%1").arg(mhz, 0, 'f', 6);
+                    QTimer::singleShot(0, this, [this, line] {
+                        if (m_syntheticDemo) emitSyntheticStatus(line);
+                    });
                     emit demoVfoChanged(mhz);
                 }
+            }
+            emit commandResponse(seq, 0, QString());
+            return;
+        }
+        // Slice set mode/filter: a real radio applies these and echoes them in
+        // slice status; without the echo AE's SliceModel (radio-authoritative,
+        // Principle II) never updates, so LSB "won't turn on" and filter drags do
+        // nothing. Model the ones we support — echo them back, and tell the audio
+        // side so the birdie demod follows the sideband. "slice set <id> k=v …".
+        if (command.startsWith(QStringLiteral("slice set"))) {
+            const QStringList parts = command.split(QLatin1Char(' '),
+                                                    Qt::SkipEmptyParts);
+            QStringList echo;
+            for (const QString& tok : parts) {
+                const int eq = tok.indexOf(QLatin1Char('='));
+                if (eq <= 0) continue;
+                const QString k = tok.left(eq);
+                const QString v = tok.mid(eq + 1);
+                if (k == QLatin1String("mode")) {
+                    m_demoSliceMode = v;
+                    echo << QStringLiteral("mode=%1").arg(v);
+                    emit demoModeChanged(v);
+                } else if (k == QLatin1String("filter_lo")
+                           || k == QLatin1String("filter_hi")) {
+                    echo << QStringLiteral("%1=%2").arg(k, v);   // echo the filter
+                }
+            }
+            if (!echo.isEmpty()) {
+                // Defer the echo to the next event-loop cycle. Emitting
+                // statusReceived synchronously here re-enters SliceModel, which
+                // can re-emit the mode intent → back into writeCommand → infinite
+                // recursion → crash. A real radio's echo also arrives async (over
+                // the socket), so this matches reality and breaks the loop.
+                const QString line =
+                    QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 %1")
+                        .arg(echo.join(QLatin1Char(' ')));
+                QTimer::singleShot(0, this, [this, line] {
+                    if (m_syntheticDemo) emitSyntheticStatus(line);
+                });
             }
             emit commandResponse(seq, 0, QString());
             return;

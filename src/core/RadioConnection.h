@@ -73,6 +73,9 @@ signals:
     // this to PanadapterStream::setDemoVfoMhz so the birdie demodulates against
     // it (pitch shifts, zero-beats). (RFC #4288)
     void demoVfoChanged(double vfoMhz);
+    // Demo mode: the user changed the slice mode (USB/LSB/…). Forwarded to
+    // PanadapterStream so the birdie demod picks the right sideband. (RFC #4288)
+    void demoModeChanged(const QString& mode);
     void versionReceived(const QString& version);
     // Emitted when a response (R-line) is received from the radio.
     // Callers register callbacks keyed by seq in their own maps. (#502)
@@ -109,6 +112,7 @@ private:
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     std::atomic<quint32> m_handle{0};
     bool m_syntheticDemo{false};   // true while connected to the demo radio
+    QString m_demoSliceMode{QStringLiteral("USB")};   // demo slice mode (USB/LSB/…)
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;  // fallback when kernel TCP_INFO unavailable
 

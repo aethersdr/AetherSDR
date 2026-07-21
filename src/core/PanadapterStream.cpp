@@ -223,7 +223,19 @@ bool PanadapterStream::start(RadioConnection* conn)
             connect(m_syntheticTimer, &QTimer::timeout,
                     this, &PanadapterStream::tickSyntheticDemo);
         }
-        m_syntheticTimer->start(50);   // ~20 fps
+        m_syntheticTimer->start(50);   // display: ~20 fps
+        // AUDIO gets its OWN fast, PRECISE timer — real RX audio is a smooth stream
+        // of small packets, not one big 50 ms lump. Delivering 50 ms batches on the
+        // coarse display timer arrived lumpy/jittery and warbled every sound. A
+        // 10 ms precise tick emitting ~240-sample chunks keeps the RX buffer fed
+        // evenly.
+        if (!m_syntheticAudioTimer) {
+            m_syntheticAudioTimer = new QTimer(this);
+            m_syntheticAudioTimer->setTimerType(Qt::PreciseTimer);
+            connect(m_syntheticAudioTimer, &QTimer::timeout,
+                    this, &PanadapterStream::tickSyntheticAudio);
+        }
+        m_syntheticAudioTimer->start(10);
         return true;
     }
 
@@ -311,29 +323,8 @@ void PanadapterStream::tickSyntheticDemo()
 
     emit spectrumReady(m_syntheticPanStreamId, bins, /*emittedNs*/ 0);
 
-    // Synthetic RX AUDIO for the demo: fill this 50 ms tick with NoiseMixer output
-    // and emit it exactly as the real UDP audio path does — 24 kHz stereo float32
-    // interleaved (L,R,L,R). audioDataReady() already feeds AudioEngine::
-    // feedAudioData(), so demo audio flows into NR/notch with no extra wiring.
-    // One tick = 50 ms = ~9.4 mixFrames of kFrameLen; round up in whole frames.
-    constexpr int kTickMs = 50;
-    const int framesPerTick =
-        (NoiseMixer::kSampleRate * kTickMs / 1000 + NoiseMixer::kFrameLen - 1)
-        / NoiseMixer::kFrameLen;
-    QByteArray pcm;
-    pcm.reserve(framesPerTick * NoiseMixer::kFrameLen * 2
-                * static_cast<int>(sizeof(float)));
-    for (int f = 0; f < framesPerTick; ++f) {
-        const QVector<float> mono = m_demoAudio.mixFrame();
-        const int base = pcm.size();
-        pcm.resize(base + mono.size() * 2 * static_cast<int>(sizeof(float)));
-        auto* p = reinterpret_cast<float*>(pcm.data() + base);
-        for (int i = 0; i < mono.size(); ++i) {
-            p[2 * i] = mono[i];         // L
-            p[2 * i + 1] = mono[i];     // R
-        }
-    }
-    emit audioDataReady(pcm);
+    // (Audio is delivered separately on tickSyntheticAudio — a fast precise timer
+    //  — so it streams smoothly instead of in lumpy 50 ms batches.)
 
     // Mark data as flowing so RadioModel's UDP-health watchdog doesn't warn that
     // no spectrum arrived — the demo delivers frames here, just not over UDP.
@@ -341,6 +332,27 @@ void PanadapterStream::tickSyntheticDemo()
 
     m_syntheticElapsedS += 0.05;   // 50 ms/tick
     ++m_syntheticFrameIndex;
+}
+
+void PanadapterStream::tickSyntheticAudio()
+{
+    // Smooth RX audio: emit exactly one 10 ms chunk (240 samples) of the demo
+    // mix per precise 10 ms tick, from a rolling buffer topped up in whole
+    // 128-sample mixFrames. 24 kHz stereo float32 (L,R,L,R), the format
+    // AudioEngine::feedAudioData() consumes. Small, evenly-paced packets like a
+    // real radio — no lumpy batching, so no warble.
+    constexpr int kChunkMs = 10;
+    constexpr int kChunk = NoiseMixer::kSampleRate * kChunkMs / 1000;   // 240
+    while (m_demoAudioBuf.size() < kChunk)
+        m_demoAudioBuf += m_demoAudio.mixFrame();
+    QByteArray pcm(kChunk * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* p = reinterpret_cast<float*>(pcm.data());
+    for (int i = 0; i < kChunk; ++i) {
+        p[2 * i] = m_demoAudioBuf[i];       // L
+        p[2 * i + 1] = m_demoAudioBuf[i];   // R
+    }
+    m_demoAudioBuf.remove(0, kChunk);       // carry the sub-frame remainder
+    emit audioDataReady(pcm);
 }
 
 bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
@@ -473,6 +485,10 @@ void PanadapterStream::stop()
     if (m_syntheticTimer) {
         m_syntheticTimer->stop();   // demo (RFC #4288)
     }
+    if (m_syntheticAudioTimer) {
+        m_syntheticAudioTimer->stop();
+    }
+    m_demoAudioBuf.clear();
     m_isWanMode = false;
     m_wanRegistered = false;
     m_wanClientHandle = 0;
@@ -1183,13 +1199,25 @@ void PanadapterStream::setDemoVfoMhz(double vfoMhz)
     updateBirdieFromVfo();
 }
 
+void PanadapterStream::setDemoMode(const QString& mode)
+{
+    // Lower-sideband family: LSB, DIGL, CWL. Everything else demods USB-style.
+    const QString m = mode.toUpper();
+    m_demoLsb = (m == QLatin1String("LSB") || m == QLatin1String("DIGL")
+                 || m == QLatin1String("CWL"));
+    updateBirdieFromVfo();
+}
+
 void PanadapterStream::updateBirdieFromVfo()
 {
-    // USB demod: audio pitch = carrier - VFO. Positive when the carrier is ABOVE
-    // the VFO (in-passband on USB). Below the VFO it would fold to a negative
-    // "frequency" — clamp to a small positive so the tone doesn't vanish oddly;
-    // near zero it approaches zero-beat (a very low rumble), like a real radio.
-    const double audioHz = (m_demoBirdieCarrierMhz - m_demoVfoMhz) * 1.0e6;
+    // Audio pitch from the RF offset, per sideband:
+    //   USB: pitch = carrier - VFO  (carrier ABOVE the VFO is audible)
+    //   LSB: pitch = VFO - carrier  (carrier BELOW the VFO is audible)
+    // A carrier on the "wrong" side gives a negative offset → clamp to silence,
+    // exactly like a real receiver: switch sideband and it disappears. Near zero
+    // it approaches zero-beat.
+    const double offsetHz = (m_demoBirdieCarrierMhz - m_demoVfoMhz) * 1.0e6;
+    const double audioHz = m_demoLsb ? -offsetHz : offsetHz;
     m_demoAudio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
                         std::max(0.0, audioHz));
 }

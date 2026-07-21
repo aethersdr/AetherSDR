@@ -125,7 +125,10 @@ private:
     std::map<Channel, ChannelState> m_ch;
 
     // phase counters (deterministic tone/buzz generators)
-    long m_cwPhase = 0, m_plPhase = 0, m_birdiePhase = 0;
+    long m_cwPhase = 0, m_plPhase = 0;
+    // Birdie phase as a CONTINUOUS RADIANS accumulator (not hz*absolute-time), so
+    // changing the pitch (VFO tuning) doesn't teleport the phase and warble.
+    double m_birdiePhaseRad = 0.0;
     long m_hashPhase = 0, m_woodPhase = 0;
 
     // RNG (own stream; Box-Muller spare)

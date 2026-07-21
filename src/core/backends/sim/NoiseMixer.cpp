@@ -220,12 +220,17 @@ void NoiseMixer::genCrashes(const ChannelState& c, float* out)
 
 void NoiseMixer::genBirdie(const ChannelState& c, float* out)
 {
+    // Continuous phase accumulation: advance by 2π·hz/rate per sample. A pitch
+    // change (VFO tuning) then continues smoothly from the current phase instead
+    // of jumping (which caused an audible warble as the pitch tracked the VFO).
     const double hz = c.hz > 0 ? c.hz : 1000.0;
+    const double dphi = kTwoPi * hz / kSampleRate;
     for (int i = 0; i < kFrameLen; ++i) {
-        const double tt = static_cast<double>(m_birdiePhase + i) / kSampleRate;
-        out[i] = static_cast<float>(std::sin(kTwoPi * hz * tt) * kNoiseRef * 1.2);
+        out[i] = static_cast<float>(std::sin(m_birdiePhaseRad) * kNoiseRef * 1.2);
+        m_birdiePhaseRad += dphi;
     }
-    m_birdiePhase += kFrameLen;
+    // wrap to keep the accumulator bounded (precision + no overflow over hours)
+    if (m_birdiePhaseRad > kTwoPi) m_birdiePhaseRad = std::fmod(m_birdiePhaseRad, kTwoPi);
 }
 
 void NoiseMixer::genHash(const ChannelState& c, float* out)
