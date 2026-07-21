@@ -28,6 +28,7 @@ struct RowSpec {
 };
 const RowSpec kRows[] = {
     {"cw",         "CW tone",        "hz",   "Hz",  300, 1200, 700,  false, -16},
+    {"voice",      "Voice (speech)", "",     "",    0, 0, 0,          false, -10},
     {"white",      "White / AWGN",   "",     "",    0, 0, 0,         false, -26},
     {"pink",       "Pink / hiss",    "",     "",    0, 0, 0,         true,  -22},
     {"qrn",        "QRN crackle",    "rate", "i/s", 1, 60, 12,       false, -18},

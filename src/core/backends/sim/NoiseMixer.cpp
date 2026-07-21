@@ -1,5 +1,7 @@
 #include "core/backends/sim/NoiseMixer.h"
 
+#include <QFile>
+
 #include <algorithm>
 #include <cmath>
 
@@ -24,6 +26,7 @@ NoiseMixer::NoiseMixer()
 {
     // Defaults mirror flex-sim's channel table (level + per-channel knobs).
     m_ch[Channel::Cw]         = {false, -16.0, 700.0, 0.0, 60.0, 0.0};
+    m_ch[Channel::Voice]      = {false, -14.0, 0.0,   0.0, 60.0, 0.0};
     m_ch[Channel::White]      = {false, -26.0, 0.0,   0.0, 60.0, 0.0};
     m_ch[Channel::Pink]       = {false, -24.0, 0.0,   0.0, 60.0, 0.0};
     m_ch[Channel::Qrn]        = {false, -18.0, 0.0,   12.0, 60.0, 0.0};
@@ -161,6 +164,39 @@ void NoiseMixer::genCw(const ChannelState& c, float* out)
     m_cwPhase += kFrameLen;
 }
 
+void NoiseMixer::loadVoiceClip()
+{
+    // Read the bundled 24 kHz mono 16-bit PCM clip once, into float samples.
+    m_voiceLoaded = true;   // set even on failure so we don't retry every frame
+    QFile f(QStringLiteral(":/demo_voice.wav"));
+    if (!f.open(QIODevice::ReadOnly)) return;
+    const QByteArray raw = f.readAll();
+    // Minimal RIFF/WAVE parse: find the "data" chunk, take int16 mono @ 24 kHz.
+    const int hdr = raw.indexOf("data");
+    if (hdr < 0 || raw.size() < hdr + 8) return;
+    const int dataOff = hdr + 8;
+    const int nSamples = (raw.size() - dataOff) / 2;
+    m_voiceSamples.resize(nSamples);
+    const auto* s = reinterpret_cast<const qint16*>(raw.constData() + dataOff);
+    for (int i = 0; i < nSamples; ++i)
+        m_voiceSamples[i] = static_cast<float>(s[i]) / 32768.0f;
+}
+
+void NoiseMixer::genVoice(const ChannelState&, float* out)
+{
+    // Play the bundled speech clip (real words), looped. 24 kHz mono == our rate,
+    // so no resample. Silent if the clip failed to load.
+    if (!m_voiceLoaded) loadVoiceClip();
+    if (m_voiceSamples.empty()) {
+        for (int i = 0; i < kFrameLen; ++i) out[i] = 0.0f;
+        return;
+    }
+    for (int i = 0; i < kFrameLen; ++i) {
+        out[i] = m_voiceSamples[m_voicePos] * 3.0f;   // scale to a healthy level
+        if (++m_voicePos >= m_voiceSamples.size()) m_voicePos = 0;   // loop
+    }
+}
+
 void NoiseMixer::genWhite(const ChannelState&, float* out)
 {
     for (int i = 0; i < kFrameLen; ++i) out[i] = static_cast<float>(nextGauss() * kNoiseRef);
@@ -268,6 +304,7 @@ QVector<float> NoiseMixer::mixFrame()
         for (int i = 0; i < kFrameLen; ++i) acc[i] += scratch[i] * g;
     };
     add(Channel::Cw,         &NoiseMixer::genCw);
+    add(Channel::Voice,      &NoiseMixer::genVoice);
     add(Channel::White,      &NoiseMixer::genWhite);
     add(Channel::Pink,       &NoiseMixer::genPink);
     add(Channel::Qrn,        &NoiseMixer::genQrn);
@@ -382,6 +419,18 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
             bump(b + 1, floorDbm + 90.0 + lvl - 8.0);
             break;
         }
+        case Channel::Voice: {
+            // SSB-ish energy band 300..2700 Hz above the VFO, with two brighter
+            // formant clumps so the waterfall reads like on-air speech.
+            const double top = floorDbm + 90.0 + lvl;
+            for (int b = binOf(300); b < binOf(2700) && b < n; ++b) {
+                if (b < 0) continue;
+                bump(b, top - 8.0 + nextUniform() * 6.0);
+            }
+            bump(binOf(600), top);      // formant-ish peaks
+            bump(binOf(1800), top - 4.0);
+            break;
+        }
         }
     }
 
@@ -402,6 +451,7 @@ QString NoiseMixer::name(Channel c)
 {
     switch (c) {
     case Channel::Cw: return QStringLiteral("cw");
+    case Channel::Voice: return QStringLiteral("voice");
     case Channel::White: return QStringLiteral("white");
     case Channel::Pink: return QStringLiteral("pink");
     case Channel::Qrn: return QStringLiteral("qrn");
@@ -424,7 +474,7 @@ NoiseMixer::Channel NoiseMixer::fromName(const QString& n, bool* ok)
 
 QVector<NoiseMixer::Channel> NoiseMixer::allChannels()
 {
-    return {Channel::Cw, Channel::White, Channel::Pink, Channel::Qrn,
+    return {Channel::Cw, Channel::Voice, Channel::White, Channel::Pink, Channel::Qrn,
             Channel::Powerline, Channel::Crashes, Channel::Birdie,
             Channel::Hash, Channel::Woodpecker};
 }

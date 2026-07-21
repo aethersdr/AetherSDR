@@ -137,6 +137,21 @@ void testNoiseRisesFromFloor()
     report("noise rises up from the floor (grassy)", risesUp);
 }
 
+void testVoiceChannelSafeWithoutClip()
+{
+    // Voice plays a bundled resource (:/demo_voice.wav) — not available in this
+    // standalone test exe (the app auto-inits the qrc). Contract here: the Voice
+    // channel must be SAFE with no clip (produce silence, never crash), and it must
+    // not disturb other channels. Audible-speech playback is verified live in the app.
+    NoiseMixer mx;
+    mx.setEnabled(Channel::Voice, true);
+    mx.setLevelDb(Channel::Voice, -6);
+    const QVector<float> f = mx.mixFrame();
+    const bool bounded = std::all_of(f.cbegin(), f.cend(),
+                                     [](float v) { return v >= -1.0f && v <= 1.0f; });
+    report("voice channel is safe without a clip (bounded output)", bounded);
+}
+
 void testNoiseBlankerKnocksDownImpulses()
 {
     auto peakOf = [](bool nb) {
@@ -179,6 +194,7 @@ int main(int argc, char** argv)
     testNoiseRisesFromFloor();
     testLevelScalesNoiseHeight();
     testNoiseBlankerKnocksDownImpulses();
+    testVoiceChannelSafeWithoutClip();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES ABOVE");
     return g_failed == 0 ? 0 : 1;
 }

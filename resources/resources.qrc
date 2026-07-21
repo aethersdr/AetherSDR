@@ -3,6 +3,11 @@
         <file alias="icon.png">../docs/assets/logo-circle.png</file>
         <file alias="bg-default.jpg">../docs/assets/logo.jpg</file>
         <file alias="cty.dat">cty.dat</file>
+        <!-- Demo-mode voice clip: public-domain Harvard sentences (the standard
+             speech-intelligibility test set), TTS-generated, 24 kHz mono 16-bit.
+             The demo radio's Voice channel loops this so NR/notch have real speech
+             to preserve and ASR (Copy Assist) has real words. No copyright. ~457 KB. -->
+        <file alias="demo_voice.wav">demo_voice.wav</file>
     </qresource>
     <qresource prefix="/bandplans">
         <file alias="arrl-us.json">bandplans/arrl-us.json</file>

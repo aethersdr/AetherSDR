@@ -42,6 +42,9 @@ public:
     enum class Channel {
         // signal (wanted — NR must preserve)
         Cw,          // a keyed CW tone at Config::cwHz
+        Voice,       // REAL speech: a bundled public-domain clip (Harvard sentences)
+                     // looped, so NR has genuine voice to preserve and ASR has real
+                     // words to transcribe. 24 kHz mono, no resample.
         // noise (unwanted — NR must remove)
         White,       // flat Gaussian AWGN — the thermal baseline
         Pink,        // 1/f band hiss (Voss-McCartney) — atmospheric floor
@@ -52,10 +55,10 @@ public:
         Hash,        // switching-supply broadband clumps
         Woodpecker,  // pulsed wideband rasp
     };
-    // NB: a Voice channel (WAV playback) exists in flex-sim but is intentionally
-    // omitted here — SimBackend has no file source; a wanted-signal tone (Cw) is
-    // enough to exercise NR's signal-preservation. Add Voice when a sample
-    // provider is wired.
+    // Voice plays a bundled public-domain speech clip (:/demo_voice.wav, Harvard
+    // sentences, 24 kHz mono) looped — REAL words, so it exercises NR's voice
+    // preservation and can be transcribed by ASR (Copy Assist, #4338). Loaded once,
+    // lazily, on first use.
 
     struct ChannelState {
         bool   enabled  = false;
@@ -115,6 +118,7 @@ public:
 private:
     // --- generators: fill `out` (kFrameLen) at unity reference for one channel ---
     void genCw(const ChannelState&, float* out);
+    void genVoice(const ChannelState&, float* out);
     void genWhite(const ChannelState&, float* out);
     void genPink(const ChannelState&, float* out);
     void genQrn(const ChannelState&, float* out);
@@ -132,6 +136,12 @@ private:
 
     // phase counters (deterministic tone/buzz generators)
     long m_cwPhase = 0, m_plPhase = 0;
+    // Voice playback: the bundled speech clip's samples (mono float, 24 kHz),
+    // loaded once, and the loop read position.
+    std::vector<float> m_voiceSamples;
+    bool   m_voiceLoaded = false;
+    size_t m_voicePos = 0;
+    void   loadVoiceClip();       // lazy-load :/demo_voice.wav on first use
     // Birdie phase as a CONTINUOUS RADIANS accumulator (not hz*absolute-time), so
     // changing the pitch (VFO tuning) doesn't teleport the phase and warble.
     double m_birdiePhaseRad = 0.0;

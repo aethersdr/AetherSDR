@@ -3275,6 +3275,7 @@ add_test(NAME spectrum_pattern_test COMMAND spectrum_pattern_test)
 add_executable(noise_mixer_test
     tests/noise_mixer_test.cpp
     src/core/backends/sim/NoiseMixer.cpp
+    resources/resources.qrc          # for the bundled demo voice clip (:/demo_voice.wav)
 )
 target_include_directories(noise_mixer_test PRIVATE src)
 target_link_libraries(noise_mixer_test PRIVATE Qt6::Core)
