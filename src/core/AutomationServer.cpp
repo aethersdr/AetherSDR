@@ -5030,12 +5030,10 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("pans"), pans}};
     }
     if (model == QLatin1String("rhi")) {
-        // Per-panadapter QRhiWidget surface geometry from every SpectrumWidget,
-        // so automation can assert the swapchain/color-buffer sizing that the
-        // #4091 fix controls (fixedColorBufferSize kept even-aligned vs a
-        // fractional QT_SCALE_FACTOR). selector filters by pan index or
-        // objectName. GUI-header-free: found by class name, snapshotted via
-        // meta-call. Reports gpu:false per pan on non-GPU builds.
+        // Per-panadapter QRhiWidget surface geometry, color-buffer sizing mode,
+        // and native-widget topology from every SpectrumWidget. selector filters
+        // by pan index or objectName. GUI-header-free: found by class name,
+        // snapshotted via meta-call. Reports gpu:false per pan on non-GPU builds.
         bool selectorIsIndex = false;
         const int wantIndex = selector.toInt(&selectorIsIndex);
         QJsonArray pans;
