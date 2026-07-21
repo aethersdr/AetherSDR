@@ -214,6 +214,13 @@ bool PanadapterStream::start(RadioConnection* conn)
         m_syntheticPanStreamId = 0x40000000u;   // matches the display-pan status id
         m_syntheticElapsedS = 0.0;
         m_syntheticFrameIndex = 0;
+        // Default audible scene: a pink-noise floor with a 1200 Hz birdie carrier,
+        // so the demo immediately demonstrates what NR2/notch can do out of the box.
+        m_demoAudio.setEnabled(NoiseMixer::Channel::Pink, true);
+        m_demoAudio.setLevelDb(NoiseMixer::Channel::Pink, -22.0);
+        m_demoAudio.setEnabled(NoiseMixer::Channel::Birdie, true);
+        m_demoAudio.setLevelDb(NoiseMixer::Channel::Birdie, -18.0);
+        m_demoAudio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
         if (!m_syntheticTimer) {
             m_syntheticTimer = new QTimer(this);
             connect(m_syntheticTimer, &QTimer::timeout,
@@ -304,6 +311,31 @@ void PanadapterStream::tickSyntheticDemo()
         m_syntheticElapsedS, m_syntheticFrameIndex);
 
     emit spectrumReady(m_syntheticPanStreamId, bins, /*emittedNs*/ 0);
+
+    // Synthetic RX AUDIO for the demo: fill this 50 ms tick with NoiseMixer output
+    // and emit it exactly as the real UDP audio path does — 24 kHz stereo float32
+    // interleaved (L,R,L,R). audioDataReady() already feeds AudioEngine::
+    // feedAudioData(), so demo audio flows into NR/notch with no extra wiring.
+    // One tick = 50 ms = ~9.4 mixFrames of kFrameLen; round up in whole frames.
+    constexpr int kTickMs = 50;
+    const int framesPerTick =
+        (NoiseMixer::kSampleRate * kTickMs / 1000 + NoiseMixer::kFrameLen - 1)
+        / NoiseMixer::kFrameLen;
+    QByteArray pcm;
+    pcm.reserve(framesPerTick * NoiseMixer::kFrameLen * 2
+                * static_cast<int>(sizeof(float)));
+    for (int f = 0; f < framesPerTick; ++f) {
+        const QVector<float> mono = m_demoAudio.mixFrame();
+        const int base = pcm.size();
+        pcm.resize(base + mono.size() * 2 * static_cast<int>(sizeof(float)));
+        auto* p = reinterpret_cast<float*>(pcm.data() + base);
+        for (int i = 0; i < mono.size(); ++i) {
+            p[2 * i] = mono[i];         // L
+            p[2 * i + 1] = mono[i];     // R
+        }
+    }
+    emit audioDataReady(pcm);
+
     // Mark data as flowing so RadioModel's UDP-health watchdog doesn't warn that
     // no spectrum arrived — the demo delivers frames here, just not over UDP.
     m_hasReceivedPacket = true;

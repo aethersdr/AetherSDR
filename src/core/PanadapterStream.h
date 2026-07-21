@@ -2,6 +2,7 @@
 
 #include "PacketLossConcealment.h"
 #include "core/backends/sim/SpectrumPatternGenerator.h"
+#include "core/backends/sim/NoiseMixer.h"   // demo-mode synthetic RX audio (RFC #4288)
 
 #include <QObject>
 #include <QUdpSocket>
@@ -369,6 +370,11 @@ private:
     quint32  m_syntheticPanStreamId{0};
     double   m_syntheticElapsedS{0.0};
     quint64  m_syntheticFrameIndex{0};
+    // Demo-mode RX audio: the same NoiseMixer engine as SimBackend, driven from
+    // the synthetic tick. Each 50 ms tick emits ~50 ms of 24 kHz stereo float32
+    // over audioDataReady() — the identical signal the real UDP audio path emits,
+    // so it feeds AudioEngine::feedAudioData() (and thus NR) with no new wiring.
+    NoiseMixer m_demoAudio;
     void tickSyntheticDemo();
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
