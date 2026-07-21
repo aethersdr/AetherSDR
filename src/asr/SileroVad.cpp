@@ -2,6 +2,10 @@
 
 #include <algorithm>
 
+#ifdef HAVE_ONNX
+#include "asr/OrtPath.h" // ORTCHAR_T (wchar_t on Windows) model-path widening
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -28,7 +32,8 @@ bool SileroVad::load(const std::string& modelPath)
 #ifdef HAVE_ONNX
     try {
         m_env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "AetherSDR-VAD");
-        m_session = std::make_unique<Ort::Session>(*m_env, modelPath.c_str(), m_opts);
+        m_session = std::make_unique<Ort::Session>(
+            *m_env, asr_detail::toOrtPath(modelPath).c_str(), m_opts);
         reset();
         m_loaded = true;
     } catch (const Ort::Exception&) {

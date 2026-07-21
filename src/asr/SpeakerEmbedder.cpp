@@ -2,6 +2,10 @@
 
 #include <cmath>
 
+#ifdef HAVE_ONNX
+#include "asr/OrtPath.h" // ORTCHAR_T (wchar_t on Windows) model-path widening
+#endif
+
 namespace AetherSDR {
 
 SpeakerEmbedder::SpeakerEmbedder() = default;
@@ -16,7 +20,8 @@ bool SpeakerEmbedder::load(const std::string& modelPath)
         m_opts.SetIntraOpNumThreads(1);
         m_opts.SetGraphOptimizationLevel(ORT_ENABLE_BASIC);
         m_mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        m_session = std::make_unique<Ort::Session>(*m_env, modelPath.c_str(), m_opts);
+        m_session = std::make_unique<Ort::Session>(
+            *m_env, asr_detail::toOrtPath(modelPath).c_str(), m_opts);
 
         Ort::AllocatorWithDefaultOptions alloc;
         m_inputName = m_session->GetInputNameAllocated(0, alloc).get();
