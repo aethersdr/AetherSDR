@@ -129,9 +129,13 @@ the layout. Grab models from sherpa-onnx's model zoo and point at the extracted
 directory. sherpa-onnx bundles its own ONNX Runtime, which the whole app then
 shares (single runtime, no version clash).
 
-Build/stage it with `scripts/setup/setup-sherpa-onnx.sh` (Linux x64 / macOS;
-`REQUIRE_ASR_SHERPA=ON` to hard-require it). A Raspberry Pi needs sherpa-onnx
-built from source (no aarch64 shared-lib prebuilt yet).
+Stage it with `scripts/setup/setup-sherpa-onnx.sh` (Linux x64/aarch64 + macOS;
+`REQUIRE_ASR_SHERPA=ON` makes it a release requirement). The AppImage and DMG
+release builds run this and ship sherpa-onnx. k2-fsa publishes no aarch64
+shared-lib, so the ARM one is built by AetherSDR's own CI
+([`build-sherpa-onnx-aarch64.yml`](../.github/workflows/build-sherpa-onnx-aarch64.yml))
+and hosted on the `sherpa-onnx-libs` release. Windows is a follow-up (needs a
+`setup-sherpa-onnx.ps1`).
 
 ## Remote backend (bring your own server)
 

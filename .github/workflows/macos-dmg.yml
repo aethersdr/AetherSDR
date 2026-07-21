@@ -105,6 +105,11 @@ jobs:
         if: matrix.label == 'apple-silicon'
         run: bash scripts/setup/setup-onnxruntime.sh
 
+      - name: Setup sherpa-onnx (non-whisper ASR backend)
+        # sherpa's macOS prebuilt is universal2, so it ships on both Apple Silicon
+        # and Intel (and bundles ONNX Runtime, which the app shares).
+        run: bash scripts/setup/setup-sherpa-onnx.sh
+
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03
         with:
@@ -143,6 +148,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="$QT_PREFIX;$(brew --prefix)" \
             -DMQTT_TLS=OFF \
             -DREQUIRE_ASR_GPU=ON \
+            -DREQUIRE_ASR_SHERPA=ON \
             $ONNX_FLAG \
             $GPU_FLAG
 

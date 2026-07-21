@@ -77,6 +77,12 @@ jobs:
       - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
         run: bash scripts/setup/setup-onnxruntime.sh
 
+      - name: Setup sherpa-onnx (non-whisper ASR backend)
+        # x86_64 uses k2-fsa's prebuilt; aarch64 uses AetherSDR's CI-built lib on
+        # the sherpa-onnx-libs release. Ships its own ONNX Runtime, which the app
+        # then shares (single runtime).
+        run: bash scripts/setup/setup-sherpa-onnx.sh
+
       - name: Setup qtkeychain (SmartLink credential persistence)
         # Builds qtkeychain from source against the active Qt and stages it in
         # third_party/qtkeychain so find_package(Qt6Keychain) succeeds. Without
@@ -96,6 +102,7 @@ jobs:
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
             -DREQUIRE_ASR_ONNX=ON \
+            -DREQUIRE_ASR_SHERPA=ON \
             -DREQUIRE_ASR_GPU=${{ matrix.require_gpu }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
@@ -160,11 +167,12 @@ jobs:
           else
             export QMAKE=$(which qmake6 2>/dev/null || which qmake)
           fi
-          # Let linuxdeploy resolve + bundle libqt6keychain.so and libonnxruntime.so
-          # (both NEEDED by the binary but staged under third_party, outside the
-          # standard search path). Qt6 DBus, which the keychain backend needs at
-          # runtime, is pulled in transitively.
-          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${LD_LIBRARY_PATH:-}"
+          # Let linuxdeploy resolve + bundle the NEEDED libs staged under
+          # third_party (outside the standard search path): libqt6keychain.so,
+          # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
+          # copy). Qt6 DBus, which the keychain backend needs at runtime, is pulled
+          # in transitively.
+          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \
