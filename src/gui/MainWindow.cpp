@@ -44,6 +44,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "AppletPanel.h"
+#include "DemoApplet.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
 #include "SMeterWidget.h"
@@ -1412,6 +1413,37 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->rxApplet(), &RxApplet::afGainChanged, this, [this](int v) {
         if (auto* s = activeSlice()) s->setAudioGain(v);
     });
+
+    // Demo Noise applet → PanadapterStream's demo-scene setters. The mixer lives
+    // on the network thread, so these are Q_INVOKABLE and invoked QUEUED so the
+    // mutation lands there (RFC #4288). No-ops unless the demo radio is connected.
+    if (auto* demo = m_appletPanel->demoApplet()) {
+        connect(demo, &DemoApplet::demoNoiseToggled, this,
+                [this](const QString& ch, bool on) {
+            if (auto* ps = m_radioModel.panStream())
+                QMetaObject::invokeMethod(ps, "setDemoNoiseEnabled",
+                    Qt::QueuedConnection, Q_ARG(QString, ch), Q_ARG(bool, on));
+        });
+        connect(demo, &DemoApplet::demoNoiseLevelChanged, this,
+                [this](const QString& ch, double db) {
+            if (auto* ps = m_radioModel.panStream())
+                QMetaObject::invokeMethod(ps, "setDemoNoiseLevel",
+                    Qt::QueuedConnection, Q_ARG(QString, ch), Q_ARG(double, db));
+        });
+        connect(demo, &DemoApplet::demoNoiseKnobChanged, this,
+                [this](const QString& ch, const QString& knob, double v) {
+            if (auto* ps = m_radioModel.panStream())
+                QMetaObject::invokeMethod(ps, "setDemoNoiseKnob",
+                    Qt::QueuedConnection, Q_ARG(QString, ch),
+                    Q_ARG(QString, knob), Q_ARG(double, v));
+        });
+        connect(demo, &DemoApplet::demoPresetRequested, this,
+                [this](const QString& preset) {
+            if (auto* ps = m_radioModel.panStream())
+                QMetaObject::invokeMethod(ps, "loadDemoNoisePreset",
+                    Qt::QueuedConnection, Q_ARG(QString, preset));
+        });
+    }
     connect(m_appletPanel->rxApplet(), &RxApplet::directEntryCommitted,
             this, [this](double mhz, const QString& source) {
         if (auto* s = activeSlice()) {
@@ -4994,6 +5026,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
     }
 
     m_connPanel->setConnected(connected);
+
+    // Demo mode: reveal the Demo Noise control tile only while connected to the
+    // synthetic demo radio; hide it for real radios. (RFC #4288)
+    if (m_appletPanel) {
+        auto* conn = m_radioModel.connection();
+        const bool demo = connected && conn && conn->isSyntheticDemo();
+        m_appletPanel->setAppletVisible(QStringLiteral("DEMO"), demo);
+    }
 
     // Pause/resume the discovery re-bind loop in step with the connection
     // lifecycle.  Without this the 5-second close()+bind() churn ran for the

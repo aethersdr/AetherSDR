@@ -101,6 +101,11 @@ public:
     static Channel  fromName(const QString& n, bool* ok = nullptr);
     static QVector<Channel> allChannels();
 
+    // Named scenes (storm / night-40m / …) for one-click demo presets. Loading a
+    // preset disables every channel, then enables + levels the ones it names.
+    void loadPreset(const QString& presetName);      // no-op on unknown name
+    static QStringList allPresetNames();
+
 private:
     // --- generators: fill `out` (kFrameLen) at unity reference for one channel ---
     void genCw(const ChannelState&, float* out);

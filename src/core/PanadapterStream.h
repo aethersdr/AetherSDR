@@ -190,6 +190,18 @@ public:
     // the network worker thread (the socket lives there). Persistence is the
     // caller's responsibility (NetworkSettings, on the GUI thread). (#3810)
     Q_INVOKABLE void setReceiveBufferSizeBytes(int bytes);
+
+    // ── Demo-mode noise scene (RFC #4288) ──────────────────────────────────
+    // Drive the synthetic-demo audio NoiseMixer from the GUI (the DemoApplet).
+    // The mixer is read on the network thread by tickSyntheticDemo(); these
+    // setters are Q_INVOKABLE so the GUI calls them via a QUEUED connection and
+    // the mutation lands on the network thread — no locking needed. channel is a
+    // NoiseMixer::Channel name (see NoiseMixer::name()). No-ops off the demo path.
+    Q_INVOKABLE void setDemoNoiseEnabled(const QString& channel, bool on);
+    Q_INVOKABLE void setDemoNoiseLevel(const QString& channel, double levelDb);
+    Q_INVOKABLE void setDemoNoiseKnob(const QString& channel, const QString& knob,
+                                      double value);
+    Q_INVOKABLE void loadDemoNoisePreset(const QString& presetName);
     // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
     // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
     int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }

@@ -403,4 +403,41 @@ QVector<NoiseMixer::Channel> NoiseMixer::allChannels()
             Channel::Hash, Channel::Woodpecker};
 }
 
+namespace {
+// Named scenes: {channel, level dB}. Mirrors flex-sim's presets.
+struct PresetEntry { NoiseMixer::Channel ch; double level; };
+const std::map<QString, std::vector<PresetEntry>>& presetTable()
+{
+    using C = NoiseMixer::Channel;
+    static const std::map<QString, std::vector<PresetEntry>> t = {
+        {QStringLiteral("quiet-20m"),  {{C::Pink, -30}}},
+        {QStringLiteral("night-40m"),  {{C::Pink, -22}, {C::Qrn, -24}, {C::Crashes, -22}}},
+        {QStringLiteral("storm"),      {{C::Pink, -20}, {C::Qrn, -12}, {C::Crashes, -10}}},
+        {QStringLiteral("noisy-qth"),  {{C::Pink, -24}, {C::Powerline, -16}, {C::Hash, -18}}},
+        {QStringLiteral("birdie-hell"),{{C::Pink, -28}, {C::Birdie, -18}, {C::Powerline, -22}}},
+        {QStringLiteral("cw-in-noise"),{{C::Cw, -16}, {C::Pink, -24}, {C::Qrn, -22}}},
+    };
+    return t;
+}
+}  // namespace
+
+void NoiseMixer::loadPreset(const QString& presetName)
+{
+    const auto& table = presetTable();
+    auto it = table.find(presetName);
+    if (it == table.end()) return;                 // unknown — leave scene as-is
+    for (auto& kv : m_ch) kv.second.enabled = false;   // presets are absolute
+    for (const PresetEntry& e : it->second) {
+        m_ch[e.ch].enabled = true;
+        m_ch[e.ch].levelDb = e.level;
+    }
+}
+
+QStringList NoiseMixer::allPresetNames()
+{
+    QStringList out;
+    for (const auto& kv : presetTable()) out << kv.first;
+    return out;
+}
+
 }  // namespace AetherSDR

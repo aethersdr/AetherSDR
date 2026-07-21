@@ -1137,6 +1137,37 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────
 
+// ── Demo-mode noise scene setters (RFC #4288) ──────────────────────────────
+// Q_INVOKABLE → called from the GUI via a queued connection, so the mutation of
+// m_demoAudio runs on the network worker thread that also reads it in
+// tickSyntheticDemo(). No locking needed (same thread), matching the PLC pattern.
+void PanadapterStream::setDemoNoiseEnabled(const QString& channel, bool on)
+{
+    bool ok = false;
+    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
+    if (ok) m_demoAudio.setEnabled(c, on);
+}
+
+void PanadapterStream::setDemoNoiseLevel(const QString& channel, double levelDb)
+{
+    bool ok = false;
+    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
+    if (ok) m_demoAudio.setLevelDb(c, levelDb);
+}
+
+void PanadapterStream::setDemoNoiseKnob(const QString& channel, const QString& knob,
+                                        double value)
+{
+    bool ok = false;
+    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
+    if (ok) m_demoAudio.setKnob(c, knob, value);
+}
+
+void PanadapterStream::loadDemoNoisePreset(const QString& presetName)
+{
+    m_demoAudio.loadPreset(presetName);
+}
+
 void PanadapterStream::setPacketLossConcealment(bool on)
 {
     m_plcEnabled.store(on);

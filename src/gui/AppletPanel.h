@@ -31,6 +31,7 @@ class CrossNeedleMeterApplet;
 class CrossNeedleMeterWidget;
 class TunerApplet;
 class AmpApplet;
+class DemoApplet;
 class TxApplet;
 class PhoneCwApplet;
 class PhoneApplet;
@@ -93,6 +94,7 @@ public:
     void setMeterPowerScale(int maxWatts, bool amplifierActive);
     TunerApplet*  tunerApplet()   { return m_tunerApplet; }
     AmpApplet*    ampApplet()     { return m_ampApplet; }
+    DemoApplet*   demoApplet()    { return m_demoApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -280,6 +282,7 @@ private:
     RxApplet*    m_rxApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};
+    DemoApplet*  m_demoApplet{nullptr};
     QPushButton* m_ampBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};

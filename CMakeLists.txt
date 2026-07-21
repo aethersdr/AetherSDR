@@ -825,6 +825,7 @@ set(GUI_SOURCES
     src/gui/ClientCompCurveWidget.cpp
     src/gui/ClientCompKnob.cpp
     src/gui/ClientGateApplet.cpp
+    src/gui/DemoApplet.cpp                # demo mode — noise-scene control tile (RFC #4288)
     src/gui/ClientGateCurveWidget.cpp
     src/gui/ClientGateEditor.cpp
     src/gui/StripGatePanel.cpp

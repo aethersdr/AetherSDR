@@ -1,0 +1,156 @@
+#include "DemoApplet.h"
+
+#include "core/backends/sim/NoiseMixer.h"
+
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QSlider>
+#include <QVBoxLayout>
+
+namespace AetherSDR {
+
+namespace {
+// The channels shown, in display order, with an optional knob {name, label,
+// min, max, default}. Kept in sync with NoiseMixer's channels.
+struct RowSpec {
+    const char* channel;
+    const char* label;
+    const char* knob;     // "" = no knob
+    const char* knobLabel;
+    int knobMin, knobMax, knobDefault;
+};
+const RowSpec kRows[] = {
+    {"cw",         "CW tone",        "hz",   "Hz",  300, 1200, 700},
+    {"white",      "White / AWGN",   "",     "",    0, 0, 0},
+    {"pink",       "Pink / hiss",    "",     "",    0, 0, 0},
+    {"qrn",        "QRN crackle",    "rate", "i/s", 1, 60, 12},
+    {"powerline",  "Power-line",     "freq", "Hz",  50, 60, 60},
+    {"crashes",    "Static crash",   "rate", "c/s", 1, 30, 4},  // stored as val/10 for 0.1..3
+    {"birdie",     "Birdie carrier", "hz",   "Hz",  300, 3000, 1200},
+    {"hash",       "SMPS hash",      "prf",  "Hz",  30, 400, 120},
+    {"woodpecker", "Woodpecker",     "prf",  "pps", 2, 50, 10},
+};
+}  // namespace
+
+DemoApplet::DemoApplet(QWidget* parent) : QWidget(parent)
+{
+    buildUI();
+}
+
+void DemoApplet::buildUI()
+{
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(8, 8, 8, 8);
+    root->setSpacing(6);
+
+    auto* title = new QLabel(QStringLiteral("Demo Noise"), this);
+    title->setStyleSheet(QStringLiteral("color:#5cf;font-weight:bold;"));
+    root->addWidget(title);
+
+    // ── scene presets ──────────────────────────────────────────────────────
+    auto* presetRow = new QHBoxLayout();
+    presetRow->setSpacing(4);
+    for (const QString& p : NoiseMixer::allPresetNames()) {
+        auto* b = new QPushButton(p, this);
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton{background:#234;color:#bdf;border:1px solid #456;"
+            "border-radius:4px;padding:3px 7px;font-size:11px;}"
+            "QPushButton:hover{background:#2a4a6a;}"));
+        connect(b, &QPushButton::clicked, this, [this, p]() {
+            emit demoPresetRequested(p);
+            applyPresetToControls(p);
+        });
+        presetRow->addWidget(b);
+    }
+    presetRow->addStretch();
+    root->addLayout(presetRow);
+
+    // ── per-channel rows: toggle | level slider | optional knob ────────────
+    auto* grid = new QGridLayout();
+    grid->setHorizontalSpacing(8);
+    grid->setVerticalSpacing(4);
+    int r = 0;
+    for (const RowSpec& spec : kRows) {
+        ChannelRow row;
+        row.name = QString::fromLatin1(spec.channel);
+        row.knob = QString::fromLatin1(spec.knob);
+
+        row.toggle = new QPushButton(QString::fromLatin1(spec.label), this);
+        row.toggle->setCheckable(true);
+        row.toggle->setStyleSheet(QStringLiteral(
+            "QPushButton{text-align:left;padding:2px 6px;border:1px solid #345;"
+            "border-radius:3px;background:#1a2332;color:#bcd;font-size:12px;}"
+            "QPushButton:checked{background:#1a5;color:#fff;}"));
+        connect(row.toggle, &QPushButton::toggled, this,
+                [this, name = row.name](bool on) { emit demoNoiseToggled(name, on); });
+        grid->addWidget(row.toggle, r, 0);
+
+        row.level = new QSlider(Qt::Horizontal, this);
+        row.level->setRange(-60, 0);
+        row.level->setValue(-24);
+        row.levelLabel = new QLabel(QStringLiteral("-24"), this);
+        row.levelLabel->setStyleSheet(QStringLiteral("color:#5cf;font-family:monospace;"));
+        row.levelLabel->setMinimumWidth(28);
+        connect(row.level, &QSlider::valueChanged, this,
+                [this, name = row.name, lbl = row.levelLabel](int v) {
+                    lbl->setText(QString::number(v));
+                    emit demoNoiseLevelChanged(name, v);
+                });
+        grid->addWidget(row.level, r, 1);
+        grid->addWidget(row.levelLabel, r, 2);
+
+        if (!row.knob.isEmpty()) {
+            row.knobSlider = new QSlider(Qt::Horizontal, this);
+            row.knobSlider->setRange(spec.knobMin, spec.knobMax);
+            row.knobSlider->setValue(spec.knobDefault);
+            row.knobSlider->setMaximumWidth(64);
+            row.knobLabel = new QLabel(QString::number(spec.knobDefault), this);
+            row.knobLabel->setStyleSheet(QStringLiteral("color:#8cf;font-family:monospace;"));
+            row.knobLabel->setMinimumWidth(30);
+            connect(row.knobSlider, &QSlider::valueChanged, this,
+                    [this, name = row.name, knob = row.knob, lbl = row.knobLabel](int v) {
+                        lbl->setText(QString::number(v));
+                        // crashes' rate is 0.1..3 c/s → slider 1..30 maps /10.
+                        const double val = (knob == QLatin1String("rate") &&
+                                            name == QLatin1String("crashes"))
+                                               ? v / 10.0 : double(v);
+                        emit demoNoiseKnobChanged(name, knob, val);
+                    });
+            grid->addWidget(row.knobSlider, r, 3);
+            grid->addWidget(row.knobLabel, r, 4);
+        }
+        m_rows.push_back(row);
+        ++r;
+    }
+    root->addLayout(grid);
+    root->addStretch();
+}
+
+void DemoApplet::applyPresetToControls(const QString& presetName)
+{
+    // A preset is absolute: everything off, then the named channels on. We can't
+    // read the mixer's post-preset levels back cheaply, so reflect enabled-state
+    // by clearing all toggles then re-checking those the preset turns on. The
+    // engine already applied the authoritative levels; the toggles just track it.
+    NoiseMixer probe;
+    probe.loadPreset(presetName);
+    for (ChannelRow& row : m_rows) {
+        bool ok = false;
+        const auto c = NoiseMixer::fromName(row.name, &ok);
+        const bool on = ok && probe.channel(c).enabled;
+        // block signals so reflecting state doesn't re-emit intents to the engine
+        // (the preset request already set the engine authoritatively).
+        const QSignalBlocker bt(row.toggle);
+        row.toggle->setChecked(on);
+        if (on) {
+            const QSignalBlocker bl(row.level);
+            const int lvl = int(probe.channel(c).levelDb);
+            row.level->setValue(lvl);
+            row.levelLabel->setText(QString::number(lvl));
+        }
+    }
+}
+
+}  // namespace AetherSDR
