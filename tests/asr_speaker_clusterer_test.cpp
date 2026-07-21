@@ -23,7 +23,7 @@ std::vector<float> vec(int axis, float perturb)
     v[axis] = 1.0f;
     v[(axis + 3) % 8] = perturb;
     double n = 0;
-    for (float x : v) n += x * x;
+    for (float x : v) n += static_cast<double>(x) * x; // accumulate in double
     n = std::sqrt(n);
     for (float& x : v) x = static_cast<float>(x / n);
     return v;
