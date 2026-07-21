@@ -397,7 +397,8 @@ def test_secure_app_instance():
             argv, kwargs, process = popen_calls[-1]
             child_env = kwargs["env"]
             check("app_instance launches exact canonical artifact without shell",
-                  argv == [str(executable.resolve())] and "shell" not in kwargs, str(argv))
+                  argv == [str(executable.resolve())] and "shell" not in kwargs
+                  and kwargs.get("close_fds") is True, str(argv))
             check("app_instance hands token only through child environment",
                   child_env.get("AETHER_MCP_TOKEN") == "runtime-only-secret"
                   and "runtime-only-secret" not in json.dumps(launched)
@@ -462,6 +463,16 @@ def test_secure_app_instance():
                   and refused_stop.get("running") is True
                   and aether_mcp._owned_app is not None, str(refused_stop))
             ignore_stop[0] = False
+
+            if sys.platform != "win32":
+                non_socket_path = aether_mcp._instance_socket()
+                Path(non_socket_path).write_text("do not unlink\n", encoding="utf-8")
+                try:
+                    aether_mcp._remove_owned_socket({"socket": non_socket_path})
+                    check("socket cleanup refuses an owned-name non-socket",
+                          Path(non_socket_path).is_file(), non_socket_path)
+                finally:
+                    Path(non_socket_path).unlink(missing_ok=True)
     finally:
         aether_mcp._stop_owned_app()
         aether_mcp.subprocess.Popen = original_popen

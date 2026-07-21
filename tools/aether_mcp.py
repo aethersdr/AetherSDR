@@ -44,6 +44,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -277,10 +278,20 @@ def _wait_for_owned_app(instance, timeout=25):
 def _remove_owned_socket(instance):
     if sys.platform == "win32" or not instance:
         return
+    socket_path = instance.get("socket", "")
+    expected = rf"/tmp/aether-mcp-{os.getpid()}-[0-9a-f]{{8}}\.sock"
+    if not re.fullmatch(expected, socket_path):
+        return
     try:
-        os.unlink(instance["socket"])
+        socket_stat = os.lstat(socket_path)
     except FileNotFoundError:
-        pass
+        return
+    except OSError:
+        return
+    if not stat.S_ISSOCK(socket_stat.st_mode):
+        return
+    try:
+        os.unlink(socket_path)
     except OSError:
         pass  # app-owned socket cleanup is best-effort after process exit
 
@@ -871,6 +882,7 @@ def handle_tool(name, args):
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
+            "close_fds": True,
         }
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
