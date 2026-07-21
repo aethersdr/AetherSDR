@@ -25,11 +25,12 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC
 
-# Auto-cancel superseded runs when a newer commit lands on the same PR/branch.
-# The guard keeps runs uncancellable on main, so the post-merge push:main scan
-# and the weekly scheduled scan (which runs on main) always complete.
+# Auto-cancel superseded runs when a newer commit lands on the same PR. PR runs
+# share a stable per-PR group (older run cancelled); runs on main append the
+# unique run_id so each is its own group — the post-merge push:main scan and the
+# weekly scheduled scan (both on main) stay fully parallel, never queue or cancel.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # Workflow-level least-privilege GITHUB_TOKEN. CodeQL's official guidance
