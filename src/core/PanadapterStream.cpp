@@ -296,19 +296,18 @@ bool PanadapterStream::start(RadioConnection* conn)
 
 void PanadapterStream::tickSyntheticDemo()
 {
-    // One synthetic FFT line for the demo pan. The pattern generator (Phase 2a)
-    // produces per-bin dBm values; emit them as if a real UDP frame had decoded,
-    // keyed by the demo pan stream id so the widget wiring matches it. (RFC #4288)
-    SpectrumPatternGenerator::Geometry geo;
-    geo.bins = 1024;
-    geo.minDbm = -140.0;
-    geo.maxDbm = -20.0;
-    geo.spanHz = 200000.0;      // matches the demo pan bandwidth (0.2 MHz)
-    geo.signalWidthHz = 12000.0;
-
-    const QVector<float> bins = SpectrumPatternGenerator::generate(
-        SpectrumPatternGenerator::Pattern::CalTones, geo,
-        m_syntheticElapsedS, m_syntheticFrameIndex);
+    // One synthetic FFT line for the demo pan — render the SAME noise scene the
+    // audio is playing, so the waterfall SHOWS what you hear (pink slope, birdie
+    // carrier line, notch cuts), not a fixed unrelated pattern. m_demoAudio's
+    // spectrum() is floor-anchored grass + tonal lines. The audio scene spans a
+    // few kHz; map it into the middle ~40 kHz of the 200 kHz demo pan so the
+    // features are visible rather than collapsed onto the VFO. (RFC #4288)
+    constexpr int kBins = 1024;
+    constexpr double kFloorDbm = -140.0;         // == the demo pan's min_dbm, so the
+                                                 // noise floor sits ON the display bottom
+    constexpr double kVisibleSpanHz = 40000.0;   // audio Hz -> bin over this width
+    const QVector<float> bins =
+        m_demoAudio.spectrum(kBins, kFloorDbm, kVisibleSpanHz, kBins / 2);
 
     emit spectrumReady(m_syntheticPanStreamId, bins, /*emittedNs*/ 0);
 
