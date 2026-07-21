@@ -323,13 +323,19 @@ void AcomApplet::setForwardPower(float watts)
 void AcomApplet::setReflectedPower(float watts)
 {
     m_reflectedWatts = watts;
-    m_refGauge->setValue(watts);
+    // Reflected power is only meaningful while there's forward drive — hold the
+    // needle at baseline below 1 W so the gauge agrees with its readout label,
+    // which already blanks under the same condition (updateValueLabels). Wiring
+    // sets forward power first each frame, so m_fwdWatts is current here.
+    m_refGauge->setValue(m_fwdWatts >= 1.0f ? watts : 0.0f);
 }
 
 void AcomApplet::setSwr(float swr)
 {
     m_swrVal = swr;
-    m_swrGauge->setValue(swr);
+    // Same forward-power gate as the SWR label: without forward drive SWR is
+    // undefined, so hold the gauge at 1.0 rather than tracking a garbage ratio.
+    m_swrGauge->setValue(m_fwdWatts >= 1.0f ? swr : 1.0f);
 }
 
 void AcomApplet::setDrainCurrent(float amps)
@@ -467,7 +473,14 @@ void AcomApplet::setConnected(bool connected)
         m_fwdWatts = 0.0f;
         m_reflectedWatts = 0.0f;
         m_swrVal = 1.0f;
+        // Clear the forward-power peak hold too — otherwise a stale peak from
+        // the prior session survives (m_peakFwd is not otherwise reset), and a
+        // reconnect within the 2.5 s peak-hold window suppresses the new
+        // session's peak marker until a reading exceeds the old peak.
+        m_peakFwd = 0.0f;
+        if (m_peakTimer) m_peakTimer->stop();
         m_pwrGauge->setValueImmediate(0.0f);
+        m_pwrGauge->clearPeak();
         m_refGauge->setValueImmediate(0.0f);
         m_swrGauge->setValueImmediate(1.0f);
         updateValueLabels();
