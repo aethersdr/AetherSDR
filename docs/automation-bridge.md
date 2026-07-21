@@ -837,10 +837,10 @@ used by the stacked trace renderer.
   trace floor used by 3D placement from the waterfall color floor.
 
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry** — the widget size,
-devicePixelRatio, and pinned color-buffer extents — so automation can assert
-the swapchain sizing that the #4091 fix controls (the color buffer stays
-even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
+Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
+the widget size, devicePixelRatio, pinned color-buffer extents, and (on macOS)
+native-leaf/ancestor isolation — so automation can assert the swapchain sizing
+that the #4091 fix controls and the bounded native-view hierarchy from #4339.
 
 ```json
 → {"cmd":"get","model":"rhi"}
@@ -858,9 +858,13 @@ even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
 | `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
+| `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
+| `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
 
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
-each entry reports `gpu:false` and omits the buffer fields.
+each entry reports `gpu:false` and omits the buffer fields. The three native
+topology fields are emitted only on macOS; other platforms omit them.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,

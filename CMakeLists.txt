@@ -2919,6 +2919,19 @@ add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
+# ancestor-isolation attribute, and native-ancestor count reported to agents.
+add_executable(native_widget_topology_test
+    tests/native_widget_topology_test.cpp
+)
+target_include_directories(native_widget_topology_test PRIVATE src)
+target_link_libraries(native_widget_topology_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+add_test(NAME native_widget_topology_test COMMAND native_widget_topology_test)
+set_tests_properties(native_widget_topology_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)

@@ -1,5 +1,6 @@
 #include "SpectrumWidget.h"
 #include "KiwiSdrTraceMath.h"
+#include "NativeWidgetTopology.h"
 #include "PanadapterRenderScheduler.h"
 #include "PanadapterMessageOverlay.h"
 #include "SpectrumOverlayMenu.h"
@@ -847,16 +848,7 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("heightPx")] = height();
     m[QStringLiteral("dpr")] = dpr;
 #ifdef Q_OS_MAC
-    m[QStringLiteral("nativeWindow")] = windowHandle() != nullptr;
-    m[QStringLiteral("nativeAncestorsBlocked")] =
-        testAttribute(Qt::WA_DontCreateNativeAncestors);
-    int nativeAncestorCount = 0;
-    for (QWidget* ancestor = parentWidget(); ancestor; ancestor = ancestor->parentWidget()) {
-        if (ancestor->testAttribute(Qt::WA_NativeWindow)) {
-            ++nativeAncestorCount;
-        }
-    }
-    m[QStringLiteral("nativeAncestorCount")] = nativeAncestorCount;
+    appendNativeWidgetTopology(m, *this);
 #endif
 #ifdef AETHER_GPU_SPECTRUM
     m[QStringLiteral("gpu")] = true;
