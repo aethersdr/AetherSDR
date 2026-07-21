@@ -202,6 +202,12 @@ public:
     Q_INVOKABLE void setDemoNoiseKnob(const QString& channel, const QString& knob,
                                       double value);
     Q_INVOKABLE void loadDemoNoisePreset(const QString& presetName);
+
+    // Live VFO frequency for the demo (MHz). The birdie is anchored to an ABSOLUTE
+    // RF carrier; when the VFO moves, its AUDIO pitch = (carrier - VFO), so the
+    // tone shifts and zero-beats like a real signal, and its waterfall position
+    // slides — both derived from the same RF relationship. (RFC #4288)
+    Q_INVOKABLE void setDemoVfoMhz(double vfoMhz);
     // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
     // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
     int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }
@@ -387,7 +393,14 @@ private:
     // over audioDataReady() — the identical signal the real UDP audio path emits,
     // so it feeds AudioEngine::feedAudioData() (and thus NR) with no new wiring.
     NoiseMixer m_demoAudio;
+    // RF-anchored birdie: the carrier sits at a fixed absolute frequency; the VFO
+    // moves under it. birdie audio Hz = (carrier - VFO), so tuning shifts the pitch
+    // (and zero-beats), and the display line tracks the same offset. Defaults put
+    // the carrier ~1.2 kHz above the 14.100 MHz demo VFO (the classic birdie).
+    double m_demoVfoMhz{14.100};
+    double m_demoBirdieCarrierMhz{14.100 + 1200.0 / 1.0e6};
     void tickSyntheticDemo();
+    void updateBirdieFromVfo();   // recompute the birdie audio Hz from carrier-VFO
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling

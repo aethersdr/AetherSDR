@@ -69,6 +69,10 @@ signals:
     void messageReceived(const ParsedMessage& msg);
     void pingRttMeasured(int ms);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow forwards
+    // this to PanadapterStream::setDemoVfoMhz so the birdie demodulates against
+    // it (pitch shifts, zero-beats). (RFC #4288)
+    void demoVfoChanged(double vfoMhz);
     void versionReceived(const QString& version);
     // Emitted when a response (R-line) is received from the radio.
     // Callers register callbacks keyed by seq in their own maps. (#502)

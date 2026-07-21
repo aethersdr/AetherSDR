@@ -1444,6 +1444,17 @@ MainWindow::MainWindow(QWidget* parent)
                     Qt::QueuedConnection, Q_ARG(QString, preset));
         });
     }
+
+    // Demo VFO tuning → the birdie demodulates against it (pitch shifts, zero-
+    // beats). RadioConnection catches the synthetic slice-tune and emits the new
+    // VFO freq; forward it to PanadapterStream (queued — mixer on the net thread).
+    if (auto* conn = m_radioModel.connection()) {
+        connect(conn, &RadioConnection::demoVfoChanged, this, [this](double mhz) {
+            if (auto* ps = m_radioModel.panStream())
+                QMetaObject::invokeMethod(ps, "setDemoVfoMhz",
+                    Qt::QueuedConnection, Q_ARG(double, mhz));
+        });
+    }
     connect(m_appletPanel->rxApplet(), &RxApplet::directEntryCommitted,
             this, [this](double mhz, const QString& source) {
         if (auto* s = activeSlice()) {

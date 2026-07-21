@@ -313,6 +313,26 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
             emit pingRttMeasured(1);
             return;
         }
+        // Slice tune: a real radio retunes and echoes the new RF_frequency in
+        // slice status. Model that so demo tuning works — parse the freq, echo it
+        // back (updates the VFO/display), and notify the audio side so the birdie
+        // demodulates against the new VFO. Format: "slice tune <id> <mhz> [kv…]".
+        if (command.startsWith(QStringLiteral("slice tune"))) {
+            const QStringList parts = command.split(QLatin1Char(' '),
+                                                    Qt::SkipEmptyParts);
+            if (parts.size() >= 4) {
+                bool ok = false;
+                const double mhz = parts.at(3).toDouble(&ok);
+                if (ok) {
+                    emitSyntheticStatus(
+                        QStringLiteral("SDE300001|slice 0 client_handle=0xDE300001 "
+                                       "RF_frequency=%1").arg(mhz, 0, 'f', 6));
+                    emit demoVfoChanged(mhz);
+                }
+            }
+            emit commandResponse(seq, 0, QString());
+            return;
+        }
         // Every other command: acknowledge OK (code 0) so the GUI-client
         // handshake (sub pan all, client gui, …) completes. The demo doesn't
         // model command effects; panadapter/slice state is pushed via synthetic

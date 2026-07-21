@@ -1157,6 +1157,16 @@ void PanadapterStream::setDemoNoiseLevel(const QString& channel, double levelDb)
 void PanadapterStream::setDemoNoiseKnob(const QString& channel, const QString& knob,
                                         double value)
 {
+    // The birdie's "hz" knob is special: the birdie is RF-anchored, so its audio
+    // pitch is (carrier - VFO), not a fixed value. Interpret the knob as the
+    // carrier's OFFSET ABOVE THE VFO (Hz) → set the carrier RF freq and recompute
+    // the audio Hz from the live VFO. This keeps the applet control meaningful
+    // (drag = move the carrier) while tuning the VFO still demodulates it.
+    if (channel == QLatin1String("birdie") && knob == QLatin1String("hz")) {
+        m_demoBirdieCarrierMhz = m_demoVfoMhz + value / 1.0e6;
+        updateBirdieFromVfo();
+        return;
+    }
     bool ok = false;
     const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
     if (ok) m_demoAudio.setKnob(c, knob, value);
@@ -1165,6 +1175,23 @@ void PanadapterStream::setDemoNoiseKnob(const QString& channel, const QString& k
 void PanadapterStream::loadDemoNoisePreset(const QString& presetName)
 {
     m_demoAudio.loadPreset(presetName);
+}
+
+void PanadapterStream::setDemoVfoMhz(double vfoMhz)
+{
+    m_demoVfoMhz = vfoMhz;
+    updateBirdieFromVfo();
+}
+
+void PanadapterStream::updateBirdieFromVfo()
+{
+    // USB demod: audio pitch = carrier - VFO. Positive when the carrier is ABOVE
+    // the VFO (in-passband on USB). Below the VFO it would fold to a negative
+    // "frequency" — clamp to a small positive so the tone doesn't vanish oddly;
+    // near zero it approaches zero-beat (a very low rumble), like a real radio.
+    const double audioHz = (m_demoBirdieCarrierMhz - m_demoVfoMhz) * 1.0e6;
+    m_demoAudio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
+                        std::max(0.0, audioHz));
 }
 
 void PanadapterStream::setPacketLossConcealment(bool on)
