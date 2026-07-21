@@ -25,6 +25,13 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC
 
+# Auto-cancel superseded runs when a newer commit lands on the same PR/branch.
+# The guard keeps runs uncancellable on main, so the post-merge push:main scan
+# and the weekly scheduled scan (which runs on main) always complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Workflow-level least-privilege GITHUB_TOKEN. CodeQL's official guidance
 # (https://github.com/github/codeql-action#permissions) is:
 #   actions: read           — needed by the CodeQL action to inspect this

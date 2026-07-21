@@ -12,6 +12,13 @@ on:
   push:
     branches: [main]
 
+# Auto-cancel superseded runs when a newer commit lands on the same PR/branch,
+# so a rapid push stream doesn't stack full runs. The guard keeps main's runs
+# uncancellable — the post-merge guard (push:main above) must always complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Least-privilege GITHUB_TOKEN. CI only needs to read repo contents to
 # build and test — no writes, no token-bearing API calls. Any future job
 # that needs more (e.g. publishing a comment) must opt in at the job level.

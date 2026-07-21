@@ -4,6 +4,13 @@ on:
   pull_request:
     branches: ["**"]
 
+# Auto-cancel superseded runs when a newer commit lands on the same PR/branch,
+# so a rapid push stream doesn't stack full runs. (PR-only workflow; the main
+# guard is kept for uniformity with ci.yml/codeql.yml and future-proofing.)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   pull-requests: write   # needed to post the summary comment; read-only on fork PRs (step gracefully skips)
 
