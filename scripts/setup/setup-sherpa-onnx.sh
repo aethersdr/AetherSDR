@@ -69,6 +69,15 @@ fi
 cp -a "${src}/lib/." "${OUT_DIR}/lib/"   # all shared libs (c-api, cxx-api, onnxruntime)
 rm -rf "${tmp}"
 
+# On macOS the k2-fsa prebuilt ships ad-hoc signed dylibs whose signature is
+# invalid on arrival (upstream strip/repack breaks the seal). dyld then
+# SIGKILLs the app at load time with "Code Signature Invalid". Re-sign ad-hoc
+# so the seal matches the on-disk bytes.
+if [ "${os}" = "Darwin" ]; then
+    echo "Re-signing dylibs (ad-hoc) ..."
+    codesign --force --sign - "${OUT_DIR}"/lib/*.dylib
+fi
+
 echo "Fetching C-API header ..."
 curl -fSL --retry 3 -o "${OUT_DIR}/include/sherpa-onnx/c-api/c-api.h" \
     "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v${SHERPA_VERSION}/sherpa-onnx/c-api/c-api.h"
