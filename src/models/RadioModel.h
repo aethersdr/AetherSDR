@@ -77,6 +77,10 @@ public:
     // Access the underlying connection and panadapter stream
     RadioConnection*  connection()  { return m_connection; }
     PanadapterStream* panStream()   { return m_panStream; }
+    // The radio-facing backend seam (aetherd RFC §5.5). Non-owning; used to wire
+    // seam-native signals (e.g. a SimBackend's audioFrameReady) that don't flow
+    // through PanadapterStream. Null before the first connect.
+    IRadioBackend*    backend()     { return m_backend.get(); }
     // Sub-models owned by RadioModel (main thread). (#502)
     MeterModel&       meterModel()       { return m_meterModel; }
     TunerModel&       tunerModel()       { return m_tunerModel; }

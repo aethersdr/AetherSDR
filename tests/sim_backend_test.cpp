@@ -7,10 +7,13 @@
 #include "core/backends/sim/SimBackend.h"
 
 #include <QCoreApplication>
+#include <QEventLoop>
 #include <QSignalSpy>
+#include <QTimer>
 
 #include <cstdio>
 
+using AetherSDR::NoiseMixer;
 using AetherSDR::RadioCapabilities;
 using AetherSDR::RadioConnectRequest;
 using AetherSDR::RadioDelta;
@@ -145,6 +148,69 @@ void testKeyingIsAlwaysInert()
     report("setKeying is a safe no-op on an RX-only sim", sim.isConnected());
 }
 
+// Pump the event loop briefly so the audio QTimer can fire, and count how many
+// audioFrameReady frames land (and their byte size).
+static int pumpFrames(QSignalSpy& spy, int ms)
+{
+    QEventLoop loop;
+    QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+    loop.exec();
+    return spy.count();
+}
+
+void testEmitsAudioWhenConnected()
+{
+    SimBackend sim;
+    QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
+    // Before connect: no audio.
+    pumpFrames(audioSpy, 30);
+    report("no audio before connect", audioSpy.count() == 0);
+
+    sim.connectRadio({});
+    const int got = pumpFrames(audioSpy, 60);   // ~11 frames at 5.33 ms
+    report("audioFrameReady fires once connected", got > 0);
+
+    // Format: 24 kHz STEREO float32 => kFrameLen * 2 channels * 4 bytes.
+    const int expectBytes =
+        NoiseMixer::kFrameLen * 2 * static_cast<int>(sizeof(float));
+    const auto lastArgs = audioSpy.constLast();
+    const int bytes = lastArgs.isEmpty() ? -1 : lastArgs.at(0).toByteArray().size();
+    report("audio frame is 24 kHz stereo float32 sized", bytes == expectBytes);
+}
+
+void testKeyingMutesAudio()
+{
+    SimBackend sim;
+    sim.connectRadio({});
+    QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
+    sim.setKeying(true);                     // muted while "keyed" (Principle VI)
+    pumpFrames(audioSpy, 60);
+    // Frames still FLOW (stream stays alive) but are all-zero when keyed.
+    bool allSilent = audioSpy.count() > 0;
+    for (const auto& call : audioSpy) {
+        const QByteArray pcm = call.at(0).toByteArray();
+        const auto* f = reinterpret_cast<const float*>(pcm.constData());
+        const int n = pcm.size() / static_cast<int>(sizeof(float));
+        for (int i = 0; i < n; ++i)
+            if (f[i] != 0.0f) { allSilent = false; break; }
+        if (!allSilent) break;
+    }
+    report("keyed audio is silence (never sounds live on TX)", allSilent);
+}
+
+void testDisconnectStopsAudio()
+{
+    SimBackend sim;
+    sim.connectRadio({});
+    QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
+    pumpFrames(audioSpy, 40);
+    report("audio flowing while connected", audioSpy.count() > 0);
+    sim.disconnectRadio();
+    audioSpy.clear();
+    pumpFrames(audioSpy, 40);
+    report("audio stops after disconnect", audioSpy.count() == 0);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -162,6 +228,9 @@ int main(int argc, char** argv)
     testSliceIntentEchoesBack();
     testDisconnectAndReconnect();
     testKeyingIsAlwaysInert();
+    testEmitsAudioWhenConnected();
+    testKeyingMutesAudio();
+    testDisconnectStopsAudio();
 
     if (g_failed == 0) {
         std::printf("All SimBackend lifecycle checks passed\n");

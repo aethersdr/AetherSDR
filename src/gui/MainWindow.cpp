@@ -222,6 +222,7 @@
 #include "RadeApplet.h"
 #endif
 #include "core/PanadapterStream.h"
+#include "core/backends/IRadioBackend.h"   // seam: SimBackend::audioFrameReady wiring
 #if defined(Q_OS_MAC)
 #include "core/VirtualAudioBridge.h"
 #include <QFileInfo>
@@ -1320,6 +1321,15 @@ MainWindow::MainWindow(QWidget* parent)
     // audioDataReady(); we feed that directly to the QAudioSink.
     connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
             m_audio, &AudioEngine::feedAudioData);
+    // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
+    // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the
+    // identical AudioEngine path. Harmless for real backends: FlexBackend never
+    // emits audioFrameReady (its audio flows through PanadapterStream above), so
+    // this connection simply stays idle unless a SimBackend is active.
+    if (auto* backend = m_radioModel.backend()) {
+        connect(backend, &IRadioBackend::audioFrameReady,
+                m_audio, &AudioEngine::feedAudioData);
+    }
     connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
             this, [this](const QString& source, const QString& sourceId,
                          const QByteArray& pcm, int sampleRate) {

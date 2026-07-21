@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QByteArray>
 #include <QString>
+#include <QTimer>
 #include <QVector>
 
 #include "core/backends/IRadioBackend.h"
@@ -52,23 +54,31 @@ public:
     static QString demoModelName();
     static QString demoSerial();
 
+private slots:
+    // Frame tick (kFrameLen / kSampleRate, ~5.3 ms): mixes one audio frame and
+    // emits it over the seam, plus a periodic spectrum row. Muted while keyed.
+    void onAudioTick();
+
 private:
     // Emit the initial synthetic snapshot a freshly-connected radio would report:
     // the radio-global delta (model/nickname/slices) and one active slice on a
     // sensible default frequency/mode. Phase 2 grows this into the pan + meters.
     void emitInitialState();
 
-    // Phase 2b (audio) forward-reference. NoiseMixer is the synthesized-RX-audio
-    // engine (white/pink/qrn/birdie/… + TNF/ANF notch); mixFrame() produces the
-    // 24 kHz float the demo radio would deliver, and spectrum() the matching
-    // panadapter render. It is BUILT AND UNIT-TESTED standalone (noise_mixer_test)
-    // but NOT yet driven here: a frame tick emitting audioFrameReady()/
-    // spectrumFrameReady() waits on the seam's audio CONSUMER, which isn't wired
-    // yet (nothing connects to IRadioBackend::audioFrameReady). When it is, a
-    // QTimer at the frame rate calls emit audioFrameReady(toStereoBytes(
-    // m_audio.mixFrame())) — RX audio straight into AE's NR chain, no DSP change.
-    // Kept muted while keyed (Principle VI): a demo radio never sounds live on TX.
+    // Serialize a mono float frame to the 24 kHz STEREO float32 QByteArray
+    // AudioEngine::feedAudioData() expects (each mono sample duplicated L=R).
+    static QByteArray toStereoBytes(const QVector<float>& mono);
+
+    // Phase 2b (audio) — the synthesized-RX-audio engine (white/pink/qrn/birdie/…
+    // + TNF/ANF notch). onAudioTick() calls m_audio.mixFrame() and emits it over
+    // audioFrameReady() as 24 kHz stereo float32 — the format AudioEngine::
+    // feedAudioData() consumes, so the demo audio flows straight into AE's NR
+    // chain with no DSP change. spectrum() gives the matching panadapter render.
+    // Muted while keyed (Principle VI): a demo radio never sounds live on TX.
     NoiseMixer m_audio;
+    QTimer     m_audioTimer;         // drives onAudioTick() at the frame rate
+    bool       m_keyed{false};       // muted while keyed (Principle VI — never sounds live on TX)
+    quint64    m_audioFrames{0};     // frame counter (throttles the spectrum row)
 
     bool   m_connected{false};
     double m_sliceFreqMhz{14.100};   // default: 20 m, a lively demo band
@@ -76,6 +86,7 @@ private:
     int    m_filterLowHz{100};
     int    m_filterHighHz{2900};
     static constexpr int kSliceId = 0;
+    static constexpr int kPanId = 0;
 };
 
 }  // namespace AetherSDR

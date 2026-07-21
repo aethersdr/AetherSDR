@@ -1,10 +1,68 @@
 #include "core/backends/sim/SimBackend.h"
 
+#include <QtEndian>
+
 namespace AetherSDR {
 
-SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent) {}
+SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
+{
+    // Frame cadence: kFrameLen samples at kSampleRate ≈ 5.33 ms. A CoarseTimer
+    // is fine — feedAudioData() buffers, and demo audio needs no sample-accurate
+    // pacing. Started on connect, stopped on disconnect.
+    m_audioTimer.setTimerType(Qt::CoarseTimer);
+    m_audioTimer.setInterval(
+        (NoiseMixer::kFrameLen * 1000) / NoiseMixer::kSampleRate);
+    connect(&m_audioTimer, &QTimer::timeout, this, &SimBackend::onAudioTick);
+    // Give the demo something audible out of the box: a pink-noise floor plus a
+    // birdie carrier — a scene that immediately shows what NR/notch can do.
+    m_audio.setEnabled(NoiseMixer::Channel::Pink, true);
+    m_audio.setLevelDb(NoiseMixer::Channel::Pink, -22.0);
+    m_audio.setEnabled(NoiseMixer::Channel::Birdie, true);
+    m_audio.setLevelDb(NoiseMixer::Channel::Birdie, -18.0);
+    m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
+}
 
 SimBackend::~SimBackend() = default;
+
+QByteArray SimBackend::toStereoBytes(const QVector<float>& mono)
+{
+    // AudioEngine::feedAudioData() wants 24 kHz STEREO float32: duplicate each
+    // mono sample into L and R. Little-endian float32 (native x86/ARM order the
+    // engine's downstream DSP reads).
+    QByteArray out;
+    out.resize(mono.size() * 2 * static_cast<int>(sizeof(float)));
+    auto* p = reinterpret_cast<float*>(out.data());
+    for (int i = 0; i < mono.size(); ++i) {
+        p[2 * i] = mono[i];
+        p[2 * i + 1] = mono[i];
+    }
+    return out;
+}
+
+void SimBackend::onAudioTick()
+{
+    if (!m_connected) {
+        return;
+    }
+    // Muted while keyed — a demo radio must never sound live on TX (Principle VI).
+    const QVector<float> frame = m_keyed
+        ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
+        : m_audio.mixFrame();
+    emit audioFrameReady(toStereoBytes(frame));
+
+    // A panadapter row a few times a second (not every audio frame — the display
+    // updates far slower than audio). ~20 fps at the 5.33 ms tick ≈ every 9th.
+    if (++m_audioFrames % 9 == 0) {
+        constexpr int kBins = 1024;
+        constexpr double kFloorDbm = -120.0;
+        constexpr double kAudioSpanHz = 8000.0;   // show ±4 kHz around the VFO
+        const QVector<float> row =
+            m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
+        QByteArray bytes(reinterpret_cast<const char*>(row.constData()),
+                         row.size() * static_cast<int>(sizeof(float)));
+        emit spectrumFrameReady(kPanId, bytes);
+    }
+}
 
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
 QString SimBackend::demoSerial()    { return QStringLiteral("DEMO-0001"); }
@@ -36,6 +94,7 @@ void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
     emit connected();
     emit capabilitiesChanged();
     emitInitialState();
+    m_audioTimer.start();   // begin delivering synthetic RX audio + spectrum
 }
 
 void SimBackend::disconnectRadio()
@@ -43,6 +102,7 @@ void SimBackend::disconnectRadio()
     if (!m_connected) {
         return;
     }
+    m_audioTimer.stop();
     m_connected = false;
     emit sliceRemoved(kSliceId);
     emit disconnected();
@@ -107,11 +167,13 @@ void SimBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
     emit sliceChanged(kSliceId, d);
 }
 
-void SimBackend::setKeying(bool /*key*/)
+void SimBackend::setKeying(bool key)
 {
-    // RX-only in the skeleton (capabilities().canTransmit == false). The engine
-    // TX guard above the seam already denies keying, but a no-op here makes the
-    // fail-closed behavior explicit at the backend too (Principle VI).
+    // RX-only (capabilities().canTransmit == false): the engine TX guard above
+    // the seam already denies keying. We DON'T transmit — but we do record the
+    // intent so onAudioTick() mutes the synthetic RX while "keyed", so the demo
+    // never plays receive audio over a (would-be) transmit (Principle VI).
+    m_keyed = key;
 }
 
 void SimBackend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/,
