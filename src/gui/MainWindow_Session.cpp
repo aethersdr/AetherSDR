@@ -1714,9 +1714,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // AETHER_AUTOMATION_ALLOW_TX into m_txAllowed and would otherwise
         // clobber a pre-start value. Fold in the persisted operator opt-in so
         // a GUI enable survives restart; setTxAllowed arms the watchdog.
+        const bool txPinnedOff =
+            qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
         guard->setTxAllowed(
-            qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-            || AutomationBridgeSettings::txAllowed());
+            !txPinnedOff
+            && (qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
+                || AutomationBridgeSettings::txAllowed()));
         // Observe-only gate (#4188) — apply the persisted operator opt-in after
         // start() so the bridge comes up read-only if the box is checked. An env
         // override lets headless/CI pin the bridge observe-only regardless.
@@ -1748,6 +1751,11 @@ void MainWindow::setAutomationBridgeToken(const QString& token)
 
 void MainWindow::setAutomationTxAllowed(bool allowed)
 {
+    if (allowed && qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX")) {
+        qWarning().noquote()
+            << "Ignoring TX-automation enable while AETHER_AUTOMATION_NO_TX pins it off";
+        return;
+    }
     // Persist the operator opt-in (nested config) so it survives restart.
     AutomationBridgeSettings::setTxAllowed(allowed);
     // Push live so toggling takes effect on a running bridge immediately —

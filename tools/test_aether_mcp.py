@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -300,6 +301,176 @@ def test_gesture_session():
         aether_mcp.Bridge = original_bridge
         aether_mcp.bridge_socket_path = original_sockpath
         os.environ.pop("AETHER_MCP_TOKEN", None)
+def test_secure_app_instance():
+    """Fresh builds inherit the token only at runtime and are identity-checked."""
+    aether_mcp._stop_owned_app()
+    original_popen = aether_mcp.subprocess.Popen
+    original_bridge = aether_mcp.Bridge
+    saved_env = {key: os.environ.get(key) for key in (
+        "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX")}
+    popen_calls = []
+    bridge_requests = []
+    tx_allowed = [False]
+    ignore_stop = [False]
+
+    class _Process:
+        next_pid = 4200
+
+        def __init__(self):
+            self.pid = _Process.next_pid
+            _Process.next_pid += 1
+            self.returncode = None
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            if not ignore_stop[0]:
+                self.returncode = -15
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise aether_mcp.subprocess.TimeoutExpired("AetherSDR", timeout)
+            return self.returncode
+
+        def kill(self):
+            if not ignore_stop[0]:
+                self.returncode = -9
+
+    def fake_popen(argv, **kwargs):
+        process = _Process()
+        popen_calls.append((argv, kwargs, process))
+        return process
+
+    class _Bridge:
+        def __init__(self, socket_path, timeout=None):
+            self.socket_path = socket_path
+
+        def request(self, obj):
+            bridge_requests.append(obj)
+            if obj.get("cmd") == "ping":
+                return {"ok": True, "authRequired": True}
+            instance = aether_mcp._owned_app
+            return {
+                "ok": True,
+                "pid": instance["process"].pid,
+                "automationIdentity": instance["socket"],
+                "socket": instance["socket"],
+                "label": instance["label"],
+                "txAllowed": tx_allowed[0],
+                "readOnly": False,
+                "version": "test",
+            }
+
+        def close(self):
+            pass
+
+    aether_mcp.subprocess.Popen = fake_popen
+    aether_mcp.Bridge = _Bridge
+    try:
+        with tempfile.TemporaryDirectory() as temp_root:
+            worktree = Path(temp_root) / "AetherSDR"
+            (worktree / ".git").mkdir(parents=True)
+            (worktree / "AGENTS.md").write_text("test\n", encoding="utf-8")
+            (worktree / "CMakeLists.txt").write_text(
+                "project(AetherSDR VERSION 1.0 LANGUAGES CXX)\n", encoding="utf-8")
+            if sys.platform == "darwin":
+                executable = (worktree / "build" / "AetherSDR.app" /
+                              "Contents" / "MacOS" / "AetherSDR")
+            elif sys.platform == "win32":
+                executable = worktree / "build" / "AetherSDR.exe"
+            else:
+                executable = worktree / "build" / "AetherSDR"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("test artifact\n", encoding="utf-8")
+            executable.chmod(0o700)
+
+            os.environ["AETHER_MCP_TOKEN"] = "runtime-only-secret"
+            os.environ["AETHER_MCP_SOCKET"] = "/tmp/unrelated.sock"
+            os.environ["AETHER_AUTOMATION_ALLOW_TX"] = "1"
+            launched = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "secure-proof"})["content"][0]["text"])
+
+            argv, kwargs, process = popen_calls[-1]
+            child_env = kwargs["env"]
+            check("app_instance launches exact canonical artifact without shell",
+                  argv == [str(executable.resolve())] and "shell" not in kwargs, str(argv))
+            check("app_instance hands token only through child environment",
+                  child_env.get("AETHER_MCP_TOKEN") == "runtime-only-secret"
+                  and "runtime-only-secret" not in json.dumps(launched)
+                  and "runtime-only-secret" not in " ".join(argv), str(launched))
+            check("app_instance pins no-autoconnect and no-TX",
+                  child_env.get("AETHER_AUTOMATION_NO_AUTOCONNECT") == "1"
+                  and child_env.get("AETHER_AUTOMATION_NO_TX") == "1"
+                  and child_env.get("AETHER_AUTOMATION_IDENTITY") == launched.get("socket")
+                  and child_env.get("AETHER_AUTOMATION_AGENT_NAME") == "secure-proof"
+                  and "AETHER_AUTOMATION_ALLOW_TX" not in child_env, str(child_env.keys()))
+            check("app_instance verifies exact authenticated identity",
+                  launched.get("authenticated") is True
+                  and launched.get("authRequired") is True
+                  and launched.get("pid") == process.pid
+                  and launched.get("txAllowed") is False
+                  and all("token" not in req for req in bridge_requests
+                          if req.get("cmd") == "ping")
+                  and all(req.get("token") == "runtime-only-secret"
+                          for req in bridge_requests if req.get("cmd") == "whoami"),
+                  str(launched))
+            check("owned instance becomes the wrapper bridge target",
+                  aether_mcp.bridge_socket_path() == launched.get("socket"), str(launched))
+
+            status = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "status"})["content"][0]["text"])
+            check("app_instance status is authenticated and scoped to owned PID",
+                  status.get("running") is True and status.get("authenticated") is True
+                  and status.get("pid") == process.pid, str(status))
+            stopped = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "stop"})["content"][0]["text"])
+            check("app_instance stop reaps only the owned process",
+                  stopped.get("running") is False and process.terminated
+                  and aether_mcp._owned_app is None, str(stopped))
+
+            os.environ.pop("AETHER_MCP_TOKEN", None)
+            before = len(popen_calls)
+            refused = aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree)})
+            check("app_instance refuses tokenless launch before spawning",
+                  refused.get("isError") is True and len(popen_calls) == before,
+                  str(refused))
+
+            os.environ["AETHER_MCP_TOKEN"] = "runtime-only-secret"
+            tx_allowed[0] = True
+            rejected = aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "unsafe-proof"})
+            unsafe_process = popen_calls[-1][2]
+            check("app_instance kills child when authenticated TX is not pinned off",
+                  rejected.get("isError") is True and unsafe_process.terminated
+                  and aether_mcp._owned_app is None, str(rejected))
+
+            tx_allowed[0] = False
+            ignore_stop[0] = True
+            stubborn = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "stubborn-proof"})["content"][0]["text"])
+            refused_stop = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "stop"})["content"][0]["text"])
+            check("app_instance does not claim an unkillable child was stopped",
+                  stubborn.get("running") is True and refused_stop.get("ok") is False
+                  and refused_stop.get("running") is True
+                  and aether_mcp._owned_app is not None, str(refused_stop))
+            ignore_stop[0] = False
+    finally:
+        aether_mcp._stop_owned_app()
+        aether_mcp.subprocess.Popen = original_popen
+        aether_mcp.Bridge = original_bridge
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 # ── JSON-RPC loop robustness (non-dict must not crash the loop) ──────────────
@@ -478,6 +649,7 @@ if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
     test_gesture_session()
+    test_secure_app_instance()
     test_jsonrpc_robustness()
     test_robustness_tools()
     test_fuzzy_suggest()

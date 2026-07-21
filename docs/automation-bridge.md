@@ -97,7 +97,9 @@ On macOS, do not host the bridge from a Codex-style sandboxed command. The
 native Cocoa platform can abort during `QApplication` startup if pasteboard or
 HIServices are unavailable, before AetherSDR reaches the automation bridge; with
 `QT_QPA_PLATFORM=offscreen`, the same sandbox can still deny the `QLocalServer`
-socket the bridge needs. Launch outside the command sandbox instead:
+socket the bridge needs. When the MCP wrapper is configured, prefer its secure
+[`app_instance`](#secure-fresh-build-handoff) launch. For a manual launch, run
+outside the command sandbox instead:
 
 ```bash
 QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
@@ -115,8 +117,7 @@ contributors to self-verify UI changes before requesting review.
 
 **Setup** (zero dependencies — plain Python 3):
 
-1. Launch the app with the bridge on: `AETHER_AUTOMATION=1 ./build/AetherSDR`
-2. Register the server with your assistant:
+1. Register the server with your assistant:
    - **Claude Code**: nothing to do — the repo's `.mcp.json` registers it;
      approve the prompt on first use. (Manual: `claude mcp add aethersdr
      -- python3 tools/aether_mcp.py`)
@@ -126,8 +127,11 @@ contributors to self-verify UI changes before requesting review.
         "command": "python3", "args": ["tools/aether_mcp.py"]}}}
      ```
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
+2. Launch through `app_instance` (recommended for a fresh proof build), or
+   manually with `AETHER_AUTOMATION=1 ./build/AetherSDR`.
 
-**Tools exposed** (23 typed tools): introspection — `bridge_status`,
+**Tools exposed** (25 typed tools): process handoff — `app_instance`;
+introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
 `get_state`, `get_log`, `floors`, `streams`; driving — `invoke`, `gesture`
@@ -166,6 +170,39 @@ plaintext settings file). Copy it into your assistant's MCP config as the
 verb except `ping` without a matching token. Headless/CI can supply the
 token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.
 
+### Secure fresh-build handoff
+
+Use the typed MCP `app_instance` tool when the MCP wrapper already has
+`AETHER_MCP_TOKEN` from a secure runtime source (for example macOS Keychain,
+Credential Manager, or libsecret) but a newly built app has a different secret-
+store requester identity:
+
+```json
+{"action":"launch","worktree":"/absolute/path/to/AetherSDR","label":"issue-4354-proof"}
+```
+
+`worktree` must be an absolute AetherSDR Git worktree. The wrapper runs only its
+canonical `build/AetherSDR` artifact (`build/AetherSDR.app/Contents/MacOS/AetherSDR`
+on macOS), directly without a shell. It passes the wrapper token only in the
+child process environment using the app's existing `AETHER_MCP_TOKEN` runtime
+override; the token is never a command-line argument, MCP result, discovery
+field, log message, or settings value.
+
+Each launch gets a unique explicit local socket and safe label. The wrapper
+sets `AETHER_AUTOMATION_NO_AUTOCONNECT=1`, pins TX automation off with
+`AETHER_AUTOMATION_NO_TX=1`, removes any inherited TX-enable flag, and refuses
+success unless token-free `ping` reports that auth is required and authenticated
+`whoami` matches the exact child PID, socket, and label with `txAllowed:false`.
+All other MCP tools then target that owned socket. `status` inspects only the
+owned process; `stop`, wrapper exit, or a failed launch terminates only that
+process and releases its socket.
+
+The tool fails closed if the wrapper has no token. It does not read, print, or
+copy a secret from the app settings UI, so an assistant never needs to put the
+credential in chat or a plaintext MCP configuration. Observe-only remains
+operator-authoritative: if the saved setting is enabled, the launched instance
+reports `readOnly:true` and mutating tools remain blocked.
+
 What the token *does* and *doesn't* do: it opts a **specific** client in
 and protects the secret at rest (nothing in a backed-up / synced /
 screen-shared dotfile), across other user accounts, and over any network
@@ -185,6 +222,12 @@ transmit and that you, the operator, remain responsible for all
 emissions; once confirmed the choice persists. Toggling it drives the
 same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
 disabling force-unkeys immediately).
+
+For proof-build process owners, `AETHER_AUTOMATION_NO_TX=1` pins this gate off
+even when the operator preference was previously enabled. The Radio Setup
+checkbox is disabled for that process and live attempts to enable it are
+ignored. `app_instance launch` always sets this pin and verifies it through
+authenticated `whoami` before returning success.
 
 ### Observe-only (read-only) mode
 

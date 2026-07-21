@@ -1580,7 +1580,9 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             grid->addWidget(new QLabel("Allow TX via MCP:"), 3, 0);
             auto* txCheck = new QCheckBox("Enable transmit control");
             const bool envForcesTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
-            txCheck->setChecked(AutomationBridgeSettings::txAllowed() || envForcesTx);
+            const bool envBlocksTx = qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
+            txCheck->setChecked(!envBlocksTx
+                                && (AutomationBridgeSettings::txAllowed() || envForcesTx));
             txCheck->setToolTip(
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
@@ -1589,7 +1591,11 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
                 "QCheckBox::indicator { width: 14px; height: 14px; }");
-            if (envForcesTx) {
+            if (envBlocksTx) {
+                txCheck->setEnabled(false);
+                txCheck->setToolTip(txCheck->toolTip()
+                    + "\n\nPinned off by the AETHER_AUTOMATION_NO_TX launch variable.");
+            } else if (envForcesTx) {
                 txCheck->setEnabled(false);
                 txCheck->setToolTip(txCheck->toolTip()
                     + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.");
