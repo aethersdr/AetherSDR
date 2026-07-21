@@ -171,6 +171,13 @@ int main(int argc, char* argv[])
         }
     }
 
+#ifdef Q_OS_MAC
+    // SpectrumWidget and WaveformWidget require native Metal child views, but
+    // their surrounding raster-widget trees must not become native siblings.
+    // Together with WA_DontCreateNativeAncestors on those leaves, this avoids
+    // redundant window-sized Core Animation backing stores (#4339).
+    QApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+#endif
     QApplication app(argc, argv);
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);

@@ -105,7 +105,9 @@ WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
 #if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
     // Same setup as SpectrumWidget: request Metal explicitly, and force a
     // native NSView so a QRhiWidget embedded in a raster-surface parent can
-    // obtain a Metal-capable surface of its own.
+    // obtain a Metal-capable surface of its own. Keep its QWidget ancestors
+    // non-native so they do not create redundant Core Animation backing stores.
+    setAttribute(Qt::WA_DontCreateNativeAncestors);
     setApi(QRhiWidget::Api::Metal);
     setAttribute(Qt::WA_NativeWindow);
 #endif

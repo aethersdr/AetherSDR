@@ -846,6 +846,18 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("widthPx")] = width();
     m[QStringLiteral("heightPx")] = height();
     m[QStringLiteral("dpr")] = dpr;
+#ifdef Q_OS_MAC
+    m[QStringLiteral("nativeWindow")] = windowHandle() != nullptr;
+    m[QStringLiteral("nativeAncestorsBlocked")] =
+        testAttribute(Qt::WA_DontCreateNativeAncestors);
+    int nativeAncestorCount = 0;
+    for (QWidget* ancestor = parentWidget(); ancestor; ancestor = ancestor->parentWidget()) {
+        if (ancestor->testAttribute(Qt::WA_NativeWindow)) {
+            ++nativeAncestorCount;
+        }
+    }
+    m[QStringLiteral("nativeAncestorCount")] = nativeAncestorCount;
+#endif
 #ifdef AETHER_GPU_SPECTRUM
     m[QStringLiteral("gpu")] = true;
     m[QStringLiteral("renderer")] = rendererDescription();
@@ -1329,6 +1341,14 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     theme::setContainer(this, QStringLiteral("spectrum"));
 
     m_panStats.clock.start();  // panstats rates are meaningless without an epoch
+
+#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
+    // Keep the required native Metal leaf from promoting its QWidget ancestors.
+    // QApplication's sibling policy in main.cpp is the complementary half (#4339).
+    if (nativeWindowPreferred()) {
+        setAttribute(Qt::WA_DontCreateNativeAncestors);
+    }
+#endif
 
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
