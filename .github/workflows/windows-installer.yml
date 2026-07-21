@@ -96,6 +96,9 @@ jobs:
       - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
         run: pwsh scripts/setup/setup-onnxruntime.ps1
 
+      - name: Setup sherpa-onnx (non-whisper ASR backend)
+        run: pwsh scripts/setup/setup-sherpa-onnx.ps1
+
       - name: Configure
         run: |
           # RelWithDebInfo (not Release): MSVC's Release config omits /Zi and
@@ -106,11 +109,12 @@ jobs:
           # emitting a full PDB, which is what create-msix.ps1 bundles as
           # .appxsym for Partner Center crash symbolication (and what we keep
           # as a standalone artifact for our own WinDbg use).
-          # REQUIRE_ASR_ONNX=ON guarantees Silero VAD + speaker labeling ship (fails
-          # the build if setup-onnxruntime.ps1 didn't stage the runtime). GPU
-          # (whisper Vulkan) on Windows is a follow-up — needs the LunarG Vulkan
-          # SDK installed here + REQUIRE_ASR_GPU=ON; CPU-only until then.
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
+          # REQUIRE_ASR_ONNX/SHERPA=ON guarantee the Silero VAD + speaker labeling
+          # and the sherpa-onnx backend ship (fail the build if their setup scripts
+          # didn't stage the runtimes). GPU (whisper Vulkan) on Windows is a
+          # follow-up — needs the LunarG Vulkan SDK installed here +
+          # REQUIRE_ASR_GPU=ON; CPU-only until then.
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,

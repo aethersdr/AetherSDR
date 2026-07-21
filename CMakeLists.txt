@@ -2135,13 +2135,24 @@ endif()
 # instead of two identical copies, and there's no rpath ambiguity. On macOS
 # sherpa's runtime is universal2, so this also covers Intel Macs, where the
 # standalone ONNX Runtime prebuilt is Apple-Silicon-only at 1.27.
-if(ORT_FOUND AND NOT WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
-    file(GLOB _sherpa_ort
-        "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so"
-        "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.dylib")
-    if(_sherpa_ort)
-        list(GET _sherpa_ort 0 ORT_LIBRARIES)
-        message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
+if(ORT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib")
+    if(WIN32)
+        # sherpa's Windows bundle carries onnxruntime.lib + onnxruntime.dll; link
+        # its import lib and drop our ORT DLL copy (sherpa's onnxruntime.dll ships
+        # via SHERPA_DLLS) so only one onnxruntime.dll lands next to the exe.
+        if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/onnxruntime.lib")
+            set(ORT_LIBRARIES "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/onnxruntime.lib")
+            set(ORT_DLLS "")
+            message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
+        endif()
+    else()
+        file(GLOB _sherpa_ort
+            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.so"
+            "${CMAKE_SOURCE_DIR}/third_party/sherpa-onnx/lib/libonnxruntime.dylib")
+        if(_sherpa_ort)
+            list(GET _sherpa_ort 0 ORT_LIBRARIES)
+            message(STATUS "ONNX Runtime: sharing sherpa-onnx's bundled 1.27 runtime (one copy for the app)")
+        endif()
     endif()
 endif()
 
