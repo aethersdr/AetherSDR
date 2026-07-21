@@ -1323,6 +1323,22 @@ QVariantMap SpectrumWidget::traceDebugSnapshot()
     return m;
 }
 
+void SpectrumWidget::applyNativeWindowIsolationPolicy()
+{
+#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
+    if (nativeWindowPreferred()) {
+        // Order matters: block ancestor promotion *before* requesting the native
+        // window, so realizing the leaf's NSView can't drag its QWidget tree
+        // native (redundant window-sized Core Animation backing stores, #4339).
+        // Both attributes are set here, as one unit, so a reparent that
+        // re-realizes the native window can never reassert WA_NativeWindow
+        // without the paired ancestor isolation.
+        setAttribute(Qt::WA_DontCreateNativeAncestors);
+        setAttribute(Qt::WA_NativeWindow);
+    }
+#endif
+}
+
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SPECTRUM_BASE_CLASS(parent)
 {
@@ -1333,14 +1349,6 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     theme::setContainer(this, QStringLiteral("spectrum"));
 
     m_panStats.clock.start();  // panstats rates are meaningless without an epoch
-
-#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
-    // Keep the required native Metal leaf from promoting its QWidget ancestors.
-    // QApplication's sibling policy in main.cpp is the complementary half (#4339).
-    if (nativeWindowPreferred()) {
-        setAttribute(Qt::WA_DontCreateNativeAncestors);
-    }
-#endif
 
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -1358,9 +1366,9 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // a raster flushSubWindow blend of the pan region on the GUI thread.
     // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it to validate the composited path on
     // newer Qt, where the whole window flushes through one rhi swapchain.
-    if (nativeWindowPreferred()) {
-        setAttribute(Qt::WA_NativeWindow);
-    }
+    // WA_NativeWindow is set together with WA_DontCreateNativeAncestors so the
+    // native leaf never promotes its QWidget ancestors (#4339); see the helper.
+    applyNativeWindowIsolationPolicy();
 #  else
     // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the
     // software OpenGL rasterizer requested in main.cpp actually takes effect.
