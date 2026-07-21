@@ -21,11 +21,22 @@ namespace {
 constexpr qint64 kHashChunkBytes = 1 << 20; // 1 MiB
 } // namespace
 
+QString AsrModelManager::defaultModelsDir()
+{
+    QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    // macOS nests AppDataLocation as <org>/<app>; both are "AetherSDR", producing
+    // a doubled final segment (…/AetherSDR/AetherSDR). Collapse it so models live
+    // directly under the app-data dir (…/AetherSDR/models), not double-nested.
+    // Linux/Windows use a single segment, so this is a no-op there.
+    const QFileInfo fi(base);
+    if (fi.fileName() == fi.dir().dirName()) {
+        base = fi.absolutePath();
+    }
+    return base + QStringLiteral("/models");
+}
+
 AsrModelManager::AsrModelManager(QObject* parent)
-    : AsrModelManager(
-          QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-              + QStringLiteral("/models"),
-          nullptr, parent)
+    : AsrModelManager(defaultModelsDir(), nullptr, parent)
 {
 }
 

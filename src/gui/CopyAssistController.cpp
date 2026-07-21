@@ -665,8 +665,7 @@ QString CopyAssistController::promptCustomModel()
     // dir (where a manually-dropped ggml-*.bin would live).
     QString startDir = QFileInfo(m_customModelPath).absolutePath();
     if (startDir.isEmpty()) {
-        startDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                   + QStringLiteral("/models");
+        startDir = AsrModelManager::defaultModelsDir();
     }
     return QFileDialog::getOpenFileName(
         m_settings, tr("Choose a Whisper model"), startDir,
@@ -677,8 +676,7 @@ QString CopyAssistController::promptSherpaModel()
 {
     const QString startDir =
         m_sherpaModelDir.isEmpty()
-            ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                  + QStringLiteral("/models")
+            ? AsrModelManager::defaultModelsDir()
             : QFileInfo(m_sherpaModelDir).absolutePath();
     return QFileDialog::getExistingDirectory(
         m_settings, tr("Choose a sherpa-onnx model folder"), startDir);
@@ -688,8 +686,7 @@ void CopyAssistController::promptVadModel()
 {
     const QString start =
         m_settings->vadModelPath().isEmpty()
-            ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                  + QStringLiteral("/models")
+            ? AsrModelManager::defaultModelsDir()
             : QFileInfo(m_settings->vadModelPath()).absolutePath();
     const QString path = QFileDialog::getOpenFileName(
         m_settings, tr("Choose a Silero VAD model"), start,
@@ -789,8 +786,7 @@ void CopyAssistController::promptSpeakerModel()
 {
     const QString start =
         m_settings->speakerModelPath().isEmpty()
-            ? QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                  + QStringLiteral("/models")
+            ? AsrModelManager::defaultModelsDir()
             : QFileInfo(m_settings->speakerModelPath()).absolutePath();
     const QString path = QFileDialog::getOpenFileName(
         m_settings, tr("Choose a speaker-embedding model"), start,

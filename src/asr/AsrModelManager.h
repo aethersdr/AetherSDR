@@ -29,7 +29,7 @@ class AsrModelManager : public QObject {
     Q_OBJECT
 
 public:
-    // Production: cache under QStandardPaths::AppDataLocation/"models".
+    // Production: cache under defaultModelsDir() (AppDataLocation/models, de-nested).
     explicit AsrModelManager(QObject* parent = nullptr);
 
     // Dependency-injection ctor for tests: explicit cache directory and an
@@ -39,6 +39,11 @@ public:
                     QObject* parent = nullptr);
 
     ~AsrModelManager() override;
+
+    // The default models cache directory (AppDataLocation/models), with the macOS
+    // <org>/<app> double-nest collapsed. Shared with the UI's file-picker defaults
+    // so downloads and manual picks point at the same place.
+    static QString defaultModelsDir();
 
     QString cacheDir() const { return m_cacheDir; }
     QString modelPath(const AsrModelTier& tier) const;
