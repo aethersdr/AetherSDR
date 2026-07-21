@@ -302,7 +302,10 @@ void PanadapterStream::tickSyntheticDemo()
     constexpr int kBins = 1024;
     constexpr double kFloorDbm = -140.0;         // == the demo pan's min_dbm, so the
                                                  // noise floor sits ON the display bottom
-    constexpr double kVisibleSpanHz = 40000.0;   // audio Hz -> bin over this width
+    constexpr double kVisibleSpanHz = 40000.0;   // audio Hz -> bin; MUST match the
+                                                 // demo pan bandwidth advertised in
+                                                 // RadioConnection (0.040 MHz) so the
+                                                 // scene fills the waterfall exactly
     const QVector<float> bins =
         m_demoAudio.spectrum(kBins, kFloorDbm, kVisibleSpanHz, kBins / 2);
 

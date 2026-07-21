@@ -147,8 +147,11 @@ void RadioConnection::startSyntheticDemoConnect()
         QTimer::singleShot(400, this, [this]() {
             if (!m_syntheticDemo) return;
             emitSyntheticStatus(QStringLiteral(
+                // 40 kHz span (== the audio scene width the demo renders), so the
+                // synthetic noise + birdie fill the waterfall at default zoom
+                // instead of collapsing onto the VFO in a 200 kHz view. (RFC #4288)
                 "SDE300001|display pan 0x40000000 client_handle=0xDE300001 "
-                "waterfall=0x42000000 center=14.100 bandwidth=0.200 "
+                "waterfall=0x42000000 center=14.100 bandwidth=0.040 "
                 "min_dbm=-140 max_dbm=-20 x_pixels=1024 y_pixels=700 fps=25 "
                 "ant_list=ANT1"));
             emitSyntheticStatus(QStringLiteral(
