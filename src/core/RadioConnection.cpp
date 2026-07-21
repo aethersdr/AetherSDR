@@ -360,6 +360,12 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 } else if (k == QLatin1String("filter_lo")
                            || k == QLatin1String("filter_hi")) {
                     echo << QStringLiteral("%1=%2").arg(k, v);   // echo the filter
+                } else if (k == QLatin1String("anf")) {
+                    echo << QStringLiteral("anf=%1").arg(v);
+                    emit demoAnfChanged(v == QLatin1String("1"));
+                } else if (k == QLatin1String("nb")) {
+                    echo << QStringLiteral("nb=%1").arg(v);
+                    emit demoNbChanged(v == QLatin1String("1"));
                 }
             }
             if (!echo.isEmpty()) {

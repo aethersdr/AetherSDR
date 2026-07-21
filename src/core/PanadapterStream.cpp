@@ -1199,6 +1199,20 @@ void PanadapterStream::setDemoVfoMhz(double vfoMhz)
     updateBirdieFromVfo();
 }
 
+void PanadapterStream::setDemoAnf(bool on)
+{
+    // Auto-notch: engage → notch the active tonal channels (birdie/cw); the mixer
+    // already knows them via autoNotchTones(). Off → clear (but keep any manual
+    // TNF notches, which this simple demo doesn't track separately yet).
+    if (on) m_demoAudio.setNotches(m_demoAudio.autoNotchTones());
+    else    m_demoAudio.setNotches({});
+}
+
+void PanadapterStream::setDemoNb(bool on)
+{
+    m_demoAudio.setNoiseBlank(on);
+}
+
 void PanadapterStream::setDemoMode(const QString& mode)
 {
     // Lower-sideband family: LSB, DIGL, CWL. Everything else demods USB-style.

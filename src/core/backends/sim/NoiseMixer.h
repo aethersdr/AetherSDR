@@ -79,6 +79,12 @@ public:
 
     // ---- notches (TNF manual + ANF auto) ----
     void setNotches(const std::vector<Notch>& notches);
+
+    // Noise blanker: when on, mixFrame() gates out short impulse spikes (QRN/
+    // crashes) — samples that jump well above the running level are attenuated,
+    // the way a real NB clips the impulse before it reaches the audio.
+    void setNoiseBlank(bool on) { m_nbOn = on; }
+    bool noiseBlank() const { return m_nbOn; }
     // ANF detection: the audio-Hz offsets of the active TONAL channels (birdie,
     // cw) — a real Auto-Notch Filter finds these by their narrow signature; the
     // sim knows them directly. Broadband/impulse noise is NOT returned.
@@ -146,6 +152,9 @@ private:
     double m_crashEnv = 0.0, m_crashLp = 0.0;
 
     // notches: audio-Hz + per-notch biquad state (carried across frames)
+    bool   m_nbOn = false;         // noise blanker engaged
+    double m_nbEnv = 0.0;          // SLOW background level for impulse detection
+    int    m_nbHold = 0;           // samples left to blank (covers the impulse tail)
     std::vector<double> m_notchHz;
     std::map<long, double> m_notchWidthHz;             // round(hz) -> width
     std::map<long, std::array<double, 4>> m_notchState; // round(hz) -> x1,x2,y1,y2

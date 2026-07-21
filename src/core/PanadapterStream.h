@@ -214,6 +214,13 @@ public:
     // So switching sideband makes a carrier on the "wrong" side go silent, like a
     // real receiver. (RFC #4288)
     Q_INVOKABLE void setDemoMode(const QString& mode);
+
+    // Radio-side DSP the demo now MODELS so it audibly acts (RFC #4288):
+    //  ANF — auto-notch: on, it finds the active tonal channels (birdie/cw) and
+    //        notches them out of the audio, leaving broadband noise (like real HW).
+    //  NB  — noise blanker: on, a time-domain impulse gate blanks QRN/crash spikes.
+    Q_INVOKABLE void setDemoAnf(bool on);
+    Q_INVOKABLE void setDemoNb(bool on);
     // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
     // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
     int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }

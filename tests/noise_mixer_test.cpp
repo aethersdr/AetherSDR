@@ -137,6 +137,23 @@ void testNoiseRisesFromFloor()
     report("noise rises up from the floor (grassy)", risesUp);
 }
 
+void testNoiseBlankerKnocksDownImpulses()
+{
+    auto peakOf = [](bool nb) {
+        NoiseMixer mx;
+        mx.setEnabled(Channel::Qrn, true);  mx.setLevelDb(Channel::Qrn, -12);
+        mx.setEnabled(Channel::Pink, true); mx.setLevelDb(Channel::Pink, -24);
+        mx.setNoiseBlank(nb);
+        double peak = 0.0;
+        for (int f = 0; f < 400; ++f)
+            for (float v : mx.mixFrame()) peak = std::max(peak, (double)std::abs(v));
+        return peak;
+    };
+    const double off = peakOf(false), on = peakOf(true);
+    // The QRN impulses are the loudest thing; NB should cut the peak substantially.
+    report("noise blanker knocks down impulse peaks", on < off * 0.6);
+}
+
 void testLevelScalesNoiseHeight()
 {
     auto top = [](double lvl) {
@@ -161,6 +178,7 @@ int main(int argc, char** argv)
     testSpectrumNotchCarvesLine();
     testNoiseRisesFromFloor();
     testLevelScalesNoiseHeight();
+    testNoiseBlankerKnocksDownImpulses();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES ABOVE");
     return g_failed == 0 ? 0 : 1;
 }

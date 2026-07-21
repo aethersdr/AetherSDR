@@ -76,6 +76,9 @@ signals:
     // Demo mode: the user changed the slice mode (USB/LSB/…). Forwarded to
     // PanadapterStream so the birdie demod picks the right sideband. (RFC #4288)
     void demoModeChanged(const QString& mode);
+    // Demo radio-side DSP toggles → PanadapterStream models them audibly. (#4288)
+    void demoAnfChanged(bool on);
+    void demoNbChanged(bool on);
     void versionReceived(const QString& version);
     // Emitted when a response (R-line) is received from the radio.
     // Callers register callbacks keyed by seq in their own maps. (#502)

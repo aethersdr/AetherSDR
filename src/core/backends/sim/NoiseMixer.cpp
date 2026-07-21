@@ -280,6 +280,27 @@ QVector<float> NoiseMixer::mixFrame()
     // TNF/ANF notches: remove each notched audio frequency (biquad).
     for (double fHz : m_notchHz) acc = applyNotch(acc, fHz, 8.0);
 
+    // Noise blanker: detect impulses (QRN/crash) as samples that spike well above
+    // the STEADY background level, and blank them. Key: the background estimate is
+    // a SLOW average that impulses barely move — a fast tracker would chase the
+    // impulse up and never fire (the bug that made NB do nothing). A short hold
+    // after a hit blanks the impulse's exponential tail too, not just the peak.
+    if (m_nbOn) {
+        for (int i = 0; i < kFrameLen; ++i) {
+            const double a = std::abs(acc[i]);
+            const double thresh = 4.0 * m_nbEnv + 1e-3;
+            if (a > thresh || m_nbHold > 0) {
+                if (a > thresh) m_nbHold = 12;   // ~0.5 ms hold covers the QRN tail
+                acc[i] *= 0.05f;                 // blank
+                if (m_nbHold > 0) --m_nbHold;
+            } else {
+                // update the slow background ONLY from non-impulse samples, so a
+                // burst can't inflate the level and hide itself.
+                m_nbEnv = 0.999 * m_nbEnv + 0.001 * a;
+            }
+        }
+    }
+
     // soft clip (tanh) — keep within [-1,1] without hard edges.
     for (int i = 0; i < kFrameLen; ++i) acc[i] = static_cast<float>(std::tanh(acc[i]));
     return acc;
