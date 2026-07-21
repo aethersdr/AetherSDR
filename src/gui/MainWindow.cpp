@@ -5028,11 +5028,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
 
     // Demo mode: reveal the Demo Noise control tile only while connected to the
-    // synthetic demo radio; hide it for real radios. (RFC #4288)
+    // synthetic demo radio; hide it for real radios. On demo connect, push the
+    // applet's control state to the engine so the audio scene == what the sliders
+    // show (the applet owns the startup scene — no drift). (RFC #4288)
     if (m_appletPanel) {
         auto* conn = m_radioModel.connection();
         const bool demo = connected && conn && conn->isSyntheticDemo();
         m_appletPanel->setAppletVisible(QStringLiteral("DEMO"), demo);
+        if (demo) {
+            if (auto* applet = m_appletPanel->demoApplet())
+                applet->pushSceneToEngine();
+        }
     }
 
     // Pause/resume the discovery re-bind loop in step with the connection

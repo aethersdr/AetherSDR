@@ -24,6 +24,12 @@ class DemoApplet : public QWidget {
 public:
     explicit DemoApplet(QWidget* parent = nullptr);
 
+    // Emit the applet's full current control state as intents, so the engine's
+    // mixer matches the UI. Call when the demo connects (MainWindow) so the audio
+    // scene == what the sliders show — the applet is the single source of truth
+    // for the startup scene, so controls and audio can never drift.
+    void pushSceneToEngine();
+
 signals:
     // User intents — MainWindow routes these to PanadapterStream::setDemoNoise*.
     void demoNoiseToggled(const QString& channel, bool on);

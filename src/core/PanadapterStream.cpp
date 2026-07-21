@@ -214,13 +214,10 @@ bool PanadapterStream::start(RadioConnection* conn)
         m_syntheticPanStreamId = 0x40000000u;   // matches the display-pan status id
         m_syntheticElapsedS = 0.0;
         m_syntheticFrameIndex = 0;
-        // Default audible scene: a pink-noise floor with a 1200 Hz birdie carrier,
-        // so the demo immediately demonstrates what NR2/notch can do out of the box.
-        m_demoAudio.setEnabled(NoiseMixer::Channel::Pink, true);
-        m_demoAudio.setLevelDb(NoiseMixer::Channel::Pink, -22.0);
-        m_demoAudio.setEnabled(NoiseMixer::Channel::Birdie, true);
-        m_demoAudio.setLevelDb(NoiseMixer::Channel::Birdie, -18.0);
-        m_demoAudio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
+        // The startup scene is NOT hardcoded here — the DemoApplet is the single
+        // source of truth and pushes its control state to the demo setters when it
+        // becomes visible (MainWindow, on demo connect), so audio + UI can't drift.
+        // Until that push arrives the mixer is silent (all channels default off).
         if (!m_syntheticTimer) {
             m_syntheticTimer = new QTimer(this);
             connect(m_syntheticTimer, &QTimer::timeout,

@@ -13,24 +13,29 @@ namespace AetherSDR {
 
 namespace {
 // The channels shown, in display order, with an optional knob {name, label,
-// min, max, default}. Kept in sync with NoiseMixer's channels.
+// min, max, default}. Kept in sync with NoiseMixer's channels. defaultOn +
+// defaultLevel define the STARTUP scene — the applet is the single source of
+// truth for it and pushes this state to the engine on show, so controls and
+// audio can never drift. (Pink floor + a 1200 Hz birdie: shows off NR + notch.)
 struct RowSpec {
     const char* channel;
     const char* label;
     const char* knob;     // "" = no knob
     const char* knobLabel;
     int knobMin, knobMax, knobDefault;
+    bool   defaultOn;
+    int    defaultLevel;  // dB
 };
 const RowSpec kRows[] = {
-    {"cw",         "CW tone",        "hz",   "Hz",  300, 1200, 700},
-    {"white",      "White / AWGN",   "",     "",    0, 0, 0},
-    {"pink",       "Pink / hiss",    "",     "",    0, 0, 0},
-    {"qrn",        "QRN crackle",    "rate", "i/s", 1, 60, 12},
-    {"powerline",  "Power-line",     "freq", "Hz",  50, 60, 60},
-    {"crashes",    "Static crash",   "rate", "c/s", 1, 30, 4},  // stored as val/10 for 0.1..3
-    {"birdie",     "Birdie carrier", "hz",   "Hz",  300, 3000, 1200},
-    {"hash",       "SMPS hash",      "prf",  "Hz",  30, 400, 120},
-    {"woodpecker", "Woodpecker",     "prf",  "pps", 2, 50, 10},
+    {"cw",         "CW tone",        "hz",   "Hz",  300, 1200, 700,  false, -16},
+    {"white",      "White / AWGN",   "",     "",    0, 0, 0,         false, -26},
+    {"pink",       "Pink / hiss",    "",     "",    0, 0, 0,         true,  -22},
+    {"qrn",        "QRN crackle",    "rate", "i/s", 1, 60, 12,       false, -18},
+    {"powerline",  "Power-line",     "freq", "Hz",  50, 60, 60,      false, -22},
+    {"crashes",    "Static crash",   "rate", "c/s", 1, 30, 4,       false, -16},  // rate stored val/10
+    {"birdie",     "Birdie carrier", "hz",   "Hz",  300, 3000, 1200, true, -18},
+    {"hash",       "SMPS hash",      "prf",  "Hz",  30, 400, 120,    false, -24},
+    {"woodpecker", "Woodpecker",     "prf",  "pps", 2, 50, 10,       false, -22},
 };
 }  // namespace
 
@@ -79,6 +84,7 @@ void DemoApplet::buildUI()
 
         row.toggle = new QPushButton(QString::fromLatin1(spec.label), this);
         row.toggle->setCheckable(true);
+        row.toggle->setChecked(spec.defaultOn);
         row.toggle->setStyleSheet(QStringLiteral(
             "QPushButton{text-align:left;padding:2px 6px;border:1px solid #345;"
             "border-radius:3px;background:#1a2332;color:#bcd;font-size:12px;}"
@@ -89,8 +95,8 @@ void DemoApplet::buildUI()
 
         row.level = new QSlider(Qt::Horizontal, this);
         row.level->setRange(-60, 0);
-        row.level->setValue(-24);
-        row.levelLabel = new QLabel(QStringLiteral("-24"), this);
+        row.level->setValue(spec.defaultLevel);
+        row.levelLabel = new QLabel(QString::number(spec.defaultLevel), this);
         row.levelLabel->setStyleSheet(QStringLiteral("color:#5cf;font-family:monospace;"));
         row.levelLabel->setMinimumWidth(28);
         connect(row.level, &QSlider::valueChanged, this,
@@ -126,6 +132,24 @@ void DemoApplet::buildUI()
     }
     root->addLayout(grid);
     root->addStretch();
+}
+
+void DemoApplet::pushSceneToEngine()
+{
+    // Send every row's current state so the engine mixer == the controls. Levels
+    // and knobs first, then the enable toggle last (so a channel turns on already
+    // at its shown level, no audible level jump).
+    for (const ChannelRow& row : m_rows) {
+        emit demoNoiseLevelChanged(row.name, row.level->value());
+        if (row.knobSlider) {
+            const int v = row.knobSlider->value();
+            const double val = (row.knob == QLatin1String("rate") &&
+                                row.name == QLatin1String("crashes"))
+                                   ? v / 10.0 : double(v);
+            emit demoNoiseKnobChanged(row.name, row.knob, val);
+        }
+        emit demoNoiseToggled(row.name, row.toggle->isChecked());
+    }
 }
 
 void DemoApplet::applyPresetToControls(const QString& presetName)
