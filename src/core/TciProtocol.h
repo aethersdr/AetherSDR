@@ -114,6 +114,9 @@ private:
 
     // Helpers
     SliceModel* sliceForTrx(int trx) const;
+    // TRX index of the current TX slice, 0 when none is marked. Used to build
+    // the spec's two-argument DRIVE/TUNE_DRIVE replies.
+    int txTrx() const;
 
 public:
     // Mode conversion (public for TciServer broadcast use)

@@ -49,6 +49,42 @@ int main(int argc, char** argv)
         }
     }
 
+    // DRIVE/TUNE_DRIVE replies must carry the TRX argument. WSJT-X and
+    // JTDX are put in ESDR3 mode by our `protocol:ExpertSDR3,1.5;` greeting,
+    // and their handler reads args.at(1) whenever args.at(0) equals their own
+    // receiver index — so a 1-element `drive:0;` segfaults them (reproduced on
+    // WSJT-X 3.0.1). The TCI v2.0 spec agrees: `DRIVE:arg1,arg2;`, arg1 being
+    // the transceiver ordinal.
+    // This protocol instance has a null model, so both the TRX index and the
+    // power resolve to 0 and each reply is fully deterministic. Assert the
+    // exact string rather than "has two arguments": an empty reply has to fail
+    // too. A null-model early return added to the SET path would otherwise
+    // leave the notification unset and quietly retire the half of this test
+    // that guards the fan-out to other clients.
+    struct { const char* cmd; const char* expected; } powerCmds[] = {
+        {"drive",      "drive:0,0;"},
+        {"tune_drive", "tune_drive:0,0;"},
+    };
+    for (const auto& pc : powerCmds) {
+        // GET reply — goes back to the polling client.
+        const QString getReply = protocol.handleCommand(QString::fromLatin1(pc.cmd));
+        if (getReply != QString::fromLatin1(pc.expected)) {
+            std::fprintf(stderr,
+                         "%s GET reply must be `%s` (a one-argument reply crashes ESDR3 clients); got `%s`\n",
+                         pc.cmd, pc.expected, getReply.toUtf8().constData());
+            return 1;
+        }
+        // SET notification — the path that fans out to every other client.
+        protocol.handleCommand(QStringLiteral("%1:0,0").arg(QString::fromLatin1(pc.cmd)));
+        const QString note = protocol.pendingNotification();
+        if (note != QString::fromLatin1(pc.expected)) {
+            std::fprintf(stderr,
+                         "%s notification must be `%s`; got `%s`\n",
+                         pc.cmd, pc.expected, note.toUtf8().constData());
+            return 1;
+        }
+    }
+
     std::printf("tci_protocol_test: all checks passed\n");
     return 0;
 }

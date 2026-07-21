@@ -82,6 +82,22 @@ SliceModel* TciProtocol::sliceForTrx(int trx) const
     return slices.isEmpty() ? nullptr : slices.first();
 }
 
+// TRX index of the TX slice for the init burst and the DRIVE/TUNE_DRIVE
+// replies. Falls back to 0 when no slice is marked TX, because the wire needs
+// a concrete index and 0 is what the burst has always used.
+int TciProtocol::txTrx() const
+{
+    if (!m_model) {
+        return 0;
+    }
+    for (auto* s : m_model->slices()) {
+        if (s->isTxSlice()) {
+            return tciTrxForSlice(m_model, s);
+        }
+    }
+    return 0;
+}
+
 // DDS = the IQ-stream center frequency a skimmer (CW Skimmer / SDC) decodes
 // against. On FlexRadio the DAX IQ stream is a *panadapter* stream centered on
 // the pan, not the slice (FlexLib: DAXIQChannel is a Panadapter property), so
@@ -236,19 +252,13 @@ QString TciProtocol::generateInitBurst()
         // Global TX state
         auto& tx = m_model->transmitModel();
         bool isTx = tx.isTransmitting();
-        int txTrx = 0;
-        for (auto* s : slices) {
-            if (s->isTxSlice()) {
-                txTrx = tciTrxForSlice(m_model, s);
-                break;
-            }
-        }
+        const int txTrxIdx = txTrx();
         // ESDR3 format requires TRX index prefix for drive commands.
         // Without it, WSJT-X/JTDX crash parsing args.at(1) on a 1-element list.
-        burst += QStringLiteral("drive:%1,%2;").arg(txTrx).arg(tx.rfPower());
-        burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrx).arg(tx.tunePower());
+        burst += QStringLiteral("drive:%1,%2;").arg(txTrxIdx).arg(tx.rfPower());
+        burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrxIdx).arg(tx.tunePower());
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
-        burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
+        burst += QStringLiteral("trx:%1,%2;").arg(txTrxIdx).arg(isTx ? "true" : "false");
 
         // Master AF volume — whole-radio (no trx prefix), same saved value
         // cmdVolume's GET returns, reported in dB per the TCI spec
@@ -567,18 +577,45 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
 
 // ── DRIVE: get/set RF power ────────────────────────────────────────────────
 
-// DRIVE and TUNE_DRIVE are global commands per the TCI v2.0 spec — they have
-// no TRX prefix. Spec form: `drive;` for GET, `drive:N;` for SET. The
-// dispatcher's isSet heuristic (args.size() >= 2) is wrong for globals
-// (treats `drive:50;` as a GET). We override here: any args at all = SET,
-// no args = GET. We also accept the legacy TRX-prefixed form `drive:0,N;`
-// for backward compatibility — when 2+ args arrive, we take args[1] as the
-// value and ignore the trx index (drive is global anyway).
+// TCI v2.0 defines these as per-transceiver, not global:
+//
+//   Set    DRIVE:arg1,arg2;    arg1 — transceiver ordinal
+//   Read   DRIVE:arg1;         arg2 — output power, 0..100
+//   Reply  DRIVE:arg1,arg2;
+//
+// Every reply below therefore carries the trx. Do not "simplify" it back to a
+// single argument: AetherSDR advertises `protocol:ExpertSDR3,1.5`, which sets
+// the ESDR3 flag in WSJT-X/JTDX, and their handler is
+//
+//     if((!ESDR3 && !HPSDR) || args.at(0)==rx_) {
+//         if (ESDR3 || HPSDR) drive_ = args.at(1);
+//
+// so a 1-element list reaches args.at(1) and segfaults them whenever args[0]
+// equals the client's own receiver index — `drive:0;` reliably killed WSJT-X
+// 3.0.1, reproduced on a FLEX-6600 while investigating #4161. Same reason the
+// init burst has been prefixed since aa132320.
+//
+// One deviation remains, left alone because fixing it is client-visible: the
+// spec's Read is `DRIVE:arg1;` (read TRX arg1), while we treat a lone argument
+// as the power VALUE, so a spec-compliant `DRIVE:0;` read SETS power to 0.
+// Pre-existing; tracked separately.
+//
+// Current behaviour otherwise unchanged: no args = GET, any args = SET; with
+// 2+ args we take args[1] as the value and ignore the incoming trx index.
+//
+// The trx we report is the TX slice's (txTrx()), not the index the client
+// asked about: DRIVE is the power of a transmitter, and the reply names which
+// transmitter that is. One consequence worth knowing — an ESDR3 client guards
+// on `args.at(0)==rx_`, so when the TX slice is not trx 0 a client sitting on
+// receiver 0 ignores the update. That is not a regression: the old
+// one-argument `drive:75;` failed the same guard whenever 75 != rx_. It also
+// keeps these replies consistent with the init burst, which has reported
+// txTrx since aa132320.
 QString TciProtocol::cmdDrive(const QStringList& args, bool /*isSet*/)
 {
     if (args.isEmpty()) {
         int pwr = m_model ? m_model->transmitModel().rfPower() : 0;
-        return QStringLiteral("drive:%1;").arg(pwr);
+        return QStringLiteral("drive:%1,%2;").arg(txTrx()).arg(pwr);
     }
     bool ok;
     int pwr = args[args.size() == 1 ? 0 : 1].toInt(&ok);
@@ -587,7 +624,7 @@ QString TciProtocol::cmdDrive(const QStringList& args, bool /*isSet*/)
         model->transmitModel().setRfPower(pwr);
     }, Qt::QueuedConnection);
 
-    m_pendingNotification = QStringLiteral("drive:%1;").arg(pwr);
+    m_pendingNotification = QStringLiteral("drive:%1,%2;").arg(txTrx()).arg(pwr);
     return {};
 }
 
@@ -597,7 +634,7 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
 {
     if (args.isEmpty()) {
         int pwr = m_model ? m_model->transmitModel().tunePower() : 0;
-        return QStringLiteral("tune_drive:%1;").arg(pwr);
+        return QStringLiteral("tune_drive:%1,%2;").arg(txTrx()).arg(pwr);
     }
     bool ok;
     int pwr = args[args.size() == 1 ? 0 : 1].toInt(&ok);
@@ -606,7 +643,8 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
         model->transmitModel().setTunePower(pwr);
     }, Qt::QueuedConnection);
 
-    m_pendingNotification = QStringLiteral("tune_drive:%1;").arg(pwr);
+    m_pendingNotification =
+        QStringLiteral("tune_drive:%1,%2;").arg(txTrx()).arg(pwr);
     return {};
 }
 
@@ -614,10 +652,15 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
 
 // mic_level bridges TransmitModel::setMicLevel() (the existing radio-side
 // setter wired into FlexLib via commandReady) to TCI clients.  Single arg
-// 0-100 (percent), global — mic is whole-radio, not per-trx — matching the
-// drive/tune_drive convention.  Accepts the legacy TRX-prefixed form
-// `mic_level:0,N;` for forward compatibility with strict-spec clients (the
-// trx index is ignored since mic is global).
+// 0-100 (percent), global — mic is whole-radio, not per-trx.  Accepts the
+// legacy TRX-prefixed form `mic_level:0,N;` for forward compatibility with
+// strict-spec clients (the trx index is ignored since mic is global).
+//
+// The single-argument reply is the same shape that crashes ESDR3 clients on
+// DRIVE (see the cmdDrive comment). It is left alone here because whether
+// WSJT-X/JTDX parse MIC_LEVEL at all is unconfirmed — do not change it by
+// symmetry with drive without reading their handler first. Follow-up to be
+// filed.
 //
 // Added 2026-05-27 to unblock the aethersdr-ulanzi-plugin Mic Gain ▲▼ keys,
 // which already send the verb but currently land on a missing dispatcher
@@ -643,8 +686,9 @@ QString TciProtocol::cmdMicLevel(const QStringList& args, bool /*isSet*/)
 
 // tx_gain is an AetherSDR extension — not in the TCI v2.0 spec. It controls
 // TciServer's outbound TX gain (m_txGain), applied to WSJT-X/JTDX audio before
-// the radio. Global command, 0-100 (percent of unity), matching the
-// drive/tune_drive convention. Like cmdVolume, TciProtocol cannot reach
+// the radio. Global command, 0-100 (percent of unity) — being an AetherSDR
+// extension, no client parses it against a spec table, so the single-argument
+// reply carries none of the DRIVE risk. Like cmdVolume, TciProtocol cannot reach
 // TciServer directly, so a SET stashes the value in m_pendingTxGain and
 // TciServer applies it via setTxGain() after handleCommand() returns.
 QString TciProtocol::cmdTxGain(const QStringList& args, bool /*isSet*/)
