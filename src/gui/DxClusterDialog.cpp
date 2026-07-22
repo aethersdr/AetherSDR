@@ -24,6 +24,8 @@
 #include <QSortFilterProxyModel>
 #include <QMenu>
 #include <QAction>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSlider>
 #include <QColorDialog>
 #include <QFile>
@@ -2010,33 +2012,46 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     m_spotTable->horizontalHeader()->setSortIndicatorShown(false);
 
     // Column visibility (#4157): Time/Freq/DX Call stay always-on as the
-    // core columns; the rest can be hidden via a right-click header menu,
-    // with the hidden set persisted in AppSettings across dialog reopen.
-    static const struct { SpotTableModel::Column col; const char* key; } kToggleCols[] = {
-        { SpotTableModel::ColComment, "SpotListColVisible_Comment" },
-        { SpotTableModel::ColSpotter, "SpotListColVisible_Spotter" },
-        { SpotTableModel::ColBand,    "SpotListColVisible_Band"    },
-        { SpotTableModel::ColMode,    "SpotListColVisible_Mode"    },
-        { SpotTableModel::ColSource,  "SpotListColVisible_Source"  },
+    // core columns; the rest can be hidden via a right-click header menu.
+    // Persisted as one JSON object under a single AppSettings key, written
+    // atomically (whole object per toggle) — Constitution Principle V: a
+    // feature's config is one self-contained object, not scattered flat
+    // keys.
+    static const struct { SpotTableModel::Column col; const char* field; } kToggleCols[] = {
+        { SpotTableModel::ColComment, "comment" },
+        { SpotTableModel::ColSpotter, "spotter" },
+        { SpotTableModel::ColBand,    "band"    },
+        { SpotTableModel::ColMode,    "mode"    },
+        { SpotTableModel::ColSource,  "source"  },
     };
-    auto& colVisSettings = AppSettings::instance();
+    static const char* kColumnVisibilityKey = "SpotListColumnVisibility";
+
+    const QJsonObject savedVisibility = QJsonDocument::fromJson(
+        AppSettings::instance().value(kColumnVisibilityKey, "{}").toString().toUtf8()).object();
     for (const auto& tc : kToggleCols) {
-        bool visible = colVisSettings.value(tc.key, "True").toString() == "True";
+        bool visible = savedVisibility.value(tc.field).toBool(true);
         m_spotTable->setColumnHidden(tc.col, !visible);
     }
     m_spotTable->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_spotTable->horizontalHeader(), &QWidget::customContextMenuRequested, this,
             [this](const QPoint& pos) {
+        auto saveColumnVisibility = [this] {
+            QJsonObject obj;
+            for (const auto& tc : kToggleCols)
+                obj.insert(tc.field, !m_spotTable->isColumnHidden(tc.col));
+            auto& s = AppSettings::instance();
+            s.setValue(kColumnVisibilityKey,
+                       QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+            s.save();
+        };
         QMenu menu(this);
         for (const auto& tc : kToggleCols) {
             auto* action = menu.addAction(m_spotModel->headerData(tc.col, Qt::Horizontal, Qt::DisplayRole).toString());
             action->setCheckable(true);
             action->setChecked(!m_spotTable->isColumnHidden(tc.col));
-            connect(action, &QAction::toggled, this, [this, tc](bool on) {
+            connect(action, &QAction::toggled, this, [this, tc, saveColumnVisibility](bool on) {
                 m_spotTable->setColumnHidden(tc.col, !on);
-                auto& s = AppSettings::instance();
-                s.setValue(tc.key, on ? "True" : "False");
-                s.save();
+                saveColumnVisibility();
             });
         }
         menu.exec(m_spotTable->horizontalHeader()->mapToGlobal(pos));
