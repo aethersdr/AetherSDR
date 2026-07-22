@@ -552,6 +552,7 @@ set(CORE_SOURCES
     src/core/PotaClient.cpp
     src/core/PropForecastClient.cpp
     src/core/PskReporterClient.cpp
+    src/core/LocationAddressResolver.cpp
     src/core/MqttAntennaAlias.cpp
     src/core/MqttSettings.cpp
     src/core/AutomationBridgeSettings.cpp
@@ -562,6 +563,8 @@ set(CORE_SOURCES
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
+    src/core/AcomProtocol.cpp
+    src/core/AcomConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -706,6 +709,7 @@ set(GUI_SOURCES
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathItem.cpp
     src/gui/PskReporterMapDialog.cpp
+    src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp
@@ -716,6 +720,7 @@ set(GUI_SOURCES
     src/gui/PanadapterMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
     src/gui/SpectrumWidget.cpp
+    src/gui/WaterfallHistoryBuffer.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -757,6 +762,7 @@ set(GUI_SOURCES
     src/gui/PanFloatingWindow.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
+    src/gui/AcomApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1566,6 +1572,7 @@ endif()
 
 # macOS app bundle
 if(APPLE)
+    target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
@@ -1773,8 +1780,10 @@ if(AETHER_GPU_SPECTRUM)
         FILES
             resources/shaders/texturedquad.vert
             resources/shaders/texturedquad.frag
+            resources/shaders/texturedquad_rowframes.frag
             resources/shaders/overlay.vert
             resources/shaders/overlay.frag
+            resources/shaders/overlay_frequency_preview.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
             resources/shaders/panscope.frag
@@ -1808,7 +1817,7 @@ if (USE_SYSTEM_RTMIDI)
     if(PkgConfig_FOUND)
         pkg_check_modules(rtmidi REQUIRED IMPORTED_TARGET rtmidi)
     endif()
-    target_link_libraries(aethercore PRIVATE PkgConfig::rtmidi)
+    target_link_libraries(aethercore PUBLIC PkgConfig::rtmidi)
 else()
     target_sources(aethercore PRIVATE third_party/rtmidi/RtMidi.cpp)
     # PUBLIC: MidiControlManager.h includes RtMidi.h
@@ -2648,6 +2657,21 @@ target_include_directories(dss_renderer_test PRIVATE src)
 target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
 
+add_executable(spectrum_preview_logic_test
+    tests/spectrum_preview_logic_test.cpp
+)
+target_include_directories(spectrum_preview_logic_test PRIVATE src)
+target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
+add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
+
+add_executable(waterfall_history_buffer_test
+    tests/waterfall_history_buffer_test.cpp
+    src/gui/WaterfallHistoryBuffer.cpp
+)
+target_include_directories(waterfall_history_buffer_test PRIVATE src)
+target_link_libraries(waterfall_history_buffer_test PRIVATE Qt6::Core)
+add_test(NAME waterfall_history_buffer_test COMMAND waterfall_history_buffer_test)
+
 add_executable(kiwi_sdr_redirect_policy_test
     tests/kiwi_sdr_redirect_policy_test.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -2815,6 +2839,14 @@ add_test(NAME dstar_accessibility_test COMMAND dstar_accessibility_test)
 set_tests_properties(dstar_accessibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(acom_protocol_test
+    tests/acom_protocol_test.cpp
+    src/core/AcomProtocol.cpp
+)
+target_include_directories(acom_protocol_test PRIVATE src)
+target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
+add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
+
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
@@ -2863,6 +2895,16 @@ add_executable(radio_status_ownership_test
 target_include_directories(radio_status_ownership_test PRIVATE src)
 target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
+
+if(APPLE)
+    add_executable(mac_startup_abort_guard_test
+        tests/mac_startup_abort_guard_test.cpp
+        src/MacStartupAbortGuard.cpp
+    )
+    target_include_directories(mac_startup_abort_guard_test PRIVATE src)
+    add_test(NAME mac_startup_abort_guard_test COMMAND mac_startup_abort_guard_test)
+endif()
+
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
 # Approved V12 cross-needle meter construction: versioned face resource,
@@ -2907,6 +2949,19 @@ add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
+# ancestor-isolation attribute, and native-ancestor count reported to agents.
+add_executable(native_widget_topology_test
+    tests/native_widget_topology_test.cpp
+)
+target_include_directories(native_widget_topology_test PRIVATE src)
+target_link_libraries(native_widget_topology_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+add_test(NAME native_widget_topology_test COMMAND native_widget_topology_test)
+set_tests_properties(native_widget_topology_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
@@ -2920,6 +2975,17 @@ if(PYTHON3_EXECUTABLE)
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
 endif()
+
+# JSON boundary regression for shared bridge `id` normalization. Exercises the
+# real QLocalSocket request path and tune dispatcher without touching a radio.
+add_executable(automation_json_id_test
+    tests/automation_json_id_test.cpp
+)
+target_include_directories(automation_json_id_test PRIVATE src tests)
+target_link_libraries(automation_json_id_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp
@@ -3304,6 +3370,16 @@ target_include_directories(aetherd_residual_decode_test PRIVATE src)
 target_link_libraries(aetherd_residual_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherd_residual_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_residual_decode_test COMMAND aetherd_residual_decode_test)
+
+add_executable(location_address_resolver_test
+    tests/location_address_resolver_test.cpp
+)
+target_include_directories(location_address_resolver_test PRIVATE src)
+target_link_libraries(location_address_resolver_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+set_target_properties(location_address_resolver_test PROPERTIES AUTOMOC ON)
+add_test(NAME location_address_resolver_test COMMAND location_address_resolver_test)
 
 add_executable(amp_model_test tests/amp_model_test.cpp)
 target_include_directories(amp_model_test PRIVATE src)
@@ -3704,6 +3780,11 @@ else()
         install(FILES third_party/smartsdr-dsp/config/AetherDV.cfg
             DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        if(LINUX)
+            install(FILES packaging/linux/70-aethersdr-thumbdv.rules
+                DESTINATION lib/udev/rules.d
+            )
+        endif()
     endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
@@ -3720,9 +3801,4 @@ else()
     install(FILES packaging/linux/aethersdr.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        install(FILES packaging/linux/70-aethersdr-thumbdv.rules
-            DESTINATION lib/udev/rules.d
-        )
-    endif()
 endif()

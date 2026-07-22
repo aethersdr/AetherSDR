@@ -20,6 +20,14 @@ on:
       - "tools/check_engine_boundary.py"
       - ".github/workflows/engine-boundary.yml"
 
+# Auto-cancel superseded runs when a newer commit lands on the same PR, so a
+# rapid push stream doesn't stack full runs. PR-only workflow: the run_id suffix
+# and the main guard never trigger here (ref is always refs/pull/N/merge), kept
+# identical to ci.yml/codeql.yml for uniformity and future-proofing.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 permissions:
   contents: read
 

@@ -321,10 +321,13 @@ TOOLS = [
     },
     {
         "name": "tune",
-        "description": ("Set the active slice frequency, in MHz "
-                        "(e.g. 14.074). Confirm with get_state model=slice."),
+        "description": ("Set a slice frequency, in MHz (e.g. 14.074). "
+                        "Tunes the active slice unless sliceId targets a "
+                        "specific slice. Confirm with get_state model=slice."),
         "inputSchema": {"type": "object", "properties": {
             "mhz": {"type": "string", "description": "frequency in MHz, e.g. '14.074'"},
+            "sliceId": {"type": "string",
+                        "description": "optional slice id; omit for the active slice"},
         }, "required": ["mhz"]},
     },
     {
@@ -546,6 +549,10 @@ def handle_tool(name, args):
             try:
                 pong = bridge_request({"cmd": "ping"}, timeout=10)
                 status["bridge_auth_required"] = pong.get("authRequired")
+                # Observe-only gate (#4188 area 6). The bridge is authoritative;
+                # this just reflects it so a client knows up front that mutating
+                # verbs will be refused. Flip it in Radio Setup → Network.
+                status["bridge_read_only"] = pong.get("readOnly", False)
             except Exception as e:  # noqa: BLE001
                 status["ping_error"] = str(e)
             # whoami is auth-gated — its success confirms our token is accepted.
@@ -560,6 +567,12 @@ def handle_tool(name, args):
                                   "Copy the token from Radio Setup → Network → "
                                   "Access Token and set it in this MCP server's "
                                   "env config.")
+            if status.get("bridge_read_only"):
+                status["read_only_note"] = (
+                    "This bridge is observe-only. Read verbs work; every "
+                    "mutating verb (set/invoke/connect/tune/capture…) is "
+                    "refused by the app. Uncheck \"Observe only\" in Radio "
+                    "Setup → Network to allow driving.")
         if not entries and not os.environ.get("AETHER_MCP_SOCKET"):
             status["hint"] = ("No bridge running. Launch AetherSDR with "
                               "AETHER_AUTOMATION=1 or enable it in Radio Setup "
@@ -664,8 +677,10 @@ def handle_tool(name, args):
         return text_result(bridge_request({"cmd": "floors"}))
 
     if name == "tune":
-        return text_result(bridge_request(
-            {"cmd": "tune", "value": str(args["mhz"])}))
+        req = {"cmd": "tune", "value": str(args["mhz"])}
+        if args.get("sliceId") not in (None, ""):
+            req["id"] = str(args["sliceId"])
+        return text_result(bridge_request(req))
 
     if name in ("slice", "record", "pan"):
         req = {"cmd": name, "action": args["action"]}

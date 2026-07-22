@@ -18,13 +18,14 @@ namespace AetherSDR {
 
 namespace {
 
-// The docked meter is intentionally compact, but the dense physical scale is
-// most useful at a larger size when popped out. Keep these at the face's 3:2
-// aspect ratio; the floating window adds its title bar above this content.
+// Open the popped-out meter large enough to keep the dense physical scale
+// readable, but let users shrink it to the widget's natural minimum. Keep
+// these at the face's 3:2 aspect ratio; the floating window adds its title bar
+// above this content.
 constexpr int kFloatingWidth = 640;
 constexpr int kFloatingHeight = 427;
-constexpr int kFloatingMinimumWidth = 420;
-constexpr int kFloatingMinimumHeight = 280;
+constexpr int kFloatingMinimumWidth = 210;
+constexpr int kFloatingMinimumHeight = 140;
 
 } // namespace
 

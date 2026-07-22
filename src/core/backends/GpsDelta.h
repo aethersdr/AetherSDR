@@ -22,6 +22,7 @@ struct GpsDelta {
     std::optional<QString> lon;
     std::optional<QString> time;
     std::optional<QString> speed;
+    std::optional<QString> track;
     std::optional<QString> freqError;
 };
 

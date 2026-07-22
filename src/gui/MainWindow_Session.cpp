@@ -1627,7 +1627,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
     m_automation->setTuneHandler(
-        [this](double mhz) { return automationTune(mhz); });
+        [this](double mhz, int sliceId) { return automationTune(mhz, sliceId); });
     m_automation->setReceiveSyncSnapshotHandler(
         [this]() { return automationReceiveSyncSnapshot(); });
     m_automation->setKiwiSdrSnapshotHandler(
@@ -1663,6 +1663,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setTxAllowed(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
             || AutomationBridgeSettings::txAllowed());
+        // Observe-only gate (#4188) — apply the persisted operator opt-in after
+        // start() so the bridge comes up read-only if the box is checked. An env
+        // override lets headless/CI pin the bridge observe-only regardless.
+        guard->setReadOnly(
+            qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
+            || AutomationBridgeSettings::readOnly());
     });
     return true;  // start initiated; the socket begins listening once the token resolves
 }
@@ -1694,6 +1700,16 @@ void MainWindow::setAutomationTxAllowed(bool allowed)
     // disabling force-unkeys the radio; enabling arms the TX watchdog.
     if (m_automation)
         m_automation->setTxAllowed(allowed);
+}
+
+void MainWindow::setAutomationReadOnly(bool readOnly)
+{
+    // Persist the operator opt-in (nested config) so it survives restart.
+    AutomationBridgeSettings::setReadOnly(readOnly);
+    // Push live so toggling observe-only takes effect on a running bridge
+    // immediately — no restart needed to arm or lift the gate.
+    if (m_automation)
+        m_automation->setReadOnly(readOnly);
 }
 
 } // namespace AetherSDR

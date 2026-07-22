@@ -19,6 +19,7 @@ namespace AetherSDR {
 //   enabled    — the bridge runs at launch (Radio Setup → Network toggle)
 //   txAllowed  — an MCP client may key the transmitter (the TX guard)
 //   txAck      — the operator has acknowledged the TX warning at least once
+//   readOnly   — observe-only: the bridge refuses every mutating verb (#4188)
 //
 // All accessors go through AppSettings and are process-wide.
 class AutomationBridgeSettings {
@@ -29,6 +30,8 @@ public:
     static void setTxAllowed(bool on);
     static bool txAck();
     static void setTxAck(bool on);
+    static bool readOnly();
+    static void setReadOnly(bool on);
 
     // Keychain coordinates for the bridge access token (see MqttSettings for
     // the analogous MQTT-password helpers).

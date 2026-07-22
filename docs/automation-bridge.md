@@ -186,6 +186,27 @@ emissions; once confirmed the choice persists. Toggling it drives the
 same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
 disabling force-unkeys immediately).
 
+### Observe-only (read-only) mode
+
+For a look-but-don't-touch session — handing an assistant visibility
+without letting it change anything — check **"Observe only"** in Radio
+Setup → Network. The bridge then refuses **every** mutating verb and
+answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
+`dumpTree`, `grab`, the read-only `log` actions, `floors`, the inventory-only
+`streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
+and `streams reset/resync/refresh`; the latter two stream actions clear local
+diagnostics or request a fresh radio inventory. It is
+enforced in the app, not in the MCP server, so no client can flip it
+off; the refusal message points the operator back to the checkbox. The
+toggle takes effect immediately on a running bridge — no restart — so
+the intended flow works: start the app with the bridge off, check
+"Observe only", then start the bridge. `ping` and `whoami` report the
+current state as `readOnly`, and the MCP server surfaces it in
+`bridge_status` as `bridge_read_only`. Headless/CI runs can pin it with
+`AETHER_AUTOMATION_READONLY=1`.
+
+![Observe only setting in Radio Setup → Network](assets/automation-observe-only.png)
+
 ---
 
 ## How it works (the contract)
@@ -235,7 +256,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`grab pan <index> [path]`](#grab) | Raw spectrum surface of a specific pan. |
 | | [`grab pan-visible <index> [path]`](#grab) | Pan applet incl. VFO/flag overlays (alias `pan-composite`). |
 | | [`floors`](#floors) | Per-pan measured noise + display floor (dBm). |
-| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`. |
+| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`, `readOnly`. |
 | **Drive** | [`invoke <target> <action> [v]`](#invoke) | Click/toggle/set/selectRow/submit/trigger a control (TX-guarded). |
 | | [`close <target>`](#close) | Close the target's top-level window. |
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
@@ -252,6 +273,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
+| | [`get gps`](#get) | GPS fix, location, satellite-count, time, course, and reference snapshot. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
 | | [`get flags`](#get) | VFO flag attachment state for slice-to-pan assertions. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
@@ -268,6 +290,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`slice <action>`](#slice) | add/remove/select/tx/mode/diversity/centerlock/txant/rxant/rxsource. |
+| **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -581,6 +604,7 @@ connects).
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
+| `gps` | — | GPS status, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time, frequency error, and oscillator-reference state |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
@@ -718,7 +742,7 @@ separately because they are a subset of FFT/waterfall ingest.
      "measuredMainThreadMsPerSec":10.7,
      "hiddenWaterfallUpdatesPerSec":0.0,
      "hiddenDssHistoryRowsPerSec":0.0,
-     "waterfallAllocatedBytes":102760448,
+     "waterfallAllocatedBytes":583680,
      "dssAllocatedBytes":37847040},
    "pans":[...],"scopes":[...],"renderScheduler":{...}}
 ```
@@ -758,11 +782,14 @@ cost a few integer adds per frame.
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
 | `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
+| `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
+| `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
 | `nativeWaterfall*` / `kiwiWaterfall*` | source-specific ingest rate and GUI-thread cost; `HiddenUpdates` identifies background Flex/Kiwi work |
-| `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained RGB-history write rates/cost (RGB history is written only for the visible source) |
+| `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained compact-intensity-history write rates/cost (history is written only for the visible source) |
 | `dssLiveRows*` / `dssHistoryRows*` | 96-row live 3D surface work versus deep retained scrollback work; `dssHiddenLiveRowsPerSec` exposes the hidden-Flex live-ring warming (#4081) — hidden sources retain no deep history |
-| `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage, including hidden-source retained history |
+| `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage; waterfall history is counted by actually allocated lazy chunks, not logical capacity |
 | `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
 | `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 
@@ -813,10 +840,10 @@ used by the stacked trace renderer.
   trace floor used by 3D placement from the waterfall color floor.
 
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry** — the widget size,
-devicePixelRatio, and pinned color-buffer extents — so automation can assert
-the swapchain sizing that the #4091 fix controls (the color buffer stays
-even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
+Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
+the widget size, devicePixelRatio, pinned color-buffer extents, and (on macOS)
+native-leaf/ancestor isolation — so automation can assert the swapchain sizing
+that the #4091 fix controls and the bounded native-view hierarchy from #4339.
 
 ```json
 → {"cmd":"get","model":"rhi"}
@@ -834,9 +861,13 @@ even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
 | `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
+| `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
+| `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
 
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
-each entry reports `gpu:false` and omits the buffer fields.
+each entry reports `gpu:false` and omits the buffer fields. The three native
+topology fields are emitted only on macOS; other platforms omit them.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -945,16 +976,28 @@ scope actually consumed, in milliseconds per wall-clock second.
   hidden-widget signature, not a bug.
 
 ### `tune`
-Set the **active slice's** frequency in MHz — the most fundamental control the
+Set a slice's frequency in MHz — the most fundamental control the
 custom-painted `VfoWidget` couldn't expose. RX/config only; despite the name it
 does **not** key (cf. `atu tune`, which does). Honors the per-slice VFO lock.
+
+Without a slice id the **active slice** is tuned (the original verb shape).
+An optional second argument (bare line) / `id` field (JSON) targets a specific
+slice by id, so scripts driving a non-active slice no longer need the racy
+`slice select` → `tune` → re-select flap:
 
 ```json
 → {"cmd":"tune","value":"7.175"}
 ← {"ok":true,"tune":7.175,"sliceId":0,"letter":"A"}
+
+→ {"cmd":"tune","value":"14.074","id":"1"}
+← {"ok":true,"tune":14.074,"sliceId":1,"letter":"B"}
 ```
 
-Refused with `refused: slice A is VFO-locked` when the slice is locked. To
+Bare-line form: `tune 14.074 1`.
+
+Refused with `refused: slice A is VFO-locked` when the slice is locked, with
+`no slice with id N` when the id names no slice, and with `refused: slice N
+belongs to another client` when another client owns it (Multi-Flex). To
 recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
@@ -988,6 +1031,32 @@ receive source. All actions are RX/config — none keys the transmitter.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+### `gps`
+
+Inject a disconnected-only GPS report through `RadioModel::applyGpsChanges`,
+the same typed-delta path used by live `FlexBackend` status. This is safe for
+deterministic dashboard and model testing: it is refused while connected and
+never sends a radio command.
+
+```json
+→ {"cmd":"gps","action":"fixture","value":"6000"}
+← {"ok":true,"gps":"fixture","profile":"6000","snapshot":{"status":"Locked","latitude":"N 34 13.464",…}}
+
+→ {"cmd":"gps","action":"fixture","value":"8000"}
+← {"ok":true,"gps":"fixture","profile":"8000","snapshot":{"status":"Locked","latitude":"34.224400000","ntpServerAddress":"192.0.2.80",…}}
+
+→ {"cmd":"gps","action":"clearfixture"}
+← {"ok":true,"gps":"clearfixture"}
+```
+
+Both profiles use the public Mount Wilson Observatory location so screenshots
+are safe to share. The `6000` profile exercises the hemisphere/degrees/decimal-
+minutes form seen from a FLEX-6700 GPSDO. The `8000` profile exercises decimal
+degrees and the `track` (course-over-ground) field captured from FLEX-8600
+firmware 4.2.18, plus the reserved TEST-NET-1 address `192.0.2.80` for testing
+the 8000-series NTP tip. Use `get gps` or `dumpTree` after injecting to assert
+model or widget state.
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -1588,8 +1657,11 @@ The `~500ms` is a **best-effort hint, not a contract** — the re-dump is async;
 `streams radio` still looks stale, poll again. Returns
 `not connected — cannot resync display inventory` with no radio.
 
-All `streams` actions are read-only / RX; none keys the transmitter (`resync`
-sends only the `sub pan all` subscription command).
+None of the `streams` actions keys the transmitter. In **Observe only** mode,
+the default Layer-A inventory and `radio`/`inventory` reads remain available;
+`reset`, `resync`, and `refresh` are blocked. `reset` changes the local orphan
+tally, while `resync`/`refresh` send the `sub pan all` subscription command to
+the radio.
 
 ### `txwaterfall`
 Toggle the radio's **show-TX-in-waterfall** display flag (`transmit set
@@ -1872,6 +1944,10 @@ push subscription — the observability suite. All diagnostic; nothing keys.
 `tail` also returns `oldest` (the oldest `seq` still resident): if your `since <
 oldest`, earlier matching events were evicted and the window is a truncated
 suffix, not a complete bracket.
+
+In **Observe only** mode, `categories`, `get`, `tail`, `subscribe`, and
+`unsubscribe` remain available. `set` and `reset` are blocked because they
+change the app's logging state.
 
 ### `record`
 Drive the client-side **QSO WAV recorder** (the same one behind the manual record
@@ -2173,7 +2249,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 46 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 47 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2199,8 +2275,9 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
-| `tune` | — | tune <mhz> — set the active slice frequency |
+| `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
@@ -2209,7 +2286,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
-| `streams` | — | streams [radio\|reset] — stream diagnostics |
+| `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |

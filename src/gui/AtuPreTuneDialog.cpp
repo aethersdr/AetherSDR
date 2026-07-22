@@ -642,16 +642,10 @@ void AtuPreTuneDialog::beginNextPoint()
     if (firstOfBand && !m_originalPanId.isEmpty() && p.bandHighMhz > p.bandLowMhz) {
         const double center = (p.bandLowMhz + p.bandHighMhz) / 2.0;
         const double width  = (p.bandHighMhz - p.bandLowMhz) * 1.10;
-        const QString centerStr = QString::number(center, 'f', 6);
-        const QString widthStr  = QString::number(width,  'f', 6);
-        if (auto* pan = m_radio->panadapter(m_originalPanId)) {
-            // Local model nudge before the radio echo (aetherd RFC 2.3: the
-            // normalized setter replaces applyPanStatus({center,bandwidth})).
-            pan->setCenterBandwidth(center, width);
-        }
-        m_radio->sendCommand(
-            QString("display pan set %1 center=%2 bandwidth=%3")
-                .arg(m_originalPanId, centerStr, widthStr));
+        // Center and bandwidth together, and deferred rather than dropped if a
+        // profile load is holding radio-state writes (#4142). The local model
+        // advances only when the command reaches the wire.
+        m_radio->requestPanCenter(m_originalPanId, center, width);
     }
 
     // Move slice to target. SliceModel::setFrequency uses autopan=0 — no recenter.
@@ -885,16 +879,12 @@ void AtuPreTuneDialog::restoreOriginalFrequency()
     // Restore the panadapter zoom captured at sweep start — same
     // optimistic-update pattern used for band transitions.
     if (!m_originalPanId.isEmpty() && m_originalPanBandwidthMhz > 0.0) {
-        const QString centerStr = QString::number(m_originalPanCenterMhz, 'f', 6);
-        const QString widthStr  = QString::number(m_originalPanBandwidthMhz, 'f', 6);
-        if (auto* pan = m_radio->panadapter(m_originalPanId)) {
-            // Local model nudge before the radio echo (aetherd RFC 2.3: the
-            // normalized setter replaces applyPanStatus({center,bandwidth})).
-            pan->setCenterBandwidth(m_originalPanCenterMhz, m_originalPanBandwidthMhz);
-        }
-        m_radio->sendCommand(
-            QString("display pan set %1 center=%2 bandwidth=%3")
-                .arg(m_originalPanId, centerStr, widthStr));
+        // Restoring the pre-sweep zoom is a user-visible promise: dropping it
+        // during a profile load would strand the pan on the sweep's band view.
+        // Deferred and replayed instead (#4142).
+        m_radio->requestPanCenter(m_originalPanId,
+                                  m_originalPanCenterMhz,
+                                  m_originalPanBandwidthMhz);
     }
 }
 

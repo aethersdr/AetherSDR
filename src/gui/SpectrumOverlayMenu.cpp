@@ -1436,6 +1436,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
+        // Trace line color — independent of the fill color (#4239). Mirrors the
+        // "FFT Fill" row's color-button-in-column-1 layout for symmetry.
+        m_lineColorBtn = new QPushButton;
+        m_lineColorBtn->setObjectName("displayFftLineColorBtn");
+        m_lineColorBtn->setFixedSize(18, 18);
+        m_lineColorBtn->setStyleSheet(
+            QString("QPushButton { background: %1; border: 1px solid #506070;"
+                    " border-radius: 2px; }")
+                .arg(m_lineColor.name()));
+        m_lineColorBtn->setToolTip("Choose trace line color");
+        grid->addWidget(m_lineColorBtn, row, 1);
+
         auto* lineWidthSlider = new GuardedSlider(Qt::Horizontal);
         lineWidthSlider->setRange(0, 10);
         lineWidthSlider->setValue(4);
@@ -1449,7 +1461,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
         m_lineWidthSlider = lineWidthSlider;
         applyPrimarySliderStyle(m_lineWidthSlider);
-        grid->addWidget(m_lineWidthSlider, row, 1, 1, 2);
+        grid->addWidget(m_lineWidthSlider, row, 2);
 
         m_lineWidthLabel = new QLabel("2.0");
         m_lineWidthLabel->setStyleSheet(valStyle);
@@ -1462,6 +1474,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             float w = v * 0.5f;
             m_lineWidthLabel->setText(v == 0 ? "Off" : QString::number(w, 'f', 1));
             emit fftLineWidthChanged(w);
+        });
+        connect(m_lineColorBtn, &QPushButton::clicked, this, [this] {
+            QColor c = QColorDialog::getColor(m_lineColor, this, "FFT Line Color",
+                                               QColorDialog::DontUseNativeDialog);
+            if (c.isValid()) {
+                m_lineColor = c;
+                m_lineColorBtn->setStyleSheet(
+                    QString("QPushButton { background: %1; border: 1px solid #506070;"
+                            " border-radius: 2px; }")
+                        .arg(c.name()));
+                emit fftLineColorChanged(c);
+            }
         });
     }
 
@@ -1998,7 +2022,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                bool autoBlackRadioSide,
                                                int renderMode,
                                                int dssFloorDepth,
-                                               int dssGain)
+                                               int dssGain,
+                                               const QColor& lineColor)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -2019,6 +2044,11 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     m_fillColorBtn->setStyleSheet(
         QString("QPushButton { background: %1; border: 1px solid #506070;"
                 " border-radius: 2px; }").arg(fillColor.name()));
+    m_lineColor = lineColor;
+    if (m_lineColorBtn)
+        m_lineColorBtn->setStyleSheet(
+            QString("QPushButton { background: %1; border: 1px solid #506070;"
+                    " border-radius: 2px; }").arg(lineColor.name()));
     m_gainSlider->setValue(gain);
     m_gainLabel->setText(QString::number(gain));
     m_blackManualValue     = black;

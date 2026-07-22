@@ -62,6 +62,7 @@
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
+#include "core/AcomConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -126,6 +127,7 @@ class DxClusterDialog;
 class CallsignLookupDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
+class GpsLocationDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
 #ifdef HAVE_HIDAPI
@@ -208,7 +210,7 @@ public:
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationSetCenterLock(int sliceId, bool enabled);
-    QJsonObject automationTune(double mhz);
+    QJsonObject automationTune(double mhz, int sliceId = -1);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
@@ -230,6 +232,9 @@ public:
     // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
     // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
     void setAutomationTxAllowed(bool allowed);
+    // Persist the observe-only opt-in and push it live (Radio Setup → Network).
+    // When set, the bridge refuses every mutating verb (#4188 area 6).
+    void setAutomationReadOnly(bool readOnly);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -486,6 +491,7 @@ private:
     void wireCallsignLookup();
     void onCwCallsignSpotted(const QString& call);
     void showCallsignLookupDialog(const QString& call = QString());
+    void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
@@ -740,6 +746,7 @@ private:
     AntennaGeniusModel m_antennaGenius;
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
+    AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
@@ -1015,6 +1022,7 @@ private:
     QSystemTrayIcon* m_trayIcon{nullptr};
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
+    QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;

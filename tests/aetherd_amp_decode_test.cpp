@@ -9,6 +9,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QString>
+#include <QVariant>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -72,6 +73,31 @@ int main(int argc, char** argv)
         const AmpDelta d = decode(b, "0x1000", QString(), {}, true);
         CHECK(d.removed && d.handle == "0x1000");
         CHECK(!d.detectedModel.has_value() && !d.operate.has_value());
+    }
+
+    // ---- #4203: a known-tuner handle mis-routed into the amp decode must NOT be
+    // cached as m_ampHandle. Observe via the encode path: with no amp handle
+    // cached, amp.operate fails closed (extensionError), never targeting the TGXL.
+    {
+        FlexBackend g;
+        // Establish the tuner handle (#4198 encode-path cache).
+        g.decodeTunerStatus("0x2000", {{"model", "TunerGeniusXL"}});
+        // Model-less TGXL status that falls through to decodeAmplifierStatus (the
+        // pre-existing routing edge: model empty AND handle == known tuner handle).
+        (void)decode(g, "0x2000", QString(), {{"state", "OPERATE"}}, false);
+        // Guard held: m_ampHandle stayed empty, so amp.operate reports no handle.
+        QSignalSpy okSpy(&g, &IRadioBackend::extensionResult);
+        QSignalSpy errSpy(&g, &IRadioBackend::extensionError);
+        g.invokeExtension("flex", "amp.operate", /*requestId=*/1, QVariantMap{{"on", true}});
+        CHECK(errSpy.count() == 1 && okSpy.count() == 0);   // fails closed, never targets TGXL
+
+        // Positive control: a genuine PGXL handle (≠ tuner handle) still caches and
+        // amp.operate dispatches against it.
+        (void)decode(g, "0x9000", "PowerGeniusXL", {{"state", "IDLE"}}, false);
+        QSignalSpy okSpy2(&g, &IRadioBackend::extensionResult);
+        QSignalSpy errSpy2(&g, &IRadioBackend::extensionError);
+        g.invokeExtension("flex", "amp.operate", /*requestId=*/2, QVariantMap{{"on", true}});
+        CHECK(okSpy2.count() == 1 && errSpy2.count() == 0);
     }
 
     if (g_failures == 0) {

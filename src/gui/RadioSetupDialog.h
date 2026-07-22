@@ -31,6 +31,7 @@ class TgxlConnection;
 class PgxlConnection;
 class AntennaGeniusModel;
 class KiwiSdrManager;
+class AcomConnection;
 
 // Radio Setup dialog — searchable, category-based configuration window.
 class RadioSetupDialog : public PersistentDialog {
@@ -42,6 +43,7 @@ public:
                               PgxlConnection* pgxl = nullptr,
                               AntennaGeniusModel* ag = nullptr,
                               KiwiSdrManager* kiwiSdrManager = nullptr,
+                              AcomConnection* acom = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void refreshFlexControlButtonActions();
@@ -69,6 +71,10 @@ signals:
     // one-time confirmation dialog). MainWindow persists it and pushes it to
     // the running bridge — enabling arms the force-unkey watchdog.
     void automationBridgeTxAllowedChanged(bool allowed);
+    // Fired when the user toggles "Observe only" in the Network tab. MainWindow
+    // persists it and pushes it to the running bridge, which then refuses every
+    // mutating verb (#4188 area 6) — MCP clients can read but not drive.
+    void automationBridgeReadOnlyChanged(bool readOnly);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -121,6 +127,7 @@ private:
     PgxlConnection*    m_pgxl{nullptr};
     AntennaGeniusModel* m_ag{nullptr};
     KiwiSdrManager* m_kiwiSdrManager{nullptr};
+    AcomConnection* m_acom{nullptr};
     QTreeWidget* m_navigation{nullptr};
     QStackedWidget* m_pages{nullptr};
     QLabel* m_pageTitle{nullptr};

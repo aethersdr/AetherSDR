@@ -1481,6 +1481,29 @@ QJsonObject radioSnapshot(const RadioModel* r)
     };
 }
 
+QJsonObject gpsSnapshot(const RadioModel* r)
+{
+    return QJsonObject{
+        {QStringLiteral("available"), r->hasGpsHardware()
+             || !r->gpsStatus().isEmpty()},
+        {QStringLiteral("status"), r->gpsStatus()},
+        {QStringLiteral("tracked"), r->gpsTracked()},
+        {QStringLiteral("visible"), r->gpsVisible()},
+        {QStringLiteral("grid"), r->gpsGrid()},
+        {QStringLiteral("altitude"), r->gpsAltitude()},
+        {QStringLiteral("latitude"), r->gpsLat()},
+        {QStringLiteral("longitude"), r->gpsLon()},
+        {QStringLiteral("utcTime"), r->gpsTime()},
+        {QStringLiteral("speed"), r->gpsSpeed()},
+        {QStringLiteral("course"), r->gpsTrack()},
+        {QStringLiteral("frequencyError"), r->gpsFreqError()},
+        {QStringLiteral("ntpServerAddress"), r->gpsNtpServerAddress()},
+        {QStringLiteral("referenceSetting"), r->oscSetting()},
+        {QStringLiteral("referenceActual"), r->oscState()},
+        {QStringLiteral("referenceLocked"), r->oscLocked()},
+    };
+}
+
 // TX-chain state (TransmitModel) — RF power, mic/processor, VOX/AM/DEXP, CW, ATU
 // and APD. Lets a QA scenario assert that a TX/Phone/CW applet control actually
 // reached the radio model, not just the widget (#3646 QA finding 2). Read-only:
@@ -2197,6 +2220,40 @@ struct AutomationServer::VerbSpec {
 
 namespace {
 
+// Requests that are pure introspection — allowed even in observe-only mode
+// (#4188 area 6). Some diagnostic verbs mix read and write actions, so the
+// action must be checked as well as the canonical verb name. Everything else
+// (drive/connect/capture/keying) is refused when m_readOnly is set.
+bool isReadOnlyRequest(const QString& name, const QString& action)
+{
+    static const QSet<QString> kSafe = {
+        QStringLiteral("ping"),     QStringLiteral("verbs"),
+        QStringLiteral("whoami"),   QStringLiteral("dumpTree"),
+        QStringLiteral("grab"),     QStringLiteral("get"),
+        QStringLiteral("floors"),   QStringLiteral("hitTest"),
+    };
+    if (kSafe.contains(name)) {
+        return true;
+    }
+
+    const QString normalizedAction = action.trimmed().toLower();
+    if (name == QLatin1String("log")) {
+        static const QSet<QString> kSafeLogActions = {
+            QString(), QStringLiteral("categories"), QStringLiteral("get"),
+            QStringLiteral("tail"), QStringLiteral("subscribe"),
+            QStringLiteral("unsubscribe"),
+        };
+        return kSafeLogActions.contains(normalizedAction);
+    }
+    if (name == QLatin1String("streams")) {
+        static const QSet<QString> kSafeStreamActions = {
+            QString(), QStringLiteral("radio"), QStringLiteral("inventory"),
+        };
+        return kSafeStreamActions.contains(normalizedAction);
+    }
+    return false;
+}
+
 QString vtok(const QList<QByteArray>& p, int i)
 {
     return QString::fromUtf8(p.value(i));
@@ -2220,6 +2277,7 @@ const QStringList& getModelNames()
         QStringLiteral("meters"),     QStringLiteral("slice"),
         QStringLiteral("slices"),     QStringLiteral("pan"),
         QStringLiteral("pans"),       QStringLiteral("panstats"),
+        QStringLiteral("gps"),
         QStringLiteral("renderstats"),
         QStringLiteral("tracedebug"), QStringLiteral("waveforms"),
         QStringLiteral("kiwi"),
@@ -2275,6 +2333,11 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             a.value = vtok(p, 1);
             return {};
         };
+        auto parseValueId = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+            a.value = vtok(p, 1);
+            a.id = vtok(p, 2);
+            return {};
+        };
         auto parseValueRest = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
             a.value = vjoin(p, 1);
             return {};
@@ -2297,6 +2360,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                     {QStringLiteral("app"), QStringLiteral("AetherSDR")},
                     {QStringLiteral("version"), QCoreApplication::applicationVersion()},
                     {QStringLiteral("authRequired"), !self.m_authToken.isEmpty()},
+                    {QStringLiteral("readOnly"), self.m_readOnly},
                 };
             });
 
@@ -2533,6 +2597,17 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doSlice(a.action, a.value);
             });
 
+        add("gps", {},
+            "gps <fixture|clearfixture> [6000|8000] — disconnected GPS test data",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.action.isEmpty()) {
+                    return err(QStringLiteral(
+                        "gps requires an action (fixture|clearfixture)"));
+                }
+                return s.doGps(a.action, a.value);
+            });
+
         add("waveform", {},
             "waveform <start|stop|unregister|resync> [args] — digital-voice service",
             parseActionRest,
@@ -2544,12 +2619,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doWaveform(a.action, a.value);
             });
 
-        add("tune", {}, "tune <mhz> — set the active slice frequency",
-            parseValueOnly,
+        add("tune", {}, "tune <mhz> [sliceId] — set a slice frequency (default: the active slice)",
+            parseValueId,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.value.isEmpty())
                     return err(QStringLiteral("tune requires a frequency in MHz"));
-                return s.doTune(a.value);
+                return s.doTune(a.value, a.id);
             });
 
         add("cwx", {}, "cwx <send|speed|stop> [args] — CWX keyer (send is TX-gated)",
@@ -2652,7 +2727,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                                a.value);
             });
 
-        add("streams", {}, "streams [radio|reset] — stream diagnostics",
+        add("streams", {}, "streams [radio|inventory|resync|refresh|reset] — stream diagnostics",
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doStreams(a.action);
@@ -2837,7 +2912,23 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         a.model    = obj.value(QStringLiteral("model")).toString();
         a.selector = obj.value(QStringLiteral("selector")).toString();
         a.property = obj.value(QStringLiteral("property")).toString();
-        a.id       = obj.value(QStringLiteral("id")).toString();
+        // id may arrive as a JSON number (e.g. tune's slice id) — normalize
+        // like `value` above; a bare .toString() would silently coerce a
+        // numeric id to "" and the request would act on the wrong target.
+        const QJsonValue idv = obj.value(QStringLiteral("id"));
+        if (idv.isString()) {
+            a.id = idv.toString();
+        } else if (idv.isDouble()) {
+            // Keep enough precision for downstream integer validation. The
+            // default six significant digits can round 1.0000001 to "1" and
+            // silently retarget a request to a real slice.
+            a.id = QString::number(idv.toDouble(), 'g',
+                                   std::numeric_limits<double>::max_digits10);
+        } else if (obj.contains(QStringLiteral("id"))) {
+            // An omitted id intentionally selects the active/default target;
+            // an explicitly malformed id must not collapse to that sentinel.
+            return err(QStringLiteral("id must be a string or number"));
+        }
         a.title    = obj.value(QStringLiteral("title")).toString();
         a.detail   = obj.value(QStringLiteral("detail")).toString();
         a.tone     = obj.value(QStringLiteral("tone")).toString();
@@ -2907,6 +2998,20 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                 "in your MCP client from Radio Setup -> Network -> Agent "
                 "Automation."));
         }
+    }
+
+    // Observe-only gate (#4188 area 6). When the operator has enabled
+    // read-only mode (Radio Setup -> Network -> "Observe only"), refuse any
+    // verb that isn't pure introspection — no driving, no connect/capture, no
+    // keying. Enforced HERE in the bridge (not the MCP client) so it can't be
+    // bypassed by talking to the socket directly. Uses the resolved canonical
+    // name so aliases are covered.
+    if (m_readOnly && !isReadOnlyRequest(spec->name, a.action)) {
+        qCWarning(lcAutomation) << "read-only mode: refused" << spec->name;
+        return err(QStringLiteral("read-only mode: '") + spec->name
+                   + QStringLiteral("' is blocked. This bridge is observe-only "
+                                    "— uncheck \"Observe only\" in Radio Setup "
+                                    "-> Network to allow driving."));
     }
 
     return spec->dispatch(*this, a, sock);
@@ -4413,6 +4518,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
 
     if (model == QLatin1String("radio")) {
         data = radioSnapshot(radio);
+    } else if (model == QLatin1String("gps")) {
+        data = gpsSnapshot(radio);
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel());
     } else if (model == QLatin1String("cwx")) {
@@ -5377,10 +5484,105 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                                 "txant|rxant|rxsource|fixture|clearfixture)"));
 }
 
+QJsonObject AutomationServer::doGps(const QString& action, const QString& format)
+{
+    if (!m_radioModel) {
+        return err(QStringLiteral("no radio model available"));
+    }
+    if (m_radioModel->isConnected()) {
+        return err(QStringLiteral(
+            "gps fixtures are disconnected-only; disconnect from the radio first"));
+    }
+
+    GpsDelta delta;
+    if (action == QLatin1String("clearfixture")) {
+        delta.status = QString();
+        delta.tracked = 0;
+        delta.visible = 0;
+        delta.grid = QString();
+        delta.altitude = QString();
+        delta.lat = QString();
+        delta.lon = QString();
+        delta.time = QString();
+        delta.speed = QString();
+        delta.track = QString();
+        delta.freqError = QString();
+        QString error;
+        if (!m_radioModel->automationApplyGpsFixture(
+                delta, QString(), QStringLiteral("auto"), false, QString(),
+                &error)) {
+            return err(error);
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("gps"), QStringLiteral("clearfixture")}};
+    }
+    if (action != QLatin1String("fixture")) {
+        return err(QStringLiteral(
+            "unknown gps action: ") + action
+            + QStringLiteral(" (fixture|clearfixture)"));
+    }
+
+    const QString profile = format.trimmed().toLower();
+    if (profile != QLatin1String("6000")
+        && profile != QLatin1String("8000")) {
+        return err(QStringLiteral("gps fixture requires 6000 or 8000"));
+    }
+
+    delta.status = QStringLiteral("Locked");
+    delta.time = QDateTime::currentDateTimeUtc().time()
+                     .toString(QStringLiteral("HH:mm:ss'Z'"));
+    delta.speed = QStringLiteral("0 kts");
+    delta.track = QString();
+    if (profile == QLatin1String("6000")) {
+        // Live FLEX-6700 GPSDO captures use hemisphere + degrees + decimal
+        // minutes. The dashboard intentionally consumes that radio text via
+        // the same parseGpsCoordinate() path as production status.
+        delta.tracked = 9;
+        delta.visible = 12;
+        // Use the public Mount Wilson Observatory for shareable visual-test
+        // artifacts; the coordinate parser unit test retains the exact live
+        // FLEX-6700 capture values.
+        delta.grid = QStringLiteral("DM04xf");
+        delta.altitude = QStringLiteral("1742 m");
+        delta.lat = QStringLiteral("N 34 13.464");
+        delta.lon = QStringLiteral("W 118 03.450");
+        delta.freqError = QStringLiteral("18 ppb");
+    } else {
+        // Exercise the decimal-coordinate and course fields from the
+        // FLEX-8600 wire format while keeping shareable visual-test artifacts
+        // pinned to the public Mount Wilson Observatory. Parser tests retain
+        // the exact clean-room firmware 4.2.18 capture values.
+        delta.tracked = 8;
+        delta.visible = 28;
+        delta.grid = QStringLiteral("DM04xf");
+        delta.altitude = QStringLiteral("1742 m");
+        delta.lat = QStringLiteral("34.224400000");
+        delta.lon = QStringLiteral("-118.057500000");
+        delta.track = QStringLiteral("273.4");
+        delta.freqError = QStringLiteral("274 ppb");
+    }
+    QString error;
+    if (!m_radioModel->automationApplyGpsFixture(
+            delta, QStringLiteral("gpsdo"), QStringLiteral("auto"), true,
+            profile == QLatin1String("8000")
+                ? QStringLiteral("192.0.2.80") : QString(),
+            &error)) {
+        return err(error);
+    }
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("gps"), QStringLiteral("fixture")},
+                       {QStringLiteral("profile"), profile},
+                       {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
+}
+
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
-// Set the active slice's frequency (MHz). The most fundamental control the
-// VfoWidget couldn't expose (it's custom-painted). Honors the slice lock guard.
-QJsonObject AutomationServer::doTune(const QString& value)
+// Set a slice's frequency (MHz). The most fundamental control the VfoWidget
+// couldn't expose (it's custom-painted). Honors the slice lock guard. An
+// optional slice id targets a specific slice directly — without it the active
+// slice is tuned (the original behavior), which forced external scripts into a
+// racy select → tune → restore flap when driving a non-active slice.
+QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
@@ -5389,17 +5591,37 @@ QJsonObject AutomationServer::doTune(const QString& value)
     if (!okF || mhz <= 0)
         return err(QStringLiteral("tune requires a positive frequency in MHz"));
 
+    int sliceId = -1;  // -1 = active slice
+    if (!id.isEmpty()) {
+        bool okId = false;
+        sliceId = id.toInt(&okId);
+        if (!okId || sliceId < 0)
+            return err(QStringLiteral("tune: sliceId must be a non-negative integer"));
+    }
+
     if (m_tuneHandler) {
-        return m_tuneHandler(mhz);
+        return m_tuneHandler(mhz, sliceId);
     }
 
     SliceModel* s = nullptr;
-    for (SliceModel* c : m_radioModel->slices())
-        if (c->isActive()) { s = c; break; }
-    if (!s && !m_radioModel->slices().isEmpty())
-        s = m_radioModel->slices().first();
-    if (!s)
-        return err(QStringLiteral("no slice to tune"));
+    if (sliceId >= 0) {
+        for (SliceModel* c : m_radioModel->slices())
+            if (c->sliceId() == sliceId) { s = c; break; }
+        if (!s)
+            return err(QStringLiteral("no slice with id ") + QString::number(sliceId));
+        // Mirror the GUI path's Multi-Flex gate (MainWindow::automationTune):
+        // a headless caller must not drive another client's slice either.
+        if (!m_radioModel->sliceMayBelongToUs(sliceId))
+            return err(QStringLiteral("refused: slice ") + QString::number(sliceId)
+                       + QStringLiteral(" belongs to another client"));
+    } else {
+        for (SliceModel* c : m_radioModel->slices())
+            if (c->isActive()) { s = c; break; }
+        if (!s && !m_radioModel->slices().isEmpty())
+            s = m_radioModel->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice to tune"));
+    }
     if (s->isLocked())
         return err(QStringLiteral("refused: slice ") + s->letter() + QStringLiteral(" is VFO-locked"));
 
@@ -7484,6 +7706,7 @@ QJsonObject AutomationServer::doWhoami() const
         {QStringLiteral("guiClientIdTransient"),
          AppSettings::instance().guiClientIdentityIsTransient()},
         {QStringLiteral("txAllowed"), m_txAllowed},
+        {QStringLiteral("readOnly"), m_readOnly},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},
     };
 }

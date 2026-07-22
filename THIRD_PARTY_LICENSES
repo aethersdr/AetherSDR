@@ -77,6 +77,39 @@ facts. The consulted facts are:
   License:   GPL-3.0-or-later (consulted as a behavioral reference only)
   Source:    https://github.com/dl1ycf/pihpsdr  (src/old_protocol.c)
 
+The ACOM S-series amplifier peripheral (shipped; see
+docs/architecture/acom-600s-amplifier-design.md) implements ACOM's RS-232
+serial protocol — the binary frame layout (start byte, address, length,
+checksum), the unified telemetry message (address 0x2F), the error-code
+bitfields (address 0x21), the system-config query (address 0x11), and the
+mode-change/clear-faults command envelope (address 0x81). These wire-protocol
+facts were consulted clean-room from the manufacturer's own published
+specification and are expressed in original AetherSDR code; no code from
+either source below is incorporated, vendored, translated, or linked into
+AetherSDR.
+
+  ACOM 600S Serial Port Communication Protocol, v1.1 (2014-12-04) — eng.
+  Nikolay Nenov, the primary protocol authority (Principle I).
+  Publisher: ACOM (manufacturer public documentation)
+  Reference: no stable public URL — distributed directly by ACOM (Bulgaria)
+             as a maintainer-supplied PDF, not a web download, so no
+             URL/access-date/hash triple is recorded here; contrast
+             third_party/crdv/CLEANROOM_PROVENANCE.md's stricter format,
+             used where a public, hashable download exists
+
+  ACOM-Controller (Björn Ekelund, SM7IUN) — consulted only as a secondary,
+  practical cross-check (e.g. that the checksum sign convention and 72-byte
+  framing match a working real-world implementation; that the mandatory-per-spec
+  0x86 acknowledgement is safely omittable on a direct RS-232 link in practice).
+  License:  MIT
+  Source:   https://github.com/bjornekelund/ACOM-Controller
+
+  ACOM product pages (acom-bg.com) — consulted for the per-model nominal/max
+  rated-power figures used to derive the auto-ranging table in
+  AcomProtocol.cpp's modelTable() (500S/600S/700S/1200S/1400S/2020S); no code
+  or text incorporated, figures only.
+  Publisher: ACOM (manufacturer public documentation)
+
 
 1. WDSP — Spectral Noise Reduction (NR2)
 -----------------------------------------
