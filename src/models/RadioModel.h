@@ -573,6 +573,12 @@ signals:
     // must be re-established from this.
     void panadapterReclaimed(PanadapterModel* pan);
     void panadapterRemoved(const QString& panId);
+    // Brackets the actual wire dispatch of a radio-authoritative band-stack
+    // recall. Unlike requestPanBand(), these signals fire after any profile-
+    // load deferral, so clients can order dependent radio commands around the
+    // real `display pan set ... band=...` write.
+    void panBandAboutToDispatch(const QString& panId);
+    void panBandDispatchFailed(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);
     // Emitted when the radio rejects a slice create command (e.g. limit reached across

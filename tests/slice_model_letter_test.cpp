@@ -147,6 +147,63 @@ int main(int argc, char** argv)
                   QStringLiteral("slice set 4 audio_pan=60"));
     }
 
+    // ── A KiwiSDR suppression mute must be lifted before a FLEX band-stack
+    // recall without disabling the external receive presentation. While that
+    // handoff is prepared, the radio's audio_mute=0 echo must not be fought;
+    // re-arming the replacement resumes the normal mute invariant (#4209).
+    {
+        SliceModel s(6);
+        QStringList commands;
+        QObject::connect(&s, &SliceModel::commandReady,
+                         [&commands](const QString& cmd) { commands.append(cmd); });
+
+        s.setExternalReceiveAudioReplacementMute(true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 6 audio_mute=1"));
+        EXPECT_EQ(s.externalReceiveReplacementActive(), true);
+        EXPECT_EQ(s.audioMute(), false);
+        EXPECT_EQ(s.flexAudioMute(), true);
+        commands.clear();
+
+        s.prepareExternalReceiveAudioReplacementBandRecall(false);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 6 audio_mute=0"));
+        EXPECT_EQ(s.externalReceiveReplacementActive(), true);
+        EXPECT_EQ(s.audioMute(), false);
+        EXPECT_EQ(s.flexAudioMute(), false);
+        commands.clear();
+
+        s.applyChanges(delta([](SliceDelta& d){ d.audioMute = false; }));
+        EXPECT_EQ(commands.join(QStringLiteral("|")), QString());
+        EXPECT_EQ(s.flexAudioMute(), false);
+
+        s.setExternalReceiveAudioReplacementMute(true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 6 audio_mute=1"));
+        EXPECT_EQ(s.audioMute(), false);
+        EXPECT_EQ(s.flexAudioMute(), true);
+        commands.clear();
+
+        s.applyChanges(delta([](SliceDelta& d){ d.audioMute = false; }));
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 6 audio_mute=1"));
+        EXPECT_EQ(s.flexAudioMute(), true);
+        commands.clear();
+
+        // A full recalled-slice status with no audio_mute means the radio used
+        // its default (unmuted). Do not carry a muted outgoing band into it.
+        s.prepareExternalReceiveAudioReplacementBandRecall(true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")), QString());
+        s.applyChanges(delta([](SliceDelta& d){ d.inUse = true; }));
+        EXPECT_EQ(commands.join(QStringLiteral("|")), QString());
+        EXPECT_EQ(s.flexAudioMute(), false);
+
+        s.setExternalReceiveAudioReplacementMute(true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 6 audio_mute=1"));
+        EXPECT_EQ(s.flexAudioMute(), true);
+    }
+
     // ── External receive replacement also owns visible AGC and SQL controls.
     // These controls should drive the replacement source, not hidden Flex state.
     {

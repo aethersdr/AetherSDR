@@ -3066,9 +3066,11 @@ bool RadioModel::dispatchPanBand(const QString& panId, const QString& bandKey)
     const QString command =
         QString("display pan set %1 band=%2").arg(panId, bandKey);
 
+    emit panBandAboutToDispatch(panId);
     if (!sendCommand(command)) {
         qCWarning(lcProtocol).noquote()
             << "RadioModel: pan band write not dispatched —" << command;
+        emit panBandDispatchFailed(panId);
         return false;
     }
 

@@ -454,6 +454,13 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, &MainWindow::prepareKiwiSdrBandRecallForPan);
+    connect(&m_radioModel, &RadioModel::panBandDispatchFailed,
+            this, [this](const QString& panId) {
+        finishPreparedKiwiSdrBandRecallForPan(panId);
+        m_kiwiRebind.clearBandRecall(panId);
+    });
     // Re-bind a KiwiSDR replacement across a band-stack slice recreation (#4158).
     // A band recall DROPS then RE-CREATES the slice (same id, new band). The
     // tracker re-binds only when a rebind is pending for this id AND this pan

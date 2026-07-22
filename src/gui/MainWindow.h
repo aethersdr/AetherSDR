@@ -394,6 +394,9 @@ private:
     void syncKiwiSdrTransmitMute();
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
+    void prepareKiwiSdrBandRecallForPan(const QString& panId);
+    void finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
+    void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
     void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
     void updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice);
@@ -982,6 +985,11 @@ private:
     bool             m_kiwiSdrAudioTransmitMuted{false};
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
+    struct KiwiSdrBandRecallPreparation {
+        QString panId;
+        QString profileId;
+    };
+    QHash<int, KiwiSdrBandRecallPreparation> m_kiwiSdrBandRecallPreparations;
     QSet<QString>    m_kiwiSdrFlexDisplayPans;
     // Retains a KiwiSDR replacement across the slice remove->re-add a FLEX
     // band-stack recall performs (band_persistence drops+re-creates the slice

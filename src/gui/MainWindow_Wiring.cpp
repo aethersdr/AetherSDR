@@ -1581,14 +1581,17 @@ void MainWindow::onSliceRemoved(int id)
     const auto rebindAction =
         m_kiwiRebind.onSliceRemoved(id, liveRemoval, kiwiRebindProfile);
     if (rebindAction.kind == KiwiRebindTracker::RemoveAction::Defer) {
-        // Leave the assignment (and Kiwi connection) and the pre-Kiwi mute
-        // intact during the window so a re-bind is seamless. If no recreation
-        // re-binds it, the generation-safe expiry finalizes the teardown.
+        // Leave the assignment and Kiwi connection intact during the window so
+        // a re-bind is seamless. The pre-Kiwi mute may already have been
+        // consumed by the band-recall preparation; the recreated slice then
+        // snapshots its recalled band's own mute. If no recreation re-binds
+        // it, the generation-safe expiry finalizes the teardown.
         const quint64 generation = rebindAction.generation;
         QTimer::singleShot(kKiwiSdrRebindGraceMs, this, [this, id, generation]() {
             if (!m_kiwiRebind.onGraceExpired(id, generation)) {
                 return;
             }
+            m_kiwiSdrBandRecallPreparations.remove(id);
             m_kiwiSdrVirtualPreviousMute.remove(id);
             if (m_kiwiSdrManager) {
                 m_kiwiSdrManager->clearSliceAssignment(id);
@@ -1596,6 +1599,7 @@ void MainWindow::onSliceRemoved(int id)
             syncKiwiSdrPanadapterUiStates();
         });
     } else {
+        m_kiwiSdrBandRecallPreparations.remove(id);
         m_kiwiSdrVirtualPreviousMute.remove(id);
         if (m_kiwiSdrManager) {
             m_kiwiSdrManager->clearSliceAssignment(id);
@@ -3809,20 +3813,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             emit bandStackRestoreStarting(applet->panId());
             clearSwrSweepForBandChange(-1, applet->panId(), bandName);
             m_bandSettings.setCurrentBand(bandName);
-            // A band recall makes the radio drop+re-create this pan's slice;
-            // mark the pan (positive band-recall intent) so onSliceAdded re-binds
-            // a KiwiSDR replacement onto the recreated slice instead of reverting
-            // to Flex (#4158). One-shot: consumed by the re-bind, or expired here
-            // so a recall on a non-Kiwi slice can't leave the marker stale.
-            m_kiwiRebind.noteBandRecall(applet->panId());
-            QTimer::singleShot(kKiwiSdrRebindGraceMs, this,
-                               [this, panId = applet->panId()]() {
-                m_kiwiRebind.clearBandRecall(panId);
-            });
             // #4142: during the profile-load hold a bare sendCommand() band=
-            // write is silently destroyed. requestPanBand defers it instead.
-            // Outside a hold it dispatches inline, so the #4158 grace window
-            // above is unchanged on the normal user-initiated band-recall path.
+            // write is silently destroyed. requestPanBand defers it instead;
+            // panBandAboutToDispatch starts the #4158 rebind window only when
+            // the deferred command actually reaches the wire.
             m_radioModel.requestPanBand(applet->panId(), stackKey);
             QTimer::singleShot(300, this, [this, panId = applet->panId()]() {
                 reassertUnmutedSliceAudioForPan(panId);

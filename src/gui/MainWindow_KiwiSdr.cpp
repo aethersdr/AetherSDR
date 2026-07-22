@@ -547,6 +547,7 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
     if (!slice || !m_radioModel.sliceMayBelongToUs(sliceId)) {
         return;
     }
+    m_kiwiSdrBandRecallPreparations.remove(sliceId);
 
     // Selecting a receive source from a VFO/header menu is also selecting the
     // slice whose receive path is being changed. Keep the side RX applet bound
@@ -630,6 +631,7 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
     qCInfo(lcKiwiSdr).noquote()
         << "Virtual RX antenna cleared for slice" << sliceId
         << "(Flex audio restored)";
+    m_kiwiSdrBandRecallPreparations.remove(sliceId);
     QString panId;
     if (SliceModel* slice = m_radioModel.slice(sliceId)) {
         panId = slice->panId();
@@ -661,6 +663,105 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
                           | KiwiSdrUiSyncWaterfallAvailability);
     if (!panId.isEmpty()) {
         syncKiwiSdrPanadapterUiState(panId);
+    }
+}
+
+void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
+{
+    if (!m_kiwiSdrManager || panId.isEmpty()) {
+        return;
+    }
+
+    // A deferred request can supersede an older one for the same pan. Re-arm
+    // any still-prepared slice before beginning the new atomic command pair.
+    finishPreparedKiwiSdrBandRecallForPan(panId);
+    m_kiwiRebind.noteBandRecall(panId);
+
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice || slice->panId() != panId
+            || !m_radioModel.sliceMayBelongToUs(slice->sliceId())
+            || !slice->externalReceiveReplacementActive()) {
+            continue;
+        }
+
+        const QString profileId =
+            m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId());
+        if (profileId.isEmpty()) {
+            continue;
+        }
+
+        const bool restoreMute =
+            m_kiwiSdrVirtualPreviousMute.contains(slice->sliceId())
+                ? m_kiwiSdrVirtualPreviousMute.take(slice->sliceId())
+                : slice->flexAudioMute();
+        m_kiwiSdrBandRecallPreparations.insert(
+            slice->sliceId(), {panId, profileId});
+        slice->prepareExternalReceiveAudioReplacementBandRecall(restoreMute);
+        qCInfo(lcKiwiSdr).noquote()
+            << "Preparing KiwiSDR band recall"
+            << "pan=" << panId
+            << "slice=" << slice->sliceId()
+            << "restore_flex_mute=" << (restoreMute ? 1 : 0);
+    }
+
+    // Same-band recalls may not change any slice field, while some firmware
+    // drops and recreates the slice. Normal retunes re-arm from
+    // frequencyChanged; this grace fallback covers the no-change case and
+    // shares the existing #4158 recreation window.
+    QTimer::singleShot(kKiwiSdrRebindGraceMs, this, [this, panId]() {
+        finishPreparedKiwiSdrBandRecallForPan(panId);
+        m_kiwiRebind.clearBandRecall(panId);
+    });
+}
+
+void MainWindow::finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice)
+{
+    if (!m_kiwiSdrManager || !slice) {
+        return;
+    }
+
+    const auto it = m_kiwiSdrBandRecallPreparations.find(slice->sliceId());
+    if (it == m_kiwiSdrBandRecallPreparations.end()) {
+        return;
+    }
+
+    const KiwiSdrBandRecallPreparation preparation = it.value();
+    const QString assignedProfile =
+        m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId());
+    m_kiwiSdrBandRecallPreparations.erase(it);
+    if (slice->panId() != preparation.panId
+        || assignedProfile != preparation.profileId) {
+        return;
+    }
+
+    // SliceModel emits frequencyChanged only after the complete radio delta —
+    // including audio_mute — has been applied. setKiwi... therefore snapshots
+    // the recalled band's own mute before re-arming Flex suppression.
+    const bool recalledFlexMute = slice->flexAudioMute();
+    setKiwiSdrVirtualAntennaForSlice(slice->sliceId(), preparation.profileId);
+    qCInfo(lcKiwiSdr).noquote()
+        << "KiwiSDR band recall re-armed"
+        << "pan=" << preparation.panId
+        << "slice=" << slice->sliceId()
+        << "recalled_flex_mute=" << (recalledFlexMute ? 1 : 0);
+}
+
+void MainWindow::finishPreparedKiwiSdrBandRecallForPan(const QString& panId)
+{
+    QVector<int> sliceIds;
+    for (auto it = m_kiwiSdrBandRecallPreparations.cbegin();
+         it != m_kiwiSdrBandRecallPreparations.cend(); ++it) {
+        if (it->panId == panId) {
+            sliceIds.append(it.key());
+        }
+    }
+
+    for (int sliceId : sliceIds) {
+        if (SliceModel* slice = m_radioModel.slice(sliceId)) {
+            finishPreparedKiwiSdrBandRecallForSlice(slice);
+        } else {
+            m_kiwiSdrBandRecallPreparations.remove(sliceId);
+        }
     }
 }
 
@@ -884,6 +985,15 @@ void MainWindow::syncFlexRxPanToAudioEngine()
 void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
 {
     if (!m_kiwiSdrManager || !slice) {
+        return;
+    }
+
+    const bool finishingBandRecall =
+        m_kiwiSdrBandRecallPreparations.contains(slice->sliceId());
+    finishPreparedKiwiSdrBandRecallForSlice(slice);
+    if (finishingBandRecall) {
+        // setKiwiSdrVirtualAntennaForSlice() performed the tracking update in
+        // its re-entrant call after consuming the preparation.
         return;
     }
 

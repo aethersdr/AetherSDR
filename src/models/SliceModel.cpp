@@ -771,12 +771,14 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
             m_externalReceiveAudioMute = false;
             m_externalReceiveAudioReplacement = true;
         }
+        m_externalReceiveFlexAudioSuppressed = true;
         if (!m_audioMute) {
             m_audioMute = true;
             sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
         }
     } else {
         m_externalReceiveAudioReplacement = false;
+        m_externalReceiveFlexAudioSuppressed = false;
         m_externalReceiveAutoSquelch = false;
         if (m_audioMute != restoreMute) {
             m_audioMute = restoreMute;
@@ -827,6 +829,27 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     if (m_externalReceiveAutoSquelch != previousExternalAutoSquelch) {
         emit externalReceiveAutoSquelchChanged(m_externalReceiveAutoSquelch);
     }
+}
+
+void SliceModel::prepareExternalReceiveAudioReplacementBandRecall(
+    bool restoreMute)
+{
+    if (!m_externalReceiveAudioReplacement) {
+        return;
+    }
+
+    // Keep the KiwiSDR-facing gain/pan/mute presentation active, but suspend
+    // the radio-mute reassertion until MainWindow observes the recalled slice
+    // state and re-arms the replacement. FLEX persists audio_mute in the
+    // outgoing band-stack entry, so this command must precede band=<key>.
+    m_externalReceiveFlexAudioSuppressed = false;
+    if (m_audioMute == restoreMute) {
+        return;
+    }
+    m_audioMute = restoreMute;
+    sendCommand(QString("slice set %1 audio_mute=%2")
+                    .arg(m_id)
+                    .arg(restoreMute ? 1 : 0));
 }
 
 void SliceModel::setDiversity(bool on)
@@ -1075,7 +1098,8 @@ void SliceModel::applyChanges(const SliceDelta& d)
         if (mute != m_audioMute) {
             const bool previousVisibleMute = audioMute();
             m_audioMute = mute;
-            if (m_externalReceiveAudioReplacement && !m_audioMute) {
+            if (m_externalReceiveAudioReplacement
+                && m_externalReceiveFlexAudioSuppressed && !m_audioMute) {
                 m_audioMute = true;
                 sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
             }
@@ -1086,9 +1110,11 @@ void SliceModel::applyChanges(const SliceDelta& d)
     } else if (d.inUse.value_or(false) && m_audioMute) {
         // Full status w/o audio_mute key → radio reset to default (0)
         // on (re)connect. Resync so UI doesn't show a stale 🔇 while
-        // audio is actually playing. Radio does not persist audio_mute
-        // (see MainWindow.cpp migration note ~line 1264).
-        if (m_externalReceiveAudioReplacement) {
+        // audio is actually playing. FLEX may persist audio_mute in a band-
+        // stack entry; the handoff path above prevents our Kiwi-only mute from
+        // becoming that persisted value (#4209).
+        if (m_externalReceiveAudioReplacement
+            && m_externalReceiveFlexAudioSuppressed) {
             sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
         } else {
             const bool previousVisibleMute = audioMute();
