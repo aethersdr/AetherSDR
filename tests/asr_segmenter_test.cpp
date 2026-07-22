@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <numbers>   // std::numbers::pi — M_PI needs _USE_MATH_DEFINES on MSVC
 #include <vector>
 
 using AetherSDR::AsrSegmenter;
@@ -36,7 +37,7 @@ void appendTone(std::vector<float>& buf, int ms, float amp = 0.3f, float freq = 
     const int n = ms * kRate / 1000;
     for (int i = 0; i < n; ++i) {
         const double t = static_cast<double>(i) / kRate;
-        buf.push_back(amp * static_cast<float>(std::sin(2.0 * M_PI * freq * t)));
+        buf.push_back(amp * static_cast<float>(std::sin(2.0 * std::numbers::pi * freq * t)));
     }
 }
 
