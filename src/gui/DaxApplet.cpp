@@ -90,7 +90,7 @@ void DaxApplet::buildUI()
     m_daxEnable->setAccessibleName(tr("DAX enable"));
     m_daxEnable->setAccessibleDescription(tr("Enable or disable DAX digital audio routing"));
     m_daxEnable->setStyleSheet(kGreenToggle);
-    m_daxEnable->setFixedSize(60, 22);
+    m_daxEnable->setFixedSize(76, 22);
     daxEnRow->addWidget(m_daxEnable);
 
     // DAX enable button → save setting + notify MainWindow

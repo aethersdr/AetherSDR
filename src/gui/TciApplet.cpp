@@ -222,7 +222,7 @@ void TciApplet::buildUI()
     m_tciEnable->setAccessibleName(tr("TCI server enable"));
     m_tciEnable->setAccessibleDescription(tr("Start or stop the TCI server"));
     m_tciEnable->setStyleSheet(kGreenToggle);
-    m_tciEnable->setFixedSize(60, 22);
+    m_tciEnable->setFixedSize(76, 22);
     {
         QSignalBlocker b(m_tciEnable);
         m_tciEnable->setChecked(tciAutoStart);
