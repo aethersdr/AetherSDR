@@ -173,6 +173,15 @@ jobs:
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
             "-DENABLE_NVIDIA_AFX=ON",
             "-DREQUIRE_SERIALPORT=ON",
+            # ASR OFF for this PR sanity check: its job is Windows-only APP
+            # regressions (WASAPI, Q_OS_WIN), not ASR. Building whisper/ggml from
+            # source here linked the large static libs into AetherSDR.exe, and that
+            # memory-heavy link concurrently starved the small test-exe links on the
+            # 16 GB runner (link.exe stalling on a different test each run — dstar,
+            # CAT_Flex — none of which hang on main, which has no ASR). ASR-on-Windows
+            # is fully built + linked + packaged by the windows-installer workflow,
+            # so nothing is lost here.
+            "-DENABLE_ASR=OFF",
             "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
           )
