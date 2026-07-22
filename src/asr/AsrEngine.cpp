@@ -135,6 +135,13 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
     const double chunkMs = 1000.0 * static_cast<double>(monoSamples.size()) / rate;
 
     [&] {
+    if (m_cancelPending.load(std::memory_order_relaxed)) {
+        // Shutting down or ASR was disabled: drop this queued chunk instead of
+        // segmenting/blocking-transcribing it. Still falls through to
+        // emit processedMs(chunkMs) below so the backlog meter's accounting
+        // stays consistent.
+        return;
+    }
     if (monoSamples.isEmpty()) {
         return;
     }
@@ -266,6 +273,17 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
 AsrEngine::~AsrEngine()
 {
     if (m_thread != nullptr) {
+        if (m_worker != nullptr) {
+            // Qt's own quit() already stops the worker from starting any FURTHER
+            // queued processAudio() calls once the current one returns — it does
+            // not drain the whole backlog first. This guarantees that even more
+            // reliably (in case that's ever platform/version-dependent) and
+            // guards the one case Qt's quit() can't help with: a call already
+            // in flight when shutdown starts still has to finish naturally (a
+            // whisper decode, or a remote HTTP round-trip up to its own
+            // timeout) — quit()+wait() below still waits for that one.
+            m_worker->setCancelPending(true);
+        }
         m_thread->quit();
         m_thread->wait();
         // m_worker is deleted via the thread's finished -> deleteLater; but that
@@ -273,6 +291,24 @@ AsrEngine::~AsrEngine()
         // that the thread has stopped.
         delete m_worker;
         m_worker = nullptr;
+    }
+}
+
+void AsrEngine::setEnabled(bool on)
+{
+    m_enabled = on;
+    if (m_worker == nullptr) {
+        return;
+    }
+    if (on) {
+        m_worker->setCancelPending(false); // resume normal processing
+    } else {
+        // Drop any already-queued backlog now, not after it finishes: the
+        // worker's still-blocking calls are cancel-checked, but reset() alone
+        // (a queued signal) would just sit behind the same backlog it's meant
+        // to clear.
+        m_worker->setCancelPending(true);
+        reset();
     }
 }
 

@@ -36,9 +36,8 @@ void AsrAudioTap::setEnabled(bool on)
         }
     } else {
         disconnect(m_conn);
-        if (m_asr != nullptr) {
-            m_asr->reset(); // drop any half-built utterance
-        }
+        // m_asr->setEnabled(false) above already resets and drops any queued
+        // backlog — no separate reset() needed here.
     }
 }
 

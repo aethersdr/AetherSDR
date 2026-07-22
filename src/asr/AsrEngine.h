@@ -8,6 +8,7 @@
 #include <QString>
 #include <QVector>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -32,6 +33,14 @@ class AsrWorker : public QObject {
 public:
     AsrWorker(AsrBackendFactory factory, AsrSegmenter::Config segConfig);
     ~AsrWorker() override;
+
+    // Thread-safe; call directly (NOT via a queued signal — the whole point is
+    // to take effect immediately, ahead of anything already queued). When true,
+    // processAudio() becomes a no-op for any call already sitting in the event
+    // queue, instead of draining the segmenter/blocking-transcribing through a
+    // whole backlog. Used so shutdown and ASR-disable don't have to wait for a
+    // backlog of queued segments to finish (each includes a blocking transcribe).
+    void setCancelPending(bool cancel) { m_cancelPending.store(cancel, std::memory_order_relaxed); }
 
 public slots:
     void init();                                   // create backend on this thread
@@ -69,6 +78,7 @@ private:
     std::unique_ptr<Resampler> m_resampler;
     int m_resamplerSrcRate = 0;
     bool m_warnedNoModel = false;
+    std::atomic<bool> m_cancelPending{false}; // see setCancelPending()
 };
 
 // Engine half — main-thread facing. Accepts 16 kHz mono audio, ships it to the
@@ -85,7 +95,10 @@ public:
               QObject* parent = nullptr);
     ~AsrEngine() override;
 
-    void setEnabled(bool on) { m_enabled = on; }
+    // Disabling drops any already-queued backlog (see AsrWorker::setCancelPending)
+    // rather than letting the worker keep transcribing it after the UI already
+    // says "Disabled". Re-enabling clears the cancel flag so work resumes.
+    void setEnabled(bool on);
     bool isEnabled() const { return m_enabled; }
 
     // Load/switch the model file (async; emits ready() or loadFailed()).
