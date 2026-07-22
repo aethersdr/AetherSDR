@@ -77,6 +77,48 @@ followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
+### Serialize physical-radio proofs across agent sandboxes
+
+Automation identities keep concurrent clients distinct, but two proof builds
+must still not manipulate the same physical radio at once. Launch radio-backed
+proofs through the repository-owned FIFO coordinator:
+
+```bash
+AETHER_AUTOMATION=1 \
+AETHER_AUTOMATION_NO_AUTOCONNECT=1 \
+python3 tools/radio_lock.py run --timeout 570 --label issue-4372 -- \
+./build/AetherSDR.app/Contents/MacOS/AetherSDR
+```
+
+Use `./build/AetherSDR` as the final command on Linux, or
+`build\\AetherSDR.exe` on Windows. The wrapper waits in FIFO order, launches the
+command only after it owns the radio slot, and releases automatically when the
+child exits. Run `python3 tools/radio_lock.py status` from any worktree to see
+the holder label, status-heartbeat age, and queued positions.
+
+The coordinator deliberately does not store or inspect PIDs. Agent sandboxes
+share the coordination directory but may not share process visibility, so
+`kill -0` and process-list probes can misclassify a live process as dead. The
+exclusive authority is an OS kernel file lock; queue tickets have random
+identities and renewable heartbeats. On POSIX, the child inherits the locked
+descriptor, which keeps the radio slot held even if the Python wrapper is
+abruptly killed. Stale waiter tickets expire after 45 seconds, but holder
+metadata is never used to reap a live kernel lock.
+
+During migration, the v2 coordinator also treats every ticket from the old
+`/tmp/aethersdr-fb.queue` as ahead of its own queue and treats an old pidfile as
+an opaque held barrier—it never tests or removes the foreign PID. Its kernel
+lock uses the existing `/tmp/aethersdr-fb.lock` path and writes a fail-closed
+compatibility sentinel while held, so an old helper waits instead of launching
+beside a v2-owned app. This preserves exclusivity while active agent tasks move
+to the repository tool.
+
+Do not use an installed PID-based `radio-lock.sh` helper for `/fb` work. It is
+not namespace-safe. Agent skills and MCP launch tools should call or import
+`tools/radio_lock.py` so the protocol stays versioned with AetherSDR. A future
+MCP process-launch integration can import `RadioCoordinator` and pass
+`RadioLease.child_popen_kwargs()` to its direct `subprocess.Popen` call.
+
 KiwiSDR compression can be forced for diagnostic runs by adding
 `AETHER_KIWI_SND_COMP=1` and/or `AETHER_KIWI_WF_COMP=1` at launch. These are
 receive-only automation knobs: SND changes the outbound sound setup request
