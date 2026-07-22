@@ -219,6 +219,7 @@ public:
 
     // Update the dBm range used for the waterfall colour map and spectrum Y axis.
     void setDbmRange(float minDbm, float maxDbm);
+    void cancelPendingDbmRangeChange();
 
     // Noise floor auto-adjust: position (1=top, 99=bottom), enable on/off.
     // The enable flag is shared for the pan; the position is stored separately
@@ -961,6 +962,8 @@ private:
     void armNoiseFloorFastLock(int freshFrames, int snapFrames);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
+    void beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
+                                 float newMinDbm, float newMaxDbm);
     void clearDbmReleaseRebase();
     // Reset the baseline tracker — called on any input change (zoom,
     // band switch, manual dBm drag) so the next frame re-acquires
@@ -977,7 +980,7 @@ private:
     void saveDisplaySourceTraceSettings();
     void setNoiseFloorPositionForSource(bool kiwiSource, int pos, bool persist);
     void restoreNoiseFloorPositionForCurrentSource(bool syncMenu);
-    void setDssFloorDepthForSource(bool kiwiSource, int dB, bool persist);
+    void setDssFloorDepthForSource(bool kiwiSource, float dB, bool persist);
     void restoreDssFloorDepthForCurrentSource(bool syncMenu);
 
     // Helper: find overlay index for a sliceId, or -1.
@@ -1040,7 +1043,7 @@ private:
     float dssFloorDbm();
     float peekDssFloorDbm() const;
     // dB span shown above the 3D floor anchor — follows the normal dBm scale,
-    // clamped so the wide Flex window can't flatten signals.
+    // with an upper cap so an excessively wide Flex window cannot flatten it.
     float dssSpanDb() const;
 
     // Pixel x coordinate for a given frequency in MHz (0 = left edge).
@@ -1101,7 +1104,7 @@ private:
     bool  m_pendingDbmRangeEcho{false};
     bool  m_pendingDbmRangeEchoFromAutoFloor{false};
     qint64 m_pendingDbmRangeEchoStartMs{0};
-    int   m_holdFftUpdatesAfterDbmRelease{0};
+    qint64 m_dbmReleaseRebaseUntilMs{0};
     float m_dbmReleasePreviewOldMinDbm{0.0f};
     float m_dbmReleasePreviewOldMaxDbm{0.0f};
     float m_dbmReleasePreviewNewMinDbm{0.0f};
@@ -1220,8 +1223,8 @@ private:
     // trace baseline. A few dB negative lifts the noisy floor carpet (with its
     // own colour) up off the baseline so you see floor -> peak, not just crests.
     float m_dssFloorOffsetDb{-6.0f};
-    int   m_flexDssFloorDepth{6};
-    int   m_kiwiDssFloorDepth{6};
+    float m_flexDssFloorDepth{6.0f};
+    float m_kiwiDssFloorDepth{6.0f};
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
     float m_dssFloorAnchorDbm{-1000.0f};
     bool  m_dssFloorAnchorValid{false};
@@ -1407,7 +1410,7 @@ private:
     float m_dbmDragStartRef{0.0f};
     float m_dbmDragStartRange{0.0f};
     float m_dbmDragStartBottom{0.0f};
-    int   m_dssFloorDragStartDepth{0};
+    float m_dssFloorDragStartDepth{0.0f};
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};

@@ -1597,6 +1597,53 @@ void MainWindow::wireDaxIq()
 // Kept out of the MainWindow.cpp monolith. The bridge is the endpoint MCP
 // clients connect to; MainWindow owns the server instance for its lifetime.
 
+QJsonObject MainWindow::automationTargetTune(double mhz)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("no slice to tune")}};
+    }
+    if (slice->isLocked()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("refused: slice %1 is VFO-locked").arg(slice->letter())}};
+    }
+    if (m_swrSweep.running) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: SWR sweep is running")}};
+    }
+
+    applyTuneRequest(slice, mhz, TuneIntent::CommandedTargetCenter,
+                     "automation-target-tune");
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("targetTune"), mhz},
+                       {QStringLiteral("sliceId"), slice->sliceId()},
+                       {QStringLiteral("letter"), slice->letter()}};
+}
+
+QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
+                                                 const QString& preferredPanId)
+{
+    if (!m_radioModel.memories().contains(memoryIndex)) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no memory with index %1").arg(memoryIndex)}};
+    }
+    if (!activateMemorySpot(memoryIndex, preferredPanId)) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("memory %1 could not be activated")
+                                .arg(memoryIndex)}};
+    }
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("memory"), QStringLiteral("activate")},
+                       {QStringLiteral("index"), memoryIndex},
+                       {QStringLiteral("panId"), preferredPanId}};
+}
+
 bool MainWindow::startAutomationBridge(const QString& sockName)
 {
     if (m_automation && m_automation->isRunning())
@@ -1628,6 +1675,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
     m_automation->setTuneHandler(
         [this](double mhz, int sliceId) { return automationTune(mhz, sliceId); });
+    m_automation->setTargetTuneHandler(
+        [this](double mhz) { return automationTargetTune(mhz); });
+    m_automation->setMemoryActivateHandler(
+        [this](int memoryIndex, const QString& preferredPanId) {
+            return automationActivateMemory(memoryIndex, preferredPanId);
+        });
     m_automation->setReceiveSyncSnapshotHandler(
         [this]() { return automationReceiveSyncSnapshot(); });
     m_automation->setKiwiSdrSnapshotHandler(

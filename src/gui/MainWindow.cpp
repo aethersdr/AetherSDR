@@ -5705,6 +5705,7 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
                     << " from_band=" << currentBand
                     << " to_band=" << memoryBand
                     << " key=" << stackKeyResult.key;
+                emit bandStackRestoreStarting(slicePanId);
                 clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
                 m_bandSettings.setCurrentBand(memoryBand);
                 // #4142: during the profile-load hold a bare sendCommand()
@@ -5946,6 +5947,7 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
         << " from_band=" << currentBand
         << " to_band=" << targetBand
         << " key=" << stackKeyResult.key;
+    emit bandStackRestoreStarting(slice->panId());
     clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
     m_bandSettings.setCurrentBand(targetBand);
     // #4142: the cross-band typed tune is the reported bug's worst variant —

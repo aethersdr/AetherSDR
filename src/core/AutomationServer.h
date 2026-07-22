@@ -161,6 +161,10 @@ class QsoRecorder;
 //   drag <target> <dx> <dy>        -> synthesize press→move→release so resize
 //                                     grips / slider handles are provable end-to-
 //                                     end. `mouse` is an alias.
+//   dragAt <target> <x> <y> <dx> <dy> [modifiers]
+//                                  -> drag from a target-local point, optionally
+//                                     with control/meta/shift/alt held. This
+//                                     reaches modifier-only custom-widget paths.
 //   showMenu <target>              -> pop a QToolButton/QPushButton drop-down,
 //                                     posted onto the GUI loop with the window
 //                                     raised (crash-safe on backgrounded macOS).
@@ -267,6 +271,15 @@ public:
     {
         m_tuneHandler = std::move(handler);
     }
+    void setTargetTuneHandler(std::function<QJsonObject(double)> handler)
+    {
+        m_targetTuneHandler = std::move(handler);
+    }
+    void setMemoryActivateHandler(
+        std::function<QJsonObject(int, const QString&)> handler)
+    {
+        m_memoryActivateHandler = std::move(handler);
+    }
     void setReceiveSyncSnapshotHandler(std::function<QJsonObject()> handler)
     {
         m_receiveSyncSnapshotHandler = std::move(handler);
@@ -362,6 +375,7 @@ private:
     // press → move → release gesture so resize grips and slider handles are
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
     QJsonObject doDrag(const QString& target, const QString& value) const;
+    QJsonObject doDragAt(const QString& target, const QString& value) const;
     // hover <target> [leave]: synthesize pointer hover over a widget so
     // hover-driven UI (e.g. the HGauge mouse-over value readout on the TX
     // SWR/power/ALC meters) is provable end-to-end. Bare form sends a
@@ -499,6 +513,8 @@ private:
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
     QJsonObject doTune(const QString& value, const QString& id);
+    QJsonObject doTargetTune(const QString& value);
+    QJsonObject doMemory(const QString& action, const QString& arg);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
     // route to RadioModel::setTransmit — the exact calls the space-bar PTT filter
     // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated
@@ -577,6 +593,8 @@ private:
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
     std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
     std::function<QJsonObject(double, int)> m_tuneHandler;
+    std::function<QJsonObject(double)> m_targetTuneHandler;
+    std::function<QJsonObject(int, const QString&)> m_memoryActivateHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;

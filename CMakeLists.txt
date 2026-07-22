@@ -2969,6 +2969,9 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+    add_test(NAME automation_probe_field_mapping
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
     # Bridge docs must stay in sync with the verb registry (#4174 Phase 3):
     # fail CI if the generated verb table drifts or a detail heading is dup'd.
     add_test(NAME bridge_docs_check
@@ -3322,6 +3325,26 @@ target_include_directories(flex_backend_lifecycle_test PRIVATE src)
 target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
 set_target_properties(flex_backend_lifecycle_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_backend_lifecycle_test COMMAND flex_backend_lifecycle_test)
+
+# A pending client dBm request must retain a mismatching radio range for timeout
+# reconciliation and yield before a radio-authoritative band-stack restore.
+add_executable(panadapter_dbm_range_test tests/panadapter_dbm_range_test.cpp)
+target_include_directories(panadapter_dbm_range_test PRIVATE src)
+target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
+set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
+add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
+
+# The bridge preserves dragAt, target-tune, memory-recall, and authenticated
+# positional requests across its bare and JSON protocol forms.
+add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
+target_include_directories(automation_drag_at_test PRIVATE src)
+target_link_libraries(automation_drag_at_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_drag_at_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_drag_at_test COMMAND automation_drag_at_test)
+set_tests_properties(automation_drag_at_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)

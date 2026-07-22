@@ -2198,8 +2198,9 @@ void AutomationServer::onDisconnected()
 // parser, and the dispatcher. The startup banner and the "unknown command"
 // error are DERIVED from this table — never hand-list verbs anywhere else.
 // Adding a verb is adding one entry here (plus its doVerb body); nothing else
-// to keep in sync. JSON requests bypass the parsers (fields map 1:1 onto
-// VerbArgs in handleLine).
+// to keep in sync. JSON requests normally bypass the parsers (fields map 1:1
+// onto VerbArgs in handleLine); the optional `args` field explicitly asks the
+// registry to parse the same positional arguments as a bare request.
 
 struct AutomationServer::VerbArgs {
     QString target, path, action, value, model, selector, property;
@@ -2313,6 +2314,11 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         auto parseTargetXY = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
             a.target = vtok(p, 1);
             a.value = vtok(p, 2) + QLatin1Char(' ') + vtok(p, 3);
+            return {};
+        };
+        auto parseTargetRest = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+            a.target = vtok(p, 1);
+            a.value = vjoin(p, 2);
             return {};
         };
         auto parseActionOnly = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
@@ -2476,6 +2482,16 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doDrag(a.target, a.value);
             });
 
+        add("dragAt", {},
+            "dragAt <target> <x> <y> <dx> <dy> [control|meta|shift|alt,...]",
+            parseTargetRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.target.isEmpty()) {
+                    return err(QStringLiteral("dragAt requires a target and '<x> <y> <dx> <dy>'"));
+                }
+                return s.doDragAt(a.target, a.value);
+            });
+
         add("showMenu", {QStringLiteral("openMenu")},
             "showMenu <target> — pop a button's drop-down menu",
             parseTargetOnly,
@@ -2625,6 +2641,26 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 if (a.value.isEmpty())
                     return err(QStringLiteral("tune requires a frequency in MHz"));
                 return s.doTune(a.value, a.id);
+            });
+
+        add("targettune", {},
+            "targettune <mhz> — absolute tune through band-stack preselection",
+            parseValueOnly,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.value.isEmpty()) {
+                    return err(QStringLiteral(
+                        "targettune requires a frequency in MHz"));
+                }
+                return s.doTargetTune(a.value);
+            });
+
+        add("memory", {}, "memory activate <index> [panId] — recall a radio memory",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.action.isEmpty()) {
+                    return err(QStringLiteral("memory requires an action (activate)"));
+                }
+                return s.doMemory(a.action, a.value);
             });
 
         add("cwx", {}, "cwx <send|speed|stop> [args] — CWX keyer (send is TX-gated)",
@@ -2934,6 +2970,28 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         a.tone     = obj.value(QStringLiteral("tone")).toString();
         a.token    = obj.value(QStringLiteral("token")).toString();
         a.timeoutMs = obj.value(QStringLiteral("timeoutMs")).toInt(0);
+        // Authenticated clients cannot use a bare request because the token is
+        // a JSON field. Let them keep the registry's positional protocol via
+        // {"cmd":"...","args":"...","token":"..."} rather than forcing
+        // every generic bridge client to duplicate all verb-specific mappings.
+        const QJsonValue positionalArgs = obj.value(QStringLiteral("args"));
+        if (!positionalArgs.isUndefined()) {
+            if (!positionalArgs.isString()) {
+                return err(QStringLiteral("JSON args must be a string"));
+            }
+            if (const VerbSpec* spec = findVerb(cmd)) {
+                QByteArray bareRequest = cmd.toUtf8();
+                const QByteArray args = positionalArgs.toString().toUtf8().trimmed();
+                if (!args.isEmpty()) {
+                    bareRequest.append(' ');
+                    bareRequest.append(args);
+                }
+                const QJsonObject parseError = spec->parse(bareRequest.split(' '), a);
+                if (!parseError.isEmpty()) {
+                    return parseError;
+                }
+            }
+        }
         // clickAt accepts numeric x/y fields directly (dumpTree geometry is
         // global), folded into `value` as "x y" so both request forms share one
         // code path. Explicit `value` still wins if supplied. Fold ONLY when
@@ -5630,6 +5688,44 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
                        {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
 }
 
+QJsonObject AutomationServer::doTargetTune(const QString& value)
+{
+    bool okFrequency = false;
+    const double mhz = value.toDouble(&okFrequency);
+    if (!okFrequency || mhz <= 0.0) {
+        return err(QStringLiteral(
+            "targettune requires a positive frequency in MHz"));
+    }
+    if (!m_targetTuneHandler) {
+        return err(QStringLiteral("target tune handler is unavailable"));
+    }
+    return m_targetTuneHandler(mhz);
+}
+
+QJsonObject AutomationServer::doMemory(const QString& action, const QString& arg)
+{
+    if (action.trimmed().compare(QStringLiteral("activate"), Qt::CaseInsensitive) != 0) {
+        return err(QStringLiteral("unknown memory action: ") + action
+                   + QStringLiteral(" (activate)"));
+    }
+    if (!m_memoryActivateHandler) {
+        return err(QStringLiteral("memory activation handler is unavailable"));
+    }
+
+    const QStringList fields = arg.split(QRegularExpression(QStringLiteral("\\s+")),
+                                         Qt::SkipEmptyParts);
+    if (fields.isEmpty() || fields.size() > 2) {
+        return err(QStringLiteral("memory activate requires <index> [panId]"));
+    }
+    bool okIndex = false;
+    const int memoryIndex = fields.first().toInt(&okIndex);
+    if (!okIndex || memoryIndex < 0) {
+        return err(QStringLiteral("memory index must be a non-negative integer"));
+    }
+    const QString preferredPanId = fields.size() == 2 ? fields.at(1) : QString();
+    return m_memoryActivateHandler(memoryIndex, preferredPanId);
+}
+
 // ── Semantic transmitter keying (#3646 fidelity — item 3) ───────────────────
 // `key ptt on|off` and `key mox` drive RadioModel::setTransmit — the exact
 // calls the space-bar PTT event filter (MainWindow_Shortcuts.cpp) and the
@@ -6173,10 +6269,12 @@ QJsonObject AutomationServer::doClose(const QString& target) const
 QJsonObject AutomationServer::doDrag(const QString& target, const QString& value) const
 {
     QWidget* w = resolveWidget(target);
-    if (!w)
+    if (!w) {
         return err(QStringLiteral("widget or window not found: ") + target);
-    if (!w->isVisible())
+    }
+    if (!w->isVisible()) {
         return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+    }
 
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() < 2)
@@ -6219,6 +6317,120 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
         {QStringLiteral("class"), wp ? shortClassName(wp) : QStringLiteral("(deleted)")},
         {QStringLiteral("dx"), dx},
         {QStringLiteral("dy"), dy},
+    };
+}
+
+QJsonObject AutomationServer::doDragAt(const QString& target, const QString& value) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w) {
+        return err(QStringLiteral("widget or window not found: ") + target);
+    }
+    if (!w->isVisible()) {
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+    }
+    if (!w->isEnabled()) {
+        return err(QStringLiteral("refused: '") + target
+                   + QStringLiteral("' is disabled — the drag would be dropped"));
+    }
+
+    // A target-local drag is still raw mouse input: an unaccepted event can
+    // propagate to a keying ancestor. Honor the same opt-in gate as clickAt().
+    if (!m_txAllowed) {
+        for (const QWidget* p = w; p; p = p->parentWidget()) {
+            if (!isTransmitControl(p)) {
+                continue;
+            }
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED transmit-related dragAt on" << target
+                << "(keying control in chain:" << shortClassName(p) << ")";
+            return err(QStringLiteral("blocked: '") + target
+                       + QStringLiteral("' resolves into a transmit-keying control "
+                                        "(TX-safety guard). Enable \"Allow TX via MCP\" "
+                                        "in Radio Setup → Network (or set "
+                                        "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
+        }
+    }
+
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 4) {
+        return err(QStringLiteral(
+            "dragAt requires '<x> <y> <dx> <dy> [modifiers]' in pixels"));
+    }
+
+    bool okx = false, oky = false, okdx = false, okdy = false;
+    const int x = parts.at(0).toInt(&okx);
+    const int y = parts.at(1).toInt(&oky);
+    const int dx = parts.at(2).toInt(&okdx);
+    const int dy = parts.at(3).toInt(&okdy);
+    if (!okx || !oky || !okdx || !okdy) {
+        return err(QStringLiteral("dragAt x/y/dx/dy must be integers"));
+    }
+
+    const QPoint start(x, y);
+    if (!w->rect().contains(start)) {
+        return err(QStringLiteral("dragAt start point is outside the target widget"));
+    }
+
+    Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+    if (parts.size() > 4) {
+        QString modifierText = parts.mid(4).join(QLatin1Char(','));
+        modifierText.replace(QLatin1Char('+'), QLatin1Char(','));
+        const QStringList modifierParts =
+            modifierText.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (const QString& raw : modifierParts) {
+            const QString modifier = raw.trimmed().toLower();
+            if (modifier == QStringLiteral("control") || modifier == QStringLiteral("ctrl")) {
+                modifiers |= Qt::ControlModifier;
+            } else if (modifier == QStringLiteral("meta")
+                       || modifier == QStringLiteral("command")
+                       || modifier == QStringLiteral("cmd")) {
+                modifiers |= Qt::MetaModifier;
+            } else if (modifier == QStringLiteral("shift")) {
+                modifiers |= Qt::ShiftModifier;
+            } else if (modifier == QStringLiteral("alt")
+                       || modifier == QStringLiteral("option")) {
+                modifiers |= Qt::AltModifier;
+            } else if (modifier != QStringLiteral("none")) {
+                return err(QStringLiteral("dragAt unknown modifier: ") + raw);
+            }
+        }
+    }
+
+    const QPoint globalStart = w->mapToGlobal(start);
+    QPointer<QWidget> wp = w;
+    auto send = [&](QEvent::Type type, const QPoint& off,
+                    Qt::MouseButton button, Qt::MouseButtons buttons) -> bool {
+        if (!wp) {
+            return false;
+        }
+        const QPoint local = start + off;
+        const QPoint global = globalStart + off;
+        QMouseEvent ev(type, QPointF(local), QPointF(local), QPointF(global),
+                       button, buttons, modifiers);
+        QCoreApplication::sendEvent(wp, &ev);
+        return wp != nullptr;
+    };
+
+    send(QEvent::MouseButtonPress, QPoint(0, 0), Qt::LeftButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPoint(dx / 3, dy / 3), Qt::NoButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPoint(dx * 2 / 3, dy * 2 / 3), Qt::NoButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPoint(dx, dy), Qt::NoButton, Qt::LeftButton);
+    send(QEvent::MouseButtonRelease, QPoint(dx, dy), Qt::LeftButton, Qt::NoButton);
+
+    qCInfo(lcAutomation).noquote()
+        << "dragAt" << target << "from" << start << "by" << dx << dy
+        << "modifiers" << static_cast<int>(modifiers);
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), wp ? shortClassName(wp) : QStringLiteral("(deleted)")},
+        {QStringLiteral("x"), x},
+        {QStringLiteral("y"), y},
+        {QStringLiteral("dx"), dx},
+        {QStringLiteral("dy"), dy},
+        {QStringLiteral("modifiers"), static_cast<int>(modifiers)},
     };
 }
 
