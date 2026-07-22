@@ -150,9 +150,16 @@ Get-ChildItem build\*.dll -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "  bundling ASR runtime DLL: $($_.Name)" -ForegroundColor DarkCyan
     Copy-Item $_.FullName $deploy\ -Force
 }
-# Vulkan loader (whisper GPU): the exe hard-links it, so it must ship.
-$vkDll = Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"
-if (-not (Test-Path $vkDll)) { throw "vulkan-1.dll not found at $vkDll" }
+# Vulkan loader (whisper GPU): the exe hard-links it, so it must ship. Its
+# location varies by SDK layout (runtime\x64 on newer SDKs, Bin on older) with a
+# driver copy in System32 — take the first that exists.
+$vkCandidates = @(
+    (Join-Path $env:VULKAN_SDK "runtime\x64\vulkan-1.dll"),
+    (Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"),
+    "$env:SystemRoot\System32\vulkan-1.dll"
+)
+$vkDll = $vkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $vkDll) { throw "vulkan-1.dll not found in: $($vkCandidates -join '; ')" }
 Copy-Item $vkDll $deploy\ -Force
 Write-Host "  deploy\ staged ($((Get-ChildItem $deploy).Count) items)" -ForegroundColor Green
 

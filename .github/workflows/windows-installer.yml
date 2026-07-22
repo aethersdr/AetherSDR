@@ -3,9 +3,6 @@ name: Windows Installer
 on:
   push:
     tags: ['v*']
-    # TEMPORARY: validate the Windows whisper GPU (Vulkan) build end-to-end on a
-    # branch before the release tag. Remove before merging PR #4338.
-    branches: ['ci/test-windows-gpu']
   workflow_dispatch:
 
 permissions:
@@ -225,8 +222,17 @@ jobs:
           # CPU-only machines (the loader then enumerates zero devices and ggml
           # falls back to CPU). Ships from the SDK; LunarG permits redistributing
           # the loader.
-          $vkDll = Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"
-          if (-not (Test-Path $vkDll)) { throw "vulkan-1.dll not found at $vkDll" }
+          # The loader DLL's location varies by SDK layout: newer LunarG SDKs stage
+          # it under runtime\x64, older ones under Bin; a driver-installed copy sits
+          # in System32. Take the first that exists (Bin alone is NOT reliable).
+          $vkCandidates = @(
+            (Join-Path $env:VULKAN_SDK "runtime\x64\vulkan-1.dll"),
+            (Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"),
+            "$env:SystemRoot\System32\vulkan-1.dll"
+          )
+          $vkDll = $vkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $vkDll) { throw "vulkan-1.dll not found in: $($vkCandidates -join '; ')" }
+          Write-Host "Bundling Vulkan loader: $vkDll"
           copy $vkDll deploy\
 
       - name: Verify DPI awareness manifest
