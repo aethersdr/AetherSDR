@@ -139,6 +139,20 @@ jobs:
         # any Ninja parallel-build ordering edge cases with IMPORTED targets.
         run: cmake --build build --target build_opus -j $env:NUMBER_OF_PROCESSORS
 
+      - name: Build ggml-vulkan (isolated, low parallelism)
+        # ggml-vulkan.cpp is a ~1 MB, template-heavy translation unit (Vulkan-Hpp);
+        # MSVC needs a lot of RAM to compile it. Under the main -j build it runs
+        # alongside 3 other heavy TUs on a 16 GB runner and thrashes hard enough to
+        # hit the 6-hour job timeout. Build just this target first at -j 2 so the
+        # big TU gets the machine to itself (its 132 generated *.comp.cpp shader
+        # wrappers are tiny); the main build below then skips it, and the remaining
+        # TUs are individually small enough for full -j without thrashing.
+        #
+        # ccache is intentionally not used: MSVC ccache requires /Z7, which would
+        # break the /Zi PDB the MSIX symbol upload depends on, and it wouldn't help
+        # the first (uncached) run — which is the one that was timing out.
+        run: cmake --build build --target ggml-vulkan -j 2
+
       - name: Build
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
 
