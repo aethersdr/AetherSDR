@@ -57,7 +57,8 @@ public:
                              bool autoBlackRadioSide = false,
                              int renderMode = 0,
                              int dssFloorDepth = 6,
-                             int dssGain = 70);
+                             int dssGain = 70,
+                             const QColor& lineColor = QColor(0x00, 0xe5, 0xff));
     // Update only the radio-owned pan processing controls from live status.
     // Signal blockers keep status echoes from generating commands back to the
     // radio.
@@ -138,6 +139,7 @@ signals:
     void fftWeightedAverageChanged(bool on);
     void fftFillAlphaChanged(float alpha);
     void fftFillColorChanged(const QColor& color);
+    void fftLineColorChanged(const QColor& color);
     void fftHeatMapChanged(bool on);
     void showGridChanged(bool on);
     void freqGridSpacingChanged(int khz);
@@ -296,6 +298,8 @@ private:
     QLabel*      m_fillLabel{nullptr};
     QPushButton* m_fillColorBtn{nullptr};
     QColor       m_fillColor{0x00, 0xe5, 0xff};  // default cyan
+    QPushButton* m_lineColorBtn{nullptr};
+    QColor       m_lineColor{0x00, 0xe5, 0xff};  // default cyan (#4239)
     QPushButton* m_heatMapBtn{nullptr};
     QPushButton* m_showGridBtn{nullptr};
     QSlider*     m_lineWidthSlider{nullptr};

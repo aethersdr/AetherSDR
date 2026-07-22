@@ -62,6 +62,7 @@
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
+#include "core/AcomConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -209,7 +210,7 @@ public:
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationSetCenterLock(int sliceId, bool enabled);
-    QJsonObject automationTune(double mhz);
+    QJsonObject automationTune(double mhz, int sliceId = -1);
     QJsonObject automationTargetTune(double mhz);
     QJsonObject automationActivateMemory(int memoryIndex,
                                          const QString& preferredPanId);
@@ -754,6 +755,7 @@ private:
     AntennaGeniusModel m_antennaGenius;
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
+    AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};

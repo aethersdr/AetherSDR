@@ -2339,6 +2339,11 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             a.value = vtok(p, 1);
             return {};
         };
+        auto parseValueId = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+            a.value = vtok(p, 1);
+            a.id = vtok(p, 2);
+            return {};
+        };
         auto parseValueRest = [](const QList<QByteArray>& p, A& a) -> QJsonObject {
             a.value = vjoin(p, 1);
             return {};
@@ -2630,12 +2635,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doWaveform(a.action, a.value);
             });
 
-        add("tune", {}, "tune <mhz> — set the active slice frequency",
-            parseValueOnly,
+        add("tune", {}, "tune <mhz> [sliceId] — set a slice frequency (default: the active slice)",
+            parseValueId,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.value.isEmpty())
                     return err(QStringLiteral("tune requires a frequency in MHz"));
-                return s.doTune(a.value);
+                return s.doTune(a.value, a.id);
             });
 
         add("targettune", {},
@@ -2943,7 +2948,23 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         a.model    = obj.value(QStringLiteral("model")).toString();
         a.selector = obj.value(QStringLiteral("selector")).toString();
         a.property = obj.value(QStringLiteral("property")).toString();
-        a.id       = obj.value(QStringLiteral("id")).toString();
+        // id may arrive as a JSON number (e.g. tune's slice id) — normalize
+        // like `value` above; a bare .toString() would silently coerce a
+        // numeric id to "" and the request would act on the wrong target.
+        const QJsonValue idv = obj.value(QStringLiteral("id"));
+        if (idv.isString()) {
+            a.id = idv.toString();
+        } else if (idv.isDouble()) {
+            // Keep enough precision for downstream integer validation. The
+            // default six significant digits can round 1.0000001 to "1" and
+            // silently retarget a request to a real slice.
+            a.id = QString::number(idv.toDouble(), 'g',
+                                   std::numeric_limits<double>::max_digits10);
+        } else if (obj.contains(QStringLiteral("id"))) {
+            // An omitted id intentionally selects the active/default target;
+            // an explicitly malformed id must not collapse to that sentinel.
+            return err(QStringLiteral("id must be a string or number"));
+        }
         a.title    = obj.value(QStringLiteral("title")).toString();
         a.detail   = obj.value(QStringLiteral("detail")).toString();
         a.tone     = obj.value(QStringLiteral("tone")).toString();
@@ -5614,9 +5635,12 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
-// Set the active slice's frequency (MHz). The most fundamental control the
-// VfoWidget couldn't expose (it's custom-painted). Honors the slice lock guard.
-QJsonObject AutomationServer::doTune(const QString& value)
+// Set a slice's frequency (MHz). The most fundamental control the VfoWidget
+// couldn't expose (it's custom-painted). Honors the slice lock guard. An
+// optional slice id targets a specific slice directly — without it the active
+// slice is tuned (the original behavior), which forced external scripts into a
+// racy select → tune → restore flap when driving a non-active slice.
+QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
@@ -5625,17 +5649,37 @@ QJsonObject AutomationServer::doTune(const QString& value)
     if (!okF || mhz <= 0)
         return err(QStringLiteral("tune requires a positive frequency in MHz"));
 
+    int sliceId = -1;  // -1 = active slice
+    if (!id.isEmpty()) {
+        bool okId = false;
+        sliceId = id.toInt(&okId);
+        if (!okId || sliceId < 0)
+            return err(QStringLiteral("tune: sliceId must be a non-negative integer"));
+    }
+
     if (m_tuneHandler) {
-        return m_tuneHandler(mhz);
+        return m_tuneHandler(mhz, sliceId);
     }
 
     SliceModel* s = nullptr;
-    for (SliceModel* c : m_radioModel->slices())
-        if (c->isActive()) { s = c; break; }
-    if (!s && !m_radioModel->slices().isEmpty())
-        s = m_radioModel->slices().first();
-    if (!s)
-        return err(QStringLiteral("no slice to tune"));
+    if (sliceId >= 0) {
+        for (SliceModel* c : m_radioModel->slices())
+            if (c->sliceId() == sliceId) { s = c; break; }
+        if (!s)
+            return err(QStringLiteral("no slice with id ") + QString::number(sliceId));
+        // Mirror the GUI path's Multi-Flex gate (MainWindow::automationTune):
+        // a headless caller must not drive another client's slice either.
+        if (!m_radioModel->sliceMayBelongToUs(sliceId))
+            return err(QStringLiteral("refused: slice ") + QString::number(sliceId)
+                       + QStringLiteral(" belongs to another client"));
+    } else {
+        for (SliceModel* c : m_radioModel->slices())
+            if (c->isActive()) { s = c; break; }
+        if (!s && !m_radioModel->slices().isEmpty())
+            s = m_radioModel->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice to tune"));
+    }
     if (s->isLocked())
         return err(QStringLiteral("refused: slice ") + s->letter() + QStringLiteral(" is VFO-locked"));
 

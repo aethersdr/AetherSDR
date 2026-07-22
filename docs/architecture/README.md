@@ -28,6 +28,11 @@ context that would otherwise live in tribal knowledge.
 - [`mainwindow-decomposition.md`](mainwindow-decomposition.md) — the
   `MainWindow_*.cpp` TU map and a decision guide for where new
   `MainWindow` code belongs (read before touching anything `MainWindow*`).
+- [`acom-600s-amplifier-design.md`](acom-600s-amplifier-design.md) — design
+  note for ACOM S-series amplifier support (serial or ser2net), a peripheral
+  accessory alongside the existing PGXL/TGXL integrations. Implemented as a
+  dedicated `AcomConnection`/`AcomApplet` pair, deliberately independent of
+  `AmpModel`/`AmpApplet` — see the doc's design-reversal section for why.
 
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.

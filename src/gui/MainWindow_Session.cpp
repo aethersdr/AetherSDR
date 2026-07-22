@@ -1674,7 +1674,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
     m_automation->setTuneHandler(
-        [this](double mhz) { return automationTune(mhz); });
+        [this](double mhz, int sliceId) { return automationTune(mhz, sliceId); });
     m_automation->setTargetTuneHandler(
         [this](double mhz) { return automationTargetTune(mhz); });
     m_automation->setMemoryActivateHandler(

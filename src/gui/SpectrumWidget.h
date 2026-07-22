@@ -112,6 +112,12 @@ public:
 
     QSize sizeHint() const override { return {800, 300}; }
     int spectrumPixelHeight() const;
+    // Waterfall pane height in pixels. MUST be the single source of truth for
+    // both the waterfall QImage row count (resizeEvent) and the destination
+    // rect drawWaterfall() blits into (paintEvent): computing it two different
+    // ways lets integer truncation make them disagree by a pixel, which shows
+    // up as a static horizontal band the scrolling waterfall passes through.
+    int waterfallPixelHeight() const;
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
@@ -132,6 +138,14 @@ public:
             qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1;
         return !noNative;
     }
+    // macOS: apply the native-window isolation policy as one unit — request the
+    // native Metal leaf (WA_NativeWindow) *and* block ancestor promotion
+    // (WA_DontCreateNativeAncestors), gated on nativeWindowPreferred(). Kept as a
+    // single helper so a native-window request can never lose its paired ancestor
+    // isolation (#4339): call it from the constructor and from every reparent path
+    // that re-realizes the native window (PanadapterStack::refreshAfterReparent).
+    // Idempotent; a no-op off macOS / on non-GPU builds.
+    void applyNativeWindowIsolationPolicy();
     // panstats (automation bridge): per-widget frame-cost counters — what the
     // GUI thread spends preparing this panadapter's frames, split by section,
     // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
@@ -398,6 +412,7 @@ public:
     void setFftFps(int fps);
     void setFftFillAlpha(float a);
     void setFftFillColor(const QColor& c);
+    void setFftLineColor(const QColor& c);
     void setFftHeatMap(bool on);
     void setShowGrid(bool on);
     void setFreqGridSpacing(int khz);
@@ -405,6 +420,7 @@ public:
     void setFftLineWidth(float w);
     float fftFillAlpha() const         { return m_fftFillAlpha; }
     QColor fftFillColor() const        { return m_fftFillColor; }
+    QColor fftLineColor() const        { return m_fftLineColor; }
     bool fftHeatMap() const            { return m_fftHeatMap; }
     bool showGrid() const              { return m_showGrid; }
     int  freqGridSpacing() const       { return m_freqGridSpacingKhz; }
@@ -1141,6 +1157,7 @@ private:
     int   m_fftFps{25};
     float m_fftFillAlpha{0.70f};     // client-side fill opacity (0-1)
     QColor m_fftFillColor{0x00, 0xe5, 0xff};  // client-side fill color (default cyan)
+    QColor m_fftLineColor{0x00, 0xe5, 0xff};  // client-side trace line color (default cyan)
     bool m_fftHeatMap{true};        // true = intensity heat map, false = solid color
     bool m_showGrid{true};          // false = hide grid lines
     int  m_freqGridSpacingKhz{0};   // 0=Auto, or 1/2/5/10/25/50/100 kHz (#1390)

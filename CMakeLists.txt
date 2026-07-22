@@ -563,6 +563,8 @@ set(CORE_SOURCES
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
+    src/core/AcomProtocol.cpp
+    src/core/AcomConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -758,6 +760,7 @@ set(GUI_SOURCES
     src/gui/PanFloatingWindow.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
+    src/gui/AcomApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -1809,7 +1812,7 @@ if (USE_SYSTEM_RTMIDI)
     if(PkgConfig_FOUND)
         pkg_check_modules(rtmidi REQUIRED IMPORTED_TARGET rtmidi)
     endif()
-    target_link_libraries(aethercore PRIVATE PkgConfig::rtmidi)
+    target_link_libraries(aethercore PUBLIC PkgConfig::rtmidi)
 else()
     target_sources(aethercore PRIVATE third_party/rtmidi/RtMidi.cpp)
     # PUBLIC: MidiControlManager.h includes RtMidi.h
@@ -2816,6 +2819,14 @@ add_test(NAME dstar_accessibility_test COMMAND dstar_accessibility_test)
 set_tests_properties(dstar_accessibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(acom_protocol_test
+    tests/acom_protocol_test.cpp
+    src/core/AcomProtocol.cpp
+)
+target_include_directories(acom_protocol_test PRIVATE src)
+target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
+add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
+
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
@@ -2908,6 +2919,19 @@ add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
+# ancestor-isolation attribute, and native-ancestor count reported to agents.
+add_executable(native_widget_topology_test
+    tests/native_widget_topology_test.cpp
+)
+target_include_directories(native_widget_topology_test PRIVATE src)
+target_link_libraries(native_widget_topology_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+add_test(NAME native_widget_topology_test COMMAND native_widget_topology_test)
+set_tests_properties(native_widget_topology_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
@@ -2924,6 +2948,17 @@ if(PYTHON3_EXECUTABLE)
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
 endif()
+
+# JSON boundary regression for shared bridge `id` normalization. Exercises the
+# real QLocalSocket request path and tune dispatcher without touching a radio.
+add_executable(automation_json_id_test
+    tests/automation_json_id_test.cpp
+)
+target_include_directories(automation_json_id_test PRIVATE src tests)
+target_link_libraries(automation_json_id_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp
@@ -3723,6 +3758,11 @@ else()
         install(FILES third_party/smartsdr-dsp/config/AetherDV.cfg
             DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        if(LINUX)
+            install(FILES packaging/linux/70-aethersdr-thumbdv.rules
+                DESTINATION lib/udev/rules.d
+            )
+        endif()
     endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
@@ -3739,9 +3779,4 @@ else()
     install(FILES packaging/linux/aethersdr.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        install(FILES packaging/linux/70-aethersdr-thumbdv.rules
-            DESTINATION lib/udev/rules.d
-        )
-    endif()
 endif()

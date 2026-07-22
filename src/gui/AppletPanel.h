@@ -31,6 +31,7 @@ class CrossNeedleMeterApplet;
 class CrossNeedleMeterWidget;
 class TunerApplet;
 class AmpApplet;
+class AcomApplet;
 class TxApplet;
 class PhoneCwApplet;
 class PhoneApplet;
@@ -93,6 +94,7 @@ public:
     void setMeterPowerScale(int maxWatts, bool amplifierActive);
     TunerApplet*  tunerApplet()   { return m_tunerApplet; }
     AmpApplet*    ampApplet()     { return m_ampApplet; }
+    AcomApplet*   acomApplet()    { return m_acomApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -152,6 +154,11 @@ public:
 
     // Show/hide the AMP button and applet based on amplifier presence.
     void setAmpVisible(bool visible);
+
+    // Show/hide the ACOM button and applet based on a direct ACOM amplifier
+    // connection. Independent of setAmpVisible — a station can have both a
+    // radio-relayed PGXL and a direct-connected ACOM amplifier at once.
+    void setAcomVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -281,6 +288,8 @@ private:
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};
     QPushButton* m_ampBtn{nullptr};
+    AcomApplet*  m_acomApplet{nullptr};
+    QPushButton* m_acomBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
     PhoneApplet*   m_phoneApplet{nullptr};

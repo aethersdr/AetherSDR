@@ -266,7 +266,8 @@ public:
     {
         m_sliceCenterLockHandler = std::move(handler);
     }
-    void setTuneHandler(std::function<QJsonObject(double)> handler)
+    // (mhz, sliceId) — sliceId -1 targets the active slice.
+    void setTuneHandler(std::function<QJsonObject(double, int)> handler)
     {
         m_tuneHandler = std::move(handler);
     }
@@ -511,7 +512,7 @@ private:
     // Disconnected-only GPS status fixtures for the 6000-series
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
-    QJsonObject doTune(const QString& value);
+    QJsonObject doTune(const QString& value, const QString& id);
     QJsonObject doTargetTune(const QString& value);
     QJsonObject doMemory(const QString& action, const QString& arg);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
@@ -591,7 +592,7 @@ private:
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
     std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
-    std::function<QJsonObject(double)> m_tuneHandler;
+    std::function<QJsonObject(double, int)> m_tuneHandler;
     std::function<QJsonObject(double)> m_targetTuneHandler;
     std::function<QJsonObject(int, const QString&)> m_memoryActivateHandler;
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;

@@ -1,6 +1,7 @@
 #include "SpectrumWidget.h"
 #include "DbmRangeTransition.h"
 #include "KiwiSdrTraceMath.h"
+#include "NativeWidgetTopology.h"
 #include "PanadapterRenderScheduler.h"
 #include "PanadapterMessageOverlay.h"
 #include "SpectrumOverlayMenu.h"
@@ -845,6 +846,9 @@ QVariantMap SpectrumWidget::automationRhiSnapshot() const
     m[QStringLiteral("widthPx")] = width();
     m[QStringLiteral("heightPx")] = height();
     m[QStringLiteral("dpr")] = dpr;
+#ifdef Q_OS_MAC
+    appendNativeWidgetTopology(m, *this);
+#endif
 #ifdef AETHER_GPU_SPECTRUM
     m[QStringLiteral("gpu")] = true;
     m[QStringLiteral("renderer")] = rendererDescription();
@@ -1362,6 +1366,22 @@ QVariantMap SpectrumWidget::traceDebugSnapshot()
     return m;
 }
 
+void SpectrumWidget::applyNativeWindowIsolationPolicy()
+{
+#if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
+    if (nativeWindowPreferred()) {
+        // Order matters: block ancestor promotion *before* requesting the native
+        // window, so realizing the leaf's NSView can't drag its QWidget tree
+        // native (redundant window-sized Core Animation backing stores, #4339).
+        // Both attributes are set here, as one unit, so a reparent that
+        // re-realizes the native window can never reassert WA_NativeWindow
+        // without the paired ancestor isolation.
+        setAttribute(Qt::WA_DontCreateNativeAncestors);
+        setAttribute(Qt::WA_NativeWindow);
+    }
+#endif
+}
+
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SPECTRUM_BASE_CLASS(parent)
 {
@@ -1389,9 +1409,9 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // a raster flushSubWindow blend of the pan region on the GUI thread.
     // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it to validate the composited path on
     // newer Qt, where the whole window flushes through one rhi swapchain.
-    if (nativeWindowPreferred()) {
-        setAttribute(Qt::WA_NativeWindow);
-    }
+    // WA_NativeWindow is set together with WA_DontCreateNativeAncestors so the
+    // native leaf never promotes its QWidget ancestors (#4339); see the helper.
+    applyNativeWindowIsolationPolicy();
 #  else
     // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the
     // software OpenGL rasterizer requested in main.cpp actually takes effect.
@@ -1822,6 +1842,12 @@ void SpectrumWidget::loadSettings()
     QColor parsed(fillColorStr);
     if (parsed.isValid())
         m_fftFillColor = parsed;
+    // Trace line color is independent of the fill (#4239). Default matches the
+    // legacy look where the line was drawn in the fill color (cyan).
+    const QString lineColorStr = s.value(settingsKey("DisplayFftLineColor"), "#00e5ff").toString();
+    QColor parsedLine(lineColorStr);
+    if (parsedLine.isValid())
+        m_fftLineColor = parsedLine;
     m_wfColorGain    = s.value(settingsKey("DisplayWfColorGain"), "50").toInt();
     m_wfBlackLevel   = s.value(settingsKey("DisplayWfBlackLevel"), "15").toInt();
     m_wfAutoBlack    = s.value(settingsKey("DisplayWfAutoBlack"), "True").toString() == "True";
@@ -1899,7 +1925,8 @@ void SpectrumWidget::loadSettings()
             m_noiseFloorPosition, m_noiseFloorEnable,
             m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
             m_fftLineWidth, m_wfAutoBlackRadioSide,
-            static_cast<int>(m_spectrumRenderMode), dssFloorDepth());
+            static_cast<int>(m_spectrumRenderMode), dssFloorDepth(),
+            m_dssGain, m_fftLineColor);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
             m_freqScaleFontPt);
@@ -2527,6 +2554,18 @@ int SpectrumWidget::spectrumPixelHeight() const
     const int chromeH = freqScaleH() + DIVIDER_H;
     const int contentH = std::max(0, height() - chromeH);
     return std::max(1, static_cast<int>(contentH * m_spectrumFrac));
+}
+
+int SpectrumWidget::waterfallPixelHeight() const
+{
+    // Derived as the REMAINDER of the split, not as a second independent
+    // truncation of contentH * (1 - m_spectrumFrac). Those two expressions are
+    // not equivalent under integer truncation — they differ by one pixel for
+    // most window heights — and using each in a different place is what caused
+    // the waterfall image and its destination rect to disagree.
+    const int chromeH = freqScaleH() + DIVIDER_H;
+    const int contentH = std::max(0, height() - chromeH);
+    return std::max(0, contentH - spectrumPixelHeight());
 }
 
 void SpectrumWidget::positionFpsMeterLabels() {
@@ -3221,6 +3260,13 @@ void SpectrumWidget::setFftFillColor(const QColor& c) {
     m_fftFillColor = c;
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayFftFillColor"), c.name());
+    s.save();
+    markOverlayDirty();
+}
+void SpectrumWidget::setFftLineColor(const QColor& c) {
+    m_fftLineColor = c;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayFftLineColor"), c.name());
     s.save();
     markOverlayDirty();
 }
@@ -7979,8 +8025,12 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // Clamp the divider position: 10%–90% of content area
         float frac = static_cast<float>(y) / contentH;
         m_spectrumFrac = std::clamp(frac, 0.10f, 0.90f);
-        // Rebuild waterfall image for new size
-        const int wfHeight = static_cast<int>(contentH * (1.0f - m_spectrumFrac));
+        // Rebuild waterfall image for new size. Uses the shared helper (which
+        // reads the m_spectrumFrac just assigned above) so the row count matches
+        // paintEvent's destination rect exactly — truncating
+        // contentH * (1 - frac) here instead would reintroduce the 1px
+        // mismatch/static band on every divider drag.
+        const int wfHeight = waterfallPixelHeight();
         // contentWidth(): rows rasterize at the displayed column count so the
         // blit into wfContentRect / the wf viewport is 1:1 — a full-width image
         // squeezed by DBM_STRIP_W nearest-drops ~36 columns per frame and a
@@ -9005,9 +9055,14 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
     // into a QSplitter can reset native window properties.
     setMouseTracking(true);
 
-    const int chromeH  = freqScaleH() + DIVIDER_H;
-    const int contentH = height() - chromeH;
-    const int wfHeight = static_cast<int>(contentH * (1.0f - m_spectrumFrac));
+    // waterfallPixelHeight(): the SAME expression paintEvent uses for the
+    // destination rect, so the image row count and the blit target always
+    // match (see the helper's comment). Previously this truncated
+    // contentH * (1 - frac) independently, which disagreed with paintEvent's
+    // contentH - specH by a pixel at most window heights → a 1px vertical
+    // stretch in drawWaterfall() that duplicated one source row at a fixed
+    // screen line, visible as a static band the scrolling waterfall ran through.
+    const int wfHeight = waterfallPixelHeight();
     // contentWidth(): see the divider-drag realloc — rows rasterize at the
     // displayed column count for a 1:1 blit (#3482).
     if (wfHeight > 0 && contentWidth() > 0) {
@@ -9715,7 +9770,7 @@ void SpectrumWidget::initSpectrumPipeline()
     // (same conclusion as PR #3968). Use it unconditionally.
     m_fftColFormat = QRhiTexture::R16F;
     m_fftScopeUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
-                                 5 * 4 * sizeof(float));
+                                 6 * 4 * sizeof(float));  // 6 vec4 — see panscope.frag U block (#4239)
     m_fftScopeUbo->create();
 
     // LINEAR column sampling interpolates the trace between device pixel
@@ -10663,7 +10718,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 // UBO — see panscope.frag's U block.
                 const QColor dk = m_fftFillColor.darker(300);
                 const float fa = m_fftFillAlpha;
-                const float ubo[20] = {
+                const float ubo[24] = {
                     static_cast<float>(specContentW) * fbDpr,       // plot: wPx
                     static_cast<float>(specH) * fbDpr,              // hPx
                     static_cast<float>(n),                          // columnCount
@@ -10685,6 +10740,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     static_cast<float>(dk.redF()),
                     static_cast<float>(dk.greenF()),
                     static_cast<float>(dk.blueF()),
+                    1.0f,
+                    // lineColor — trace stroke, independent of fill (#4239)
+                    static_cast<float>(m_fftLineColor.redF()),
+                    static_cast<float>(m_fftLineColor.greenF()),
+                    static_cast<float>(m_fftLineColor.blueF()),
                     1.0f,
                 };
                 batch->updateDynamicBuffer(m_fftScopeUbo, 0, sizeof(ubo), ubo);
@@ -10981,8 +11041,12 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
     const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
-    const int specH    = static_cast<int>(contentH * m_spectrumFrac);
-    const int wfH      = contentH - specH;
+    // Both via the shared helpers so this rect and the waterfall QImage
+    // allocated in resizeEvent are always the same height — a 1:1 vertical
+    // blit. (wfH == contentH - specH by construction; see
+    // waterfallPixelHeight().)
+    const int specH    = spectrumPixelHeight();
+    const int wfH      = waterfallPixelHeight();
 
     const int divY     = specH;
     const int scaleY   = specH + DIVIDER_H;

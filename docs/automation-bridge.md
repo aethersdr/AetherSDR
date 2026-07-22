@@ -843,10 +843,10 @@ used by the stacked trace renderer.
   trace floor used by 3D placement from the waterfall color floor.
 
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry** — the widget size,
-devicePixelRatio, and pinned color-buffer extents — so automation can assert
-the swapchain sizing that the #4091 fix controls (the color buffer stays
-even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
+Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
+the widget size, devicePixelRatio, pinned color-buffer extents, and (on macOS)
+native-leaf/ancestor isolation — so automation can assert the swapchain sizing
+that the #4091 fix controls and the bounded native-view hierarchy from #4339.
 
 ```json
 → {"cmd":"get","model":"rhi"}
@@ -864,9 +864,13 @@ even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
 | `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
+| `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
+| `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
 
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
-each entry reports `gpu:false` and omits the buffer fields.
+each entry reports `gpu:false` and omits the buffer fields. The three native
+topology fields are emitted only on macOS; other platforms omit them.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -975,16 +979,28 @@ scope actually consumed, in milliseconds per wall-clock second.
   hidden-widget signature, not a bug.
 
 ### `tune`
-Set the **active slice's** frequency in MHz — the most fundamental control the
+Set a slice's frequency in MHz — the most fundamental control the
 custom-painted `VfoWidget` couldn't expose. RX/config only; despite the name it
 does **not** key (cf. `atu tune`, which does). Honors the per-slice VFO lock.
+
+Without a slice id the **active slice** is tuned (the original verb shape).
+An optional second argument (bare line) / `id` field (JSON) targets a specific
+slice by id, so scripts driving a non-active slice no longer need the racy
+`slice select` → `tune` → re-select flap:
 
 ```json
 → {"cmd":"tune","value":"7.175"}
 ← {"ok":true,"tune":7.175,"sliceId":0,"letter":"A"}
+
+→ {"cmd":"tune","value":"14.074","id":"1"}
+← {"ok":true,"tune":14.074,"sliceId":1,"letter":"B"}
 ```
 
-Refused with `refused: slice A is VFO-locked` when the slice is locked. To
+Bare-line form: `tune 14.074 1`.
+
+Refused with `refused: slice A is VFO-locked` when the slice is locked, with
+`no slice with id N` when the id names no slice, and with `refused: slice N
+belongs to another client` when another client owns it (Multi-Flex). To
 recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
@@ -2302,7 +2318,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
 | `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
-| `tune` | — | tune <mhz> — set the active slice frequency |
+| `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
