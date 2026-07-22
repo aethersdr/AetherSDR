@@ -3,6 +3,11 @@
 // utterance boundaries, the minimum-speech drop, multi-utterance splitting, and
 // flush().
 
+// MSVC's <math.h> only defines M_PI when _USE_MATH_DEFINES is set before the
+// first math header, which any of the includes below may transitively pull in.
+// (POSIX/Linux headers define it unconditionally.) Must be before ALL #includes.
+#define _USE_MATH_DEFINES
+
 #include "asr/AsrSegmenter.h"
 
 #include <cmath>

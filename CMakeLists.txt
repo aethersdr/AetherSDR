@@ -47,6 +47,13 @@ option(ENABLE_NVIDIA_AFX "Enable the NVIDIA Maxine AFX GPU denoiser (BNR; runtim
 # is CPU-only); see third_party/whisper.cpp/AETHER_VENDORING.md. Opt out with
 # -DENABLE_ASR=OFF.
 option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cpp" ON)
+# Windows-only: consume prebuilt whisper/ggml/ggml-vulkan static libs from the
+# whisper-gpu-<ver> release asset instead of compiling from source. Bypasses
+# the 4h step-timeout on stock GitHub windows-latest runners (4 core / 16 GB)
+# where the ggml-vulkan Release compile alone exceeds the budget. Local dev
+# builds should leave this OFF and compile from source.
+option(ASR_USE_PREBUILT_WHISPER_GPU
+    "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
@@ -1150,14 +1157,29 @@ if (ENABLE_ASR)
     else()
         option(ENABLE_ASR_VULKAN "Enable Vulkan GPU acceleration for ASR (auto-detected)" ON)
         if (ENABLE_ASR_VULKAN)
-            find_package(Vulkan QUIET COMPONENTS glslc)
-            find_package(SPIRV-Headers QUIET CONFIG)
-            if (Vulkan_FOUND AND Vulkan_glslc_FOUND AND SPIRV-Headers_FOUND)
-                set(_asr_vulkan ON)
-                message(STATUS "ASR: Vulkan GPU backend enabled (glslc: ${Vulkan_GLSLC_EXECUTABLE})")
+            # Prebuilt Windows path: skips the glslc + SPIRV-Headers requirement
+            # because the shaders are already compiled INTO the shipped
+            # ggml-vulkan.lib. Only the runtime Vulkan loader import lib is
+            # needed to link the final exe.
+            if (WIN32 AND MSVC AND ASR_USE_PREBUILT_WHISPER_GPU)
+                find_package(Vulkan QUIET)
+                if (Vulkan_FOUND)
+                    set(_asr_vulkan ON)
+                    set(_asr_use_prebuilt ON)
+                    message(STATUS "ASR: Vulkan GPU backend enabled via prebuilt whisper-gpu pack")
+                else()
+                    message(STATUS "ASR: ASR_USE_PREBUILT_WHISPER_GPU requested but Vulkan loader not found — CPU-only")
+                endif()
             else()
-                message(STATUS "ASR: Vulkan toolchain not found — CPU-only "
-                    "(Vulkan=${Vulkan_FOUND} glslc=${Vulkan_glslc_FOUND} SPIRV-Headers=${SPIRV-Headers_FOUND})")
+                find_package(Vulkan QUIET COMPONENTS glslc)
+                find_package(SPIRV-Headers QUIET CONFIG)
+                if (Vulkan_FOUND AND Vulkan_glslc_FOUND AND SPIRV-Headers_FOUND)
+                    set(_asr_vulkan ON)
+                    message(STATUS "ASR: Vulkan GPU backend enabled (glslc: ${Vulkan_GLSLC_EXECUTABLE})")
+                else()
+                    message(STATUS "ASR: Vulkan toolchain not found — CPU-only "
+                        "(Vulkan=${Vulkan_FOUND} glslc=${Vulkan_glslc_FOUND} SPIRV-Headers=${SPIRV-Headers_FOUND})")
+                endif()
             endif()
         endif()
     endif()
@@ -1184,26 +1206,67 @@ if (ENABLE_ASR)
             OPENVINO RPC CANN ZDNN ZENDNN HEXAGON)
         set(GGML_${_ggml_backend} OFF CACHE BOOL "" FORCE)
     endforeach()
-    # Build whisper/ggml as static objects, not .so's.
-    set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
-    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-    add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
-    set(BUILD_SHARED_LIBS ${_aether_saved_shared_libs} CACHE BOOL "" FORCE)
+    if (_asr_use_prebuilt)
+        # Consume the prebuilt static libs from the whisper-gpu release asset.
+        # See scripts/build/build-whisper-vulkan-windows.ps1 for the producer.
+        # Public headers still come from the vendored source tree (in git); only
+        # the compiled .libs come off GitHub. Everything else — dep graph,
+        # target names — matches what add_subdirectory would have produced, so
+        # the rest of this file is unchanged.
+        include(FetchContent)
+        set(_whisper_gpu_ver "1.9.1")
+        set(_whisper_gpu_sha "7671384731bc286e8eacaab36d2d69e5ffad5a6458fb47fff8e8dec361f68ca7")
+        FetchContent_Declare(whisper_gpu_prebuilt
+            URL      "https://github.com/aethersdr/AetherSDR/releases/download/whisper-gpu-${_whisper_gpu_ver}/whisper-gpu-${_whisper_gpu_ver}-windows-x86_64.zip"
+            URL_HASH SHA256=${_whisper_gpu_sha}
+        )
+        FetchContent_MakeAvailable(whisper_gpu_prebuilt)
+        set(_wg_libs "${whisper_gpu_prebuilt_SOURCE_DIR}/libs")
+        set(_wc_root "${CMAKE_SOURCE_DIR}/third_party/whisper.cpp")
 
-    if (MSVC)
-        # MSVC's optimizer is pathologically slow on ggml's SIMD/quant kernels
-        # (ggml-cpu/ops.cpp, ggml.c, ggml-quants.c, repack.cpp) — a cold Release
-        # build of the vendored engine ran Windows CI from ~28 min to 3h+. These
-        # kernels are explicitly vectorized (intrinsics) and memory-bandwidth-
-        # bound, so /O1 keeps runtime fast enough while cutting MSVC compile time
-        # dramatically. Scoped to the vendored ASR targets only; the rest of
-        # AetherSDR keeps its normal optimization. (/O1 intentionally overrides
-        # the config's /O2 — the D9025 override notice is expected.)
-        foreach(_asr_msvc_target ggml-base ggml ggml-cpu ggml-vulkan whisper)
-            if (TARGET ${_asr_msvc_target})
-                target_compile_options(${_asr_msvc_target} PRIVATE /O1)
-            endif()
+        find_package(Threads REQUIRED)
+        foreach(_tgt IN ITEMS ggml-base ggml ggml-cpu ggml-vulkan whisper)
+            add_library(${_tgt} STATIC IMPORTED)
+            set_target_properties(${_tgt} PROPERTIES
+                IMPORTED_LOCATION "${_wg_libs}/${_tgt}.lib"
+            )
         endforeach()
+        # Header search paths — mirror what the source targets propagate.
+        set_target_properties(ggml-base   PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+        set_target_properties(ggml        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+        set_target_properties(ggml-cpu    PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+        set_target_properties(whisper     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/include;${_wc_root}/ggml/include")
+        # Link graph — matches whisper.cpp/ggml's own target_link_libraries so
+        # the final exe pulls in every transitive .lib and the Vulkan loader.
+        set_target_properties(ggml-base   PROPERTIES INTERFACE_LINK_LIBRARIES "Threads::Threads")
+        set_target_properties(ggml-cpu    PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base")
+        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
+        set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
+        set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
+        message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+    else()
+        # Build whisper/ggml as static objects, not .so's.
+        set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
+        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+        add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
+        set(BUILD_SHARED_LIBS ${_aether_saved_shared_libs} CACHE BOOL "" FORCE)
+
+        if (MSVC)
+            # MSVC's optimizer is pathologically slow on ggml's SIMD/quant kernels
+            # (ggml-cpu/ops.cpp, ggml.c, ggml-quants.c, repack.cpp) — a cold Release
+            # build of the vendored engine ran Windows CI from ~28 min to 3h+. These
+            # kernels are explicitly vectorized (intrinsics) and memory-bandwidth-
+            # bound, so /O1 keeps runtime fast enough while cutting MSVC compile time
+            # dramatically. Scoped to the vendored ASR targets only; the rest of
+            # AetherSDR keeps its normal optimization. (/O1 intentionally overrides
+            # the config's /O2 — the D9025 override notice is expected.)
+            foreach(_asr_msvc_target ggml-base ggml ggml-cpu ggml-vulkan whisper)
+                if (TARGET ${_asr_msvc_target})
+                    target_compile_options(${_asr_msvc_target} PRIVATE /O1)
+                endif()
+            endforeach()
+        endif()
     endif()
 
     # ASR ships as its OWN static library, deliberately NOT part of libaethercore.
