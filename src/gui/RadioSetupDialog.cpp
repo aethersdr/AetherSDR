@@ -6614,7 +6614,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             [this]() { m_ag->disconnectFromDevice(); },
             isSsConnected,
             [this]() { return m_ag->peerAddress(); },
-            [this]() { return (quint16)9007; });
+            []() { return (quint16)9007; });
         connect(m_ag, &AntennaGeniusModel::connected,    this, updateSs);
         connect(m_ag, &AntennaGeniusModel::disconnected, this, updateSs);
 

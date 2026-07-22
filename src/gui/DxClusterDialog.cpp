@@ -235,11 +235,18 @@ QString SpotTableModel::bandForFreq(double mhz)
 
 void BandFilterProxy::setBandVisible(const QString& band, bool visible)
 {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    beginFilterChange();
+#endif
     if (visible)
         m_hiddenBands.remove(band);
     else
         m_hiddenBands.insert(band);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
     invalidateFilter();
+#endif
 }
 
 bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const

@@ -53,7 +53,7 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setRenderHint(QPainter::TextAntialiasing, true);
 
-    const QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+    const QRectF r = rect();
     const qreal radius = 3.0;
 
     // Colour the body by state precedence: active > checked > idle.

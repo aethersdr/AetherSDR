@@ -86,10 +86,6 @@ static constexpr const char* kLabelStyle =
 static constexpr const char* kDimLabelStyle =
     "QLabel { color: #8090a0; font-size: 10px; }";
 
-static constexpr const char* kInsetValueStyle =
-    "QLabel { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e; "
-    "border-radius: 3px; padding: 1px 2px; color: #c8d8e8; }";
-
 static constexpr const char* kInsetEditStyle =
     "QLineEdit { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e; "
     "border-radius: 3px; padding: 1px 2px; color: #c8d8e8; }"

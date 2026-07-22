@@ -273,7 +273,6 @@ constexpr int kPanadapterSliceCapacityStatusMs = 4000;
 // shared between the constructor timer setup here and MainWindow_SwrSweep.cpp.
 constexpr const char* kSuppressAudioDeviceNotificationsKey =
     "SuppressAudioDeviceNotifications";
-constexpr int kTMate2DefaultUserInteractionTimeoutMs = 2000;
 constexpr const char* kStatusBarCompactLabelObjectName = "statusBarCompactLabel";
 
 QString statusBarCompactLabelStyle(const QString& color)

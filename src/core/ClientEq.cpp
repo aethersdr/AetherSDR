@@ -23,9 +23,6 @@ constexpr float kSmoothTimeConstantSec = 0.015f;
 
 // Chebyshev I passband ripple (dB) — classic 1 dB Chebyshev default.
 constexpr float kChebyshevRippleDb = 1.0f;
-// Elliptic passband ripple and stopband attenuation.
-constexpr float kEllipticRippleDb  = 1.0f;
-constexpr float kEllipticStopDb    = 60.0f;
 
 float dbToAmp(float db) noexcept
 {

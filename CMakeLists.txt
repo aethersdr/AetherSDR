@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
+
+# CMake 3.29+ can safely de-duplicate libraries for linkers that support it.
+# This avoids duplicate-library warnings from Apple's linker while preserving
+# compatibility with the project's CMake 3.25 minimum.
+if(POLICY CMP0156)
+    cmake_policy(SET CMP0156 NEW)
+endif()
+
 project(AetherSDR VERSION 26.7.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -1249,6 +1257,18 @@ if((UNIX OR WIN32) AND ENABLE_DSTAR)
         ${DIGITAL_VOICE_WAVEFORM_DIR}/resampler.c
     )
 
+    # ThumbDV is vendored C code and is also compiled directly by its queue
+    # test, so suppress platform deprecation warnings at the source boundary.
+    if(MSVC)
+        set_source_files_properties(
+            ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/thumbDV.c
+            PROPERTIES COMPILE_FLAGS "/w")
+    else()
+        set_source_files_properties(
+            ${DIGITAL_VOICE_WAVEFORM_DIR}/ThumbDV/thumbDV.c
+            PROPERTIES COMPILE_FLAGS "-w")
+    endif()
+
     add_executable(aether-dv-waveform ${DIGITAL_VOICE_WAVEFORM_SOURCES})
     set_target_properties(aether-dv-waveform PROPERTIES
         C_STANDARD 11
@@ -1819,6 +1839,11 @@ if (USE_SYSTEM_RTMIDI)
     target_link_libraries(aethercore PUBLIC PkgConfig::rtmidi)
 else()
     target_sources(aethercore PRIVATE third_party/rtmidi/RtMidi.cpp)
+    if(MSVC)
+        set_source_files_properties(third_party/rtmidi/RtMidi.cpp PROPERTIES COMPILE_FLAGS "/w")
+    else()
+        set_source_files_properties(third_party/rtmidi/RtMidi.cpp PROPERTIES COMPILE_FLAGS "-w")
+    endif()
     # PUBLIC: MidiControlManager.h includes RtMidi.h
     target_include_directories(aethercore PUBLIC third_party/rtmidi)
 endif()
@@ -2173,7 +2198,7 @@ if(ENABLE_MQTT)
             target_compile_definitions(aethercore PUBLIC HAVE_MQTT_TLS)
         endif()
     else()
-        target_include_directories(aethercore PRIVATE
+        target_include_directories(aethercore SYSTEM PRIVATE
             ${MOSQUITTO_DIR}/include
             ${MOSQUITTO_DIR}/src)
         target_sources(aethercore PRIVATE ${MOSQUITTO_SOURCES})

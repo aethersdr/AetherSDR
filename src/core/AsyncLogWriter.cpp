@@ -360,7 +360,10 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         const QString newPath = rotationCb(oldPath);
         if (newPath.isEmpty() || newPath == oldPath) {
             file.setFileName(oldPath);
-            file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+                maxFileBytes = 0;
+                return;
+            }
             maxFileBytes = 0;
             return;
         }
@@ -368,7 +371,10 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         file.setFileName(newPath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
             file.setFileName(oldPath);
-            file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+                maxFileBytes = 0;
+                return;
+            }
             maxFileBytes = 0;
             return;
         }

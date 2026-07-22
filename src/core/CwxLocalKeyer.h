@@ -41,7 +41,7 @@ public:
     using KeyDownCallback = std::function<void(bool down)>;
 
     CwxLocalKeyer();
-    ~CwxLocalKeyer();
+    virtual ~CwxLocalKeyer();
 
     CwxLocalKeyer(const CwxLocalKeyer&) = delete;
     CwxLocalKeyer& operator=(const CwxLocalKeyer&) = delete;

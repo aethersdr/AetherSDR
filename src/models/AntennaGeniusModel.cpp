@@ -94,7 +94,7 @@ void AntennaGeniusModel::startDiscovery()
     // Timeout timer: prune devices that stop broadcasting.
     m_discoveryTimeout = new QTimer(this);
     m_discoveryTimeout->setInterval(kDiscoveryTimeoutMs);
-    connect(m_discoveryTimeout, &QTimer::timeout, this, [this]() {
+    connect(m_discoveryTimeout, &QTimer::timeout, this, []() {
         // In a full implementation we'd track last-seen timestamps.
         // For now we rely on the device broadcasting every 1 s.
     });
