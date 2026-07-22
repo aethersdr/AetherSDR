@@ -154,7 +154,18 @@ jobs:
         run: cmake --build build --target ggml-vulkan -j 2
 
       - name: Build
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+        # -j 2 (not full -j): even with ggml-vulkan pre-built, the main build was
+        # thrashing 4-wide on the 16 GB runner — the ASR headers (ONNX C++ API /
+        # whisper / vulkan-hpp) make many app TUs memory-heavy, so 4 concurrent
+        # MSVC processes exceed RAM and swap. Halving parallelism gives each ~8 GB.
+        # timeout-minutes fails the STEP (which preserves its log — unlike the
+        # job-level 6 h cancel, which discards logs), so a still-slow build is
+        # finally diagnosable; NINJA_STATUS stamps elapsed seconds per line to
+        # expose the long-pole targets.
+        timeout-minutes: 240
+        env:
+          NINJA_STATUS: "[%f/%t %es] "
+        run: cmake --build build -j 2
 
       - name: Deploy Qt
         run: |
