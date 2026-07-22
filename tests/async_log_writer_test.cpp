@@ -325,6 +325,66 @@ void testHighPriorityReservePreservesCritical(const QString& dir)
            c.droppedHighPriorityLines == 0);
 }
 
+void testRotationReopenFailureMirrorsToStderr(const QString& dir)
+{
+    auto runCase = [&](const QString& caseName, bool returnInvalidNewPath) {
+        const QString stderrPath = dir + "/rotation_" + caseName + "_stderr.txt";
+        const QString activeDir = dir + "/rotation_" + caseName + "_active";
+        const QString logPath = activeDir + "/active.log";
+        const QString marker = "rotation-fallback-" + caseName;
+
+        QDir().mkpath(activeDir);
+        std::fflush(stderr);
+        FILE* redirected = std::freopen(stderrPath.toUtf8().constData(), "w", stderr);
+        if (!redirected) {
+            const QByteArray label = ("rotation fallback " + caseName
+                                      + ": freopen succeeds").toUtf8();
+            report(label.constData(), false);
+            return;
+        }
+
+        bool blockerCreated = false;
+        AsyncLogWriter w;
+        w.setRotationConfig(1,
+            [activeDir, returnInvalidNewPath, &blockerCreated](const QString& currentPath) {
+                QFile::remove(currentPath);
+                QDir(activeDir).removeRecursively();
+
+                QFile blocker(activeDir);
+                blockerCreated = blocker.open(QIODevice::WriteOnly | QIODevice::Truncate);
+                blocker.close();
+
+                if (returnInvalidNewPath) {
+                    return activeDir + "/rotated.log";
+                }
+                return QString{};
+            });
+
+        const bool started = w.start(logPath, false);
+        if (started) {
+            w.enqueue(QtWarningMsg, QTime(9, 0, 0, 0),
+                      QStringLiteral("aether.x"), QStringLiteral("trigger-rotation"));
+            w.flush();
+            w.enqueue(QtWarningMsg, QTime(9, 0, 0, 1),
+                      QStringLiteral("aether.x"), marker);
+            w.flush();
+            w.shutdown();
+        }
+
+        std::fflush(stderr);
+        const QByteArray captured = readAll(stderrPath);
+        const QByteArray label = ("rotation fallback " + caseName
+                                  + ": future logs mirror to stderr").toUtf8();
+        report(label.constData(), started && blockerCreated
+               && captured.contains(marker.toUtf8()));
+
+        QFile::remove(activeDir);
+    };
+
+    runCase(QStringLiteral("same-path"), false);
+    runCase(QStringLiteral("new-path"), true);
+}
+
 void testStderrMirroring(const QString& dir)
 {
     const QString stderrPath = dir + "/captured_stderr.txt";
@@ -391,6 +451,7 @@ int main(int argc, char** argv)
     testShutdownDrainsAllEnqueuedLines(dir);
     testDropAccountingEmitsSummaryAndCounters(dir);
     testHighPriorityReservePreservesCritical(dir);
+    testRotationReopenFailureMirrorsToStderr(dir);
     testStderrMirroring(dir);
 
     return g_failed == 0 ? 0 : 1;

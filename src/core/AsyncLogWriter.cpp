@@ -348,6 +348,17 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         bufferedLineCount = 0;
     };
 
+    auto reopenForAppendOrMirrorToStderr = [&](const QString& reopenPath) {
+        QDir().mkpath(QFileInfo(reopenPath).absolutePath());
+        file.setFileName(reopenPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            mirrorToStderr = true;
+            return false;
+        }
+        file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        return true;
+    };
+
     auto maybeRotate = [&]() {
         if (maxFileBytes <= 0 || !rotationCb)
             return;
@@ -359,8 +370,7 @@ void AsyncLogWriter::run(std::promise<bool> opened)
 
         const QString newPath = rotationCb(oldPath);
         if (newPath.isEmpty() || newPath == oldPath) {
-            file.setFileName(oldPath);
-            if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            if (!reopenForAppendOrMirrorToStderr(oldPath)) {
                 maxFileBytes = 0;
                 return;
             }
@@ -368,10 +378,10 @@ void AsyncLogWriter::run(std::promise<bool> opened)
             return;
         }
 
+        QDir().mkpath(QFileInfo(newPath).absolutePath());
         file.setFileName(newPath);
         if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-            file.setFileName(oldPath);
-            if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            if (!reopenForAppendOrMirrorToStderr(oldPath)) {
                 maxFileBytes = 0;
                 return;
             }
@@ -440,10 +450,15 @@ void AsyncLogWriter::run(std::promise<bool> opened)
                                                    item.log.timestamp,
                                                    item.log.category,
                                                    item.log.message);
-                buffer.append(line);
-                ++bufferedLineCount;
+                if (file.isOpen()) {
+                    buffer.append(line);
+                    ++bufferedLineCount;
+                }
                 if (mirrorToStderr) {
                     fwrite(line.constData(), 1, static_cast<size_t>(line.size()), stderr);
+                    if (!file.isOpen()) {
+                        fflush(stderr);
+                    }
                 }
                 if (!isDebugOrInfo(item.log.type))
                     flushAfterBatch = true;
