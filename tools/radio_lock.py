@@ -354,15 +354,12 @@ class RadioCoordinator:
         for path in self.queue_dir.glob("*.json"):
             record = _read_json(path)
             if record is None:
-                try:
-                    age = max(0.0, now - path.stat().st_mtime)
-                except OSError:
-                    continue
-                if age > self.ticket_ttl_seconds:
-                    with contextlib.suppress(FileNotFoundError):
-                        path.unlink()
-                else:
-                    entries.append((path, {"createdNs": 0, "label": "invalid-fresh-ticket"}))
+                # Valid tickets arrive only through atomic replace, so a JSON
+                # parse failure cannot be a partially-written live ticket.
+                # Remove it immediately instead of letting malformed local
+                # state jump to the front of the queue for a full TTL.
+                with contextlib.suppress(FileNotFoundError):
+                    path.unlink()
                 continue
             heartbeat = float(record.get("heartbeatAt", 0.0))
             if max(0.0, now - heartbeat) > self.ticket_ttl_seconds:

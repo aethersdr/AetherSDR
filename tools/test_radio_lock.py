@@ -208,6 +208,16 @@ class RadioLockTests(unittest.TestCase):
         self.assertTrue(fresh_path.exists())
         self.assertEqual([ticket["label"] for ticket in status["queue"]], ["fresh"])
 
+    def test_malformed_ticket_is_removed_without_blocking_acquisition(self) -> None:
+        coordinator = self.coordinator()
+        malformed_path = coordinator.queue_dir / "00000000000000000001-invalid.json"
+        malformed_path.write_text("{not-json", encoding="utf-8")
+
+        lease = coordinator.acquire("valid-after-malformed", timeout_seconds=1.0)
+        self.assertFalse(malformed_path.exists())
+        self.assertTrue(coordinator.status()["held"])
+        lease.release()
+
     @unittest.skipIf(os.name != "posix", "descriptor inheritance contract is POSIX-specific")
     def test_child_inherits_lock_if_coordinator_is_killed(self) -> None:
         events = Path(self.temporary.name) / "orphan-events.jsonl"
