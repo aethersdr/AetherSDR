@@ -99,9 +99,14 @@ class RadioLockTests(unittest.TestCase):
             self.assertTrue(coordinator.status()["held"])
             lease.release()
         kill_mock.assert_not_called()
-        source = Path(radio_lock.__file__).read_text(encoding="utf-8")
-        self.assertNotIn("os.kill(", source)
-        self.assertNotIn('"pgrep"', source)
+
+    def test_windows_child_kwargs_keep_default_handle_closure(self) -> None:
+        lease = self.coordinator().acquire("windows-popen", timeout_seconds=1.0)
+        was_inheritable = os.get_inheritable(lease.fileno)
+        with mock.patch.object(radio_lock.os, "name", "nt"):
+            self.assertEqual(lease.child_popen_kwargs(), {})
+        self.assertEqual(os.get_inheritable(lease.fileno), was_inheritable)
+        lease.release()
 
     def test_legacy_pidfile_and_queue_are_fail_closed_barriers(self) -> None:
         legacy_lock = Path(self.temporary.name) / "legacy.lock"

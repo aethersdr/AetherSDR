@@ -244,13 +244,14 @@ class RadioLease:
         self._heartbeat_thread.start()
 
     def child_popen_kwargs(self) -> dict:
-        """Keep the kernel lock alive in the child if this wrapper is killed."""
-        os.set_inheritable(self.fileno, True)
+        """Keep the POSIX kernel lock alive if this wrapper is killed."""
         if os.name == "posix":
+            os.set_inheritable(self.fileno, True)
             return {"pass_fds": (self.fileno,)}
-        # Windows inherits only explicitly inheritable handles when close_fds
-        # is false.  The parent still owns normal graceful unlock/cleanup.
-        return {"close_fds": False}
+        # The crash-survival inheritance contract is POSIX-specific.  Keep
+        # Popen's close_fds default on Windows rather than leaking unrelated
+        # inheritable handles into the proof process.
+        return {}
 
     def release(self) -> None:
         if self._released:
