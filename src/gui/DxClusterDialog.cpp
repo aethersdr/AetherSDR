@@ -2270,7 +2270,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     auto* bgEnabledBtn = new QPushButton(overrideBg ? "Enabled" : "Disabled");
     bgEnabledBtn->setCheckable(true);
     bgEnabledBtn->setChecked(overrideBg);
-    bgEnabledBtn->setFixedWidth(70);
+    bgEnabledBtn->setFixedWidth(76);
     bgEnabledBtn->setStyleSheet(bgStyle);
     auto* bgAutoBtn = new QPushButton("Auto");
     bgAutoBtn->setCheckable(true);

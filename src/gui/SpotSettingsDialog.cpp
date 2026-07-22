@@ -218,7 +218,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     m_overrideBgEnabled = new QPushButton(m_overrideBg ? "Enabled" : "Disabled");
     m_overrideBgEnabled->setCheckable(true);
     m_overrideBgEnabled->setChecked(m_overrideBg);
-    m_overrideBgEnabled->setFixedWidth(70);
+    m_overrideBgEnabled->setFixedWidth(76);
     m_overrideBgAuto = new QPushButton("Auto");
     m_overrideBgAuto->setCheckable(true);
     m_overrideBgAuto->setChecked(m_overrideBgAutoMode);
