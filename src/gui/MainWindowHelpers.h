@@ -48,7 +48,9 @@ bool macDaxDriverInstalled();
 
 QString formatNetworkMs(int ms);
 QString formatNetworkSeqErrors(int errors, int packets);
-QString buildNetworkTooltip(const RadioModel& model);
+QString buildNetworkTooltip(const RadioModel& model,
+                            int adaptiveFpsCap,
+                            bool throttleRestorePending);
 
 // ─── TNF tooltip ─────────────────────────────────────────────────────────────
 
