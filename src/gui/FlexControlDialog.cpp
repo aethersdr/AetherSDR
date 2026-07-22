@@ -26,6 +26,7 @@
 #include <QPushButton>
 #include <QRadialGradient>
 #include <QScreen>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -999,9 +1000,26 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     // the rest of the FlexControl dialog stylesheet.
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         bodyWidget(), QString::fromLatin1(kFlexControlStyle));
-    auto* root = new QVBoxLayout(bodyWidget());
+    auto* bodyLayout = new QVBoxLayout(bodyWidget());
+    bodyLayout->setContentsMargins(14, 14, 14, 14);
+    bodyLayout->setSpacing(0);
+
+    m_scrollArea = new QScrollArea(bodyWidget());
+    m_scrollArea->setObjectName(QStringLiteral("FlexControlScrollArea"));
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    bodyLayout->addWidget(m_scrollArea);
+
+    m_contentWidget = new QWidget(m_scrollArea);
+    m_contentWidget->setObjectName(QStringLiteral("FlexControlContent"));
+    m_scrollArea->setWidget(m_contentWidget);
+
+    auto* root = new QVBoxLayout(m_contentWidget);
+    m_contentLayout = root;
     root->setSizeConstraint(QLayout::SetMinimumSize);
-    root->setContentsMargins(14, 14, 14, 14);
+    root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(10);
 
     auto* header = new QFrame;
@@ -1722,9 +1740,15 @@ void FlexControlDialog::updateCompactMode()
         if (compact)
             m_deviceFrame->setMaximumHeight(m_deviceFrame->minimumSizeHint().height());
     }
-    if (auto* bodyLayout = bodyWidget()->layout()) {
-        bodyLayout->setAlignment(m_deviceFrame, compact ? Qt::AlignTop : Qt::Alignment());
-        bodyLayout->activate();
+    if (m_contentLayout) {
+        m_contentLayout->setAlignment(m_deviceFrame, compact ? Qt::AlignTop : Qt::Alignment());
+        m_contentLayout->activate();
+    }
+    if (m_contentWidget) {
+        m_contentWidget->adjustSize();
+    }
+    if (m_scrollArea) {
+        m_scrollArea->updateGeometry();
     }
 
     if (compact) {
@@ -1733,30 +1757,23 @@ void FlexControlDialog::updateCompactMode()
             applyCompactWindowSize();
         });
     } else {
-        QSize required = minimumSizeHint().expandedTo(QSize(430, 0));
+        QSize required = m_contentWidget
+            ? m_contentWidget->minimumSizeHint().expandedTo(QSize(430, 0))
+            : minimumSizeHint().expandedTo(QSize(430, 0));
 
-        // Never demand more vertical space than the display can show (#3662).
-        // The full (non-compact) layout is ~1100 px tall; on a short or
-        // DPI-scaled screen that exceeds the available workspace, so pinning
-        // it as a hard minimum opens the window taller than the screen with
-        // its bottom clipped and no way to shrink it back. Fall back to the
-        // existing compact layout, which fits, rather than clipping.
+        // Keep the full controller available even on a short or DPI-scaled
+        // screen (#3662). The content area scrolls when its intrinsic height
+        // exceeds the workspace, so screen fit no longer has to override the
+        // user's Compact preference.
         const int availH = availableScreenHeight();
-        if (availH > 0 && required.height() > availH
-            && m_compactButton && !m_compactButton->isChecked()) {
-            const QSignalBlocker blocker(m_compactButton);
-            m_compactButton->setChecked(true);
-            updateCompactMode();
-            return;
-        }
-        // Backstop: even when compact mode is unavailable, never enforce a
-        // minimum taller than the screen.
         if (availH > 0 && required.height() > availH)
             required.setHeight(availH);
 
-        setMinimumSize(required);
-        if (isVisible() && (width() < required.width() || height() < required.height()))
-            resize(size().expandedTo(required));
+        const int minimumHeight = availH > 0 ? std::min(610, availH) : 610;
+        setMinimumSize(430, minimumHeight);
+        if (isVisible()) {
+            resize(std::max(width(), required.width()), required.height());
+        }
     }
 }
 
@@ -1780,10 +1797,14 @@ void FlexControlDialog::applyCompactWindowSize()
         m_deviceFrame->layout()->activate();
         m_deviceFrame->setMaximumHeight(m_deviceFrame->minimumSizeHint().height());
     }
-    if (auto* bodyLayout = bodyWidget()->layout())
-        bodyLayout->activate();
+    if (m_contentLayout)
+        m_contentLayout->activate();
+    if (m_contentWidget)
+        m_contentWidget->adjustSize();
 
-    QSize required = minimumSizeHint().expandedTo(QSize(410, 0));
+    QSize required = m_contentWidget
+        ? m_contentWidget->minimumSizeHint().expandedTo(QSize(410, 0))
+        : minimumSizeHint().expandedTo(QSize(410, 0));
     // Backstop (#3662): never pin a window taller than the screen, even in
     // compact mode. On a screen shorter than the compact layout's own minimum
     // the body may need to scroll, but the window stays fully on-screen and
