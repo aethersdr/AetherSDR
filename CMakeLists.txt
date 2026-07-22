@@ -3665,6 +3665,24 @@ target_link_libraries(amp_applet_test PRIVATE
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
 
+add_executable(tx_applet_power_reconciliation_test
+    tests/tx_applet_power_reconciliation_test.cpp
+    src/gui/TxApplet.cpp
+    src/gui/AtuPreTuneDialog.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(tx_applet_power_reconciliation_test PRIVATE src)
+target_link_libraries(tx_applet_power_reconciliation_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(tx_applet_power_reconciliation_test PROPERTIES AUTOMOC ON)
+add_test(NAME tx_applet_power_reconciliation_test
+         COMMAND tx_applet_power_reconciliation_test)
+set_tests_properties(tx_applet_power_reconciliation_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(container_manager_test
     tests/container_manager_test.cpp
     src/gui/FramelessResizer.cpp

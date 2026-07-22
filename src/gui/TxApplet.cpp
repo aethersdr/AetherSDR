@@ -350,11 +350,15 @@ void TxApplet::buildUI()
         if (!m_updatingFromModel && m_model)
             m_model->setRfPower(v);
     });
+    connect(m_rfPowerSlider, &QSlider::sliderReleased,
+            this, &TxApplet::syncFromModel);
     connect(m_tunePowerSlider, &QSlider::valueChanged, this, [this](int v) {
         m_tunePowerLabel->setText(QString::number(v));
         if (!m_updatingFromModel && m_model)
             m_model->setTunePower(v);
     });
+    connect(m_tunePowerSlider, &QSlider::sliderReleased,
+            this, &TxApplet::syncFromModel);
 
     // Profile dropdown → load command
     connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
