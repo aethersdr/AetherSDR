@@ -286,6 +286,10 @@ void MainWindow::buildMenuBar()
     connect(memoryAction, &QAction::triggered, this, [this] {
         showMemoryDialog();
     });
+    auto* sliceAudioAction = settingsMenu->addAction("Slice Audio Switcher...");
+    connect(sliceAudioAction, &QAction::triggered, this, [this] {
+        showSliceAudioSwitcherDialog();
+    });
     auto* netSchedulerAction = settingsMenu->addAction("Net Scheduler...");
     connect(netSchedulerAction, &QAction::triggered, this, [this] {
         showNetSchedulerDialog();

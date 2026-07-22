@@ -93,6 +93,7 @@
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
+#include "SliceAudioSwitcherDialog.h"
 #include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
 #ifdef HAVE_WEBSOCKETS
@@ -3475,6 +3476,11 @@ void MainWindow::showMemoryDialog()
             s.save();
         });
     }
+}
+
+void MainWindow::showSliceAudioSwitcherDialog()
+{
+    showOrRaisePersistent(m_sliceAudioSwitcherDialog, &m_radioModel);
 }
 
 SliceModel* MainWindow::preferredMemorySlice(const QString& preferredPanId) const

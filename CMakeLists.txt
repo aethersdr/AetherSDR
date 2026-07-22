@@ -742,6 +742,7 @@ set(GUI_SOURCES
     src/gui/MemoryCommands.cpp
     src/gui/MemoryBrowsePanel.cpp
     src/gui/MemoryDialog.cpp
+    src/gui/SliceAudioSwitcherDialog.cpp
     src/gui/NetSchedulerDialog.cpp
     src/gui/NetReminderBanner.cpp
     src/gui/SpotSettingsDialog.cpp
