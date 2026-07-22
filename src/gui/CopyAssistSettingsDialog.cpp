@@ -48,6 +48,15 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     m_gpuLabel->hide();
     m_gpu->hide();
 
+    m_language = new QComboBox(this);
+    m_language->setObjectName(QStringLiteral("CopyAssistLanguageCombo"));
+    m_language->setAccessibleName(tr("Copy Assist language"));
+    m_language->setToolTip(tr("Spoken language to transcribe (multilingual models only; "
+                              "Auto-detect picks it from the audio)"));
+    connect(m_language, &QComboBox::currentIndexChanged, this,
+            [this](int) { emit languageChanged(currentLanguage()); });
+    form->addRow(tr("Language:"), m_language);
+
     // Transcript-to-file logging. The checkbox is the master switch; the path row
     // (populated by the controller's file picker) enables with it.
     m_logToFile = new QCheckBox(tr("Save transcript to a file"), this);
@@ -201,6 +210,24 @@ void CopyAssistSettingsDialog::setGpuSelectorVisible(bool on)
 {
     m_gpuLabel->setVisible(on);
     m_gpu->setVisible(on);
+}
+
+void CopyAssistSettingsDialog::addLanguage(const QString& code, const QString& name)
+{
+    m_language->addItem(name, code);
+}
+
+void CopyAssistSettingsDialog::setCurrentLanguage(const QString& code)
+{
+    const int idx = m_language->findData(code);
+    if (idx >= 0) {
+        m_language->setCurrentIndex(idx);
+    }
+}
+
+QString CopyAssistSettingsDialog::currentLanguage() const
+{
+    return m_language->currentData().toString();
 }
 
 void CopyAssistSettingsDialog::setLogToFile(bool on)

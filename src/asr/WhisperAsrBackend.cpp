@@ -99,9 +99,14 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     wparams.print_special = false;
     wparams.suppress_blank = true;
 
+    // "auto" (or empty) → let whisper detect the language from the audio; any
+    // other value pins decoding to that language. whisper_full() treats a
+    // language of "auto" as detection on its own (see whisper.cpp), but set the
+    // flag explicitly too so the intent is unambiguous.
     const QByteArray langUtf8 = m_language.toUtf8();
-    wparams.language = langUtf8.isEmpty() ? "en" : langUtf8.constData();
-    wparams.detect_language = false;
+    const bool autoDetect = langUtf8.isEmpty() || langUtf8 == "auto";
+    wparams.language = autoDetect ? "auto" : langUtf8.constData();
+    wparams.detect_language = autoDetect;
 
     if (whisper_full(m_ctx, wparams, pcm16k.data(), static_cast<int>(pcm16k.size())) != 0) {
         if (error != nullptr) {
@@ -179,6 +184,40 @@ bool asrGpuAvailable()
 {
     // True when ggml has at least one GPU (discrete or integrated) device.
     return !asrGpuDevices().empty();
+}
+
+std::vector<AsrLanguage> asrWhisperLanguages()
+{
+    // Enumerate every language the vendored whisper build supports, straight
+    // from its own table (whisper_lang_str = ISO code, whisper_lang_str_full =
+    // English name), so this never drifts out of sync with the model. The
+    // multilingual checkpoints cover them all; the .en-only models ignore the
+    // setting and always decode English. Sorted by display name; the caller
+    // prepends "Auto-detect" (there's no such entry in whisper's table — a
+    // language of "auto" triggers detection in transcribe()).
+    std::vector<AsrLanguage> langs;
+    const int maxId = whisper_lang_max_id();
+    langs.reserve(static_cast<size_t>(maxId) + 1);
+    for (int id = 0; id <= maxId; ++id) {
+        const char* code = whisper_lang_str(id);
+        const char* full = whisper_lang_str_full(id);
+        if (code == nullptr || full == nullptr) {
+            continue;
+        }
+        AsrLanguage lang;
+        lang.code = QString::fromUtf8(code);
+        // whisper's full names are lowercase ("english"); title-case the first
+        // letter for display ("English") without pulling in a locale.
+        QString name = QString::fromUtf8(full);
+        if (!name.isEmpty()) {
+            name[0] = name[0].toUpper();
+        }
+        lang.name = name;
+        langs.push_back(std::move(lang));
+    }
+    std::sort(langs.begin(), langs.end(),
+              [](const AsrLanguage& a, const AsrLanguage& b) { return a.name < b.name; });
+    return langs;
 }
 
 } // namespace AetherSDR

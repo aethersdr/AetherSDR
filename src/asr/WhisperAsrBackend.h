@@ -58,4 +58,17 @@ bool asrGpuAvailable();
 // gpu_device indexes them. Empty on CPU-only builds / GPU-less hosts.
 std::vector<AsrGpuDevice> asrGpuDevices();
 
+// A selectable transcription language: `code` is the ISO code passed to the
+// backend (e.g. "en", "es"); `name` is the English display name ("English").
+struct AsrLanguage {
+    QString code;
+    QString name;
+};
+
+// Every language the vendored whisper build supports, sorted by display name.
+// Multilingual models honor the choice; English-only (.en) models ignore it.
+// Does NOT include an "auto-detect" entry — pass a language of "auto" (or empty)
+// to whisperAsrBackendFactory to auto-detect; the UI adds that option itself.
+std::vector<AsrLanguage> asrWhisperLanguages();
+
 } // namespace AetherSDR

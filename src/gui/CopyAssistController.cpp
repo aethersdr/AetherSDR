@@ -76,7 +76,11 @@ AetherSDR::RemoteAsrConfig readRemoteConfig()
     cfg.url = s.value(QStringLiteral("AsrRemoteUrl"), QString()).toString();
     cfg.apiKey = s.value(QStringLiteral("AsrRemoteApiKey"), QString()).toString();
     cfg.model = s.value(QStringLiteral("AsrRemoteModel"), QStringLiteral("whisper-1")).toString();
-    cfg.language = QStringLiteral("en");
+    // Share the Copy Assist language selection with the remote endpoint. "auto"
+    // is left empty so an OpenAI-compatible server does its own detection rather
+    // than being handed a non-standard language value.
+    const QString lang = s.value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
+    cfg.language = (lang == QStringLiteral("auto")) ? QString() : lang;
     return cfg;
 }
 
@@ -183,6 +187,17 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_settings->setGpuSelectorVisible(true);
     }
 
+    // Language selector — "Auto-detect" first, then every language the whisper
+    // build supports. Multilingual models honor it; English-only models ignore
+    // it. (The remote/sherpa backends read the same stored value where relevant.)
+    m_settings->addLanguage(QStringLiteral("auto"), tr("Auto-detect"));
+    for (const AsrLanguage& lang : asrWhisperLanguages()) {
+        m_settings->addLanguage(lang.code, lang.name);
+    }
+    m_settings->setCurrentLanguage(
+        AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
+            .toString());
+
     // Panel intent. The ⚙ button toggles the modeless settings dialog; model/GPU
     // changes come from the dialog itself.
     connect(m_panel, &CopyAssistPanel::enableToggled, this, &CopyAssistController::onEnableToggled);
@@ -204,6 +219,18 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             if (m_enabled) {
                 beginEnable();
             }
+        }
+    });
+    connect(m_settings, &CopyAssistSettingsDialog::languageChanged, this, [this](const QString& code) {
+        auto& st = AppSettings::instance();
+        st.setValue(QStringLiteral("AsrLanguage"), code);
+        st.save();
+        // Language is fixed at backend construction (whisper factory arg /
+        // remote config), so a change needs an engine rebuild — same as GPU.
+        m_tap->setEnabled(false);
+        buildEngine();
+        if (m_enabled) {
+            beginEnable();
         }
     });
 
@@ -399,6 +426,9 @@ void CopyAssistController::buildEngine()
     const int gpuDevice = AppSettings::instance()
                               .value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0"))
                               .toString().toInt();
+    const QString language = AppSettings::instance()
+                                 .value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
+                                 .toString();
     // Optional learned (Silero) VAD — an .onnx path enables it in the worker;
     // empty (or the toggle off) keeps the built-in energy VAD.
     AsrSegmenter::Config segConfig;
@@ -423,7 +453,7 @@ void CopyAssistController::buildEngine()
         m_asr = new AsrEngine(remoteAsrBackendFactory(readRemoteConfig()), segConfig, this);
         break;
     case AsrBackendKind::Whisper:
-        m_asr = new AsrEngine(whisperAsrBackendFactory(QStringLiteral("en"), gpuDevice),
+        m_asr = new AsrEngine(whisperAsrBackendFactory(language, gpuDevice),
                               segConfig, this);
         break;
     case AsrBackendKind::SherpaOnnx:
