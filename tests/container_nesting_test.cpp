@@ -3,6 +3,7 @@
 // drives a specific sequence of manager calls, and asserts the
 // resulting state.
 
+#include "TestSettingsProfile.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "core/AppSettings.h"
@@ -241,7 +242,12 @@ void test_reparent()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-container-nesting-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("Container system Phase 3 nesting tests\n\n");
 
     test_1_floatParentWhileChildFloating();

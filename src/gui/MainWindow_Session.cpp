@@ -454,6 +454,22 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    // Re-bind a KiwiSDR replacement across a band-stack slice recreation (#4158).
+    // A band recall DROPS then RE-CREATES the slice (same id, new band). The
+    // tracker re-binds only when a rebind is pending for this id AND this pan
+    // actually just did a band recall (noteBandRecall), so a plain slice-id
+    // reuse can't hijack the Kiwi onto an unrelated slice. Connected AFTER
+    // onSliceAdded so the recreated slice's VFO widget/overlay already exist.
+    connect(&m_radioModel, &RadioModel::sliceAdded, this, [this](SliceModel* s) {
+        if (!s) {
+            return;
+        }
+        const QString profileId = m_kiwiRebind.onSliceAdded(s->sliceId(), s->panId());
+        if (profileId.isEmpty()) {
+            return;
+        }
+        setKiwiSdrVirtualAntennaForSlice(s->sliceId(), profileId);
+    });
     connect(&m_radioModel, &RadioModel::memoryChanged,
             this, &MainWindow::syncMemorySpot);
     connect(&m_radioModel, &RadioModel::memoryRemoved,
@@ -831,7 +847,7 @@ void MainWindow::wireRadioModel()
             m_panApplet->spectrumWidget()->setTransmitting(tx);
         // S-Meter: use raw interlock state so Level/Compression modes work
         // during VOX/hardware CW without the effectiveTx power threshold (#877)
-        m_appletPanel->sMeterWidget()->setTransmitting(tx);
+        m_appletPanel->setMeterTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
@@ -1068,7 +1084,9 @@ void MainWindow::wirePanLifecycle()
             }
         }
     });
-    // Legacy panadapterInfoChanged — only used for initial display settings push.
+    // Legacy panadapterInfoChanged — only used for initial client-rendered
+    // display settings and local WNB/RF-gain restore. Profile-owned FFT
+    // processing and waterfall timing arrive through PanadapterModel status.
     // Per-pan frequency/level tracking is done via PanadapterModel signals in panadapterAdded.
     connect(&m_radioModel, &RadioModel::panadapterInfoChanged,
             this, [this]() {
@@ -1076,17 +1094,10 @@ void MainWindow::wirePanLifecycle()
             auto* sw = spectrum();
             if (!sw) return;  // pan not yet available
             m_displaySettingsPushed = true;
-            m_radioModel.setPanAverage(sw->fftAverage());
-            if (!m_adaptiveThrottleActive)
-                m_radioModel.setPanFps(sw->fftFps());
-            m_radioModel.setPanWeightedAverage(sw->fftWeightedAvg());
             m_radioModel.setWaterfallColorGain(sw->wfColorGain());
             m_radioModel.setWaterfallBlackLevel(sw->wfBlackLevel());
             m_radioModel.setWaterfallAutoBlack(sw->wfAutoBlack());
             m_radioModel.setWaterfallAutoBlackSource(sw->wfAutoBlackRadioSide());
-            int rate = sw->wfLineDuration();
-            if (!m_adaptiveThrottleActive)
-                m_radioModel.setWaterfallLineDuration(rate);
             // Restore saved WNB and RF gain
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
@@ -1115,14 +1126,6 @@ void MainWindow::wirePanLifecycle()
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
             sw->setDssGain(
                 s.value(sw->settingsKey("Display3DGain"), "70").toInt());
-            // Nudge rate to force waterfall tile re-sync
-            if (!m_adaptiveThrottleActive) {
-                QTimer::singleShot(500, this, [this, rate]() {
-                    const int nudgeRate = (rate < 100) ? rate + 1 : rate - 1;
-                    m_radioModel.setWaterfallLineDuration(nudgeRate);
-                    m_radioModel.setWaterfallLineDuration(rate);
-                });
-            }
         }
     });
     // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.
@@ -1298,8 +1301,8 @@ void MainWindow::wirePanLifecycle()
     // A reclaimed (previous-session) pan keeps its applet and all the
     // model→widget wiring from its original panadapterAdded, so the full add
     // path must not run again (it would duplicate connections). But the
-    // disconnect path tears down the per-pan FPS / waterfall-line-duration
-    // reconcilers, so those need re-wiring here.
+    // disconnect path tears down the four radio-owned display-status handlers,
+    // so those need re-wiring here.
     connect(&m_radioModel, &RadioModel::panadapterReclaimed,
             this, [this](PanadapterModel* pan) {
         if (m_shuttingDown || !m_panStack || !pan) {
@@ -1309,7 +1312,7 @@ void MainWindow::wirePanLifecycle()
         if (!applet) {
             return;
         }
-        wirePanReconcilers(applet, pan);
+        wirePanDisplayStatus(applet, pan);
         for (SliceModel* slice : m_radioModel.slices()) {
             if (slice && slice->panId() == pan->panId()) {
                 reattachSliceVisualsToPanadapter(slice);
@@ -1372,57 +1375,10 @@ void MainWindow::wirePanLifecycle()
         if (m_shuttingDown || !m_panStack) {
             return;
         }
-        if (auto it = m_panFpsReconcileConnections.find(panId);
-            it != m_panFpsReconcileConnections.end()) {
-            QObject::disconnect(it.value());
-            m_panFpsReconcileConnections.erase(it);
-        }
-        if (auto it = m_wfLineDurationReconcileConnections.find(panId);
-            it != m_wfLineDurationReconcileConnections.end()) {
-            QObject::disconnect(it.value());
-            m_wfLineDurationReconcileConnections.erase(it);
-        }
-        if (auto it = m_panFpsReconcile.find(panId);
-            it != m_panFpsReconcile.end()) {
-            if (it->timer) {
-                it->timer->stop();
-                it->timer->deleteLater();
-            }
-            m_panFpsReconcile.erase(it);
-        }
-        if (auto it = m_wfLineDurationReconcile.find(panId);
-            it != m_wfLineDurationReconcile.end()) {
-            if (it->timer) {
-                it->timer->stop();
-                it->timer->deleteLater();
-            }
-            m_wfLineDurationReconcile.erase(it);
-        }
-        if (auto it = m_panAverageReconcileConnections.find(panId);
-            it != m_panAverageReconcileConnections.end()) {
-            QObject::disconnect(it.value());
-            m_panAverageReconcileConnections.erase(it);
-        }
-        if (auto it = m_panWeightedAvgReconcileConnections.find(panId);
-            it != m_panWeightedAvgReconcileConnections.end()) {
-            QObject::disconnect(it.value());
-            m_panWeightedAvgReconcileConnections.erase(it);
-        }
-        if (auto it = m_panAverageReconcile.find(panId);
-            it != m_panAverageReconcile.end()) {
-            if (it->timer) {
-                it->timer->stop();
-                it->timer->deleteLater();
-            }
-            m_panAverageReconcile.erase(it);
-        }
-        if (auto it = m_panWeightedAvgReconcile.find(panId);
-            it != m_panWeightedAvgReconcile.end()) {
-            if (it->timer) {
-                it->timer->stop();
-                it->timer->deleteLater();
-            }
-            m_panWeightedAvgReconcile.erase(it);
+        const QVector<QMetaObject::Connection> statusConnections =
+            m_panDisplayStatusConnections.take(panId);
+        for (const QMetaObject::Connection& connection : statusConnections) {
+            QObject::disconnect(connection);
         }
 
         // Disconnect all signals from the dying applet's widgets to prevent
@@ -1707,6 +1663,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setTxAllowed(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
             || AutomationBridgeSettings::txAllowed());
+        // Observe-only gate (#4188) — apply the persisted operator opt-in after
+        // start() so the bridge comes up read-only if the box is checked. An env
+        // override lets headless/CI pin the bridge observe-only regardless.
+        guard->setReadOnly(
+            qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
+            || AutomationBridgeSettings::readOnly());
     });
     return true;  // start initiated; the socket begins listening once the token resolves
 }
@@ -1738,6 +1700,16 @@ void MainWindow::setAutomationTxAllowed(bool allowed)
     // disabling force-unkeys the radio; enabling arms the TX watchdog.
     if (m_automation)
         m_automation->setTxAllowed(allowed);
+}
+
+void MainWindow::setAutomationReadOnly(bool readOnly)
+{
+    // Persist the operator opt-in (nested config) so it survives restart.
+    AutomationBridgeSettings::setReadOnly(readOnly);
+    // Push live so toggling observe-only takes effect on a running bridge
+    // immediately — no restart needed to arm or lift the gate.
+    if (m_automation)
+        m_automation->setReadOnly(readOnly);
 }
 
 } // namespace AetherSDR

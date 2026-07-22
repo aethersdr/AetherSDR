@@ -1,6 +1,8 @@
 // Standalone test harness for HelpDialog guide search.
 // Build: CMake target `help_dialog_test`. Exit 0 = pass.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "gui/HelpDialog.h"
 
 #include <QApplication>
@@ -179,7 +181,12 @@ void testEmptyQueryDisablesFind()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-help-dialog-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("HelpDialog find test harness\n\n");
 
     testFindNextAndWrap();

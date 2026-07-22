@@ -5,6 +5,8 @@
 // process signals, but never calls show() (no X11 / display needed).
 // Run:   ./build/container_widget_test
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "gui/containers/ContainerTitleBar.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/containers/FloatingContainerWindow.h"
@@ -171,6 +173,20 @@ void testFloatingWidthPolicy()
            body2->maximumWidth() == QWIDGETSIZE_MAX);
 }
 
+void testDefaultFloatingSize()
+{
+    ContainerWidget c("sized", "Sized");
+    c.setContent(new QLabel("payload"));
+    c.setDefaultFloatingSize(QSize(640, 445));
+
+    FloatingContainerWindow win;
+    win.takeContainer(&c);
+    win.restoreAndEnsureVisible(nullptr);
+    report("container-specific first-float size overrides generic fallback",
+           win.size() == QSize(640, 445));
+    win.releaseContainer();
+}
+
 void testCloseSignal()
 {
     ContainerWidget c("id", "T");
@@ -195,7 +211,12 @@ void testTitlebarCloseButtonToggle()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-container-widget-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("Container system Phase 1 test harness\n\n");
 
     testContainerBasics();
@@ -203,6 +224,7 @@ int main(int argc, char** argv)
     testVisibilitySignal();
     testFloatDockCycle();
     testFloatingWidthPolicy();
+    testDefaultFloatingSize();
     testCloseSignal();
     testTitlebarCloseButtonToggle();
 

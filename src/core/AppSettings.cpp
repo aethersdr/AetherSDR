@@ -49,6 +49,70 @@ QString machineBinding()
 
 constexpr char kIdentityConfigKey[] = "GuiClientIdentity";
 
+bool readSettingsFile(const QString& path, QMap<QString, QString>& settings,
+                      QMap<QString, QString>& stationSettings,
+                      QString& stationName, QString& error)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        error = file.errorString();
+        return false;
+    }
+
+    QMap<QString, QString> parsedSettings;
+    QMap<QString, QString> parsedStationSettings;
+    QString parsedStationName = QStringLiteral("AetherSDR");
+    QString currentStation;
+    bool sawRoot = false;
+    QXmlStreamReader xml(&file);
+
+    while (!xml.atEnd()) {
+        xml.readNext();
+
+        if (xml.isStartElement()) {
+            const QString tag = xml.name().toString();
+            if (!sawRoot) {
+                if (tag != QStringLiteral("Settings")) {
+                    xml.raiseError(QStringLiteral("root element is not Settings"));
+                } else {
+                    sawRoot = true;
+                }
+                continue;
+            }
+
+            if (tag == parsedStationName && currentStation.isEmpty()) {
+                currentStation = tag;
+                continue;
+            }
+
+            const QString text = xml.readElementText();
+            if (!currentStation.isEmpty()) {
+                parsedStationSettings.insert(tag, text);
+            } else {
+                parsedSettings.insert(tag, text);
+                if (tag == QStringLiteral("StationName")) {
+                    parsedStationName = text;
+                }
+            }
+        } else if (xml.isEndElement()
+                   && xml.name().toString() == currentStation) {
+            currentStation.clear();
+        }
+    }
+
+    if (xml.hasError() || !sawRoot) {
+        error = xml.hasError() ? xml.errorString()
+                               : QStringLiteral("missing Settings root element");
+        return false;
+    }
+
+    settings = parsedSettings;
+    stationSettings = parsedStationSettings;
+    stationName = parsedStationName;
+    error.clear();
+    return true;
+}
+
 } // namespace
 
 AppSettings::AppSettings()
@@ -97,100 +161,100 @@ void AppSettings::migrateSettingsPath()
 
 void AppSettings::load()
 {
-    QFile file(m_filePath);
-    if (!file.exists()) {
-        // First launch or migration needed
-        migrateFromQSettings();
-        return;
-    }
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        qWarning() << "AppSettings: cannot open" << m_filePath;
-        return;
-    }
-
+    m_loadState = LoadState::Failed;
+    m_preserveRecoveryBackup = false;
+    m_loadedCount = 0;
     m_settings.clear();
     m_stationSettings.clear();
+    m_stationName = QStringLiteral("AetherSDR");
 
-    QXmlStreamReader xml(&file);
-    QString currentStation;  // non-empty when inside a station element
+    const QString tmpPath = m_filePath + QStringLiteral(".tmp");
+    const QString bakPath = m_filePath + QStringLiteral(".bak");
 
-    while (!xml.atEnd()) {
-        xml.readNext();
+    if (!QFile::exists(m_filePath)) {
+        QString recoveryError;
 
-        if (xml.isStartElement()) {
-            const QString tag = xml.name().toString();
-
-            if (tag == "Settings") continue;  // root element
-
-            // Check if this is the station element
-            if (tag == m_stationName && currentStation.isEmpty()) {
-                currentStation = tag;
-                continue;
+        // A validated temp file is the newest intended state after a crash in
+        // the save window between live->backup and temp->live. Promote it only
+        // when the live path is absent, so a valid committed live file always
+        // remains authoritative.
+        if (QFile::exists(tmpPath)
+            && readSettingsFile(tmpPath, m_settings, m_stationSettings,
+                                m_stationName, recoveryError)) {
+            if (QFile::rename(tmpPath, m_filePath)) {
+                QFile::setPermissions(m_filePath,
+                                      QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+                m_preserveRecoveryBackup = QFile::exists(bakPath);
+                m_loadState = LoadState::ReadyToSave;
+                m_loadedCount = m_settings.size();
+                qDebug() << "AppSettings: promoted interrupted commit with"
+                         << m_settings.size() << "settings";
+                return;
             }
-
-            // Read the text content
-            const QString text = xml.readElementText();
-
-            if (!currentStation.isEmpty()) {
-                m_stationSettings.insert(tag, text);
-            } else {
-                m_settings.insert(tag, text);
-                // Track station name
-                if (tag == "StationName")
-                    m_stationName = text;
-            }
-        } else if (xml.isEndElement()) {
-            if (xml.name().toString() == m_stationName && !currentStation.isEmpty())
-                currentStation.clear();
-        }
-    }
-
-    if (xml.hasError()) {
-        qWarning() << "AppSettings: XML parse error:" << xml.errorString();
-
-        // Try to recover from backup if the main file is corrupt
-        const QString bakPath = m_filePath + ".bak";
-        if (QFile::exists(bakPath) && m_settings.size() < 10) {
-            qWarning() << "AppSettings: main file corrupt, recovering from backup";
-            file.close();
+            qWarning() << "AppSettings: valid temporary settings could not be promoted";
             m_settings.clear();
             m_stationSettings.clear();
-
-            QFile bakFile(bakPath);
-            if (bakFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QXmlStreamReader bakXml(&bakFile);
-                QString bakStation;
-                while (!bakXml.atEnd()) {
-                    bakXml.readNext();
-                    if (bakXml.isStartElement()) {
-                        const QString tag = bakXml.name().toString();
-                        if (tag == "Settings") continue;
-                        if (tag == m_stationName && bakStation.isEmpty()) {
-                            bakStation = tag;
-                            continue;
-                        }
-                        const QString text = bakXml.readElementText();
-                        if (!bakStation.isEmpty())
-                            m_stationSettings.insert(tag, text);
-                        else {
-                            m_settings.insert(tag, text);
-                            if (tag == "StationName") m_stationName = text;
-                        }
-                    } else if (bakXml.isEndElement()) {
-                        if (bakXml.name().toString() == m_stationName && !bakStation.isEmpty())
-                            bakStation.clear();
-                    }
-                }
-                bakFile.close();
-                if (!bakXml.hasError())
-                    qDebug() << "AppSettings: recovered" << m_settings.size() << "settings from backup";
-                else
-                    qWarning() << "AppSettings: backup also corrupt:" << bakXml.errorString();
-            }
+            m_stationName = QStringLiteral("AetherSDR");
+        } else if (QFile::exists(tmpPath)) {
+            qWarning() << "AppSettings: temporary recovery file is corrupt:"
+                       << recoveryError;
         }
+
+        if (QFile::exists(bakPath)
+            && readSettingsFile(bakPath, m_settings, m_stationSettings,
+                                m_stationName, recoveryError)) {
+            m_preserveRecoveryBackup = true;
+            m_loadState = LoadState::ReadyToSave;
+            m_loadedCount = m_settings.size();
+            qDebug() << "AppSettings: recovered missing live profile from backup with"
+                     << m_settings.size() << "settings";
+            return;
+        }
+
+        // Recovery artifacts prove this is not a true first launch. If none is
+        // usable, stay failed so startup code cannot replace them with defaults.
+        if (QFile::exists(tmpPath) || QFile::exists(bakPath)) {
+            if (QFile::exists(bakPath)) {
+                qWarning() << "AppSettings: backup recovery file is unavailable or corrupt:"
+                           << recoveryError;
+            }
+            m_settings.clear();
+            m_stationSettings.clear();
+            m_stationName = QStringLiteral("AetherSDR");
+            return;
+        }
+
+        // No live or recovery artifacts: this is a genuine first launch or a
+        // legacy QSettings migration.
+        m_loadState = LoadState::ReadyToSave;
+        migrateFromQSettings();
+        m_loadedCount = m_settings.size();
+        return;
     }
 
-    file.close();
+    QString error;
+    if (!readSettingsFile(m_filePath, m_settings, m_stationSettings,
+                          m_stationName, error)) {
+        qWarning() << "AppSettings: cannot load" << m_filePath << ':' << error;
+
+        if (!QFile::exists(bakPath)
+            || !readSettingsFile(bakPath, m_settings, m_stationSettings,
+                                 m_stationName, error)) {
+            if (QFile::exists(bakPath)) {
+                qWarning() << "AppSettings: backup also unavailable or corrupt:" << error;
+            }
+            m_settings.clear();
+            m_stationSettings.clear();
+            m_stationName = QStringLiteral("AetherSDR");
+            return;
+        }
+
+        m_preserveRecoveryBackup = true;
+        qDebug() << "AppSettings: recovered" << m_settings.size()
+                 << "settings from backup";
+    }
+
+    m_loadState = LoadState::ReadyToSave;
     m_loadedCount = m_settings.size();
     qDebug() << "AppSettings: loaded" << m_settings.size() << "settings +"
              << m_stationSettings.size() << "station settings from" << m_filePath;
@@ -207,6 +271,11 @@ void AppSettings::save()
         }
     }
 
+    if (m_loadState != LoadState::ReadyToSave) {
+        qWarning() << "AppSettings: refusing to save before a successful load";
+        return;
+    }
+
     // Guard: refuse to save if we'd lose more than half the settings.
     // This catches cases where the app crashes early or settings were
     // cleared from memory before save() runs.
@@ -218,8 +287,8 @@ void AppSettings::save()
 
     // Atomic save: write to temp file, then rename over the original.
     // This prevents data loss if the app crashes or is killed mid-write.
-    const QString tmpPath = m_filePath + ".tmp";
-
+    const QString tmpPath = m_filePath + QStringLiteral(".tmp");
+    const QString bakPath = m_filePath + QStringLiteral(".bak");
     QFile file(tmpPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "AppSettings: cannot write" << tmpPath;
@@ -266,33 +335,69 @@ void AppSettings::save()
     // If parsing fails, the file is corrupt; don't overwrite the original.
     {
         QFile check(tmpPath);
-        if (check.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QXmlStreamReader validator(&check);
-            while (!validator.atEnd()) validator.readNext();
-            check.close();
-            if (validator.hasError()) {
-                qWarning() << "AppSettings: temp file failed validation:"
-                           << validator.errorString() << "— NOT saving";
-                QFile::remove(tmpPath);
-                return;
-            }
+        if (!check.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            qWarning() << "AppSettings: cannot reopen temp file for validation — NOT saving";
+            QFile::remove(tmpPath);
+            return;
+        }
+        QXmlStreamReader validator(&check);
+        while (!validator.atEnd()) {
+            validator.readNext();
+        }
+        check.close();
+        if (validator.hasError()) {
+            qWarning() << "AppSettings: temp file failed validation:"
+                       << validator.errorString() << "— NOT saving";
+            QFile::remove(tmpPath);
+            return;
         }
     }
 
     // Atomic rename: on Linux/macOS this is a single inode swap.
-    // On Windows, QFile::rename fails if the target exists, so remove first.
+    // On Windows, QFile::rename fails if the target exists, so rotate first.
+    QString displacedCorruptPath;
+    bool rotatedLiveToBackup = false;
     if (QFile::exists(m_filePath)) {
-        // Keep a backup in case something goes wrong
-        const QString bakPath = m_filePath + ".bak";
-        QFile::remove(bakPath);
-        QFile::rename(m_filePath, bakPath);
-        // Tighten the backup the same way as the live file — see below.
-        QFile::setPermissions(bakPath,
-                              QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        if (m_preserveRecoveryBackup && QFile::exists(bakPath)) {
+            // Keep the known-good recovery source through the first save after
+            // recovery. Move the existing live file aside only until the
+            // replacement has been installed.
+            displacedCorruptPath = m_filePath + QStringLiteral(".corrupt");
+            QFile::remove(displacedCorruptPath);
+            if (!QFile::rename(m_filePath, displacedCorruptPath)) {
+                qWarning() << "AppSettings: cannot move corrupt live file aside";
+                QFile::remove(tmpPath);
+                return;
+            }
+        } else {
+            QFile::remove(bakPath);
+            if (!QFile::rename(m_filePath, bakPath)) {
+                qWarning() << "AppSettings: cannot rotate live settings to backup";
+                QFile::remove(tmpPath);
+                return;
+            }
+            rotatedLiveToBackup = true;
+            QFile::setPermissions(bakPath,
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        }
     }
     if (!QFile::rename(tmpPath, m_filePath)) {
         qWarning() << "AppSettings: atomic rename failed from" << tmpPath << "to" << m_filePath;
+        if (!displacedCorruptPath.isEmpty()) {
+            QFile::rename(displacedCorruptPath, m_filePath);
+        } else if (rotatedLiveToBackup && !QFile::exists(m_filePath)) {
+            if (!QFile::copy(bakPath, m_filePath)) {
+                qWarning() << "AppSettings: could not restore live settings from backup";
+            } else {
+                QFile::setPermissions(m_filePath,
+                                      QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+            }
+        }
         return;
+    }
+
+    if (!displacedCorruptPath.isEmpty()) {
+        QFile::remove(displacedCorruptPath);
     }
 
     // Restrict permissions to owner read/write (mode 0600).  Default umask
@@ -301,6 +406,8 @@ void AppSettings::save()
     // precedent.  See GHSA-mmqp-cm4w-cvpp (L5).
     QFile::setPermissions(m_filePath,
                           QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    m_loadedCount = m_settings.size();
+    m_preserveRecoveryBackup = false;
 }
 
 void AppSettings::reset()
@@ -310,6 +417,8 @@ void AppSettings::reset()
     m_stationSettings.clear();
     m_stationName = "AetherSDR";
     m_loadedCount = 0;
+    m_loadState = LoadState::NotAttempted;
+    m_preserveRecoveryBackup = false;
     m_persistentGuiClientId.clear();
     m_effectiveGuiClientId.clear();
     m_effectiveStationName.clear();
@@ -431,16 +540,10 @@ void AppSettings::initializeGuiClientIdentity()
         m_effectiveGuiClientId =
             GuiClientIdentityPolicy::automationClientId(m_automationIdentity);
         m_guiClientIdentityTransient = true;
-        m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_AGENT_NAME").trimmed();
-        if (m_automationAgentName.isEmpty()) {
-            m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_STATION").trimmed();
-        }
-        if (m_automationAgentName.isEmpty()) {
-            m_automationAgentName = qEnvironmentVariable("AETHER_AUTOMATION_LABEL").trimmed();
-        }
-        if (m_automationAgentName.isEmpty()) {
-            m_automationAgentName = QStringLiteral("Automation");
-        }
+        m_automationAgentName = GuiClientIdentityPolicy::automationAgentName(
+            qEnvironmentVariable("AETHER_AUTOMATION_AGENT_NAME"),
+            qEnvironmentVariable("AETHER_AUTOMATION_STATION"),
+            qEnvironmentVariable("AETHER_AUTOMATION_LABEL"));
         m_effectiveStationName =
             GuiClientIdentityPolicy::protocolSafeStation(m_automationAgentName);
         return;
@@ -555,8 +658,17 @@ void AppSettings::recordPersistentGuiClientIdReply(const QString& clientId)
 
 void AppSettings::migrateFromQSettings()
 {
-    QSettings old("AetherSDR", "AetherSDR");
-    const QStringList keys = old.allKeys();
+    std::unique_ptr<QSettings> old;
+    if (QStandardPaths::isTestModeEnabled()) {
+        const QString isolatedLegacyPath =
+            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+            + QStringLiteral("/AetherSDR/legacy-qsettings.ini");
+        old = std::make_unique<QSettings>(isolatedLegacyPath, QSettings::IniFormat);
+    } else {
+        old = std::make_unique<QSettings>(QStringLiteral("AetherSDR"),
+                                          QStringLiteral("AetherSDR"));
+    }
+    const QStringList keys = old->allKeys();
 
     if (keys.isEmpty()) {
         // No old settings — first launch. Set defaults.
@@ -582,37 +694,37 @@ void AppSettings::migrateFromQSettings()
 
     // Map old QSettings keys to new XML keys
     // MainWindow
-    if (old.contains("lastRadioSerial"))
-        setValue("LastConnectedRadioSerial", old.value("lastRadioSerial").toString());
-    if (old.contains("geometry"))
-        setValue("MainWindowGeometry", old.value("geometry").toByteArray().toBase64());
-    if (old.contains("windowState"))
-        setValue("MainWindowState", old.value("windowState").toByteArray().toBase64());
-    if (old.contains("splitterState"))
-        setValue("SplitterState", old.value("splitterState").toByteArray().toBase64());
+    if (old->contains("lastRadioSerial"))
+        setValue("LastConnectedRadioSerial", old->value("lastRadioSerial").toString());
+    if (old->contains("geometry"))
+        setValue("MainWindowGeometry", old->value("geometry").toByteArray().toBase64());
+    if (old->contains("windowState"))
+        setValue("MainWindowState", old->value("windowState").toByteArray().toBase64());
+    if (old->contains("splitterState"))
+        setValue("SplitterState", old->value("splitterState").toByteArray().toBase64());
 
     // Spectrum
-    if (old.contains("spectrum/splitRatio"))
-        setValue("SpectrumSplitRatio", old.value("spectrum/splitRatio").toString());
+    if (old->contains("spectrum/splitRatio"))
+        setValue("SpectrumSplitRatio", old->value("spectrum/splitRatio").toString());
 
     // Spots
-    if (old.contains("spots/enabled"))
-        setValue("IsSpotsEnabled", old.value("spots/enabled").toBool() ? "True" : "False");
-    if (old.contains("spots/levels"))
-        setValue("SpotsMaxLevel", old.value("spots/levels").toString());
-    if (old.contains("spots/position"))
-        setValue("SpotsStartingHeightPercentage", old.value("spots/position").toString());
-    if (old.contains("spots/fontSize"))
-        setValue("SpotFontSize", old.value("spots/fontSize").toString());
-    if (old.contains("spots/overrideColors"))
+    if (old->contains("spots/enabled"))
+        setValue("IsSpotsEnabled", old->value("spots/enabled").toBool() ? "True" : "False");
+    if (old->contains("spots/levels"))
+        setValue("SpotsMaxLevel", old->value("spots/levels").toString());
+    if (old->contains("spots/position"))
+        setValue("SpotsStartingHeightPercentage", old->value("spots/position").toString());
+    if (old->contains("spots/fontSize"))
+        setValue("SpotFontSize", old->value("spots/fontSize").toString());
+    if (old->contains("spots/overrideColors"))
         setValue("IsSpotsOverrideColorsEnabled",
-                 old.value("spots/overrideColors").toBool() ? "True" : "False");
-    if (old.contains("spots/overrideBg"))
+                 old->value("spots/overrideColors").toBool() ? "True" : "False");
+    if (old->contains("spots/overrideBg"))
         setValue("IsSpotsOverrideBackgroundColorsEnabled",
-                 old.value("spots/overrideBg").toBool() ? "True" : "False");
-    if (old.contains("spots/overrideBgAuto"))
+                 old->value("spots/overrideBg").toBool() ? "True" : "False");
+    if (old->contains("spots/overrideBgAuto"))
         setValue("IsSpotsOverrideToAutoBackgroundColorEnabled",
-                 old.value("spots/overrideBgAuto").toBool() ? "True" : "False");
+                 old->value("spots/overrideBgAuto").toBool() ? "True" : "False");
 
     // Set defaults for new keys
     setValue("ApplicationVersion", QCoreApplication::applicationVersion());

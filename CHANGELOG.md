@@ -8,6 +8,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.7.3] — 2026-07-19
+
+### Cross-needle metering · radio-state fidelity · operating polish
+
+25 commits since v26.7.2. The headline addition is a new **cross-needle PWR / SWR applet**, joined by configurable analog S-meter themes and more accurate SWR response. This release also tightens radio-authoritative panadapter, KiwiSDR, D-STAR, and CWX behavior; fixes a Linux PC Audio stall after TCI transmit; and rounds out the operating experience across the VFO, memory drawer, compact-screen radio picker, Aetherial Audio, and update dialogs.
+
+Agent automation and release infrastructure get a smaller but useful pass as well: canonical bridge identity in the status chip, optional MCP screenshot output paths, stronger macOS helper signing and bundle placement, a much faster cached Intel Qt build, refreshed documentation, and a release-action dependency bump.
+
+### Metering
+
+- Add a cross-needle forward-power, reflected-power, and SWR meter applet. (#4246 — @rfoust)
+- Add configurable analog S-meter themes and improve SWR meter accuracy. (#4274 — @rfoust)
+- Suppress false HLTH SWR warnings during normal transmit transitions. (#4268 — @jensenpat)
+
+### Radio, display & slice fidelity
+
+- Honor the radio's display state and bound hidden-pan rendering. (#4261 — @jensenpat)
+- Retain KiwiSDR RX across band changes and restore mute state on exit. (#4204 — @ten9876)
+- Reconcile D-STAR slice claims correctly. (#4219 — @rfoust)
+- Make CWX availability follow the active TX slice. (#4269 — @jensenpat)
+
+### Operator workflow
+
+- Show active noise reduction in the VFO DSP label. (#4241 — @jensenpat)
+- Reconcile the SPLIT / SWAP badge from the slice's current role on every update. (#4262 — @Ozy311)
+- Keep the RX applet frequency font scoped correctly after restart. (#4267 — @jensenpat)
+- Keep **Add Memory** visible in short memory drawers. (#4272 — @jensenpat)
+- Keep the local-radio list scrollable and reachable on compact displays. (#4284 — @nigelfenton)
+- Fix frameless edge resizing in Aetherial Audio. (#4266 — @jensenpat)
+- Reserve title-bar margin so update-dialog text is not clipped. (#4245 — @aethersdr-agent)
+
+### Audio, diagnostics & automation
+
+- Fix the Linux PC Audio capture stall after a TCI transmit handoff. (#4251 — @jensenpat)
+- Add opt-in TX capture health summaries for diagnosing TCI handoffs. (#4233 — @jensenpat)
+- Use the canonical automation agent identity in the status chip and accessibility metadata. (#4283 — @rfoust)
+- Add an optional output path to MCP `grab_widget`. (#4270 — @skerker)
+
+### Packaging, build & documentation
+
+- Sign additional `Contents/MacOS` helpers, including `aether-dv-waveform`, before notarization. (#4213 — @ten9876)
+- Put `AetherDV.cfg` in `Contents/Resources` instead of `Contents/MacOS`. (#4218 — @ten9876)
+- Cache the Intel from-source Qt build, reducing the path from roughly 2.5 hours to about 20 minutes. (#4217 — @ten9876)
+- Refresh the README and current 3D stacked-trace showcase image. (#4244 plus follow-up asset — @ten9876)
+- Note the optional `setup-deepfilter.sh` prerequisite for local DFNR builds. (#4282 — @ten9876)
+- Bump `softprops/action-gh-release` from 3.0.1 to 3.0.2. (#4285 — @dependabot)
+
+### Contributors
+
+Big thanks to **@jensenpat** (9 commits — panadapter state, audio / TCI, CWX, VFO and memory polish), **@ten9876** (maintainer, 7 commits — macOS packaging, KiwiSDR band recall, documentation and build work), **@rfoust** (4 commits — cross-needle and analog meters, D-STAR reconciliation, automation identity), **@nigelfenton** (1 commit — compact-screen radio selection), **@aethersdr-agent** (the AetherClaude orchestrator, 1 commit — update-dialog layout), **@Ozy311** (1 commit — SPLIT / SWAP badge state), and **@skerker** (1 commit — MCP screenshot output). Dependabot contributed 1 dependency bump.
+
+73, Pat KI6BCJ & Codex (AI dev partner)
+
 ## [v26.7.2] — 2026-07-12
 
 ### aetherd radio-backend seam · MCP server for AI agents · BNR on RTX 50-series · searchable Radio Setup · KiwiSDR passwords · D-STAR ThumbDV
@@ -8963,4 +9016,3 @@ AetherSDR now creates its own independent slice and panadapter when connecting t
 https://github.com/ten9876/AetherSDR/compare/v0.2.1...v0.2.2
 
 ---
-

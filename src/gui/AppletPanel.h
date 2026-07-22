@@ -27,8 +27,11 @@ namespace AetherSDR {
 class SliceModel;
 class RxApplet;
 class SMeterWidget;
+class CrossNeedleMeterApplet;
+class CrossNeedleMeterWidget;
 class TunerApplet;
 class AmpApplet;
+class AcomApplet;
 class TxApplet;
 class PhoneCwApplet;
 class PhoneApplet;
@@ -77,8 +80,21 @@ public:
 
     RxApplet*     rxApplet()      { return m_rxApplet; }
     SMeterWidget* sMeterWidget()  { return m_sMeter; }
+    CrossNeedleMeterWidget* crossNeedleMeterWidget() const;
+    void setMeterTxValues(float forwardWatts, float swr);
+    void setStandardMeterTxValues(float forwardWatts, float swr);
+    void setStandardRadioMeterTxValues(float forwardWatts,
+                                       float forwardWattsInstant,
+                                       float swr);
+    void setCrossNeedleDirectionalValues(float forwardWatts,
+                                         float reflectedWatts,
+                                         float swr,
+                                         bool reflectedPowerMeasured);
+    void setMeterTransmitting(bool transmitting);
+    void setMeterPowerScale(int maxWatts, bool amplifierActive);
     TunerApplet*  tunerApplet()   { return m_tunerApplet; }
     AmpApplet*    ampApplet()     { return m_ampApplet; }
+    AcomApplet*   acomApplet()    { return m_acomApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
@@ -138,6 +154,11 @@ public:
 
     // Show/hide the AMP button and applet based on amplifier presence.
     void setAmpVisible(bool visible);
+
+    // Show/hide the ACOM button and applet based on a direct ACOM amplifier
+    // connection. Independent of setAmpVisible — a station can have both a
+    // radio-relayed PGXL and a direct-connected ACOM amplifier at once.
+    void setAcomVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -244,6 +265,8 @@ private:
                                     const QString& appletKey,
                                     bool hardwareVisible);
     void markHardwareConditional(const QString& id);
+    void persistVuMeterSettings() const;
+    void showStandardMeterContextMenu(QWidget* source, const QPoint& position);
     static const int kFavoriteCount = 5;
 
     ContainerManager* m_containerMgr{nullptr};
@@ -255,10 +278,18 @@ private:
     ContainerWidget* m_sMeterContainer{nullptr};
     QPushButton*     m_vuBtn{nullptr};
     SMeterWidget*    m_sMeter{nullptr};
+    CrossNeedleMeterApplet* m_crossNeedleApplet{nullptr};
+    int              m_vuTxSelect{0};
+    int              m_vuRxSelect{0};
+    bool             m_vuPeakHoldEnabled{false};
+    QString          m_vuPeakDecayRate{QStringLiteral("Medium")};
+    QString          m_vuFaceTheme{QStringLiteral("aether-default")};
     RxApplet*    m_rxApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};
     QPushButton* m_ampBtn{nullptr};
+    AcomApplet*  m_acomApplet{nullptr};
+    QPushButton* m_acomBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
     PhoneApplet*   m_phoneApplet{nullptr};

@@ -26,6 +26,7 @@
 #include "core/FirmwareStager.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
+#include "core/AcomConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "core/CallsignLookupService.h"
 #include "core/QrzLookupSettings.h"
@@ -588,16 +589,52 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
     if (idx >= 0) combo->setCurrentIndex(idx);
 }
 
+#ifdef HAVE_SERIALPORT
+// Populates a serial-port combo (real ports discovered via QSerialPortInfo,
+// plus a trailing "Custom..." sentinel) and selects the entry matching
+// savedPort. If none of the discovered ports match — the saved port isn't
+// currently plugged in, or it's a non-standard path (e.g. /dev/ttyUSB0 on
+// Linux, a symlinked TTY) — falls back to "Custom..." with customEdit
+// pre-filled, so the saved value is never silently dropped. Returns true if
+// the fallback (Custom) was selected. Shared by the CW/keying Port
+// Configuration group and the ACOM Peripherals row, which independently
+// re-implemented this match/fallback logic with a subtly different
+// isCustom computation before this was factored out.
+static bool populateSerialPortCombo(QComboBox* combo, QLineEdit* customEdit,
+                                    const QString& savedPort)
+{
+    for (const auto& info : QSerialPortInfo::availablePorts())
+        combo->addItem(QString("%1 — %2").arg(info.portName(), info.description()),
+                        info.portName());
+    combo->addItem("Custom...", QStringLiteral("__custom__"));
+
+    bool isCustom = !savedPort.isEmpty();
+    for (int i = 0; i < combo->count() - 1; ++i) {
+        if (combo->itemData(i).toString() == savedPort) {
+            combo->setCurrentIndex(i);
+            isCustom = false;
+            break;
+        }
+    }
+    if (isCustom) {
+        combo->setCurrentIndex(combo->count() - 1);
+        if (customEdit) customEdit->setText(savedPort);
+    }
+    return isCustom;
+}
+#endif
+
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    TgxlConnection* tgxl, PgxlConnection* pgxl,
                                    AntennaGeniusModel* ag,
                                    KiwiSdrManager* kiwiSdrManager,
+                                   AcomConnection* acom,
                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
-      m_kiwiSdrManager(kiwiSdrManager)
+      m_kiwiSdrManager(kiwiSdrManager), m_acom(acom)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(960, 680);
@@ -1570,7 +1607,42 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             grid->addWidget(txCheck, 3, 1);
         }
 
-        grid->addWidget(new QLabel("Network MTU:"), 4, 0);
+        // Observe only — the read-only gate (#4188 area 6). When checked, the
+        // bridge refuses every mutating verb (set/invoke/connect/tune/capture…)
+        // and answers only pure-introspection reads. Enforced in the bridge, so
+        // no MCP client can flip it off. Lets the operator start the app, arm
+        // observe-only, then start the MCP server for a look-but-don't-touch
+        // session. An env override (AETHER_AUTOMATION_READONLY) pins it for
+        // headless/CI runs.
+        {
+            grid->addWidget(new QLabel("Observe only:"), 4, 0);
+            auto* roCheck = new QCheckBox("Read-only (block all driving)");
+            roCheck->setObjectName(QStringLiteral("automationReadOnlyCheck"));
+            const bool envForcesRo = qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY");
+            roCheck->setChecked(AutomationBridgeSettings::readOnly() || envForcesRo);
+            roCheck->setToolTip(
+                "Make the bridge observe-only: MCP clients can read state\n"
+                "(ping/whoami/get/dumpTree/grab, read-only log and streams\n"
+                "actions, floors, and hitTest)\n"
+                "but every mutating verb is refused. Enforced in the app, so a\n"
+                "client cannot bypass it. Toggle takes effect immediately on the\n"
+                "running bridge. See docs/automation-bridge.md.");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(roCheck,
+                "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
+                "QCheckBox::indicator { width: 14px; height: 14px; }");
+            if (envForcesRo) {
+                roCheck->setEnabled(false);
+                roCheck->setToolTip(roCheck->toolTip()
+                    + "\n\nForced on by the AETHER_AUTOMATION_READONLY launch variable.");
+            }
+            connect(roCheck, &QCheckBox::toggled, this, [this](bool on) {
+                AutomationBridgeSettings::setReadOnly(on);
+                emit automationBridgeReadOnlyChanged(on);
+            });
+            grid->addWidget(roCheck, 4, 1);
+        }
+
+        grid->addWidget(new QLabel("Network MTU:"), 5, 0);
         auto* mtuSpin = new QSpinBox;
         mtuSpin->setRange(576, 9000);
         mtuSpin->setValue(AppSettings::instance().value("NetworkMtu", "1450").toInt());
@@ -1582,7 +1654,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().setValue("NetworkMtu", QString::number(val));
             AppSettings::instance().save();
         });
-        grid->addWidget(mtuSpin, 4, 1);
+        grid->addWidget(mtuSpin, 5, 1);
 
         // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
         // kernel clamps the grant at net.core.rmem_max, so we show the granted
@@ -1599,7 +1671,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             return QStringLiteral("%1 KB").arg(b / 1024);
         };
 
-        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 5, 0);
+        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 6, 0);
         auto* bufRow = new QWidget;
         auto* bufLay = new QHBoxLayout(bufRow);
         bufLay->setContentsMargins(0, 0, 0, 0);
@@ -1627,7 +1699,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         bufValLabel->setMinimumWidth(48);
         bufLay->addWidget(bufSlider, 1);
         bufLay->addWidget(bufValLabel);
-        grid->addWidget(bufRow, 5, 1);
+        grid->addWidget(bufRow, 6, 1);
 
         auto* bufGrantedLabel = new QLabel;
         if (m_model && m_model->panStream()) {
@@ -1635,7 +1707,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
                                            : QStringLiteral("granted: — (applies on connect)"));
         }
-        grid->addWidget(bufGrantedLabel, 6, 1);
+        grid->addWidget(bufGrantedLabel, 7, 1);
 
         connect(bufSlider, &QSlider::valueChanged, this,
                 [this, bufValLabel, fmtBytes](int idx) {
@@ -5401,22 +5473,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addWidget(new QLabel("Port:"), 0, 0);
         auto* portCombo = new QComboBox;
         portCombo->setMinimumWidth(200);
-        for (const auto& info : QSerialPortInfo::availablePorts())
-            portCombo->addItem(QString("%1 — %2").arg(info.portName(), info.description()),
-                               info.portName());
-        // "Custom..." sentinel triggers manual entry field
-        portCombo->addItem("Custom...", QStringLiteral("__custom__"));
         QString savedPort = settings.value("SerialPortName", "").toString();
-        bool isCustom = false;
-        for (int i = 0; i < portCombo->count() - 1; ++i) {
-            if (portCombo->itemData(i).toString() == savedPort) {
-                portCombo->setCurrentIndex(i);
-                break;
-            }
-            if (i == portCombo->count() - 2) {
-                isCustom = !savedPort.isEmpty();
-            }
-        }
+        auto* customEdit = new QLineEdit;
+        customEdit->setPlaceholderText("/dev/ttyr0");
+        bool isCustom = populateSerialPortCombo(portCombo, customEdit, savedPort);
         grid->addWidget(portCombo, 0, 1);
 
         auto* refreshBtn = new QPushButton("Refresh");
@@ -5427,14 +5487,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Custom port row — hidden unless "Custom..." selected or saved port is custom
         auto* customLabel = new QLabel("Path:");
-        auto* customEdit = new QLineEdit;
-        customEdit->setPlaceholderText("/dev/ttyr0");
         customLabel->setVisible(isCustom);
         customEdit->setVisible(isCustom);
-        if (isCustom) {
-            customEdit->setText(savedPort);
-            portCombo->setCurrentIndex(portCombo->count() - 1);  // select "Custom..."
-        }
         grid->addWidget(customLabel, 1, 0);
         grid->addWidget(customEdit, 1, 1, 1, 3);
 
@@ -6592,6 +6646,201 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
     }
 
+    // Row 5: ACOM S-series amplifier — serial OR ser2net network, unlike the
+    // rows above (which are network-only). See
+    // docs/architecture/acom-600s-amplifier-design.md for the design note.
+    if (m_acom) {
+        const int row = 5;
+        static const QString kComboStyle =
+            "QComboBox { background: #1a2a3a; border: 1px solid #304050; "
+            "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }"
+            "QComboBox::drop-down { border: none; }";
+
+        auto* devWidget = new QWidget;
+        auto* devLay = new QVBoxLayout(devWidget);
+        devLay->setContentsMargins(0, 0, 0, 0);
+        devLay->setSpacing(2);
+        auto* devLbl = new QLabel("ACOM Amplifier");
+        devLbl->setStyleSheet(kLabelStyle);
+        devLay->addWidget(devLbl);
+        auto* modeCombo = new QComboBox;
+        modeCombo->setStyleSheet(kComboStyle);
+#ifdef HAVE_SERIALPORT
+        modeCombo->addItem("Serial", "Serial");
+#endif
+        modeCombo->addItem("Network", "Network");
+        devLay->addWidget(modeCombo);
+        grid->addWidget(devWidget, row, 0);
+
+        // Address column: serial-port combo (with "Custom..." fallback, same
+        // pattern as the CW/keying Port Configuration group) OR a plain IP
+        // field, swapped via a QStackedWidget.
+        auto* addrStack = new QStackedWidget;
+        int serialPageIdx = -1;
+        QComboBox* serialCombo = nullptr;
+        QLineEdit* serialCustomEdit = nullptr;
+#ifdef HAVE_SERIALPORT
+        {
+            auto* serialPage = new QWidget;
+            auto* lay = new QHBoxLayout(serialPage);
+            lay->setContentsMargins(0, 0, 0, 0);
+            serialCombo = new QComboBox;
+            serialCombo->setStyleSheet(kComboStyle);
+            serialCustomEdit = new QLineEdit;
+            serialCustomEdit->setPlaceholderText("/dev/ttyUSB0");
+            serialCustomEdit->setStyleSheet(kEditStyle);
+            const QString savedSerialPort = PeripheralSettings::deviceString("Acom", "SerialPort");
+            populateSerialPortCombo(serialCombo, serialCustomEdit, savedSerialPort);
+            serialCustomEdit->setVisible(serialCombo->currentData().toString() == "__custom__");
+            connect(serialCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [serialCombo, serialCustomEdit](int idx) {
+                serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
+            });
+            lay->addWidget(serialCombo, 1);
+            lay->addWidget(serialCustomEdit, 1);
+            serialPageIdx = addrStack->addWidget(serialPage);
+        }
+#endif
+        auto* netPage = new QWidget;
+        auto* netLay = new QHBoxLayout(netPage);
+        netLay->setContentsMargins(0, 0, 0, 0);
+        auto* netIpEdit = new QLineEdit;
+        netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.52");
+        netIpEdit->setStyleSheet(kEditStyle);
+        netIpEdit->setText(PeripheralSettings::deviceString("Acom", "ManualIp"));
+        netLay->addWidget(netIpEdit);
+        const int netPageIdx = addrStack->addWidget(netPage);
+        grid->addWidget(addrStack, row, 1);
+
+        // Port/baud column: fixed "9600 8N1" text for serial (not
+        // user-configurable — mandated by the amplifier's own protocol
+        // spec) OR a port spin box for network mode.
+        auto* portStack = new QStackedWidget;
+        int serialBaudIdx = -1;
+#ifdef HAVE_SERIALPORT
+        {
+            auto* fixedLbl = new QLabel("9600 8N1");
+            fixedLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+            serialBaudIdx = portStack->addWidget(fixedLbl);
+        }
+#endif
+        auto* netPortSpin = new QSpinBox;
+        netPortSpin->setRange(1, 65535);
+        netPortSpin->setValue(PeripheralSettings::deviceInt("Acom", "ManualPort", 7000));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(netPortSpin,
+            "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
+        const int netPortIdx = portStack->addWidget(netPortSpin);
+        grid->addWidget(portStack, row, 2);
+
+        auto applyMode = [=](const QString& mode) {
+#ifdef HAVE_SERIALPORT
+            if (mode == "Serial" && serialPageIdx >= 0) {
+                addrStack->setCurrentIndex(serialPageIdx);
+                portStack->setCurrentIndex(serialBaudIdx);
+                return;
+            }
+#endif
+            addrStack->setCurrentIndex(netPageIdx);
+            portStack->setCurrentIndex(netPortIdx);
+        };
+        const QString savedMode = PeripheralSettings::deviceString("Acom", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        {
+            const int idx = modeCombo->findData(savedMode);
+            modeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+        applyMode(modeCombo->currentData().toString());
+        connect(modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [=](int idx) {
+            const QString mode = modeCombo->itemData(idx).toString();
+            PeripheralSettings::setDeviceString("Acom", "ConnectionMode", mode);
+            applyMode(mode);
+        });
+
+        auto* statusLbl = new QLabel(m_acom->isConnected() ? "Connected" : "Not connected");
+        statusLbl->setStyleSheet(m_acom->isConnected()
+            ? "QLabel { color: #00e060; font-size: 11px; }"
+            : "QLabel { color: #8aa8c0; font-size: 11px; }");
+        grid->addWidget(statusLbl, row, 4);
+
+        auto* acomBtn = new QPushButton(m_acom->isConnected() ? "Disconnect" : "Connect");
+        acomBtn->setStyleSheet(kBtnStyle);
+        grid->addWidget(acomBtn, row, 3);
+
+        auto updateAcomState = [this, acomBtn, statusLbl]() {
+            const bool conn = m_acom->isConnected();
+            acomBtn->setText(conn ? "Disconnect" : "Connect");
+            statusLbl->setText(conn ? "Connected" : "Not connected");
+            statusLbl->setStyleSheet(conn
+                ? "QLabel { color: #00e060; font-size: 11px; }"
+                : "QLabel { color: #8aa8c0; font-size: 11px; }");
+        };
+        connect(m_acom, &AcomConnection::connected, this, updateAcomState);
+        connect(m_acom, &AcomConnection::disconnected, this, updateAcomState);
+        connect(m_acom, &AcomConnection::connectionFailed, this,
+                [statusLbl](const QString& err) {
+            statusLbl->setText("Error: " + err);
+            statusLbl->setStyleSheet("QLabel { color: #e06060; font-size: 11px; }");
+        });
+
+        connect(acomBtn, &QPushButton::clicked, this, [=, this]() {
+            if (m_acom->isConnected()) {
+                m_acom->disconnect();
+                return;
+            }
+            const QString mode = modeCombo->currentData().toString();
+            if (mode == "Network") {
+                const QString ip = netIpEdit->text().trimmed();
+                if (ip.isEmpty()) return;
+                const int port = netPortSpin->value();
+                PeripheralSettings::setDeviceString("Acom", "ManualIp", ip);
+                PeripheralSettings::setDeviceInt("Acom", "ManualPort", port);
+                m_acom->connectNetwork(ip, static_cast<quint16>(port));
+            }
+#ifdef HAVE_SERIALPORT
+            else {
+                QString port = serialCombo->currentData().toString();
+                if (port == "__custom__")
+                    port = serialCustomEdit->text().trimmed();
+                if (port.isEmpty()) return;
+                PeripheralSettings::setDeviceString("Acom", "SerialPort", port);
+                m_acom->connectSerial(port);
+            }
+#endif
+        });
+
+        // Save-on-close: same "user cleared the field and closed the dialog
+        // without clicking Connect/Disconnect" handling the network-only
+        // rows get via buildRow() above — wipe the saved manual network IP
+        // (and its port) so a cleared field does not leave a stale
+        // auto-connect target behind. Serial mode has no equivalent free-text
+        // field to leak (the combo always resolves to either a discovered
+        // port or the explicit "Custom..." edit, which is only committed on
+        // a Connect click), so this only covers Acom's ManualIp/ManualPort.
+        m_peripheralRowSavers.append([netIpEdit, this]() {
+            if (!netIpEdit) return;
+            const QString ip = netIpEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = PeripheralSettings::deviceString("Acom", "ManualIp");
+            if (savedIp.isEmpty()) return;
+            PeripheralSettings::clearDeviceField("Acom", "ManualIp");
+            PeripheralSettings::clearDeviceField("Acom", "ManualPort");
+            // Only disconnect if the live connection is actually the network
+            // target being cleared — ACOM, unlike the network-only rows
+            // above, may currently be connected over Serial instead, which
+            // this saved IP has nothing to do with.
+            if (m_acom->isConnected() && m_acom->description().startsWith(savedIp + ":")) {
+                m_acom->disconnect();
+            }
+        });
+    }
+
     for (auto* lbl : group->findChildren<QLabel*>())
         if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);
 
@@ -6615,6 +6864,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         }
         if (m_ag) {
             m_ag->setAutoReconnect(on);
+        }
+        if (m_acom) {
+            m_acom->setAutoReconnect(on);
         }
     });
     vbox->addWidget(reconnectCheck);

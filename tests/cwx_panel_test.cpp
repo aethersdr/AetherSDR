@@ -1,6 +1,8 @@
 // Focused CWX panel behavior tests.
 // Run: ./build/cwx_panel_test
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "gui/CwxPanel.h"
 #include "models/CwxModel.h"
 
@@ -228,7 +230,12 @@ void testResendPreservesSpeedModifiers()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-cwx-panel-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("CWX panel behavior test harness\n\n");
 
     testLiveButtonTogglesOff();

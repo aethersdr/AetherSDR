@@ -48,6 +48,10 @@ public:
     void setHistoryCapacityRows(int rows);
     int historyCapacityRows() const { return m_historyCapacityRows; }
     int historyRowCount() const { return m_historyRowCount; }
+    quint64 fixedStorageBytes() const;
+    quint64 historyStorageBytes() const;
+    quint64 cacheStorageBytes() const;
+    quint64 allocatedBytes() const;
     void appendHistoryRow(const QVector<float>& binsDbm,
                           double centerMhz, double bandwidthMhz,
                           float fallbackDbm);

@@ -20,14 +20,17 @@
 #include "MainWindow.h"
 
 #include "AetherDspWidget.h"
+#include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AppletPanel.h"
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
+#include "GpsLocationDialog.h"
 #include "RxApplet.h"
 #include "AmpApplet.h"
+#include "AcomApplet.h"
 #include "HealthApplet.h"
 #include "MeterApplet.h"
 #include "ProfileSwitcherApplet.h"
@@ -177,6 +180,11 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 }
 
 } // namespace
+
+void MainWindow::showGpsLocationDialog()
+{
+    showOrRaisePersistent(m_gpsLocationDialog, &m_radioModel);
+}
 
 int MainWindow::centerLockSliceForPan(const QString& panId) const
 {
@@ -1328,6 +1336,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         syncTxWaterfallSliceToSpectrums();
         updateSplitState();
 
+        // TX flag just moved — keyer availability follows the TX slice (#4173).
+        updateKeyerAvailability();
+
         // Active follows TX slice (#1351) — switch the displayed/active slice
         // when an external program (e.g. WSJT-X) moves the TX flag
         if (tx && s->sliceId() != m_activeSliceId
@@ -1363,9 +1374,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
             refreshCwDecodeState();
             refreshRttyDecodeState();
 
-            // Update CWX/DVK indicator availability for new mode
-            updateKeyerAvailability(mode);
-
             // Disable client-side DSP in digital and CW modes — NR2/RN2/BNR
             // corrupt digital data (#534) and suppress CW tones (#784)
             bool disableDsp = (mode == "DIGU" || mode == "DIGL" || mode == "RTTY"
@@ -1383,6 +1391,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNvAfxEnabled(false); });
             }
         }
+
+        // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice,
+        // so re-evaluate only when the TX slice changes mode (#4173).
+        if (s->isTxSlice())
+            updateKeyerAvailability();
 #ifdef HAVE_RADE
         if (mode.startsWith("FDV"))
             activateFdvDisplay(s->sliceId());
@@ -1533,9 +1546,46 @@ void MainWindow::onSliceRemoved(int id)
     }
     m_centerLockTuneHoldBySlice.remove(id);
 
-    m_kiwiSdrVirtualPreviousMute.remove(id);
-    if (m_kiwiSdrManager) {
-        m_kiwiSdrManager->clearSliceAssignment(id);
+    // A band-stack recall (band_persistence) DROPS and RE-CREATES the slice
+    // (same id, new band) instead of retuning it, which would tear down a
+    // KiwiSDR replacement on the removal. Defer that teardown across the
+    // remove->re-add so onSliceAdded can re-bind the Kiwi (retuned to the new
+    // band) instead of reverting to a plain Flex slice (#4158). m_kiwiRebind is
+    // the pure policy — see KiwiRebindTracker; identity is gated on band-recall
+    // intent and generation, not slice id + time.
+    //
+    // `live` distinguishes a genuine removal (the slice has already left the
+    // model, so slice(id) is null) from the reconnect stale-slice prune (a
+    // sliceRemoved(oldId) whose id already belongs to a live new-session slice)
+    // — same guard the center-lock logic above uses. Only a live Kiwi removal
+    // defers; the prune keeps the pre-existing immediate cleanup and never
+    // enters the grace path, so a stale prune can't later clear a live
+    // assignment.
+    const bool liveRemoval = !m_radioModel.slice(id);
+    const QString kiwiRebindProfile = (liveRemoval && m_kiwiSdrManager)
+        ? m_kiwiSdrManager->assignedProfileForSlice(id) : QString();
+    const auto rebindAction =
+        m_kiwiRebind.onSliceRemoved(id, liveRemoval, kiwiRebindProfile);
+    if (rebindAction.kind == KiwiRebindTracker::RemoveAction::Defer) {
+        // Leave the assignment (and Kiwi connection) and the pre-Kiwi mute
+        // intact during the window so a re-bind is seamless. If no recreation
+        // re-binds it, the generation-safe expiry finalizes the teardown.
+        const quint64 generation = rebindAction.generation;
+        QTimer::singleShot(kKiwiSdrRebindGraceMs, this, [this, id, generation]() {
+            if (!m_kiwiRebind.onGraceExpired(id, generation)) {
+                return;
+            }
+            m_kiwiSdrVirtualPreviousMute.remove(id);
+            if (m_kiwiSdrManager) {
+                m_kiwiSdrManager->clearSliceAssignment(id);
+            }
+            syncKiwiSdrPanadapterUiStates();
+        });
+    } else {
+        m_kiwiSdrVirtualPreviousMute.remove(id);
+        if (m_kiwiSdrManager) {
+            m_kiwiSdrManager->clearSliceAssignment(id);
+        }
     }
     syncKiwiSdrPanadapterUiStates();
 
@@ -2073,6 +2123,86 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 }
 
+void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
+                                      PanadapterModel* pan)
+{
+    if (!applet || !pan) {
+        return;
+    }
+    SpectrumWidget* sw = applet->spectrumWidget();
+    if (!sw) {
+        return;
+    }
+
+    const QString panId = applet->panId();
+    QVector<QMetaObject::Connection> oldConnections =
+        m_panDisplayStatusConnections.take(panId);
+    for (const QMetaObject::Connection& connection : oldConnections) {
+        QObject::disconnect(connection);
+    }
+
+    QVector<QMetaObject::Connection> connections;
+    connections.reserve(4);
+    connections.append(connect(
+        pan, &PanadapterModel::averageReported,
+        sw, [sw](int average) {
+            if (average >= 0) {
+                sw->setFftAverage(average);
+            }
+        }));
+    connections.append(connect(
+        pan, &PanadapterModel::weightedAverageReported,
+        sw, [sw, pan](bool weighted) {
+            // Guard on "known" like the other three fields, so an unreported
+            // value doesn't paint a definitive unchecked box (#4261).
+            if (pan->weightedAverageKnown()) {
+                sw->setFftWeightedAvg(weighted);
+            }
+        }));
+    connections.append(connect(
+        pan, &PanadapterModel::fpsReported,
+        sw, [this, sw](int fps) {
+            // The adaptive cap is transient client transport state: suppress only
+            // the cap's own echo so the pre-cap radio value stays the restore
+            // target, but let a genuine radio/profile update through even while
+            // throttled (#4261 — otherwise it's lost when the throttle lifts).
+            if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                            m_adaptiveFpsCap, fps)) {
+                sw->setFftFps(fps);
+            }
+        }));
+    connections.append(connect(
+        pan, &PanadapterModel::waterfallLineDurationReported,
+        sw, [this, sw](int lineDurationMs) {
+            if (applyThrottledDisplayReport(
+                    m_adaptiveThrottleActive,
+                    m_radioModel.adaptiveWfMsForCap(m_adaptiveFpsCap),
+                    lineDurationMs)) {
+                sw->setWfLineDuration(lineDurationMs);
+            }
+        }));
+    m_panDisplayStatusConnections.insert(panId, connections);
+
+    // Reclaimed pans already hold their latest status and do not necessarily
+    // emit a new report after reconnect. Seed the view immediately.
+    if (pan->average() >= 0) {
+        sw->setFftAverage(pan->average());
+    }
+    if (pan->weightedAverageKnown()) {
+        sw->setFftWeightedAvg(pan->weightedAverage());
+    }
+    if (applyThrottledDisplayReport(m_adaptiveThrottleActive,
+                                    m_adaptiveFpsCap, pan->fps())) {
+        sw->setFftFps(pan->fps());
+    }
+    if (applyThrottledDisplayReport(
+            m_adaptiveThrottleActive,
+            m_radioModel.adaptiveWfMsForCap(m_adaptiveFpsCap),
+            pan->waterfallLineDuration())) {
+        sw->setWfLineDuration(pan->waterfallLineDuration());
+    }
+}
+
 
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
@@ -2340,7 +2470,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // correct radio-reported range via the pendingDbm guard. (#3034)
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
-        wirePanReconcilers(applet, pan);
+        wirePanDisplayStatus(applet, pan);
     }
     syncTxWaterfallSliceToSpectrums();
 
@@ -2632,6 +2762,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setFftFillAlpha);
     connect(menu, &SpectrumOverlayMenu::fftFillColorChanged,
             sw, &SpectrumWidget::setFftFillColor);
+    connect(menu, &SpectrumOverlayMenu::fftLineColorChanged,
+            sw, &SpectrumWidget::setFftLineColor);
     connect(menu, &SpectrumOverlayMenu::fftHeatMapChanged,
             sw, &SpectrumWidget::setFftHeatMap);
     connect(menu, &SpectrumOverlayMenu::showGridChanged,
@@ -3039,6 +3171,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFps(25);
         sw->setFftFillAlpha(0.70f);
         sw->setFftFillColor(QColor(0x00, 0xe5, 0xff));
+        sw->setFftLineColor(QColor(0x00, 0xe5, 0xff));
         sw->setFftLineWidth(2.0f);
         sw->setFftWeightedAvg(false);
         sw->setFftHeatMap(true);
@@ -3086,19 +3219,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
         // Persist all defaults to AppSettings
         auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayFftAverage"),          "0");
-        s.setValue(sw->settingsKey("DisplayFftFps"),              "25");
         s.setValue(sw->settingsKey("DisplayFftFillAlpha"),        "0.70");
         s.setValue(sw->settingsKey("DisplayFftFillColor"),        "#00e5ff");
+        s.setValue(sw->settingsKey("DisplayFftLineColor"),        "#00e5ff");
         s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "2.0");
-        s.setValue(sw->settingsKey("DisplayFftWeightedAvg"),      "False");
         s.setValue(sw->settingsKey("DisplayFftHeatMap"),          "True");
         s.setValue(sw->settingsKey("DisplayWfColorScheme"),       "0");
         s.setValue(sw->settingsKey("DisplayWfColorGain"),         "50");
         s.setValue(sw->settingsKey("DisplayWfBlackLevel"),        "15");
         s.setValue(sw->settingsKey("DisplayWfAutoBlack"),         "True");
         s.setValue(sw->settingsKey("DisplayWfAutoBlackRadioSide"), "False");
-        s.setValue(sw->settingsKey("DisplayWfLineDuration"),      "100");
         s.setValue(sw->settingsKey("WaterfallBlankingEnabled"),   "False");
         s.setValue(sw->settingsKey("WaterfallBlankingThreshold"), "1.15");
         s.setValue(sw->settingsKey("WaterfallBlankingMode"),      "0");
@@ -3566,6 +3696,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 << " xvtr=" << xvtrForBandSummary(bandName, xvtrs);
             clearSwrSweepForBandChange(-1, applet->panId(), bandName);
             m_bandSettings.setCurrentBand(bandName);
+            // A band recall makes the radio drop+re-create this pan's slice;
+            // mark the pan (positive band-recall intent) so onSliceAdded re-binds
+            // a KiwiSDR replacement onto the recreated slice instead of reverting
+            // to Flex (#4158). One-shot: consumed by the re-bind, or expired here
+            // so a recall on a non-Kiwi slice can't leave the marker stale.
+            m_kiwiRebind.noteBandRecall(applet->panId());
+            QTimer::singleShot(kKiwiSdrRebindGraceMs, this,
+                               [this, panId = applet->panId()]() {
+                m_kiwiRebind.clearBandRecall(panId);
+            });
             m_radioModel.sendCommand(
                 QString("display pan set %1 band=%2").arg(applet->panId()).arg(stackKey));
             QTimer::singleShot(300, this, [this, panId = applet->panId()]() {
@@ -3582,7 +3722,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
                               &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                              m_kiwiSdrManager);
+                              m_kiwiSdrManager, &m_acomConn);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -4223,7 +4363,8 @@ void MainWindow::wireMeters()
             this, [this](float fwd, float swr) {
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
-        m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
+        m_appletPanel->setStandardRadioMeterTxValues(
+            fwd, m_radioModel.meterModel().fwdPowerInstant(), swr);
 #ifdef HAVE_HIDAPI
         m_tmate2TxWatts = fwd;
         if (m_radioModel.transmitModel().isTransmitting()) {
@@ -4232,10 +4373,21 @@ void MainWindow::wireMeters()
         }
 #endif
     });
+    connect(&m_radioModel.meterModel(),
+            &MeterModel::directionalPowerMetersChanged,
+            this, [this](float fwd, float reflected, float swr,
+                         bool reflectedPowerMeasured) {
+        if (m_radioModel.amplifier().present()
+            && m_radioModel.amplifier().operate()) {
+            return;
+        }
+        m_appletPanel->setCrossNeedleDirectionalValues(
+            fwd, reflected, swr, reflectedPowerMeasured);
+    });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            m_appletPanel->sMeterWidget(), &SMeterWidget::setTransmitting);
+            m_appletPanel, &AppletPanel::setMeterTransmitting);
 
     // ── Tuner: MeterModel TX meters → TunerApplet gauges ────────────────
     // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
@@ -4271,10 +4423,18 @@ void MainWindow::wireMeters()
         m_tgxlConn.setAutoReconnect(ar);
         m_pgxlConn.setAutoReconnect(ar);
         m_antennaGenius.setAutoReconnect(ar);
+        m_acomConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // ACOM deliberately does NOT route through AmpModel — it has its own
+    // dedicated AcomApplet talking straight to AcomConnection (commands and
+    // telemetry alike), so AmpModel stays 100% PGXL/Flex-relay-only. Wiring
+    // ACOM into AmpModel's shared presence signal previously caused the AMP
+    // (PGXL) panel to appear whenever ACOM connected, since AmpModel::present()
+    // couldn't distinguish "PGXL relayed" from "ACOM direct". See
+    // docs/architecture/acom-600s-amplifier-design.md.
     // Also attempt connection when TGXL IP arrives (may come after presence)
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, [this]() {
         auto* tuner = &m_radioModel.tunerModel();
@@ -4339,10 +4499,10 @@ void MainWindow::wireMeters()
             }
             // Ensure S-Meter is in TX mode when PGXL reports transmitting
             if (kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->sMeterWidget()->setTransmitting(true);
+                m_appletPanel->setMeterTransmitting(true);
             else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->sMeterWidget()->setTransmitting(false);
-            m_appletPanel->sMeterWidget()->setTxMeters(watts, swr);
+                m_appletPanel->setMeterTransmitting(false);
+            m_appletPanel->setMeterTxValues(watts, swr);
 #ifdef HAVE_HIDAPI
             m_tmate2TxWatts = watts;
             if (m_radioModel.transmitModel().isTransmitting()) {
@@ -4403,6 +4563,119 @@ void MainWindow::wireMeters()
         m_radioModel.amplifier().setOperate(on);
     });
 
+    // ── ACOM S-series amplifier — serial or ser2net, no FlexRadio relay ─────
+    // See docs/architecture/acom-600s-amplifier-design.md. All signal wiring
+    // happens before the startup auto-connect trigger at the bottom of this
+    // block — connectSerial() can call onTransportUp() synchronously (unlike
+    // connectNetwork(), which waits on the TCP handshake), so wiring after
+    // triggering auto-connect would silently miss the first connected()/
+    // modelChanged() emission on every app start with a saved serial config.
+    connect(&m_acomConn, &AcomConnection::connected, this, [this]() {
+        auto* acom = m_appletPanel->acomApplet();
+        // Source label from the live transport, not the persisted
+        // ConnectionMode setting — the two can diverge (mode combo switched in
+        // Radio Setup without a reconnect), which would mislabel an active
+        // serial link as "NETWORK". See AcomConnection::sourceLabel().
+        acom->setSource(m_acomConn.sourceLabel());
+        acom->setConnected(true);
+        m_appletPanel->setAcomVisible(true);
+    });
+    connect(&m_acomConn, &AcomConnection::disconnected, this, [this]() {
+        m_appletPanel->acomApplet()->setConnected(false);
+        m_appletPanel->setAcomVisible(false);
+    });
+    connect(m_appletPanel->acomApplet(), &AcomApplet::clearFaultClicked, this, [this]() {
+        m_acomConn.clearFaults();
+    });
+    connect(m_appletPanel->acomApplet(), &AcomApplet::operateToggled, this, [this](bool on) {
+        m_acomConn.setOperate(on);
+    });
+    connect(m_appletPanel->acomApplet(), &AcomApplet::offClicked, this, [this]() {
+        m_acomConn.powerOff();
+    });
+
+    // Gauge ranges (and the temperature-offset used per telemetry frame below)
+    // re-apply every time the effective model changes — at connect ("default"
+    // = 600S, our one confirmed model), when a SystemConfig reply confirms a
+    // model ("confirmed"), and whenever observed forward power outgrows the
+    // current tier ("auto-scaled"). See design doc §6 for why there's no
+    // model-selector dropdown driving this instead.
+    connect(&m_acomConn, &AcomConnection::modelChanged, this,
+            [this](const QString& model, const QString& reason) {
+        const auto& spec = AetherSDR::Acom::modelSpec(model);
+        auto* acom = m_appletPanel->acomApplet();
+        acom->setPowerRange(spec.nominalForwardW, spec.maxForwardW);
+        acom->setReflectedRange(spec.nominalReflectedW, spec.maxReflectedW);
+        acom->setDiagnosticTooltip(QStringLiteral("Scaled for %1 (%2)").arg(model, reason));
+    });
+    // SystemConfig (0x11) is one-shot diagnostic info — firmware/serial/the
+    // raw amplifierType byte — surfaced so a user with an unrecognized model
+    // can report it back to the project (design doc §6's "help us confirm").
+    connect(&m_acomConn, &AcomConnection::systemConfigReceived, this,
+            [this](const AetherSDR::Acom::SystemConfig& cfg) {
+        auto* acom = m_appletPanel->acomApplet();
+        const QString modelGuess = AetherSDR::Acom::modelNameForAmplifierType(cfg.amplifierType);
+        const QString identity = modelGuess.isEmpty()
+            ? QStringLiteral("type %1 (unrecognized)").arg(cfg.amplifierType)
+            : modelGuess;
+        acom->setDiagnosticTooltip(QStringLiteral(
+            "Detected: %1 · FW %2.%3 · S/N %4\nUnrecognized type? Please report it — "
+            "see docs/architecture/acom-600s-amplifier-design.md")
+            .arg(identity)
+            .arg(cfg.fwVersion)
+            .arg(cfg.fwSubVersion)
+            .arg(cfg.serialNumberHex));
+    });
+
+    connect(&m_acomConn, &AcomConnection::telemetryUpdated, this,
+            [this](const AetherSDR::Acom::Telemetry& t) {
+        auto* acom = m_appletPanel->acomApplet();
+        const QString effectiveModel = m_acomConn.currentModel();
+        const auto& spec = AetherSDR::Acom::modelSpec(effectiveModel);
+
+        acom->setForwardPower(static_cast<float>(t.forwardPowerW));
+        acom->setReflectedPower(static_cast<float>(t.reflectedPowerW));
+        acom->setSwr(t.swr_x100 / 100.0f);
+        acom->setDrainCurrent(t.id1_mA / 1000.0f);
+        acom->setDrainVoltage(t.hv1_x10V / 10.0f);
+        acom->setTemp(static_cast<float>(t.paTempRaw) - static_cast<float>(spec.temperatureOffset));
+        acom->setBand(AetherSDR::Acom::bandName(t.activeBand));
+        acom->setUptime(t.systemClockSec);
+        acom->setMode(t.mode);
+        acom->setFaultText(t.errorCode == 0xFF
+            ? QString()
+            : AetherSDR::Acom::errorCodeName(t.errorCode));
+        acom->setClearFaultEnabled(t.errorCode != 0xFF);
+    });
+
+    // Startup auto-connect from saved Peripherals settings — deliberately
+    // last in this block (see the comment above). Unlike PGXL/TGXL (which
+    // auto-connect when the *radio* reports their IP), the ACOM has no
+    // radio-side presence signal at all — the saved setting is the only
+    // trigger there will ever be.
+    {
+        const QString mode = PeripheralSettings::deviceString("Acom", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        if (mode == "Network") {
+            const QString ip = PeripheralSettings::deviceString("Acom", "ManualIp");
+            const int port = PeripheralSettings::deviceInt("Acom", "ManualPort", 7000);
+            if (!ip.isEmpty())
+                m_acomConn.connectNetwork(ip, static_cast<quint16>(port));
+        }
+#ifdef HAVE_SERIALPORT
+        else {
+            const QString port = PeripheralSettings::deviceString("Acom", "SerialPort");
+            if (!port.isEmpty())
+                m_acomConn.connectSerial(port);
+        }
+#endif
+    }
+
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.
     // All three power gauges (TxApplet, TunerApplet, SMeterWidget) update together.
     // When the PGXL is in STANDBY we fall back to the barefoot scale — only the
@@ -4421,7 +4694,7 @@ void MainWindow::wireMeters()
                             && m_radioModel.amplifier().operate();
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
-        m_appletPanel->sMeterWidget()->setPowerScale(maxW, ampActive);
+        m_appletPanel->setMeterPowerScale(maxW, ampActive);
         m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
     };
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, updatePowerScale);
@@ -4485,7 +4758,7 @@ void MainWindow::wireMeters()
         // exciter output when it's STANDBY (txMetersChanged already handles that
         // path, so we just stop overriding it here).
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) {
-            m_appletPanel->sMeterWidget()->setTxMeters(fwdPwr, swr);
+            m_appletPanel->setMeterTxValues(fwdPwr, swr);
 #ifdef HAVE_HIDAPI
             m_tmate2TxWatts = fwdPwr;
             if (m_radioModel.transmitModel().isTransmitting()) {

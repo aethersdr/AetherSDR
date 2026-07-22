@@ -457,8 +457,17 @@ RadioModel::RadioModel(QObject* parent)
         if (state == DigitalVoiceWaveformProcess::State::Running) {
             m_dstarRuntimeConfigurationPending = true;
             syncDigitalVoiceTxSelection(true);
+            applyPendingDStarRuntimeConfiguration();
         }
     });
+    connect(&DigitalVoiceModeRegistry::instance(),
+            &DigitalVoiceModeRegistry::activeSliceChanged,
+            this,
+            [this](int) {
+        m_lastDigitalVoiceTxSelectionKey.clear();
+        syncDigitalVoiceTxSelection(true);
+        applyPendingDStarRuntimeConfiguration();
+    }, Qt::QueuedConnection);
 
     const QString digitalVoiceDir =
         QFileInfo(AppSettings::instance().filePath()).absolutePath()
@@ -1193,6 +1202,29 @@ bool RadioModel::automationApplySliceFixture(int sliceId,
     return true;
 }
 
+bool RadioModel::automationApplyGpsFixture(const GpsDelta& delta,
+                                           const QString& referenceState,
+                                           const QString& referenceSetting,
+                                           bool referenceLocked,
+                                           const QString& ntpServerAddress,
+                                           QString* error)
+{
+    if (isConnected()) {
+        if (error) {
+            *error = QStringLiteral(
+                "GPS fixture is only available while disconnected");
+        }
+        return false;
+    }
+    applyGpsChanges(delta);
+    m_oscState = referenceState;
+    m_oscSetting = referenceSetting;
+    m_oscLocked = referenceLocked;
+    m_automationGpsNtpServerAddress = ntpServerAddress;
+    emit oscillatorChanged();
+    return true;
+}
+
 bool RadioModel::automationRemoveSliceFixture(int sliceId, QString* error)
 {
     auto fail = [error](const QString& message) {
@@ -1754,6 +1786,7 @@ void RadioModel::emitInterlockNotification(const QString& message,
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
     clearAutomationSliceFixtures();
+    m_automationGpsNtpServerAddress.clear();
 
     m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
@@ -1788,6 +1821,7 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
              << "wanHandle=0x" << QString::number(wan->clientHandle(), 16);
 
     clearAutomationSliceFixtures();
+    m_automationGpsNtpServerAddress.clear();
 
     // Disconnect any stale signal connections from a previous WAN session
     if (m_wanConn)
@@ -6345,6 +6379,18 @@ QString RadioModel::serial() const
     return m_lastInfo.serial;
 }
 
+QString RadioModel::gpsNtpServerAddress() const
+{
+    if (!m_automationGpsNtpServerAddress.isEmpty()) {
+        return m_automationGpsNtpServerAddress;
+    }
+    if (!capabilities().hasNtpServer || isWan() || m_lastInfo.isRouted
+        || m_lastInfo.address.isNull()) {
+        return {};
+    }
+    return m_lastInfo.address.toString();
+}
+
 LicenseFeatureState RadioModel::licenseFeature(const QString& name) const
 {
     return m_licenseFeatures.value(normalizedLicenseFeatureName(name));
@@ -6732,6 +6778,7 @@ void RadioModel::applyGpsChanges(const GpsDelta& d)
     if (d.lon)       m_gpsLon       = *d.lon;
     if (d.time)      m_gpsTime      = *d.time;
     if (d.speed)     m_gpsSpeed     = *d.speed;
+    if (d.track)     m_gpsTrack     = *d.track;
     if (d.freqError) m_gpsFreqError = *d.freqError;
 
     emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,

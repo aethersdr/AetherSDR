@@ -137,19 +137,11 @@ protected:
     void resizeEvent(QResizeEvent* ev) override;
     void showEvent(QShowEvent* ev) override;
     void hideEvent(QHideEvent* ev) override;
-    // Frameless 8-axis resize: 4 edges + 4 corners.  Mouse hover on
-    // the bare margin around the embedded grid updates the cursor;
-    // press starts a compositor-managed resize via startSystemResize.
-    void mouseMoveEvent(QMouseEvent* ev) override;
-    void mousePressEvent(QMouseEvent* ev) override;
-    void leaveEvent(QEvent* ev) override;
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     void saveGeometryToSettings();
     void restoreGeometryFromSettings();
-    Qt::Edges edgesAt(const QPoint& pos) const;
-    void updateResizeCursor(const QPoint& pos);
 
     // Master bypass — snapshot all enabled TX stages, then disable
     // them.  Restores the snapshot on uncheck.  Mirrors the docked

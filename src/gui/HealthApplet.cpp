@@ -29,6 +29,13 @@ constexpr int kRecentWindow = 70;
 constexpr qint64 kFreshMs = 900;
 constexpr qint64 kStaleMs = 1700;
 constexpr float kActivePowerWatts = 0.75f;
+constexpr int kSwrSettleFrames = 4;
+constexpr int kSwrAdmissionWindow = 5;
+// Frames of sustained inactivity or a settled source change before the SWR
+// admission quorum is wiped. Matches the idle-baseline dropout tolerance
+// (~1.2s) so a single dropped frame or a transient bestSnapshot() source flip
+// cannot trap HLTH in "never trusted" and mask a real fault.
+constexpr int kSwrDropoutFrames = 24;
 constexpr float kMaxReturnLossDb = 45.0f;
 
 enum class GraphMetric {
@@ -66,6 +73,23 @@ float returnLossDbForSwr(float swr)
         return kMaxReturnLossDb;
 
     return std::clamp(-20.0f * std::log10(reflectionCoefficient), 0.0f, kMaxReturnLossDb);
+}
+
+float admittedSwr(const QVector<float>& values)
+{
+    if (values.isEmpty()) {
+        return 1.0f;
+    }
+
+    QVector<float> scratch = values;
+    const int index = (scratch.size() - 1) / 4;
+    // Low-power directional measurements fail upward as reflected power
+    // approaches the radio's noise floor.  The lower quartile requires four
+    // of five distinct reports to be elevated before HLTH treats the rise as
+    // real, while a sustained mismatch still passes through within 250 ms.
+    // nth_element selects the quartile in O(n) without a full sort.
+    std::nth_element(scratch.begin(), scratch.begin() + index, scratch.end());
+    return scratch.at(index);
 }
 
 QColor themeColor(const QString& token, int alpha = 255)
@@ -464,6 +488,8 @@ void HealthApplet::setMeterModel(MeterModel* model)
         // other connections an outside party might have established to
         // the same model intact.
         disconnect(m_model, &MeterModel::txMetersChanged,   this, nullptr);
+        disconnect(m_model, &MeterModel::directionalPowerMetersChanged,
+                   this, nullptr);
         disconnect(m_model, &MeterModel::tgxlMetersChanged, this, nullptr);
         disconnect(m_model, &MeterModel::ampMetersChanged,  this, nullptr);
     }
@@ -472,8 +498,19 @@ void HealthApplet::setMeterModel(MeterModel* model)
     if (!m_model)
         return;
 
+    // Emission order matters: MeterModel::updateValues() emits
+    // directionalPowerMetersChanged (carrying the INSTANTANEOUS forward power
+    // used to gate SWR) in the same cycle as txMetersChanged (the smoothed
+    // display power). updateRadioDirectionalMeters() must overwrite the
+    // qualifying power AFTER updateRadioMeters() caches the smoothed value, so
+    // the SWR gate never qualifies on decaying unkey power. A future MeterModel
+    // refactor that splits FWDPWR/SWR into independently-gated signals would
+    // break this — keep them co-emitted, or gate on an explicit instantaneous
+    // timestamp here. (#4243)
     connect(m_model, &MeterModel::txMetersChanged,
             this, &HealthApplet::updateRadioMeters);
+    connect(m_model, &MeterModel::directionalPowerMetersChanged,
+            this, &HealthApplet::updateRadioDirectionalMeters);
     connect(m_model, &MeterModel::tgxlMetersChanged,
             this, &HealthApplet::updateTunerMeters);
     connect(m_model, &MeterModel::ampMetersChanged,
@@ -508,6 +545,25 @@ void HealthApplet::updateAmplifierMeters(float fwdPowerWatts, float swr)
     cacheMeters(MeterSource::Amplifier, fwdPowerWatts, swr);
 }
 
+void HealthApplet::updateRadioDirectionalMeters(float forwardPowerWatts,
+                                                 float reflectedPowerWatts,
+                                                 float swr,
+                                                 bool reflectedPowerMeasured)
+{
+    Q_UNUSED(reflectedPowerWatts)
+    Q_UNUSED(reflectedPowerMeasured)
+
+    m_radioSnapshot.swrQualifyingPowerWatts =
+        std::max(0.0f, finiteOr(forwardPowerWatts, 0.0f));
+    m_radioSnapshot.swr = std::clamp(finiteOr(swr, 1.0f), 1.0f, 99.0f);
+    m_radioSnapshot.swrQualifyingPowerUpdatedAtMs = m_model
+        ? m_model->fwdPowerUpdatedAtMs()
+        : QDateTime::currentMSecsSinceEpoch();
+    m_radioSnapshot.swrSampleUpdatedAtMs = m_model
+        ? m_model->swrUpdatedAtMs()
+        : QDateTime::currentMSecsSinceEpoch();
+}
+
 void HealthApplet::cacheMeters(MeterSource source, float fwdPowerWatts, float swr)
 {
     MeterSnapshot* dst = nullptr;
@@ -518,9 +574,17 @@ void HealthApplet::cacheMeters(MeterSource source, float fwdPowerWatts, float sw
     case MeterSource::None:      return;
     }
 
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     dst->powerWatts = std::max(0.0f, finiteOr(fwdPowerWatts, 0.0f));
+    // The "qualifying" fields feed the SWR gate. For Tuner/Amplifier the
+    // forward power is already instantaneous, so they mirror powerWatts here.
+    // For Radio these are placeholders immediately overwritten by
+    // updateRadioDirectionalMeters() with the true instantaneous power.
+    dst->swrQualifyingPowerWatts = dst->powerWatts;
     dst->swr = std::clamp(finiteOr(swr, 1.0f), 1.0f, 99.0f);
-    dst->updatedAtMs = QDateTime::currentMSecsSinceEpoch();
+    dst->updatedAtMs = nowMs;
+    dst->swrQualifyingPowerUpdatedAtMs = nowMs;
+    dst->swrSampleUpdatedAtMs = nowMs;
     dst->valid = true;
 }
 
@@ -584,9 +648,78 @@ void HealthApplet::appendFrame()
     const bool active = snapshot.valid
         && (nowMs - snapshot.updatedAtMs) <= kStaleMs
         && snapshot.powerWatts >= kActivePowerWatts;
+    if (active) {
+        ++m_activeFrames;
+    } else {
+        m_activeFrames = 0;
+    }
+    const bool swrQualifyingPowerFresh =
+        snapshot.swrQualifyingPowerUpdatedAtMs > 0
+        && (nowMs - snapshot.swrQualifyingPowerUpdatedAtMs) <= kFreshMs;
+    const bool swrCandidate = active
+        && swrQualifyingPowerFresh
+        && snapshot.swrQualifyingPowerWatts >= kActivePowerWatts;
+
+    // Only Radio forward power is smoothed by MeterModel, so only Radio SWR
+    // carries the key/unkey transient this PR filters. Tuner and Amplifier
+    // forward power is never smoothed, so trust their raw SWR immediately —
+    // gating them on the settle window would delay a genuine amp/tuner fault by
+    // ~250ms for no benefit.
+    const bool needsSettle = source == MeterSource::Radio;
+
+    // Tolerate a brief inactive dropout or a transient bestSnapshot() source
+    // flip before wiping the admission quorum. bestSnapshot() reselects the
+    // source every tick from a bare 900ms/1700ms freshness boundary with no
+    // hysteresis, so a second meter whose cadence straddles it oscillates the
+    // source; clearing the window on every flip would trap HLTH in "never
+    // trusted" and mask a real fault (the opposite of what #4243 needs). Only
+    // reset after sustained inactivity or a settled source change.
+    m_swrInactiveFrames = active ? 0 : (m_swrInactiveFrames + 1);
+    m_swrSourceMismatchFrames =
+        (source == m_swrAdmissionSource) ? 0 : (m_swrSourceMismatchFrames + 1);
+    // Acquire the first source immediately (None -> real); only a *sustained*
+    // dropout or source change resets an already-established window.
+    if (m_swrAdmissionSource == MeterSource::None
+        || m_swrInactiveFrames > kSwrDropoutFrames
+        || m_swrSourceMismatchFrames > kSwrDropoutFrames) {
+        m_swrAdmissionWindow.clear();
+        m_lastAdmittedSwrSampleMs = 0;
+        m_swrAdmissionSource = source;
+        m_swrInactiveFrames = 0;
+        m_swrSourceMismatchFrames = 0;
+    }
+    // Admit only samples from the tracked admission source so a transient flip
+    // to a second meter cannot mix foreign SWR into the quorum.
+    if (needsSettle
+        && swrCandidate
+        && source == m_swrAdmissionSource
+        && snapshot.swrSampleUpdatedAtMs > 0
+        && snapshot.swrSampleUpdatedAtMs != m_lastAdmittedSwrSampleMs) {
+        m_swrAdmissionWindow.append(snapshot.swr);
+        while (m_swrAdmissionWindow.size() > kSwrAdmissionWindow) {
+            m_swrAdmissionWindow.removeFirst();
+        }
+        m_lastAdmittedSwrSampleMs = snapshot.swrSampleUpdatedAtMs;
+    }
+
+    const bool swrTrusted = swrCandidate
+        && (!needsSettle
+            || (m_activeFrames >= kSwrSettleFrames
+                && m_swrAdmissionWindow.size() >= kSwrAdmissionWindow));
 
     const float targetPower = active ? snapshot.powerWatts : 0.0f;
-    const float targetSwr = active ? snapshot.swr : 1.0f;
+    float targetSwr;
+    if (!active) {
+        targetSwr = 1.0f;
+    } else if (!needsSettle) {
+        // Tuner/Amplifier: unsmoothed power, no transient to filter.
+        targetSwr = snapshot.swr;
+    } else if (swrTrusted) {
+        targetSwr = admittedSwr(m_swrAdmissionWindow);
+    } else {
+        // Radio, still settling — hold the last trusted display value.
+        targetSwr = m_displaySwr;
+    }
 
     const float powerAlpha = targetPower > m_displayPower ? 0.45f : 0.18f;
     m_displayPower += (targetPower - m_displayPower) * powerAlpha;
@@ -595,17 +728,25 @@ void HealthApplet::appendFrame()
 
     if (active) {
         m_idleFrames = 0;
-        if (!m_baselineReady) {
-            m_powerAverage = std::max(1.0f, m_displayPower);
-            m_swrAverage = std::max(1.0f, m_displaySwr);
-            m_returnLossAverage = displayReturnLossDb;
-            m_baselineReady = true;
-        } else {
-            m_powerAverage += (m_displayPower - m_powerAverage) * 0.035f;
-            m_swrAverage += (m_displaySwr - m_swrAverage) * 0.030f;
-            m_returnLossAverage += (displayReturnLossDb - m_returnLossAverage) * 0.030f;
+        // Baseline + telemetry only accumulate once SWR is trusted. For Radio
+        // this intentionally withholds the first ~250ms of a transmit so a
+        // key-up transient cannot poison the baseline (the #4243 fix); a fast
+        // Radio fault confined to that settle window is deferred by design.
+        // Tuner/Amplifier trust immediately (needsSettle == false), so they
+        // have no such blind spot.
+        if (swrTrusted) {
+            if (!m_baselineReady) {
+                m_powerAverage = std::max(1.0f, m_displayPower);
+                m_swrAverage = std::max(1.0f, m_displaySwr);
+                m_returnLossAverage = displayReturnLossDb;
+                m_baselineReady = true;
+            } else {
+                m_powerAverage += (m_displayPower - m_powerAverage) * 0.035f;
+                m_swrAverage += (m_displaySwr - m_swrAverage) * 0.030f;
+                m_returnLossAverage += (displayReturnLossDb - m_returnLossAverage) * 0.030f;
+            }
+            pushRecent(m_displayPower, m_displaySwr, displayReturnLossDb);
         }
-        pushRecent(m_displayPower, m_displaySwr, displayReturnLossDb);
     } else {
         ++m_idleFrames;
         if (m_idleFrames > 24) {
@@ -636,7 +777,9 @@ void HealthApplet::appendFrame()
     sample.swrSpread = std::max({m_swrStdDev, m_swrSpan * 0.5f, 0.025f});
     sample.returnLossSpread = std::max({m_returnLossStdDev, m_returnLossSpan * 0.5f, 0.75f});
     sample.active = active;
-    sample.severity = active ? computeSeverity(sample.powerWatts, sample.swr) : 0.0f;
+    sample.severity = swrTrusted
+        ? computeSeverity(sample.powerWatts, sample.swr)
+        : 0.0f;
 
     if (m_incidentCooldownFrames > 0)
         --m_incidentCooldownFrames;

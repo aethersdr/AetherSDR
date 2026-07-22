@@ -178,6 +178,12 @@ int main(int argc, char* argv[])
     }
 
 #ifdef Q_OS_MAC
+    // SpectrumWidget and WaveformWidget require native Metal child views, but
+    // their surrounding raster-widget trees must not become native siblings.
+    // Together with WA_DontCreateNativeAncestors on those leaves, this avoids
+    // redundant window-sized Core Animation backing stores (#4339).
+    QApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+
     // A restricted launcher can deny QCocoa access to macOS GUI services.
     // AppKit then calls abort() from HIServices while QApplication is being
     // constructed. Scope the handler to this constructor only: runtime aborts
@@ -190,7 +196,6 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 #endif
-
     QApplication app(argc, argv);
 
 #ifdef Q_OS_MAC

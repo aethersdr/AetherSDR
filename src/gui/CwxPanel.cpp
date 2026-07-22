@@ -284,12 +284,13 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             this, [this](int v) { if (m_model) m_model->setSpeed(v); });
 
     // Wire model signals
-    // ── F1-F12 hotkeys — active app-wide when the active slice is in a CW
-    //    mode (CW or CWL).  Guard prevents collisions with a future DVK
-    //    macro panel or other function-key users. (#1552)
+    // ── F1-F12 hotkeys — active app-wide when the TX slice is in a CW
+    //    mode (CW or CWL).  CWX keys the TX slice, so the guard follows it,
+    //    not the selected RX slice. Guard prevents collisions with the DVK
+    //    macro panel or other function-key users. (#1552, #4173)
     //
     //    Created disabled; MainWindow flips enable state based on the
-    //    active slice's mode (mutually exclusive with DvkPanel's F1-F12
+    //    TX slice's mode (mutually exclusive with DvkPanel's F1-F12
     //    set) so the keys fire regardless of panel visibility, while
     //    Qt still sees at most one enabled ApplicationShortcut per key
     //    and never emits activatedAmbiguously. (#2464, #2582)
@@ -300,8 +301,8 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
         m_shortcuts.append(sc);
         connect(sc, &QShortcut::activated, this, [this, i]() {
             if (!m_model) return;
-            if (m_activeModeProvider) {
-                const QString mode = m_activeModeProvider();
+            if (m_txModeProvider) {
+                const QString mode = m_txModeProvider();
                 if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
                     return;
             }

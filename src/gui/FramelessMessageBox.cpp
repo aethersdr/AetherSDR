@@ -32,16 +32,22 @@ void FramelessMessageBox::setFramelessMode(bool on)
         setGeometry(geom);
     }
 
+    m_frameless = on;
     m_titleBar->setVisible(on);
-    const int titleHeight = on ? m_titleBar->sizeHint().height() : 0;
-    layout()->setContentsMargins(m_originalMargins.left(),
-                                 m_originalMargins.top() + titleHeight,
-                                 m_originalMargins.right(),
-                                 m_originalMargins.bottom());
+    applyTitleBarMargins();
     positionTitleBar();
     if (wasVisible) {
         show();
     }
+}
+
+void FramelessMessageBox::applyTitleBarMargins()
+{
+    const int titleHeight = m_frameless ? m_titleBar->sizeHint().height() : 0;
+    layout()->setContentsMargins(m_originalMargins.left(),
+                                 m_originalMargins.top() + titleHeight,
+                                 m_originalMargins.right(),
+                                 m_originalMargins.bottom());
 }
 
 void FramelessMessageBox::resizeEvent(QResizeEvent* event)
@@ -53,6 +59,12 @@ void FramelessMessageBox::resizeEvent(QResizeEvent* event)
 void FramelessMessageBox::showEvent(QShowEvent* event)
 {
     m_titleBar->setTitleText(windowTitle());
+    // QMessageBox rebuilds its grid layout (and resets contents margins) on any
+    // post-construction setIcon/setText/addButton/setStandardButtons call, which
+    // discards the top-margin reservation made in the constructor. Re-apply it
+    // here so the base showEvent's updateSize() sizes the box with the reserved
+    // space and the title-bar overlay no longer clips the top of the content.
+    applyTitleBarMargins();
     QMessageBox::showEvent(event);
     positionTitleBar();
 }

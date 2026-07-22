@@ -218,6 +218,30 @@ void DssRenderer::clear()
     resetHistorySmoothing();
 }
 
+quint64 DssRenderer::fixedStorageBytes() const
+{
+    return sizeof(m_rows)
+        + sizeof(m_rawPrev1) + sizeof(m_rawPrev2)
+        + sizeof(m_historyRawPrev1) + sizeof(m_historyRawPrev2);
+}
+
+quint64 DssRenderer::historyStorageBytes() const
+{
+    return static_cast<quint64>(m_historyRows.capacity()) * sizeof(qfloat16)
+        + static_cast<quint64>(m_historyRowCenterMhz.capacity()) * sizeof(double)
+        + static_cast<quint64>(m_historyRowBandwidthMhz.capacity()) * sizeof(double);
+}
+
+quint64 DssRenderer::cacheStorageBytes() const
+{
+    return m_cache.isNull() ? 0 : static_cast<quint64>(m_cache.sizeInBytes());
+}
+
+quint64 DssRenderer::allocatedBytes() const
+{
+    return fixedStorageBytes() + historyStorageBytes() + cacheStorageBytes();
+}
+
 const std::array<float, DssRenderer::kCols>&
 DssRenderer::rowAt(int age) const
 {

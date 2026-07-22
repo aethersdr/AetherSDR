@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/ShortcutManager.h"
 
@@ -33,22 +34,15 @@ void registerCwActions(ShortcutManager& manager)
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir fakeHome(QDir::tempPath() + "/aether-shortcut-manager-test-XXXXXX");
-    if (!fakeHome.isValid()) {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-shortcut-manager-test"));
+    if (!settingsProfile.isValid()) {
         std::cerr << "[FAIL] create temporary home\n";
         return 1;
     }
-    qputenv("HOME", fakeHome.path().toUtf8());
-    qputenv("CFFIXED_USER_HOME", fakeHome.path().toUtf8());
-    QStandardPaths::setTestModeEnabled(true);
     QCoreApplication app(argc, argv);
 
-    const QString configRoot =
-        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    QDir(configRoot + "/AetherSDR").removeRecursively();
-
     auto& settings = AppSettings::instance();
-    settings.reset();
+    settings.load();
 
     ShortcutManager manager;
     registerCwActions(manager);
@@ -128,6 +122,7 @@ int main(int argc, char** argv)
     // reset to — its default is written absent; only user-changed keys stick.
     {
         settings.reset();
+        settings.load();
 
         ShortcutManager mgr;
         mgr.registerAction(QStringLiteral("band_up"), QStringLiteral("Band Up"),
@@ -167,6 +162,7 @@ int main(int argc, char** argv)
     // its new (non-colliding) default rather than staying pinned to "".
     {
         settings.reset();
+        settings.load();
 
         ShortcutManager mgr;
         mgr.registerAction(QStringLiteral("alpha"), QStringLiteral("Alpha"),
@@ -195,6 +191,5 @@ int main(int argc, char** argv)
                      "resolved-collision default delivered (normalization not pinned)");
     }
 
-    QDir(configRoot + "/AetherSDR").removeRecursively();
     return ok ? 0 : 1;
 }

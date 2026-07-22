@@ -29,9 +29,10 @@ static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
     if (QWindow* windowHandle = sw->windowHandle()) {
         windowHandle->destroy();
     }
-    if (AetherSDR::SpectrumWidget::nativeWindowPreferred()) {
-        sw->setAttribute(Qt::WA_NativeWindow);
-    }
+    // Re-realize the native leaf with its ancestor isolation intact — the helper
+    // reasserts WA_NativeWindow *and* WA_DontCreateNativeAncestors as a pair, so a
+    // reparent can't promote ancestors to native (redundant backing stores, #4339).
+    sw->applyNativeWindowIsolationPolicy();
     if (wasVisible) {
         sw->show();
     }
