@@ -135,14 +135,14 @@ void CatControlApplet::buildDockedView(QWidget* page)
     auto* row = new QHBoxLayout;
     row->setSpacing(6);
 
-    m_enableBtn = new QPushButton("Enable CAT");
+    const bool catEnabled = AppSettings::instance().value("CatEnabled", "False").toString() == "True";
+    m_enableBtn = new QPushButton(catEnabled ? "Enabled" : "Disabled");
     m_enableBtn->setCheckable(true);
     applyToggleButtonStyle(m_enableBtn, ToggleTribe::Success);
     m_enableBtn->setFixedSize(100, 22);
     {
         QSignalBlocker b(m_enableBtn);
-        m_enableBtn->setChecked(
-            AppSettings::instance().value("CatEnabled", "False").toString() == "True");
+        m_enableBtn->setChecked(catEnabled);
     }
     row->addWidget(m_enableBtn);
     row->addStretch();
@@ -159,6 +159,10 @@ void CatControlApplet::buildDockedView(QWidget* page)
     root->addWidget(hint);
 
     connect(m_enableBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_enableBtn->setText(on ? "Enabled" : "Disabled");
+        if (m_floatingEnableBtn) {
+            m_floatingEnableBtn->setText(on ? "Enabled" : "Disabled");
+        }
         auto& s = AppSettings::instance();
         s.setValue("CatEnabled", on ? "True" : "False");
         s.save();
@@ -173,10 +177,12 @@ void CatControlApplet::setCatEnabled(bool on)
     if (m_enableBtn) {
         QSignalBlocker b(m_enableBtn);
         m_enableBtn->setChecked(on);
+        m_enableBtn->setText(on ? "Enabled" : "Disabled");
     }
     if (m_floatingEnableBtn) {
         QSignalBlocker b(m_floatingEnableBtn);
         m_floatingEnableBtn->setChecked(on);
+        m_floatingEnableBtn->setText(on ? "Enabled" : "Disabled");
     }
     for (int i = 0; i < m_rows.size(); ++i)
         updateRowLocked(i);
@@ -196,14 +202,15 @@ void CatControlApplet::setFloating(bool on)
             // Enable button + note (must enable before ports can be configured)
             auto* enableRow = new QHBoxLayout;
             enableRow->setSpacing(8);
-            m_floatingEnableBtn = new QPushButton("Enable CAT");
+            const bool floatingCatEnabled =
+                AppSettings::instance().value("CatEnabled", "False").toString() == "True";
+            m_floatingEnableBtn = new QPushButton(floatingCatEnabled ? "Enabled" : "Disabled");
             m_floatingEnableBtn->setCheckable(true);
             applyToggleButtonStyle(m_floatingEnableBtn, ToggleTribe::Success);
             m_floatingEnableBtn->setFixedSize(100, 22);
             {
                 QSignalBlocker b(m_floatingEnableBtn);
-                m_floatingEnableBtn->setChecked(
-                    AppSettings::instance().value("CatEnabled", "False").toString() == "True");
+                m_floatingEnableBtn->setChecked(floatingCatEnabled);
             }
             auto* noteLabel = new QLabel("Enable before configuring ports.");
             ThemeManager::instance().applyStyleSheet(noteLabel,
@@ -214,12 +221,14 @@ void CatControlApplet::setFloating(bool on)
             floatingRoot->addLayout(enableRow);
 
             connect(m_floatingEnableBtn, &QPushButton::toggled, this, [this](bool on) {
+                m_floatingEnableBtn->setText(on ? "Enabled" : "Disabled");
                 auto& s = AppSettings::instance();
                 s.setValue("CatEnabled", on ? "True" : "False");
                 s.save();
                 if (m_enableBtn) {
                     QSignalBlocker b(m_enableBtn);
                     m_enableBtn->setChecked(on);
+                    m_enableBtn->setText(on ? "Enabled" : "Disabled");
                 }
                 emit enableChanged(on);
             });
