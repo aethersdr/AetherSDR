@@ -321,10 +321,13 @@ TOOLS = [
     },
     {
         "name": "tune",
-        "description": ("Set the active slice frequency, in MHz "
-                        "(e.g. 14.074). Confirm with get_state model=slice."),
+        "description": ("Set a slice frequency, in MHz (e.g. 14.074). "
+                        "Tunes the active slice unless sliceId targets a "
+                        "specific slice. Confirm with get_state model=slice."),
         "inputSchema": {"type": "object", "properties": {
             "mhz": {"type": "string", "description": "frequency in MHz, e.g. '14.074'"},
+            "sliceId": {"type": "string",
+                        "description": "optional slice id; omit for the active slice"},
         }, "required": ["mhz"]},
     },
     {
@@ -674,8 +677,10 @@ def handle_tool(name, args):
         return text_result(bridge_request({"cmd": "floors"}))
 
     if name == "tune":
-        return text_result(bridge_request(
-            {"cmd": "tune", "value": str(args["mhz"])}))
+        req = {"cmd": "tune", "value": str(args["mhz"])}
+        if args.get("sliceId") not in (None, ""):
+            req["id"] = str(args["sliceId"])
+        return text_result(bridge_request(req))
 
     if name in ("slice", "record", "pan"):
         req = {"cmd": name, "action": args["action"]}

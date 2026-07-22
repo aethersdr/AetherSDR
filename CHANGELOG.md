@@ -8,6 +8,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Audio, diagnostics & automation
+
+- Add an optional slice id to the automation bridge `tune` verb
+  (`tune <mhz> [sliceId]`, JSON `id` field) so scripts can drive a non-active
+  slice directly instead of the racy `slice select` → `tune` → re-select flap.
+  No id keeps today's active-slice behavior; lock, SWR-sweep, and Multi-Flex
+  ownership refusals apply to both forms. (#4324 — @quelleck)
+
 ## [v26.7.3] — 2026-07-19
 
 ### Cross-needle metering · radio-state fidelity · operating polish

@@ -199,6 +199,33 @@ void testTokenFalsePositiveBoundary(const QString& dir)
            contents.contains(QStringLiteral("keytoken=fixture_value_unchanged")));
 }
 
+void testPersonalNameRedaction(const QString& dir)
+{
+    const QString path = dir + "/personal_names.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.smartlink"),
+        QStringLiteral("application user_settings first_name=Pat last_name=Jensen "
+                       "fullName='Pat Jensen' callsign=KK7GWY"));
+    report("SmartLink personal names are absent from disk logs",
+           !contents.contains(QStringLiteral("Pat"))
+           && !contents.contains(QStringLiteral("Jensen"))
+           && contents.count(QStringLiteral("***REDACTED***")) == 3
+           && contents.contains(QStringLiteral("callsign=KK7GWY")));
+}
+
+void testCoordinateRedaction(const QString& dir)
+{
+    const QString path = dir + "/coordinates.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("gps lat=47.6205#lon=-122.3493 latitude:47.6205 "
+                       "gps_longitude=-122.3493 location=47.6205,-122.3493"));
+    report("GPS and location coordinates are absent from disk logs",
+           !contents.contains(QStringLiteral("47.6205"))
+           && !contents.contains(QStringLiteral("-122.3493"))
+           && contents.count(QStringLiteral("***REDACTED***")) == 5);
+}
+
 void testMacDashRedaction(const QString& dir)
 {
     const QString path = dir + "/mac_dash.log";
@@ -385,6 +412,8 @@ int main(int argc, char** argv)
     testSerialRedaction(dir);
     testTokenRedaction(dir);
     testTokenFalsePositiveBoundary(dir);
+    testPersonalNameRedaction(dir);
+    testCoordinateRedaction(dir);
     testMacDashRedaction(dir);
     testMacColonRedaction(dir);
     testClearLogTruncatesPriorButPreservesSubsequent(dir);

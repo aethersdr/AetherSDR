@@ -12,6 +12,15 @@ on:
   push:
     branches: [main]
 
+# Auto-cancel superseded runs when a newer commit lands on the same PR, so a
+# rapid push stream doesn't stack full runs. PR runs share a stable per-PR
+# group (the older run is cancelled); main runs append the unique run_id so
+# each is its own group — main stays fully parallel and never queues or
+# cancels, leaving the post-merge push:main guard exactly as it was.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 # Least-privilege GITHUB_TOKEN. CI only needs to read repo contents to
 # build and test — no writes, no token-bearing API calls. Any future job
 # that needs more (e.g. publishing a comment) must opt in at the job level.

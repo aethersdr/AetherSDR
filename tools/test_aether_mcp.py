@@ -121,7 +121,13 @@ def test_field_mapping():
 
     r = run_tool("tune", {"mhz": "14.074"})[-1]
     check("tune → cmd=tune value(mhz)",
-          r.get("cmd") == "tune" and r.get("value") == "14.074", str(r))
+          r.get("cmd") == "tune" and r.get("value") == "14.074"
+          and "id" not in r, str(r))
+
+    r = run_tool("tune", {"mhz": "14.074", "sliceId": "1"})[-1]
+    check("tune → cmd=tune value(mhz)+id(sliceId)",
+          r.get("cmd") == "tune" and r.get("value") == "14.074"
+          and r.get("id") == "1", str(r))
 
     r = run_tool("slice", {"action": "select", "value": "3"})[-1]
     check("slice → cmd=slice action+value",
