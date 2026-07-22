@@ -8,6 +8,10 @@
 #include "core/MacMicPermission.h"
 #include "core/AutomationServer.h"
 
+#ifdef Q_OS_MAC
+#include "MacStartupAbortGuard.h"
+#endif
+
 #include <QApplication>
 #include <QSurfaceFormat>
 #include <memory>
@@ -20,6 +24,8 @@
 #include <QDateTime>
 #include <QStandardPaths>
 #include <QTimer>
+#include <cstdio>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <io.h>
@@ -177,8 +183,30 @@ int main(int argc, char* argv[])
     // Together with WA_DontCreateNativeAncestors on those leaves, this avoids
     // redundant window-sized Core Animation backing stores (#4339).
     QApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+
+    // A restricted launcher can deny QCocoa access to macOS GUI services.
+    // AppKit then calls abort() from HIServices while QApplication is being
+    // constructed. Scope the handler to this constructor only: runtime aborts
+    // must keep their normal crash semantics.
+    AetherSDR::MacStartupAbortGuard startupAbortGuard;
+    if (!startupAbortGuard.isArmed()) {
+        std::fputs("AetherSDR startup error: could not install the macOS GUI "
+                   "initialization guard; refusing to start.\n",
+                   stderr);
+        return EXIT_FAILURE;
+    }
 #endif
     QApplication app(argc, argv);
+
+#ifdef Q_OS_MAC
+    if (!startupAbortGuard.disarm()) {
+        std::fputs("AetherSDR startup error: could not restore the SIGABRT "
+                   "handler after GUI initialization; refusing to continue.\n",
+                   stderr);
+        return EXIT_FAILURE;
+    }
+#endif
+
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);
     app.setOrganizationName("AetherSDR");
