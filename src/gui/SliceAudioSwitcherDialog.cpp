@@ -31,6 +31,7 @@ SliceAudioSwitcherDialog::SliceAudioSwitcherDialog(RadioModel* model, QWidget* p
         auto* btn = new QPushButton(bodyWidget());
         btn->setFixedSize(56, 40);
         btn->setCursor(Qt::PointingHandCursor);
+        btn->setAccessibleName(QString("Slice %1 audio mute toggle").arg(QChar('A' + id)));
         layout->addWidget(btn);
         m_slots[id].button = btn;
 
@@ -104,6 +105,8 @@ void SliceAudioSwitcherDialog::updateButton(QPushButton* button, SliceModel* sli
                          .arg(muteGlyph(muted)));
     button->setToolTip(muted ? QString("Slice %1 muted — click to unmute").arg(slice->letter())
                               : QString("Slice %1 audio on — click to mute").arg(slice->letter()));
+    button->setAccessibleDescription(muted ? QStringLiteral("Currently muted")
+                                            : QStringLiteral("Currently on"));
     button->setStyleSheet(
         QString("QPushButton { background: %1; color: #000000; border: none; "
                 "border-radius: 4px; font-weight: bold; }")

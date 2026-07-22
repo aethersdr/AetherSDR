@@ -590,7 +590,6 @@ private:
 
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
-    void showSliceAudioSwitcherDialog();
 
     // Net Reminder Scheduler (MainWindow_Nets.cpp).
     void initNetScheduler();

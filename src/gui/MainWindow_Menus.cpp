@@ -22,6 +22,7 @@
 #include "PersistentDialog.h"
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
+#include "SliceAudioSwitcherDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
 #include "SupportDialog.h"
@@ -288,7 +289,7 @@ void MainWindow::buildMenuBar()
     });
     auto* sliceAudioAction = settingsMenu->addAction("Slice Audio Switcher...");
     connect(sliceAudioAction, &QAction::triggered, this, [this] {
-        showSliceAudioSwitcherDialog();
+        showOrRaisePersistent(m_sliceAudioSwitcherDialog, &m_radioModel);
     });
     auto* netSchedulerAction = settingsMenu->addAction("Net Scheduler...");
     connect(netSchedulerAction, &QAction::triggered, this, [this] {
