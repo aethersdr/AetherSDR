@@ -167,7 +167,12 @@ jobs:
         timeout-minutes: 240
         env:
           NINJA_STATUS: "[%f/%t %es] "
-        run: cmake --build build -j 2
+        # Only --target AetherSDR (+ its aether-dv-waveform helper dependency)
+        # ships; the default `all` also built ~200 unit-test exes the installer
+        # never packages or runs — wasted time, and their links contend with the
+        # whisper-heavy app link on the 16 GB runner (same starvation we hit in
+        # check-windows). Narrowing removes that risk too.
+        run: cmake --build build -j 2 --target AetherSDR aether-dv-waveform
 
       - name: Deploy Qt
         run: |

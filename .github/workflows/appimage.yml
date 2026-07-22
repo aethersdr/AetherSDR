@@ -112,7 +112,11 @@ jobs:
         run: cmake --build build --target build_opus -j$(nproc)
 
       - name: Build
-        run: cmake --build build -j$(nproc)
+        # Only the app ships (+ its aether-dv-waveform helper dependency, which
+        # also stages AetherDV.cfg and the ASR/DFNR runtime payloads via POST_BUILD).
+        # The default `all` target additionally builds ~200 unit-test executables
+        # the AppImage never bundles and never runs — pure wasted build time.
+        run: cmake --build build --target AetherSDR aether-dv-waveform -j$(nproc)
 
       - name: Install to AppDir
         run: |

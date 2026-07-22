@@ -153,7 +153,11 @@ jobs:
             $GPU_FLAG
 
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu)
+        # Only the .app bundle ships (+ its aether-dv-waveform helper dependency,
+        # which stages AetherDV.cfg + runtime payloads via POST_BUILD). The default
+        # `all` target also builds ~200 unit-test executables the DMG never bundles
+        # or runs. (The DAX driver is built separately in the driver-build step.)
+        run: cmake --build build --target AetherSDR aether-dv-waveform -j$(sysctl -n hw.ncpu)
 
       - name: Bundle DFNR model
         run: |
