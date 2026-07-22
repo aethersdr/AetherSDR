@@ -402,11 +402,19 @@ void SmartLinkClient::onPingTimer()
 
 void SmartLinkClient::parseMessage(const QString& msg)
 {
-    // Redact any token= values from log output
-    if (msg.contains("token="))
+    const bool isUserSettings = msg.startsWith("application user_settings");
+
+    // SmartLink account-holder names have no diagnostic value. Do not enqueue
+    // the raw user-settings message at all; the centralized writer redaction
+    // remains a final defense for any future logging path.
+    if (isUserSettings) {
+        qCDebug(lcSmartLink)
+            << "SmartLink RX: application user_settings (personal fields omitted)";
+    } else if (msg.contains("token=")) {
         qCDebug(lcSmartLink) << "SmartLink RX:" << msg.left(msg.indexOf("token=") + 6) + "***REDACTED***";
-    else
+    } else {
         qCDebug(lcSmartLink) << "SmartLink RX:" << msg.left(120);
+    }
 
     if (msg.startsWith("radio list ")) {
         parseRadioList(msg);
@@ -414,7 +422,7 @@ void SmartLinkClient::parseMessage(const QString& msg)
         parseConnectReady(msg);
     } else if (msg.startsWith("application info")) {
         parseApplicationInfo(msg);
-    } else if (msg.startsWith("application user_settings")) {
+    } else if (isUserSettings) {
         parseUserSettings(msg);
     } else if (msg.startsWith("application registration_invalid")) {
         qCWarning(lcSmartLink) << "SmartLinkClient: registration invalid — token rejected";
@@ -542,8 +550,7 @@ void SmartLinkClient::parseUserSettings(const QString& msg)
         else if (key == "first_name") m_userFirstName = val;
         else if (key == "last_name")  m_userLastName = val;
     }
-    qCDebug(lcSmartLink) << "SmartLinkClient: user:" << m_userFirstName << m_userLastName
-             << "callsign:" << m_userCallsign;
+    qCDebug(lcSmartLink) << "SmartLinkClient: user settings received (personal fields omitted)";
 }
 
 void SmartLinkClient::parseTestResults(const QString& msg)

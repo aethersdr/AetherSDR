@@ -49,7 +49,11 @@ void testPlantedSecretIsRedacted()
     const QString logTail =
         "[12:00:00.000] INF aether.wan: access_token=SECRET123abcdefghijklmnop payload\n"
         "[12:00:00.100] INF aether.wan: refresh_token=RTOPSECRETdeadbeef0123456789\n"
-        "[12:00:00.200] INF aether.wan: Authorization: Bearer TOPSECRETjwtheaderpayload";
+        "[12:00:00.200] INF aether.wan: Authorization: Bearer TOPSECRETjwtheaderpayload\n"
+        "[12:00:00.300] DBG aether.wan: application user_settings "
+        "first_name=Pat last_name=Jensen\n"
+        "[12:00:00.400] DBG aether.connection: gps "
+        "lat=47.6205#lon=-122.3493#grid=CN87";
 
     const QString body = buildIssueReport(sampleSys(), sampleRadio(), logTail);
 
@@ -59,6 +63,10 @@ void testPlantedSecretIsRedacted()
            !body.contains("RTOPSECRETdeadbeef0123456789"));
     report("planted bearer token value is absent from body",
            !body.contains("TOPSECRETjwtheaderpayload"));
+    report("SmartLink full name is absent from body",
+           !body.contains("Pat") && !body.contains("Jensen"));
+    report("GPS coordinates are absent from body",
+           !body.contains("47.6205") && !body.contains("-122.3493"));
     report("redaction marker is present where a secret was",
            body.contains("***REDACTED***"));
     report("log block is fenced as ```text",
@@ -96,8 +104,9 @@ void testSnapshotSectionsPresent()
     report("OS & version section present",   body.contains("### OS & version"));
     report("AetherSDR version filled in",    body.contains("26.7.3"));
     report("Qt version filled in",           body.contains("6.6.2"));
-    report("no-personal-data header present",
-           body.contains("No personal data is included"));
+    report("specific privacy notice is present",
+           body.contains("GPS coordinates")
+           && body.contains("SmartLink account names"));
 }
 
 } // namespace

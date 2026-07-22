@@ -9,12 +9,12 @@ QString buildIssueReport(const SupportBundle::SystemInfo& sys,
 {
     QString body;
 
-    // Header states, truthfully, that no personal data rides along: the log
-    // tail is secret-redacted at the boundary below, and serial/IP are
-    // scrubbed too.  Callsign and radio model are public and kept.
+    // State the concrete privacy guarantees without implying that arbitrary
+    // user-authored log text can be proven free of every kind of PII.
     body += "<!-- Pre-filled by AetherSDR (Help \xE2\x86\x92 File an Issue). "
-            "No personal data is included: the recent-log tail below is "
-            "secret-redacted, and the radio serial/IP are scrubbed. Please "
+            "Known sensitive fields are redacted: authentication tokens, "
+            "network/radio identifiers, GPS coordinates, and SmartLink "
+            "account names. Please review the report, then "
             "replace the italic placeholders with your own words. -->\n\n";
 
     body += "### What happened?\n";
@@ -35,12 +35,15 @@ QString buildIssueReport(const SupportBundle::SystemInfo& sys,
         // record; model/firmware/protocol are not sensitive.
         body += QString("- Model: %1\n").arg(radio.model);
         body += QString("- Firmware: %1\n").arg(radio.firmware);
-        if (!radio.protocolVersion.isEmpty())
+        if (!radio.protocolVersion.isEmpty()) {
             body += QString("- Protocol: %1\n").arg(radio.protocolVersion);
-        if (!radio.callsign.isEmpty())
+        }
+        if (!radio.callsign.isEmpty()) {
             body += QString("- Callsign: %1\n").arg(radio.callsign);
-        if (!radio.serial.isEmpty())
+        }
+        if (!radio.serial.isEmpty()) {
             body += QString("- Serial: %1\n").arg(redactPii(radio.serial));
+        }
         body += "- Connection: connected\n\n";
     } else {
         body += "- Connection: not connected\n\n";
