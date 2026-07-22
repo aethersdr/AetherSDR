@@ -964,7 +964,8 @@ scope actually consumed, in milliseconds per wall-clock second.
    "name":"waveAppletScope","windowTitle":"AetherSDR","windowClass":"AetherSDR::MainWindow",
    "floating":false,"visible":true,"tx":false,"paused":false,
    "mode":"Scope","fps":60,"windowMs":1000,"sampleRate":48000,
-   "widthPx":244,"heightPx":110,"sinceMs":40012,
+   "widthPx":244,"heightPx":110,"nativeWindow":false,
+   "nativeAncestorsBlocked":false,"nativeAncestorCount":0,"sinceMs":40012,
    "paintCount":2381,"paintsPerSec":59.5,"avgPaintUs":312.4,"maxPaintUs":1893,
    "paintMsPerSec":18.6,"appendsPerSec":124.9,"samplesPerSec":47980.1}]}
 ```
@@ -973,6 +974,11 @@ scope actually consumed, in milliseconds per wall-clock second.
 - `mode` uses the applet's UI names: `Scope` / `Envelope` / `History` / `Bands`.
 - `floating` + `windowClass` — which top-level surface hosts the scope
   (`MainWindow` docked, `FloatingContainerWindow` popped out, or the strip).
+- `nativeWindow`, `nativeAncestorsBlocked`, and `nativeAncestorCount` expose
+  the same QWidget/native-surface topology as `get rhi`. On macOS, waveform
+  scopes embedded in scroll areas are expected to remain composited
+  (`false`, `false`, `0`) so their rendering follows QWidget resize, scroll,
+  and clipping geometry.
 - Counters accumulate from app start; a selector narrows to one scope
   (`get wavestats waveAppletScope`) and the pseudo-property `reset` zeroes
   the counters after the read (`get wavestats "" reset`) so successive reads
