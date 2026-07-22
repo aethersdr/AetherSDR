@@ -2002,6 +2002,14 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
         m_blackSlider->setToolTip(autoOn
             ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
             : "Waterfall black level. Decrease to darken the noise floor.");
+        if (!m_kiwiWaterfallControlMode) {
+            m_blackSlider->setAccessibleName(autoOn
+                ? tr("Waterfall auto-black offset")
+                : tr("Waterfall black level"));
+            m_blackSlider->setAccessibleDescription(autoOn
+                ? tr("Sets the target offset from the measured noise floor.")
+                : tr("Sets the manual waterfall black level."));
+        }
     }
     if (emitSignals) {
         emit wfAutoBlackChanged(autoOn);
@@ -2135,6 +2143,12 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
         m_gainSlider->setToolTip(kiwiMode
             ? "KiwiSDR waterfall ceiling dBm. Auto sets this from the row's 98th percentile plus 30 dB."
             : "Waterfall color gain.");
+        m_gainSlider->setAccessibleName(kiwiMode
+            ? tr("KiwiSDR waterfall ceiling")
+            : tr("Waterfall color gain"));
+        m_gainSlider->setAccessibleDescription(kiwiMode
+            ? tr("Sets the maximum KiwiSDR waterfall display level in dBm.")
+            : tr("Sets the waterfall color gain from 0 to 100."));
     }
     if (m_blackSlider) {
         m_blackSlider->setRange(kiwiMode ? -260 : 0, kiwiMode ? 29 : 100);
@@ -2143,6 +2157,11 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
             : (m_autoBlackBtn && m_autoBlackBtn->isChecked()
                    ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
                    : "Waterfall black level. Decrease to darken the noise floor."));
+        if (kiwiMode) {
+            m_blackSlider->setAccessibleName(tr("KiwiSDR waterfall floor"));
+            m_blackSlider->setAccessibleDescription(
+                tr("Sets the minimum KiwiSDR waterfall display level in dBm."));
+        }
     }
     if (m_rateSlider) {
         m_rateSlider->setRange(kiwiMode ? 0 : WF_RATE_SLIDER_MIN,
@@ -2151,6 +2170,12 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
         m_rateSlider->setToolTip(kiwiMode
             ? "KiwiSDR waterfall rate. Auto follows the Flex waterfall rate."
             : "Waterfall rate.");
+        m_rateSlider->setAccessibleName(kiwiMode
+            ? tr("KiwiSDR waterfall rate")
+            : tr("Waterfall rate"));
+        m_rateSlider->setAccessibleDescription(kiwiMode
+            ? tr("Zero follows the Flex waterfall rate; values 1 to 4 request a fixed KiwiSDR rate.")
+            : tr("Sets the waterfall row update rate."));
     }
     if (m_autoBlackBtn) {
         m_autoBlackBtn->setToolTip(kiwiMode
