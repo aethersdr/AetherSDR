@@ -6057,53 +6057,6 @@ QJsonObject MainWindow::automationTune(double mhz)
                        {QStringLiteral("letter"), slice->letter()}};
 }
 
-QJsonObject MainWindow::automationTargetTune(double mhz)
-{
-    SliceModel* slice = activeSlice();
-    if (!slice) {
-        return QJsonObject{{QStringLiteral("ok"), false},
-                           {QStringLiteral("error"), QStringLiteral("no slice to tune")}};
-    }
-    if (slice->isLocked()) {
-        return QJsonObject{
-            {QStringLiteral("ok"), false},
-            {QStringLiteral("error"),
-             QStringLiteral("refused: slice %1 is VFO-locked").arg(slice->letter())}};
-    }
-    if (m_swrSweep.running) {
-        return QJsonObject{{QStringLiteral("ok"), false},
-                           {QStringLiteral("error"),
-                            QStringLiteral("refused: SWR sweep is running")}};
-    }
-
-    applyTuneRequest(slice, mhz, TuneIntent::CommandedTargetCenter,
-                     "automation-target-tune");
-    return QJsonObject{{QStringLiteral("ok"), true},
-                       {QStringLiteral("targetTune"), mhz},
-                       {QStringLiteral("sliceId"), slice->sliceId()},
-                       {QStringLiteral("letter"), slice->letter()}};
-}
-
-QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
-                                                 const QString& preferredPanId)
-{
-    if (!m_radioModel.memories().contains(memoryIndex)) {
-        return QJsonObject{{QStringLiteral("ok"), false},
-                           {QStringLiteral("error"),
-                            QStringLiteral("no memory with index %1").arg(memoryIndex)}};
-    }
-    if (!activateMemorySpot(memoryIndex, preferredPanId)) {
-        return QJsonObject{{QStringLiteral("ok"), false},
-                           {QStringLiteral("error"),
-                            QStringLiteral("memory %1 could not be activated")
-                                .arg(memoryIndex)}};
-    }
-    return QJsonObject{{QStringLiteral("ok"), true},
-                       {QStringLiteral("memory"), QStringLiteral("activate")},
-                       {QStringLiteral("index"), memoryIndex},
-                       {QStringLiteral("panId"), preferredPanId}};
-}
-
 QJsonObject MainWindow::automationSetCenterLock(int sliceId, bool enabled)
 {
     SliceModel* slice = m_radioModel.slice(sliceId);
