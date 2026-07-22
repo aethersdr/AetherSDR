@@ -6932,7 +6932,7 @@ void MainWindow::applyUiScale(int pct)
     AppSettings::instance().setValue("UiScalePercent", QString::number(pct));
     AppSettings::instance().save();
 
-    auto answer = QMessageBox::question(this, "UI Scale",
+    auto answer = FramelessMessageBox::question(this, "UI Scale",
         QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
