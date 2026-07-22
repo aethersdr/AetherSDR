@@ -6468,6 +6468,14 @@ void MainWindow::updateSplitState()
 
     for (auto* s : m_radioModel.slices()) {
         if (!s || s->isTxSlice()) continue;       // RX candidates only
+        // A diversity slice is not a split partner (#3980). The child is an
+        // RX-only beamforming slave that deliberately SHARES its parent's
+        // panadapter, so it matches the "distinct RX slice on the TX slice's
+        // pan" shape below and would otherwise be badged SPLIT while the real
+        // TX slice is badged SWAP — and acting on that badge transmits on the
+        // wrong slice. Skip the parent too, so the pair can never be read as a
+        // split in either direction.
+        if (s->diversity() && (s->isDiversityChild() || s->isDiversityParent())) continue;
         if (!txByPan.contains(s->panId())) continue;  // need a distinct TX slice here
         auto*& chosen = rxByPan[s->panId()];      // default-inserts nullptr
         // Prefer the GUI-tracked RX (exact pairing for the SPLIT button), then the
