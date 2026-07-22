@@ -5528,19 +5528,19 @@ void MainWindow::onRadioMessage(const QString& text, MessageSeverity severity)
         qCWarning(lcGui) << "Radio M-message [Warning]:" << text;
         if (interlockMessage)
             break;
-        QMessageBox::warning(this, tr("Radio"), text);
+        FramelessMessageBox::warning(this, tr("Radio"), text);
         break;
     case MessageSeverity::Error:
         qCCritical(lcGui) << "Radio M-message [Error]:" << text;
         if (interlockMessage)
             break;
-        QMessageBox::critical(this, tr("Radio — Error"), text);
+        FramelessMessageBox::critical(this, tr("Radio — Error"), text);
         break;
     case MessageSeverity::Fatal:
         qCCritical(lcGui) << "Radio M-message [Fatal]:" << text;
         if (interlockMessage)
             break;
-        QMessageBox::critical(this, tr("Radio — Fatal"), text);
+        FramelessMessageBox::critical(this, tr("Radio — Fatal"), text);
         break;
     }
 }

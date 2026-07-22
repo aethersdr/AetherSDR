@@ -106,6 +106,13 @@ QMessageBox::StandardButton FramelessMessageBox::warning(
     return showMessage(Warning, parent, title, text, buttons, defaultButton);
 }
 
+QMessageBox::StandardButton FramelessMessageBox::critical(
+    QWidget* parent, const QString& title, const QString& text,
+    StandardButtons buttons, StandardButton defaultButton)
+{
+    return showMessage(Critical, parent, title, text, buttons, defaultButton);
+}
+
 QMessageBox::StandardButton FramelessMessageBox::question(
     QWidget* parent, const QString& title, const QString& text,
     StandardButtons buttons, StandardButton defaultButton)
