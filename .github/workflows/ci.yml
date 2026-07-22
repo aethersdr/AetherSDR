@@ -189,7 +189,17 @@ jobs:
         run: cmake --build build --target build_opus -j $env:NUMBER_OF_PROCESSORS
 
       - name: Build
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+        # This job's purpose is to catch Windows-only compile/link regressions
+        # (WASAPI, Q_OS_WIN paths) that Linux/macOS CI can't see — served by
+        # linking the app plus the handful of portability tests run below, NOT the
+        # default `all` target. Building every *_test.exe relinked the same
+        # libraries into hundreds of tiny executables for no added Windows coverage
+        # (cross-platform test linkage is already exercised by the Linux/macOS CI
+        # that build AND run the full suite), and that link tail was stalling for
+        # hours on the runner. timeout-minutes fails fast (with logs) if it ever
+        # hangs again, instead of running to the 6-hour job limit.
+        timeout-minutes: 45
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test
 
       - name: Test ThumbDV portability paths
         run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure
