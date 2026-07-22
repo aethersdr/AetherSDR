@@ -71,6 +71,9 @@ public:
 
     // Update the dBm range used to scale incoming FFT bins for a specific stream.
     void setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho = false);
+    // Abandon an in-flight client range request so the next radio-authoritative
+    // range can update the FFT decoder immediately (for example, on a band change).
+    bool cancelPendingDbmRange(quint32 streamId);
     // Update the ypixels used to scale FFT bin values for a specific stream.
     // The radio encodes FFT bins as pixel Y positions (0 = top/max_dbm,
     // ypixels-1 = bottom/min_dbm), NOT as 0-65535 uint16 range.

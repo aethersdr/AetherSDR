@@ -20,9 +20,9 @@ layout(std140, binding = 0) uniform U {
     float frontMaxRidgeFrac;
     float haze;
     float texCols;
-    float pad0;
-    float pad1;
-    float pad2;
+    float frequencyScale;
+    float frequencyOffset;
+    float frequencyPreview;
     vec4  bgFill;
 };
 

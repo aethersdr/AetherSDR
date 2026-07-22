@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
 
@@ -39,6 +40,7 @@ void resetSettings()
     QFile::remove(path);
     QFile::remove(path + QStringLiteral(".bak"));
     QFile::remove(path + QStringLiteral(".tmp"));
+    settings.load();
 }
 
 void testDefaultPlaceholder()
@@ -136,27 +138,16 @@ void testPreferenceReload()
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir fakeHome(QDir::tempPath() + "/aether-amp-applet-test-XXXXXX");
-    if (!fakeHome.isValid()) {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-amp-applet-test"));
+    if (!settingsProfile.isValid()) {
         std::printf("[FAIL] create temporary home\n");
         return 1;
     }
-
-    const QByteArray fakeHomePath = fakeHome.path().toUtf8();
-    qputenv("HOME", fakeHomePath);
-    qputenv("CFFIXED_USER_HOME", fakeHomePath);
-    qputenv("LOCALAPPDATA", fakeHomePath);
-    qputenv("XDG_CONFIG_HOME", fakeHomePath);
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
-    QStandardPaths::setTestModeEnabled(true);
 
     QApplication app(argc, argv);
-
-    const QString configRoot =
-        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QDir(configRoot + QStringLiteral("/AetherSDR")).removeRecursively();
 
     std::printf("AmpApplet temperature unit test harness\n\n");
 

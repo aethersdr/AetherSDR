@@ -6,7 +6,6 @@
 #include <QEvent>
 #include <QFont>
 #include <QFontMetricsF>
-#include <QImage>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QLoggingCategory>
@@ -76,56 +75,6 @@ QPainterPath sampledArc(const QPointF &center, double radius, double startRadian
     return path;
 }
 
-const QImage &paperGrainTexture() {
-    // Keep the texture near the meter's nominal on-screen size. The previous
-    // 750 x 500 field averaged several noise samples into every applet pixel,
-    // making its grain disappear when the design was reduced to 260 x 173.
-    // Two correlated noise bands and sparse flecks read as paper/paint fibres
-    // without introducing a repeating raster asset.
-    static const QImage texture = []() {
-        // Roughly 1.4 logical applet pixels per texel at the nominal size:
-        // broad enough to remain visible on a Retina capture, fine enough not
-        // to look like discrete digital blocks.
-        QImage image(180, 120, QImage::Format_RGB32);
-        quint32 state = 0x6d2b79f5U;
-        const auto nextNoise = [&state]() {
-            state ^= state << 13U;
-            state ^= state >> 17U;
-            state ^= state << 5U;
-            return state;
-        };
-        for (int y = 0; y < image.height(); ++y) {
-            const int rowBias = static_cast<int>((nextNoise() >> 28U) & 0x0fU) - 8;
-            int horizontalFibre = 0;
-            QRgb *line = reinterpret_cast<QRgb *>(image.scanLine(y));
-            for (int x = 0; x < image.width(); ++x) {
-                const quint32 sample = nextNoise();
-                const int fine = static_cast<int>((sample >> 26U) & 0x3fU) - 32;
-                horizontalFibre = (7 * horizontalFibre + fine) / 8;
-                const int fleck = (sample & 0xffU) < 6U
-                    ? (((sample >> 8U) & 1U) == 0U ? -34 : 34)
-                    : 0;
-                const int value = std::clamp(
-                    128 + rowBias + fine + 2 * horizontalFibre + fleck, 58, 198);
-                line[x] = qRgb(value, value, value);
-            }
-        }
-        return image;
-    }();
-    return texture;
-}
-
-void drawPaperGrain(QPainter &painter, const QRectF &face, double opacity) {
-    painter.save();
-    painter.setOpacity(opacity);
-    // Overlay keeps a mid-grey texture luminance-neutral while giving its
-    // darker and lighter fibres enough contrast to survive at 260 px wide.
-    painter.setCompositionMode(QPainter::CompositionMode_Overlay);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.drawImage(face, paperGrainTexture());
-    painter.restore();
-}
-
 } // namespace
 
 CrossNeedleMeterWidget::CrossNeedleMeterWidget(QWidget *parent)
@@ -143,6 +92,14 @@ CrossNeedleMeterWidget::CrossNeedleMeterWidget(QWidget *parent)
         qCWarning(lcCrossNeedleMeter).noquote()
             << "CrossNeedleMeterWidget: using degraded fallback geometry:" << geometryError;
         m_geometry = CrossNeedleMeterGeometry::fallback();
+    }
+
+    QString themeError;
+    m_faceThemes = AnalogMeterFaceThemeCatalog::loadResource(&themeError);
+    if (!m_faceThemes.isValid()) {
+        qCWarning(lcCrossNeedleMeter).noquote()
+            << "CrossNeedleMeterWidget: using fallback face themes:" << themeError;
+        m_faceThemes = AnalogMeterFaceThemeCatalog::fallback();
     }
 
     setObjectName(QStringLiteral("crossNeedleMeter"));
@@ -190,11 +147,33 @@ QString CrossNeedleMeterWidget::faceThemeId() const {
     return QStringLiteral("classic-warm");
 }
 
+AnalogMeterFaceTheme CrossNeedleMeterWidget::analogFaceTheme() const {
+    switch (m_faceTheme) {
+    case FaceTheme::ClassicWarm:
+        return AnalogMeterFaceTheme::ClassicWarm;
+    case FaceTheme::DarkRoomUplight:
+        return AnalogMeterFaceTheme::DarkRoomUplight;
+    case FaceTheme::GraphiteDark:
+        return AnalogMeterFaceTheme::GraphiteDark;
+    }
+    return AnalogMeterFaceTheme::ClassicWarm;
+}
+
 void CrossNeedleMeterWidget::setFaceTheme(FaceTheme theme) {
     if (m_faceTheme == theme) {
         return;
     }
     m_faceTheme = theme;
+    m_cacheValid = false;
+    publishAutomationProperties();
+    update();
+}
+
+void CrossNeedleMeterWidget::setRangeLegendVisible(bool visible) {
+    if (m_rangeLegendVisible == visible) {
+        return;
+    }
+    m_rangeLegendVisible = visible;
     m_cacheValid = false;
     publishAutomationProperties();
     update();
@@ -388,19 +367,8 @@ void CrossNeedleMeterWidget::drawScale(QPainter &painter,
                                        const CrossNeedleMeterGeometry::Scale &scale,
                                        const CrossNeedleMeterGeometry::Title &title) const {
     const CrossNeedleMeterGeometry::ScaleStyle &style = m_geometry.scaleStyle;
-    const CrossNeedleMeterGeometry::DarkTheme &dark = m_geometry.darkTheme;
-    const bool graphiteDark = m_faceTheme == FaceTheme::GraphiteDark;
-    const QColor outer = graphiteDark ? dark.scaleOuter : style.outer;
-    const QColor separator = graphiteDark
-                                 ? dark.scaleSeparator
-                                 : (m_faceTheme == FaceTheme::DarkRoomUplight
-                                        ? m_geometry.uplightGradient.scaleSeparator
-                                        : style.separator);
-    const QColor calibration = graphiteDark ? dark.scaleCalibration : style.calibration;
-    const QColor inner = graphiteDark ? dark.scaleInner : style.inner;
-    const QColor majorTick = graphiteDark ? dark.majorTick : style.majorTick;
-    const QColor minorTick = graphiteDark ? dark.minorTick : style.minorTick;
-    const QColor text = graphiteDark ? dark.text : style.text;
+    const AnalogMeterFaceThemeCatalog::Palette &colors =
+        m_faceThemes.palette(analogFaceTheme());
 
     // drawFace() leaves the face-coloured brush active. An open QPainterPath
     // is implicitly closed for filling, so retaining that brush would paint a
@@ -413,31 +381,36 @@ void CrossNeedleMeterWidget::drawScale(QPainter &painter,
     // slate inner rule without relying on raster artwork or changing an arc.
     if (m_faceTheme == FaceTheme::ClassicWarm) {
         painter.setPen(
-            QPen(style.ribbon, style.ribbonWidth, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+            QPen(colors.ribbon, style.ribbonWidth, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
         painter.drawPath(sampledArc(scale.center, scale.radius - style.ribbonInset,
                                     scale.startRadians, scale.endRadians));
     }
-    painter.setPen(QPen(outer, style.outerWidth, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+    painter.setPen(QPen(colors.scaleOuter, style.outerWidth, Qt::SolidLine, Qt::FlatCap,
+                        Qt::RoundJoin));
     painter.drawPath(sampledArc(scale.center, scale.radius, scale.startRadians, scale.endRadians));
     painter.setPen(
-        QPen(separator, style.separatorWidth, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+        QPen(colors.scaleSeparator, style.separatorWidth, Qt::SolidLine, Qt::FlatCap,
+             Qt::RoundJoin));
     painter.drawPath(sampledArc(scale.center, scale.radius - style.separatorInset,
                                 scale.startRadians, scale.endRadians));
     painter.setPen(
-        QPen(calibration, style.calibrationWidth, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+        QPen(colors.scaleCalibration, style.calibrationWidth, Qt::SolidLine, Qt::FlatCap,
+             Qt::RoundJoin));
     painter.drawPath(sampledArc(scale.center, scale.radius - style.calibrationInset,
                                 scale.startRadians, scale.endRadians));
-    painter.setPen(QPen(inner, style.innerWidth, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+    painter.setPen(QPen(colors.scaleInner, style.innerWidth, Qt::SolidLine, Qt::FlatCap,
+                        Qt::RoundJoin));
     painter.drawPath(sampledArc(scale.center, scale.radius - style.innerInset, scale.startRadians,
                                 scale.endRadians));
 
-    const QPen minorPen(minorTick, style.minorTickWidth, Qt::SolidLine, Qt::SquareCap);
+    const QPen minorPen(colors.minorTick, style.minorTickWidth, Qt::SolidLine, Qt::SquareCap);
     for (int i = 0; i + 1 < scale.anglesRadians.size(); ++i) {
-        const double first = scale.anglesRadians[i];
-        const double second = scale.anglesRadians[i + 1];
+        const double firstValue = scale.values[i];
+        const double secondValue = scale.values[i + 1];
         for (int subdivision = 1; subdivision < scale.minorSubdivisions; ++subdivision) {
             const double fraction = static_cast<double>(subdivision) / scale.minorSubdivisions;
-            const double angle = first + (second - first) * fraction;
+            const double value = std::lerp(firstValue, secondValue, fraction);
+            const double angle = CrossNeedleMeterGeometry::angleForValue(scale, value);
             const QPointF radial(std::cos(angle), std::sin(angle));
             const QPointF point = scale.center + radial * scale.radius;
             painter.setPen(minorPen);
@@ -449,15 +422,15 @@ void CrossNeedleMeterWidget::drawScale(QPainter &painter,
     numberFont.setPixelSize(m_geometry.typography.scaleNumberPixels);
     numberFont.setWeight(QFont::Medium);
     painter.setFont(numberFont);
-    painter.setPen(QPen(majorTick, style.majorTickWidth, Qt::SolidLine, Qt::SquareCap));
+    painter.setPen(QPen(colors.majorTick, style.majorTickWidth, Qt::SolidLine, Qt::SquareCap));
     for (int i = 0; i < scale.anglesRadians.size(); ++i) {
-        const double angle = scale.anglesRadians[i];
+        const double angle = CrossNeedleMeterGeometry::printedAngleForIndex(scale, i);
         const QPointF radial(std::cos(angle), std::sin(angle));
         const QPointF point = scale.center + radial * scale.radius;
         painter.drawLine(point - radial * 20.0, point + radial * 14.0);
         if (!scale.labels[i].isEmpty()) {
             painter.save();
-            painter.setPen(text);
+            painter.setPen(colors.text);
             drawCenteredText(painter, point + radial * scale.labelOffset, scale.labels[i]);
             painter.restore();
         }
@@ -467,26 +440,43 @@ void CrossNeedleMeterWidget::drawScale(QPainter &painter,
     titleFont.setPixelSize(m_geometry.typography.sideTitlePixels);
     titleFont.setBold(true);
     painter.setFont(titleFont);
-    painter.setPen(text);
+    painter.setPen(colors.text);
     drawRotatedText(painter, title.center, title.text, title.rotationDegrees);
 }
 
 void CrossNeedleMeterWidget::drawSwrGuides(QPainter &painter) const {
-    const bool graphiteDark = m_faceTheme == FaceTheme::GraphiteDark;
-    const QColor guideColor =
-        graphiteDark ? m_geometry.darkTheme.swrGuide : m_geometry.swrStyle.guide;
-    const QColor labelColor =
-        graphiteDark ? m_geometry.darkTheme.swrLabel : m_geometry.swrStyle.label;
-    painter.setPen(QPen(guideColor, m_geometry.swrStyle.guideWidth, Qt::SolidLine, Qt::RoundCap,
+    const AnalogMeterFaceThemeCatalog::Palette &colors =
+        m_faceThemes.palette(analogFaceTheme());
+    painter.setPen(QPen(colors.swrGuide, m_geometry.swrStyle.guideWidth, Qt::SolidLine, Qt::RoundCap,
                         Qt::RoundJoin));
+    // Trim the leading (lower) end of every contour to sit a small gap above
+    // the mask, like the real meter face: clip guide drawing to the region
+    // above the mask boundary raised by maskGap. Labels below are unaffected.
+    painter.save();
+    const QVector<QPointF> &maskEdge = m_geometry.mask.boundary;
+    const double maskGap = m_geometry.swrStyle.maskGap;
+    if (maskGap > 0.0 && maskEdge.size() >= 2) {
+        QPainterPath above;
+        above.moveTo(0.0, 0.0);
+        above.lineTo(m_geometry.canvasWidth, 0.0);
+        above.lineTo(m_geometry.canvasWidth, maskEdge.last().y() - maskGap);
+        for (int i = maskEdge.size() - 1; i >= 0; --i) {
+            above.lineTo(maskEdge[i].x(), maskEdge[i].y() - maskGap);
+        }
+        above.lineTo(0.0, maskEdge.first().y() - maskGap);
+        above.closeSubpath();
+        painter.setClipPath(above, Qt::IntersectClip);
+    }
     for (const CrossNeedleMeterGeometry::SwrGuide &guide : m_geometry.swrGuides) {
         painter.drawPath(m_geometry.swrGuidePath(guide));
     }
+    painter.restore();
 
     QFont labelFont = font();
     labelFont.setPixelSize(m_geometry.typography.swrNumberPixels);
     labelFont.setBold(true);
     painter.setFont(labelFont);
+    const QFontMetricsF metrics(labelFont);
     for (const CrossNeedleMeterGeometry::SwrGuide &guide : m_geometry.swrGuides) {
         if (guide.displayLabel.isEmpty()) {
             continue;
@@ -494,10 +484,11 @@ void CrossNeedleMeterWidget::drawSwrGuides(QPainter &painter) const {
         const QString display = guide.displayLabel == QStringLiteral("infinity")
                                     ? QString::fromUtf8("\xe2\x88\x9e")
                                     : guide.displayLabel;
-        const QFontMetricsF metrics(labelFont);
         const QRectF textRect = metrics.boundingRect(display).adjusted(-3.0, -2.0, 3.0, 2.0);
+        const QPointF labelCenter =
+            m_geometry.swrGuideLabelCenter(guide, labelFont);
         QRectF background = textRect;
-        background.moveCenter(m_geometry.swrGuideLabelCenter(guide));
+        background.moveCenter(labelCenter);
         const CrossNeedleMeterGeometry::Frame &frame = m_geometry.frame;
         const QRectF face(frame.faceInset, frame.faceInset,
                           m_geometry.canvasWidth - 2.0 * frame.faceInset,
@@ -506,115 +497,13 @@ void CrossNeedleMeterWidget::drawSwrGuides(QPainter &painter) const {
         painter.setClipRect(background);
         drawFaceBackground(painter, face);
         painter.restore();
-        painter.setPen(labelColor);
-        drawCenteredText(painter, m_geometry.swrGuideLabelCenter(guide), display);
+        painter.setPen(colors.swrLabel);
+        drawCenteredText(painter, labelCenter, display);
     }
 }
 
 void CrossNeedleMeterWidget::drawFaceBackground(QPainter &painter, const QRectF &face) const {
-    if (m_faceTheme == FaceTheme::GraphiteDark) {
-        const CrossNeedleMeterGeometry::DarkTheme &dark = m_geometry.darkTheme;
-
-        QLinearGradient card(face.topLeft(), face.bottomLeft());
-        card.setColorAt(0.0, dark.top);
-        card.setColorAt(dark.middleStop, dark.middle);
-        card.setColorAt(1.0, dark.bottom);
-        painter.fillRect(face, card);
-
-        QRadialGradient ambient(dark.ambientCenter, dark.ambientRadius);
-        ambient.setColorAt(0.0, dark.ambientInner);
-        ambient.setColorAt(1.0, dark.ambientOuter);
-        painter.fillRect(face, ambient);
-
-        painter.save();
-        painter.setCompositionMode(QPainter::CompositionMode_Screen);
-        QRadialGradient glow(dark.glowCenter, dark.glowRadius);
-        glow.setColorAt(0.0, dark.glowInner);
-        glow.setColorAt(dark.glowMiddleStop, dark.glowMiddle);
-        glow.setColorAt(1.0, dark.glowOuter);
-        painter.fillRect(face, glow);
-        painter.restore();
-
-        QColor clearEdge = dark.vignetteEdge;
-        clearEdge.setAlpha(0);
-        QRadialGradient vignette(dark.vignetteCenter, dark.vignetteRadius);
-        vignette.setColorAt(0.0, clearEdge);
-        vignette.setColorAt(dark.vignetteClearStop, clearEdge);
-        vignette.setColorAt(1.0, dark.vignetteEdge);
-        painter.fillRect(face, vignette);
-
-        drawPaperGrain(painter, face, dark.paperGrainOpacity);
-        return;
-    }
-
-    if (m_faceTheme == FaceTheme::DarkRoomUplight) {
-        const CrossNeedleMeterGeometry::UplightGradient &light = m_geometry.uplightGradient;
-
-        // The theme is deliberately composed from ordinary QPainter layers:
-        // low ambient exposure, a broad lamp halo, a concentrated bulb glow,
-        // a small paper-diffusion bloom, then a symmetric edge vignette. The
-        // two inner layers use Screen blending to behave like emitted light
-        // passing through the card rather than opaque orange paint.
-        QLinearGradient ambient(face.topLeft(), face.bottomLeft());
-        ambient.setColorAt(0.0, light.top);
-        ambient.setColorAt(light.middleStop, light.middle);
-        ambient.setColorAt(1.0, light.bottom);
-        painter.fillRect(face, ambient);
-
-        QRadialGradient halo(light.haloCenter, light.haloRadius);
-        halo.setColorAt(0.0, light.haloInner);
-        halo.setColorAt(light.haloMiddleStop, light.haloMiddle);
-        halo.setColorAt(light.haloShoulderStop, light.haloShoulder);
-        halo.setColorAt(1.0, light.haloOuter);
-        painter.fillRect(face, halo);
-
-        painter.save();
-        painter.setCompositionMode(QPainter::CompositionMode_Screen);
-        QRadialGradient hotspot(light.hotspotCenter, light.hotspotRadius);
-        hotspot.setColorAt(0.0, light.hotspotInner);
-        hotspot.setColorAt(light.hotspotMiddleStop, light.hotspotMiddle);
-        hotspot.setColorAt(1.0, light.hotspotOuter);
-        painter.fillRect(face, hotspot);
-
-        QRadialGradient bloom(light.bloomCenter, light.bloomRadius);
-        bloom.setColorAt(0.0, light.bloomInner);
-        bloom.setColorAt(light.bloomMiddleStop, light.bloomMiddle);
-        bloom.setColorAt(1.0, light.bloomOuter);
-        painter.fillRect(face, bloom);
-        painter.restore();
-
-        QColor clearEdge = light.vignetteEdge;
-        clearEdge.setAlpha(0);
-        QRadialGradient vignette(light.vignetteCenter, light.vignetteRadius);
-        vignette.setColorAt(0.0, clearEdge);
-        vignette.setColorAt(light.vignetteClearStop, clearEdge);
-        vignette.setColorAt(1.0, light.vignetteEdge);
-        painter.fillRect(face, vignette);
-
-        drawPaperGrain(painter, face, light.paperGrainOpacity);
-        return;
-    }
-
-    const CrossNeedleMeterGeometry::FaceGradient &material = m_geometry.faceGradient;
-
-    QLinearGradient base(face.topLeft(), face.bottomLeft());
-    base.setColorAt(0.0, material.top);
-    base.setColorAt(material.middleStop, material.middle);
-    base.setColorAt(1.0, material.bottom);
-    painter.fillRect(face, base);
-
-    QRadialGradient glow(material.glowCenter, material.glowRadius);
-    glow.setColorAt(0.0, material.glowInner);
-    glow.setColorAt(1.0, material.glowOuter);
-    painter.fillRect(face, glow);
-
-    QColor clearEdge = material.vignetteEdge;
-    clearEdge.setAlpha(0);
-    QRadialGradient vignette(material.vignetteCenter, material.vignetteRadius);
-    vignette.setColorAt(0.0, clearEdge);
-    vignette.setColorAt(material.vignetteClearStop, clearEdge);
-    vignette.setColorAt(1.0, material.vignetteEdge);
-    painter.fillRect(face, vignette);
+    m_faceThemes.drawBackground(painter, face, analogFaceTheme());
 }
 
 void CrossNeedleMeterWidget::drawFace(QPainter &painter) const {
@@ -664,20 +553,23 @@ void CrossNeedleMeterWidget::drawFace(QPainter &painter) const {
         drawScale(painter, m_geometry.reflectedScale, m_geometry.reflectedTitle);
     }
 
-    QFont rangeFont = font();
-    rangeFont.setPixelSize(m_geometry.typography.rangePixels);
-    rangeFont.setBold(true);
-    painter.setFont(rangeFont);
-    painter.setPen(m_faceTheme == FaceTheme::GraphiteDark ? m_geometry.darkTheme.rangeText
-                                                          : QColor(54, 61, 66));
-    drawCenteredMultilineText(painter, m_geometry.rangeLabelCenter, m_geometry.rangeLabel);
+    const AnalogMeterFaceThemeCatalog::Palette &colors =
+        m_faceThemes.palette(analogFaceTheme());
+    if (m_rangeLegendVisible) {
+        QFont rangeFont = font();
+        rangeFont.setPixelSize(m_geometry.typography.rangePixels);
+        rangeFont.setBold(true);
+        painter.setFont(rangeFont);
+        painter.setPen(colors.secondaryText);
+        drawCenteredMultilineText(painter, m_geometry.rangeLabelCenter,
+                                  m_geometry.rangeLabel);
+    }
 
     QFont unitFont = font();
     unitFont.setPixelSize(m_geometry.typography.unitPixels);
     unitFont.setBold(true);
     painter.setFont(unitFont);
-    painter.setPen(m_faceTheme == FaceTheme::GraphiteDark ? m_geometry.darkTheme.text
-                                                          : m_geometry.scaleStyle.text);
+    painter.setPen(colors.text);
     drawCenteredText(painter, m_geometry.forwardUnitCenter, QStringLiteral("(W)"));
     drawCenteredText(painter, m_geometry.reflectedUnitCenter, QStringLiteral("(W)"));
 
@@ -692,28 +584,25 @@ void CrossNeedleMeterWidget::drawFace(QPainter &painter) const {
 }
 
 void CrossNeedleMeterWidget::drawLowerMask(QPainter &painter) const {
-    const bool graphiteDark = m_faceTheme == FaceTheme::GraphiteDark;
-    const QColor fill = graphiteDark ? m_geometry.darkTheme.maskFill : m_geometry.mask.fill;
-    const QColor edge = graphiteDark ? m_geometry.darkTheme.maskEdge : m_geometry.mask.edge;
-    const QColor text = graphiteDark ? m_geometry.darkTheme.maskText : m_geometry.mask.text;
-    QPolygonF polygon;
-    polygon.append(QPointF(m_geometry.mask.boundary.first().x(), m_geometry.mask.bottomY));
-    for (const QPointF &point : m_geometry.mask.boundary) {
-        polygon.append(point);
-    }
-    polygon.append(QPointF(m_geometry.mask.boundary.last().x(), m_geometry.mask.bottomY));
+    const AnalogMeterFaceThemeCatalog::Palette &colors =
+        m_faceThemes.palette(analogFaceTheme());
+    const CrossNeedleMeterGeometry::Frame &frame = m_geometry.frame;
+    const QRectF face(frame.faceInset, frame.faceInset,
+                      m_geometry.canvasWidth - 2.0 * frame.faceInset,
+                      m_geometry.canvasHeight - 2.0 * frame.faceInset);
+    const QVector<QPointF> boundary = m_faceThemes.lowerMaskBoundary(face);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(fill);
-    painter.drawPolygon(polygon);
+    painter.setBrush(colors.maskFill);
+    painter.drawPath(m_faceThemes.lowerMaskPath(face));
 
-    painter.setPen(QPen(edge, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.drawPolyline(QPolygonF(m_geometry.mask.boundary));
+    painter.setPen(QPen(colors.maskEdge, 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.drawPolyline(QPolygonF(boundary));
 
     QFont labelFont = font();
     labelFont.setPixelSize(m_geometry.typography.maskLabelPixels);
     labelFont.setBold(true);
     painter.setFont(labelFont);
-    painter.setPen(text);
+    painter.setPen(colors.maskText);
     drawCenteredText(painter, m_geometry.mask.labelCenter, m_geometry.mask.label);
 }
 
@@ -750,21 +639,21 @@ void CrossNeedleMeterWidget::drawNeedles(QPainter &painter) const {
     painter.save();
     painter.setClipPath(clip);
 
-    const bool graphiteDark = m_faceTheme == FaceTheme::GraphiteDark;
+    const AnalogMeterFaceThemeCatalog::Palette &colors =
+        m_faceThemes.palette(analogFaceTheme());
     const CrossNeedleMeterGeometry::NeedleStyle &style = m_geometry.needleStyle;
-    const QColor shadow = graphiteDark ? m_geometry.darkTheme.needleShadow : style.shadow;
-    const QColor line = graphiteDark ? m_geometry.darkTheme.needle : style.line;
-    const QColor edge = graphiteDark ? m_geometry.darkTheme.needleEdge : style.edge;
-    const QColor highlight =
-        graphiteDark ? m_geometry.darkTheme.needleHighlight : style.highlight;
-    const auto drawMovement = [&painter, &style, shadow, line, edge, highlight](
+    const QColor shadow = colors.needleShadow;
+    const QColor line = colors.needle;
+    const QColor edge = colors.needleEdge;
+    const QColor highlight = colors.needleHighlight;
+    const auto drawMovement = [&painter, &style, &colors, shadow, line, edge, highlight](
                                   const QPointF &pivot, const QPointF &tip) {
         // Build physical depth from code-drawn material layers. Only the soft
         // shadows and sub-pixel edge reflections are displaced; the body is
         // always painted on the calibrated pivot-to-tip ray. The cast shadows
         // remain continuous over the printed scale, as they would on a
         // physical meter face beneath an elevated needle.
-        painter.setPen(QPen(style.softShadow, style.softShadowWidth, Qt::SolidLine,
+        painter.setPen(QPen(colors.needleSoftShadow, style.softShadowWidth, Qt::SolidLine,
                             Qt::RoundCap));
         painter.drawLine(pivot + style.softShadowOffset, tip + style.softShadowOffset);
         painter.setPen(QPen(shadow, style.shadowWidth, Qt::SolidLine, Qt::RoundCap));
@@ -874,6 +763,7 @@ void CrossNeedleMeterWidget::publishAutomationProperties() {
                 m_reflectedPowerMeasured ? QStringLiteral("measured") : QStringLiteral("derived"));
     setProperty("swr", m_swr);
     setProperty("rangeMultiplier", m_rangeMultiplier);
+    setProperty("rangeLegendVisible", m_rangeLegendVisible);
     setProperty("transmitting", m_transmitting);
     setProperty("effectiveActive", m_transmitting || m_automationFixture);
     setProperty("automationFixture", m_automationFixture);

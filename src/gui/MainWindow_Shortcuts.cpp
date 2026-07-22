@@ -555,8 +555,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // Close DVK (mutual exclusion)
         if (show && m_dvkPanel->isVisible()) {
             m_dvkPanel->hide();
-            auto* sl = activeSlice();
-            updateKeyerAvailability(sl ? sl->mode() : QString());
+            updateKeyerAvailability();
         }
         m_cwxPanel->setVisible(show);
         m_cwxIndicator->setStyleSheet(show
@@ -581,8 +580,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         // Close CWX (mutual exclusion)
         if (show && m_cwxPanel->isVisible()) {
             m_cwxPanel->hide();
-            auto* sl = activeSlice();
-            updateKeyerAvailability(sl ? sl->mode() : QString());
+            updateKeyerAvailability();
         }
         m_dvkPanel->setVisible(show);
         m_dvkIndicator->setStyleSheet(show

@@ -233,6 +233,11 @@ DStarModel::DStarModel(QObject* parent, bool autoSelectSerial)
             this, &DStarModel::serviceChanged);
     connect(&process, &DigitalVoiceWaveformProcess::metricsChanged,
             this, &DStarModel::serviceChanged);
+    connect(&DigitalVoiceModeRegistry::instance(),
+            &DigitalVoiceModeRegistry::activeSliceChanged,
+            this,
+            [this](int) { emit serviceChanged(); },
+            Qt::QueuedConnection);
 
     m_serialProbe.setProcessChannelMode(QProcess::MergedChannels);
     connect(&m_serialProbe,

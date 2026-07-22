@@ -169,6 +169,16 @@ cmake --build build -j$(nproc)
 ./build/AetherSDR
 ```
 
+**Optional — DFNR (DeepFilterNet3) noise reduction.** Run
+`scripts/setup/setup-deepfilter.sh` (Windows: `setup-deepfilter.ps1`)
+*once before* `cmake` to fetch the prebuilt `libdeepfilter` for your
+platform; configure will otherwise report `DFNR ... disabled — library
+not found` and gate the feature off. CI runs this step automatically
+(cached) in the release-build workflows, so shipped binaries always
+include DFNR; it is a manual prereq only for local dev builds. NR still
+works without it — RN2 (RNNoise) is bundled and always built, needing no
+setup.
+
 Full dependency list is in `README.md` — don't duplicate it here.
 
 Current version: **26.7.2** (set in both `CMakeLists.txt` and `README.md`).
@@ -218,6 +228,11 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   TUs; new feature code goes in a sibling, NOT `MainWindow.cpp` — see
   [Adding code to MainWindow](#adding-code-to-mainwindow)
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
+- `CrossNeedleMeterGeometry` — PWR applet's cross-needle power/SWR face math.
+  **Before touching the response model, SWR-contour construction, or label
+  placement, read [`docs/cross-needle-meter-math.md`](docs/cross-needle-meter-math.md)** —
+  the authoritative model + decision record (it exists because these formulas
+  have churned when edited without a shared spec).
 
 **Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
@@ -467,7 +482,7 @@ document why.
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which writes
 an XML file at `~/.config/AetherSDR/AetherSDR.settings`. Key names use
-PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftAverage`). Boolean
+PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
 values are stored as `"True"` / `"False"` strings.
 
 ```cpp
@@ -501,14 +516,25 @@ the radio does NOT save.
 
 **Radio-authoritative (do NOT persist):** frequency, mode, filter, step size,
 AGC, squelch, DSP flags, antennas, TX power, panadapter *count* and per-pan
-state (center, bandwidth, min/max dBm, etc.).
+state (center, bandwidth, min/max dBm, FFT average/FPS/weighted-average, and
+waterfall line duration).
 
 **Client-authoritative (persist in AppSettings):** window geometry, layout
 arrangement (`PanadapterLayout`, applet order/visibility), client-side DSP
-(NR2/RN2/NR4/DFNR), UI preferences, display preferences, spot settings.
+(NR2/RN2/NR4/DFNR), UI preferences, client-only display appearance
+preferences, spot settings.
 
 **Why:** When both persist the same setting, they fight on reconnect. The
 radio's GUIClientID session restore is always more current than our saved state.
+
+**Anti-pattern (recurring — see #4261):** Do not write a radio-echoed status
+value into a setter that *also* persists it to `AppSettings`. That makes the
+client re-assert stale state on reconnect / profile load and fight the radio —
+the exact class of bug behind #2465, #4126, #4081, #4083, and #4261. For a
+radio-authoritative field, route status straight to the display (a plain member
++ signal) and never call `AppSettings::setValue()` in its setter. When a display
+setter genuinely persists (e.g. waterfall *appearance*: color gain, black
+level), that value must be client-only — never a value the radio also echoes.
 
 ### GUI↔Radio Sync (No Feedback Loops)
 

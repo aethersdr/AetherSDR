@@ -16,6 +16,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -61,6 +62,7 @@
 #include "core/SignalClassifier.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
+#include "core/AcomConnection.h"
 #include "core/DxccColorProvider.h"
 
 #include <QMainWindow>
@@ -125,6 +127,7 @@ class DxClusterDialog;
 class CallsignLookupDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
+class GpsLocationDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
 #ifdef HAVE_HIDAPI
@@ -207,7 +210,10 @@ public:
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationSetCenterLock(int sliceId, bool enabled);
-    QJsonObject automationTune(double mhz);
+    QJsonObject automationTune(double mhz, int sliceId = -1);
+    QJsonObject automationTargetTune(double mhz);
+    QJsonObject automationActivateMemory(int memoryIndex,
+                                         const QString& preferredPanId);
     QJsonObject automationReceiveSyncSnapshot() const;
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
@@ -229,6 +235,15 @@ public:
     // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
     // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
     void setAutomationTxAllowed(bool allowed);
+    // Persist the observe-only opt-in and push it live (Radio Setup → Network).
+    // When set, the bridge refuses every mutating verb (#4188 area 6).
+    void setAutomationReadOnly(bool readOnly);
+
+signals:
+    // Synchronous per-pan preflight for every radio-authoritative band-stack
+    // restore. wirePanadapter() owns the pending dBm handshake state, while the
+    // restore can originate in several MainWindow translation units.
+    void bandStackRestoreStarting(const QString& panId);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -471,11 +486,7 @@ private:
     };
     void scheduleKiwiSdrUiSync(int flags);
     void wirePanadapter(PanadapterApplet* applet);
-    void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
-    void schedulePanFpsReconcile(const QString& panId, int reportedFps);
-    void schedulePanAverageReconcile(const QString& panId, int reportedAverage);
-    void schedulePanWeightedAvgReconcile(const QString& panId, bool reportedWeighted);
-    void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
+    void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message,
@@ -489,6 +500,7 @@ private:
     void wireCallsignLookup();
     void onCwCallsignSpotted(const QString& call);
     void showCallsignLookupDialog(const QString& call = QString());
+    void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
@@ -589,7 +601,7 @@ private:
 #ifdef HAVE_WEBSOCKETS
     void showFreeDvReporter();
 #endif
-    void updateKeyerAvailability(const QString& mode);
+    void updateKeyerAvailability();
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
     void showDfnrParamPopup(const QPoint& globalPos);
@@ -743,6 +755,7 @@ private:
     AntennaGeniusModel m_antennaGenius;
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
+    AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
@@ -970,6 +983,12 @@ private:
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
     QSet<QString>    m_kiwiSdrFlexDisplayPans;
+    // Retains a KiwiSDR replacement across the slice remove->re-add a FLEX
+    // band-stack recall performs (band_persistence drops+re-creates the slice
+    // with the same id at the new band). The tracker is the pure policy; the
+    // grace window itself is a QTimer::singleShot in onSliceRemoved. (#4158)
+    KiwiRebindTracker    m_kiwiRebind;
+    static constexpr int kKiwiSdrRebindGraceMs = 1500;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1012,6 +1031,7 @@ private:
     QSystemTrayIcon* m_trayIcon{nullptr};
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
+    QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;
@@ -1161,46 +1181,14 @@ private:
     QWidget*    m_appletPanelFloatWindow{nullptr};
     void floatAppletPanel();
     void dockAppletPanel();
-    bool m_displaySettingsPushed{false};  // one-shot: push saved display settings after pan created
+    bool m_displaySettingsPushed{false};  // one-shot: push client-rendered settings after pan creation
     bool m_applyingLayout{false};        // true during layout tear-down/recreate — suppresses panadapterAdded handler
-    struct PanFpsReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};
-    };
-    QHash<QString, PanFpsReconcileState> m_panFpsReconcile;
-    QHash<QString, QMetaObject::Connection> m_panFpsReconcileConnections;
-    // FFT averaging reconcile (#4001) — mirrors the fps reconcile so a global
-    // profile / band switch that adopts the profile's stored average/weighted
-    // value gets the user's desired value re-asserted once the write-hold
-    // releases. Averaging is NOT adaptively throttled, so no throttle guard.
-    struct PanAverageReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};
-    };
-    QHash<QString, PanAverageReconcileState> m_panAverageReconcile;
-    QHash<QString, QMetaObject::Connection> m_panAverageReconcileConnections;
-    struct PanWeightedAvgReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};   // 0/1 last-sent weighted_average flag
-    };
-    QHash<QString, PanWeightedAvgReconcileState> m_panWeightedAvgReconcile;
-    QHash<QString, QMetaObject::Connection> m_panWeightedAvgReconcileConnections;
-    bool m_adaptiveThrottleActive{false}; // fps/wf reconcile suppressed while true
+    // Live radio status drives the four profile-owned processing controls.
+    // Keeping the connections per pan lets reconnect/reclaim replace them
+    // atomically without accumulating duplicate status handlers.
+    QHash<QString, QVector<QMetaObject::Connection>> m_panDisplayStatusConnections;
+    bool m_adaptiveThrottleActive{false}; // fps/wf status held as restore targets while true
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
-    struct WaterfallLineDurationReconcileState {
-        QTimer* timer{nullptr};
-        QPointer<SpectrumWidget> spectrum;
-        qint64 lastSentMs{0};
-        int lastSentDesired{-1};
-    };
-    QHash<QString, WaterfallLineDurationReconcileState> m_wfLineDurationReconcile;
-    QHash<QString, QMetaObject::Connection> m_wfLineDurationReconcileConnections;
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
     // User layout choices should suppress startup rearrange, but still allow

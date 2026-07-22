@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMutex>
+#include <QObject>
 #include <QString>
 #include <QList>
 
@@ -27,8 +28,10 @@ struct DigitalVoiceSliceClaim {
     QString previousMode;
 };
 
-class DigitalVoiceModeRegistry
+class DigitalVoiceModeRegistry : public QObject
 {
+    Q_OBJECT
+
 public:
     static DigitalVoiceModeRegistry& instance();
 
@@ -53,6 +56,9 @@ public:
     std::optional<DigitalVoiceModeId> activeMode() const;
     int activeSliceId() const;
     std::optional<DigitalVoiceSliceClaim> activeClaim() const;
+
+signals:
+    void activeSliceChanged(int sliceId);
 
 private:
     DigitalVoiceModeRegistry() = default;

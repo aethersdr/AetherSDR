@@ -11,6 +11,7 @@
 #include "VuMeterSettings.h"
 #include "TunerApplet.h"
 #include "AmpApplet.h"
+#include "AcomApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -95,16 +96,19 @@ MeterSettings::Snapshot loadVuMeterSettings()
         MeterSettings::LegacyCrossNeedle legacyCrossNeedle;
         const MeterSettings::Snapshot settings =
             MeterSettings::decode(raw, &error, &legacyCrossNeedle);
+        const int storedVersion = QJsonDocument::fromJson(raw).object()
+                                      .value(QStringLiteral("version")).toInt();
         if (!error.isEmpty()) {
             qCWarning(lcGui).noquote()
                 << "AppletPanel: ignoring invalid VuMeter settings:"
                 << error;
-        } else if (legacyCrossNeedle.present) {
-            // Version 1 temporarily combined both meters. Move its theme into
-            // the independent PWR feature object and rewrite VuMeter as the
-            // standard-only version 2 object. Queue every value before one
-            // save so the AppSettings document changes atomically.
-            if (!appSettings.contains(PowerMeterSettings::kSettingsKey)) {
+        } else if (storedVersion < MeterSettings::kVersion) {
+            // Version 1 temporarily combined both meters. Move that PWR theme
+            // first, then rewrite either legacy version as the version-3
+            // standard-only object with the established Aether face. Queue
+            // every value before one save so AppSettings changes atomically.
+            if (legacyCrossNeedle.present
+                && !appSettings.contains(PowerMeterSettings::kSettingsKey)) {
                 const PowerMeterSettings::Snapshot powerSettings =
                     PowerMeterSettings::migrateLegacyTheme(
                         legacyCrossNeedle.faceTheme);
@@ -363,7 +367,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_vuRxSelect = meterSettings.rxSelect;
     m_vuPeakHoldEnabled = meterSettings.peakHoldEnabled;
     m_vuPeakDecayRate = meterSettings.peakDecayRate;
+    m_vuFaceTheme = MeterSettings::normalizeFaceTheme(meterSettings.faceTheme);
 
+    m_sMeter->setFaceTheme(analogMeterFaceThemeFromId(
+        m_vuFaceTheme, AnalogMeterFaceTheme::AetherDefault));
     m_sMeter->setTxMode(MeterSettings::txMeterItems()[m_vuTxSelect]);
     m_sMeter->setRxMode(MeterSettings::rxMeterItems()[m_vuRxSelect]);
     m_sMeter->setPeakHoldEnabled(m_vuPeakHoldEnabled);
@@ -398,6 +405,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // tray button toggles its visibility.
     m_sMeterContainer = m_containerMgr->createContainer("VU", "S-Meter");
     m_sMeterContainer->setContent(sMeterContent);
+    connect(m_sMeterContainer, &ContainerWidget::dockModeChanged,
+            m_sMeter, [this](ContainerWidget::DockMode mode) {
+                m_sMeter->setFloating(mode == ContainerWidget::DockMode::Floating);
+            });
     const bool sMeterOn = AppSettings::instance()
         .value("Applet_VU", "True").toString() == "True";
     m_sMeterContainer->setContainerVisible(sMeterOn);
@@ -723,6 +734,18 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // ACOM S-series amplifier — independent of AMP (PGXL): a station can
+    // have both a radio-relayed PGXL and a direct-connected ACOM amplifier
+    // at once. See docs/architecture/acom-600s-amplifier-design.md.
+    m_acomApplet = new AcomApplet;
+    {
+        auto entry = makeEntry("ACOM", "ACOM Amplifier", m_acomApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_acomBtn = entry.btn;
+        markHardwareConditional("ACOM");
+        m_appletOrder.append(entry);
+    }
+
     m_txApplet = new TxApplet;
     m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
 
@@ -985,6 +1008,12 @@ void AppletPanel::setStandardMeterTxValues(float forwardWatts, float swr)
     m_sMeter->setTxMeters(forwardWatts, swr);
 }
 
+void AppletPanel::setStandardRadioMeterTxValues(
+    float forwardWatts, float forwardWattsInstant, float swr)
+{
+    m_sMeter->setRadioTxMeters(forwardWatts, forwardWattsInstant, swr);
+}
+
 void AppletPanel::setCrossNeedleDirectionalValues(
     float forwardWatts, float reflectedWatts, float swr,
     bool reflectedPowerMeasured)
@@ -1015,6 +1044,7 @@ void AppletPanel::persistVuMeterSettings() const
     settings.rxSelect = m_vuRxSelect;
     settings.peakHoldEnabled = m_vuPeakHoldEnabled;
     settings.peakDecayRate = m_vuPeakDecayRate;
+    settings.faceTheme = m_vuFaceTheme;
 
     AppSettings& appSettings = AppSettings::instance();
     appSettings.setValue(MeterSettings::kSettingsKey,
@@ -1042,6 +1072,34 @@ void AppletPanel::showStandardMeterContextMenu(QWidget* source,
         action->setEnabled(false);
         menu.addAction(action);
     };
+
+    addHeader(QStringLiteral("Face theme"));
+    QActionGroup* faceThemeGroup = new QActionGroup(&menu);
+    struct FaceThemeAction {
+        const char* label;
+        const char* id;
+        const char* objectName;
+    };
+    static constexpr FaceThemeAction faceThemes[] = {
+        {"Aether default", "aether-default", "standardSMeterAetherFaceThemeAction"},
+        {"Classic warm", "classic-warm", "standardSMeterClassicFaceThemeAction"},
+        {"Dark-room uplight", "dark-room-uplight", "standardSMeterUplightFaceThemeAction"},
+        {"Graphite dark", "graphite-dark", "standardSMeterDarkFaceThemeAction"},
+    };
+    for (const FaceThemeAction& faceTheme : faceThemes) {
+        const QString id = QString::fromLatin1(faceTheme.id);
+        QAction* action = menu.addAction(QString::fromLatin1(faceTheme.label));
+        action->setObjectName(QString::fromLatin1(faceTheme.objectName));
+        action->setCheckable(true);
+        action->setChecked(m_vuFaceTheme == id);
+        faceThemeGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, id]() {
+            m_vuFaceTheme = MeterSettings::normalizeFaceTheme(id);
+            m_sMeter->setFaceTheme(analogMeterFaceThemeFromId(
+                m_vuFaceTheme, AnalogMeterFaceTheme::AetherDefault));
+            persistVuMeterSettings();
+        });
+    }
 
     addHeader(QStringLiteral("TX Select"));
     QActionGroup* txGroup = new QActionGroup(&menu);
@@ -1324,6 +1382,12 @@ void AppletPanel::setTunerVisible(bool visible)
 void AppletPanel::setAmpVisible(bool visible)
 {
     updateHardwareAvailability("AMP", "Applet_AMP", visible);
+    applyBarLayout();
+}
+
+void AppletPanel::setAcomVisible(bool visible)
+{
+    updateHardwareAvailability("ACOM", "Applet_ACOM", visible);
     applyBarLayout();
 }
 

@@ -15,6 +15,7 @@
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
+#include "ProfileLoadPanWriteQueue.h"
 #include "TunerModel.h"
 #include "AmpModel.h"
 #include "TransmitModel.h"
@@ -160,7 +161,9 @@ public:
     QString gpsLon()       const { return m_gpsLon; }
     QString gpsTime()      const { return m_gpsTime; }
     QString gpsSpeed()     const { return m_gpsSpeed; }
+    QString gpsTrack()     const { return m_gpsTrack; }
     QString gpsFreqError() const { return m_gpsFreqError; }
+    QString gpsNtpServerAddress() const;
 
     // Max slices reported by radio
     int maxSlices() const { return m_maxSlices; }
@@ -372,6 +375,10 @@ public:
 
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
+    // The slice that transmits (IsTransmitSlice), or nullptr if none. Mirrors
+    // FlexLib's TX-slice scan (CWX::getTXFrequency, CWX.cs:186) — keyer/CWX
+    // targeting follows this slice, not the selected RX slice.
+    SliceModel* txSlice() const;
     QMap<int, QString> rawSliceModeLists() const { return m_rawSliceModeLists; }
     int rawModeOccurrenceCount(const QString& mode) const;
     int activeTxSliceNum() const;
@@ -396,6 +403,12 @@ public:
                                      QString* error = nullptr);
     bool automationRemoveSliceFixture(int sliceId,
                                       QString* error = nullptr);
+    bool automationApplyGpsFixture(const GpsDelta& delta,
+                                   const QString& referenceState,
+                                   const QString& referenceSetting,
+                                   bool referenceLocked,
+                                   const QString& ntpServerAddress,
+                                   QString* error = nullptr);
 
     // High-level actions
     void connectToRadio(const RadioInfo& info);
@@ -444,6 +457,62 @@ public:
     void setPanBandwidth(double bandwidthMhz);
     void setPanCenter(double centerMhz);
     void setPanDbmRange(float minDbm, float maxDbm);
+
+    // #4142 — the ONLY supported way for a USER-INTENT path to write a pan's
+    // center/bandwidth/band to the radio.
+    //
+    // `display pan set <id> center=…` (and bandwidth=/band=) is classified as
+    // a profile-owned radio state write, so sendCmd() DROPS it while the
+    // profile-load hold is armed: it returns before a sequence number is
+    // allocated and the command never reaches the wire. A user action that
+    // lands in that window (typed frequency, zoom, drag, band change, ATU
+    // sweep, automation) was silently lost, and the client kept its optimistic
+    // state — leaving the pan permanently claiming state the radio never took.
+    //
+    // requestPan*() defers instead of dropping: while the hold is armed it
+    // coalesces the request per pan (field-wise, last write wins per field)
+    // and returns false WITHOUT advancing local model state, so the client
+    // never claims state the radio does not have. The replay is scheduled by
+    // the act of deferring and re-checks the hold before sending.
+    //
+    // Deduping is centralized here against EFFECTIVE state — the pending value
+    // if one is queued, else the model (which keeps tracking radio status
+    // during the hold). A request equal to the model that supersedes a
+    // different pending value is a user CORRECTION: the pending entry is
+    // cancelled instead of replayed.
+    //
+    // Routing discipline is the user-intent boundary: model-echo/reconcile
+    // writers (active-slice reasserts, dBm auto-floor, fps/average reconciles)
+    // must keep their explicit guards and the sendCmd() backstop — #3563
+    // suppresses them during a profile load BY DESIGN. Do not route those.
+    //
+    // Pass bandwidthMhz > 0 to set center and bandwidth coherently in one
+    // command (zoom paths must never split the pair); pass <= 0 to leave the
+    // radio's bandwidth untouched.
+    //
+    // Returns true if the radio's state matches the request (dispatched, or a
+    // corrective cancel — the radio is already there); false if the request is
+    // deferred or could not be dispatched. Callers that also advance view
+    // state optimistically must gate that on the return value, or they will
+    // re-create the black-waterfall divergence.
+    bool requestPanCenter(const QString& panId,
+                          double centerMhz,
+                          double bandwidthMhz = -1.0);
+    bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
+    bool requestPanBand(const QString& panId, const QString& bandKey);
+
+    // Effective pan geometry: the deferred pending value if one is queued,
+    // else the live model value, else NaN when the pan is unknown. Caller-side
+    // no-op guards must compare against THIS, not the raw model — during the
+    // hold the model deliberately lags the user's deferred request.
+    double effectivePanCenterMhz(const QString& panId) const;
+    double effectivePanBandwidthMhz(const QString& panId) const;
+
+    // Replays deferred pan writes. Hard invariant: this early-returns while
+    // the hold is armed, so no deferred write can reach the wire inside the
+    // hold window. Scheduling is owned by the defer path (hold-relative,
+    // self-re-arming) — never by the profile-load ACK, which may never arrive.
+    void flushPendingProfileLoadPanWrites();
     void setPanWnb(bool on);
     void setPanWnbLevel(int level);
     void setPanRfGain(int gain);
@@ -499,8 +568,9 @@ signals:
     // Emitted when a previous-session pan model is reclaimed on reconnect
     // instead of created fresh. The applet/widget wiring from the original
     // panadapterAdded survives (model and widget both outlive the disconnect),
-    // but connections MainWindow tears down at disconnect (per-pan FPS and
-    // waterfall line-duration reconcilers) must be re-established from this.
+    // but connections MainWindow tears down at disconnect (the per-pan
+    // radio-status display connections wired by wirePanDisplayStatus(), #4261)
+    // must be re-established from this.
     void panadapterReclaimed(PanadapterModel* pan);
     void panadapterRemoved(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
@@ -614,8 +684,18 @@ signals:
     void radioMessageReceived(const QString& text, MessageSeverity severity);
 
 public:
-    // Send a raw command to the radio (for dialogs that need direct protocol access).
-    void sendCommand(const QString& cmd);
+    // Send a raw command to the radio (for dialogs that need direct protocol
+    // access). Returns whether the command was actually dispatched: false when
+    // the foreign-owner gate (#3977) drops a pan write, when the profile-load
+    // hold backstop suppresses a profile-owned write (#4142), or when a WAN
+    // session is not connected. The WAN case is the only transport failure
+    // this contract can see: the LAN path allocates a sequence number
+    // unconditionally, so a write queued onto a dead LAN socket still reports
+    // as dispatched (pre-existing optimistic behavior; a disconnect instead
+    // voids any deferred pan writes via onDisconnected()). Callers that
+    // advance local state to match a command MUST gate that on this return,
+    // or the client will claim state the radio never took.
+    bool sendCommand(const QString& cmd);
 
     // Request local PTT for our station. Sends "client set local_ptt=1" and applies
     // an optimistic update in case the radio doesn't echo the state change.
@@ -683,6 +763,27 @@ private:
     bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
     bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;
+    // Raw senders (#4142). Both keep ALL wire-string building for the pan
+    // touchpoint in one place (AGENTS.md seam step 2.4: command encode migrates
+    // to FlexBackend per-touchpoint — these two functions are that touchpoint).
+    //
+    // dispatchPanCenterBandwidth re-clamps the center against the pan's
+    // CURRENT geometry, puts the command on the wire FIRST, and advances the
+    // model only when the send actually happened — wire-before-model is what
+    // makes a re-entrant request converge (last wire write == last model
+    // write) instead of diverging. bandwidthMhz <= 0 means center-only;
+    // centerMhz as NaN means bandwidth-only.
+    bool dispatchPanCenterBandwidth(const QString& panId,
+                                    double centerMhz,
+                                    double bandwidthMhz);
+    // No model write: band-stack state arrives via radio status.
+    bool dispatchPanBand(const QString& panId, const QString& bandKey);
+    // Schedules the deferred-pan-write replay for when the hold lifts. Armed by
+    // the act of deferring, NOT by the profile-load ACK — a large topology can
+    // stall the radio into a disconnect before it ever ACKs. (#4142)
+    void armProfileLoadPanWriteFlush();
+    // Voids one pan's deferred writes, loudly naming what was destroyed.
+    void voidPendingPanWrites(const QString& panId, const QString& reason);
     void registerAsGuiClient(const QString& clientId);
     void disconnectPendingClientsThen(std::function<void()> continuation);
     // LAN-only: subscribe to radio+client topics early, wait 400 ms for
@@ -904,7 +1005,9 @@ private:
     QString m_gpsLon;
     QString m_gpsTime;
     QString m_gpsSpeed;
+    QString m_gpsTrack;
     QString m_gpsFreqError;
+    QString m_automationGpsNtpServerAddress;
 
     // Per-band TX settings (from "transmit band" and "interlock band" status)
     struct TxBandInfo {
@@ -930,7 +1033,6 @@ private:
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     void applyTuneInhibit();    // suppress selected TX outputs before tune
     void restoreTuneInhibit();  // re-enable TX outputs after tune
-    SliceModel* txSlice() const;
     QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
     QString transmitInhibitMessageForTxSlice() const;
     void enforceTransmitInhibitForPan(const QString& panId);
@@ -1054,6 +1156,16 @@ private:
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
     qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};
+
+    // #4142 — user pan writes (band/center/bandwidth) deferred while the
+    // profile-load hold is armed. Field-wise coalescing lives in the queue
+    // type; see ProfileLoadPanWriteQueue.h for the semantics and
+    // profile_load_command_test for the contract.
+    ProfileLoadPanWriteQueue m_pendingProfileLoadPanWrites;
+    // Single owner of the replay schedule (stop/start re-arm — never a fan of
+    // one-shot timers, which would fire a stale flush for every extension).
+    QTimer m_profileLoadPanWriteFlushTimer;
+
     QMap<quint32, ClientInfo> m_clientInfoMap; // handle → full client info
     std::function<void()> m_multiFlexContinuation; // saved continuation during conflict pause
     QMap<quint32, QString> m_clientStations;   // handle → station name (legacy, kept in sync)
@@ -1084,7 +1196,7 @@ private:
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
     void applyAdaptiveFrameRate(NetState newState, NetState oldState);
     static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
-    int  adaptiveWfMsForCap(int fpsCap) const;
+    // adaptiveWfMsForCap() moved to the public network-diagnostics section (#4261).
     void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
@@ -1139,6 +1251,10 @@ public:
     int     maxPingRtt()       const { return m_maxPingRtt; }
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
+    // Waterfall line-duration the adaptive throttle caps to for a given fps cap.
+    // Public so MainWindow can recognize (and suppress) that cap's own status
+    // echo while distinguishing it from a real radio/profile update (#4261).
+    int     adaptiveWfMsForCap(int fpsCap) const;
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }

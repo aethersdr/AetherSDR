@@ -30,10 +30,12 @@ private:
     void loadSettings();
     void persistSettings() const;
     void setFaceTheme(const QString& theme, bool persist);
+    void setRangeLegendVisible(bool visible, bool persist);
     void showContextMenu(const QPoint& position);
 
     CrossNeedleMeterWidget* m_meter{nullptr};
     QString m_faceTheme;
+    bool m_rangeLegendVisible{true};
     bool m_floating{false};
 };
 

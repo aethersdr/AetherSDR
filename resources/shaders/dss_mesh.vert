@@ -18,9 +18,9 @@ layout(std140, binding = 0) uniform U {
     float frontMaxRidgeFrac;  // max ridge height (front) as a fraction of plot H
     float haze;               // atmospheric fade toward bgFill with depth
     float texCols;            // height-texture width, for column texel-centre sampling
-    float pad0;
-    float pad1;
-    float pad2;
+    float frequencyScale;     // target bandwidth / retained-frame bandwidth
+    float frequencyOffset;    // (target centre - retained centre) / retained bandwidth
+    float frequencyPreview;   // non-zero while the interaction preview is active
     vec4  bgFill;             // plot background colour (for haze)
 };
 
@@ -40,8 +40,15 @@ void main()
     // neighbouring row/column. rowOffset already carries the row half-texel; the
     // column maps geometry u in [0,1] onto centre (u*(cols-1)+0.5)/cols.
     float texY = fract(rowOffset + v);
-    float texU = (texCols > 1.0) ? (u * (texCols - 1.0) + 0.5) / texCols : 0.5;
-    float dbm  = texture(heightTex, vec2(texU, texY)).r;
+    float sourceU = 0.5 + frequencyOffset + (u - 0.5) * frequencyScale;
+    bool outsidePreview = frequencyPreview > 0.5
+        && (sourceU < 0.0 || sourceU > 1.0);
+    float texU = (texCols > 1.0)
+        ? (sourceU * (texCols - 1.0) + 0.5) / texCols
+        : 0.5;
+    float dbm = outsidePreview
+        ? floorDbm
+        : texture(heightTex, vec2(texU, texY)).r;
     // Linear strength drives COLOUR (LUT[sLin] = dbmToRgb(floor+sLin*range),
     // matching the CPU path); the zCurve lift applies to HEIGHT only.
     float sLin = clamp((dbm - floorDbm) / max(rangeDb, 1.0), 0.0, 1.0);

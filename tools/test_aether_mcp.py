@@ -15,6 +15,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -82,6 +83,14 @@ def test_field_mapping():
     r = reqs[0]
     check("grab_widget sends cmd=grab + target",
           r.get("cmd") == "grab" and r.get("target") == "SpectrumWidget", str(r))
+    check("grab_widget default path lands in the temp dir",
+          r.get("path", "").startswith(tempfile.gettempdir()), str(r))
+
+    reqs = run_tool("grab_widget", {"target": "SpectrumWidget",
+                                    "path": "/tmp/shot.png"})
+    r = reqs[0]
+    check("grab_widget honors caller-supplied path (#4249)",
+          r.get("path") == "/tmp/shot.png", str(r))
 
     reqs = run_tool("dump_tree", {})
     check("dump_tree sends cmd=dumpTree", reqs[-1].get("cmd") == "dumpTree", str(reqs))
@@ -112,7 +121,13 @@ def test_field_mapping():
 
     r = run_tool("tune", {"mhz": "14.074"})[-1]
     check("tune → cmd=tune value(mhz)",
-          r.get("cmd") == "tune" and r.get("value") == "14.074", str(r))
+          r.get("cmd") == "tune" and r.get("value") == "14.074"
+          and "id" not in r, str(r))
+
+    r = run_tool("tune", {"mhz": "14.074", "sliceId": "1"})[-1]
+    check("tune → cmd=tune value(mhz)+id(sliceId)",
+          r.get("cmd") == "tune" and r.get("value") == "14.074"
+          and r.get("id") == "1", str(r))
 
     r = run_tool("slice", {"action": "select", "value": "3"})[-1]
     check("slice → cmd=slice action+value",
@@ -321,6 +336,40 @@ def test_prompts_and_resources():
     check("unknown prompt → error", "error" in bad, str(bad))
 
 
+def test_read_only_reflected():
+    # bridge_status must reflect the bridge's observe-only state (#4188 area 6)
+    # from the token-free ping — the bridge is authoritative; the server only
+    # mirrors it. readOnly:true → bridge_read_only + a read_only_note hint.
+    orig = aether_mcp.bridge_request
+    os.environ["AETHER_MCP_SOCKET"] = "/tmp/does-not-need-to-exist"
+
+    def ro(obj, timeout=None):
+        if obj.get("cmd") == "ping":
+            return {"ok": True, "authRequired": False, "readOnly": True}
+        if obj.get("cmd") == "whoami":
+            return {"ok": True, "pid": 1, "readOnly": True}
+        return {"ok": True}
+
+    aether_mcp.bridge_request = ro
+    try:
+        r = json.loads(aether_mcp.handle_tool("bridge_status", {})["content"][0]["text"])
+        check("bridge_status reflects readOnly", r.get("bridge_read_only") is True, str(r))
+        check("bridge_status adds read_only_note", "read_only_note" in r, str(r))
+
+        # readOnly absent/false → no note, mirroring an unlocked bridge.
+        def rw(obj, timeout=None):
+            if obj.get("cmd") == "ping":
+                return {"ok": True, "authRequired": False, "readOnly": False}
+            return {"ok": True}
+        aether_mcp.bridge_request = rw
+        r = json.loads(aether_mcp.handle_tool("bridge_status", {})["content"][0]["text"])
+        check("bridge_status read-write has no note",
+              r.get("bridge_read_only") is False and "read_only_note" not in r, str(r))
+    finally:
+        aether_mcp.bridge_request = orig
+        os.environ.pop("AETHER_MCP_SOCKET", None)
+
+
 if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
@@ -328,6 +377,7 @@ if __name__ == "__main__":
     test_robustness_tools()
     test_fuzzy_suggest()
     test_prompts_and_resources()
+    test_read_only_reflected()
     if _failures:
         print(f"\n{len(_failures)} FAILED: {_failures}")
         sys.exit(1)

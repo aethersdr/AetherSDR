@@ -28,10 +28,10 @@ constexpr int kMaxZoomPercent = 600;
 constexpr int kDefaultZoomPercent = 170;
 constexpr int kMinFps = 5;
 constexpr int kMaxFps = 60;
-// Default 25 fps — a calm, low-overhead cadence matching the 2D/3D panadapter
-// default (DisplayFftFps = 25). The slider still reaches 60 for users who want
-// a faster scope. Users who previously saved an explicit FPS keep it — the
-// default is only applied when the setting key is absent.
+// Default 25 fps — a calm, low-overhead cadence matching the usual radio
+// panadapter rate. The slider still reaches 60 for users who want a faster
+// scope. Users who previously saved an explicit WAVE FPS keep it — the default
+// is only applied when the WAVE setting key is absent.
 constexpr int kDefaultFps = 25;
 // Discrete window steps for the WaveApplet drawer's "Window" slider.
 // First three notches give sub-second detail (240 ms, 480 ms, 1 s); the

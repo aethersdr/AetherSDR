@@ -1,4 +1,10 @@
 {
+ "core/AcomConnection.h": {
+  "tag": "peripheral(acom)",
+  "note": "Direct serial/ser2net client for the ACOM S-series amplifier line (600S primary target, protocol shared across 500S/700S/1200S/2020S) — a standalone RS-232 accessory with no FlexRadio awareness at all, same precedent as core/PgxlConnection.h and core/TgxlConnection.h. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam. See docs/architecture/acom-600s-amplifier-design.md.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AdaptiveFilterEngine.h": {
   "tag": "universal",
   "note": "GUI-thread adaptive RX passband coordinator over SliceModel/spectrum frames; canonical radio state, no vendor ties.",

@@ -2,6 +2,7 @@
 #include "FramelessMessageBox.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/IssueReport.h"
 #include "core/LogManager.h"
 #include "core/SupportBundle.h"
 #include "models/RadioModel.h"
@@ -268,6 +269,7 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         radio.model = radioModel->model();
         radio.serial = radioModel->serial();
         radio.firmware = radioModel->version();
+        radio.protocolVersion = radioModel->protocolVersion();
         radio.callsign = radioModel->callsign();
         radio.ip = radioModel->radioAddress().toString();
         radio.connected = true;
@@ -380,10 +382,37 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
         QDesktopServices::openUrl(QUrl("https://www.perplexity.ai/"));
         openedLLM = true;
     } else if (clicked == issueBtn) {
-        QUrl url("https://github.com/aethersdr/AetherSDR/issues/new");
-        QUrlQuery query;
-        query.addQueryItem("labels", "bug");
-        url.setQuery(query);
+        // Pre-fill the issues/new form with the snapshot + a redacted recent-
+        // log tail (#3705).  The log tail is already secret-redacted on disk
+        // and re-scrubbed at the render boundary in buildIssueReport().
+        auto sys = SupportBundle::collectSystemInfo();
+        const QString logTail = SupportBundle::recentLogTail(kIssueLogTailLines);
+        const QString fullBody = buildIssueReport(sys, radio, logTail);
+
+        const QString title = radio.connected
+            ? QString("[bug] %1 v%2 \xE2\x80\x94 ").arg(radio.model, sys.aetherVersion)
+            : QString("[bug] AetherSDR v%1 \xE2\x80\x94 ").arg(sys.aetherVersion);
+
+        const auto makeUrl = [&title](const QString& body) {
+            QUrl url("https://github.com/aethersdr/AetherSDR/issues/new");
+            QUrlQuery query;
+            query.addQueryItem("labels", "bug");
+            query.addQueryItem("title", title);
+            query.addQueryItem("body", body);
+            url.setQuery(query);
+            return url;
+        };
+
+        // First try the full body; if the encoded URL exceeds the ceiling,
+        // re-render without the log block and hand the full report to the
+        // clipboard so nothing is lost.
+        QUrl url = makeUrl(fullBody);
+        bool logTrimmed = false;
+        if (url.toEncoded().size() > kIssueUrlMaxBytes) {
+            url = makeUrl(buildIssueReport(sys, radio, QString()));
+            QApplication::clipboard()->setText(fullBody);
+            logTrimmed = true;
+        }
         QDesktopServices::openUrl(url);
 
         // Open support bundle folder for drag-and-drop
@@ -392,9 +421,16 @@ void SupportDialog::fileIssue(QWidget* parent, RadioModel* radioModel)
 
         FramelessMessageBox::information(parent, "Submit Bug Report",
             QString("Your browser and support folder have been opened.\n\n"
-                    "1. Paste the AI's bug report into the GitHub form\n"
-                    "2. Drag and drop the support bundle: %1")
-                .arg(fi.fileName()));
+                    "The issue form is pre-filled with your system + radio "
+                    "snapshot%1.\n"
+                    "1. Fill in what happened / expected / steps\n"
+                    "2. Drag and drop the support bundle: %2")
+                .arg(logTrimmed
+                         ? " (the recent log was too long for the link \xE2\x80\x94 "
+                           "it's on your clipboard; paste it in or just attach "
+                           "the bundle)"
+                         : " and a redacted recent-log tail",
+                     fi.fileName()));
     }
 
     if (openedLLM) {

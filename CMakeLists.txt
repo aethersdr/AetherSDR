@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AetherSDR VERSION 26.7.2 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.7.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -552,6 +552,7 @@ set(CORE_SOURCES
     src/core/PotaClient.cpp
     src/core/PropForecastClient.cpp
     src/core/PskReporterClient.cpp
+    src/core/LocationAddressResolver.cpp
     src/core/MqttAntennaAlias.cpp
     src/core/MqttSettings.cpp
     src/core/AutomationBridgeSettings.cpp
@@ -562,6 +563,8 @@ set(CORE_SOURCES
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
+    src/core/AcomProtocol.cpp
+    src/core/AcomConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -597,6 +600,7 @@ set(CORE_SOURCES
     src/core/LogManager.cpp
     src/core/ShortcutManager.cpp
     src/core/SupportBundle.cpp
+    src/core/IssueReport.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
     src/core/FlexControlManager.cpp
@@ -705,6 +709,7 @@ set(GUI_SOURCES
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathItem.cpp
     src/gui/PskReporterMapDialog.cpp
+    src/gui/GpsLocationDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp
@@ -715,6 +720,7 @@ set(GUI_SOURCES
     src/gui/PanadapterMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
     src/gui/SpectrumWidget.cpp
+    src/gui/WaterfallHistoryBuffer.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
@@ -727,6 +733,7 @@ set(GUI_SOURCES
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/AprsMessagesDialog.cpp
     src/gui/AprsSymbolIcons.cpp
@@ -755,6 +762,7 @@ set(GUI_SOURCES
     src/gui/PanFloatingWindow.cpp
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
+    src/gui/AcomApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -775,6 +783,9 @@ set(GUI_SOURCES
     src/gui/RxApplet.cpp
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
+    src/gui/RadioSwrValidityFilter.cpp
+    src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
@@ -1561,6 +1572,7 @@ endif()
 
 # macOS app bundle
 if(APPLE)
+    target_sources(AetherSDR PRIVATE src/MacStartupAbortGuard.cpp)
     set_target_properties(AetherSDR PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
@@ -1768,8 +1780,10 @@ if(AETHER_GPU_SPECTRUM)
         FILES
             resources/shaders/texturedquad.vert
             resources/shaders/texturedquad.frag
+            resources/shaders/texturedquad_rowframes.frag
             resources/shaders/overlay.vert
             resources/shaders/overlay.frag
+            resources/shaders/overlay_frequency_preview.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
             resources/shaders/panscope.frag
@@ -1803,7 +1817,7 @@ if (USE_SYSTEM_RTMIDI)
     if(PkgConfig_FOUND)
         pkg_check_modules(rtmidi REQUIRED IMPORTED_TARGET rtmidi)
     endif()
-    target_link_libraries(aethercore PRIVATE PkgConfig::rtmidi)
+    target_link_libraries(aethercore PUBLIC PkgConfig::rtmidi)
 else()
     target_sources(aethercore PRIVATE third_party/rtmidi/RtMidi.cpp)
     # PUBLIC: MidiControlManager.h includes RtMidi.h
@@ -2292,6 +2306,30 @@ target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
 
+# AppSettings persistence safety. Each scenario is a separate process because
+# AppSettings is a process-wide singleton and load state must not leak between
+# cases.
+add_executable(app_settings_safety_test
+    tests/app_settings_safety_test.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(app_settings_safety_test PRIVATE src)
+target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core)
+foreach(APP_SETTINGS_SCENARIO
+        save-before-load
+        load-then-save
+        first-run
+        count-guard
+        backup-recovery
+        missing-live-temp
+        missing-live-backup
+        missing-live-corrupt
+        failed-load)
+    add_test(
+        NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
+        COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
+endforeach()
+
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
     src/models/PanadapterModel.cpp
@@ -2319,6 +2357,17 @@ add_executable(model_capabilities_test
 target_include_directories(model_capabilities_test PRIVATE src)
 target_link_libraries(model_capabilities_test PRIVATE Qt6::Core)
 add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
+
+# Adaptive-throttle display-status echo gate (#4261) — header-only pure logic.
+add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
+target_include_directories(display_status_gate_test PRIVATE src)
+add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
+
+# KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
+add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)
+target_include_directories(kiwi_rebind_tracker_test PRIVATE src)
+target_link_libraries(kiwi_rebind_tracker_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_rebind_tracker_test COMMAND kiwi_rebind_tracker_test)
 
 add_executable(declared_bands_test
     tests/declared_bands_test.cpp
@@ -2426,6 +2475,16 @@ add_executable(audio_output_router_test
 target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
+
+# Hardware-free state-machine coverage for the opt-in TX capture health
+# summary. Reproduces the Qt pull-mode Active -> Idle/full-buffer signature and
+# verifies anomaly rate limiting without requiring PipeWire or an audio device.
+add_executable(tx_capture_health_test
+    tests/tx_capture_health_test.cpp
+)
+target_include_directories(tx_capture_health_test PRIVATE src)
+target_link_libraries(tx_capture_health_test PRIVATE Qt6::Core)
+add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
 
 # Regression test for #4003 — QsoRecorder must not dereference a SliceModel that
 # was freed (reconnect prune) before recording starts. QPointer auto-nulls the
@@ -2598,6 +2657,21 @@ target_include_directories(dss_renderer_test PRIVATE src)
 target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
 
+add_executable(spectrum_preview_logic_test
+    tests/spectrum_preview_logic_test.cpp
+)
+target_include_directories(spectrum_preview_logic_test PRIVATE src)
+target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
+add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
+
+add_executable(waterfall_history_buffer_test
+    tests/waterfall_history_buffer_test.cpp
+    src/gui/WaterfallHistoryBuffer.cpp
+)
+target_include_directories(waterfall_history_buffer_test PRIVATE src)
+target_link_libraries(waterfall_history_buffer_test PRIVATE Qt6::Core)
+add_test(NAME waterfall_history_buffer_test COMMAND waterfall_history_buffer_test)
+
 add_executable(kiwi_sdr_redirect_policy_test
     tests/kiwi_sdr_redirect_policy_test.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -2734,7 +2808,7 @@ add_executable(digital_voice_slice_lifecycle_test
     src/core/DigitalVoiceModeRegistry.cpp
 )
 target_include_directories(digital_voice_slice_lifecycle_test PRIVATE src)
-target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core)
+target_link_libraries(digital_voice_slice_lifecycle_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME digital_voice_slice_lifecycle_test COMMAND digital_voice_slice_lifecycle_test)
 
 add_executable(dstar_model_test
@@ -2748,12 +2822,30 @@ add_executable(dstar_model_test
     src/core/AppSettings.cpp
 )
 target_include_directories(dstar_model_test PRIVATE src)
-target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network)
+target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(dstar_model_test PRIVATE HAVE_SERIALPORT)
     target_link_libraries(dstar_model_test PRIVATE Qt6::SerialPort)
 endif()
 add_test(NAME dstar_model_test COMMAND dstar_model_test)
+
+add_executable(dstar_accessibility_test
+    tests/dstar_accessibility_test.cpp
+    src/gui/DStarAccessibility.cpp
+)
+target_include_directories(dstar_accessibility_test PRIVATE src)
+target_link_libraries(dstar_accessibility_test PRIVATE Qt6::Widgets)
+add_test(NAME dstar_accessibility_test COMMAND dstar_accessibility_test)
+set_tests_properties(dstar_accessibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(acom_protocol_test
+    tests/acom_protocol_test.cpp
+    src/core/AcomProtocol.cpp
+)
+target_include_directories(acom_protocol_test PRIVATE src)
+target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
+add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
@@ -2803,6 +2895,16 @@ add_executable(radio_status_ownership_test
 target_include_directories(radio_status_ownership_test PRIVATE src)
 target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
+
+if(APPLE)
+    add_executable(mac_startup_abort_guard_test
+        tests/mac_startup_abort_guard_test.cpp
+        src/MacStartupAbortGuard.cpp
+    )
+    target_include_directories(mac_startup_abort_guard_test PRIVATE src)
+    add_test(NAME mac_startup_abort_guard_test COMMAND mac_startup_abort_guard_test)
+endif()
+
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
 # Approved V12 cross-needle meter construction: versioned face resource,
@@ -2810,6 +2912,7 @@ add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 qt_add_resources(CROSS_NEEDLE_METER_TEST_RESOURCES resources/resources.qrc)
 add_executable(cross_needle_meter_test
     tests/cross_needle_meter_test.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
     src/gui/CrossNeedleMeterWidget.cpp
     ${CROSS_NEEDLE_METER_TEST_RESOURCES}
@@ -2823,6 +2926,42 @@ add_test(NAME cross_needle_meter_test COMMAND cross_needle_meter_test)
 set_tests_properties(cross_needle_meter_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Versioned standard S-meter face: responsive geometry, calibrated mappings,
+# resource validation/fallback, and offscreen rendering of every meter mode.
+add_executable(s_meter_geometry_test
+    tests/s_meter_geometry_test.cpp
+    src/gui/AnalogMeterFaceTheme.cpp
+    src/gui/RadioSwrValidityFilter.cpp
+    src/gui/SMeterGeometry.cpp
+    src/gui/SMeterWidget.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${CROSS_NEEDLE_METER_TEST_RESOURCES}
+)
+target_include_directories(s_meter_geometry_test PRIVATE src)
+target_link_libraries(s_meter_geometry_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(s_meter_geometry_test PROPERTIES AUTOMOC ON)
+add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
+set_tests_properties(s_meter_geometry_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
+# ancestor-isolation attribute, and native-ancestor count reported to agents.
+add_executable(native_widget_topology_test
+    tests/native_widget_topology_test.cpp
+)
+target_include_directories(native_widget_topology_test PRIVATE src)
+target_link_libraries(native_widget_topology_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+add_test(NAME native_widget_topology_test COMMAND native_widget_topology_test)
+set_tests_properties(native_widget_topology_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # MCP server field-mapping / protocol regression test (#4177). Pure Python,
 # no app or Qt needed — guards the schema ↔ bridge verb field mapping.
 find_program(PYTHON3_EXECUTABLE NAMES python3 python)
@@ -2830,12 +2969,26 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME aether_mcp_field_mapping
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_aether_mcp.py)
+    add_test(NAME automation_probe_field_mapping
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_automation_probe.py)
     # Bridge docs must stay in sync with the verb registry (#4174 Phase 3):
     # fail CI if the generated verb table drifts or a detail heading is dup'd.
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
 endif()
+
+# JSON boundary regression for shared bridge `id` normalization. Exercises the
+# real QLocalSocket request path and tune dispatcher without touching a radio.
+add_executable(automation_json_id_test
+    tests/automation_json_id_test.cpp
+)
+target_include_directories(automation_json_id_test PRIVATE src tests)
+target_link_libraries(automation_json_id_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 
 add_executable(gui_client_identity_policy_test
     tests/gui_client_identity_policy_test.cpp
@@ -3134,6 +3287,27 @@ endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME meter_model_test COMMAND meter_model_test)
 
+add_executable(health_applet_test
+    tests/health_applet_test.cpp
+    src/gui/HealthApplet.cpp
+    src/models/MeterModel.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(health_applet_test PRIVATE src)
+target_link_libraries(health_applet_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(UNIX)
+    target_link_libraries(health_applet_test PRIVATE pthread)
+endif()
+set_target_properties(health_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME health_applet_test COMMAND health_applet_test)
+set_tests_properties(health_applet_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(vu_meter_settings_test
     tests/vu_meter_settings_test.cpp
     src/gui/CrossNeedleMeterSettings.cpp
@@ -3151,6 +3325,26 @@ target_include_directories(flex_backend_lifecycle_test PRIVATE src)
 target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
 set_target_properties(flex_backend_lifecycle_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_backend_lifecycle_test COMMAND flex_backend_lifecycle_test)
+
+# A pending client dBm request must retain a mismatching radio range for timeout
+# reconciliation and yield before a radio-authoritative band-stack restore.
+add_executable(panadapter_dbm_range_test tests/panadapter_dbm_range_test.cpp)
+target_include_directories(panadapter_dbm_range_test PRIVATE src)
+target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
+set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
+add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
+
+# The bridge preserves dragAt, target-tune, memory-recall, and authenticated
+# positional requests across its bare and JSON protocol forms.
+add_executable(automation_drag_at_test tests/automation_drag_at_test.cpp)
+target_include_directories(automation_drag_at_test PRIVATE src)
+target_link_libraries(automation_drag_at_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_drag_at_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_drag_at_test COMMAND automation_drag_at_test)
+set_tests_properties(automation_drag_at_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # aetherd RFC 2.3 template — pan decode/normalize chain (incl. wnb_level guard).
 add_executable(aetherd_pan_decode_test tests/aetherd_pan_decode_test.cpp)
@@ -3199,6 +3393,16 @@ target_include_directories(aetherd_residual_decode_test PRIVATE src)
 target_link_libraries(aetherd_residual_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherd_residual_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_residual_decode_test COMMAND aetherd_residual_decode_test)
+
+add_executable(location_address_resolver_test
+    tests/location_address_resolver_test.cpp
+)
+target_include_directories(location_address_resolver_test PRIVATE src)
+target_link_libraries(location_address_resolver_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+set_target_properties(location_address_resolver_test PROPERTIES AUTOMOC ON)
+add_test(NAME location_address_resolver_test COMMAND location_address_resolver_test)
 
 add_executable(amp_model_test tests/amp_model_test.cpp)
 target_include_directories(amp_model_test PRIVATE src)
@@ -3249,6 +3453,21 @@ if(UNIX)
     target_link_libraries(async_log_writer_test PRIVATE pthread)
 endif()
 set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
+
+# Pre-filled GitHub issue body + redaction-at-render guarantee (#3705).
+# IssueReport.cpp depends only on redactPii (AsyncLogWriter.cpp) — no
+# RadioModel — so the redaction contract is unit-testable in isolation.
+add_executable(issue_report_test
+    tests/issue_report_test.cpp
+    src/core/IssueReport.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(issue_report_test PRIVATE src src/core)
+target_link_libraries(issue_report_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(issue_report_test PRIVATE pthread)
+endif()
+set_target_properties(issue_report_test PROPERTIES AUTOMOC ON)
 
 add_executable(perf_telemetry_test
     tests/perf_telemetry_test.cpp
@@ -3584,6 +3803,11 @@ else()
         install(FILES third_party/smartsdr-dsp/config/AetherDV.cfg
             DESTINATION ${CMAKE_INSTALL_BINDIR}
         )
+        if(LINUX)
+            install(FILES packaging/linux/70-aethersdr-thumbdv.rules
+                DESTINATION lib/udev/rules.d
+            )
+        endif()
     endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
@@ -3600,9 +3824,4 @@ else()
     install(FILES packaging/linux/aethersdr.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        install(FILES packaging/linux/70-aethersdr-thumbdv.rules
-            DESTINATION lib/udev/rules.d
-        )
-    endif()
 endif()

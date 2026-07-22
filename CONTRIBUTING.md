@@ -87,7 +87,11 @@ changes.
 - **Settings**: Use `AppSettings`, **never** `QSettings`. Keys are PascalCase.
   Booleans are `"True"` / `"False"` strings.
 - **Radio-authoritative**: Never persist or override settings the radio manages
-  (frequency, mode, filter, step size, AGC, antennas, TX power).
+  (frequency, mode, filter, step size, AGC, squelch, DSP flags, antennas, TX
+  power, panadapter *count* and per-pan state — including FFT
+  average/FPS/weighted-average and waterfall line duration). Never write a
+  radio-echoed status value into a setter that also persists to `AppSettings`
+  (the recurring #4261 anti-pattern). See `AGENTS.md` for the full list.
 
 ### Working in MainWindow
 
