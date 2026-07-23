@@ -26,6 +26,28 @@ inline QString protocolSafeStation(QString value)
     return value;
 }
 
+inline QString automationAgentName(QString configuredName,
+                                   QString legacyStation,
+                                   QString label)
+{
+    configuredName = configuredName.trimmed();
+    if (!configuredName.isEmpty()) {
+        return configuredName;
+    }
+
+    legacyStation = legacyStation.trimmed();
+    if (!legacyStation.isEmpty()) {
+        return legacyStation;
+    }
+
+    label = label.trimmed();
+    if (!label.isEmpty()) {
+        return label;
+    }
+
+    return QStringLiteral("Automation");
+}
+
 inline bool shouldSelectDistinctId(bool transientIdentity,
                                    const QString& ourStation,
                                    const QString& otherStation,

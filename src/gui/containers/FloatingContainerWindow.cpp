@@ -17,7 +17,6 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kDefaultW = 300;
-constexpr int kDefaultH = 240;
 
 } // namespace
 
@@ -101,7 +100,9 @@ void FloatingContainerWindow::restoreAndEnsureVisible(QWidget* anchor)
         // open with dead space above and below the children.  Width
         // falls back to kDefaultW when the hint is too narrow to read.
         adjustSize();
-        const QSize hint = sizeHint();
+        const QSize configured = m_container
+            ? m_container->defaultFloatingSize() : QSize();
+        const QSize hint = configured.isValid() ? configured : sizeHint();
         const int w = std::max(kDefaultW, hint.width());
         const int h = std::max(hint.height(), 80);  // tiny floor
         resize(w, h);

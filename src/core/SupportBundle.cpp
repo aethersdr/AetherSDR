@@ -14,6 +14,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QStringList>
 #include <QSysInfo>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -208,6 +209,39 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
         return {};
 
     return archivePath;
+}
+
+QString SupportBundle::recentLogTail(int lines)
+{
+    if (lines <= 0)
+        return {};
+
+    auto& logMgr = LogManager::instance();
+    logMgr.flushLog();
+
+    QFile f(logMgr.logFilePath());
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        return {};
+
+    // Read a bounded tail; ~200KB comfortably holds kIssueLogTailLines worth
+    // of formatted lines without loading a large log in full.
+    constexpr qint64 kMaxRead = 200 * 1024;
+    const qint64 size = f.size();
+    const bool seeked = size > kMaxRead;
+    if (seeked)
+        f.seek(size - kMaxRead);
+    const QString text = QString::fromUtf8(f.readAll());
+    f.close();
+
+    QStringList all = text.split('\n');
+    // A mid-line seek can leave a partial first line; drop it so the tail
+    // starts on a clean line boundary.
+    if (seeked && !all.isEmpty())
+        all.removeFirst();
+
+    if (all.size() > lines)
+        all = all.mid(all.size() - lines);
+    return all.join('\n').trimmed();
 }
 
 void SupportBundle::openEmailClient(const QString& bundlePath,

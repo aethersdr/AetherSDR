@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -218,11 +219,85 @@ void DssRenderer::clear()
     resetHistorySmoothing();
 }
 
+quint64 DssRenderer::fixedStorageBytes() const
+{
+    return sizeof(m_rows)
+        + sizeof(m_rawPrev1) + sizeof(m_rawPrev2)
+        + sizeof(m_historyRawPrev1) + sizeof(m_historyRawPrev2);
+}
+
+quint64 DssRenderer::historyStorageBytes() const
+{
+    return static_cast<quint64>(m_historyRows.capacity()) * sizeof(qfloat16)
+        + static_cast<quint64>(m_historyRowCenterMhz.capacity()) * sizeof(double)
+        + static_cast<quint64>(m_historyRowBandwidthMhz.capacity()) * sizeof(double);
+}
+
+quint64 DssRenderer::cacheStorageBytes() const
+{
+    return m_cache.isNull() ? 0 : static_cast<quint64>(m_cache.sizeInBytes());
+}
+
+quint64 DssRenderer::allocatedBytes() const
+{
+    return fixedStorageBytes() + historyStorageBytes() + cacheStorageBytes();
+}
+
 const std::array<float, DssRenderer::kCols>&
 DssRenderer::rowAt(int age) const
 {
     const int idx = (m_head + age) % kRows;
     return m_rows[idx];
+}
+
+DssRenderer::RowStats DssRenderer::rowStats(int age, float epsilonDb) const
+{
+    RowStats stats;
+    if (age < 0 || age >= m_count) {
+        return stats;
+    }
+
+    const auto& row = rowAt(age);
+    stats.minDbm = std::numeric_limits<float>::infinity();
+    stats.maxDbm = -std::numeric_limits<float>::infinity();
+    for (const float value : row) {
+        if (!std::isfinite(value)) {
+            continue;
+        }
+        stats.minDbm = std::min(stats.minDbm, value);
+        stats.maxDbm = std::max(stats.maxDbm, value);
+        ++stats.finiteBins;
+    }
+    if (stats.finiteBins == 0) {
+        stats.minDbm = 0.0f;
+        stats.maxDbm = 0.0f;
+        return stats;
+    }
+
+    epsilonDb = std::max(0.0f, epsilonDb);
+    int currentRun = 0;
+    float previous = 0.0f;
+    bool havePrevious = false;
+    for (const float value : row) {
+        if (!std::isfinite(value)) {
+            currentRun = 0;
+            havePrevious = false;
+            continue;
+        }
+        if (std::abs(value - stats.minDbm) <= epsilonDb) {
+            ++stats.minValueBins;
+        }
+        if (havePrevious && std::abs(value - previous) <= epsilonDb) {
+            ++currentRun;
+        } else {
+            currentRun = 1;
+        }
+        stats.longestFlatRunBins =
+            std::max(stats.longestFlatRunBins, currentRun);
+        previous = value;
+        havePrevious = true;
+    }
+    return stats;
 }
 
 void DssRenderer::pushRow(const QVector<float>& binsDbm)

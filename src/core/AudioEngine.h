@@ -23,6 +23,7 @@
 #include <QStringList>
 
 #include "TxMicChannelNormalizer.h"
+#include "TxCaptureHealthTracker.h"
 #include "SpectralNR.h"
 
 class QMediaDevices;
@@ -800,6 +801,15 @@ private:
     void accumulatePcMicMeterInt16Stereo(const QByteArray& int16stereo);
     void logTxInputChannelDiagnostics(const TxMicChannelNormalizer::Diagnostics& diagnostics,
                                       const char* route);
+    static TxCaptureHealthTracker::CaptureState txCaptureState(QAudio::State state);
+    qint64 txCaptureBufferedBytes() const;
+    qint64 txCaptureBufferCapacityBytes() const;
+    qint64 txCaptureNowMs() const;
+    bool tciAudioFresh() const;
+    void observeTxCaptureState(QAudio::State state);
+    void recordTxCaptureLocalTxAttempt();
+    void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
+    void logTxCaptureHealthSummary(const QString& reason, bool anomaly);
 
     // Apply the whole RX DSP chain in the configured order.  Phase 0
     // ships the dispatcher with no implemented stages — every entry is
@@ -841,6 +851,8 @@ private:
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
     QElapsedTimer      m_txSourceStartTime;
     quint64            m_txLifecycleGeneration{0};
+    QElapsedTimer      m_txCaptureHealthClock;
+    TxCaptureHealthTracker m_txCaptureHealth;
     // WASAPI silent-open watchdog (#2929): some USB PnP mics report mono-only
     // capture but Qt accepts an unsupported stereo open and then delivers no
     // bytes. The watchdog reopens as mono if no bytes arrive within ~1.5 s.

@@ -242,8 +242,10 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         }
     }
     // Averaging is radio-authoritative: parse the level the firmware echoes back
-    // and re-emit it so MainWindow can reconcile the user's desired value after a
-    // global-profile / band switch (#4001). average=0 (off) is a valid value —
+    // and re-emit it so the display follows the radio's value after a
+    // global-profile / band switch (#4001; radio authority per #4261 — the UI no
+    // longer persists or re-asserts a client "desired" value). average=0 (off)
+    // is a valid value —
     // the ok-guard rejects only a malformed field, exactly like fps.
     if (fields.contains(QStringLiteral("average"))) {
         bool ok = false;
@@ -268,6 +270,7 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
             fields.value(QStringLiteral("weighted_average")).toString().toUInt(&ok);
         if (ok && v <= 255) {
             const bool weighted = (v != 0);
+            m_weightedAverageKnown = true;   // radio has now reported it (#4261)
             if (weighted != m_weightedAverage) {
                 m_weightedAverage = weighted;
                 emit weightedAverageChanged(m_weightedAverage);

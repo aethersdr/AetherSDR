@@ -83,6 +83,26 @@ QString redactPii(const QString& msg)
         QRegularExpression::CaseInsensitiveOption);
     out.replace(*bearerRe, QStringLiteral("\\1\\2\\3***REDACTED***"));
 
+    // SmartLink account-holder names are not useful for diagnostics. Scrub
+    // the protocol's snake_case fields and common camelCase equivalents as a
+    // final defense if a raw or parsed user-settings message reaches logging.
+    static const QRegularExpression* personalNameRe = new QRegularExpression(
+        R"(\b(first_?name|last_?name|full_?name)(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s#|,}\]]+))",
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(*personalNameRe, QStringLiteral("\\1\\2***REDACTED***"));
+
+    // GPS coordinates likewise have no diagnostic value. Cover the Flex
+    // lat=/lon= status spelling, long-form/JSON spellings, optional gps_
+    // prefixes, and a numeric pair carried in a location=/gps= field.
+    static const QRegularExpression* coordinateFieldRe = new QRegularExpression(
+        R"(\b((?:gps[_-]?)?(?:lat(?:itude)?|lon(?:gitude)?))(["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s#|,}\]]+))",
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(*coordinateFieldRe, QStringLiteral("\\1\\2***REDACTED***"));
+    static const QRegularExpression* coordinatePairRe = new QRegularExpression(
+        R"(\b(gps(?:[_-]?location)?|location)(["']?\s*[:=]\s*)[-+]?\d{1,3}(?:\.\d+)?\s*[,/]\s*[-+]?\d{1,3}(?:\.\d+)?)",
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(*coordinatePairRe, QStringLiteral("\\1\\2***REDACTED***"));
+
     // MAC addresses: 00-1C-2D-05-37-2A -> **-**-**-**-**-2A
     //                00:1C:2D:05:37:2A -> **:**:**:**:**:2A
     static const QRegularExpression* macRe = new QRegularExpression(

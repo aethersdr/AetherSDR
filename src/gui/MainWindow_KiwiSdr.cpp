@@ -559,7 +559,21 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
     if (!m_kiwiSdrVirtualPreviousMute.contains(sliceId)) {
         m_kiwiSdrVirtualPreviousMute.insert(sliceId, slice->flexAudioMute());
     }
+    const bool wasExternalReceiveActive = slice->externalReceiveReplacementActive();
     slice->setExternalReceiveAudioReplacementMute(true);
+    if (!wasExternalReceiveActive && slice->isDiversityChild()
+        && slice->flexAudioGain() <= 0.0f) {
+        // A Flex diversity child always reports audio_level=0 (its audio is
+        // combined into the parent), so the snapshot just taken above is
+        // silence. Seed it from the parent's level instead, so both slices
+        // start matched rather than the child starting muted — see #4300.
+        for (SliceModel* other : m_radioModel.slices()) {
+            if (isSameDiversityReceivePair(slice, other) && other->isDiversityParent()) {
+                slice->setAudioGain(other->audioGain());
+                break;
+            }
+        }
+    }
     if (m_appletPanel) {
         m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     }
@@ -1169,7 +1183,7 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
             spectrum->wfColorScheme(), spectrum->showGrid(),
             spectrum->fftLineWidth(), spectrum->wfAutoBlackRadioSide(),
             spectrum->spectrumRenderMode(), spectrum->dssFloorDepth(),
-            spectrum->dssGain());
+            spectrum->dssGain(), spectrum->fftLineColor());
     };
 
     spectrum->setKiwiSdrDisplaySourceKiwi(displayKiwi);

@@ -41,6 +41,13 @@ public:
     // Returns the full path to the archive, or empty string on failure.
     static QString createBundle(const RadioInfo& radio);
 
+    // Flush the log pipeline and return the last `lines` lines of the most
+    // recent on-disk log (#3705).  The on-disk log is already secret-redacted
+    // at capture (AsyncLogWriter::formatLine → redactPii), so this is the
+    // redacted stream; callers still re-scrub at the render boundary as
+    // belt-and-suspenders.  Reads a bounded tail (~200KB) to stay responsive.
+    static QString recentLogTail(int lines);
+
     // Open the default email client with pre-filled subject/body.
     static void openEmailClient(const QString& bundlePath,
                                 const SystemInfo& sys,

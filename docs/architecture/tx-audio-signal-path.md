@@ -213,7 +213,7 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
 | 3 | TX- | HWALC | dBFS | 20 | External HWALC RCA voltage (zero without external connection) | SliceTroubleshootingDialog telemetry only |
 | 33 | TX- | ALC | dBFS | 20 | Post-software-ALC SSB peak | P/CW ALC gauge (Phone + CW panels, mirrored) |
 | 8 | TX- | FWDPWR | dBm | 20 | Forward power | TX applet, S-Meter power, Tuner |
-| 9 | TX- | REFPWR | dBm | 20 | Reflected power | — |
+| 9 | TX- | REFPWR | dBm | 20 | Reflected power | Cross-needle meter |
 | 10 | TX- | SWR | SWR | 20 | Standing wave ratio | TX applet, Tuner |
 | 11 | TX- | PATEMP | degC | 0 | PA temperature | Status bar |
 | 24 | TX- | CODEC | dBFS | 10 | CODEC output (post mic gain) | — |

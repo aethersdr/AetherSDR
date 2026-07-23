@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "gui/SliceLabel.h"
 #include "core/AppSettings.h"
 
@@ -29,6 +30,11 @@ static void setMode(const char* mode)
 
 int main()
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-slice-label-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
+    AppSettings::instance().load();
     // ── Global mode (default) ─────────────────────────────────────
     setMode("Global");
 

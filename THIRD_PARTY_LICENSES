@@ -77,6 +77,39 @@ facts. The consulted facts are:
   License:   GPL-3.0-or-later (consulted as a behavioral reference only)
   Source:    https://github.com/dl1ycf/pihpsdr  (src/old_protocol.c)
 
+The ACOM S-series amplifier peripheral (shipped; see
+docs/architecture/acom-600s-amplifier-design.md) implements ACOM's RS-232
+serial protocol — the binary frame layout (start byte, address, length,
+checksum), the unified telemetry message (address 0x2F), the error-code
+bitfields (address 0x21), the system-config query (address 0x11), and the
+mode-change/clear-faults command envelope (address 0x81). These wire-protocol
+facts were consulted clean-room from the manufacturer's own published
+specification and are expressed in original AetherSDR code; no code from
+either source below is incorporated, vendored, translated, or linked into
+AetherSDR.
+
+  ACOM 600S Serial Port Communication Protocol, v1.1 (2014-12-04) — eng.
+  Nikolay Nenov, the primary protocol authority (Principle I).
+  Publisher: ACOM (manufacturer public documentation)
+  Reference: no stable public URL — distributed directly by ACOM (Bulgaria)
+             as a maintainer-supplied PDF, not a web download, so no
+             URL/access-date/hash triple is recorded here; contrast
+             third_party/crdv/CLEANROOM_PROVENANCE.md's stricter format,
+             used where a public, hashable download exists
+
+  ACOM-Controller (Björn Ekelund, SM7IUN) — consulted only as a secondary,
+  practical cross-check (e.g. that the checksum sign convention and 72-byte
+  framing match a working real-world implementation; that the mandatory-per-spec
+  0x86 acknowledgement is safely omittable on a direct RS-232 link in practice).
+  License:  MIT
+  Source:   https://github.com/bjornekelund/ACOM-Controller
+
+  ACOM product pages (acom-bg.com) — consulted for the per-model nominal/max
+  rated-power figures used to derive the auto-ranging table in
+  AcomProtocol.cpp's modelTable() (500S/600S/700S/1200S/1400S/2020S); no code
+  or text incorporated, figures only.
+  Publisher: ACOM (manufacturer public documentation)
+
 
 1. WDSP — Spectral Noise Reduction (NR2)
 -----------------------------------------
@@ -179,9 +212,12 @@ Bundled at third_party/deepfilter/
 
 11. ONNX Runtime — Neural Network Inference Engine (optional)
 --------------------------------------------------------------
-Pre-built binaries at third_party/onnxruntime/ (Windows only; optional feature).
-Loaded at runtime for the S-History CNN signal classifier (S_History_v2-AI).
-Only present when setup-onnxruntime.ps1 has been run.
+Pre-built binaries staged at third_party/onnxruntime/ (all platforms) by
+scripts/setup/setup-onnxruntime.sh (Linux/macOS) or setup-onnxruntime.ps1
+(Windows); version 1.27.0. Loaded at runtime for the S-History CNN signal
+classifier and the Copy Assist ASR ONNX features (Silero VAD, speaker labeling).
+When sherpa-onnx is also present the app shares its bundled ONNX Runtime instead
+(same version). Optional — absent unless the setup script has been run.
 
   Copyright (c) Microsoft Corporation. All rights reserved.
   License: MIT
@@ -357,3 +393,60 @@ inside third_party/crdv/.
   License: GPL-3.0-or-later
   Provenance: third_party/crdv/CLEANROOM_PROVENANCE.md
   Manifest:   third_party/crdv/CONTENT_SHA256.txt
+
+
+20. sherpa-onnx — Non-Whisper ASR Engine (optional)
+---------------------------------------------------
+Pre-built C-API shared library staged at third_party/sherpa-onnx/ by
+scripts/setup/setup-sherpa-onnx.sh (from k2-fsa's releases on x64/macOS, or from
+the AetherSDR `sherpa-onnx-libs` release on linux-aarch64, which is built by
+.github/workflows/build-sherpa-onnx-aarch64.yml). Provides the optional
+"sherpa-onnx model…" Copy Assist backend (offline transducer/Moonshine/
+Paraformer/CTC models). Absent unless the setup script has been run.
+
+  Copyright (c) 2022-2026  Xiaomi Corporation and the k2-fsa/sherpa-onnx authors
+  License: Apache-2.0
+  Source:  https://github.com/k2-fsa/sherpa-onnx
+
+  Bundled inside the sherpa-onnx shared library:
+    - kaldi-native-fbank  Apache-2.0  https://github.com/csukuangfj/kaldi-native-fbank
+    - kaldifst            Apache-2.0  https://github.com/k2-fsa/kaldifst
+    - ONNX Runtime        MIT         (see entry 11; sherpa ships its own copy)
+
+
+21. Silero VAD — Voice-Activity-Detection Model (download-on-demand)
+-------------------------------------------------------------------
+Model weights only; NOT bundled in the binary. Downloaded on first enable of the
+optional Silero VAD option (primary: Hugging Face; fallback: the AetherSDR
+`asr-models-v1` release mirror), SHA-256-verified, cached under the user's data
+dir. Run by ONNX Runtime (entry 11).
+
+  Copyright (c) Silero Team
+  License: MIT
+  Source:  https://github.com/snakers4/silero-vad
+           https://huggingface.co/onnx-community/silero-vad
+
+
+22. WeSpeaker ECAPA-TDNN — Speaker-Embedding Model (download-on-demand)
+----------------------------------------------------------------------
+Model weights only; NOT bundled in the binary. Downloaded on first enable of the
+optional speaker-labeling option (primary: Hugging Face; fallback: the AetherSDR
+`asr-models-v1` release mirror), SHA-256-verified, cached under the user's data
+dir. Trained on VoxCeleb2. Run by ONNX Runtime (entry 11).
+
+  Attribution: "WeSpeaker" by the Wenet Open Source Community (wenet-e2e).
+  License: CC-BY-4.0  (attribution required — https://creativecommons.org/licenses/by/4.0/)
+  Source:  https://github.com/wenet-e2e/wespeaker
+           https://huggingface.co/Wespeaker/wespeaker-ecapa-tdnn512-LM
+
+
+23. Moonshine — Speech-Recognition Model (download-on-demand, via sherpa-onnx)
+-----------------------------------------------------------------------------
+Model weights only; NOT bundled or redistributed by AetherSDR. A user may point
+the "sherpa-onnx model…" folder picker at a Moonshine bundle obtained from the
+sherpa-onnx model zoo. Listed here because AetherSDR documents it as the default
+sherpa-onnx model.
+
+  Copyright (c) 2024 Useful Sensors, Inc.
+  License: MIT
+  Source:  https://github.com/usefulsensors/moonshine

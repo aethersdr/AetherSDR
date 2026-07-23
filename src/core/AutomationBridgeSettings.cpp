@@ -15,7 +15,7 @@ namespace AetherSDR {
 
 namespace {
 // Single nested-JSON key holding the bridge's non-secret config (Principle V).
-// Shape: {"enabled":bool,"txAllowed":bool,"txAck":bool}.
+// Shape: {"enabled":bool,"txAllowed":bool,"txAck":bool,"readOnly":bool}.
 const QString kRootKey = QStringLiteral("AutomationBridge");
 
 // Legacy flat keys (pre-nesting). Migrated one-shot into kRootKey on first read.
@@ -26,6 +26,7 @@ const QString kLegacyTxAck     = QStringLiteral("AutomationBridgeTxAck");
 constexpr const char* kFieldEnabled   = "enabled";
 constexpr const char* kFieldTxAllowed = "txAllowed";
 constexpr const char* kFieldTxAck     = "txAck";
+constexpr const char* kFieldReadOnly  = "readOnly";
 
 // Keychain coordinates for the token (analogous to MqttSettings).
 constexpr const char* kKeychainService  = "AetherSDR";
@@ -90,6 +91,12 @@ bool AutomationBridgeSettings::txAck()
     return readObj().value(QLatin1String(kFieldTxAck)).toBool(false);
 }
 void AutomationBridgeSettings::setTxAck(bool on) { writeBool(kFieldTxAck, on); }
+
+bool AutomationBridgeSettings::readOnly()
+{
+    return readObj().value(QLatin1String(kFieldReadOnly)).toBool(false);
+}
+void AutomationBridgeSettings::setReadOnly(bool on) { writeBool(kFieldReadOnly, on); }
 
 QString AutomationBridgeSettings::keychainService()
 {

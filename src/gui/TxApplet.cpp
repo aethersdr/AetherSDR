@@ -350,11 +350,15 @@ void TxApplet::buildUI()
         if (!m_updatingFromModel && m_model)
             m_model->setRfPower(v);
     });
+    connect(m_rfPowerSlider, &QSlider::sliderReleased,
+            this, &TxApplet::syncFromModel);
     connect(m_tunePowerSlider, &QSlider::valueChanged, this, [this](int v) {
         m_tunePowerLabel->setText(QString::number(v));
         if (!m_updatingFromModel && m_model)
             m_model->setTunePower(v);
     });
+    connect(m_tunePowerSlider, &QSlider::sliderReleased,
+            this, &TxApplet::syncFromModel);
 
     // Profile dropdown → load command
     connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -518,12 +522,16 @@ void TxApplet::syncFromModel()
 
     m_updatingFromModel = true;
 
-    if (m_rfPowerSlider->value() != m_model->rfPower())
+    if (!m_rfPowerSlider->isSliderDown()
+        && m_rfPowerSlider->value() != m_model->rfPower()) {
         m_rfPowerSlider->setValue(m_model->rfPower());
+    }
     m_rfPowerLabel->setText(QString::number(m_model->rfPower()));
 
-    if (m_tunePowerSlider->value() != m_model->tunePower())
+    if (!m_tunePowerSlider->isSliderDown()
+        && m_tunePowerSlider->value() != m_model->tunePower()) {
         m_tunePowerSlider->setValue(m_model->tunePower());
+    }
     m_tunePowerLabel->setText(QString::number(m_model->tunePower()));
 
     // Active profile — update combo selection

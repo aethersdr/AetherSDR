@@ -35,6 +35,7 @@ Env:
     AETHER_MCP_TOKEN    access token from Radio Setup → Network (if set)
 """
 
+import atexit
 import base64
 import difflib
 import glob
@@ -49,6 +50,9 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "aethersdr-automation", "version": "1.0.0"}
 REQUEST_TIMEOUT_S = 60
 MAX_INLINE_IMAGE_BYTES = 800_000  # larger grabs are returned as a path only
+
+_gesture_bridge = None
+_gesture_socket_path = None
 
 
 # --------------------------------------------------------------------------
@@ -141,14 +145,33 @@ def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
     # Attach the access token to every request so the bridge's auth gate
     # accepts it. Harmless when the bridge has no token configured (the
     # field is simply ignored). `ping` doesn't need it but sending it is fine.
-    token = os.environ.get("AETHER_MCP_TOKEN")
-    if token and "token" not in obj:
-        obj = dict(obj, token=token)
+    obj = _authenticated_request(obj)
     b = Bridge(sock_path, timeout)
     try:
         return b.request(obj)
     finally:
         b.close()
+
+
+def _authenticated_request(obj):
+    """Copy a request and attach the runtime token without logging it."""
+    token = os.environ.get("AETHER_MCP_TOKEN")
+    if token and "token" not in obj:
+        return dict(obj, token=token)
+    return obj
+
+
+def _close_gesture_bridge():
+    """Close the held gesture transport; app-side disconnect releases input."""
+    global _gesture_bridge, _gesture_socket_path
+    bridge = _gesture_bridge
+    _gesture_bridge = None
+    _gesture_socket_path = None
+    if bridge is not None:
+        bridge.close()
+
+
+atexit.register(_close_gesture_bridge)
 
 
 # --------------------------------------------------------------------------
@@ -216,6 +239,10 @@ TOOLS = [
             "target": {"type": "string"},
             "selector": {"type": "string",
                          "description": "pan index, only for pan/pan-visible/pan-composite"},
+            "path": {"type": "string",
+                     "description": ("output PNG path; defaults to a temp file. The "
+                                     "returned JSON's `path` is authoritative — the app "
+                                     "may normalize it")},
         }, "required": ["target"]},
     },
     {
@@ -241,7 +268,7 @@ TOOLS = [
             "Live JSON snapshot of app/radio state — assert on state "
             "without screenshots. model = audio | dsp | radio | "
             "transmit | slice <selector: id|active|tx> | slices | pan "
-            "<selector: id|active> | pans | flags | kiwi | sync. "
+            "<selector: id|active> | pans | flags | kiwi | sync | clock. "
             "Optional `property` returns just that field."),
         "inputSchema": {"type": "object", "properties": {
             "model": {"type": "string"},
@@ -317,10 +344,13 @@ TOOLS = [
     },
     {
         "name": "tune",
-        "description": ("Set the active slice frequency, in MHz "
-                        "(e.g. 14.074). Confirm with get_state model=slice."),
+        "description": ("Set a slice frequency, in MHz (e.g. 14.074). "
+                        "Tunes the active slice unless sliceId targets a "
+                        "specific slice. Confirm with get_state model=slice."),
         "inputSchema": {"type": "object", "properties": {
             "mhz": {"type": "string", "description": "frequency in MHz, e.g. '14.074'"},
+            "sliceId": {"type": "string",
+                        "description": "optional slice id; omit for the active slice"},
         }, "required": ["mhz"]},
     },
     {
@@ -425,6 +455,26 @@ TOOLS = [
             "expected": {"type": "string"},
             "selector": {"type": "string"},
         }, "required": ["model", "property", "expected"]},
+    },
+    {
+        "name": "gesture",
+        "description": (
+            "Hold a real pointer gesture open across MCP calls so independent "
+            "bridge requests and delayed app/model events can interleave while "
+            "a slider is genuinely down. Use begin(target, optional start x/y), "
+            "then move(dx/dy), status, and end(dx/dy) or cancel. The wrapper "
+            "keeps one private bridge connection for the gesture; any error, "
+            "disconnect, or server lease timeout releases it. TX and read-only "
+            "guards are enforced in the app."),
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["begin", "move", "end", "cancel", "status"]},
+            "target": {"type": "string",
+                       "description": "widget target, required for begin"},
+            "value": {"type": "string",
+                      "description": ("begin: optional local 'x y'; move/end: "
+                                      "fixed-base 'dx dy' offsets")},
+        }, "required": ["action"]},
     },
     {
         "name": "bridge_command",
@@ -542,6 +592,10 @@ def handle_tool(name, args):
             try:
                 pong = bridge_request({"cmd": "ping"}, timeout=10)
                 status["bridge_auth_required"] = pong.get("authRequired")
+                # Observe-only gate (#4188 area 6). The bridge is authoritative;
+                # this just reflects it so a client knows up front that mutating
+                # verbs will be refused. Flip it in Radio Setup → Network.
+                status["bridge_read_only"] = pong.get("readOnly", False)
             except Exception as e:  # noqa: BLE001
                 status["ping_error"] = str(e)
             # whoami is auth-gated — its success confirms our token is accepted.
@@ -556,6 +610,12 @@ def handle_tool(name, args):
                                   "Copy the token from Radio Setup → Network → "
                                   "Access Token and set it in this MCP server's "
                                   "env config.")
+            if status.get("bridge_read_only"):
+                status["read_only_note"] = (
+                    "This bridge is observe-only. Read verbs work; every "
+                    "mutating verb (set/invoke/connect/tune/capture…) is "
+                    "refused by the app. Uncheck \"Observe only\" in Radio "
+                    "Setup → Network to allow driving.")
         if not entries and not os.environ.get("AETHER_MCP_SOCKET"):
             status["hint"] = ("No bridge running. Launch AetherSDR with "
                               "AETHER_AUTOMATION=1 or enable it in Radio Setup "
@@ -579,8 +639,9 @@ def handle_tool(name, args):
 
     if name == "grab_widget":
         target = args["target"]
-        out = os.path.join(tempfile.gettempdir(),
-                           f"aether-mcp-grab-{int(time.time())}.png")
+        out = (args.get("path")
+               or os.path.join(tempfile.gettempdir(),
+                               f"aether-mcp-grab-{int(time.time())}.png"))
         req = {"cmd": "grab", "target": target, "path": out}
         if args.get("selector"):
             req["selector"] = str(args["selector"])
@@ -659,8 +720,10 @@ def handle_tool(name, args):
         return text_result(bridge_request({"cmd": "floors"}))
 
     if name == "tune":
-        return text_result(bridge_request(
-            {"cmd": "tune", "value": str(args["mhz"])}))
+        req = {"cmd": "tune", "value": str(args["mhz"])}
+        if args.get("sliceId") not in (None, ""):
+            req["id"] = str(args["sliceId"])
+        return text_result(bridge_request(req))
 
     if name in ("slice", "record", "pan"):
         req = {"cmd": name, "action": args["action"]}
@@ -725,6 +788,60 @@ def handle_tool(name, args):
                     out["last_error"] = last_err
                 return text_result(out)
             time.sleep(interval)
+
+    if name == "gesture":
+        global _gesture_bridge, _gesture_socket_path
+        action = str(args.get("action") or "").strip().lower()
+        if action not in ("begin", "move", "end", "cancel", "status"):
+            return error_result(
+                "gesture action must be begin, move, end, cancel, or status")
+
+        if action == "begin":
+            target = str(args.get("target") or "").strip()
+            if not target:
+                return error_result("gesture begin requires `target`")
+            if _gesture_bridge is not None:
+                return error_result(
+                    "a gesture is already active; end or cancel it first")
+            sock_path = bridge_socket_path()
+            if not sock_path:
+                return error_result(
+                    "no running AetherSDR automation bridge found")
+            try:
+                _gesture_bridge = Bridge(sock_path, REQUEST_TIMEOUT_S)
+                _gesture_socket_path = sock_path
+                req = {"cmd": "gesture", "action": "begin", "target": target}
+                if args.get("value") is not None:
+                    req["value"] = str(args["value"])
+                response = _gesture_bridge.request(_authenticated_request(req))
+            except Exception as exc:  # noqa: BLE001 — cleanup is the contract
+                _close_gesture_bridge()
+                return error_result(str(exc))
+            if not isinstance(response, dict) or not response.get("ok"):
+                _close_gesture_bridge()
+            return text_result(response)
+
+        if action == "status" and _gesture_bridge is None:
+            return text_result(bridge_request(
+                {"cmd": "gesture", "action": "status"}))
+        if _gesture_bridge is None:
+            return error_result("no active gesture; begin one first")
+
+        req = {"cmd": "gesture", "action": action}
+        if args.get("value") is not None:
+            req["value"] = str(args["value"])
+        try:
+            response = _gesture_bridge.request(_authenticated_request(req))
+        except Exception as exc:  # noqa: BLE001 — closing releases app input
+            _close_gesture_bridge()
+            return error_result(str(exc))
+
+        terminal = (action in ("end", "cancel")
+                    or (isinstance(response, dict)
+                        and response.get("active") is False))
+        if terminal or not isinstance(response, dict) or not response.get("ok"):
+            _close_gesture_bridge()
+        return text_result(response)
 
     if name == "bridge_command":
         req = args.get("request")

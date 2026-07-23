@@ -85,6 +85,10 @@ public:
     int fps() const { return m_fps; }
     int average() const { return m_average; }
     bool weightedAverage() const { return m_weightedAverage; }
+    // False until the radio first reports weighted_average. Lets the UI avoid
+    // painting a definitive unchecked box before the real value is known, the
+    // same way average()/fps() use a -1 unknown sentinel (#4261).
+    bool weightedAverageKnown() const { return m_weightedAverageKnown; }
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
     // Normalized waterfall-line-duration setter driven by the backend (universal
     // display timing). Feeds PerfTelemetry and always emits
@@ -146,8 +150,9 @@ signals:
     void fpsReported(int fps);
     // Averaging is radio-authoritative (firmware runs it, echoes the level in
     // pan status). Reported fires every status cycle; Changed only on an actual
-    // change — mirrors the fps pair so MainWindow can reconcile after a
-    // global-profile / band switch adopts the profile's stored value (#4001).
+    // change — mirrors the fps pair so the display follows the radio's value
+    // after a global-profile / band switch adopts the profile's stored value
+    // (#4001; radio-owned per #4261 — no client re-assert / persistence).
     void averageChanged(int average);
     void averageReported(int average);
     void weightedAverageChanged(bool weighted);
@@ -184,6 +189,7 @@ private:
     int         m_fps{-1};
     int         m_average{-1};        // -1 = unknown; 0 = off, 1-N = level (#4001)
     bool        m_weightedAverage{false};
+    bool        m_weightedAverageKnown{false};  // #4261 unknown sentinel
     int         m_waterfallLineDuration{-1};
     int         m_fftYPixels{-1};
     QString     m_preamp;

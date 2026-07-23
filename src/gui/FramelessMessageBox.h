@@ -24,6 +24,10 @@ public:
                                   const QString& text,
                                   StandardButtons buttons = Ok,
                                   StandardButton defaultButton = NoButton);
+    static StandardButton critical(QWidget* parent, const QString& title,
+                                   const QString& text,
+                                   StandardButtons buttons = Ok,
+                                   StandardButton defaultButton = NoButton);
     static StandardButton question(QWidget* parent, const QString& title,
                                    const QString& text,
                                    StandardButtons buttons = StandardButtons(Yes | No),
@@ -39,9 +43,14 @@ private:
                                       StandardButtons buttons,
                                       StandardButton defaultButton);
     void positionTitleBar();
+    // Reserve space for the title-bar overlay by growing the layout's top
+    // content margin. Must be re-applied after QMessageBox rebuilds its grid
+    // (setIcon/setText/addButton/... all trigger a rebuild that resets margins).
+    void applyTitleBarMargins();
 
     FramelessWindowTitleBar* m_titleBar{nullptr};
     QMargins m_originalMargins;
+    bool m_frameless{false};
 };
 
 } // namespace AetherSDR

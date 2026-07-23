@@ -8,13 +8,14 @@
 
 namespace AetherSDR {
 
-void FramelessResizer::install(QWidget* window, int margin)
+void FramelessResizer::install(QWidget* window, int margin, int topMoveReserve)
 {
-    new FramelessResizer(window, margin);
+    new FramelessResizer(window, margin, topMoveReserve);
 }
 
-FramelessResizer::FramelessResizer(QWidget* window, int margin)
-    : QObject(window), m_window(window), m_margin(margin)
+FramelessResizer::FramelessResizer(QWidget* window, int margin, int topMoveReserve)
+    : QObject(window), m_window(window), m_margin(margin),
+      m_topMoveReserve(topMoveReserve)
 {
     if (window->windowHandle()) {
         // Native window already exists — install directly on it.
@@ -39,6 +40,20 @@ FramelessResizer::~FramelessResizer()
 
 Qt::Edges FramelessResizer::edgesAt(const QPoint& p) const
 {
+    // A maximized or fullscreen window must not resize from an edge drag — the
+    // compositor owns its geometry. Previously each adopter guarded this in its
+    // own edgesAt(); centralizing it here closes the gap for every adopter
+    // (#4266).
+    if (m_window->isMaximized() || m_window->isFullScreen()) {
+        return {};
+    }
+    // Reserve an edge-to-edge top move handle (e.g. a full-width title bar) for
+    // the window's own move handling rather than the top-edge resize zone, so a
+    // title-bar grab isn't consumed as a resize (#4266). Resize still works
+    // everywhere below the reserved strip.
+    if (m_topMoveReserve > 0 && p.y() < m_topMoveReserve) {
+        return {};
+    }
     const QRect r = m_window->rect();
     Qt::Edges edges;
     if (p.x() <= m_margin)              edges |= Qt::LeftEdge;

@@ -2441,6 +2441,22 @@ QAudioFormat AudioEngine::makeFormat() const
 
 QJsonArray AudioEngine::audioEndpointDiagnostics() const
 {
+    QThread* const ownerThread = thread();
+    if (ownerThread && ownerThread != QThread::currentThread()) {
+        if (!ownerThread->isRunning()) {
+            return {};
+        }
+
+        QJsonArray endpoints;
+        const bool invoked = QMetaObject::invokeMethod(
+            const_cast<AudioEngine*>(this),
+            [this, &endpoints]() {
+                endpoints = audioEndpointDiagnostics();
+            },
+            Qt::BlockingQueuedConnection);
+        return invoked ? endpoints : QJsonArray{};
+    }
+
     const auto outputDescription = [this]() {
         const QAudioDevice dev = m_outputDevice.isNull()
             ? QMediaDevices::defaultAudioOutput()
@@ -2525,6 +2541,21 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     tx["sample_format"] = txRunning ? QStringLiteral("Int16") : QString();
     tx["resampling_active"] = txRunning ? QJsonValue(m_txNeedsResample) : QJsonValue();
     tx["note"] = m_txInputMono ? QStringLiteral("mono input promoted to stereo for radio TX") : QString();
+    const TxCaptureHealthTracker::Snapshot txHealth =
+        m_txCaptureHealth.snapshot(txCaptureNowMs());
+    tx["buffer_bytes_available"] = static_cast<double>(txCaptureBufferedBytes());
+    tx["buffer_capacity_bytes"] = static_cast<double>(txCaptureBufferCapacityBytes());
+    tx["source_was_active"] = txHealth.sourceWasActive;
+    tx["saturation_observed"] = txHealth.saturationObserved;
+    tx["tci_suppressed_callbacks"] = static_cast<double>(txHealth.tciSuppressedCallbacks);
+    tx["full_buffer_during_tci_observations"] =
+        static_cast<double>(txHealth.fullBufferDuringTciObservations);
+    tx["idle_during_tci_transitions"] = static_cast<double>(txHealth.idleDuringTciTransitions);
+    tx["post_tci_local_tx_while_saturated"] =
+        static_cast<double>(txHealth.postTciLocalTxWhileSaturated);
+    tx["last_mic_read_age_ms"] = txHealth.lastMicReadAgeMs >= 0
+        ? QJsonValue(static_cast<double>(txHealth.lastMicReadAgeMs))
+        : QJsonValue();
     endpoints.append(tx);
 
     const bool sidetoneRunning = m_sidetoneSink && m_sidetoneSink->isRunning();
@@ -6944,6 +6975,128 @@ void AudioEngine::logTxInputChannelDiagnostics(const TxMicChannelNormalizer::Dia
                      << TxMicChannelNormalizer::channelModeName(diagnostics.selectedMode);
 }
 
+TxCaptureHealthTracker::CaptureState AudioEngine::txCaptureState(QAudio::State state)
+{
+    switch (state) {
+    case QAudio::ActiveState:    return TxCaptureHealthTracker::CaptureState::Active;
+    case QAudio::IdleState:      return TxCaptureHealthTracker::CaptureState::Idle;
+    case QAudio::SuspendedState: return TxCaptureHealthTracker::CaptureState::Suspended;
+    case QAudio::StoppedState:   return TxCaptureHealthTracker::CaptureState::Stopped;
+    }
+    return TxCaptureHealthTracker::CaptureState::Stopped;
+}
+
+qint64 AudioEngine::txCaptureBufferedBytes() const
+{
+#ifdef Q_OS_MAC
+    return m_micBuffer ? m_micBuffer->size() : 0;
+#else
+    return m_micDevice ? m_micDevice->bytesAvailable() : 0;
+#endif
+}
+
+qint64 AudioEngine::txCaptureBufferCapacityBytes() const
+{
+    return m_audioSource ? m_audioSource->bufferSize() : 0;
+}
+
+qint64 AudioEngine::txCaptureNowMs() const
+{
+    return m_txCaptureHealthClock.isValid() ? m_txCaptureHealthClock.elapsed() : 0;
+}
+
+bool AudioEngine::tciAudioFresh() const
+{
+    return m_tciAudioTimer.isValid()
+        && m_tciAudioTimer.elapsed() < kTciAudioActiveWindowMs;
+}
+
+void AudioEngine::observeTxCaptureState(QAudio::State state)
+{
+    const TxCaptureHealthTracker::Event event = m_txCaptureHealth.observeState(
+        txCaptureState(state), tciAudioFresh(), txCaptureBufferedBytes());
+    if (event != TxCaptureHealthTracker::Event::None) {
+        logTxCaptureHealthEvent(event);
+    }
+}
+
+void AudioEngine::recordTxCaptureLocalTxAttempt()
+{
+    if (!m_audioSource) {
+        return;
+    }
+
+    const TxCaptureHealthTracker::Event event = m_txCaptureHealth.recordLocalTxAttempt(
+        txCaptureState(m_audioSource->state()),
+        m_transmitting.load(std::memory_order_acquire),
+        m_daxTxMode.load(std::memory_order_acquire),
+        tciAudioFresh(),
+        txCaptureBufferedBytes(),
+        txCaptureBufferCapacityBytes());
+    if (event != TxCaptureHealthTracker::Event::None) {
+        logTxCaptureHealthEvent(event);
+    }
+}
+
+void AudioEngine::logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event)
+{
+    switch (event) {
+    case TxCaptureHealthTracker::Event::BufferSaturatedDuringTci:
+        logTxCaptureHealthSummary(QStringLiteral("buffer saturated during TCI suppression"), true);
+        break;
+    case TxCaptureHealthTracker::Event::LocalTxWhileSaturated:
+        logTxCaptureHealthSummary(QStringLiteral("local TX with saturated post-TCI capture"), true);
+        break;
+    case TxCaptureHealthTracker::Event::None:
+        break;
+    }
+}
+
+void AudioEngine::logTxCaptureHealthSummary(const QString& reason, bool anomaly)
+{
+    // TCI server diagnostics use lcCat today. Keep these support summaries
+    // opt-in with the same Help -> Support debug toggle; warnings must not make
+    // the capture-health instrumentation default-on by bypassing that choice.
+    if (!lcCat().isDebugEnabled()) {
+        return;
+    }
+
+    const TxCaptureHealthTracker::Snapshot health =
+        m_txCaptureHealth.snapshot(txCaptureNowMs());
+    if (!anomaly && health.tciSuppressedCallbacks == 0
+        && health.fullBufferDuringTciObservations == 0
+        && health.idleDuringTciTransitions == 0
+        && health.postTciLocalTxWhileSaturated == 0) {
+        return;
+    }
+
+    const QAudioDevice device = m_inputDevice.isNull()
+        ? QMediaDevices::defaultAudioInput()
+        : m_inputDevice;
+
+    AudioSummaryLogger::TxCaptureHealthSummary summary;
+    summary.reason = reason;
+    summary.deviceDescription = device.description();
+    summary.state = m_audioSource
+        ? audioStateName(m_audioSource->state())
+        : QStringLiteral("Stopped");
+    summary.error = m_audioSource
+        ? audioErrorName(m_audioSource->error())
+        : QStringLiteral("NoError");
+    summary.lifecycleMs = health.lifecycleMs;
+    summary.bufferedBytes = txCaptureBufferedBytes();
+    summary.bufferCapacityBytes = txCaptureBufferCapacityBytes();
+    summary.lastMicReadAgeMs = health.lastMicReadAgeMs;
+    summary.tciSuppressedCallbacks = health.tciSuppressedCallbacks;
+    summary.suppressedBufferPeakBytes = health.suppressedBufferPeakBytes;
+    summary.fullBufferDuringTciObservations = health.fullBufferDuringTciObservations;
+    summary.idleDuringTciTransitions = health.idleDuringTciTransitions;
+    summary.postTciLocalTxWhileSaturated = health.postTciLocalTxWhileSaturated;
+    summary.sourceWasActive = health.sourceWasActive;
+    summary.saturationObserved = health.saturationObserved;
+    AudioSummaryLogger::logTxCaptureHealth(summary, anomaly);
+}
+
 // ─── TX stream ────────────────────────────────────────────────────────────────
 
 bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioPort)
@@ -7284,6 +7437,17 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 #endif
 #endif
 
+    m_txCaptureHealthClock.restart();
+    m_txCaptureHealth.reset(txCaptureState(m_audioSource->state()));
+    QAudioSource* const observedSource = m_audioSource;
+    connect(observedSource, &QAudioSource::stateChanged, this,
+            [this, observedSource](QAudio::State state) {
+        if (observedSource != m_audioSource) {
+            return;
+        }
+        observeTxCaptureState(state);
+    }, Qt::QueuedConnection);
+
     m_txSourceStartTime.restart();
     qCWarning(lcAudio) << "AudioEngine: TX stream started ->" << radioAddress.toString()
              << ":" << radioPort << "streamId:" << Qt::hex << m_txStreamId
@@ -7304,6 +7468,9 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 
 void AudioEngine::stopTxStream()
 {
+    if (m_audioSource) {
+        logTxCaptureHealthSummary(QStringLiteral("source lifecycle ended"), false);
+    }
     ++m_txLifecycleGeneration;
 #ifdef Q_OS_MAC
     QTimer* pollTimer = m_txPollTimer;
@@ -7428,8 +7595,29 @@ void AudioEngine::onTxAudioReady()
     // where the default CoreAudio input is a real webcam mic that
     // produces continuous ambient packets. The 200 ms window comfortably
     // covers the 50 ms TCI frame cadence.
-    if (m_tciAudioTimer.isValid()
-        && m_tciAudioTimer.elapsed() < kTciAudioActiveWindowMs) {
+    if (tciAudioFresh()) {
+        const TxCaptureHealthTracker::Event event = m_txCaptureHealth.recordSuppressedCallback(
+            txCaptureBufferedBytes(), txCaptureBufferCapacityBytes());
+        if (event != TxCaptureHealthTracker::Event::None) {
+            logTxCaptureHealthEvent(event);
+        }
+#ifdef Q_OS_LINUX
+        // Qt/PipeWire capture is edge-driven: leaving the pull device unread
+        // fills its ring, after which no new readyRead edge arrives to resume
+        // PC Audio when TCI stops (#4230). Keep consuming the Linux source but
+        // discard these samples so only TCI audio reaches the radio. Windows
+        // and macOS retain their existing behavior until equivalent evidence
+        // exists for those backends.
+        if (m_micDevice) {
+            const QByteArray discarded = m_micDevice->readAll();
+            if (!discarded.isEmpty()) {
+                m_txCaptureHealth.recordMicRead(txCaptureNowMs());
+            }
+        }
+#endif
+        if (m_audioSource) {
+            observeTxCaptureState(m_audioSource->state());
+        }
         return;
     }
 #ifdef Q_OS_MAC
@@ -7449,6 +7637,8 @@ void AudioEngine::onTxAudioReady()
     if (data.isEmpty()) return;
     m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
 #endif
+
+    m_txCaptureHealth.recordMicRead(txCaptureNowMs());
 
     // Canonicalize immediately after capture: TX voice is logically mono
     // carried as stereo int16, so choose/average the real mic channel before
@@ -7929,6 +8119,20 @@ void AudioEngine::setRadioTransmitting(bool tx)
     const bool previous = m_radioTransmitting.exchange(tx);
     if (previous == tx)
         return;
+
+    if (tx) {
+        // radioTransmittingChanged originates on the UI thread while AudioEngine
+        // owns its QAudioSource and health tracker on the audio thread. Preserve
+        // the existing immediate atomic TX edge, but sample capture state only
+        // on the owning thread so diagnostics cannot race readyRead/stateChanged.
+        if (thread() == QThread::currentThread()) {
+            recordTxCaptureLocalTxAttempt();
+        } else {
+            QMetaObject::invokeMethod(this, [this]() {
+                recordTxCaptureLocalTxAttempt();
+            }, Qt::QueuedConnection);
+        }
+    }
 
     // Close the CW-record over on unkey so the next over re-arms cleanly (the
     // pump latches on our keyer, clears here). #2539.

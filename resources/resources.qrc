@@ -19,6 +19,11 @@
         <file alias="default-dark.json">themes/default-dark.json</file>
         <file alias="default-light.json">themes/default-light.json</file>
     </qresource>
+    <qresource prefix="/meterfaces">
+        <file alias="analog-meter-themes-v1.json">meterfaces/analog-meter-themes-v1.json</file>
+        <file alias="cross-needle-v12.json">meterfaces/cross-needle-v12.json</file>
+        <file alias="s-meter-v1.json">meterfaces/s-meter-v1.json</file>
+    </qresource>
     <qresource prefix="/help">
         <file alias="getting-started.md">help/getting-started.md</file>
         <file alias="aethersdr-help.md">help/aethersdr-help.md</file>

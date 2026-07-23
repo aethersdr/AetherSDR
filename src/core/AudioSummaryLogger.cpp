@@ -26,6 +26,11 @@ QString yesNo(bool value)
     return value ? QStringLiteral("yes") : QStringLiteral("no");
 }
 
+QString ageText(qint64 ageMs)
+{
+    return ageMs >= 0 ? QStringLiteral("%1ms").arg(ageMs) : QStringLiteral("unknown");
+}
+
 QString valueOrUnavailable(QString value)
 {
     value = value.trimmed();
@@ -217,6 +222,33 @@ QString formatOpenFailure(const OpenFailureSummary& summary)
     return lines.join(QLatin1Char('\n'));
 }
 
+QString formatTxCaptureHealth(const TxCaptureHealthSummary& summary)
+{
+    QStringList lines;
+    lines << QStringLiteral("Audio TX capture health summary:")
+          << QStringLiteral("  reason=\"%1\" %2 state=%3 error=%4 lifetime=%5ms")
+                 .arg(valueOrUnknown(summary.reason),
+                      field(QStringLiteral("device"), summary.deviceDescription),
+                      valueOrUnknown(summary.state),
+                      valueOrUnknown(summary.error))
+                 .arg(summary.lifecycleMs)
+          << QStringLiteral("  buffered=%1/%2B peakSuppressed=%3B lastMicReadAge=%4")
+                 .arg(summary.bufferedBytes)
+                 .arg(summary.bufferCapacityBytes)
+                 .arg(summary.suppressedBufferPeakBytes)
+                 .arg(ageText(summary.lastMicReadAgeMs))
+          << QStringLiteral("  suppressedCallbacks=%1 fullDuringTci=%2 idleDuringTci=%3")
+                 .arg(summary.tciSuppressedCallbacks)
+                 .arg(summary.fullBufferDuringTciObservations)
+                 .arg(summary.idleDuringTciTransitions)
+          << QStringLiteral("  postTciLocalTxWhileSaturated=%1")
+                 .arg(summary.postTciLocalTxWhileSaturated)
+          << QStringLiteral("  sourceWasActive=%1 saturationObserved=%2")
+                 .arg(yesNo(summary.sourceWasActive),
+                      yesNo(summary.saturationObserved));
+    return lines.join(QLatin1Char('\n'));
+}
+
 void logStartupEnvironment(const QJsonObject& audioDevices)
 {
     emitIfChanged(QStringLiteral("startup"), formatStartupEnvironment(audioDevices));
@@ -248,6 +280,16 @@ void logOpenFailure(const OpenFailureSummary& summary)
     emitIfChanged(QStringLiteral("failure:%1:%2")
                       .arg(summary.path, summary.backend),
                   formatOpenFailure(summary));
+}
+
+void logTxCaptureHealth(const TxCaptureHealthSummary& summary, bool anomaly)
+{
+    const QString text = formatTxCaptureHealth(summary);
+    if (anomaly) {
+        qCWarning(lcAudioSummary).noquote() << text;
+        return;
+    }
+    qCInfo(lcAudioSummary).noquote() << text;
 }
 
 } // namespace AetherSDR::AudioSummaryLogger

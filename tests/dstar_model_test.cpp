@@ -1,8 +1,10 @@
+#include "core/DigitalVoiceModeRegistry.h"
 #include "models/DStarModel.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QMap>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 
 #include <cstdio>
@@ -111,6 +113,19 @@ int main(int argc, char** argv)
 
     {
         DStarModel model;
+        QSignalSpy serviceSpy(&model, &DStarModel::serviceChanged);
+        AetherSDR::DigitalVoiceModeRegistry& registry =
+            AetherSDR::DigitalVoiceModeRegistry::instance();
+        registry.deactivateMode(AetherSDR::DigitalVoiceModeId::DStar);
+        report("D-STAR mode registry activates for service notification test",
+               registry.activateMode(AetherSDR::DigitalVoiceModeId::DStar));
+        report("D-STAR slice claim succeeds for service notification test",
+               registry.claimSlice(AetherSDR::DigitalVoiceModeId::DStar, 3));
+        QCoreApplication::processEvents();
+        report("slice claim notifies D-STAR service observers",
+               serviceSpy.count() == 1);
+        registry.deactivateMode(AetherSDR::DigitalVoiceModeId::DStar);
+        QCoreApplication::processEvents();
         model.setTrafficPersistencePath(historyPath);
 
         DStarConfiguration valid;

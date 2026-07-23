@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/SpotCommandPolicy.h"
 
@@ -50,7 +51,12 @@ void testSendPolicyUsesAppSettings()
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-passive-spots-policy-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
 
     testSettingParsing();
     testSendPolicyUsesAppSettings();

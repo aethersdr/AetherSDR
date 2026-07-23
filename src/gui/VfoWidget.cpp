@@ -31,7 +31,6 @@
 #include <QTimer>
 #include <QLabel>
 #include <QSlider>
-#include <QGraphicsOpacityEffect>
 #include <QAccessible>
 #include <QAccessibleWidget>
 #include <QLineEdit>
@@ -254,6 +253,12 @@ static const QString kTabLblActive =
     "QPushButton { background: transparent; border: none; "
     "border-bottom: 2px solid #00b4d8; "
     "color: #00b4d8; font-size: 13px; font-weight: bold; padding: 3px 0; }"
+    "QPushButton:focus { outline: none; }";
+
+static const QString kTabLblDspActive =
+    "QPushButton { background: transparent; border: none; "
+    "border-bottom: 2px solid #20a040; "
+    "color: #20a040; font-size: 13px; font-weight: bold; padding: 3px 0; }"
     "QPushButton:focus { outline: none; }";
 
 static const QString kDisabledBtn =
@@ -1743,7 +1748,7 @@ void VfoWidget::buildTabContent()
         m_aetherDspBtn = new QPushButton("ADSP");
         m_aetherDspBtn->setObjectName("aetherDspBtn");
         m_aetherDspBtn->setCheckable(false);
-        m_aetherDspBtn->setMinimumHeight(22);
+        m_aetherDspBtn->setFixedHeight(26);
         m_aetherDspBtn->setStyleSheet(kDspToggle);
         m_aetherDspBtn->setAccessibleName("AetherDSP Settings");
         m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR)");
@@ -1754,7 +1759,7 @@ void VfoWidget::buildTabContent()
         // 2 columns wide (cols 2-3 of the same row that hosts ADSP).
         m_aetherVoiceBtn = new QPushButton("AetherVoice");
         m_aetherVoiceBtn->setCheckable(false);
-        m_aetherVoiceBtn->setMinimumHeight(22);
+        m_aetherVoiceBtn->setFixedHeight(26);
         m_aetherVoiceBtn->setStyleSheet(kDspToggle);
         m_aetherVoiceBtn->setAccessibleName("Aetherial Audio Channel Strip");
         m_aetherVoiceBtn->setToolTip("Open Aetherial Audio Channel Strip — unified TX DSP suite");
@@ -1818,15 +1823,10 @@ void VfoWidget::buildTabContent()
                 }
             });
 
-            // Stay laid out always — toggling visibility would shift the
-            // button grid up/down each time the slider's target changes.
-            // Instead, keep the row in the layout and fade contents with
-            // an opacity effect (0 when no DSP is targeted, 1 when one
-            // is).  Stray clicks while transparent are no-ops because
-            // the slider's valueChanged handler ignores LvlNone.
-            auto* eff = new QGraphicsOpacityEffect(m_dspLevelRow);
-            eff->setOpacity(0.0);
-            m_dspLevelRow->setGraphicsEffect(eff);
+            // Keep the panel compact when no leveled DSP is active. The row
+            // appears only when it has a real target; setDspLevelTarget()
+            // refits the flag after each visibility transition.
+            m_dspLevelRow->hide();
             dspVb->addWidget(m_dspLevelRow);
         }
 
@@ -2551,11 +2551,9 @@ void VfoWidget::closeActiveTab()
     if (m_tabStack) {
         m_tabStack->hide();
     }
-    if (m_activeTab < m_tabBtns.size()) {
-        m_tabBtns[m_activeTab]->setStyleSheet(kTabLblNormal);
-        m_tabBtns[m_activeTab]->setChecked(false);
-    }
+    const int closedTab = m_activeTab;
     m_activeTab = -1;
+    deactivateTabButton(closedTab);
 }
 
 // Open or close the S-Meter / SmartMTR selector.  Single source of truth for
@@ -2594,14 +2592,15 @@ void VfoWidget::showTab(int index)
 {
     if (m_activeTab == index) {
         // Toggle off — collapse content
+        const int closedTab = m_activeTab;
         m_tabStack->hide();
-        m_tabBtns[m_activeTab]->setStyleSheet(kTabLblNormal);
-        m_tabBtns[m_activeTab]->setChecked(false);
         m_activeTab = -1;
+        deactivateTabButton(closedTab);
     } else {
         if (m_activeTab >= 0) {
-            m_tabBtns[m_activeTab]->setStyleSheet(kTabLblNormal);
-            m_tabBtns[m_activeTab]->setChecked(false);
+            const int closedTab = m_activeTab;
+            m_activeTab = -1;
+            deactivateTabButton(closedTab);
         }
         m_activeTab = index;
         m_tabBtns[index]->setStyleSheet(kTabLblActive);
@@ -2614,6 +2613,69 @@ void VfoWidget::showTab(int index)
         }
     }
     relayoutToCurrentContent();
+}
+
+void VfoWidget::updateDspTabAccent()
+{
+    if (m_tabBtns.size() <= 1) {
+        return;
+    }
+
+    const auto activeWhenAvailable = [](const QPushButton* button, bool active) {
+        return active && button && !button->isHidden();
+    };
+    const bool radioDspActive = m_slice
+        && (activeWhenAvailable(m_nbBtn, m_slice->nbOn())
+            || activeWhenAvailable(m_nrBtn, m_slice->nrOn())
+            || activeWhenAvailable(m_anfBtn, m_slice->anfOn())
+            || activeWhenAvailable(m_nrlBtn, m_slice->nrlOn())
+            || activeWhenAvailable(m_nrsBtn, m_slice->nrsOn())
+            || activeWhenAvailable(m_rnnBtn, m_slice->rnnOn())
+            || activeWhenAvailable(m_nrfBtn, m_slice->nrfOn())
+            || activeWhenAvailable(m_anflBtn, m_slice->anflOn())
+            || activeWhenAvailable(m_anftBtn, m_slice->anftOn())
+            || activeWhenAvailable(m_apfBtn, m_slice->apfOn()));
+    const bool dspActive = radioDspActive || m_aetherDspActive;
+    QPushButton* dspTabButton = m_tabBtns[1];
+
+    const QString accessibleName = dspActive
+        ? tr("DSP settings (DSP active)")
+        : tr("DSP settings");
+    if (dspTabButton->accessibleName() != accessibleName) {
+        dspTabButton->setAccessibleName(accessibleName);
+        QAccessibleEvent event(dspTabButton, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+
+    // Cyan remains the unambiguous open-panel state. Green is the persistent
+    // closed-panel cue that at least one radio or client DSP is engaged.
+    if (m_activeTab != 1) {
+        // Guard the repaint like the accessible name above: a single radio
+        // status packet re-runs this up to 9x (SliceModel::applyChanges emits
+        // the DSP signals unconditionally), and setStyleSheet() forces a full
+        // style recompute even when the accent is unchanged.
+        const QString& target = dspActive ? kTabLblDspActive : kTabLblNormal;
+        if (dspTabButton->styleSheet() != target) {
+            dspTabButton->setStyleSheet(target);
+        }
+    }
+}
+
+// Drop a just-closed tab button back to its resting style. The caller must
+// already have cleared m_activeTab so the DSP tab (index 1) resolves its
+// persistent closed-panel accent here; every other tab returns to the plain
+// label style.
+void VfoWidget::deactivateTabButton(int closedTab)
+{
+    if (closedTab < 0 || closedTab >= m_tabBtns.size()) {
+        return;
+    }
+    m_tabBtns[closedTab]->setChecked(false);
+    if (closedTab == 1) {
+        updateDspTabAccent();
+    } else {
+        m_tabBtns[closedTab]->setStyleSheet(kTabLblNormal);
+    }
 }
 
 void VfoWidget::setCollapsed(bool collapsed)
@@ -2712,6 +2774,7 @@ void VfoWidget::setCollapsed(bool collapsed)
                 btn->setStyleSheet(kTabLblNormal);
                 btn->setChecked(false);
             }
+            updateDspTabAccent();
         }
         // Restore external buttons to pre-collapse state and reposition them
         // based on the new expanded width (they were positioned for COLLAPSED_W)
@@ -2938,6 +3001,7 @@ void VfoWidget::setAetherDspActive(bool active)
     m_aetherDspBtn->setStyleSheet(active ? kDspToggleActive : kDspToggle);
     m_aetherDspBtn->setAccessibleName(active ? QStringLiteral("AetherDSP Settings (NR active)")
                                              : QStringLiteral("AetherDSP Settings"));
+    updateDspTabAccent();
 }
 
 // ── Per-slice VFO marker display prefs (#1526) ───────────────────────────────
@@ -4024,6 +4088,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_nrlBtn->setVisible(!isFm);
         // 8000-series-only firmware DSP filters — shared rule (#2177)
         updateExtendedDspVisibility();
+        updateDspTabAccent();
         relayoutDspGrid();
         updateFilterLabel();
         if (m_tabStack->isVisible()) relayoutToCurrentContent();
@@ -4133,6 +4198,7 @@ void VfoWidget::setSlice(SliceModel* slice)
             QSignalBlocker sb(btn);
             btn->setChecked(on);
             m_updatingFromModel = false;
+            updateDspTabAccent();
         });
     };
     // Leveled variant — also push/pop the shared DSP-level slider stack
@@ -4148,6 +4214,7 @@ void VfoWidget::setSlice(SliceModel* slice)
             m_updatingFromModel = false;
             if (on) pushDspLevelTarget(tag);
             else    popDspLevelTarget(tag);
+            updateDspTabAccent();
         });
     };
     connectLeveledDsp(&SliceModel::nbChanged,   m_nbBtn,   LvlNB);
@@ -4352,10 +4419,14 @@ void VfoWidget::updateTxBadgeStyle(bool isTx)
 
 void VfoWidget::updateSplitBadge(bool isTxSlice, bool isRxSplit)
 {
+    // Relabel unconditionally from the slice's current role: the click handler
+    // dispatches on this text, so a stale "SWAP" after the split pair is torn
+    // down (or after roles flip via swap) would keep emitting swapRequested()
+    // and Split could never be re-enabled (#4051).
+    m_splitBadge->setText(isTxSlice ? "SWAP" : "SPLIT");
     if (isTxSlice) {
         // TX slice in split pair — show SWAP button
         m_splitBadge->show();
-        m_splitBadge->setText("SWAP");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_splitBadge, "QPushButton { background: {{color.background.1}}; color: #80c0ff; border: none; "
             "border-radius: 2px; font-size: 11px; font-weight: bold; "
             "padding: 0px 3px; }"
@@ -4557,7 +4628,8 @@ void VfoWidget::syncFromSlice()
     m_rttyContainer->setVisible(isRtty);
     bool isCw = (m_slice->mode() == "CW" || m_slice->mode() == "CWL");
     bool isDig = (m_slice->mode() == "DIGL" || m_slice->mode() == "DIGU" || m_slice->mode() == "NT");
-    bool isFm = (m_slice->mode() == "FM" || m_slice->mode() == "NFM");
+    bool isFm = (m_slice->mode() == "FM" || m_slice->mode() == "NFM"
+                 || m_slice->mode() == "DFM");
     m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
     m_apfBtn->setVisible(isCw);
     m_anfBtn->setVisible(!isRtty && !isCw && !isDig && !isFm);
@@ -4594,6 +4666,7 @@ void VfoWidget::syncFromSlice()
         m_digOffsetLabel->setText(QString::number(off));
     }
     relayoutDspGrid();
+    updateDspTabAccent();
 
     // APF level
     {
@@ -4728,9 +4801,13 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
 {
     m_dspLevelTarget = t;
     if (!m_dspLevelRow) return;
-    auto* eff = qobject_cast<QGraphicsOpacityEffect*>(m_dspLevelRow->graphicsEffect());
-    if (t == LvlNone || !m_slice) {
-        if (eff) eff->setOpacity(0.0);
+    const bool showLevelRow = t != LvlNone && m_slice;
+    const bool visibilityChanged = m_dspLevelRow->isHidden() == showLevelRow;
+    m_dspLevelRow->setVisible(showLevelRow);
+    if (!showLevelRow) {
+        if (visibilityChanged && m_activeTab == 1 && m_tabStack->isVisible()) {
+            QTimer::singleShot(0, this, [this] { relayoutToCurrentContent(); });
+        }
         return;
     }
     int level = 0;
@@ -4751,7 +4828,9 @@ void VfoWidget::setDspLevelTarget(DspLevelTarget t)
         m_dspLevelSlider->setValue(level);
     }
     m_dspLevelValue->setText(QString::number(level));
-    if (eff) eff->setOpacity(1.0);
+    if (visibilityChanged && m_activeTab == 1 && m_tabStack->isVisible()) {
+        QTimer::singleShot(0, this, [this] { relayoutToCurrentContent(); });
+    }
 }
 
 void VfoWidget::refreshDspLevelTarget()
