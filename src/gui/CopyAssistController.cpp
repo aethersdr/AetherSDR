@@ -190,19 +190,24 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // Language selector — every language the whisper build supports.
     // Multilingual models honor it; English-only models ignore it. (The
     // remote/sherpa backends read the same stored value where relevant.)
-    // NOTE: the "Auto-detect" option was removed — whisper language detection
-    // wasn't working reliably in testing. The backend still handles "auto"
-    // (see WhisperAsrBackend::transcribe), so re-adding is a one-line change
-    // once the detection issue is understood.
-    for (const AsrLanguage& lang : asrWhisperLanguages()) {
-        m_settings->addLanguage(lang.code, lang.name);
-    }
+    // NOTE: the "Auto-detect" option was removed — whisper's detection wasn't
+    // reliable on Copy Assist's short VAD segments (it keys off ~30 s of audio).
+    // The backend still handles "auto" (see WhisperAsrBackend::transcribe), left
+    // dormant so re-adding it is a one-line change once detection is understood.
     QString savedLang =
         AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
-    if (savedLang == QStringLiteral("auto")) {
-        // Auto-detect option removed: migrate any previously-saved value to
-        // English so the dropdown and the engine agree (a lingering "auto"
-        // would otherwise still trigger detection in the backend).
+    bool savedLangSupported = false;
+    for (const AsrLanguage& lang : asrWhisperLanguages()) {
+        m_settings->addLanguage(lang.code, lang.name);
+        if (lang.code == savedLang) {
+            savedLangSupported = true;
+        }
+    }
+    if (!savedLangSupported) {
+        // Fall back to English for any value the model can't decode — mirrors the
+        // GPU-device clamp above. This also migrates the retired "auto" sentinel
+        // and any empty/stale code, keeping the dropdown and the engine in sync
+        // (a lingering "auto" would otherwise still trigger detection).
         savedLang = QStringLiteral("en");
         auto& st = AppSettings::instance();
         st.setValue(QStringLiteral("AsrLanguage"), savedLang);
