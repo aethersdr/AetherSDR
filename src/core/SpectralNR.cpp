@@ -1184,7 +1184,9 @@ void SpectralNR::estimateNoiseOsms()
     }
 
     // ── Sub-window rotation ───────────────────────────────────────────
-    if (m_subwc == m_V) {
+    // >= (not ==) so a counter that ever advances past m_V still rotates,
+    // rather than stalling the minimum tracker permanently.
+    if (m_subwc >= m_V) {
         const double noiseSlopeMax = invQbar < 0.03 ? m_noiseSlopeMax[0]
             : invQbar < 0.05 ? m_noiseSlopeMax[1]
             : invQbar < 0.06 ? m_noiseSlopeMax[2]
@@ -1227,8 +1229,9 @@ void SpectralNR::estimateNoiseOsms()
     }
 
     for (int k = 0; k < m_msize; ++k) {
+        // estimateNoise() copies the selected estimator into m_noisePsd, so
+        // only this estimator's own persistent state is written here.
         m_osmsNoisePsd[k] = m_pMin[k];
-        m_noisePsd[k] = m_osmsNoisePsd[k];
     }
 }
 
@@ -1681,7 +1684,6 @@ void SpectralNR::estimateNoiseMmse()
             + speechPresence * sigma;
         m_mmseNoisePsd[k] = m_mmseAlphaPow * sigma
                           + (1.0 - m_mmseAlphaPow) * expectedNoise;
-        m_noisePsd[k] = m_mmseNoisePsd[k];
     }
 }
 
@@ -1719,7 +1721,6 @@ void SpectralNR::estimateNoiseNstat()
             + (1.0 - m_nstatAlphaD) * m_nstatSpeechProbability[k];
         m_nstatNoisePsd[k] = smoothing * m_nstatNoisePsd[k]
                            + (1.0 - smoothing) * m_lambdaY[k];
-        m_noisePsd[k] = std::max(m_nstatNoisePsd[k], EpsFloor);
     }
 }
 

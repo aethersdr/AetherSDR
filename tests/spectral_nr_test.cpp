@@ -679,8 +679,8 @@ double rmsGainDb(const std::vector<float>& input,
     double inputEnergy = 0.0;
     double outputEnergy = 0.0;
     for (int i = firstSample; i < lastSample; ++i) {
-        inputEnergy += input[i] * input[i];
-        outputEnergy += output[i + latencySamples]
+        inputEnergy += static_cast<double>(input[i]) * input[i];
+        outputEnergy += static_cast<double>(output[i + latencySamples])
                       * output[i + latencySamples];
     }
     return 10.0 * std::log10(
@@ -694,7 +694,8 @@ double outputRmsDbfs(const std::vector<float>& output,
 {
     double energy = 0.0;
     for (int i = firstSample; i < lastSample; ++i) {
-        energy += output[i + latencySamples] * output[i + latencySamples];
+        energy += static_cast<double>(output[i + latencySamples])
+                * output[i + latencySamples];
     }
     const double meanEnergy = energy / std::max(1, lastSample - firstSample);
     return 10.0 * std::log10(std::max(meanEnergy, 1e-20));
@@ -1170,8 +1171,8 @@ double projectedSignalGainDb(const std::vector<float>& clean,
     double cleanEnergy = 0.0;
     double outputCleanDot = 0.0;
     for (int i = firstSample; i < lastSample; ++i) {
-        cleanEnergy += clean[i] * clean[i];
-        outputCleanDot += output[i + latencySamples] * clean[i];
+        cleanEnergy += static_cast<double>(clean[i]) * clean[i];
+        outputCleanDot += static_cast<double>(output[i + latencySamples]) * clean[i];
     }
     const double gain = outputCleanDot / std::max(cleanEnergy, 1e-20);
     return 20.0 * std::log10(std::max(std::abs(gain), 1e-20));
