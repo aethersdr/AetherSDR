@@ -215,17 +215,17 @@ void TciApplet::buildUI()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciStatus, "QLabel { color: {{color.background.3}}; font-size: 10px; }");
     enableRow->addWidget(m_tciStatus, 1);
 
-    m_tciEnable = new QPushButton("Enable");
+    const bool tciAutoStart = settings.value("AutoStartTCI", "False").toString() == "True";
+    m_tciEnable = new QPushButton(tciAutoStart ? "Enabled" : "Disabled");
     m_tciEnable->setCheckable(true);
     m_tciEnable->setObjectName(QStringLiteral("tciEnable"));
     m_tciEnable->setAccessibleName(tr("TCI server enable"));
     m_tciEnable->setAccessibleDescription(tr("Start or stop the TCI server"));
     m_tciEnable->setStyleSheet(kGreenToggle);
-    m_tciEnable->setFixedSize(60, 22);
+    m_tciEnable->setFixedSize(76, 22);
     {
         QSignalBlocker b(m_tciEnable);
-        m_tciEnable->setChecked(
-            settings.value("AutoStartTCI", "False").toString() == "True");
+        m_tciEnable->setChecked(tciAutoStart);
     }
     enableRow->addWidget(m_tciEnable);
 
@@ -249,6 +249,7 @@ void TciApplet::buildUI()
     });
 
     connect(m_tciEnable, &QPushButton::toggled, this, [this](bool on) {
+        m_tciEnable->setText(on ? "Enabled" : "Disabled");
         int port = m_tciPort->text().toInt();
         if (port < 1024 || port > 65535) {
             port = 50001;
@@ -265,6 +266,7 @@ void TciApplet::buildUI()
                 if (!m_tciServer->isRunning() && m_tciEnable) {
                     QSignalBlocker b(m_tciEnable);
                     m_tciEnable->setChecked(false);
+                    m_tciEnable->setText("Disabled");
                     m_tciStatus->setText("(port in use)");
                     m_tciStatus->setStyleSheet(
                         "QLabel { color: #cc3333; font-size: 10px; }");
@@ -390,6 +392,7 @@ void TciApplet::setTciEnabled(bool on)
     if (m_tciEnable) {
         QSignalBlocker b(m_tciEnable);
         m_tciEnable->setChecked(on);
+        m_tciEnable->setText(on ? "Enabled" : "Disabled");
     }
     updateTciStatus();
 #else

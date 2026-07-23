@@ -1,6 +1,7 @@
 #include "WaveformWidget.h"
 
 #include "InteractionSettings.h"
+#include "NativeWidgetTopology.h"
 #include "core/AppSettings.h"
 
 #include <QApplication>
@@ -103,13 +104,13 @@ WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAutoFillBackground(false);
 #if defined(AETHER_GPU_SPECTRUM) && defined(Q_OS_MAC)
-    // Same setup as SpectrumWidget: request Metal explicitly, and force a
-    // native NSView so a QRhiWidget embedded in a raster-surface parent can
-    // obtain a Metal-capable surface of its own. Keep its QWidget ancestors
-    // non-native so they do not create redundant Core Animation backing stores.
-    setAttribute(Qt::WA_DontCreateNativeAncestors);
+    // Unlike the panadapter, every waveform scope lives inside a QScrollArea.
+    // Making that child a native NSView while deliberately keeping its
+    // ancestors non-native disconnects the native surface from QWidget
+    // geometry: it stays behind when the scroll area moves or clips it. Keep
+    // the waveform composited into its ancestor backing store so resize,
+    // scrolling, and clipping remain QWidget-owned.
     setApi(QRhiWidget::Api::Metal);
-    setAttribute(Qt::WA_NativeWindow);
 #endif
     setToolTip("Click to pause/resume waveform capture; double-click for WAVE settings");
     setObjectName(profile == Profile::Strip ? QStringLiteral("stripWaveformScope")
@@ -289,6 +290,7 @@ QVariantMap WaveformWidget::wavestatsSnapshot(bool reset)
     m[QStringLiteral("sampleRate")] = activeSampleRate();
     m[QStringLiteral("widthPx")] = width();
     m[QStringLiteral("heightPx")] = height();
+    appendNativeWidgetTopology(m, *this);
     m[QStringLiteral("sinceMs")] = static_cast<qlonglong>(s.sinceMs);
     m[QStringLiteral("paintCount")] = static_cast<qulonglong>(s.paintCount);
     m[QStringLiteral("paintsPerSec")] = s.paintCount / secs;

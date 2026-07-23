@@ -17,9 +17,11 @@ jobs:
           - runner: ubuntu-22.04
             arch: x86_64
             use_aqt: true
+            require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
           - runner: ubuntu-24.04-arm
             arch: aarch64
             use_aqt: false
+            require_gpu: 'OFF'  # ARM/Pi ships CPU-only (no Vulkan expected)
 
     runs-on: ${{ matrix.runner }}
 
@@ -30,6 +32,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config \
+            glslc libvulkan-dev spirv-headers \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
             libxcb-render-util0 libxcb-xinerama0 libxcb-randr0 libxcb-xfixes0 \
@@ -71,6 +74,15 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
+        run: bash scripts/setup/setup-onnxruntime.sh
+
+      - name: Setup sherpa-onnx (non-whisper ASR backend)
+        # x86_64 uses k2-fsa's prebuilt; aarch64 uses AetherSDR's CI-built lib on
+        # the sherpa-onnx-libs release. Ships its own ONNX Runtime, which the app
+        # then shares (single runtime).
+        run: bash scripts/setup/setup-sherpa-onnx.sh
+
       - name: Setup qtkeychain (SmartLink credential persistence)
         # Builds qtkeychain from source against the active Qt and stages it in
         # third_party/qtkeychain so find_package(Qt6Keychain) succeeds. Without
@@ -89,6 +101,9 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
+            -DREQUIRE_ASR_ONNX=ON \
+            -DREQUIRE_ASR_SHERPA=ON \
+            -DREQUIRE_ASR_GPU=${{ matrix.require_gpu }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
             $CMAKE_EXTRA
@@ -97,7 +112,11 @@ jobs:
         run: cmake --build build --target build_opus -j$(nproc)
 
       - name: Build
-        run: cmake --build build -j$(nproc)
+        # Only the app ships (+ its aether-dv-waveform helper dependency, which
+        # also stages AetherDV.cfg and the ASR/DFNR runtime payloads via POST_BUILD).
+        # The default `all` target additionally builds ~200 unit-test executables
+        # the AppImage never bundles and never runs — pure wasted build time.
+        run: cmake --build build --target AetherSDR aether-dv-waveform -j$(nproc)
 
       - name: Install to AppDir
         run: |
@@ -152,10 +171,12 @@ jobs:
           else
             export QMAKE=$(which qmake6 2>/dev/null || which qmake)
           fi
-          # Let linuxdeploy resolve + bundle libqt6keychain.so (NEEDED by the
-          # binary, staged outside the standard search path). Qt6 DBus, which
-          # the keychain backend needs at runtime, is pulled in transitively.
-          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${LD_LIBRARY_PATH:-}"
+          # Let linuxdeploy resolve + bundle the NEEDED libs staged under
+          # third_party (outside the standard search path): libqt6keychain.so,
+          # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
+          # copy). Qt6 DBus, which the keychain backend needs at runtime, is pulled
+          # in transitively.
+          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${{ github.workspace }}/third_party/onnxruntime/lib:${{ github.workspace }}/third_party/sherpa-onnx/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \

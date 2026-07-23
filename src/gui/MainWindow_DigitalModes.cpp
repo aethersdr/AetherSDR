@@ -1112,9 +1112,12 @@ void MainWindow::wireDaxSlice(SliceModel* slice)
 // a self-sustaining storm — the ~12-15 Hz `slice set dax` loop of #4009 and
 // the create/remove churn of #3626. Acquire/release are idempotent and the
 // manager's grace window absorbs the transient pair, so this path is
-// loop-free by construction. The #1439 dax_clients re-assert still exists,
-// but as a one-shot tied to `stream create` in RadioModel — command-initiated,
-// never echo-initiated.
+// loop-free by construction. The #1439 dax_clients re-assert still exists in
+// RadioModel::handleDaxRxStreamRegistry; it fires from the dax_rx status echo,
+// but a per-stream one-shot (m_nudgedDaxStreams, cleared only on `stream
+// remove`) gates it to fire at most once per create so the radio's own
+// transient unbind echo cannot re-trigger it — see #4383 (which reopened #4009
+// because that gate was originally missing).
 void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 {
     if (!slice || !m_daxBridge) return;

@@ -293,6 +293,9 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    // GPS coordinates are never useful in a support log. Drop the raw status
+    // at the source; AsyncLogWriter also scrubs coordinate-shaped fields as a
+    // defense against future logging paths.
     const bool isGps = line.contains("|gps ");
     bool isPingReply = false;
     if (m_lastPingSeq && line.startsWith("R")) {
@@ -305,8 +308,9 @@ void RadioConnection::processLine(const QString& line)
             m_lastPingSeq = 0;
         }
     }
-    if (!isGps && !isPingReply)
+    if (!isGps && !isPingReply) {
         qCDebug(lcConnection) << "RX:" << line;
+    }
 
     ParsedMessage msg = CommandParser::parseLine(line);
     emit messageReceived(msg);

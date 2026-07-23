@@ -315,15 +315,19 @@ constexpr int kDefaultPanXpixels = 1024;
 constexpr int kDefaultPanYpixels = 700;
 constexpr int kMinPanXpixels = 100;
 constexpr int kMinPanYpixels = 20;
-constexpr int kMaxRadioPanPixels = 8192;
+// FLEX radios cap panadapter FFT frames at a 4096-bin boundary. Requesting
+// that boundary (or more) leaves the right edge malformed on firmware
+// 4.2.18/4.2.20, so stay one bin below it.
+constexpr int kMaxRadioPanXPixels = 4095;
+constexpr int kMaxRadioPanYPixels = 8192;
 
-int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels)
+int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
 {
     const double ratio = spectrum ? spectrum->devicePixelRatioF() : 1.0;
     const double dpr = std::isfinite(ratio) && ratio > 0.0 ? ratio : 1.0;
     return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)),
                       1,
-                      kMaxRadioPanPixels);
+                      maximumPixels);
 }
 } // namespace
 
@@ -332,7 +336,7 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
     if (!spectrum || spectrum->width() < kMinPanXpixels) {
         return kDefaultPanXpixels;
     }
-    return radioPixelsFor(spectrum, spectrum->width());
+    return radioPixelsFor(spectrum, spectrum->width(), kMaxRadioPanXPixels);
 }
 
 int panYpixelsFor(const SpectrumWidget* spectrum)
@@ -348,7 +352,8 @@ int panYpixelsFor(const SpectrumWidget* spectrum)
     // FFT bins arrive as radio-encoded pixel positions, not full-precision dBm
     // samples. Request render-device pixels and keep the historical 700 px
     // floor so zoomed traces have sub-screen-pixel precision.
-    return std::max(radioPixelsFor(spectrum, ypix), kDefaultPanYpixels);
+    return std::max(radioPixelsFor(spectrum, ypix, kMaxRadioPanYPixels),
+                    kDefaultPanYpixels);
 }
 
 bool panPixelDimensionsReady(const SpectrumWidget* spectrum)

@@ -729,6 +729,7 @@ protected:
     // fractional QT_SCALE_FACTOR (UiScalePercent ≠ 100) never hands the GPU
     // driver odd texture extents on resize (#4091).
     void updateFixedColorBufferSize();
+    QSize fullFrameTextureSize() const;
 #else
     void paintEvent(QPaintEvent* event) override;
 #endif

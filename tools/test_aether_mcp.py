@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -161,6 +162,18 @@ def test_field_mapping():
     check("streams → cmd=streams action(scope)",
           r.get("cmd") == "streams" and r.get("action") == "radio", str(r))
 
+    r = run_tool("memory_profile",
+                 {"action": "start", "interval_ms": 2000,
+                  "max_samples": 500})[-1]
+    check("memory_profile → cmd=memory action+bounded sampler args",
+          r.get("cmd") == "memprofile" and r.get("action") == "start"
+          and r.get("value") == "2000 500", str(r))
+
+    r = run_tool("memory_profile", {"action": "snapshot"})[-1]
+    check("memory_profile snapshot has no synthetic value",
+          r.get("cmd") == "memprofile" and r.get("action") == "snapshot"
+          and "value" not in r, str(r))
+
     reqs = run_tool("bridge_command", {"request": {"cmd": "whoami"}})
     check("bridge_command passes raw request", reqs[-1].get("cmd") == "whoami", str(reqs))
 
@@ -196,6 +209,307 @@ def test_token_attached():
         aether_mcp.bridge_socket_path = orig_sockpath
         aether_mcp.bridge_request = orig_req
         del os.environ["AETHER_MCP_TOKEN"]
+
+
+def test_gesture_session():
+    """A phaseful gesture must reuse one bridge connection until terminal."""
+    aether_mcp._close_gesture_bridge()
+    os.environ["AETHER_MCP_TOKEN"] = "gesture-secret"
+    instances = []
+
+    class _GestureBridge:
+        def __init__(self, sock_path, timeout):
+            self.sock_path = sock_path
+            self.timeout = timeout
+            self.requests = []
+            self.closed = False
+            instances.append(self)
+
+        def request(self, obj):
+            self.requests.append(obj)
+            action = obj.get("action")
+            return {"ok": True, "active": action not in ("end", "cancel"),
+                    "sliderDown": action not in ("end", "cancel")}
+
+        def close(self):
+            self.closed = True
+
+    original_bridge = aether_mcp.Bridge
+    original_sockpath = aether_mcp.bridge_socket_path
+    aether_mcp.Bridge = _GestureBridge
+    aether_mcp.bridge_socket_path = lambda: "/tmp/gesture.sock"
+    try:
+        begin = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "begin", "target": "RF power"})
+            ["content"][0]["text"])
+        move = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "move", "value": "12 0"})
+            ["content"][0]["text"])
+        status = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "status"})["content"][0]["text"])
+
+        check("gesture begin/move/status reuse one connection",
+              len(instances) == 1 and len(instances[0].requests) == 3,
+              str(instances))
+        check("gesture keeps slider down before end",
+              begin.get("sliderDown") and move.get("sliderDown")
+              and status.get("sliderDown"), str((begin, move, status)))
+        check("gesture requests carry runtime token",
+              all(r.get("token") == "gesture-secret"
+                  for r in instances[0].requests), str(instances[0].requests))
+
+        ended = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "end"})["content"][0]["text"])
+        check("gesture end closes held connection",
+              ended.get("active") is False and instances[0].closed
+              and aether_mcp._gesture_bridge is None, str(ended))
+
+        class _ExpiredGestureBridge(_GestureBridge):
+            def request(self, obj):
+                self.requests.append(obj)
+                if obj.get("action") == "status":
+                    return {"ok": True, "active": False}
+                return {"ok": True, "active": True}
+
+        aether_mcp.Bridge = _ExpiredGestureBridge
+        aether_mcp.handle_tool(
+            "gesture", {"action": "begin", "target": "RF power"})
+        expired = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "status"})["content"][0]["text"])
+        check("gesture status clears an expired held connection",
+              expired.get("active") is False and instances[-1].closed
+              and aether_mcp._gesture_bridge is None, str(expired))
+
+        class _FailingGestureBridge(_GestureBridge):
+            def request(self, obj):
+                self.requests.append(obj)
+                if obj.get("action") == "move":
+                    return {"ok": False, "error": "bad move"}
+                return {"ok": True, "active": True}
+
+        aether_mcp.Bridge = _FailingGestureBridge
+        aether_mcp.handle_tool(
+            "gesture", {"action": "begin", "target": "RF power"})
+        failed = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "move", "value": "bad"})
+            ["content"][0]["text"])
+        check("gesture error closes transport for app-side release",
+              failed.get("ok") is False and instances[-1].closed
+              and aether_mcp._gesture_bridge is None, str(failed))
+    finally:
+        aether_mcp._close_gesture_bridge()
+        aether_mcp.Bridge = original_bridge
+        aether_mcp.bridge_socket_path = original_sockpath
+        os.environ.pop("AETHER_MCP_TOKEN", None)
+def test_secure_app_instance():
+    """Fresh builds inherit the token only at runtime and are identity-checked."""
+    aether_mcp._stop_owned_app()
+    original_popen = aether_mcp.subprocess.Popen
+    original_bridge = aether_mcp.Bridge
+    saved_env = {key: os.environ.get(key) for key in (
+        "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX")}
+    popen_calls = []
+    bridge_requests = []
+    tx_allowed = [False]
+    ignore_stop = [False]
+    accept_tokenless = [False]  # simulate a bridge that advertises but doesn't enforce auth
+
+    class _Process:
+        next_pid = 4200
+
+        def __init__(self):
+            self.pid = _Process.next_pid
+            _Process.next_pid += 1
+            self.returncode = None
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            if not ignore_stop[0]:
+                self.returncode = -15
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise aether_mcp.subprocess.TimeoutExpired("AetherSDR", timeout)
+            return self.returncode
+
+        def kill(self):
+            if not ignore_stop[0]:
+                self.returncode = -9
+
+    def fake_popen(argv, **kwargs):
+        process = _Process()
+        popen_calls.append((argv, kwargs, process))
+        return process
+
+    class _Bridge:
+        def __init__(self, socket_path, timeout=None):
+            self.socket_path = socket_path
+
+        def request(self, obj):
+            bridge_requests.append(obj)
+            if obj.get("cmd") == "ping":
+                return {"ok": True, "authRequired": True}
+            # Model the real bridge's shared-secret gate: a privileged command
+            # without the matching token is refused (never ok). This lets the
+            # launch proof assert an actual tokenless rejection, not just the
+            # advertised authRequired flag.
+            if (obj.get("token") != os.environ.get("AETHER_MCP_TOKEN")
+                    and not accept_tokenless[0]):
+                return {"error": "unauthorized: this bridge requires a token"}
+            instance = aether_mcp._owned_app
+            return {
+                "ok": True,
+                "pid": instance["process"].pid,
+                "automationIdentity": instance["socket"],
+                "socket": instance["socket"],
+                "label": instance["label"],
+                "txAllowed": tx_allowed[0],
+                "readOnly": False,
+                "version": "test",
+            }
+
+        def close(self):
+            pass
+
+    aether_mcp.subprocess.Popen = fake_popen
+    aether_mcp.Bridge = _Bridge
+    try:
+        with tempfile.TemporaryDirectory() as temp_root:
+            worktree = Path(temp_root) / "AetherSDR"
+            (worktree / ".git").mkdir(parents=True)
+            (worktree / "AGENTS.md").write_text("test\n", encoding="utf-8")
+            (worktree / "CMakeLists.txt").write_text(
+                "project(AetherSDR VERSION 1.0 LANGUAGES CXX)\n", encoding="utf-8")
+            if sys.platform == "darwin":
+                executable = (worktree / "build" / "AetherSDR.app" /
+                              "Contents" / "MacOS" / "AetherSDR")
+            elif sys.platform == "win32":
+                executable = worktree / "build" / "AetherSDR.exe"
+            else:
+                executable = worktree / "build" / "AetherSDR"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("test artifact\n", encoding="utf-8")
+            executable.chmod(0o700)
+
+            os.environ["AETHER_MCP_TOKEN"] = "runtime-only-secret"
+            os.environ["AETHER_MCP_SOCKET"] = "/tmp/unrelated.sock"
+            os.environ["AETHER_AUTOMATION_ALLOW_TX"] = "1"
+            launched = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "secure-proof"})["content"][0]["text"])
+
+            argv, kwargs, process = popen_calls[-1]
+            child_env = kwargs["env"]
+            check("app_instance launches exact canonical artifact without shell",
+                  argv == [str(executable.resolve())] and "shell" not in kwargs
+                  and kwargs.get("close_fds") is True, str(argv))
+            check("app_instance hands token only through child environment",
+                  child_env.get("AETHER_MCP_TOKEN") == "runtime-only-secret"
+                  and "runtime-only-secret" not in json.dumps(launched)
+                  and "runtime-only-secret" not in " ".join(argv), str(launched))
+            check("app_instance pins no-autoconnect and no-TX",
+                  child_env.get("AETHER_AUTOMATION_NO_AUTOCONNECT") == "1"
+                  and child_env.get("AETHER_AUTOMATION_NO_TX") == "1"
+                  and child_env.get("AETHER_AUTOMATION_IDENTITY") == launched.get("socket")
+                  and child_env.get("AETHER_AUTOMATION_AGENT_NAME") == "secure-proof"
+                  and "AETHER_AUTOMATION_ALLOW_TX" not in child_env, str(child_env.keys()))
+            whoami_reqs = [req for req in bridge_requests
+                           if req.get("cmd") == "whoami"]
+            check("app_instance verifies exact authenticated identity",
+                  launched.get("authenticated") is True
+                  and launched.get("authRequired") is True
+                  and launched.get("pid") == process.pid
+                  and launched.get("txAllowed") is False
+                  and all("token" not in req for req in bridge_requests
+                          if req.get("cmd") == "ping")
+                  # The authenticated identity check carries the runtime token.
+                  and any(req.get("token") == "runtime-only-secret"
+                          for req in whoami_reqs)
+                  # The launch proof also sends a TOKENLESS whoami and requires
+                  # the bridge to refuse it — enforcement, not just the flag.
+                  and any("token" not in req for req in whoami_reqs),
+                  str(launched))
+            check("owned instance becomes the wrapper bridge target",
+                  aether_mcp.bridge_socket_path() == launched.get("socket"), str(launched))
+
+            status = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "status"})["content"][0]["text"])
+            check("app_instance status is authenticated and scoped to owned PID",
+                  status.get("running") is True and status.get("authenticated") is True
+                  and status.get("pid") == process.pid, str(status))
+            stopped = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "stop"})["content"][0]["text"])
+            check("app_instance stop reaps only the owned process",
+                  stopped.get("running") is False and process.terminated
+                  and aether_mcp._owned_app is None, str(stopped))
+
+            os.environ.pop("AETHER_MCP_TOKEN", None)
+            before = len(popen_calls)
+            refused = aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree)})
+            check("app_instance refuses tokenless launch before spawning",
+                  refused.get("isError") is True and len(popen_calls) == before,
+                  str(refused))
+
+            os.environ["AETHER_MCP_TOKEN"] = "runtime-only-secret"
+            tx_allowed[0] = True
+            rejected = aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "unsafe-proof"})
+            unsafe_process = popen_calls[-1][2]
+            check("app_instance kills child when authenticated TX is not pinned off",
+                  rejected.get("isError") is True and unsafe_process.terminated
+                  and aether_mcp._owned_app is None, str(rejected))
+
+            tx_allowed[0] = False
+            ignore_stop[0] = True
+            stubborn = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "stubborn-proof"})["content"][0]["text"])
+            refused_stop = json.loads(aether_mcp.handle_tool(
+                "app_instance", {"action": "stop"})["content"][0]["text"])
+            check("app_instance does not claim an unkillable child was stopped",
+                  stubborn.get("running") is True and refused_stop.get("ok") is False
+                  and refused_stop.get("running") is True
+                  and aether_mcp._owned_app is not None, str(refused_stop))
+            ignore_stop[0] = False
+            # The stubborn instance is reapable again now — clear it before the
+            # next launch (which refuses while an instance is still owned).
+            aether_mcp.handle_tool("app_instance", {"action": "stop"})
+
+            # #3: a bridge that ADVERTISES authRequired but ACCEPTS a tokenless
+            # privileged command must be refused (fail closed), not launched.
+            accept_tokenless[0] = True
+            insecure = aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "insecure-proof"})
+            check("app_instance refuses a bridge that accepts tokenless commands",
+                  insecure.get("isError") is True
+                  and aether_mcp._owned_app is None, str(insecure))
+            accept_tokenless[0] = False
+
+            if sys.platform != "win32":
+                non_socket_path = aether_mcp._instance_socket()
+                Path(non_socket_path).write_text("do not unlink\n", encoding="utf-8")
+                try:
+                    aether_mcp._remove_owned_socket({"socket": non_socket_path})
+                    check("socket cleanup refuses an owned-name non-socket",
+                          Path(non_socket_path).is_file(), non_socket_path)
+                finally:
+                    Path(non_socket_path).unlink(missing_ok=True)
+    finally:
+        aether_mcp._stop_owned_app()
+        aether_mcp.subprocess.Popen = original_popen
+        aether_mcp.Bridge = original_bridge
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 # ── JSON-RPC loop robustness (non-dict must not crash the loop) ──────────────
@@ -373,6 +687,8 @@ def test_read_only_reflected():
 if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
+    test_gesture_session()
+    test_secure_app_instance()
     test_jsonrpc_robustness()
     test_robustness_tools()
     test_fuzzy_suggest()

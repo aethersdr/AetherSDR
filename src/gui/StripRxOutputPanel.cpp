@@ -41,7 +41,7 @@ float dbToRatio(float db)
 // RX-side gradient meter — visual mirror of the TX HorizMeter (gradient
 // fill, dB tick scale, peak-hold hairline) minus the limiter-specific
 // bits (no ceiling drag handle, no GR overlay, no input-peak backdrop,
-// no LIMIT band).  Single child widget; reads m_peak / m_rms on the
+// no LIMIT band).  Single child widget; reads m_rms on the
 // parent through references so it has no internal state of its own.
 //
 // Bar gradient renders RMS (the slow, average-loudness reading), with
@@ -51,8 +51,8 @@ float dbToRatio(float db)
 // visual indicator of instantaneous peaks.
 class RxGradientMeter : public QWidget {
 public:
-    RxGradientMeter(const float& peak, const float& rms, QWidget* parent)
-        : QWidget(parent), m_peak(peak), m_rms(rms)
+    RxGradientMeter(const float& rms, QWidget* parent)
+        : QWidget(parent), m_rms(rms)
     {
         // Match the TX meter's geometry: 22 px header (unused on RX —
         // no ceiling handle / value text) + 28 px bar + 22 px tick
@@ -148,7 +148,6 @@ protected:
     }
 
 private:
-    const float& m_peak;
     const float& m_rms;
     float  m_holdDb{-120.0f};
     qint64 m_holdUntilMs{0};
@@ -206,7 +205,7 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
     });
     row->addWidget(m_trim);
 
-    auto* meter = new RxGradientMeter(m_peakDb, m_rmsDb, this);
+    auto* meter = new RxGradientMeter(m_rmsDb, this);
     m_meter = meter;
     row->addWidget(meter, 1);
 

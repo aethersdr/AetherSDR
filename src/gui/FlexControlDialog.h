@@ -10,8 +10,10 @@ class QComboBox;
 class QFrame;
 class QLabel;
 class QPushButton;
+class QScrollArea;
 class QSlider;
 class QShortcut;
+class QVBoxLayout;
 class QCloseEvent;
 class QEvent;
 class QKeyEvent;
@@ -69,6 +71,9 @@ private:
     void updateCompactMode();
     void applyCompactWindowSize();
     int availableScreenHeight() const;
+    // Height the window needs around the scroll area's content (frameless title
+    // bar + body-layout margins); measured from live geometry, 0 before show.
+    int windowChromeHeight() const;
     void setCaptureHintActive(bool active);
 
     QPointer<SliceModel> m_slice;
@@ -90,6 +95,9 @@ private:
     QSlider* m_spinSlider{nullptr};
     QSlider* m_sensitivitySlider{nullptr};
     QShortcut* m_releaseShortcut{nullptr};
+    QScrollArea* m_scrollArea{nullptr};
+    QWidget* m_contentWidget{nullptr};
+    QVBoxLayout* m_contentLayout{nullptr};
     QFrame* m_controlStrip{nullptr};
     QFrame* m_deviceFrame{nullptr};
     QFrame* m_knobPanel{nullptr};

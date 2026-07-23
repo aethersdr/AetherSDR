@@ -22,6 +22,11 @@
 #include <QTableView>
 #include <QHeaderView>
 #include <QSortFilterProxyModel>
+#include <QMenu>
+#include <QAction>
+#include <QMouseEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSlider>
 #include <QColorDialog>
 #include <QFile>
@@ -53,6 +58,97 @@ protected:
     }
 private:
     int m_resetValue{0};
+};
+
+// Left-to-right layout that wraps to a new row when it runs out of
+// horizontal space, rather than compressing children to illegibility
+// (#4157). Used for the Spot List band-filter checkboxes so the
+// checked state stays readable when SpotHub is narrow.
+class FlowLayout : public QLayout {
+public:
+    explicit FlowLayout(int margin, int hSpacing, int vSpacing)
+        : m_hSpace(hSpacing), m_vSpace(vSpacing) {
+        setContentsMargins(margin, margin, margin, margin);
+    }
+    ~FlowLayout() override {
+        while (QLayoutItem* item = takeAt(0))
+            delete item;
+    }
+
+    void addItem(QLayoutItem* item) override { m_items.append(item); }
+    Qt::Orientations expandingDirections() const override { return {}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override { return doLayout(QRect(0, 0, width, 0), true); }
+    int count() const override { return m_items.size(); }
+    QLayoutItem* itemAt(int index) const override { return m_items.value(index); }
+    QLayoutItem* takeAt(int index) override {
+        return (index >= 0 && index < m_items.size()) ? m_items.takeAt(index) : nullptr;
+    }
+    QSize sizeHint() const override { return minimumSize(); }
+    QSize minimumSize() const override {
+        QSize size;
+        for (QLayoutItem* item : m_items)
+            size = size.expandedTo(item->minimumSize());
+        const QMargins m = contentsMargins();
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom());
+    }
+    void setGeometry(const QRect& rect) override {
+        QLayout::setGeometry(rect);
+        doLayout(rect, false);
+    }
+
+private:
+    int doLayout(const QRect& rect, bool testOnly) const {
+        const QMargins m = contentsMargins();
+        QRect effectiveRect = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom());
+        int x = effectiveRect.x();
+        int y = effectiveRect.y();
+        int lineHeight = 0;
+        for (QLayoutItem* item : m_items) {
+            int nextX = x + item->sizeHint().width() + m_hSpace;
+            if (nextX - m_hSpace > effectiveRect.right() && lineHeight > 0) {
+                x = effectiveRect.x();
+                y += lineHeight + m_vSpace;
+                nextX = x + item->sizeHint().width() + m_hSpace;
+                lineHeight = 0;
+            }
+            if (!testOnly)
+                item->setGeometry(QRect(QPoint(x, y), item->sizeHint()));
+            x = nextX;
+            lineHeight = qMax(lineHeight, item->sizeHint().height());
+        }
+        return y + lineHeight - rect.y() + m.bottom();
+    }
+
+    QList<QLayoutItem*> m_items;
+    int m_hSpace;
+    int m_vSpace;
+};
+
+// Keeps a QMenu open while its checkable actions are toggled, so several
+// columns can be shown/hidden in one pass instead of reopening the header
+// menu per column (#4157). Installed on the menu for the duration of exec();
+// a left-release over a checkable action is toggled here and swallowed so the
+// menu doesn't dismiss. Non-checkable actions and clicks outside fall through
+// to the default close behavior.
+class KeepMenuOpenOnToggle : public QObject {
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonRelease) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                if (auto* menu = qobject_cast<QMenu*>(watched)) {
+                    QAction* action = menu->actionAt(me->pos());
+                    if (action && action->isCheckable() && action->isEnabled()) {
+                        action->trigger();  // toggles + fires toggled()
+                        return true;        // swallow so the menu stays open
+                    }
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
 };
 
 // Shared DSP-style toggle for every checkable button in SpotHub
@@ -235,11 +331,18 @@ QString SpotTableModel::bandForFreq(double mhz)
 
 void BandFilterProxy::setBandVisible(const QString& band, bool visible)
 {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    beginFilterChange();
+#endif
     if (visible)
         m_hiddenBands.remove(band);
     else
         m_hiddenBands.insert(band);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
     invalidateFilter();
+#endif
 }
 
 bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const
@@ -274,7 +377,11 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
       m_radioModel(radioModel), m_dxccProvider(dxccProvider)
 {
     theme::setContainer(this, QStringLiteral("dialog/dxCluster"));
-    setMinimumSize(680, 560);
+    // Width floor lowered from 680 (#4157) so SpotHub can be dragged down
+    // toward the Spot List tab's visible-column width once columns are
+    // hidden; the other tabs' own layouts still enforce their own wider
+    // minimums via Qt's normal layout-constraint sizing.
+    setMinimumSize(360, 560);
     resize(760, 640);
 
     // Capture source log paths up front so the per-tab Clear handlers (built
@@ -1857,9 +1964,9 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     auto* layout = new QVBoxLayout(page);
     layout->setSpacing(4);
 
-    // Band filter checkboxes
-    auto* filterRow = new QHBoxLayout;
-    filterRow->setSpacing(2);
+    // Band filter checkboxes: wraps to additional rows instead of being
+    // compressed unreadable when SpotHub is narrow (#4157).
+    auto* filterRow = new FlowLayout(0, 8, 4);
     auto* filterLabel = new QLabel("Bands:");
     AetherSDR::ThemeManager::instance().applyStyleSheet(filterLabel, "QLabel { color: {{color.text.label}}; font-size: 13px; }");
     filterRow->addWidget(filterLabel);
@@ -1891,7 +1998,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
             s.setValue(key, on ? "True" : "False");
             s.save();
         });
-        filterRow->addWidget(cb, 1);  // equal stretch across row
+        filterRow->addWidget(cb);
     }
     layout->addLayout(filterRow);
 
@@ -1937,6 +2044,54 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
 
     // No default sort — insertion order is newest-first
     m_spotTable->horizontalHeader()->setSortIndicatorShown(false);
+
+    // Column visibility (#4157): Time/Freq/DX Call stay always-on as the
+    // core columns; the rest can be hidden via a right-click header menu.
+    // Persisted as one JSON object under a single AppSettings key, written
+    // atomically (whole object per toggle) — Constitution Principle V: a
+    // feature's config is one self-contained object, not scattered flat
+    // keys.
+    static const struct { SpotTableModel::Column col; const char* field; } kToggleCols[] = {
+        { SpotTableModel::ColComment, "comment" },
+        { SpotTableModel::ColSpotter, "spotter" },
+        { SpotTableModel::ColBand,    "band"    },
+        { SpotTableModel::ColMode,    "mode"    },
+        { SpotTableModel::ColSource,  "source"  },
+    };
+    static const char* kColumnVisibilityKey = "SpotListColumnVisibility";
+
+    const QJsonObject savedVisibility = QJsonDocument::fromJson(
+        AppSettings::instance().value(kColumnVisibilityKey, "{}").toString().toUtf8()).object();
+    for (const auto& tc : kToggleCols) {
+        bool visible = savedVisibility.value(tc.field).toBool(true);
+        m_spotTable->setColumnHidden(tc.col, !visible);
+    }
+    m_spotTable->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_spotTable->horizontalHeader(), &QWidget::customContextMenuRequested, this,
+            [this](const QPoint& pos) {
+        auto saveColumnVisibility = [this] {
+            QJsonObject obj;
+            for (const auto& tc : kToggleCols)
+                obj.insert(tc.field, !m_spotTable->isColumnHidden(tc.col));
+            auto& s = AppSettings::instance();
+            s.setValue(kColumnVisibilityKey,
+                       QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+            s.save();
+        };
+        QMenu menu(this);
+        KeepMenuOpenOnToggle keepOpen;
+        menu.installEventFilter(&keepOpen);
+        for (const auto& tc : kToggleCols) {
+            auto* action = menu.addAction(m_spotModel->headerData(tc.col, Qt::Horizontal, Qt::DisplayRole).toString());
+            action->setCheckable(true);
+            action->setChecked(!m_spotTable->isColumnHidden(tc.col));
+            connect(action, &QAction::toggled, this, [this, tc, saveColumnVisibility](bool on) {
+                m_spotTable->setColumnHidden(tc.col, !on);
+                saveColumnVisibility();
+            });
+        }
+        menu.exec(m_spotTable->horizontalHeader()->mapToGlobal(pos));
+    });
 
     // Double-click to tune (#2298: also forward mode hints so the receiver
     // switches CW/SSB to match the spot rather than only changing frequency).
@@ -2236,13 +2391,14 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     // ── Override Colors + color picker ──────────────────────────────────
     grid->addWidget(new QLabel("Override Colors:"), row, 0);
     auto* colorRow = new QHBoxLayout;
-    auto* overrideToggle = new QPushButton("Enabled");
+    auto* overrideToggle = new QPushButton(overrideColors ? "Enabled" : "Disabled");
     overrideToggle->setCheckable(true);
     overrideToggle->setChecked(overrideColors);
     overrideToggle->setFixedWidth(80);
     overrideToggle->setStyleSheet(
         kSpotHubToggle);
-    connect(overrideToggle, &QPushButton::toggled, this, [save](bool on) {
+    connect(overrideToggle, &QPushButton::toggled, this, [save, overrideToggle](bool on) {
+        overrideToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
     });
     colorRow->addWidget(overrideToggle);
@@ -2266,17 +2422,18 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Override Background:"), row, 0);
     auto* bgRow = new QHBoxLayout;
     const QString& bgStyle = kSpotHubToggle;
-    auto* bgEnabledBtn = new QPushButton("Enabled");
+    auto* bgEnabledBtn = new QPushButton(overrideBg ? "Enabled" : "Disabled");
     bgEnabledBtn->setCheckable(true);
     bgEnabledBtn->setChecked(overrideBg);
-    bgEnabledBtn->setFixedWidth(70);
+    bgEnabledBtn->setFixedWidth(76);
     bgEnabledBtn->setStyleSheet(bgStyle);
     auto* bgAutoBtn = new QPushButton("Auto");
     bgAutoBtn->setCheckable(true);
     bgAutoBtn->setChecked(overrideBgAuto);
     bgAutoBtn->setFixedWidth(50);
     bgAutoBtn->setStyleSheet(bgStyle);
-    connect(bgEnabledBtn, &QPushButton::toggled, this, [save](bool on) {
+    connect(bgEnabledBtn, &QPushButton::toggled, this, [save, bgEnabledBtn](bool on) {
+        bgEnabledBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideBackgroundColorsEnabled", on ? "True" : "False");
     });
     connect(bgAutoBtn, &QPushButton::toggled, this, [save](bool on) {
@@ -2319,14 +2476,15 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
 
     // ── Spot Lines ──────────────────────────────────────────────────────
     grid->addWidget(new QLabel("Spot Lines:"), row, 0);
-    auto* spotLinesBtn = new QPushButton("Enabled");
+    auto* spotLinesBtn = new QPushButton(spotLines ? "Enabled" : "Disabled");
     spotLinesBtn->setCheckable(true);
     spotLinesBtn->setChecked(spotLines);
     spotLinesBtn->setFixedWidth(80);
     spotLinesBtn->setToolTip("Show vertical lines from the spectrum up to each spot label.\nDisable during contests to reduce clutter.");
     spotLinesBtn->setStyleSheet(
         kSpotHubToggle);
-    connect(spotLinesBtn, &QPushButton::toggled, this, [save](bool on) {
+    connect(spotLinesBtn, &QPushButton::toggled, this, [save, spotLinesBtn](bool on) {
+        spotLinesBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsLinesEnabled", on ? "True" : "False");
     });
     grid->addWidget(spotLinesBtn, row++, 1, Qt::AlignLeft);
@@ -2363,13 +2521,14 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         int drow = 0;
 
         bool dxccEnabled = m_dxccProvider ? m_dxccProvider->isEnabled() : false;
-        auto* dxccToggle = new QPushButton("Enabled");
+        auto* dxccToggle = new QPushButton(dxccEnabled ? "Enabled" : "Disabled");
         dxccToggle->setCheckable(true);
         dxccToggle->setChecked(dxccEnabled);
         dxccToggle->setFixedWidth(80);
         dxccToggle->setStyleSheet(
             kSpotHubToggle);
-        connect(dxccToggle, &QPushButton::toggled, this, [this, save](bool on) {
+        connect(dxccToggle, &QPushButton::toggled, this, [this, save, dxccToggle](bool on) {
+            dxccToggle->setText(on ? "Enabled" : "Disabled");
             save("IsDxccColoringEnabled", on ? "True" : "False");
             if (m_dxccProvider) m_dxccProvider->setEnabled(on);
         });
@@ -2573,7 +2732,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         // the carrier).
         const bool snapEnabled = AppSettings::instance()
             .value("SHistorySnapToStep", "False").toString() == "True";
-        auto* snapToggle = new QPushButton("Enabled");
+        auto* snapToggle = new QPushButton(snapEnabled ? "Enabled" : "Disabled");
         snapToggle->setCheckable(true);
         snapToggle->setChecked(snapEnabled);
         snapToggle->setFixedWidth(80);
@@ -2582,7 +2741,8 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "Round SHistory click-to-tune to the nearest multiple of the\n"
             "active slice's step size.  Hides the small carrier offset that\n"
             "comes from detecting voice on the panadapter.");
-        connect(snapToggle, &QPushButton::toggled, this, [save](bool on) {
+        connect(snapToggle, &QPushButton::toggled, this, [save, snapToggle](bool on) {
+            snapToggle->setText(on ? "Enabled" : "Disabled");
             save("SHistorySnapToStep", on ? "True" : "False");
         });
         shGrid->addWidget(new QLabel("Snap to Step:"), shr, 0);

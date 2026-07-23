@@ -16,6 +16,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/CenterLockRebindTracker.h"
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
@@ -94,8 +95,12 @@ class QSystemTrayIcon;
 
 namespace AetherSDR {
 
+class AetherClockApplet;
+class AetherClockEngine;
+class AetherClockModel;
 class AutomationServer;
 class ConnectionPanel;
+class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 class SpectrumWidget;
@@ -128,6 +133,9 @@ class CallsignLookupDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class GpsLocationDialog;
+#ifdef AETHER_ASR_ENABLED
+class CopyAssistController;
+#endif
 class FlexControlDialog;
 class MidiMappingDialog;
 #ifdef HAVE_HIDAPI
@@ -208,6 +216,10 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    // Inject one learned VFO-knob CC value through MidiControlManager for
+    // automation proof. Returns 0 on acceptance, 1 if MIDI is unavailable,
+    // and 2 for an out-of-range MIDI value.
+    Q_INVOKABLE int injectMidiVfoCcForAutomation(int value);
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationSetCenterLock(int sliceId, bool enabled);
     QJsonObject automationTune(double mhz, int sliceId = -1);
@@ -493,6 +505,7 @@ private:
         KiwiSdrUiSyncPanadapterStates = 0x08,
     };
     void scheduleKiwiSdrUiSync(int flags);
+    void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
@@ -627,6 +640,9 @@ private:
     void showNetworkDiagnosticsDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
+#ifdef AETHER_ASR_ENABLED
+    void showCopyAssist();
+#endif
     void scheduleDigitalVoiceAutoStart();
     void stopDigitalVoiceService(bool waitForExit);
     void showPskReporterMapDialog();
@@ -999,12 +1015,17 @@ private:
     // band recall that superseded it within the grace window.
     QHash<QString, quint64> m_kiwiSdrBandRecallGenerations;
     QSet<QString>    m_kiwiSdrFlexDisplayPans;
-    // Retains a KiwiSDR replacement across the slice remove->re-add a FLEX
-    // band-stack recall performs (band_persistence drops+re-creates the slice
-    // with the same id at the new band). The tracker is the pure policy; the
-    // grace window itself is a QTimer::singleShot in onSliceRemoved. (#4158)
+    // Retain client-side receiver state across the slice teardown/rebuild a
+    // FLEX band-stack recall performs. The trackers are pure lifecycle policy;
+    // MainWindow owns their side effects and shared grace window.
     KiwiRebindTracker    m_kiwiRebind;
-    static constexpr int kKiwiSdrRebindGraceMs = 1500;
+    CenterLockRebindTracker m_centerLockRebind;
+    // Per-pan band-recall generation: makes the shared grace timer's Kiwi
+    // marker clear generation-safe against overlapping recalls, the same way
+    // the Center Lock tracker guards its own resolution.
+    QHash<QString, quint64> m_bandRecallGenerationByPan;
+    quint64              m_bandRecallGeneration{0};
+    static constexpr int kBandRecallRecreateGraceMs = 1500;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1046,10 +1067,16 @@ private:
     NetReminderBanner* m_netReminderBanner{nullptr};
     QSystemTrayIcon* m_trayIcon{nullptr};
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
+#ifdef AETHER_ASR_ENABLED
+    QPointer<CopyAssistController> m_copyAssistController;
+    QPointer<PanadapterApplet> m_copyAssistApplet;
+    QMetaObject::Connection m_copyAssistFreqConn; // active-slice retune → clear decode
+#endif
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
+    QPointer<ContributeDialog> m_contributeDialog;
     QPointer<AetherDspDialog> m_dspDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
@@ -1092,6 +1119,9 @@ private:
     QLabel* m_addPanLabel{nullptr};
     QLabel* m_tnfIndicator{nullptr};
     QLabel* m_cwxIndicator{nullptr};
+#ifdef AETHER_ASR_ENABLED
+    QLabel* m_asrIndicator{nullptr};  // status-bar ASR (Copy Assist) toggle
+#endif
     CwxPanel* m_cwxPanel{nullptr};
     DvkPanel* m_dvkPanel{nullptr};
     QLabel* m_dvkIndicator{nullptr};
@@ -1289,6 +1319,12 @@ private:
     ShortcutManager m_shortcutManager;
     UpdateChecker* m_updateChecker{nullptr};
 
+// AetherClock (MainWindow_AetherClock.cpp)
+    AetherClockEngine* m_clockEngine{nullptr};
+    AetherClockModel* m_clockModel{nullptr};
+    QMetaObject::Connection m_clockDaxConn;  // daxAudioReady feed — live only while the engine runs
+    void setupAetherClock();
+
 #ifdef HAVE_RADE
     RADEEngine* m_radeEngine{nullptr};
     QThread*    m_radeThread{nullptr};
@@ -1340,6 +1376,8 @@ private:
     void saveCenterLockSettings() const;
     void persistCenterLockForSlice(const SliceModel* slice);
     void restoreCenterLockForPan(const QString& panId);
+    void showCenterLockReleaseNotification(const QString& panId,
+                                           const QString& detail);
     void setCenterLockForSlice(SliceModel* slice, bool on);
     void setCenterLockForPan(const QString& panId, int sliceId, bool on,
                              bool persist = true);

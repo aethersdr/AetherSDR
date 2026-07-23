@@ -375,7 +375,16 @@ def _map_panmessage(rest):
     return req
 
 
+def _map_no_args(rest):
+    if rest:
+        sys.exit("error: this command takes no arguments")
+    return {}
+
+
 MAPPERS = {
+    "verbs": _map_no_args,
+    "whoami": _map_no_args,
+    "disconnect": _map_no_args,
     "grab": _map_grab,
     "invoke": _map_invoke,
     "get": _map_get,
@@ -393,6 +402,8 @@ MAPPERS = {
     "waveform": _map_action_value(
         "waveform needs <start|stop|unregister|resync> [args]"),
     "pan": _map_action_value("pan needs <create|add|center|close|remove> [value]"),
+    "streams": _map_action_value(),
+    "memprofile": _map_action_value(),
     "layout": _map_action_value("layout needs <rearrange <id> | get>"),
     "record": _map_action_value(),
     "testtone": _map_action_value(),

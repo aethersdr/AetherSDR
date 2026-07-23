@@ -1504,6 +1504,7 @@ const char* PanadapterStream::daxConsumerName(DaxConsumer who)
     case DaxConsumer::Bridge: return "bridge";
     case DaxConsumer::Tci:    return "tci";
     case DaxConsumer::Rade:   return "rade";
+    case DaxConsumer::Clock:  return "clock";
     }
     return "?";
 }
@@ -1637,7 +1638,8 @@ QVector<PanadapterStream::DaxChannelSnapshot> PanadapterStream::daxChannelSnapsh
         s.channel = it.key();
         s.streamId = it->streamId;
         s.createPending = it->createPending;
-        for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade}) {
+        for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade,
+                                DaxConsumer::Clock}) {
             if (it->holders & daxHolderBit(who))
                 s.holders << QString::fromLatin1(daxConsumerName(who));
         }

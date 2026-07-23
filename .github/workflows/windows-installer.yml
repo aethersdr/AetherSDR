@@ -93,6 +93,24 @@ jobs:
         if: steps.cache-qtkeychain.outputs.cache-hit != 'true'
         run: .\scripts\setup\setup-qtkeychain.ps1
 
+      - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
+        run: pwsh scripts/setup/setup-onnxruntime.ps1
+
+      - name: Setup sherpa-onnx (non-whisper ASR backend)
+        run: pwsh scripts/setup/setup-sherpa-onnx.ps1
+
+      - name: Cache Vulkan SDK
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-vulkan-sdk.ps1') }}
+
+      # Runs unconditionally (not gated on the cache hit): the script skips the
+      # heavy install when the SDK is already present but must still export
+      # VULKAN_SDK to $GITHUB_ENV for the Configure + Deploy steps below.
+      - name: Setup Vulkan SDK (whisper GPU backend)
+        run: pwsh scripts/setup/setup-vulkan-sdk.ps1
+
       - name: Configure
         run: |
           # RelWithDebInfo (not Release): MSVC's Release config omits /Zi and
@@ -103,7 +121,26 @@ jobs:
           # emitting a full PDB, which is what create-msix.ps1 bundles as
           # .appxsym for Partner Center crash symbolication (and what we keep
           # as a standalone artifact for our own WinDbg use).
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
+          # REQUIRE_ASR_ONNX/SHERPA=ON guarantee the Silero VAD + speaker labeling
+          # and the sherpa-onnx backend ship (fail the build if their setup scripts
+          # didn't stage the runtimes). REQUIRE_ASR_GPU=ON does the same for the
+          # whisper Vulkan (ggml-vulkan) GPU backend.
+          #
+          # ASR_USE_PREBUILT_WHISPER_GPU=ON: consume the pinned whisper/ggml/
+          # ggml-vulkan static libs from the whisper-gpu-<ver> release asset
+          # instead of compiling from source. MSVC's ~1 h Release compile of the
+          # ~1 MB ggml-vulkan.cpp translation unit exceeds windows-latest's step
+          # timeout regardless of parallelism; the prebuilt path skips it and
+          # the CI-cache producer (scripts/build/build-whisper-vulkan-windows.ps1)
+          # cuts a fresh asset whenever whisper.cpp / Vulkan SDK / MSVC bumps.
+          #
+          # Vulkan is still needed at link time: CMAKE_PREFIX_PATH points
+          # find_package(Vulkan) at the SDK's loader import lib (vulkan-1.lib).
+          # glslc + SPIRV-Headers are NOT required on the prebuilt path (their
+          # only job is compiling ggml-vulkan's own shaders, which are already
+          # baked into the shipped .lib). The runtime vulkan-1.dll is bundled
+          # in the Deploy step.
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DREQUIRE_SERIALPORT=ON -DREQUIRE_ASR_ONNX=ON -DREQUIRE_ASR_SHERPA=ON -DREQUIRE_ASR_GPU=ON -DASR_USE_PREBUILT_WHISPER_GPU=ON -DCMAKE_PREFIX_PATH="$env:VULKAN_SDK" -DENABLE_NVIDIA_AFX=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,
@@ -111,8 +148,31 @@ jobs:
         # any Ninja parallel-build ordering edge cases with IMPORTED targets.
         run: cmake --build build --target build_opus -j $env:NUMBER_OF_PROCESSORS
 
+      # NOTE: the previous "Build ggml-vulkan (isolated, low parallelism)" step
+      # was removed. Under ASR_USE_PREBUILT_WHISPER_GPU=ON ggml-vulkan is an
+      # IMPORTED target with no build rule, so `--target ggml-vulkan` would
+      # fail with "unknown target". If you disable the prebuilt option to
+      # bisect, restore that step from git history and expect the historical
+      # timeout risk to come back with it.
+
       - name: Build
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+        # -j 2 (not full -j): even with ggml-vulkan pre-built, the main build was
+        # thrashing 4-wide on the 16 GB runner — the ASR headers (ONNX C++ API /
+        # whisper / vulkan-hpp) make many app TUs memory-heavy, so 4 concurrent
+        # MSVC processes exceed RAM and swap. Halving parallelism gives each ~8 GB.
+        # timeout-minutes fails the STEP (which preserves its log — unlike the
+        # job-level 6 h cancel, which discards logs), so a still-slow build is
+        # finally diagnosable; NINJA_STATUS stamps elapsed seconds per line to
+        # expose the long-pole targets.
+        timeout-minutes: 240
+        env:
+          NINJA_STATUS: "[%f/%t %es] "
+        # Only --target AetherSDR (+ its aether-dv-waveform helper dependency)
+        # ships; the default `all` also built ~200 unit-test exes the installer
+        # never packages or runs — wasted time, and their links contend with the
+        # whisper-heavy app link on the 16 GB runner (same starvation we hit in
+        # check-windows). Narrowing removes that risk too.
+        run: cmake --build build -j 2 --target AetherSDR aether-dv-waveform
 
       - name: Deploy Qt
         run: |
@@ -155,8 +215,30 @@ jobs:
           if (Test-Path "third_party\qtkeychain\bin\qt6keychain.dll") {
             copy third_party\qtkeychain\bin\qt6keychain.dll deploy\
           }
-          if ($false) {
+          # ASR runtime DLLs. CMake's POST_BUILD stages the ONNX Runtime + sherpa-onnx
+          # DLLs next to build\AetherSDR.exe (root of the build dir, non-recursive);
+          # windeployqt only handles Qt modules, so copy them into the payload here.
+          Get-ChildItem build\*.dll -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Bundling ASR runtime DLL: $($_.Name)"
+            Copy-Item $_.FullName deploy\ -Force
           }
+          # Vulkan loader for the whisper GPU backend. ggml-vulkan hard-links
+          # vulkan-1, so the DLL must ship or the exe fails to start even on
+          # CPU-only machines (the loader then enumerates zero devices and ggml
+          # falls back to CPU). Ships from the SDK; LunarG permits redistributing
+          # the loader.
+          # The loader DLL's location varies by SDK layout: newer LunarG SDKs stage
+          # it under runtime\x64, older ones under Bin; a driver-installed copy sits
+          # in System32. Take the first that exists (Bin alone is NOT reliable).
+          $vkCandidates = @(
+            (Join-Path $env:VULKAN_SDK "runtime\x64\vulkan-1.dll"),
+            (Join-Path $env:VULKAN_SDK "Bin\vulkan-1.dll"),
+            "$env:SystemRoot\System32\vulkan-1.dll"
+          )
+          $vkDll = $vkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $vkDll) { throw "vulkan-1.dll not found in: $($vkCandidates -join '; ')" }
+          Write-Host "Bundling Vulkan loader: $vkDll"
+          copy $vkDll deploy\
 
       - name: Verify DPI awareness manifest
         run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-dpi-awareness.ps1 -ExePath deploy\AetherSDR.exe

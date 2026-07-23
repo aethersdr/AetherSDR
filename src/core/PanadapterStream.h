@@ -139,6 +139,7 @@ public:
         Bridge = 0,   // DAX virtual-audio bridge (macOS CoreAudio / PipeWire)
         Tci    = 1,   // TCI server audio clients (WSJT-X etc.)
         Rade   = 2,   // RADE digital-voice engine
+        Clock  = 3,   // AetherClock time-signal decode engine
     };
     static const char* daxConsumerName(DaxConsumer who);
 

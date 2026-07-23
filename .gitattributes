@@ -1,3 +1,7 @@
 # Tell GitHub linguist to ignore reference material and docs
 reference/** linguist-vendored
 docs/** linguist-documentation
+
+# Preserve the exact upstream WDSP snapshot, including generated-table
+# whitespace, while keeping patch checks useful for AetherSDR-owned files.
+third_party/wdsp/** linguist-vendored whitespace=-trailing-space,-space-before-tab

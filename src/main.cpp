@@ -2,6 +2,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "models/Nr2SettingsModel.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
@@ -398,6 +399,9 @@ int main(int argc, char* argv[])
     // to LogManager. SHistorySoftEdgeDb migration moved here for the same
     // reason.
     AetherSDR::AppSettings::instance().load();
+    // Construct the NR2 feature-owned settings model on the main thread after
+    // AppSettings is loaded. This also performs its one-time flat-key migration.
+    static_cast<void>(AetherSDR::Nr2SettingsModel::instance());
     AetherSDR::AppSettings::instance().initializeGuiClientIdentity();
     {
         auto& s = AetherSDR::AppSettings::instance();

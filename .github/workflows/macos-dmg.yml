@@ -98,6 +98,18 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Setup ONNX Runtime (Silero VAD + speaker labeling + signal classifier)
+        # ONNX Runtime 1.27 ships no Intel-macOS prebuilt (Apple-Silicon only), so
+        # the Intel DMG builds without the ONNX ASR features (CPU whisper + Metal
+        # still ship). Apple Silicon requires them (below).
+        if: matrix.label == 'apple-silicon'
+        run: bash scripts/setup/setup-onnxruntime.sh
+
+      - name: Setup sherpa-onnx (non-whisper ASR backend)
+        # sherpa's macOS prebuilt is universal2, so it ships on both Apple Silicon
+        # and Intel (and bundles ONNX Runtime, which the app shares).
+        run: bash scripts/setup/setup-sherpa-onnx.sh
+
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03
         with:
@@ -119,6 +131,15 @@ jobs:
           if [ "${{ matrix.label }}" = "intel" ]; then
             GPU_FLAG="-DAETHER_GPU_SPECTRUM=OFF"
           fi
+          # Require the ONNX ASR features only on Apple Silicon (ONNX Runtime 1.27
+          # has no Intel-macOS prebuilt). REQUIRE_ASR_GPU=ON on both: the Metal
+          # backend must build (the macOS runners have full Xcode with the metal
+          # compiler + the GGML_METAL_EMBED_LIBRARY fix), so a broken Metal
+          # toolchain fails the build instead of silently shipping CPU-only.
+          ONNX_FLAG=""
+          if [ "${{ matrix.label }}" = "apple-silicon" ]; then
+            ONNX_FLAG="-DREQUIRE_ASR_ONNX=ON"
+          fi
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -126,10 +147,17 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" \
             -DCMAKE_PREFIX_PATH="$QT_PREFIX;$(brew --prefix)" \
             -DMQTT_TLS=OFF \
+            -DREQUIRE_ASR_GPU=ON \
+            -DREQUIRE_ASR_SHERPA=ON \
+            $ONNX_FLAG \
             $GPU_FLAG
 
       - name: Build
-        run: cmake --build build -j$(sysctl -n hw.ncpu)
+        # Only the .app bundle ships (+ its aether-dv-waveform helper dependency,
+        # which stages AetherDV.cfg + runtime payloads via POST_BUILD). The default
+        # `all` target also builds ~200 unit-test executables the DMG never bundles
+        # or runs. (The DAX driver is built separately in the driver-build step.)
+        run: cmake --build build --target AetherSDR aether-dv-waveform -j$(sysctl -n hw.ncpu)
 
       - name: Bundle DFNR model
         run: |

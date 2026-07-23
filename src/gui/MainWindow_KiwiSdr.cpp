@@ -687,8 +687,10 @@ void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
 
     // A deferred request can supersede an older one for the same pan. Re-arm
     // any still-prepared slice before beginning the new atomic command pair.
+    // The #4158/Center Lock rebind marker (noteBandRecallForPan) is owned by the
+    // band-recall trigger sites, not here — this path only performs the #4209
+    // audio-mute handoff, bracketed around the actual wire dispatch.
     finishPreparedKiwiSdrBandRecallForPan(panId);
-    m_kiwiRebind.noteBandRecall(panId);
 
     for (SliceModel* slice : m_radioModel.slices()) {
         if (!slice || slice->panId() != panId
@@ -718,18 +720,19 @@ void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
     }
 
     // Same-band recalls may not change any slice field, while some firmware
-    // drops and recreates the slice. Normal retunes re-arm from
-    // frequencyChanged; this grace fallback covers the no-change case and
-    // shares the existing #4158 recreation window. Guard on a per-pan epoch so
-    // a rapid second recall (which bumps the generation) isn't finished/cleared
-    // by this now-stale timer before its own window elapses.
+    // drops and recreates the slice. A recreation re-arms via the #4158 rebind;
+    // normal retunes re-arm from frequencyChanged; this grace fallback covers
+    // only the no-change case, sharing the band-recall recreation window. Guard
+    // on a per-pan epoch so a rapid second recall (which bumps the generation)
+    // can't have this now-stale timer finish its in-flight handoff early. The
+    // marker's own lifecycle is owned by noteBandRecallForPan, so this timer
+    // touches only the mute handoff.
     const quint64 generation = ++m_kiwiSdrBandRecallGenerations[panId];
-    QTimer::singleShot(kKiwiSdrRebindGraceMs, this, [this, panId, generation]() {
+    QTimer::singleShot(kBandRecallRecreateGraceMs, this, [this, panId, generation]() {
         if (m_kiwiSdrBandRecallGenerations.value(panId) != generation) {
             return;
         }
         finishPreparedKiwiSdrBandRecallForPan(panId);
-        m_kiwiRebind.clearBandRecall(panId);
     });
 }
 

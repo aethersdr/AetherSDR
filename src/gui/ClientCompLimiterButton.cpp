@@ -53,7 +53,11 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setRenderHint(QPainter::TextAntialiasing, true);
 
-    const QRectF r = rect().adjusted(0.5, 0.5, -0.5, -0.5);
+    // Half-pixel inset so the 1px antialiased border lands on pixel centres
+    // (crisp). QRectF::adjusted takes qreal, so 0.5 is honoured — unlike
+    // QRect::adjusted, which truncated it to 0 and left the stroke straddling
+    // the edge (soft).
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
     const qreal radius = 3.0;
 
     // Colour the body by state precedence: active > checked > idle.

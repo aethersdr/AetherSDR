@@ -365,6 +365,11 @@ class CrossNeedleMeterGeometry {
     // collision layout before the static face is rebuilt.
     QVector<QPointF> swrLabelCenters(const QFont &labelFont) const;
     mutable QVector<QPointF> swrLabelCenterCache;
+    // Arc-length-uniform samples of every SWR guide, in guide order, built once
+    // on first use. The geometry is immutable after load, so unlike the label
+    // centres above there is no font or design key to invalidate against.
+    const QVector<QPointF> &guideSamples(int index) const;
+    mutable QVector<QVector<QPointF>> swrGuideSampleCache;
     mutable QString swrLabelCenterCacheFontKey;
     mutable QString swrLabelPlacementError;
     QRectF swrLabelBox(const QPointF &center, const SwrGuide &guide,

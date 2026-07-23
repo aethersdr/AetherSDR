@@ -14,6 +14,10 @@
     </qresource>
     <qresource prefix="/sounds">
         <file alias="aetherial.wav">aetherial.wav</file>
+        <file alias="community-credits.wav">community-credits.wav</file>
+    </qresource>
+    <qresource prefix="/images">
+        <file alias="aurora-cutout.png">aurora-cutout.png</file>
     </qresource>
     <qresource prefix="/themes">
         <file alias="default-dark.json">themes/default-dark.json</file>
