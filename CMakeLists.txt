@@ -596,7 +596,6 @@ set(CORE_SOURCES
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
     src/core/ShortcutManager.cpp
-    src/core/ShortcutFileTransfer.cpp
     src/core/SupportBundle.cpp
     src/core/DeviceDiagnostics.cpp
     src/core/SerialPortController.cpp
@@ -2867,7 +2866,6 @@ add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
-    src/core/ShortcutFileTransfer.cpp
     src/core/AppSettings.cpp
 )
 target_include_directories(shortcut_manager_test PRIVATE src)

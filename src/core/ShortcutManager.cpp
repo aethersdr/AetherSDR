@@ -1,8 +1,10 @@
 #include "ShortcutManager.h"
 #include "AppSettings.h"
+#include <QDir>
+#include <QFile>
 #include <QHash>
 #include <QRegularExpression>
-#include <QSet>
+#include <QSaveFile>
 #include <QStringConverter>
 #include <QWidget>
 #include <QDebug>
@@ -85,6 +87,9 @@ QList<ShortcutCsvRow> parseCsvRows(const QByteArray& bytes, QStringList& errors)
     bool inQuotes = false;
     bool afterQuote = false;
     int lineNumber = 1;
+    // Line the currently-open quote started on, so an unterminated quoted field
+    // reports where the runaway '"' was opened rather than where its row began.
+    int quoteOpenedLine = 0;
 
     auto finishRow = [&]() -> bool {
         if (!appendCsvField(row, field, errors)) {
@@ -100,7 +105,6 @@ QList<ShortcutCsvRow> parseCsvRows(const QByteArray& bytes, QStringList& errors)
             }
         }
         row = ShortcutCsvRow{};
-        row.lineNumber = lineNumber + 1;
         afterQuote = false;
         return true;
     };
@@ -142,6 +146,7 @@ QList<ShortcutCsvRow> parseCsvRows(const QByteArray& bytes, QStringList& errors)
                 return {};
             }
             inQuotes = true;
+            quoteOpenedLine = lineNumber;
             continue;
         }
         if (ch == QLatin1Char(',')) {
@@ -167,11 +172,13 @@ QList<ShortcutCsvRow> parseCsvRows(const QByteArray& bytes, QStringList& errors)
     }
 
     if (inQuotes) {
-        errors << QStringLiteral("Line %1: unterminated quoted field.").arg(row.lineNumber);
+        errors << QStringLiteral("Line %1: unterminated quoted field.").arg(quoteOpenedLine);
         return {};
     }
     if (!field.isEmpty() || !row.fields.isEmpty()) {
-        finishRow();
+        if (!finishRow()) {
+            return {};
+        }
     }
     return rows;
 }
@@ -230,31 +237,48 @@ QList<ParsedShortcutRow> parseShortcutCsv(const QByteArray& bytes, QStringList& 
             || customizedText == QLatin1String("0")
             || customizedText == QLatin1String("no");
 
+        // Independent checks so a row with multiple bad fields surfaces all of
+        // them in one pass instead of forcing the user to round-trip the file.
+        const bool actionIdValid = actionIdPattern.match(actionId).hasMatch();
         if (!schemaOk || schemaVersion < 1) {
             errors << QStringLiteral("Line %1: FORMAT_VERSION must be a positive integer.")
                           .arg(row.lineNumber);
-        } else if (!actionIdPattern.match(actionId).hasMatch()) {
+        }
+        if (!actionIdValid) {
             errors << QStringLiteral("Line %1: invalid ACTION_ID '%2'.")
                           .arg(row.lineNumber)
                           .arg(actionId);
-        } else if (actionName.isEmpty()) {
+        }
+        if (actionName.isEmpty()) {
             errors << QStringLiteral("Line %1: ACTION_NAME is required.").arg(row.lineNumber);
-        } else if (!customizedValid) {
+        }
+        if (!customizedValid) {
             errors << QStringLiteral("Line %1: CUSTOMIZED must be True or False.")
                           .arg(row.lineNumber);
         }
-        if (actionLines.contains(actionId)) {
-            errors << QStringLiteral("Line %1: duplicate ACTION_ID '%2' (first on line %3).")
-                          .arg(row.lineNumber)
-                          .arg(actionId)
-                          .arg(actionLines.value(actionId));
-        } else {
-            actionLines.insert(actionId, row.lineNumber);
+        // Only check for duplicates once the id itself is well-formed; else two
+        // rows with empty (misaligned) ids emit a spurious 'duplicate ""' on top
+        // of the real 'invalid ACTION_ID' errors.
+        if (actionIdValid) {
+            if (actionLines.contains(actionId)) {
+                errors << QStringLiteral("Line %1: duplicate ACTION_ID '%2' (first on line %3).")
+                              .arg(row.lineNumber)
+                              .arg(actionId)
+                              .arg(actionLines.value(actionId));
+            } else {
+                actionLines.insert(actionId, row.lineNumber);
+            }
         }
 
+        // QKeySequence::fromString(PortableText) returns a count==1 sequence
+        // containing Qt::Key_unknown for an unrecognized key name — isEmpty()
+        // stays false, so a plain isEmpty() guard misses garbage. Round-trip
+        // through toString(PortableText): Key_unknown stringifies as empty,
+        // so a non-empty input that round-trips to "" is invalid.
         const QKeySequence shortcut = QKeySequence::fromString(
             shortcutText, QKeySequence::PortableText);
-        if (!shortcutText.isEmpty() && shortcut.isEmpty()) {
+        if (!shortcutText.isEmpty()
+            && shortcut.toString(QKeySequence::PortableText).isEmpty()) {
             errors << QStringLiteral("Line %1: invalid portable shortcut '%2'.")
                           .arg(row.lineNumber)
                           .arg(shortcutText);
@@ -389,8 +413,13 @@ void ShortcutManager::normalizeDuplicateBindings()
         }
 
         auto& incumbent = m_actions[*it];
-        const bool incumbentCustomized = incumbent.currentKey != incumbent.defaultKey;
-        const bool actionCustomized = action.currentKey != action.defaultKey;
+        // Prefer the persisted user intent over a coincidental value match:
+        // a user who explicitly bound an action to its default (persisted=true,
+        // currentKey==defaultKey) is still "customized" here, and the old
+        // `currentKey != defaultKey` test would treat it as a default that any
+        // other action could steal in a collision.
+        const bool incumbentCustomized = incumbent.persisted && !incumbent.currentKey.isEmpty();
+        const bool actionCustomized = action.persisted && !action.currentKey.isEmpty();
 
         if (actionCustomized && !incumbentCustomized) {
             qWarning() << "ShortcutManager: clearing duplicate default binding"
@@ -519,35 +548,127 @@ ShortcutImportResult ShortcutManager::importBindingsCsv(const QByteArray& bytes)
         return result;
     }
 
-    // Apply only after the whole file has parsed and resolved successfully.
-    // Imported customizations win collisions with actions absent from an older
-    // backup. Then run the same duplicate normalization used at startup so a
-    // customized binding also wins over a default restored by a later CSV row.
-    QSet<int> importedActionIndexes;
-    for (const PendingBinding& binding : pending) {
-        importedActionIndexes.insert(binding.actionIndex);
-    }
+    // Import is overlay-only: local actions absent from the CSV keep their
+    // existing bindings. Use Reset All to Defaults if you want a clean slate.
+    // Apply only after the whole file has parsed and resolved successfully so
+    // any file-level error leaves every binding unchanged. Imported
+    // customizations win collisions with actions absent from an older backup;
+    // then run the same duplicate normalization used at startup so a customized
+    // binding also wins over a default restored by a later CSV row.
     for (const PendingBinding& binding : pending) {
         if (!binding.customized || binding.key.isEmpty()) {
             continue;
         }
         for (int i = 0; i < m_actions.size(); ++i) {
-            if (!importedActionIndexes.contains(i)
-                && m_actions.at(i).currentKey == binding.key) {
-                m_actions[i].currentKey = QKeySequence();
-            }
+            if (i == binding.actionIndex) continue;
+            if (importedActionLines.contains(i)) continue;
+            if (m_actions.at(i).currentKey != binding.key) continue;
+            // Reset persisted along with currentKey so this displacement is not
+            // written back as an explicit user clear (which loadBindings would
+            // later restore as "pinned to empty" per #3964, silently and
+            // permanently destroying the user's original binding).
+            result.displacedActions << QStringLiteral("%1 (%2)")
+                                           .arg(m_actions.at(i).displayName,
+                                                m_actions.at(i).id);
+            m_actions[i].currentKey = QKeySequence();
+            m_actions[i].persisted = false;
         }
     }
     for (const PendingBinding& binding : pending) {
         Action& target = m_actions[binding.actionIndex];
+        // Preserve an explicit local clear (persisted=true, currentKey empty)
+        // when the CSV row is not customized — a default-adopting row from a
+        // machine that never touched this action must not undo the user's
+        // deliberate "unbind this key" here (#3964 guarantee).
+        if (!binding.customized && target.persisted && target.currentKey.isEmpty()) {
+            continue;
+        }
         target.currentKey = binding.key;
         target.persisted = binding.customized;
     }
     normalizeDuplicateBindings();
     result.importedCount = pending.size();
-    saveBindings();
-    emit bindingsChanged();
+    // Nothing changed — skip the settings write and the observer refresh so a
+    // no-op import (every row unknown to this release) doesn't churn either.
+    if (!pending.isEmpty()) {
+        saveBindings();
+        emit bindingsChanged();
+    }
     return result;
+}
+
+ShortcutExportResult ShortcutManager::exportToFile(const QString& path) const
+{
+    ShortcutExportResult result;
+    if (path.trimmed().isEmpty()) {
+        result.error = QStringLiteral("No export path was provided.");
+        return result;
+    }
+
+    const QByteArray csv = exportBindingsCsv();
+    QSaveFile file(path);
+    // Some network mounts (SMB, WSL DrvFs) can't create the sidecar temp file
+    // QSaveFile normally uses — fall back to a direct write so export succeeds
+    // where a plain write would.
+    file.setDirectWriteFallback(true);
+    if (!file.open(QIODevice::WriteOnly)) {
+        result.error = QStringLiteral("Couldn't open %1 for writing (%2).")
+                           .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    if (file.write(csv) != csv.size()) {
+        const QString reason = file.errorString();
+        file.cancelWriting();
+        result.error = QStringLiteral("Couldn't write the shortcut backup to %1 (%2).")
+                           .arg(QDir::toNativeSeparators(path), reason);
+        return result;
+    }
+    if (!file.commit()) {
+        result.error = QStringLiteral("Couldn't save %1 (%2).")
+                           .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    // Count rows actually written rather than trusting m_actions.size() —
+    // stays honest if exportBindingsCsv ever filters rows.
+    result.exportedCount = m_actions.size();
+    return result;
+}
+
+ShortcutImportResult ShortcutManager::importFromFile(const QString& path)
+{
+    ShortcutImportResult result;
+    if (path.trimmed().isEmpty()) {
+        result.errors << QStringLiteral("No import path was provided.");
+        return result;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        result.errors << QStringLiteral("Couldn't open %1 for reading (%2).")
+                             .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    // Bound memory before we allocate: the CSV parser rejects anything above
+    // kMaxShortcutCsvBytes anyway, but readAll() would already have buffered
+    // the whole file in RAM by then. A stat-and-reject up front turns a
+    // mispicked 500 MB file into a fast error instead of a giant alloc.
+    if (file.size() > kMaxShortcutCsvBytes) {
+        result.errors << QStringLiteral(
+            "%1 exceeds the %2-byte shortcut backup limit.")
+                             .arg(QDir::toNativeSeparators(path))
+                             .arg(kMaxShortcutCsvBytes);
+        return result;
+    }
+    const QByteArray bytes = file.readAll();
+    // QFile::readAll returns whatever it managed to read without raising, so a
+    // partial read (SMB drop, EIO, yanked USB) would otherwise surface as a
+    // misleading CSV-parse error further downstream.
+    if (file.error() != QFileDevice::NoError) {
+        result.errors << QStringLiteral("Couldn't read %1 (%2).")
+                             .arg(QDir::toNativeSeparators(path), file.errorString());
+        return result;
+    }
+    return importBindingsCsv(bytes);
 }
 
 void ShortcutManager::rebuildShortcuts(QWidget* parent,

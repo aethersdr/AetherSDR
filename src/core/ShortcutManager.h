@@ -14,9 +14,20 @@ namespace AetherSDR {
 struct ShortcutImportResult {
     int importedCount{0};
     QStringList unknownActions;
+    // Local (non-imported) actions whose binding this import displaced by a
+    // colliding customized incoming key — the caller should surface these so
+    // the user notices customizations they didn't intend to overwrite.
+    QStringList displacedActions;
     QStringList errors;
 
     bool ok() const { return errors.isEmpty(); }
+};
+
+struct ShortcutExportResult {
+    int exportedCount{0};
+    QString error;
+
+    bool ok() const { return error.isEmpty(); }
 };
 
 class ShortcutManager : public QObject {
@@ -63,6 +74,12 @@ public:
     // QKeySequence::PortableText keeps modifier names cross-platform.
     QByteArray exportBindingsCsv() const;
     ShortcutImportResult importBindingsCsv(const QByteArray& bytes);
+
+    // File I/O for the portable backup — atomic write via QSaveFile, size-gated
+    // and error-string-surfacing read. Kept on the manager itself so the gui
+    // never learns about QFile/QSaveFile (matches ThemeManager's precedent).
+    ShortcutExportResult exportToFile(const QString& path) const;
+    ShortcutImportResult importFromFile(const QString& path);
 
     // Create/destroy QShortcuts on the target widget.
     // guardFn is called before each handler — return false to suppress.

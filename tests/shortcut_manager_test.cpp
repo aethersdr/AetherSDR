@@ -1,5 +1,4 @@
 #include "core/AppSettings.h"
-#include "core/ShortcutFileTransfer.h"
 #include "core/ShortcutManager.h"
 
 #include <QCoreApplication>
@@ -318,8 +317,7 @@ int main(int argc, char** argv)
                               QStringLiteral("Display"), QKeySequence(Qt::Key_F6), {});
         source.setBinding(QStringLiteral("file_action"), QKeySequence(Qt::Key_F10));
         const QString path = fakeHome.filePath(QStringLiteral("shortcuts.csv"));
-        const ShortcutExportResult exported =
-            ShortcutFileTransfer::exportToFile(source, path);
+        const ShortcutExportResult exported = source.exportToFile(path);
         ok &= expect(exported.ok() && exported.exportedCount == 1,
                      "shortcut file export commits atomically");
 
@@ -327,11 +325,188 @@ int main(int argc, char** argv)
         ShortcutManager target;
         target.registerAction(QStringLiteral("file_action"), QStringLiteral("File Action"),
                               QStringLiteral("Display"), QKeySequence(Qt::Key_F6), {});
-        const ShortcutImportResult imported =
-            ShortcutFileTransfer::importFromFile(target, path);
+        const ShortcutImportResult imported = target.importFromFile(path);
         ok &= expect(imported.ok() && target.action(QStringLiteral("file_action"))->currentKey
                                             == QKeySequence(Qt::Key_F10),
                      "shortcut file import uses production parser and applies binding");
+    }
+
+    // Regression: a customized import row that displaces a locally-persisted
+    // customization on the same key must (a) clear persisted along with
+    // currentKey — otherwise saveBindings writes "" and loadBindings pins the
+    // displaced action to empty forever (#3964); and (b) surface the local
+    // action in result.displacedActions so the UI can warn the user.
+    {
+        settings.reset();
+        ShortcutManager target;
+        target.registerAction(QStringLiteral("local_only"), QStringLiteral("Local Only"),
+                              QStringLiteral("DSP"), QKeySequence(), {});
+        target.registerAction(QStringLiteral("imported"), QStringLiteral("Imported"),
+                              QStringLiteral("DSP"), QKeySequence(), {});
+        target.loadBindings();
+        target.setBinding(QStringLiteral("local_only"), QKeySequence(Qt::Key_F5));
+
+        ShortcutManager source;
+        source.registerAction(QStringLiteral("imported"), QStringLiteral("Imported"),
+                              QStringLiteral("DSP"), QKeySequence(), {});
+        source.setBinding(QStringLiteral("imported"), QKeySequence(Qt::Key_F5));
+
+        const ShortcutImportResult imported =
+            target.importBindingsCsv(source.exportBindingsCsv());
+        ok &= expect(imported.ok(), "cross-clear import succeeds");
+        ok &= expect(imported.displacedActions.size() == 1
+                         && imported.displacedActions.first().contains(QStringLiteral("local_only")),
+                     "displaced local binding is surfaced to the caller");
+
+        // Round-trip through save/load: the displaced action must NOT come
+        // back as a pinned empty (#3964 failure mode).
+        settings.reset();
+        settings.load();
+        ShortcutManager reloaded;
+        reloaded.registerAction(QStringLiteral("local_only"), QStringLiteral("Local Only"),
+                                QStringLiteral("DSP"), QKeySequence(Qt::Key_F9), {});
+        reloaded.registerAction(QStringLiteral("imported"), QStringLiteral("Imported"),
+                                QStringLiteral("DSP"), QKeySequence(), {});
+        reloaded.loadBindings();
+        ok &= expect(reloaded.action(QStringLiteral("local_only"))->currentKey
+                         == QKeySequence(Qt::Key_F9),
+                     "displaced local action gets its release default (not pinned empty)");
+    }
+
+    // Regression (#3964 via import): a CUSTOMIZED=False row from a machine
+    // that never touched action A must not resurrect A's default when the
+    // local user had explicitly cleared A. The explicit clear is preserved.
+    {
+        settings.reset();
+        ShortcutManager target;
+        target.registerAction(QStringLiteral("keep_cleared"), QStringLiteral("Keep Cleared"),
+                              QStringLiteral("DSP"), QKeySequence(Qt::Key_F4), {});
+        target.loadBindings();
+        target.clearBinding(QStringLiteral("keep_cleared"));
+
+        ShortcutManager source;
+        source.registerAction(QStringLiteral("keep_cleared"), QStringLiteral("Keep Cleared"),
+                              QStringLiteral("DSP"), QKeySequence(Qt::Key_F4), {});
+        // source did not customize keep_cleared → CSV row is CUSTOMIZED=False.
+
+        const ShortcutImportResult imported =
+            target.importBindingsCsv(source.exportBindingsCsv());
+        ok &= expect(imported.ok(),
+                     "default-adopting row for a locally-cleared action imports without error");
+        ok &= expect(target.action(QStringLiteral("keep_cleared"))->currentKey.isEmpty(),
+                     "explicit local clear is preserved across a CUSTOMIZED=False import");
+    }
+
+    // Zero-import (older release reading a newer backup): every row is unknown,
+    // so nothing changes — the tail must not churn AppSettings or emit
+    // bindingsChanged for a pure no-op.
+    {
+        settings.reset();
+        ShortcutManager source;
+        source.registerAction(QStringLiteral("future_only"), QStringLiteral("Future Only"),
+                              QStringLiteral("Display"), QKeySequence(Qt::Key_F1), {});
+        source.setBinding(QStringLiteral("future_only"), QKeySequence(Qt::Key_F2));
+
+        settings.reset();
+        ShortcutManager target;
+        target.registerAction(QStringLiteral("known"), QStringLiteral("Known"),
+                              QStringLiteral("DSP"), QKeySequence(Qt::Key_F6), {});
+        target.loadBindings();
+        int changeSignals = 0;
+        QObject::connect(&target, &ShortcutManager::bindingsChanged,
+                         [&changeSignals] { ++changeSignals; });
+
+        const ShortcutImportResult imported =
+            target.importBindingsCsv(source.exportBindingsCsv());
+        ok &= expect(imported.ok() && imported.importedCount == 0,
+                     "no-op import succeeds with zero imported actions");
+        ok &= expect(imported.unknownActions.size() == 1,
+                     "unknown future action is reported");
+        ok &= expect(changeSignals == 0,
+                     "no-op import does not emit bindingsChanged");
+    }
+
+    // Parser rejects garbage-key names (e.g. XF86AudioNext) instead of
+    // silently storing a Key_unknown that never fires as a QShortcut.
+    {
+        settings.reset();
+        ShortcutManager target;
+        target.registerAction(QStringLiteral("badkey"), QStringLiteral("Bad Key"),
+                              QStringLiteral("DSP"), QKeySequence(), {});
+        target.loadBindings();
+
+        const QByteArray csv =
+            "FORMAT_VERSION,ACTION_ID,ACTION_NAME,CATEGORY,SHORTCUT,CUSTOMIZED\r\n"
+            "1,badkey,Bad Key,DSP,XF86AudioNext,True\r\n";
+        const ShortcutImportResult rejected = target.importBindingsCsv(csv);
+        ok &= expect(!rejected.ok(),
+                     "unrecognized portable-key name is rejected (Key_unknown guard)");
+    }
+
+    // Parser surfaces every field error on a row instead of only the first
+    // (independent-if validators, not an else-if chain).
+    {
+        settings.reset();
+        ShortcutManager target;
+        target.loadBindings();
+        const QByteArray csv =
+            "FORMAT_VERSION,ACTION_ID,ACTION_NAME,CATEGORY,SHORTCUT,CUSTOMIZED\r\n"
+            "1,bad-id,,DSP,,maybe\r\n";
+        const ShortcutImportResult rejected = target.importBindingsCsv(csv);
+        ok &= expect(!rejected.ok(), "multi-field-bad row is rejected");
+        int badId = 0, blankName = 0, badCustomized = 0;
+        for (const QString& msg : rejected.errors) {
+            if (msg.contains(QStringLiteral("invalid ACTION_ID"))) ++badId;
+            if (msg.contains(QStringLiteral("ACTION_NAME is required"))) ++blankName;
+            if (msg.contains(QStringLiteral("CUSTOMIZED"))) ++badCustomized;
+        }
+        ok &= expect(badId == 1 && blankName == 1 && badCustomized == 1,
+                     "every field error on the row is surfaced in one pass");
+    }
+
+    // Duplicate-id check must not fire on rows whose id is itself invalid —
+    // otherwise misaligned rows produce spurious 'duplicate ""' noise.
+    {
+        settings.reset();
+        ShortcutManager target;
+        target.loadBindings();
+        const QByteArray csv =
+            "FORMAT_VERSION,ACTION_ID,ACTION_NAME,CATEGORY,SHORTCUT,CUSTOMIZED\r\n"
+            "1,,A,DSP,,False\r\n"
+            "1,,B,DSP,,False\r\n";
+        const ShortcutImportResult rejected = target.importBindingsCsv(csv);
+        ok &= expect(!rejected.ok(), "invalid-id rows are rejected");
+        for (const QString& msg : rejected.errors) {
+            ok &= expect(!msg.contains(QStringLiteral("duplicate ACTION_ID")),
+                         "duplicate-id check does not fire on invalid ids");
+        }
+    }
+
+    // Rejected import must leave EVERY binding untouched, not just the first.
+    {
+        settings.reset();
+        ShortcutManager target;
+        target.registerAction(QStringLiteral("a1"), QStringLiteral("Alpha One"),
+                              QStringLiteral("DSP"), QKeySequence(Qt::Key_F1), {});
+        target.registerAction(QStringLiteral("a2"), QStringLiteral("Alpha Two"),
+                              QStringLiteral("DSP"), QKeySequence(Qt::Key_F2), {});
+        target.registerAction(QStringLiteral("a3"), QStringLiteral("Alpha Three"),
+                              QStringLiteral("DSP"), QKeySequence(Qt::Key_F3), {});
+        target.loadBindings();
+        target.setBinding(QStringLiteral("a1"), QKeySequence(Qt::Key_F11));
+        target.clearBinding(QStringLiteral("a2"));
+
+        const QByteArray malformed =
+            "FORMAT_VERSION,ACTION_ID,ACTION_NAME,CATEGORY,SHORTCUT,CUSTOMIZED\r\n"
+            "1,a1,\"Broken quoted name,DSP,Ctrl+Q,True\r\n";
+        const ShortcutImportResult rejected = target.importBindingsCsv(malformed);
+        ok &= expect(!rejected.ok(), "malformed CSV is rejected");
+        ok &= expect(target.action(QStringLiteral("a1"))->currentKey == QKeySequence(Qt::Key_F11),
+                     "a1 unchanged after rejected import");
+        ok &= expect(target.action(QStringLiteral("a2"))->currentKey.isEmpty(),
+                     "a2 (explicitly cleared) unchanged after rejected import");
+        ok &= expect(target.action(QStringLiteral("a3"))->currentKey == QKeySequence(Qt::Key_F3),
+                     "a3 (default) unchanged after rejected import");
     }
 
     QDir(configRoot + "/AetherSDR").removeRecursively();

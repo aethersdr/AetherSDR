@@ -128,7 +128,12 @@ Shortcut backups are release-tolerant:
   unavailable actions as skipped.
 - A newer release leaves actions that did not exist in an older backup alone.
 - Actions that were using defaults adopt the importing release's defaults,
-  while your customized and explicitly cleared bindings are restored exactly.
+  while the source's customized and explicitly cleared bindings are restored
+  exactly. Local explicit clears are preserved when an imported row for the
+  same action is not customized.
+- If an imported customized shortcut takes a key you had bound to a different
+  local action, that local binding is cleared and reported so you can notice
+  the displacement — use **Reset to Default** to restore it.
 - A malformed backup is rejected before any shortcuts are changed.
 
 Keep the original exported file if you move temporarily to an older release;
