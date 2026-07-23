@@ -362,6 +362,11 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
+    // GPS coordinates are never useful in a support log. Compute this before
+    // the certificate-decision early return so that path cannot bypass the
+    // normal GPS payload suppression below.
+    const bool isGps = line.contains("|gps ");
+
     // GHSA-wfx7-w6p8-4jr2 phase 2: while the operator is being prompted
     // about a cert mismatch, the TLS channel stays open but we must not
     // act on anything that arrives. A MITM on the path (the exact threat
@@ -372,13 +377,17 @@ void WanConnection::processLine(const QString& line)
     // to connected() — so we extend the suppression symmetrically:
     // nothing gets parsed until the operator's decision lands.
     if (m_awaitingCertDecision) {
-        qCDebug(lcSmartLink)
-            << "WAN RX (suppressed during cert-pin decision):" << line;
+        if (isGps) {
+            qCDebug(lcSmartLink)
+                << "WAN RX (suppressed during cert-pin decision; GPS payload omitted)";
+        } else {
+            qCDebug(lcSmartLink)
+                << "WAN RX (suppressed during cert-pin decision):" << line;
+        }
         return;
     }
 
     // Suppress noisy messages
-    const bool isGps = line.contains("|gps ");
     bool isPingReply = false;
     if (m_lastPingSeq && line.startsWith("R")) {
         isPingReply = line.startsWith(QString("R%1|").arg(m_lastPingSeq));
@@ -387,8 +396,9 @@ void WanConnection::processLine(const QString& line)
             m_lastPingSeq = 0;
         }
     }
-    if (!isGps && !isPingReply)
+    if (!isGps && !isPingReply) {
         qCDebug(lcSmartLink) << "WAN RX:" << line;
+    }
 
     ParsedMessage msg = CommandParser::parseLine(line);
     emit messageReceived(msg);

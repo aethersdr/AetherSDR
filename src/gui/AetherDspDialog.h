@@ -31,11 +31,13 @@ public:
 signals:
     // NR2 parameter changes (forwarded from m_widget)
     void nr2GainMaxChanged(float value);
+    void nr2GainFloorChanged(float value);
     void nr2GainSmoothChanged(float value);
     void nr2QsppChanged(float value);
     void nr2GainMethodChanged(int method);
     void nr2NpeMethodChanged(int method);
     void nr2AeFilterChanged(bool on);
+    void nr2UseOriginalGeometryChanged(bool useOriginal);
     // MNR parameter changes
     void mnrEnabledChanged(bool on);
     void mnrStrengthChanged(float value);

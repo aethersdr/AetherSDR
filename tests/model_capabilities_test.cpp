@@ -1,6 +1,7 @@
 // Verifies the per-model feature-flag table in ModelCapabilities mirrors
 // FlexLib/ModelInfo.cs row-for-row for Platform, Has4Meters / Has2Meters
-// and HasLoopA / HasLoopB (#695, #2177).
+// and HasLoopA / HasLoopB (#695, #2177), plus the documented FLEX-8000
+// Stratum 1 NTP-server capability.
 // Catches drift if FlexLib ever flips a flag — re-sync the C++ table
 // and update this test together.
 
@@ -42,7 +43,8 @@ int main()
 
     // Exact model strings from FlexLib/ModelInfo.cs.  Expected columns
     // copied directly from that file: Platform / Has4Meters / Has2Meters /
-    // HasLoopA / HasLoopB.  hasExtendedDsp is derived (BigBend|DragonFire).
+    // HasLoopA / HasLoopB. hasExtendedDsp is derived (BigBend|DragonFire);
+    // NTP-server expectations come from FLEX-8000 hardware manual §25.2.
     struct Row {
         const char* model;
         RadioPlatform platform;
@@ -51,32 +53,33 @@ int main()
         bool hasLoopA;
         bool hasLoopB;
         bool diversity;
+        bool ntpServer;
         int  slices;   // FlexLib SliceList size == max slices == max panadapters
     };
     const Row kExpected[] = {
-        {"FLEX-6300",  RadioPlatform::Microburst, false, false, false, false, false, 2},
-        {"FLEX-6400",  RadioPlatform::DeepEddy,   false, false, false, false, false, 2},
-        {"FLEX-6400M", RadioPlatform::DeepEddy,   false, false, false, false, false, 2},
-        {"FLEX-6500",  RadioPlatform::Microburst, true,  false, true,  false, false, 4},
-        {"FLEX-6600",  RadioPlatform::DeepEddy,   false, false, false, false, true,  4},
-        {"FLEX-6600M", RadioPlatform::DeepEddy,   false, false, false, false, true,  4},
-        {"FLEX-6700",  RadioPlatform::Microburst, true,  true,  true,  true,  true,  8},
-        {"FLEX-6700R", RadioPlatform::Microburst, false, false, false, false, true,  8},
-        {"FLEX-8400",  RadioPlatform::BigBend,    false, false, false, false, false, 2},
-        {"FLEX-8400M", RadioPlatform::BigBend,    false, false, false, false, false, 2},
-        {"FLEX-8600",  RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"FLEX-8600M", RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"ML-9600",    RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"ML-9600W",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"ML-9600X",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"MLS-9601",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"CL-9300",    RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"CLS-9301",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"RT-2122",    RadioPlatform::DragonFire, false, false, false, false, false, 2},
-        {"AU-510",     RadioPlatform::BigBend,    false, false, false, false, false, 2},
-        {"AU-510M",    RadioPlatform::BigBend,    false, false, false, false, false, 2},
-        {"AU-520",     RadioPlatform::BigBend,    false, false, false, false, true,  4},
-        {"AU-520M",    RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"FLEX-6300",  RadioPlatform::Microburst, false, false, false, false, false, false, 2},
+        {"FLEX-6400",  RadioPlatform::DeepEddy,   false, false, false, false, false, false, 2},
+        {"FLEX-6400M", RadioPlatform::DeepEddy,   false, false, false, false, false, false, 2},
+        {"FLEX-6500",  RadioPlatform::Microburst, true,  false, true,  false, false, false, 4},
+        {"FLEX-6600",  RadioPlatform::DeepEddy,   false, false, false, false, true,  false, 4},
+        {"FLEX-6600M", RadioPlatform::DeepEddy,   false, false, false, false, true,  false, 4},
+        {"FLEX-6700",  RadioPlatform::Microburst, true,  true,  true,  true,  true,  false, 8},
+        {"FLEX-6700R", RadioPlatform::Microburst, false, false, false, false, true,  false, 8},
+        {"FLEX-8400",  RadioPlatform::BigBend,    false, false, false, false, false, true,  2},
+        {"FLEX-8400M", RadioPlatform::BigBend,    false, false, false, false, false, true,  2},
+        {"FLEX-8600",  RadioPlatform::BigBend,    false, false, false, false, true,  true,  4},
+        {"FLEX-8600M", RadioPlatform::BigBend,    false, false, false, false, true,  true,  4},
+        {"ML-9600",    RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"ML-9600W",   RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"ML-9600X",   RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"MLS-9601",   RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"CL-9300",    RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"CLS-9301",   RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"RT-2122",    RadioPlatform::DragonFire, false, false, false, false, false, false, 2},
+        {"AU-510",     RadioPlatform::BigBend,    false, false, false, false, false, false, 2},
+        {"AU-510M",    RadioPlatform::BigBend,    false, false, false, false, false, false, 2},
+        {"AU-520",     RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
+        {"AU-520M",    RadioPlatform::BigBend,    false, false, false, false, true,  false, 4},
     };
 
     for (const auto& row : kExpected) {
@@ -90,6 +93,7 @@ int main()
         check(caps.hasLoopA == row.hasLoopA, m + ": hasLoopA");
         check(caps.hasLoopB == row.hasLoopB, m + ": hasLoopB");
         check(caps.isDiversityAllowed == row.diversity, m + ": isDiversityAllowed");
+        check(caps.hasNtpServer == row.ntpServer, m + ": hasNtpServer");
         check(caps.maxSlices == row.slices,
               m + ": maxSlices == " + std::to_string(row.slices)
                   + " (got " + std::to_string(caps.maxSlices) + ")");
@@ -137,6 +141,18 @@ int main()
               std::string(m) + " does NOT report extended DSP");
     }
 
+    // Integral GNSS-backed NTP is an 8000-series capability, not a generic
+    // BigBend or optional-GPSDO capability.
+    for (const char* m : {"FLEX-8400", "FLEX-8400M", "FLEX-8600", "FLEX-8600M"}) {
+        check(capabilitiesFor(QString::fromLatin1(m)).hasNtpServer,
+              std::string(m) + " provides a Stratum 1 NTP server");
+    }
+    for (const char* m : {"FLEX-6300", "FLEX-6400", "FLEX-6500",
+                          "FLEX-6600", "FLEX-6700", "FLEX-6700R"}) {
+        check(!capabilitiesFor(QString::fromLatin1(m)).hasNtpServer,
+              std::string(m) + " does NOT advertise an NTP server");
+    }
+
     // Diversity regressions vs the old contains() gate:
     //  - FLEX-6500 is single-SCU -> diversity must be FALSE (old gate wrongly
     //    listed contains("6500") as diversity-allowed).
@@ -176,6 +192,7 @@ int main()
         check(caps.platform == RadioPlatform::Unknown
                   && !caps.has4Meters && !caps.has2Meters
                   && !caps.hasLoopA && !caps.hasLoopB
+                  && !caps.hasNtpServer
                   && !caps.hasExtendedDsp()
                   && caps.maxSlices == 2,   // FlexLib DEFAULT SliceList {A,B}
               "Unknown model returns default Unknown/all-false/2-slice capabilities");

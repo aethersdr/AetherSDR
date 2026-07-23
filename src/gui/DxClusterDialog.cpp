@@ -2236,13 +2236,14 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     // ── Override Colors + color picker ──────────────────────────────────
     grid->addWidget(new QLabel("Override Colors:"), row, 0);
     auto* colorRow = new QHBoxLayout;
-    auto* overrideToggle = new QPushButton("Enabled");
+    auto* overrideToggle = new QPushButton(overrideColors ? "Enabled" : "Disabled");
     overrideToggle->setCheckable(true);
     overrideToggle->setChecked(overrideColors);
     overrideToggle->setFixedWidth(80);
     overrideToggle->setStyleSheet(
         kSpotHubToggle);
-    connect(overrideToggle, &QPushButton::toggled, this, [save](bool on) {
+    connect(overrideToggle, &QPushButton::toggled, this, [save, overrideToggle](bool on) {
+        overrideToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
     });
     colorRow->addWidget(overrideToggle);
@@ -2266,17 +2267,18 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Override Background:"), row, 0);
     auto* bgRow = new QHBoxLayout;
     const QString& bgStyle = kSpotHubToggle;
-    auto* bgEnabledBtn = new QPushButton("Enabled");
+    auto* bgEnabledBtn = new QPushButton(overrideBg ? "Enabled" : "Disabled");
     bgEnabledBtn->setCheckable(true);
     bgEnabledBtn->setChecked(overrideBg);
-    bgEnabledBtn->setFixedWidth(70);
+    bgEnabledBtn->setFixedWidth(76);
     bgEnabledBtn->setStyleSheet(bgStyle);
     auto* bgAutoBtn = new QPushButton("Auto");
     bgAutoBtn->setCheckable(true);
     bgAutoBtn->setChecked(overrideBgAuto);
     bgAutoBtn->setFixedWidth(50);
     bgAutoBtn->setStyleSheet(bgStyle);
-    connect(bgEnabledBtn, &QPushButton::toggled, this, [save](bool on) {
+    connect(bgEnabledBtn, &QPushButton::toggled, this, [save, bgEnabledBtn](bool on) {
+        bgEnabledBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideBackgroundColorsEnabled", on ? "True" : "False");
     });
     connect(bgAutoBtn, &QPushButton::toggled, this, [save](bool on) {
@@ -2319,14 +2321,15 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
 
     // ── Spot Lines ──────────────────────────────────────────────────────
     grid->addWidget(new QLabel("Spot Lines:"), row, 0);
-    auto* spotLinesBtn = new QPushButton("Enabled");
+    auto* spotLinesBtn = new QPushButton(spotLines ? "Enabled" : "Disabled");
     spotLinesBtn->setCheckable(true);
     spotLinesBtn->setChecked(spotLines);
     spotLinesBtn->setFixedWidth(80);
     spotLinesBtn->setToolTip("Show vertical lines from the spectrum up to each spot label.\nDisable during contests to reduce clutter.");
     spotLinesBtn->setStyleSheet(
         kSpotHubToggle);
-    connect(spotLinesBtn, &QPushButton::toggled, this, [save](bool on) {
+    connect(spotLinesBtn, &QPushButton::toggled, this, [save, spotLinesBtn](bool on) {
+        spotLinesBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsLinesEnabled", on ? "True" : "False");
     });
     grid->addWidget(spotLinesBtn, row++, 1, Qt::AlignLeft);
@@ -2363,13 +2366,14 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         int drow = 0;
 
         bool dxccEnabled = m_dxccProvider ? m_dxccProvider->isEnabled() : false;
-        auto* dxccToggle = new QPushButton("Enabled");
+        auto* dxccToggle = new QPushButton(dxccEnabled ? "Enabled" : "Disabled");
         dxccToggle->setCheckable(true);
         dxccToggle->setChecked(dxccEnabled);
         dxccToggle->setFixedWidth(80);
         dxccToggle->setStyleSheet(
             kSpotHubToggle);
-        connect(dxccToggle, &QPushButton::toggled, this, [this, save](bool on) {
+        connect(dxccToggle, &QPushButton::toggled, this, [this, save, dxccToggle](bool on) {
+            dxccToggle->setText(on ? "Enabled" : "Disabled");
             save("IsDxccColoringEnabled", on ? "True" : "False");
             if (m_dxccProvider) m_dxccProvider->setEnabled(on);
         });
@@ -2573,7 +2577,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         // the carrier).
         const bool snapEnabled = AppSettings::instance()
             .value("SHistorySnapToStep", "False").toString() == "True";
-        auto* snapToggle = new QPushButton("Enabled");
+        auto* snapToggle = new QPushButton(snapEnabled ? "Enabled" : "Disabled");
         snapToggle->setCheckable(true);
         snapToggle->setChecked(snapEnabled);
         snapToggle->setFixedWidth(80);
@@ -2582,7 +2586,8 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "Round SHistory click-to-tune to the nearest multiple of the\n"
             "active slice's step size.  Hides the small carrier offset that\n"
             "comes from detecting voice on the panadapter.");
-        connect(snapToggle, &QPushButton::toggled, this, [save](bool on) {
+        connect(snapToggle, &QPushButton::toggled, this, [save, snapToggle](bool on) {
+            snapToggle->setText(on ? "Enabled" : "Disabled");
             save("SHistorySnapToStep", on ? "True" : "False");
         });
         shGrid->addWidget(new QLabel("Snap to Step:"), shr, 0);

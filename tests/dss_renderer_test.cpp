@@ -168,6 +168,56 @@ int testMovedFromHistoryCapacityRebuild()
     return 0;
 }
 
+int testZeroCapacityReleasesRetainedHistory()
+{
+    DssRenderer renderer;
+    renderer.setHistoryCapacityRows(24);
+    renderer.appendHistoryRow(rowWithPeak(128), 14.0, 1.0, -200.0f);
+    if (renderer.historyStorageBytes() == 0 || renderer.historyRowCount() != 1) {
+        return fail("retained DSS history should allocate before release");
+    }
+
+    renderer.setHistoryCapacityRows(0);
+    if (renderer.historyCapacityRows() != 0
+        || renderer.historyRowCount() != 0
+        || renderer.historyStorageBytes() != 0) {
+        return fail("zero DSS history capacity must release all retained storage");
+    }
+
+    return 0;
+}
+
+int testRowPlateauStats()
+{
+    DssRenderer renderer;
+    QVector<float> bins(DssRenderer::kCols, -110.0f);
+    for (int i = 0; i < bins.size(); ++i) {
+        bins[i] += static_cast<float>(i % 17) * 0.2f;
+    }
+    // Spatial smoothing softens one bin at each edge, leaving an exact
+    // 40-bin plateau in the stored row.
+    for (int i = 100; i < 142; ++i) {
+        bins[i] = -120.0f;
+    }
+    renderer.pushRow(bins);
+
+    const DssRenderer::RowStats stats = renderer.rowStats(0);
+    if (stats.finiteBins != DssRenderer::kCols) {
+        return fail("row stats should count every finite DSS bin");
+    }
+    if (stats.minValueBins != 40) {
+        return fail("row stats should count bins clipped to the row minimum");
+    }
+    if (stats.longestFlatRunBins != 40) {
+        return fail("row stats should report the longest localized flat run");
+    }
+    const DssRenderer::RowStats missing = renderer.rowStats(1);
+    if (missing.finiteBins != 0 || missing.longestFlatRunBins != 0) {
+        return fail("row stats should reject ages outside the visible history");
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -188,6 +238,12 @@ int main()
         return rc;
     }
     if (int rc = testMovedFromHistoryCapacityRebuild(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testZeroCapacityReleasesRetainedHistory(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testRowPlateauStats(); rc != 0) {
         return rc;
     }
 

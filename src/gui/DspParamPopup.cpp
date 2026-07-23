@@ -40,6 +40,21 @@ DspParamPopup::DspParamPopup(QWidget* parent)
     m_layout->setSpacing(6);
 }
 
+void DspParamPopup::SliderControl::setEnabled(bool enabled) const
+{
+    label->setEnabled(enabled);
+    slider->setEnabled(enabled);
+    valueLabel->setEnabled(enabled);
+}
+
+void DspParamPopup::SliderControl::setToolTip(
+    const QString& tooltip) const
+{
+    label->setToolTip(tooltip);
+    slider->setToolTip(tooltip);
+    valueLabel->setToolTip(tooltip);
+}
+
 void DspParamPopup::addRadioGroup(const QString& label, const QStringList& options,
                                    int defaultIdx, std::function<void(int)> onChange)
 {
@@ -68,9 +83,12 @@ void DspParamPopup::addRadioGroup(const QString& label, const QStringList& optio
     });
 }
 
-void DspParamPopup::addSlider(const QString& label, int min, int max, int defaultVal,
-                               std::function<QString(int)> format,
-                               std::function<void(int)> onChange)
+DspParamPopup::SliderControl DspParamPopup::addSlider(
+    const QString& label, int min, int max, int defaultVal,
+    std::function<QString(int)> format,
+    std::function<void(int)> onChange,
+    bool enabled,
+    const QString& tooltip)
 {
     auto* row = new QHBoxLayout;
 
@@ -81,6 +99,7 @@ void DspParamPopup::addSlider(const QString& label, int min, int max, int defaul
     auto* slider = new GuardedSlider(Qt::Horizontal);
     slider->setRange(min, max);
     slider->setValue(defaultVal);
+    slider->setDragValueFormatter(format);
     applyPrimarySliderStyle(slider);
     row->addWidget(slider);
 
@@ -88,6 +107,12 @@ void DspParamPopup::addSlider(const QString& label, int min, int max, int defaul
     AetherSDR::ThemeManager::instance().applyStyleSheet(val, "QLabel { color: {{color.text.primary}}; min-width: 36px; }");
     val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row->addWidget(val);
+
+    const SliderControl control{lbl, slider, val};
+    control.setEnabled(enabled);
+    if (!tooltip.isEmpty()) {
+        control.setToolTip(tooltip);
+    }
 
     m_layout->addLayout(row);
 
@@ -99,10 +124,13 @@ void DspParamPopup::addSlider(const QString& label, int min, int max, int defaul
     m_resetters.append([slider, defaultVal]() {
         slider->setValue(defaultVal);
     });
+
+    return control;
 }
 
-void DspParamPopup::addCheckbox(const QString& label, bool defaultVal,
-                                 std::function<void(bool)> onChange)
+QCheckBox* DspParamPopup::addCheckbox(
+    const QString& label, bool defaultVal,
+    std::function<void(bool)> onChange)
 {
     auto* cb = new QCheckBox(label);
     cb->setChecked(defaultVal);
@@ -115,6 +143,8 @@ void DspParamPopup::addCheckbox(const QString& label, bool defaultVal,
     m_resetters.append([cb, defaultVal]() {
         cb->setChecked(defaultVal);
     });
+
+    return cb;
 }
 
 void DspParamPopup::finalize(std::function<void()> onMore, std::function<void()> onReset)

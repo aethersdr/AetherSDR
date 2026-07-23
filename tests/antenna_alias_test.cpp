@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "models/AntennaAliasStore.h"
 #include "models/SliceModel.h"
@@ -24,22 +25,15 @@ bool expect(bool condition, const char* label)
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir fakeHome(QDir::tempPath() + "/aether-antenna-alias-test-XXXXXX");
-    if (!fakeHome.isValid()) {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-antenna-alias-test"));
+    if (!settingsProfile.isValid()) {
         std::cerr << "[FAIL] create temporary home\n";
         return 1;
     }
-    qputenv("HOME", fakeHome.path().toUtf8());
-    qputenv("CFFIXED_USER_HOME", fakeHome.path().toUtf8());
-    QStandardPaths::setTestModeEnabled(true);
     QCoreApplication app(argc, argv);
 
-    const QString configRoot =
-        QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    QDir(configRoot + "/AetherSDR").removeRecursively();
-
     auto& settings = AppSettings::instance();
-    settings.reset();
+    settings.load();
 
     const QString radioKey = QStringLiteral("serial-123");
     QMap<QString, QString> aliases;
@@ -107,6 +101,5 @@ int main(int argc, char** argv)
     ok &= expect(commands == QStringList({QStringLiteral("slice set 3 txant=XVTR")}),
                  "slice TX antenna command keeps canonical token");
 
-    QDir(configRoot + "/AetherSDR").removeRecursively();
     return ok ? 0 : 1;
 }

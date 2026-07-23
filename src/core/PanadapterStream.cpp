@@ -530,6 +530,17 @@ void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm,
              << minDbm << "->" << maxDbm;
 }
 
+bool PanadapterStream::cancelPendingDbmRange(quint32 streamId)
+{
+    QMutexLocker lock(&m_streamMutex);
+    const bool removed = m_pendingDbmRanges.remove(streamId) > 0;
+    if (removed) {
+        qCDebug(lcVita49) << "PanadapterStream: cancelled pending dBm range for 0x"
+                         + QString::number(streamId, 16);
+    }
+    return removed;
+}
+
 void PanadapterStream::setYPixels(quint32 streamId, int yPixels)
 {
     QMutexLocker lock(&m_streamMutex);
@@ -1493,6 +1504,7 @@ const char* PanadapterStream::daxConsumerName(DaxConsumer who)
     case DaxConsumer::Bridge: return "bridge";
     case DaxConsumer::Tci:    return "tci";
     case DaxConsumer::Rade:   return "rade";
+    case DaxConsumer::Clock:  return "clock";
     }
     return "?";
 }
@@ -1626,7 +1638,8 @@ QVector<PanadapterStream::DaxChannelSnapshot> PanadapterStream::daxChannelSnapsh
         s.channel = it.key();
         s.streamId = it->streamId;
         s.createPending = it->createPending;
-        for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade}) {
+        for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade,
+                                DaxConsumer::Clock}) {
             if (it->holders & daxHolderBit(who))
                 s.holders << QString::fromLatin1(daxConsumerName(who));
         }

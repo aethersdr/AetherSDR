@@ -25,6 +25,8 @@ AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
     // AetherDspDialog::* keep working unchanged.
     connect(m_widget, &AetherDspWidget::nr2GainMaxChanged,
             this,    &AetherDspDialog::nr2GainMaxChanged);
+    connect(m_widget, &AetherDspWidget::nr2GainFloorChanged,
+            this,    &AetherDspDialog::nr2GainFloorChanged);
     connect(m_widget, &AetherDspWidget::nr2GainSmoothChanged,
             this,    &AetherDspDialog::nr2GainSmoothChanged);
     connect(m_widget, &AetherDspWidget::nr2QsppChanged,
@@ -35,6 +37,8 @@ AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
             this,    &AetherDspDialog::nr2NpeMethodChanged);
     connect(m_widget, &AetherDspWidget::nr2AeFilterChanged,
             this,    &AetherDspDialog::nr2AeFilterChanged);
+    connect(m_widget, &AetherDspWidget::nr2UseOriginalGeometryChanged,
+            this,    &AetherDspDialog::nr2UseOriginalGeometryChanged);
     connect(m_widget, &AetherDspWidget::mnrEnabledChanged,
             this,    &AetherDspDialog::mnrEnabledChanged);
     connect(m_widget, &AetherDspWidget::mnrStrengthChanged,

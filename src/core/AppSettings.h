@@ -71,6 +71,12 @@ public:
     void migrateFromQSettings();
 
 private:
+    enum class LoadState {
+        NotAttempted,
+        ReadyToSave,
+        Failed,
+    };
+
     AppSettings();
     ~AppSettings();
     AppSettings(const AppSettings&) = delete;
@@ -85,6 +91,8 @@ private:
     QMap<QString, QString> m_stationSettings;   // per-station key=value
     QString m_stationName{"AetherSDR"};
     int m_loadedCount{0};  // settings count at load time (guard against truncated saves)
+    LoadState m_loadState{LoadState::NotAttempted};
+    bool m_preserveRecoveryBackup{false};
     std::unique_ptr<QLockFile> m_guiClientLock;
     QString m_persistentGuiClientId;
     QString m_effectiveGuiClientId;

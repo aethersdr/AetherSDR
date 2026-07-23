@@ -31,6 +31,9 @@ struct ModelCapabilities {
     bool hasLoopA{false};    // RX loop/preselector path (FLEX-6500, FLEX-6700)
     bool hasLoopB{false};    // Second RX loop path (FLEX-6700)
     bool isDiversityAllowed{false};  // 2-SCU diversity RX (FlexLib IsDiversityAllowed)
+    // FLEX-8000 hardware manual §25.2: the integral GNSS receiver provides a
+    // Stratum 1 NTP server. GPSDO-equipped 6000-series radios do not.
+    bool hasNtpServer{false};
     // Max independent receivers (FlexLib SliceList size).  Also the max
     // panadapter count — pan capacity tracks the radio's SCU/slice capacity,
     // which is identical across every current model.  Default 2 mirrors

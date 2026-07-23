@@ -60,12 +60,19 @@ private:
 
     struct MeterSnapshot {
         float powerWatts{0.0f};
+        float swrQualifyingPowerWatts{0.0f};
         float swr{1.0f};
         qint64 updatedAtMs{0};
+        qint64 swrQualifyingPowerUpdatedAtMs{0};
+        qint64 swrSampleUpdatedAtMs{0};
         bool valid{false};
     };
 
     void cacheMeters(MeterSource source, float fwdPowerWatts, float swr);
+    void updateRadioDirectionalMeters(float forwardPowerWatts,
+                                      float reflectedPowerWatts,
+                                      float swr,
+                                      bool reflectedPowerMeasured);
     MeterSnapshot bestSnapshot(qint64 nowMs, MeterSource* source) const;
     void appendFrame();
     void applyTheme();
@@ -98,6 +105,7 @@ private:
     QVector<float> m_recentPower;
     QVector<float> m_recentSwr;
     QVector<float> m_recentReturnLoss;
+    QVector<float> m_swrAdmissionWindow;
 
     float m_displayPower{0.0f};
     float m_displaySwr{1.0f};
@@ -114,6 +122,11 @@ private:
     float m_powerFullScale{120.0f};
     bool m_baselineReady{false};
     bool m_paused{false};
+    MeterSource m_swrAdmissionSource{MeterSource::None};
+    qint64 m_lastAdmittedSwrSampleMs{0};
+    int m_swrInactiveFrames{0};
+    int m_swrSourceMismatchFrames{0};
+    int m_activeFrames{0};
     int m_idleFrames{0};
     int m_incidentCooldownFrames{0};
 };

@@ -12,6 +12,8 @@
 //
 // Build: CMake target `pan_layout_dialog_size_test`. Exit 0 = pass.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "gui/PanLayoutDialog.h"
 
 #include <QApplication>
@@ -45,7 +47,12 @@ int topInRoot(QWidget* w, QWidget* root)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-pan-layout-dialog-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("PanLayoutDialog Cancel-button overlap test harness\n\n");
 
     // maxPans = 8 enables every layout (the tallest grid — worst case).

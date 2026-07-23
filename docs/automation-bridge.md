@@ -71,7 +71,9 @@ AETHER_AUTOMATION_SOCKET=aethersdr-4166 \
 GUI client UUID, so concurrent worktrees do not displace one another through
 the radio's duplicate-client takeover behavior. If it is omitted, the socket,
 automation label, or PID is used in that order. `AETHER_AUTOMATION_AGENT_NAME`
-sets the station label shown to other Multi-Flex clients; it is display-only
+sets the station label shown to other Multi-Flex clients; the legacy
+`AETHER_AUTOMATION_STATION` and then `AETHER_AUTOMATION_LABEL` are fallbacks,
+followed by the neutral default `Automation`. The agent name is display-only
 and is never used as the UUID because several worktrees may use the same LLM.
 Automation identities never overwrite the user's persistent `GUIClientID`.
 
@@ -125,9 +127,10 @@ contributors to self-verify UI changes before requesting review.
      ```
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
 
-**Tools exposed** (22 typed tools): introspection — `bridge_status`,
-`dump_tree` (with a `filter` arg), `grab_widget` (PNG inline),
-`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`
+**Tools exposed** (23 typed tools): introspection — `bridge_status`,
+`dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
+`path` for where the PNG is written, else a temp file),
+`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`, `gesture`
 (on a target-not-found failure it appends `did_you_mean` candidates),
 `shortcut`, `tune`, `slice`, `pan`, `record`, `mark`, `window`, `menu`;
 assert/await — `assert_state` / `wait_for` (read a model property and
@@ -183,6 +186,27 @@ emissions; once confirmed the choice persists. Toggling it drives the
 same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
 disabling force-unkeys immediately).
 
+### Observe-only (read-only) mode
+
+For a look-but-don't-touch session — handing an assistant visibility
+without letting it change anything — check **"Observe only"** in Radio
+Setup → Network. The bridge then refuses **every** mutating verb and
+answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
+`dumpTree`, `grab`, the read-only `log` actions, `floors`, the inventory-only
+`streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
+and `streams reset/resync/refresh`; the latter two stream actions clear local
+diagnostics or request a fresh radio inventory. It is
+enforced in the app, not in the MCP server, so no client can flip it
+off; the refusal message points the operator back to the checkbox. The
+toggle takes effect immediately on a running bridge — no restart — so
+the intended flow works: start the app with the bridge off, check
+"Observe only", then start the bridge. `ping` and `whoami` report the
+current state as `readOnly`, and the MCP server surfaces it in
+`bridge_status` as `bridge_read_only`. Headless/CI runs can pin it with
+`AETHER_AUTOMATION_READONLY=1`.
+
+![Observe only setting in Radio Setup → Network](assets/automation-observe-only.png)
+
 ---
 
 ## How it works (the contract)
@@ -195,6 +219,9 @@ disabling force-unkeys immediately).
   - `dumpTree`
   - `grab SpectrumWidget /tmp/pan.png`
   - `{"cmd":"grab","target":"SpectrumWidget","path":"/tmp/pan.png"}`
+  - `{"cmd":"grab","args":"SpectrumWidget /tmp/pan.png","token":"..."}`
+    (the optional `args` string uses the same positional parser as a bare
+    command, which is useful when authenticated requests also need a token)
 - **Discovery:** on startup the app writes the resolved socket path to
   `${TMPDIR:-/tmp}/aethersdr-automation.json`, so you never have to guess the
   platform-specific endpoint:
@@ -232,10 +259,12 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`grab pan <index> [path]`](#grab) | Raw spectrum surface of a specific pan. |
 | | [`grab pan-visible <index> [path]`](#grab) | Pan applet incl. VFO/flag overlays (alias `pan-composite`). |
 | | [`floors`](#floors) | Per-pan measured noise + display floor (dBm). |
-| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`. |
+| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`, `readOnly`. |
 | **Drive** | [`invoke <target> <action> [v]`](#invoke) | Click/toggle/set/selectRow/submit/trigger a control (TX-guarded). |
 | | [`close <target>`](#close) | Close the target's top-level window. |
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
+| | [`dragAt <target> "<x> <y> <dx> <dy> [modifiers]"`](#dragat) | Drag from a target-local point with optional keyboard modifiers. |
+| | [`gesture <phase>`](#gesture) | Hold press/move/release across requests for delayed-event tests. |
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
 | | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
@@ -245,17 +274,21 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
 | | [`shortcut <id>`](#shortcut) | Fire a ShortcutManager/MIDI action by id (TX-guarded). |
+| | [`midi cc <0-127>`](#midi) | Inject a learned VFO Tune Knob CC event (RX-only). |
 | | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
+| | [`get gps`](#get) | GPS fix, location, satellite-count, time, course, and reference snapshot. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
 | | [`get flags`](#get) | VFO flag attachment state for slice-to-pan assertions. |
 | | [`get cwx`](#get-cwx) | CWX keyer state + queue-drain watch (#3949). |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
+| | [`get renderstats`](#get-renderstats) | Combined 2D/3D pan, waterfall, DSS, scheduler, and WAVE profiling snapshot. |
 | | [`get tracedebug`](#get-tracedebug) | Per-panadapter Flex/Kiwi FFT and 3D trace diagnostics. |
 | | [`get clients`](#get-clients) | Radio client roster, GUI IDs + foreign-pan-write forensics (#3977/#4166). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
+| | [`get clock`](#get-clock) | AetherClock time-signal decode state (lock, station, decoded UTC, offset, quality). |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
 | | `get waveforms` | Installed waveform list, WFP state, local D-STAR service/configuration, delivery health/metrics, and recent waveform status reports. |
 | | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
@@ -263,7 +296,10 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
+| | [`targettune <mhz>`](#targettune) | Absolute tune through the commanded-target and band-stack path. |
+| | [`memory activate <index> [panId]`](#memory) | Recall a radio memory through the normal UI policy. |
 | | [`slice <action>`](#slice) | add/remove/select/tx/mode/diversity/centerlock/txant/rxant/rxsource. |
+| **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
@@ -343,6 +379,7 @@ Each `<node>`:
   "text": "NR2",                           // checkable buttons: the label (value would just be "checked")
   "checked": false,                        // checkable buttons: explicit boolean check-state
   "range": { "min": 0, "max": 100 },       // numeric controls only (slider/spinbox)
+  "sliderDown": false,                     // sliders only: real QAbstractSlider press ownership
   "items": ["LSB","USB","AM","CW"],        // QComboBox only: full option list
   "currentIndex": 1,                       // QComboBox only: selected index
   "panIndex": 0,                           // SpectrumWidget only: pass to `grab pan`/`pan close`
@@ -577,12 +614,14 @@ connects).
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
+| `gps` | — | GPS status, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time, frequency error, and oscillator-reference state |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `cwx` | — | CWX keyer + queue-drain watch — see [`get cwx`](#get-cwx) |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), txSlice, …) |
+| `clock` | — | AetherClock snapshot: `state`/`stateName` (NoSignal/Acquiring/Locked), `station`/`stationName` (WWV/WWVH/WWVB), `decodedUtc` (ISO-8601, empty until a decode), `offsetMs` (decoded − host at the second edge; positive = host behind broadcast), `lockQuality` (0–100), `sliceId` (bound slice, −1 when stopped), `gpsTimeAvailable`. Validate applet Start/Tune/station-switch actions and lock progress without pixels. |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps, `transmitInhibited`, `transmitInhibitReason`) |
 | `flags` (or `vfoFlags`) | `all` (default) / `<sliceId>` | VFO flag attachment snapshot: each flag’s slice id, expected radio pan id, attached UI pan id/index, geometry, visibility, and `attachedToExpectedPan`; also reports `missingSlices`. |
@@ -601,6 +640,18 @@ chunks dispatched to Receive Presentation Sync analysis, while
 `receivePresentationOutputSignalSuppressedCount` counts non-empty output chunks
 that were captured for automation but skipped because no KiwiSDR audio source
 was active.
+
+The TX input endpoint also exposes in-memory capture-health evidence for TCI
+handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
+`source_was_active`, `saturation_observed`, `tci_suppressed_callbacks`,
+`full_buffer_during_tci_observations`, `idle_during_tci_transitions`,
+`post_tci_local_tx_while_saturated`, and `last_mic_read_age_ms`.
+`saturation_observed` is set when the capture buffer reaches its reported
+capacity during TCI suppression. An Active-to-Idle transition with suppressed
+callbacks and unread bytes remains a fallback for backends that do not expose a
+useful capacity. The same evidence is written to the Audio Summary support log
+only when Help → Support's **CAT/rigctld** logging toggle (the category used by
+TCI debug logging) is enabled; TX capture-health summaries are off by default.
 
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
@@ -683,6 +734,36 @@ until `lastCommand.pending` is false, require `lastCommand.code == 0`, then
 poll the raw mode lists after the automatic slice-status resync. The verb is
 generic; the bridge does not embed or preserve an old registration name.
 
+### `get renderstats`
+
+Combined rendering-analysis snapshot for before/after automation. It returns
+every `panstats` entry, every WAVE/strip `wavestats` entry, the shared pan
+scheduler, and non-overlapping headline totals. The totals cover measured
+GUI-thread FFT ingest, native/Kiwi waterfall ingest, GPU frame preparation,
+software fallback painting, and WAVE painting. DSS timings are reported
+separately because they are a subset of FFT/waterfall ingest.
+
+```json
+→ {"cmd":"get","model":"renderstats","selector":"reset"}
+← {"ok":true,"model":"renderstats",
+   "totals":{"panCount":1,"visiblePanCount":1,"waveScopeCount":1,
+     "fftFramesPerSec":24.9,"gpuFramesPerSec":25.1,
+     "fftIngestMsPerSec":4.2,"nativeWaterfallUpdateMsPerSec":3.8,
+     "gpuFrameMsPerSec":2.7,"wavePaintMsPerSec":0.0,
+     "measuredMainThreadMsPerSec":10.7,
+     "hiddenWaterfallUpdatesPerSec":0.0,
+     "hiddenDssHistoryRowsPerSec":0.0,
+     "waterfallAllocatedBytes":583680,
+     "dssAllocatedBytes":37847040},
+   "pans":[...],"scopes":[...],"renderScheduler":{...}}
+```
+
+Use `get renderstats reset`, wait for a fixed observation interval, then read
+`get renderstats reset` again. This gives disjoint samples across pan, waterfall,
+3DSS, scheduler, and WAVE counters with one command. `measuredMainThreadMsPerSec`
+is instrumented GUI-thread work, not whole-process CPU percentage; use it for
+causal comparisons while keeping the radio/display configuration fixed.
+
 ### `get panstats`
 Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
 each pan spends preparing frames, split by pipeline section, for before/after
@@ -712,7 +793,14 @@ cost a few integer adds per frame.
 | `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
 | `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
 | `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `previewOverlayTransformsPerSec` | GPU-only remaps of the retained frequency-overlay texture during pan/zoom; these should not produce matching full-image rebuilds/uploads |
+| `previewOverlayCommitRefreshes` | exact CPU overlay refreshes performed when pan/zoom previews commit |
+| `previewScaleRefreshesPerSec`, `previewScalePaintMsPerSec`, `previewScaleUploadBytesPerSec` | narrow frequency-scale strip refreshes during preview; separates the small correctness update from full-pan overlay work |
 | `wfUploadBytesPerSec` | waterfall texture upload volume |
+| `nativeWaterfall*` / `kiwiWaterfall*` | source-specific ingest rate and GUI-thread cost; `HiddenUpdates` identifies background Flex/Kiwi work |
+| `waterfallVisibleRows*` / `waterfallHistoryRows*` | viewport and retained compact-intensity-history write rates/cost (history is written only for the visible source) |
+| `dssLiveRows*` / `dssHistoryRows*` | 96-row live 3D surface work versus deep retained scrollback work; `dssHiddenLiveRowsPerSec` exposes the hidden-Flex live-ring warming (#4081) — hidden sources retain no deep history |
+| `waterfallAllocatedBytes` / `dssAllocatedBytes` | current plus cached Flex/Kiwi/profile storage; waterfall history is counted by actually allocated lazy chunks, not logical capacity |
 | `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
 | `renderScheduler` | shared panadapter repaint scheduler counters; `coalescedRequests` and `avgWidgetsPerFlush` show cross-pan request coalescing |
 
@@ -763,10 +851,10 @@ used by the stacked trace renderer.
   trace floor used by 3D placement from the waterfall color floor.
 
 ### `get rhi`
-Per-panadapter `QRhiWidget` **surface geometry** — the widget size,
-devicePixelRatio, and pinned color-buffer extents — so automation can assert
-the swapchain sizing that the #4091 fix controls (the color buffer stays
-even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
+Per-panadapter `QRhiWidget` **surface geometry and native-widget topology** —
+the widget size, devicePixelRatio, pinned color-buffer extents, and (on macOS)
+native-leaf/ancestor isolation — so automation can assert the swapchain sizing
+that the #4091 fix controls and the bounded native-view hierarchy from #4339.
 
 ```json
 → {"cmd":"get","model":"rhi"}
@@ -784,9 +872,13 @@ even-aligned in device pixels under a fractional `QT_SCALE_FACTOR`).
 | `colorBufferW` / `colorBufferH` | the pinned device-pixel color buffer, or the unset sentinel `-1,-1` when auto-sized |
 | `expectedEvenW` / `expectedEvenH` | what an even-aligned pin should be for the current size — assert `colorBufferW/H` matches without recomputing the formula |
 | `evenAligned` | both pinned dimensions are even (the #4091 invariant); `false` when auto-sized |
+| `nativeWindow` | macOS only: `true` when the `SpectrumWidget` currently has an actual native child window (`windowHandle()` exists); expected for the default Metal path and `false` with `AETHER_PAN_NO_NATIVE_WINDOW=1` |
+| `nativeAncestorsBlocked` | macOS only: whether the leaf has `WA_DontCreateNativeAncestors`, preventing its native-window request from promoting the surrounding QWidget tree |
+| `nativeAncestorCount` | macOS only: number of QWidget ancestors marked `WA_NativeWindow`; the isolated default Metal path expects `0` |
 
 `selector` filters by pan index (`get rhi 0`) or objectName. On non-GPU builds
-each entry reports `gpu:false` and omits the buffer fields.
+each entry reports `gpu:false` and omits the buffer fields. The three native
+topology fields are emitted only on macOS; other platforms omit them.
 
 ### `get clients`
 Multi-session forensics (#3977/#3951): every client connected to the radio,
@@ -877,7 +969,8 @@ scope actually consumed, in milliseconds per wall-clock second.
    "name":"waveAppletScope","windowTitle":"AetherSDR","windowClass":"AetherSDR::MainWindow",
    "floating":false,"visible":true,"tx":false,"paused":false,
    "mode":"Scope","fps":60,"windowMs":1000,"sampleRate":48000,
-   "widthPx":244,"heightPx":110,"sinceMs":40012,
+   "widthPx":244,"heightPx":110,"nativeWindow":false,
+   "nativeAncestorsBlocked":false,"nativeAncestorCount":0,"sinceMs":40012,
    "paintCount":2381,"paintsPerSec":59.5,"avgPaintUs":312.4,"maxPaintUs":1893,
    "paintMsPerSec":18.6,"appendsPerSec":124.9,"samplesPerSec":47980.1}]}
 ```
@@ -886,6 +979,11 @@ scope actually consumed, in milliseconds per wall-clock second.
 - `mode` uses the applet's UI names: `Scope` / `Envelope` / `History` / `Bands`.
 - `floating` + `windowClass` — which top-level surface hosts the scope
   (`MainWindow` docked, `FloatingContainerWindow` popped out, or the strip).
+- `nativeWindow`, `nativeAncestorsBlocked`, and `nativeAncestorCount` expose
+  the same QWidget/native-surface topology as `get rhi`. On macOS, waveform
+  scopes embedded in scroll areas are expected to remain composited
+  (`false`, `false`, `0`) so their rendering follows QWidget resize, scroll,
+  and clipping geometry.
 - Counters accumulate from app start; a selector narrows to one scope
   (`get wavestats waveAppletScope`) and the pseudo-property `reset` zeroes
   the counters after the read (`get wavestats "" reset`) so successive reads
@@ -895,18 +993,53 @@ scope actually consumed, in milliseconds per wall-clock second.
   hidden-widget signature, not a bug.
 
 ### `tune`
-Set the **active slice's** frequency in MHz — the most fundamental control the
+Set a slice's frequency in MHz — the most fundamental control the
 custom-painted `VfoWidget` couldn't expose. RX/config only; despite the name it
 does **not** key (cf. `atu tune`, which does). Honors the per-slice VFO lock.
+
+Without a slice id the **active slice** is tuned (the original verb shape).
+An optional second argument (bare line) / `id` field (JSON) targets a specific
+slice by id, so scripts driving a non-active slice no longer need the racy
+`slice select` → `tune` → re-select flap:
 
 ```json
 → {"cmd":"tune","value":"7.175"}
 ← {"ok":true,"tune":7.175,"sliceId":0,"letter":"A"}
+
+→ {"cmd":"tune","value":"14.074","id":"1"}
+← {"ok":true,"tune":14.074,"sliceId":1,"letter":"B"}
 ```
 
-Refused with `refused: slice A is VFO-locked` when the slice is locked. To
+Bare-line form: `tune 14.074 1`.
+
+Refused with `refused: slice A is VFO-locked` when the slice is locked, with
+`no slice with id N` when the id names no slice, and with `refused: slice N
+belongs to another client` when another client owns it (Multi-Flex). To
 recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
+
+### `targettune`
+Tune through the same absolute-target policy used by typed frequency entry and
+other commanded jumps. Unlike `tune`, this can preselect a different band stack
+before applying the final frequency, so it is the bridge path for testing
+radio-authoritative band restores. RX/config only and honors VFO lock and SWR
+sweep guards.
+
+```json
+→ {"cmd":"targettune","value":"146.520"}
+← {"ok":true,"targetTune":146.52,"sliceId":0,"letter":"A"}
+```
+
+### `memory`
+Recall a radio memory through `MainWindow::activateMemorySpot()`, including its
+cross-band preselection and delayed reveal behavior. The optional `panId`
+selects the target pan; omit it to use the active/preferred slice. RX/config
+only.
+
+```json
+→ {"cmd":"memory","action":"activate","value":"12 0x40000000"}
+← {"ok":true,"memory":"activate","index":12,"panId":"0x40000000"}
+```
 
 ### `slice`
 Slice lifecycle, mode, diversity, Center Lock, TX assignment, antennas, and
@@ -938,6 +1071,32 @@ receive source. All actions are RX/config — none keys the transmitter.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+### `gps`
+
+Inject a disconnected-only GPS report through `RadioModel::applyGpsChanges`,
+the same typed-delta path used by live `FlexBackend` status. This is safe for
+deterministic dashboard and model testing: it is refused while connected and
+never sends a radio command.
+
+```json
+→ {"cmd":"gps","action":"fixture","value":"6000"}
+← {"ok":true,"gps":"fixture","profile":"6000","snapshot":{"status":"Locked","latitude":"N 34 13.464",…}}
+
+→ {"cmd":"gps","action":"fixture","value":"8000"}
+← {"ok":true,"gps":"fixture","profile":"8000","snapshot":{"status":"Locked","latitude":"34.224400000","ntpServerAddress":"192.0.2.80",…}}
+
+→ {"cmd":"gps","action":"clearfixture"}
+← {"ok":true,"gps":"clearfixture"}
+```
+
+Both profiles use the public Mount Wilson Observatory location so screenshots
+are safe to share. The `6000` profile exercises the hemisphere/degrees/decimal-
+minutes form seen from a FLEX-6700 GPSDO. The `8000` profile exercises decimal
+degrees and the `track` (course-over-ground) field captured from FLEX-8600
+firmware 4.2.18, plus the reserved TEST-NET-1 address `192.0.2.80` for testing
+the 8000-series NTP tip. Use `get gps` or `dumpTree` after injecting to assert
+model or widget state.
 
 #### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
@@ -983,6 +1142,62 @@ is provable end-to-end, not just via seed + read-back.
 computed once from the press point (a `QSizeGrip` moves as the window resizes, so
 re-mapping mid-drag would overshoot) — a `140 90` grip drag grows the window by
 exactly 140×90.
+
+### `dragAt`
+Synthesize a drag from an exact target-local point. Optional modifiers are a
+comma- or plus-separated combination of `control`, `meta`, `shift`, and `alt`
+(`cmd`/`command` and `option` are accepted aliases). This reaches custom-widget
+gestures whose behavior depends on both position and a held modifier. As with
+`clickAt`, the drag is refused when the target or an ancestor is marked as a
+TX-keying control unless transmit automation is explicitly enabled.
+
+```json
+→ {"cmd":"dragAt","target":"SpectrumWidget","value":"1564 100 0 300 meta"}
+← {"ok":true,"target":"SpectrumWidget","class":"SpectrumWidget",
+   "x":1564,"y":100,"dx":0,"dy":300,"modifiers":268435456}
+```
+
+`drag` remains the backward-compatible one-shot form. It now enforces the same
+disabled-control, TX-keying, and `AETHER_AUTOMATION_TX_MAX_POWER` pointer rails
+as `clickAt`; it cannot be used to bypass those guards.
+
+### `gesture`
+Keep a real left-button gesture open across multiple main-loop requests. This is
+the phaseful counterpart to atomic [`drag`](#drag-alias-mouse), intended for
+testing behavior such as a delayed model/radio update arriving while
+`QAbstractSlider::isSliderDown()` is genuinely true.
+
+```json
+→ {"cmd":"gesture","action":"begin","target":"RF power"}
+← {"ok":true,"active":true,"sliderDown":true,"value":50,"leaseMs":60000}
+
+→ {"cmd":"gesture","action":"move","value":"0 -30"}
+← {"ok":true,"active":true,"sliderDown":true,"dx":0,"dy":-30}
+
+→ {"cmd":"gesture","action":"end"}
+← {"ok":true,"active":false,"target":"RF power","dx":0,"dy":-30}
+```
+
+Phases:
+
+- `begin <target> [x y]` presses at the widget center, or at optional local
+  coordinates. Only one phaseful gesture may exist in the app at once.
+- `move <dx> <dy>` sends a move at fixed-base offsets from the original press.
+- `status` is read-only and reports `active`, ownership, offsets, and
+  `sliderDown`/`value` for a slider.
+- `end [dx dy]` optionally moves to a final offset, then releases.
+- `cancel` releases at the current offset.
+
+The owning bridge connection must remain open between phases. The typed MCP
+`gesture` tool does this automatically while ordinary tools keep using separate
+connections, which is what lets an independent `invoke`, `dump_tree`, or delayed
+app event interleave. Raw clients must reuse one socket themselves.
+
+Safety is fail-closed: auth and observe-only checks apply to every phase; begin
+uses the same disabled-control, TX-keying, and power-ceiling rails as pointer
+clicks. End, cancel, malformed continuation, target destruction, client
+disconnect, bridge stop, or 60 seconds without a move all synthesize the release
+and clear ownership.
 
 ### `hover`
 Synthesize a pointer **hover** over a widget (no button pressed, unlike `drag`)
@@ -1273,6 +1488,21 @@ needs key **release** edges. The bridge replies with a distinct
 truth, no bridge-side id list to drift. RX-only actions (the zoom shortcuts
 included) need no flag.
 
+### `midi`
+Inject one MIDI Control Change value through the same learned VFO Tune Knob
+relative decoder used by physical controllers. This focused automation surface
+does not create or persist a binding and is RX-only.
+
+```json
+→ {"cmd":"midi","action":"cc","value":"65"}
+← {"ok":true,"midi":"cc","value":65,"paramId":"rx.tuneKnob","accepted":true}
+```
+
+Bare form: `midi cc 65`. Use `get slice active` before and after the injection
+to assert that center-64 values 65 and 63 move exactly one configured tuning
+step in opposite directions. The controller manager coalesces events for 20 ms,
+so callers should wait briefly before reading the resulting slice frequency.
+
 ### `pan`
 Panadapter lifecycle — create or tear down a pan regardless of how it was opened.
 
@@ -1538,8 +1768,11 @@ The `~500ms` is a **best-effort hint, not a contract** — the re-dump is async;
 `streams radio` still looks stale, poll again. Returns
 `not connected — cannot resync display inventory` with no radio.
 
-All `streams` actions are read-only / RX; none keys the transmitter (`resync`
-sends only the `sub pan all` subscription command).
+None of the `streams` actions keys the transmitter. In **Observe only** mode,
+the default Layer-A inventory and `radio`/`inventory` reads remain available;
+`reset`, `resync`, and `refresh` are blocked. `reset` changes the local orphan
+tally, while `resync`/`refresh` send the `sub pan all` subscription command to
+the radio.
 
 ### `txwaterfall`
 Toggle the radio's **show-TX-in-waterfall** display flag (`transmit set
@@ -1667,6 +1900,49 @@ Useful fields:
 | `lastAcceptedLock` | Whether the latest estimator pass changed/confirmed the applied lock |
 | `flex*BufferMs`, `kiwi*BufferMs`, `playbackQueuedMs` | Current live-to-ear staging counters |
 
+### `get clock`
+Read the AetherClock time-signal decode snapshot (engine + voter state for the
+WWV/WWVH/WWVB decoders). Served before the radio guard, so it answers even
+while disconnected; until the GUI wires a model it replies
+`"no clock model available"`.
+
+```json
+→ {"cmd":"get","model":"clock"}
+← {"ok":true,"model":"clock","state":2,"stateName":"Locked",
+   "station":1,"stationName":"WWV","decodedUtc":"2026-07-20T22:52:59.000Z",
+   "offsetMs":-129.7,"lockQuality":75,"sliceId":0,"gpsTimeAvailable":false}
+```
+
+Useful fields:
+
+| field | meaning |
+|---|---|
+| `state` / `stateName` | `NoSignal`, `Acquiring`, `Locked` — the authoritative currency signal |
+| `station` / `stationName` | Auto-tagged station: WWV / WWVH / WWVB |
+| `decodedUtc` | Last voted broadcast time (ISO-8601; empty until a first decode). Retained after demotion so age-since-decode stays computable — always read it beside `stateName` |
+| `offsetMs` | decoded − host at the second edge; positive = host behind broadcast |
+| `lockQuality` | Voter lock confidence 0–100 (weakest-voted-bit semantics) |
+| `sliceId` | Bound slice while running, −1 when stopped |
+| `gpsTimeAvailable` | Whether the connected radio reports GPS time (context for the offset) |
+
+Acquisition telemetry (additive; mirrors the engine's ~1 Hz `ClockDiagnostics`
+snapshot — every value is a real measurement or a real gate verdict, updated
+while the engine runs):
+
+| field | meaning |
+|---|---|
+| `toneSnrDb` | Stage 1 carrier readout: WWVB tone-search peak/median in dB; WWV/WWVH folded tick-band peak-to-mean in dB |
+| `pwmContrast` | WWVB envelope p90/p10 contrast (0 when n/a); ≥ ~1.4 means a real AM drop exists |
+| `toneDetected` | Carrier gate result (WWVB tone gate / WWV tick-fold lock) |
+| `phaseLocked` | Second-edge timing sync (WWV tick lock / WWVB envelope phase) |
+| `delayEstMs` | WWV tracked matched-filter delay estimate; `null` when the decoder has none |
+| `anchored` | Minute frame anchored (marker sync) |
+| `badFrameStreak` | Consecutive broken-marker-skeleton frames (WWV; 3 triggers resync) |
+| `classifiedPct` | % of the last 60 s that classified into a symbol |
+| `framesInWindow` / `windowSize` | Voter sliding-window occupancy |
+| `voteQuality` | Raw voter lock confidence 0–1 (pre-scale; `lockQuality` is the 0–100 post-lock mirror) |
+| `refusalReason` / `refusalName` | Which lock gate is currently refusing: `None`, `QualityFloor`, `Plausibility`, `Staleness`, `Contested` (`None` = locked or still collecting frames) |
+
 ### `audioCapture`
 Bounded, automation-only PCM capture for receive-sync diagnostics. It is active
 only inside an `AETHER_AUTOMATION=1` process, is read-only, and does not change
@@ -1746,7 +2022,7 @@ Actions:
 
 | action | value | effect |
 |---|---|---|
-| `snapshot` | optional pan target | Read `live`, current center/bandwidth MHz, waterfall/DSS history row counts, visible DSS row count, and the current front-row peak bin. |
+| `snapshot` | optional pan target | Read `live`, current center/bandwidth MHz, waterfall/DSS history row counts, visible DSS row count, the current front-row peak bin/min/max/span, localized plateau metrics (`dssVisibleFrontMinValueBins`, `dssVisibleFrontLongestFlatRunBins`, and visible maxima), and flat/non-flat visible-row counts. |
 | `reset` | `native` or `kiwi` | Clear the selected stream's current/history rows and make that stream active for subsequent injection. |
 | `inject` | `<count> <firstPeakBin> <stepBin> [native\|kiwi [rowLowMhz rowHighMhz]]` | Add synthetic rows with one strong peak per row. `count` is rejected if it exceeds the retained waterfall history capacity. Native injection adds one fallback-style waterfall/DSS row per input row; Kiwi injection drives `updateKiwiSdrWaterfallRow()`. Kiwi frame arguments override the source row's frequency span, so tests can cover partial-overlap rows. |
 | `scrollback` | `<offsetRows>` | Enter waterfall history mode and rebuild the 3D surface using the same offset. |
@@ -1775,7 +2051,8 @@ its own per-pid socket + discovery entry).
 → {"cmd":"whoami"}
 ← {"ok":true,"pid":34758,"name":"aethersdr-automation-34758",
    "socket":"/var/folders/…/aethersdr-automation-34758",
-   "label":"","station":"Claude","txAllowed":false,"version":"26.6.5"}
+   "label":"","station":"Automation","agentName":"Automation",
+   "txAllowed":false,"version":"26.6.5"}
 ```
 
 `txAllowed` reports whether `AETHER_AUTOMATION_ALLOW_TX` is set for this process —
@@ -1821,6 +2098,10 @@ push subscription — the observability suite. All diagnostic; nothing keys.
 `tail` also returns `oldest` (the oldest `seq` still resident): if your `since <
 oldest`, earlier matching events were evicted and the window is a truncated
 suffix, not a complete bracket.
+
+In **Observe only** mode, `categories`, `get`, `tail`, `subscribe`, and
+`unsubscribe` remain available. `set` and `reset` are blocked because they
+change the app's logging state.
 
 ### `record`
 Drive the client-side **QSO WAV recorder** (the same one behind the manual record
@@ -2122,7 +2403,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 46 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 52 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2136,6 +2417,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
+| `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
+| `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
 | `contextMenu` | — | contextMenu <target> [x y] — Qt context-menu path |
 | `rightClick` | — | rightClick <target> [x y] — mousePressEvent menu path |
@@ -2148,8 +2431,11 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `txtest` | — | txtest <twotone\|off> — TX-gated test signal |
 | `atu` | — | atu <bypass\|start> — antenna tuner (start is TX-gated) |
 | `slice` | — | slice <action> [args] — slice lifecycle/config (see doSlice) |
+| `gps` | — | gps <fixture\|clearfixture> [6000\|8000] — disconnected GPS test data |
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
-| `tune` | — | tune <mhz> — set the active slice frequency |
+| `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
+| `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
+| `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
@@ -2158,7 +2444,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
-| `streams` | — | streams [radio\|reset] — stream diagnostics |
+| `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
@@ -2167,6 +2453,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `resize` | — | resize <w> <h> [target] — resize a window |
 | `window` | — | window <maximize\|restore\|minimize\|fullscreen> [target] |
 | `shortcut` | — | shortcut <id> — fire a ShortcutManager/MIDI action (TX-gated) |
+| `midi` | — | midi cc <0-127> — inject a learned VFO Tune Knob CC event |
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |

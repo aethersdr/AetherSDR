@@ -1,3 +1,4 @@
+#include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
 
@@ -35,6 +36,11 @@ static int g_failures = 0;
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-theme-manager-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "FAIL could not create isolated settings profile\n");
+        return 1;
+    }
     // Route every QStandardPaths writable location into Qt's test-mode
     // sandbox (~/.qttest/...).  XDG_CONFIG_HOME alone isn't enough:
     // macOS ignores it and resolves GenericConfigLocation to
@@ -42,8 +48,6 @@ int main(int argc, char** argv)
     // probe themes into the developer's real themes dir — the leftover
     // files then collide on the next run and the import de-duplicates
     // the name to "... (2)", failing the EXPECT_EQ assertions below.
-    QStandardPaths::setTestModeEnabled(true);
-
     // The sandbox itself persists across runs, so clear any probe
     // themes a previous (possibly crashed) run left behind before the
     // ThemeManager singleton scans the dir.
@@ -54,12 +58,6 @@ int main(int argc, char** argv)
             + QStringLiteral("/AetherSDR");
         QDir(sandboxAppDir).removeRecursively();
     }
-
-    // Route AppSettings + theme dirs into an isolated temp tree so the
-    // test never pollutes the developer's real ~/.config/AetherSDR.
-    QTemporaryDir tmp;
-    EXPECT_TRUE(tmp.isValid());
-    qputenv("XDG_CONFIG_HOME", tmp.path().toUtf8());
 
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("AetherSDR-test");
@@ -195,7 +193,8 @@ int main(int argc, char** argv)
     // that's Phase 5 work.  The check below verifies the loadThemeFromPath
     // logic via the *file* layer though by writing the theme and re-reading
     // it through setActiveTheme's load path on a separate construction.
-    const QString userThemesDir = tmp.path() + "/AetherSDR-test/themes";
+    const QString userThemesDir =
+        settingsProfile.path() + "/AetherSDR-test/themes";
     QDir().mkpath(userThemesDir);
     QFile f(userThemesDir + "/test-theme.json");
     if (f.open(QIODevice::WriteOnly)) {
@@ -460,7 +459,8 @@ int main(int argc, char** argv)
     // (a font compound has no "type" field; a gradient has no "family"
     // field; a plain nested object has neither and must recurse).
     {
-        const QString discriminatorDir = tmp.path() + "/_discriminator_src";
+        const QString discriminatorDir =
+            settingsProfile.path() + "/_discriminator_src";
         QDir().mkpath(discriminatorDir);
         const QString discriminatorPath =
             discriminatorDir + "/discriminator.json";
@@ -659,7 +659,7 @@ int main(int argc, char** argv)
     // A sparse user theme that does not mention applet/* should still
     // inherit the built-in per-applet differentiation after load.
     {
-        const QString sparseDir = tmp.path() + "/_sparse_theme_src";
+        const QString sparseDir = settingsProfile.path() + "/_sparse_theme_src";
         QDir().mkpath(sparseDir);
         const QString sparsePath = sparseDir + "/sparse-theme.json";
         QFile sf(sparsePath);
@@ -736,7 +736,7 @@ int main(int argc, char** argv)
     //   2. the compound font persisted in {family, size, color} shape,
     //   3. unloading + reloading the theme produces identical values.
     {
-        const QString v1Dir = tmp.path() + "/_v1_src";
+        const QString v1Dir = settingsProfile.path() + "/_v1_src";
         QDir().mkpath(v1Dir);
         const QString v1Path = v1Dir + "/v1-source.json";
         QFile v1(v1Path);

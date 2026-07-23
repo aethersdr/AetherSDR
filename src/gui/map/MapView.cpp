@@ -27,6 +27,8 @@
 #include <QVariantAnimation>
 #include <QVBoxLayout>
 
+#include <cmath>
+
 namespace AetherSDR {
 
 namespace {
@@ -34,7 +36,6 @@ namespace {
 const QGV::GeoRect kWorldRect{ 70.0, -170.0, -60.0, 170.0 };
 // View placed around the home position by resetToHome(): roughly
 // continental scale, wide enough that typical HF reception paths fit.
-constexpr double kHomeSpanDeg = 30.0;
 constexpr double kPanFraction = 0.25;   // arrow-key pan, fraction of viewport
 constexpr double kZoomStep = 2.0;       // +/- key zoom factor
 constexpr qint64 kTileCacheBytes = 256LL * 1024 * 1024;
@@ -247,6 +248,14 @@ void MapView::setHomePosition(double lat, double lon, const QString& label,
     }
 }
 
+void MapView::setHomeSpanDegrees(double spanDegrees)
+{
+    if (!std::isfinite(spanDegrees) || spanDegrees <= 0.0) {
+        return;
+    }
+    m_homeSpanDeg = qBound(0.002, spanDegrees, 120.0);
+}
+
 void MapView::setMarkers(const QVector<Marker>& markers)
 {
     clearMarkers();
@@ -338,10 +347,10 @@ void MapView::resetToHome()
         m_map->cameraTo(QGVCameraActions(m_map).scaleTo(kWorldRect), true);
         return;
     }
-    const QGV::GeoRect rect{ m_homeLat + kHomeSpanDeg / 2.0,
-                             m_homeLon - kHomeSpanDeg,
-                             m_homeLat - kHomeSpanDeg / 2.0,
-                             m_homeLon + kHomeSpanDeg };
+    const QGV::GeoRect rect{ m_homeLat + m_homeSpanDeg / 2.0,
+                             m_homeLon - m_homeSpanDeg,
+                             m_homeLat - m_homeSpanDeg / 2.0,
+                             m_homeLon + m_homeSpanDeg };
     m_map->cameraTo(QGVCameraActions(m_map).scaleTo(rect), true);
 }
 

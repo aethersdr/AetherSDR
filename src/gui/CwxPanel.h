@@ -66,11 +66,13 @@ public:
 
     // Optional providers used to guard the global F1-F12 / ESC shortcuts
     // so they don't fire in modes/states where they'd be surprising (#1552).
-    //  - modeProvider returns the active slice's mode ("CW", "CWL", ...)
+    //  - txModeProvider returns the TX slice's mode ("CW", "CWL", ...) — CWX
+    //    keys the TX slice, so the guard follows it, not the selected RX slice
+    //    (matches indicator availability; #4173)
     //  - transmittingProvider returns true when the radio is actively TXing
     // When unset, the shortcuts fire unconditionally (legacy behavior).
-    void setActiveModeProvider(std::function<QString()> provider) {
-        m_activeModeProvider = std::move(provider);
+    void setTxModeProvider(std::function<QString()> provider) {
+        m_txModeProvider = std::move(provider);
     }
     void setTransmittingProvider(std::function<bool()> provider) {
         m_transmittingProvider = std::move(provider);
@@ -139,7 +141,7 @@ private:
     QPushButton*    m_setupBtn{nullptr};
     QSpinBox*       m_speedSpin{nullptr};
 
-    std::function<QString()> m_activeModeProvider;
+    std::function<QString()> m_txModeProvider;
     std::function<bool()>    m_transmittingProvider;
 
     // F1-F12 + ESC shortcuts — enabled by MainWindow based on the active

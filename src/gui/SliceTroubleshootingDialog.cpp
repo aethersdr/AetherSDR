@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/DeviceDiagnostics.h"
+#include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"
 
 #include <QApplication>
@@ -331,9 +332,11 @@ QString nr4MethodName(int id)
 QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
 {
     auto& settings = AppSettings::instance();
+    const Nr2SettingsModel::Config nr2Config =
+        Nr2SettingsModel::instance().config();
 
-    const int nr2GainMethod = settings.value("NR2GainMethod", "2").toInt();
-    const int nr2NpeMethod = settings.value("NR2NpeMethod", "0").toInt();
+    const int nr2GainMethod = nr2Config.gainMethod;
+    const int nr2NpeMethod = nr2Config.npeMethod;
     const int nr4MethodId = settings.value("NR4NoiseEstimationMethod", "0").toInt();
 
     QJsonObject nr2;
@@ -342,10 +345,13 @@ QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
     nr2["gain_method"] = nr2GainMethodName(nr2GainMethod);
     nr2["npe_method_id"] = nr2NpeMethod;
     nr2["npe_method"] = nr2NpeMethodName(nr2NpeMethod);
-    nr2["ae_filter"] = settings.value("NR2AeFilter", "True").toString() == "True";
-    nr2["gain_max"] = settings.value("NR2GainMax", "1.50").toFloat();
-    nr2["gain_smooth"] = settings.value("NR2GainSmooth", "0.85").toFloat();
-    nr2["qspp"] = settings.value("NR2Qspp", "0.20").toFloat();
+    nr2["ae_filter"] = nr2Config.aeFilter;
+    nr2["gain_max"] = nr2Config.gainMax;
+    nr2["gain_floor"] = nr2Config.gainFloor;
+    nr2["gain_smooth"] = nr2Config.gainSmooth;
+    nr2["qspp"] = nr2Config.qspp;
+    nr2["legacy_geometry_and_gain_mapping"] =
+        nr2Config.legacyGeometryAndGainMapping;
 
     QJsonObject nr4;
     nr4["enabled"] = audio ? audio->nr4Enabled() : false;

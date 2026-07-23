@@ -15,6 +15,7 @@
 //
 // Build: CMake target `flex_control_dialog_size_test`. Exit 0 = pass.
 
+#include "TestSettingsProfile.h"
 #include "gui/FlexControlDialog.h"
 
 #include <QApplication>
@@ -59,7 +60,12 @@ QPushButton* findCompactButton(FlexControlDialog& dialog)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-flex-control-dialog-test"));
+    if (!settingsProfile.isValid()) {
+        return 1;
+    }
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     std::printf("FlexControlDialog screen-fit test harness (#3662)\n\n");
 
     // Start from the non-compact layout so the auto-engage path is exercised.

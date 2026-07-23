@@ -83,22 +83,23 @@ void DaxApplet::buildUI()
     daxLabel->setStyleSheet(kDimLabel);
     daxEnRow->addWidget(daxLabel);
     daxEnRow->addStretch();
-    m_daxEnable = new QPushButton("Enable");
+    const bool daxAutoStart = settings.value("AutoStartDAX", "False").toString() == "True";
+    m_daxEnable = new QPushButton(daxAutoStart ? "Enabled" : "Disabled");
     m_daxEnable->setCheckable(true);
     m_daxEnable->setObjectName(QStringLiteral("daxEnable"));
     m_daxEnable->setAccessibleName(tr("DAX enable"));
     m_daxEnable->setAccessibleDescription(tr("Enable or disable DAX digital audio routing"));
     m_daxEnable->setStyleSheet(kGreenToggle);
-    m_daxEnable->setFixedSize(60, 22);
+    m_daxEnable->setFixedSize(76, 22);
     daxEnRow->addWidget(m_daxEnable);
 
     // DAX enable button → save setting + notify MainWindow
     {
         const QSignalBlocker b(m_daxEnable);
-        m_daxEnable->setChecked(
-            settings.value("AutoStartDAX", "False").toString() == "True");
+        m_daxEnable->setChecked(daxAutoStart);
     }
     connect(m_daxEnable, &QPushButton::toggled, this, [this](bool on) {
+        m_daxEnable->setText(on ? "Enabled" : "Disabled");
         auto& ss = AppSettings::instance();
         ss.setValue("AutoStartDAX", on ? "True" : "False");
         ss.save();
@@ -232,6 +233,7 @@ void DaxApplet::setDaxEnabled(bool on)
     }
     QSignalBlocker b(m_daxEnable);
     m_daxEnable->setChecked(on);
+    m_daxEnable->setText(on ? "Enabled" : "Disabled");
 }
 
 void DaxApplet::setDaxRxLevel(int channel, float rms)

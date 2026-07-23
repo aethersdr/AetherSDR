@@ -1,0 +1,125 @@
+{
+  "format_version": 1,
+  "design_version": 5,
+  "sizing": {
+    "preferred": [280, 140],
+    "minimum": [200, 100],
+    "minimum_aspect_ratio": 1.75,
+    "maximum_aspect_ratio": 4.0
+  },
+  "arc": {
+    "center_x_width_factor": 0.5,
+    "radius_width_factor": 0.85,
+    "center_y_height_factor": 0.35,
+    "start_degrees": 55.0,
+    "end_degrees": 125.0,
+    "inner_gap_pixels": 6.0,
+    "line_width_pixels": 3.0
+  },
+  "tick_style": {
+    "start_offset_pixels": 2.0,
+    "end_offset_pixels": 14.0,
+    "label_offset_pixels": 26.0,
+    "line_width_pixels": 1.5,
+    "font_minimum_pixels": 10,
+    "font_height_factor": 0.1,
+    "bold": true
+  },
+  "rx_scale": {
+    "minimum_dbm": -127.0,
+    "s9_dbm": -73.0,
+    "maximum_dbm": -13.0,
+    "db_per_s_unit": 6.0,
+    "s9_fraction": 0.6,
+    "ticks": [
+      {"value": -121.0, "label": "1"},
+      {"value": -109.0, "label": "3"},
+      {"value": -97.0, "label": "5"},
+      {"value": -85.0, "label": "7"},
+      {"value": -73.0, "label": "9"},
+      {"value": -53.0, "label": "+20"},
+      {"value": -33.0, "label": "+40"}
+    ]
+  },
+  "swr_scale": {
+    "minimum": 1.0,
+    "maximum": 3.0,
+    "has_warning": true,
+    "warning_start": 2.5,
+    "ticks": [
+      {"value": 1.0, "label": "1"},
+      {"value": 1.5, "label": "1.5"},
+      {"value": 2.0, "label": "2"},
+      {"value": 2.5, "label": "2.5"},
+      {"value": 3.0, "label": "3"}
+    ]
+  },
+  "level_scale": {
+    "minimum": -40.0,
+    "maximum": 5.0,
+    "has_warning": true,
+    "warning_start": 0.0,
+    "ticks": [
+      {"value": -40.0, "label": "-40"},
+      {"value": -30.0, "label": "-30"},
+      {"value": -20.0, "label": "-20"},
+      {"value": -10.0, "label": "-10"},
+      {"value": 0.0, "label": "0"}
+    ]
+  },
+  "compression_scale": {
+    "minimum": 0.0,
+    "maximum": 25.0,
+    "has_warning": false,
+    "warning_start": 0.0,
+    "ticks": [
+      {"value": 0.0, "label": "0"},
+      {"value": 5.0, "label": "-5"},
+      {"value": 10.0, "label": "-10"},
+      {"value": 15.0, "label": "-15"},
+      {"value": 20.0, "label": "-20"},
+      {"value": 25.0, "label": "-25"}
+    ]
+  },
+  "power_tick_policies": [
+    {"minimum_scale_watts": 2000.0, "tick_step_watts": 100, "label_step_watts": 500},
+    {"minimum_scale_watts": 600.0, "tick_step_watts": 50, "label_step_watts": 100},
+    {"minimum_scale_watts": 0.0, "tick_step_watts": 10, "label_step_watts": 40}
+  ],
+  "needle": {
+    "pivot_y_below_widget_pixels": 6.0,
+    "tip_extension_pixels": 14.0,
+    "line_width_pixels": 2.0,
+    "shadow_width_pixels": 3.0,
+    "shadow_offset": [1.0, 1.0]
+  },
+  "pivot": {
+    "minimum_radius_pixels": 13.5,
+    "radius_width_factor": 0.0975,
+    "glow_radius_factor": 3.4,
+    "glow_middle_factor": 0.45,
+    "glow_center_alpha": 80,
+    "glow_middle_alpha": 28,
+    "rim_width_pixels": 1.0
+  },
+  "peak_marker": {
+    "radius_inset_pixels": 2.0,
+    "length_pixels": 6.0,
+    "half_width_pixels": 3.0,
+    "minimum_lead_db": 1.0
+  },
+  "peak_hold": {
+    "inner_radius_offset_pixels": -4.0,
+    "outer_radius_offset_pixels": 10.0,
+    "line_width_pixels": 2.0,
+    "visible_above_minimum_db": 1.0
+  },
+  "readout": {
+    "source_font_minimum_pixels": 9,
+    "source_font_height_divisor": 14.0,
+    "value_font_minimum_pixels": 13,
+    "value_font_height_divisor": 8.0,
+    "top_extra_pixels": 4,
+    "side_margin_pixels": 6
+  }
+}

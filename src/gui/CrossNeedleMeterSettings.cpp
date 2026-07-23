@@ -18,6 +18,7 @@ QString encode(const Snapshot& settings)
     QJsonObject root;
     root.insert(QStringLiteral("version"), kVersion);
     root.insert(QStringLiteral("faceTheme"), normalizeTheme(settings.faceTheme));
+    root.insert(QStringLiteral("showRange"), settings.showRange);
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
@@ -40,7 +41,8 @@ Snapshot decode(const QByteArray& encoded, QString* error)
     }
 
     const QJsonObject root = document.object();
-    if (root.value(QStringLiteral("version")).toInt() != kVersion) {
+    const int version = root.value(QStringLiteral("version")).toInt();
+    if (version != 1 && version != kVersion) {
         if (error) {
             *error = QStringLiteral("unsupported CrossNeedleMeter settings version");
         }
@@ -49,6 +51,10 @@ Snapshot decode(const QByteArray& encoded, QString* error)
 
     settings.faceTheme = normalizeTheme(
         root.value(QStringLiteral("faceTheme")).toString());
+    if (version >= 2) {
+        settings.showRange =
+            root.value(QStringLiteral("showRange")).toBool(true);
+    }
     return settings;
 }
 
