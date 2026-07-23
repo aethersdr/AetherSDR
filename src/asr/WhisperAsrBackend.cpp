@@ -192,9 +192,9 @@ std::vector<AsrLanguage> asrWhisperLanguages()
     // from its own table (whisper_lang_str = ISO code, whisper_lang_str_full =
     // English name), so this never drifts out of sync with the model. The
     // multilingual checkpoints cover them all; the .en-only models ignore the
-    // setting and always decode English. Sorted by display name; the caller
-    // prepends "Auto-detect" (there's no such entry in whisper's table — a
-    // language of "auto" triggers detection in transcribe()).
+    // setting and always decode English. Sorted by display name. There is no
+    // "auto-detect" entry — whisper's table has no such code, and the UI does
+    // not add one (detection was unreliable on short VAD segments).
     std::vector<AsrLanguage> langs;
     const int maxId = whisper_lang_max_id();
     langs.reserve(static_cast<size_t>(maxId) + 1);

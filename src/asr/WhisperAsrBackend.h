@@ -67,8 +67,10 @@ struct AsrLanguage {
 
 // Every language the vendored whisper build supports, sorted by display name.
 // Multilingual models honor the choice; English-only (.en) models ignore it.
-// Does NOT include an "auto-detect" entry — pass a language of "auto" (or empty)
-// to whisperAsrBackendFactory to auto-detect; the UI adds that option itself.
+// There is no "auto-detect" entry: passing a language of "auto" (or empty) to
+// whisperAsrBackendFactory still triggers detection in transcribe(), but the UI
+// does not offer that option — detection was unreliable on Copy Assist's short
+// VAD segments (whisper keys off ~30 s of audio), so the path is left dormant.
 std::vector<AsrLanguage> asrWhisperLanguages();
 
 } // namespace AetherSDR
