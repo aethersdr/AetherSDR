@@ -38,11 +38,14 @@ public:
     void setGpuSelectorVisible(bool on);
 
     // Transcription-language selector (code + human label, e.g. "en"/"English").
-    // The controller populates it from the whisper backend's supported list
-    // plus an "Auto-detect" entry; whisper-free here, same as the tier/GPU combos.
+    // The controller populates it from the whisper backend's supported list;
+    // whisper-free here, same as the tier/GPU combos. Only applies to the
+    // whisper/remote backends — the controller hides it for sherpa-onnx (which
+    // takes its language from the loaded model).
     void addLanguage(const QString& code, const QString& name);
     void setCurrentLanguage(const QString& code);
     QString currentLanguage() const;
+    void setLanguageSelectorVisible(bool on);
 
     // Transcript-to-file logging: a checkbox + a (controller-populated) path. The
     // controller owns the file picker and the actual writing.
@@ -85,6 +88,7 @@ private:
     QComboBox* m_gpu = nullptr;
     QLabel* m_gpuLabel = nullptr;   // paired with m_gpu so both hide together
     QComboBox* m_language = nullptr;
+    QLabel* m_languageLabel = nullptr; // paired with m_language so both hide together
     QCheckBox* m_logToFile = nullptr;
     QLineEdit* m_logPath = nullptr; // read-only display of the chosen path
     QPushButton* m_logBrowse = nullptr;

@@ -209,6 +209,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         st.save();
     }
     m_settings->setCurrentLanguage(savedLang);
+    // The language selector only affects whisper/remote; sherpa-onnx takes its
+    // language from the model, so hide it when sherpa is the active backend.
+    m_settings->setLanguageSelectorVisible(m_backend != AsrBackendKind::SherpaOnnx);
 
     // Panel intent. The ⚙ button toggles the modeless settings dialog; model/GPU
     // changes come from the dialog itself.
@@ -598,6 +601,10 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     const AsrBackendKind prev = m_backend;
     m_backend = kind;
     m_tierId = tierId;
+
+    // Language applies to whisper/remote only; sherpa-onnx picks it from the
+    // model. Keep the selector's visibility in sync with the active backend.
+    m_settings->setLanguageSelectorVisible(kind != AsrBackendKind::SherpaOnnx);
 
     // Leaving the remote backend clears the persisted auto-connect flag so the
     // next launch starts on the local engine.
