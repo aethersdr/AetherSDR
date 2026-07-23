@@ -4250,21 +4250,11 @@ void MainWindow::buildUI()
         if (auto* applet = m_panStack->panadapter(panId))
             setActivePanApplet(applet);
 
-        // Show/hide CW decode panel based on the new active pan's slice mode
-        // — driven through refreshCwDecodeState() so the panel on the
-        // landed pan picks up the same RX/TX toggle gating the active
-        // slice does (#2417).
-        for (auto* sl : m_radioModel.slices()) {
-            if (sl->panId() == panId) {
-                const bool isCw = (sl->mode() == "CW" || sl->mode() == "CWL");
-                const bool anyOn = CwDecodeSettings::anyEnabled();
-                if (auto* applet = m_panStack->panadapter(panId))
-                    applet->setCwPanelVisible(isCw && anyOn);
-                refreshCwDecodeState();
-                refreshRttyDecodeState();
-                break;
-            }
-        }
+        // Decoder panel visibility follows the active slice, not whichever
+        // slice happens to appear first on the newly active pan (#4409).
+        // The refresh functions also clear stale panels on every other pan.
+        refreshCwDecodeState();
+        refreshRttyDecodeState();
     });
     splitter->setStretchFactor(0, 0);  // CWX panel: fixed width
     splitter->setStretchFactor(1, 0);  // DVK panel: fixed width
@@ -6627,6 +6617,10 @@ void MainWindow::routeCwDecoderOutput()
     disconnect(m_cwStatsConn);
 #endif
     if (m_cwDecoderApplet) {
+        // A panel can still be visible when startup status ordering moves the
+        // decoder target. Hide it before dropping ownership so a later refresh
+        // cannot leave an orphaned CW dock on the old pan (#4409).
+        m_cwDecoderApplet->setCwPanelVisible(false);
         disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         disconnect(&m_cwDecoderTx, &CwDecoder::textDecoded,
@@ -6713,8 +6707,16 @@ void MainWindow::refreshCwDecodeState()
     // text view is anchored to a CW slice's panadapter.  TX-side
     // decode is shown in the same panel, so if there's no CW slice in
     // view, there's no panel either.
-    if (m_cwDecoderApplet)
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (applet) {
+                applet->setCwPanelVisible(
+                    applet == m_cwDecoderApplet && isCw && anyOn);
+            }
+        }
+    } else if (m_cwDecoderApplet) {
         m_cwDecoderApplet->setCwPanelVisible(isCw && anyOn);
+    }
 
     // RX decoder runs only when RX-decode is on and the operator is
     // listening to a CW slice.  Non-CW slices feed unrelated audio,

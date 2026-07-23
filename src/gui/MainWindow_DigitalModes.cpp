@@ -158,6 +158,9 @@ void MainWindow::routeRttyDecoderOutput()
     if (target == m_rttyDecoderApplet) return;
 
     if (m_rttyDecoderApplet) {
+        // Keep the old pan from retaining a visible RTTY dock when startup
+        // status ordering or a slice switch moves decoder ownership (#4409).
+        m_rttyDecoderApplet->setRttyPanelVisible(false);
         disconnect(&m_rttyDecoder, &RttyDecoder::textDecoded,
                    m_rttyDecoderApplet, &PanadapterApplet::appendRttyText);
         disconnect(&m_rttyDecoder, &RttyDecoder::statsUpdated,
@@ -203,8 +206,16 @@ void MainWindow::refreshRttyDecodeState()
     // the panel manually via the slice context menu (future work).
     const bool isRtty = s && s->mode() == "RTTY";
 
-    if (m_rttyDecoderApplet)
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (applet) {
+                applet->setRttyPanelVisible(
+                    applet == m_rttyDecoderApplet && isRtty);
+            }
+        }
+    } else if (m_rttyDecoderApplet) {
         m_rttyDecoderApplet->setRttyPanelVisible(isRtty);
+    }
 
     if (!isRtty) {
         if (m_rttyDecoder.isRunning()) m_rttyDecoder.stop();
