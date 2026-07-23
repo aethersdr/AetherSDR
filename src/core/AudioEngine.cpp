@@ -25,6 +25,7 @@
 #include "OpusCodec.h"
 #include "ReceivePresentationSync.h"
 #include "SpectralNR.h"
+#include "models/Nr2SettingsModel.h"
 #ifdef HAVE_SPECBLEACH
 #include "SpecbleachFilter.h"
 #endif
@@ -75,7 +76,7 @@ namespace AetherSDR {
 static QString wisdomDir();
 static void logNr2WisdomSummary(const QString& context);
 static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result);
-static void applyNr2SettingsFromAppSettings(SpectralNR& nr2);
+static void applyNr2Settings(SpectralNR& nr2);
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target);
 #ifdef HAVE_SPECBLEACH
 static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4);
@@ -104,6 +105,13 @@ constexpr qint64 kTxPostChainEmitMinIntervalMs = 8;
 constexpr qint64 kRxPostChainEmitMinIntervalMs = 8;
 constexpr int kAutomationAudioCaptureMaxDurationMs = 15000;
 constexpr qsizetype kAutomationAudioCaptureMaxBytes = 64 * 1024 * 1024;
+// WDSP/Thetis runs EMNR at 4096/4 with 48 kHz DSP audio. Geometry sweeps at
+// AetherSDR's 24 kHz RX DSP rate show that 1024/4 is the better tradeoff for
+// this implementation: 42.7 ms window, 10.7 ms hop, and 23.4 Hz bin spacing.
+constexpr int kNr2FftSize = 1024;
+constexpr int kNr2Overlap = 4;
+constexpr int kNr2OriginalFftSize = 256;
+constexpr int kNr2OriginalOverlap = 2;
 
 qint64 steadyNowNs()
 {
@@ -988,6 +996,23 @@ AudioEngine::externalKiwiSource(const QString& sourceId, bool create)
     return m_externalKiwiSources.back().get();
 }
 
+std::unique_ptr<SpectralNR>
+AudioEngine::createNr2Filter(const QString& label) const
+{
+    const bool useOriginal = m_nr2UseOriginalGeometry.load(
+        std::memory_order_relaxed);
+    const int fftSize = useOriginal ? kNr2OriginalFftSize : kNr2FftSize;
+    const int overlap = useOriginal ? kNr2OriginalOverlap : kNr2Overlap;
+    auto filter = std::make_unique<SpectralNR>(
+        fftSize, DEFAULT_SAMPLE_RATE, overlap, useOriginal);
+    if (filter->hasPlanFailed()) {
+        qCWarning(lcAudio).noquote()
+            << "AudioEngine: NR2 plan creation failed for" << label;
+        return {};
+    }
+    return filter;
+}
+
 std::unique_ptr<RNNoiseFilter>
 AudioEngine::createRn2Filter(const QString& label) const
 {
@@ -1137,11 +1162,8 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #endif
 
     if (needNr2) {
-        nr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
-        if (nr2->hasPlanFailed()) {
-            qCWarning(lcAudio)
-                << "AudioEngine: legacy Kiwi NR2 plan failed";
-            nr2.reset();
+        nr2 = createNr2Filter(QStringLiteral("legacy Kiwi"));
+        if (!nr2) {
             ok = false;
         }
     }
@@ -1327,11 +1349,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #endif
 
     if (needNr2) {
-        nr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
-        if (nr2->hasPlanFailed()) {
-            qCWarning(lcAudio) << "AudioEngine: external Kiwi NR2 plan failed for"
-                               << id;
-            nr2.reset();
+        nr2 = createNr2Filter(QStringLiteral("external Kiwi %1").arg(id));
+        if (!nr2) {
             ok = false;
         }
     }
@@ -1778,6 +1797,11 @@ AudioEngine::AudioEngine(QObject* parent)
 
     // Restore saved audio device selections
     auto& s = AppSettings::instance();
+    const Nr2SettingsModel::Config nr2Config =
+        Nr2SettingsModel::instance().config();
+    m_nr2UseOriginalGeometry.store(
+        nr2Config.legacyGeometryAndGainMapping,
+        std::memory_order_relaxed);
     QByteArray savedOutId = s.value("AudioOutputDeviceId", "").toByteArray();
     QByteArray savedInId  = s.value("AudioInputDeviceId",  "").toByteArray();
 
@@ -2850,8 +2874,9 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 
     const auto probeOne = [this, &input](const QString& requestedMode) -> QJsonObject {
         if (requestedMode == QLatin1String("NR2")) {
-            SpectralNR nr2(256, DEFAULT_SAMPLE_RATE);
-            if (nr2.hasPlanFailed()) {
+            std::unique_ptr<SpectralNR> nr2 = createNr2Filter(
+                QStringLiteral("automation probe"));
+            if (!nr2) {
                 return QJsonObject{
                     {QStringLiteral("ok"), false},
                     {QStringLiteral("mode"), requestedMode},
@@ -2860,10 +2885,10 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                     {QStringLiteral("error"), QStringLiteral("NR2 plan creation failed")},
                 };
             }
-            applyNr2SettingsFromAppSettings(nr2);
+            applyNr2Settings(*nr2);
             QByteArray output;
             processNr2StereoSharedMask(
-                nr2,
+                *nr2,
                 reinterpret_cast<const float*>(input.constData()),
                 input.size() / (2 * static_cast<int>(sizeof(float))),
                 output);
@@ -6170,20 +6195,23 @@ static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result)
     }
 }
 
-static void applyNr2SettingsFromAppSettings(SpectralNR& nr2)
+static void applyNr2Settings(SpectralNR& nr2)
 {
-    auto& s = AppSettings::instance();
-    nr2.setGainMax(s.value("NR2GainMax", "1.00").toFloat());  // default 1.0 = no amplification (#1507)
-    nr2.setGainSmooth(s.value("NR2GainSmooth", "0.85").toFloat());
-    nr2.setQspp(s.value("NR2Qspp", "0.20").toFloat());
-    nr2.setGainMethod(s.value("NR2GainMethod", "2").toInt());
-    nr2.setNpeMethod(s.value("NR2NpeMethod", "0").toInt());
-    nr2.setAeFilter(s.value("NR2AeFilter", "True").toString() == "True");
+    const Nr2SettingsModel::Config config =
+        Nr2SettingsModel::instance().config();
+    nr2.setGainMax(config.gainMax);
+    nr2.setGainFloor(config.gainFloor);
+    nr2.setGainSmooth(config.gainSmooth);
+    nr2.setQspp(config.qspp);
+    nr2.setGainMethod(config.gainMethod);
+    nr2.setNpeMethod(config.npeMethod);
+    nr2.setAeFilter(config.aeFilter);
 }
 
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
 {
     target.setGainMax(source.gainMax());
+    target.setGainFloor(source.gainFloor());
     target.setGainSmooth(source.gainSmooth());
     target.setQspp(source.qspp());
     target.setGainMethod(source.gainMethod());
@@ -6309,15 +6337,13 @@ void AudioEngine::setNr2Enabled(bool on)
             qCWarning(lcAudio) << "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
                                << "using runtime FFTW_MEASURE plans";
 #endif
-        m_nr2 = std::make_unique<SpectralNR>(256, DEFAULT_SAMPLE_RATE);
-        if (m_nr2->hasPlanFailed()) {
-            qCWarning(lcAudio) << "AudioEngine: NR2 FFTW plan creation failed — disabling";
-            m_nr2.reset();
+        m_nr2 = createNr2Filter(QStringLiteral("main RX"));
+        if (!m_nr2) {
             emit nr2EnabledChanged(false);
             return;
         }
-        // Restore user-adjusted parameters from AppSettings
-        applyNr2SettingsFromAppSettings(*m_nr2);
+        // Restore the feature-owned NR2 configuration.
+        applyNr2Settings(*m_nr2);
         m_nr2Enabled = true;
     } else {
         m_nr2Enabled = false;
@@ -6351,6 +6377,18 @@ void AudioEngine::setNr2GainMax(float v)
     for (const auto& source : m_externalKiwiSources) {
         if (source && source->nr2) {
             source->nr2->setGainMax(v);
+        }
+    }
+}
+
+void AudioEngine::setNr2GainFloor(float v)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_nr2) m_nr2->setGainFloor(v);
+    if (m_kiwiSdrNr2) m_kiwiSdrNr2->setGainFloor(v);
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nr2) {
+            source->nr2->setGainFloor(v);
         }
     }
 }
@@ -6403,6 +6441,45 @@ void AudioEngine::setNr2NpeMethod(int m)
     }
 }
 
+QJsonObject AudioEngine::nr2RuntimeDiagnostics() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto filterSnapshot = [](const SpectralNR* filter) {
+        if (!filter) {
+            return QJsonObject{{QStringLiteral("present"), false}};
+        }
+        return QJsonObject{
+            {QStringLiteral("present"), true},
+            {QStringLiteral("gainMethod"), filter->gainMethod()},
+            {QStringLiteral("npeMethod"), filter->npeMethod()},
+            {QStringLiteral("aeFilter"), filter->aeFilter()},
+            {QStringLiteral("gainMax"), filter->gainMax()},
+            {QStringLiteral("gainFloor"), filter->gainFloor()},
+            {QStringLiteral("gainSmooth"), filter->gainSmooth()},
+            {QStringLiteral("qspp"), filter->qspp()},
+            {QStringLiteral("fftSize"), filter->fftSize()},
+            {QStringLiteral("legacyGainMethods"),
+                filter->usesLegacyGainMethods()},
+        };
+    };
+
+    QJsonArray externalKiwi;
+    for (const auto& source : m_externalKiwiSources) {
+        if (!source) {
+            continue;
+        }
+        QJsonObject snapshot = filterSnapshot(source->nr2.get());
+        snapshot[QStringLiteral("sourceId")] = source->id;
+        externalKiwi.append(snapshot);
+    }
+
+    return QJsonObject{
+        {QStringLiteral("main"), filterSnapshot(m_nr2.get())},
+        {QStringLiteral("legacyKiwi"), filterSnapshot(m_kiwiSdrNr2.get())},
+        {QStringLiteral("externalKiwi"), externalKiwi},
+    };
+}
+
 void AudioEngine::setNr2AeFilter(bool on)
 {
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
@@ -6413,6 +6490,28 @@ void AudioEngine::setNr2AeFilter(bool on)
             source->nr2->setAeFilter(on);
         }
     }
+}
+
+void AudioEngine::setNr2UseOriginalGeometry(bool useOriginal)
+{
+    const bool previous = m_nr2UseOriginalGeometry.exchange(
+        useOriginal, std::memory_order_relaxed);
+    if (previous == useOriginal) {
+        return;
+    }
+
+    qCInfo(lcAudio).noquote()
+        << "AudioEngine: NR2 comparison mode switched to"
+        << (useOriginal ? "original geometry/gain"
+                        : "1024/4 with WDSP gain mapping");
+    if (!m_nr2Enabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    // Re-enter through the normal lifecycle so every Flex/Kiwi NR2 instance,
+    // presentation buffer, and startup estimator is rebuilt together.
+    setNr2Enabled(false);
+    setNr2Enabled(true);
 }
 
 

@@ -10,6 +10,7 @@
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
+#include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
@@ -1700,6 +1701,7 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
 
     // Engine-owned tuning (the slider params that have live engine getters).
     QJsonObject tuning;
+    tuning[QStringLiteral("nr2Runtime")] = a->nr2RuntimeDiagnostics();
     tuning[QStringLiteral("mnr")] =
         QJsonObject{{QStringLiteral("strength"), a->mnrStrength()}};
     tuning[QStringLiteral("dfnr")] =
@@ -3790,19 +3792,22 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         QJsonObject data = dspSnapshotOnObjectThread(audio, &snapshotOk);
         if (!snapshotOk)
             return err(QStringLiteral("dsp snapshot unavailable"));
-        // Merge the NR2/NR4/DFNR-beta slider params, which the AetherDSP applet
-        // persists in AppSettings rather than the engine. Read on the main
-        // thread (where the bridge runs); defaults mirror the applet's.
+        // Merge client-side DSP tuning state. NR2 owns one versioned settings
+        // object; the remaining DSPs still use their established keys.
         AppSettings& s = AppSettings::instance();
+        const Nr2SettingsModel::Config nr2 =
+            Nr2SettingsModel::instance().config();
         QJsonObject tuning = data.value(QStringLiteral("tuning")).toObject();
         tuning[QStringLiteral("nr2")] = QJsonObject{
-            {QStringLiteral("gainMax"),    s.value("NR2GainMax", "1.50").toFloat()},
-            {QStringLiteral("gainSmooth"), s.value("NR2GainSmooth", "0.85").toFloat()},
-            {QStringLiteral("qspp"),       s.value("NR2Qspp", "0.20").toFloat()},
-            {QStringLiteral("gainMethod"), s.value("NR2GainMethod", "2").toInt()},
-            {QStringLiteral("npeMethod"),  s.value("NR2NpeMethod", "0").toInt()},
-            {QStringLiteral("aeFilter"),
-                s.value("NR2AeFilter", "True").toString() == QLatin1String("True")},
+            {QStringLiteral("gainMax"), nr2.gainMax},
+            {QStringLiteral("gainFloor"), nr2.gainFloor},
+            {QStringLiteral("gainSmooth"), nr2.gainSmooth},
+            {QStringLiteral("qspp"), nr2.qspp},
+            {QStringLiteral("gainMethod"), nr2.gainMethod},
+            {QStringLiteral("npeMethod"), nr2.npeMethod},
+            {QStringLiteral("aeFilter"), nr2.aeFilter},
+            {QStringLiteral("legacyGeometryAndGainMapping"),
+                nr2.legacyGeometryAndGainMapping},
         };
         tuning[QStringLiteral("nr4")] = QJsonObject{
             {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},

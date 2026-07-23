@@ -56,6 +56,7 @@
 #include "models/ProfileLoadCommand.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/Nr2SettingsModel.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -779,6 +780,9 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     connect(w, &AetherDspWidget::nr2GainMaxChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
     });
+    connect(w, &AetherDspWidget::nr2GainFloorChanged, this, [this](float v) {
+        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainFloor(v); });
+    });
     connect(w, &AetherDspWidget::nr2GainSmoothChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
     });
@@ -793,6 +797,12 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     });
     connect(w, &AetherDspWidget::nr2AeFilterChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
+    });
+    connect(w, &AetherDspWidget::nr2UseOriginalGeometryChanged,
+            this, [this](bool useOriginal) {
+        QMetaObject::invokeMethod(m_audio, [this, useOriginal]() {
+            m_audio->setNr2UseOriginalGeometry(useOriginal);
+        });
     });
     // NR4
     connect(w, &AetherDspWidget::nr4ReductionChanged, this, [this](float v) {
@@ -1027,7 +1037,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Deferred so the VFO widget exists for button sync.
         QTimer::singleShot(500, this, [this]() {
             auto& settings = AppSettings::instance();
-            if (settings.value("ClientNr2Enabled", "False").toString() == "True")
+            if (Nr2SettingsModel::instance().config().enabled)
                 enableNr2WithWisdom();
             else if (settings.value("ClientRn2Enabled", "False").toString() == "True")
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setRn2Enabled(true); });

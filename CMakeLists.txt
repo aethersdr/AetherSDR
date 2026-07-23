@@ -680,6 +680,7 @@ elseif(UNIX)
 endif()
 
 set(MODEL_SOURCES
+    src/models/Nr2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
@@ -2641,6 +2642,16 @@ foreach(APP_SETTINGS_SCENARIO
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
 endforeach()
+
+add_executable(nr2_settings_model_test
+    tests/nr2_settings_model_test.cpp
+    src/models/Nr2SettingsModel.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(nr2_settings_model_test PRIVATE src tests)
+target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(nr2_settings_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME nr2_settings_model_test COMMAND nr2_settings_model_test)
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp

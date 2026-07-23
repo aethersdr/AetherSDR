@@ -113,13 +113,19 @@ AetherSDR.
 
 1. WDSP — Spectral Noise Reduction (NR2)
 -----------------------------------------
-The SpectralNR module (src/core/SpectralNR.h, SpectralNR.cpp) is derived from
-the WDSP library's emnr.c, implementing the Ephraim-Malah MMSE-LSA noise
-reduction algorithm with OSMS noise floor tracking.
+The SpectralNR module (src/core/SpectralNR.h, SpectralNR.cpp) derives its OSMS,
+MMSE, and NSTAT noise estimators and Gaussian/Gamma gain processing from the
+WDSP library's emnr.c.  The exact 241 x 241 GG and GGS lookup-table values in
+src/core/Nr2GammaTables.inc are embedded from WDSP's Source/calculus binary.
 
   Copyright (C) 2015, 2025 Warren Pratt, NR0V
   License: GPL-2.0-or-later
   Source:  https://github.com/TAPR/OpenHPSDR-wdsp
+  Pinned commit: 584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3
+  Calculus source:
+    https://raw.githubusercontent.com/TAPR/OpenHPSDR-wdsp/584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3/Source/calculus
+  Calculus SHA-256:
+    de43a4b9c7db4445997e6452852980d58d2558d635ab3c63e6423a347ba326c3
 
 
 2. RNNoise — Neural Network Noise Suppression (RN2)
