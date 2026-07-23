@@ -24,6 +24,7 @@
 #include <QSortFilterProxyModel>
 #include <QMenu>
 #include <QAction>
+#include <QMouseEvent>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSlider>
@@ -122,6 +123,32 @@ private:
     QList<QLayoutItem*> m_items;
     int m_hSpace;
     int m_vSpace;
+};
+
+// Keeps a QMenu open while its checkable actions are toggled, so several
+// columns can be shown/hidden in one pass instead of reopening the header
+// menu per column (#4157). Installed on the menu for the duration of exec();
+// a left-release over a checkable action is toggled here and swallowed so the
+// menu doesn't dismiss. Non-checkable actions and clicks outside fall through
+// to the default close behavior.
+class KeepMenuOpenOnToggle : public QObject {
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonRelease) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                if (auto* menu = qobject_cast<QMenu*>(watched)) {
+                    QAction* action = menu->actionAt(me->pos());
+                    if (action && action->isCheckable() && action->isEnabled()) {
+                        action->trigger();  // toggles + fires toggled()
+                        return true;        // swallow so the menu stays open
+                    }
+                }
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
 };
 
 // Shared DSP-style toggle for every checkable button in SpotHub
@@ -2045,6 +2072,8 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
             s.save();
         };
         QMenu menu(this);
+        KeepMenuOpenOnToggle keepOpen;
+        menu.installEventFilter(&keepOpen);
         for (const auto& tc : kToggleCols) {
             auto* action = menu.addAction(m_spotModel->headerData(tc.col, Qt::Horizontal, Qt::DisplayRole).toString());
             action->setCheckable(true);
