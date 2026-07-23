@@ -2,6 +2,7 @@
 
 #include "BandDefs.h"
 
+#include <cstddef>
 #include <string_view>
 
 namespace AetherSDR {
@@ -43,24 +44,61 @@ constexpr BandAlias kBandAliases[] = {
     {"70cm", "440"},   // UHF: every ham + gateway spells it 70cm; AE names it 440
 };
 
-// Enforce the security invariant at COMPILE TIME: every alias's canonical must
-// name an existing kBands entry. This makes Principle VII hold by construction
-// (an alias can only ever be a second spelling of a real band) rather than by
-// review — a future typo'd or renamed canonical fails the build instead of
-// silently dropping the band.
-constexpr bool aliasCanonicalsExist()
+// Constexpr ASCII case-insensitive compare. Band tokens are ASCII, so this
+// matches resolveAlias()'s Qt::CaseInsensitive comparison for the shadow check
+// below while staying evaluable at compile time.
+constexpr char asciiLower(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+constexpr bool ciEqualAscii(std::string_view a, std::string_view b)
+{
+    if (a.size() != b.size())
+        return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (asciiLower(a[i]) != asciiLower(b[i]))
+            return false;
+    return true;
+}
+
+// Enforce the alias invariants at COMPILE TIME so Principle VII holds by
+// construction (an alias can only ever be a second spelling of a real,
+// renderable band) rather than by review. A future bad alias fails the build
+// instead of silently misbehaving. Three invariants, each with a concrete
+// failure mode if it were violated:
+//   (1) canonical exists in kBands — else the alias resolves to a name the
+//       allow-list drops (dead alias).
+//   (2) canonical is declarable — resolveAlias() runs before the isDeclarable
+//       gate, so an alias to a non-declarable band (2200m/630m) would also be
+//       a dead alias; require declarability up front so the failure is a build
+//       error, not a silent empty result.
+//   (3) the alias key does NOT collide with a real kBands name — resolveAlias()
+//       runs BEFORE the allow-list match, so a key equal to a real band would
+//       silently redirect (shadow) that legitimate band's token.
+constexpr bool aliasesAreValid()
 {
     for (const auto& a : kBandAliases) {
-        bool found = false;
+        // (3) alias key must not shadow a real band (case-insensitive, matching
+        //     resolveAlias's own comparison).
         for (const auto& def : kBands)
-            if (std::string_view(def.name) == a.canonical) { found = true; break; }
-        if (!found)
+            if (ciEqualAscii(def.name, a.alias))
+                return false;
+        // (1) + (2) canonical must name an existing, declarable kBands entry.
+        bool ok = false;
+        for (const auto& def : kBands)
+            if (std::string_view(def.name) == a.canonical && isDeclarable(def)) {
+                ok = true;
+                break;
+            }
+        if (!ok)
             return false;
     }
     return true;
 }
-static_assert(aliasCanonicalsExist(),
-              "every kBandAliases canonical must name an existing kBands entry");
+static_assert(aliasesAreValid(),
+              "every kBandAliases entry must (1) name an existing kBands "
+              "canonical, (2) that is declarable, and (3) use an alias key that "
+              "does not collide with any real kBands name");
 
 // If `name` is a known alias, return its canonical kBands spelling; otherwise
 // return `name` unchanged. Case-insensitive on the alias key.

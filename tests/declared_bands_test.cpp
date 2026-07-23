@@ -110,6 +110,14 @@ int main(int argc, char** argv)
     report("alias kept, junk dropped (70cm,junk -> [440])",
            eq(parseDeclaredBands(QStringLiteral("70cm,junk")),
               {QStringLiteral("440")}));
+    // An alias must be a *faithful* second spelling: it produces exactly what
+    // the canonical produces — same output, and (since the canonical renders)
+    // never a name the allow-list drops. This pins the observable half of the
+    // compile-time invariants (canonical exists AND is declarable); the shadow
+    // and declarability guarantees themselves are enforced by static_assert.
+    report("alias parse equals canonical parse (70cm == 440)",
+           eq(parseDeclaredBands(QStringLiteral("70cm")),
+              parseDeclaredBands(QStringLiteral("440"))));
 
     if (g_failed == 0) {
         std::printf("\nAll %d declared-bands tests passed.\n", g_total);
