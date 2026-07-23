@@ -206,11 +206,18 @@ std::vector<AsrLanguage> asrWhisperLanguages()
         }
         AsrLanguage lang;
         lang.code = QString::fromUtf8(code);
-        // whisper's full names are lowercase ("english"); title-case the first
-        // letter for display ("English") without pulling in a locale.
+        // whisper's full names are lowercase ("english", "haitian creole");
+        // title-case each word for display ("Haitian Creole") without pulling in
+        // a locale.
         QString name = QString::fromUtf8(full);
-        if (!name.isEmpty()) {
-            name[0] = name[0].toUpper();
+        bool startOfWord = true;
+        for (QChar& ch : name) {
+            if (ch.isSpace()) {
+                startOfWord = true;
+            } else if (startOfWord && ch.isLetter()) {
+                ch = ch.toUpper();
+                startOfWord = false;
+            }
         }
         lang.name = name;
         langs.push_back(std::move(lang));
