@@ -395,7 +395,7 @@ private:
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
     void prepareKiwiSdrBandRecallForPan(const QString& panId);
-    void finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
+    bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
     void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
@@ -990,6 +990,9 @@ private:
         QString profileId;
     };
     QHash<int, KiwiSdrBandRecallPreparation> m_kiwiSdrBandRecallPreparations;
+    // Per-pan epoch so a stale prepare() grace timer can't finish/clear a newer
+    // band recall that superseded it within the grace window.
+    QHash<QString, quint64> m_kiwiSdrBandRecallGenerations;
     QSet<QString>    m_kiwiSdrFlexDisplayPans;
     // Retains a KiwiSDR replacement across the slice remove->re-add a FLEX
     // band-stack recall performs (band_persistence drops+re-creates the slice

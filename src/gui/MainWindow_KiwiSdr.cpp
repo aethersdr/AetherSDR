@@ -707,22 +707,32 @@ void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
     // Same-band recalls may not change any slice field, while some firmware
     // drops and recreates the slice. Normal retunes re-arm from
     // frequencyChanged; this grace fallback covers the no-change case and
-    // shares the existing #4158 recreation window.
-    QTimer::singleShot(kKiwiSdrRebindGraceMs, this, [this, panId]() {
+    // shares the existing #4158 recreation window. Guard on a per-pan epoch so
+    // a rapid second recall (which bumps the generation) isn't finished/cleared
+    // by this now-stale timer before its own window elapses.
+    const quint64 generation = ++m_kiwiSdrBandRecallGenerations[panId];
+    QTimer::singleShot(kKiwiSdrRebindGraceMs, this, [this, panId, generation]() {
+        if (m_kiwiSdrBandRecallGenerations.value(panId) != generation) {
+            return;
+        }
         finishPreparedKiwiSdrBandRecallForPan(panId);
         m_kiwiRebind.clearBandRecall(panId);
     });
 }
 
-void MainWindow::finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice)
+// Returns true only when the preparation was consumed AND re-armed — i.e.
+// setKiwiSdrVirtualAntennaForSlice() ran (which also performs the tracking
+// update). A stale-preparation guard miss returns false so the caller can fall
+// back to its normal tracking path instead of assuming the re-entrant re-arm.
+bool MainWindow::finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice)
 {
     if (!m_kiwiSdrManager || !slice) {
-        return;
+        return false;
     }
 
     const auto it = m_kiwiSdrBandRecallPreparations.find(slice->sliceId());
     if (it == m_kiwiSdrBandRecallPreparations.end()) {
-        return;
+        return false;
     }
 
     const KiwiSdrBandRecallPreparation preparation = it.value();
@@ -731,7 +741,7 @@ void MainWindow::finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice)
     m_kiwiSdrBandRecallPreparations.erase(it);
     if (slice->panId() != preparation.panId
         || assignedProfile != preparation.profileId) {
-        return;
+        return false;
     }
 
     // SliceModel emits frequencyChanged only after the complete radio delta —
@@ -744,6 +754,7 @@ void MainWindow::finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice)
         << "pan=" << preparation.panId
         << "slice=" << slice->sliceId()
         << "recalled_flex_mute=" << (recalledFlexMute ? 1 : 0);
+    return true;
 }
 
 void MainWindow::finishPreparedKiwiSdrBandRecallForPan(const QString& panId)
@@ -988,12 +999,10 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
         return;
     }
 
-    const bool finishingBandRecall =
-        m_kiwiSdrBandRecallPreparations.contains(slice->sliceId());
-    finishPreparedKiwiSdrBandRecallForSlice(slice);
-    if (finishingBandRecall) {
+    if (finishPreparedKiwiSdrBandRecallForSlice(slice)) {
         // setKiwiSdrVirtualAntennaForSlice() performed the tracking update in
-        // its re-entrant call after consuming the preparation.
+        // its re-entrant call after consuming the preparation. A stale-guard
+        // miss returns false and falls through to the normal tracking below.
         return;
     }
 
