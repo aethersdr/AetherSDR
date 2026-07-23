@@ -5,8 +5,10 @@
 // its one-line showOrRaisePersistent() launcher.
 
 #include "Contribute.h"
+#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 
+#include <QAudioOutput>
 #include <QColor>
 #include <QDesktopServices>
 #include <QDialog>
@@ -14,6 +16,7 @@
 #include <QFont>
 #include <QFontMetricsF>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -21,13 +24,14 @@
 #include <QJsonValue>
 #include <QLabel>
 #include <QLinearGradient>
+#include <QMediaPlayer>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
-#include <QSoundEffect>
+#include <QShowEvent>
 #include <QStringList>
 #include <QTimer>
 #include <QUrl>
@@ -78,7 +82,8 @@ public:
         m_animationTimer.setInterval(16);
         connect(&m_animationTimer, &QTimer::timeout, this,
                 qOverload<>(&CommunityCreditsCanvas::update));
-        m_animationTimer.start();
+        // The timer is driven by showEvent/hideEvent so a backgrounded or
+        // minimised credits window doesn't keep waking the CPU 60×/s.
     }
 
     void applySupporters(const QStringList& supporters)
@@ -96,6 +101,20 @@ public:
     }
 
 protected:
+    void showEvent(QShowEvent* event) override
+    {
+        QWidget::showEvent(event);
+        if (!m_animationTimer.isActive()) {
+            m_animationTimer.start();
+        }
+    }
+
+    void hideEvent(QHideEvent* event) override
+    {
+        m_animationTimer.stop();
+        QWidget::hideEvent(event);
+    }
+
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
@@ -125,9 +144,11 @@ protected:
             viewport.center().y() - sceneSize.height() / 2.0,
             sceneSize.width(), sceneSize.height());
 
-        painter.setOpacity(0.99);
+        // Drawn at full opacity: any sub-1.0 opacity forces QPainter onto a
+        // destination read-back software compositing path (~4 MB/frame here).
+        // The aurora is painted before the cutout and the PNG carries its own
+        // alpha, so it already bleeds through the transparent regions.
         painter.drawImage(sceneRect, m_radioImage);
-        painter.setOpacity(1.0);
 
         // Measured from the cleaned product cutout. Keeping this in source-
         // image coordinates makes the text stay inside the physical LCD at
@@ -519,6 +540,28 @@ private:
 
 void fetchOpenCollectiveSupporters(QDialog* owner, CommunityCreditsCanvas* canvas)
 {
+    // Opening the credits dialog issues one outbound request to Open
+    // Collective's public API for the newest backers. It is user-initiated (the
+    // dialog only opens from an explicit About action), non-blocking (7 s abort
+    // below), and never persisted to disk. Users on metered, air-gapped, or
+    // privacy-sensitive links can suppress it entirely by setting AppSettings
+    // "CommunityCreditsFetchSupporters" to "False"; the built-in generic
+    // scroller is shown instead.
+    if (AetherSDR::AppSettings::instance()
+            .value(QStringLiteral("CommunityCreditsFetchSupporters"), QStringLiteral("True"))
+            .toString() != QStringLiteral("True")) {
+        return;
+    }
+
+    // Backers change rarely, so the first successful result is cached for the
+    // rest of the app session — reopening the dialog re-uses it instead of
+    // hitting the API again.
+    static QStringList s_supporterCache;
+    if (!s_supporterCache.isEmpty()) {
+        canvas->applySupporters(s_supporterCache);
+        return;
+    }
+
     auto* manager = new QNetworkAccessManager(owner);
     QNetworkRequest request{QUrl(QStringLiteral("https://api.opencollective.com/graphql/v2"))};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -554,9 +597,14 @@ void fetchOpenCollectiveSupporters(QDialog* owner, CommunityCreditsCanvas* canva
             const QJsonObject account = value.toObject()
                                             .value(QStringLiteral("account")).toObject();
             QString name = account.value(QStringLiteral("name")).toString().trimmed();
-            if (account.value(QStringLiteral("isIncognito")).toBool()
-                || name.isEmpty() || name.compare(QStringLiteral("Guest"), Qt::CaseInsensitive) == 0) {
-                name = QStringLiteral("Anonymous Signal Booster");
+            const bool anonymous = account.value(QStringLiteral("isIncognito")).toBool()
+                || name.isEmpty() || name.compare(QStringLiteral("Guest"), Qt::CaseInsensitive) == 0;
+            if (anonymous) {
+                // Each anonymous backer keeps its own slot; only real names are
+                // de-duplicated. Collapsing every incognito supporter into one
+                // placeholder would erase most of the credit reel.
+                supporters.push_back(QStringLiteral("Anonymous Signal Booster"));
+                continue;
             }
             const bool duplicate = std::any_of(
                 supporters.cbegin(), supporters.cend(), [&name](const QString& existing) {
@@ -565,6 +613,9 @@ void fetchOpenCollectiveSupporters(QDialog* owner, CommunityCreditsCanvas* canva
             if (!duplicate) {
                 supporters.push_back(name);
             }
+        }
+        if (!supporters.isEmpty()) {
+            s_supporterCache = supporters;
         }
         canvas->applySupporters(supporters);
     });
@@ -629,13 +680,20 @@ ContributeDialog::ContributeDialog(QWidget* parent)
     controlsLayout->addWidget(closeButton);
     root->addWidget(controls);
 
-    auto* music = new QSoundEffect(this);
+    // QMediaPlayer (not QSoundEffect) for the looping music bed: the track is a
+    // ~1.6 MB WAV, well past the small-buffer range QSoundEffect is documented
+    // for, and QMediaPlayer streams it rather than decoding the whole file into
+    // a single backend buffer. The source is raw PCM, so no compressed-audio
+    // codec is required.
+    auto* audioOutput = new QAudioOutput(this);
+    audioOutput->setVolume(0.08f);
+    auto* music = new QMediaPlayer(this);
+    music->setAudioOutput(audioOutput);
     music->setSource(QUrl(QStringLiteral("qrc:/sounds/community-credits.wav")));
-    music->setVolume(0.08f);
-    music->setLoopCount(QSoundEffect::Infinite);
+    music->setLoops(QMediaPlayer::Infinite);
     connect(muteButton, &QPushButton::toggled, this,
-            [music, muteButton](bool muted) {
-                music->setMuted(muted);
+            [audioOutput, muteButton](bool muted) {
+                audioOutput->setMuted(muted);
                 muteButton->setText(muted ? QStringLiteral("Unmute Music")
                                           : QStringLiteral("Mute Music"));
             });
