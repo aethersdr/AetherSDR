@@ -58,6 +58,7 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     // selector only applies to the whisper/remote backends; sherpa-onnx picks
     // its language from the loaded model, so the controller hides this row then.
     m_languageLabel = new QLabel(tr("Language:"), this);
+    m_languageLabel->setObjectName(QStringLiteral("CopyAssistLanguageLabel"));
     form->addRow(m_languageLabel, m_language);
 
     // Transcript-to-file logging. The checkbox is the master switch; the path row

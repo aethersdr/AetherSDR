@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QLabel>
 #include <QSignalSpy>
 
 #include <cstdio>
@@ -65,6 +66,37 @@ int main(int argc, char** argv)
         expect(dlg.currentGpu() == -1, "setCurrentGpu selects the CPU sentinel");
         expect(!gpuSpy.isEmpty() && gpuSpy.last().at(0).toInt() == -1,
                "gpuChanged carries the device index");
+    }
+
+    // ---- Language selector: round-trip, signal, paired visibility ---------
+    {
+        dlg.addLanguage(QStringLiteral("en"), QStringLiteral("English"));
+        dlg.addLanguage(QStringLiteral("es"), QStringLiteral("Spanish"));
+
+        QSignalSpy langSpy(&dlg, &CopyAssistSettingsDialog::languageChanged);
+        dlg.setCurrentLanguage(QStringLiteral("es"));
+        expect(dlg.currentLanguage() == QStringLiteral("es"),
+               "setCurrentLanguage selects by code, currentLanguage round-trips");
+        expect(!langSpy.isEmpty() && langSpy.last().at(0).toString() == QStringLiteral("es"),
+               "languageChanged carries the language code");
+
+        // Unknown code is a no-op (the controller coerces to a supported code
+        // before calling this), so the selection stays put.
+        dlg.setCurrentLanguage(QStringLiteral("zz-nonesuch"));
+        expect(dlg.currentLanguage() == QStringLiteral("es"),
+               "setCurrentLanguage ignores an unsupported code");
+
+        // The label + combo hide/show together (sherpa-onnx path hides the row).
+        auto* langCombo = dlg.findChild<QComboBox*>(QStringLiteral("CopyAssistLanguageCombo"));
+        auto* langLabel = dlg.findChild<QLabel*>(QStringLiteral("CopyAssistLanguageLabel"));
+        dlg.setLanguageSelectorVisible(false);
+        expect(langCombo != nullptr && !langCombo->isVisibleTo(&dlg)
+                   && langLabel != nullptr && !langLabel->isVisibleTo(&dlg),
+               "setLanguageSelectorVisible(false) hides label + combo together");
+        dlg.setLanguageSelectorVisible(true);
+        expect(langCombo != nullptr && langCombo->isVisibleTo(&dlg)
+                   && langLabel != nullptr && langLabel->isVisibleTo(&dlg),
+               "setLanguageSelectorVisible(true) shows label + combo together");
     }
 
     // ---- Transcript file logging: state + toggle signal -------------------
