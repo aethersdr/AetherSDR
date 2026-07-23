@@ -110,6 +110,38 @@ void testBoundedRetention()
           report.value(QStringLiteral("durationMs")).toInt() == 2000);
 }
 
+void testLateMetricDurationGate()
+{
+    MemoryTelemetrySeries series;
+    constexpr double mebibyte = 1024.0 * 1024.0;
+    // Early samples with NO panadapter subsystem, spanning well over a minute.
+    for (int i = 0; i < 3; ++i) {
+        series.addSnapshot(i * 400000LL, QJsonObject{
+            {QStringLiteral("process"), QJsonObject{
+                {QStringLiteral("residentBytes"), 100.0 * mebibyte},
+            }},
+        });
+    }
+    // Six panadapter samples that appear only late and span 50s (< the 60s
+    // sustained-growth duration gate), but grow hard (steep slope, R^2 ~ 1).
+    const qint64 base = 1200000LL;
+    for (int i = 0; i < 6; ++i) {
+        series.addSnapshot(base + i * 10000LL,
+                           snapshot(100.0 * mebibyte,
+                                    (100.0 + i * 20.0) * mebibyte, 1 + i));
+    }
+    const QJsonObject trend = series.report(false)
+        .value(QStringLiteral("byteTrends")).toObject()
+        .value(QStringLiteral("subsystem.panadapter.trackedBytes")).toObject();
+    check("late-appearing metric collects its six samples",
+          trend.value(QStringLiteral("samples")).toInt() == 6);
+    // The metric's OWN span is 50s, so despite the steep growth it must not be
+    // flagged sustained — the duration gate uses the metric's span, not the
+    // full series range (which here is ~21 minutes).
+    check("late metric spanning under 60s is not flagged sustained",
+          !trend.value(QStringLiteral("sustainedGrowth")).toBool());
+}
+
 void testLiveProcessSnapshot()
 {
     const ProcessMemorySnapshot live = ProcessMemorySnapshot::capture();
@@ -128,6 +160,7 @@ int main(int argc, char** argv)
     testLinearGrowth();
     testFlatSeries();
     testBoundedRetention();
+    testLateMetricDurationGate();
     testLiveProcessSnapshot();
     return g_failures == 0 ? 0 : 1;
 }

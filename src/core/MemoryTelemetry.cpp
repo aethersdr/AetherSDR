@@ -113,7 +113,9 @@ ProcessMemorySnapshot ProcessMemorySnapshot::capture()
     snapshot.residentBytes = parseProcKilobytes(status.value("VmRSS"));
     snapshot.peakResidentBytes = parseProcKilobytes(status.value("VmHWM"));
     snapshot.virtualBytes = parseProcKilobytes(status.value("VmSize"));
-    snapshot.threadCount = status.value("Threads").toLongLong();
+    if (status.contains("Threads")) {
+        snapshot.threadCount = status.value("Threads").toLongLong();
+    }  // else leave the -1 "unknown" sentinel so toJson() omits it
     snapshot.valid = snapshot.residentBytes > 0;
     snapshot.residentMetric = QStringLiteral("vmRss");
 
@@ -292,7 +294,12 @@ QJsonObject MemoryTelemetrySeries::trend(const std::deque<Point>& points,
     const double first = values.constFirst().second;
     const double last = values.constLast().second;
     const double delta = last - first;
-    const double durationMs = points.back().elapsedMs - points.front().elapsedMs;
+    // Span of THIS metric's own samples (x is in hours), not the whole series —
+    // a subsystem metric that only appears partway through the run must have its
+    // sustainedGrowth duration gate measured over the range it was actually
+    // sampled, not the full point range.
+    const double durationMs =
+        (values.constLast().first - values.constFirst().first) * 3600000.0;
     const double growthThreshold = bytes ? 4.0 * 1024.0 * 1024.0 : 1.0;
     const bool sustainedGrowth = values.size() >= 6
         && durationMs >= 60000.0

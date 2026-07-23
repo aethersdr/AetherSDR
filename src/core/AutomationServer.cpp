@@ -8456,18 +8456,25 @@ QJsonObject AutomationServer::memorySnapshot() const
             QStringLiteral("GUI includes panadapter objects, so subsystem object counts are scoped and non-additive"),
             QStringLiteral("estimatedGpuBytes is a lower-bound surface estimate and is excluded from resident attribution"),
             QStringLiteral("OS memory fields use platform-native accounting and are not byte-for-byte comparable across operating systems"),
+            QStringLiteral("each snapshot walks the live object tree on the calling (GUI) thread; prefer intervals of a few seconds for long soaks so the profiler's own work does not perturb the numbers it reports"),
+            QStringLiteral("report.classCountGrowth compares the first observed class census against the latest and spans the whole profiling session, even when older raw samples have aged out of the bounded ring (so its window can exceed report.durationMs)"),
         }},
     };
 }
 
-void AutomationServer::recordMemorySample()
+QJsonObject AutomationServer::recordMemorySample()
 {
     if (!m_memoryClock.isValid()) {
         m_memoryClock.start();
     }
     const qint64 elapsedMs = m_memoryClock.elapsed();
-    m_memorySeries.addSnapshot(elapsedMs, memorySnapshot());
+    // memorySnapshot() is heavy (full object-tree walk + cross-thread audio
+    // round-trips); build it once here and hand the same object back so callers
+    // that also want to return it don't take a second snapshot.
+    QJsonObject snapshot = memorySnapshot();
+    m_memorySeries.addSnapshot(elapsedMs, snapshot);
     m_memoryLastSampleMs = elapsedMs;
+    return snapshot;
 }
 
 QJsonObject AutomationServer::doMemory(const QString& action, const QString& value)
@@ -8533,8 +8540,7 @@ QJsonObject AutomationServer::doMemory(const QString& action, const QString& val
             m_memoryClock.start();
             m_memoryLastSampleMs = -1;
         }
-        recordMemorySample();
-        QJsonObject snapshot = memorySnapshot();
+        QJsonObject snapshot = recordMemorySample();
         snapshot[QStringLiteral("action")] = QStringLiteral("sample");
         snapshot[QStringLiteral("sampleCount")] = m_memorySeries.sampleCount();
         return snapshot;
@@ -8566,17 +8572,23 @@ QJsonObject AutomationServer::doMemory(const QString& action, const QString& val
         if (m_memoryTimer) {
             m_memoryTimer->stop();
         }
+        // Take a final sample if enough time has passed, and reuse it for the
+        // returned snapshot so `stop` never snapshots twice.
+        QJsonObject finalSnapshot;
+        bool haveSnapshot = false;
         if (m_memoryClock.isValid()
             && (m_memoryLastSampleMs < 0
                 || m_memoryClock.elapsed() - m_memoryLastSampleMs >= 100)) {
-            recordMemorySample();
+            finalSnapshot = recordMemorySample();
+            haveSnapshot = true;
         }
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("action"), QStringLiteral("stop")},
             {QStringLiteral("running"), false},
             {QStringLiteral("report"), m_memorySeries.report(false)},
-            {QStringLiteral("snapshot"), memorySnapshot()},
+            {QStringLiteral("snapshot"),
+             haveSnapshot ? finalSnapshot : memorySnapshot()},
         };
     }
 
