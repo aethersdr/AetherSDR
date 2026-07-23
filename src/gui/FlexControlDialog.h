@@ -71,6 +71,9 @@ private:
     void updateCompactMode();
     void applyCompactWindowSize();
     int availableScreenHeight() const;
+    // Height the window needs around the scroll area's content (frameless title
+    // bar + body-layout margins); measured from live geometry, 0 before show.
+    int windowChromeHeight() const;
     void setCaptureHintActive(bool active);
 
     QPointer<SliceModel> m_slice;
