@@ -539,6 +539,15 @@ SliceModel* MainWindow::kiwiSdrAudioTargetSlice() const
 void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
                                                   const QString& profileId)
 {
+    // User/automation menu selection: also selects the slice (selectSlice=true).
+    setKiwiSdrVirtualAntennaForSliceInternal(sliceId, profileId,
+                                             /*selectSlice=*/true);
+}
+
+void MainWindow::setKiwiSdrVirtualAntennaForSliceInternal(int sliceId,
+                                                          const QString& profileId,
+                                                          bool selectSlice)
+{
     if (!m_kiwiSdrManager || profileId.isEmpty()) {
         return;
     }
@@ -553,7 +562,11 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
     // slice whose receive path is being changed. Keep the side RX applet bound
     // to that slice so SQL/AGC controls drive the Kiwi replacement source, not
     // whichever Flex slice happened to be active before the menu action.
-    if (sliceId != m_activeSliceId) {
+    // Automatic re-arms (band-recall finish, #4158 recreation re-bind) pass
+    // selectSlice=false: they must not steal the active-slice selection when the
+    // Kiwi slice lives on a non-active pan — the applet binding already exists
+    // from the original user selection.
+    if (selectSlice && sliceId != m_activeSliceId) {
         setActiveSliceInternal(sliceId, false);
     }
 
@@ -746,9 +759,13 @@ bool MainWindow::finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice)
 
     // SliceModel emits frequencyChanged only after the complete radio delta —
     // including audio_mute — has been applied. setKiwi... therefore snapshots
-    // the recalled band's own mute before re-arming Flex suppression.
+    // the recalled band's own mute before re-arming Flex suppression. This
+    // finish is automatic, so selectSlice=false — it must not steal the active
+    // slice when the recalled Kiwi slice is on a non-active pan.
     const bool recalledFlexMute = slice->flexAudioMute();
-    setKiwiSdrVirtualAntennaForSlice(slice->sliceId(), preparation.profileId);
+    setKiwiSdrVirtualAntennaForSliceInternal(slice->sliceId(),
+                                             preparation.profileId,
+                                             /*selectSlice=*/false);
     qCInfo(lcKiwiSdr).noquote()
         << "KiwiSDR band recall re-armed"
         << "pan=" << preparation.panId

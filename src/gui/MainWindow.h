@@ -393,6 +393,11 @@ private:
     bool kiwiSdrTransmitMuteRequired() const;
     void syncKiwiSdrTransmitMute();
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
+    // Worker for the above. selectSlice=false suppresses the active-slice steal
+    // for automatic re-arms (band-recall finish, #4158 recreation re-bind).
+    void setKiwiSdrVirtualAntennaForSliceInternal(int sliceId,
+                                                  const QString& profileId,
+                                                  bool selectSlice);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
     void prepareKiwiSdrBandRecallForPan(const QString& panId);
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);

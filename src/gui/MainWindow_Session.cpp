@@ -475,7 +475,10 @@ void MainWindow::wireRadioModel()
         if (profileId.isEmpty()) {
             return;
         }
-        setKiwiSdrVirtualAntennaForSlice(s->sliceId(), profileId);
+        // Automatic recreation re-bind: selectSlice=false so a band recall on a
+        // Kiwi slice that lives on a non-active pan can't steal the active slice.
+        setKiwiSdrVirtualAntennaForSliceInternal(s->sliceId(), profileId,
+                                                 /*selectSlice=*/false);
     });
     connect(&m_radioModel, &RadioModel::memoryChanged,
             this, &MainWindow::syncMemorySpot);
