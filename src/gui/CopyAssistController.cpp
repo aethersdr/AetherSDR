@@ -187,16 +187,28 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_settings->setGpuSelectorVisible(true);
     }
 
-    // Language selector — "Auto-detect" first, then every language the whisper
-    // build supports. Multilingual models honor it; English-only models ignore
-    // it. (The remote/sherpa backends read the same stored value where relevant.)
-    m_settings->addLanguage(QStringLiteral("auto"), tr("Auto-detect"));
+    // Language selector — every language the whisper build supports.
+    // Multilingual models honor it; English-only models ignore it. (The
+    // remote/sherpa backends read the same stored value where relevant.)
+    // NOTE: the "Auto-detect" option was removed — whisper language detection
+    // wasn't working reliably in testing. The backend still handles "auto"
+    // (see WhisperAsrBackend::transcribe), so re-adding is a one-line change
+    // once the detection issue is understood.
     for (const AsrLanguage& lang : asrWhisperLanguages()) {
         m_settings->addLanguage(lang.code, lang.name);
     }
-    m_settings->setCurrentLanguage(
-        AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
-            .toString());
+    QString savedLang =
+        AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
+    if (savedLang == QStringLiteral("auto")) {
+        // Auto-detect option removed: migrate any previously-saved value to
+        // English so the dropdown and the engine agree (a lingering "auto"
+        // would otherwise still trigger detection in the backend).
+        savedLang = QStringLiteral("en");
+        auto& st = AppSettings::instance();
+        st.setValue(QStringLiteral("AsrLanguage"), savedLang);
+        st.save();
+    }
+    m_settings->setCurrentLanguage(savedLang);
 
     // Panel intent. The ⚙ button toggles the modeless settings dialog; model/GPU
     // changes come from the dialog itself.
