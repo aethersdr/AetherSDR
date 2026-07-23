@@ -1,6 +1,9 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "TciProtocol.h"
+#include "TciRoutingState.h"
+
 #include <QObject>
 #include <QPointer>
 #include <QElapsedTimer>
@@ -10,7 +13,9 @@
 #include <QSet>
 #include <QString>
 #include <QVector>
+#include <functional>
 #include <memory>
+#include <optional>
 
 class QWebSocketServer;
 class QWebSocket;
@@ -21,7 +26,6 @@ namespace AetherSDR {
 class RadioModel;
 class AudioEngine;
 class SliceModel;
-class TciProtocol;
 class Resampler;
 
 // Read-only snapshot of one connected TCI client, surfaced to the Radio
@@ -154,8 +158,30 @@ private:
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
+    SliceModel* sliceForTrx(int trx) const;
+    QVector<TciSliceEndpoint> routingEndpoints() const;
+    void handleVfoRequest(QWebSocket* client, const TciProtocol::VfoRequest& request);
+    void handleSplitRequest(QWebSocket* client, const TciProtocol::SplitRequest& request);
+    void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request);
+    void tuneSliceAndConfirm(
+        QWebSocket* client, int trx, int channel, int sliceId, long long frequencyHz);
+    void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
+    void createTxSliceForVfoB(QWebSocket* client,
+        const TciProtocol::VfoRequest& request,
+        SliceModel* rxSlice,
+        const QString& routeConfirmation = {},
+        bool splitOnly = false);
+    void prepareTxAudio();
     void startTxChrono(QWebSocket* client, int trx);
     void stopTxChrono();
+    void requestTciPttOff();
+    void abortTciPtt();
+    quint64 beginRouteTransition();
+    void finishRouteTransition(quint64 generation);
+    void drainDeferredRoutingAndPtt();
+    void onRadioTransmittingChanged(bool transmitting);
+    void broadcastActualTxState(bool transmitting);
+    void teardownTciRoute();
     void sendTxChronoFrame(QWebSocket* client);
     void logTxAudioSummary(const char* reason);
 
@@ -209,10 +235,49 @@ private:
     QSet<int>         m_tciDaxSlices;   // slice IDs where we auto-assigned DAX (#1331)
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
+    TciRoutingState m_routingState;
+    struct PendingVfoBCreate
+    {
+        QPointer<QWebSocket> client;
+        TciProtocol::VfoRequest request;
+        int rxSliceId { -1 };
+        QString routeConfirmation;
+        bool splitOnly { false };
+        quint64 transitionGeneration { 0 };
+    };
+    std::optional<PendingVfoBCreate> m_pendingVfoBCreate;
+    struct PendingTrxRequest
+    {
+        QPointer<QWebSocket> client;
+        TciProtocol::TrxRequest request;
+    };
+    std::optional<PendingTrxRequest> m_pendingTrxRequest;
+    struct PendingRouteCommand
+    {
+        enum class Kind {
+            Vfo,
+            Split,
+        };
+        Kind kind { Kind::Vfo };
+        QPointer<QWebSocket> client;
+        TciProtocol::VfoRequest vfo;
+        TciProtocol::SplitRequest split;
+    };
+    QList<PendingRouteCommand> m_pendingRouteCommands;
+    bool m_routeTransitionInFlight { false };
+    quint64 m_routeTransitionGeneration { 0 };
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
+    QPointer<QWebSocket> m_tciPttClient;
+    int m_tciPttTrx { 0 };
+    bool m_tciPttWantsAudio { false };
+    bool m_tciPttRequestedOn { false };
+    bool m_tciPttConfirmedOn { false };
+    bool m_tciPttCancelPending { false };
+    quint64 m_tciPttGeneration { 0 };
+    bool m_txAudioPrepared { false };
     int               m_txChronoTrx{0};
     std::unique_ptr<Resampler> m_txResampler; // 48kHz→24kHz TX downsampler
     QElapsedTimer     m_txChronoClock;
@@ -234,7 +299,7 @@ private:
     QElapsedTimer     m_rxAudioLogTimer;
     qint64            m_rxAudioPackets{0};
     qint64            m_rxAudioFramesSent{0};
-    bool              m_lastTx{false};
+    bool m_lastRadioTx { false };
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};

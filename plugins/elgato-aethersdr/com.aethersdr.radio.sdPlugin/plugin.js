@@ -67,10 +67,8 @@ function parseTci(msg) {
             case "tune":         if (p.length >= 2) radio.tuning = p[1] === "true"; break;
             case "mute":         if (p.length >= 2) radio.muted = p[1] === "true"; break;
             case "volume":       if (p.length >= 1) { radio.volume = volumePercentFromDb(parseInt(p[0])); volumeDial.updateAll(); } break;
-            // drive/tune_drive arrive as `drive:<power>;` (1 arg) when echoing our
-            // own SET, but as `drive:<trx>,<power>;` (2 args) in the init burst —
-            // the power is always the LAST field, matching TciProtocol::cmdDrive's
-            // own `args[args.size() == 1 ? 0 : 1]` parsing.
+            // TCI v2 DRIVE/TUNE_DRIVE replies are always `<trx>,<power>`.
+            // Keep last-field parsing for compatibility with older servers.
             case "drive":        if (p.length >= 1) { radio.rfPower = parseInt(p[p.length - 1]); rfPowerDial.updateAll(); } break;
             case "tune_drive":   if (p.length >= 1) radio.tunePower = parseInt(p[p.length - 1]); break;
             case "rx_nb_enable":  if (p.length >= 2) radio.nbOn = p[1] === "true"; break;
@@ -224,7 +222,7 @@ const rfPowerDial = createDial({
     onPress: (state) => { state.stepIndex = (state.stepIndex + 1) % RF_POWER_STEPS.length; },
     getValue: () => radio.rfPower,
     setValue: (v) => { radio.rfPower = v; },
-    sendCommand: (w) => tciSend(`drive:${w};`),
+    sendCommand: (w) => tciSend(`drive:0,${w};`),
     formatTitle: (state) => `Step: ${RF_POWER_STEPS[state.stepIndex]} W`,
     formatValue: (w) => `${w} W`,
 });
@@ -265,8 +263,8 @@ const actionHandlers = {
     // excludes the sender) unlike volume/lock, which do — so the sender
     // never hears its own change confirmed and must apply it optimistically,
     // or every next press would recompute from the same stale value.
-    "com.aethersdr.radio.rf-power":    { keyDown: () => { radio.rfPower = nextInCycle(POWER_LEVELS, radio.rfPower); tciSend(`drive:${radio.rfPower};`); rfPowerDial.updateAll(); } },
-    "com.aethersdr.radio.tune-power":  { keyDown: () => { radio.tunePower = nextInCycle(TUNE_LEVELS, radio.tunePower); tciSend(`tune_drive:${radio.tunePower};`); } },
+    "com.aethersdr.radio.rf-power":    { keyDown: () => { radio.rfPower = nextInCycle(POWER_LEVELS, radio.rfPower); tciSend(`drive:0,${radio.rfPower};`); rfPowerDial.updateAll(); } },
+    "com.aethersdr.radio.tune-power":  { keyDown: () => { radio.tunePower = nextInCycle(TUNE_LEVELS, radio.tunePower); tciSend(`tune_drive:0,${radio.tunePower};`); } },
     // Audio
     "com.aethersdr.radio.mute-toggle":  { keyDown: () => tciSend(`mute:0,${!radio.muted};`) },
     "com.aethersdr.radio.volume-up":    { keyDown: () => tciSend(volumeSetCommand(VOLUME_LEVELS[Math.min(closestIndex(VOLUME_LEVELS, radio.volume) + 1, VOLUME_LEVELS.length - 1)])) },
