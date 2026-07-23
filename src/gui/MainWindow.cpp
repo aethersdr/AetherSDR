@@ -126,6 +126,7 @@
 #include "models/BandPlanManager.h"
 #include "models/XvtrPolicy.h"
 #include "core/BandStackSettings.h"
+#include "gui/AutoConnectPolicy.h"
 #include "gui/BandStackPanel.h"
 #include "models/TunerModel.h"
 #include "models/TransmitModel.h"
@@ -507,19 +508,13 @@ static constexpr const char* kPaTempUnitSettingKey = "PaTempDisplayUnit";
 
 // Under the automation bridge there is no operator to answer a client-slot
 // contention dialog, so blocking on one hangs the headless instance (#4401).
-// A slot dialog is only reached once a slot is contended; in bridge mode we
-// decline instead of prompting — never auto-disconnecting another client, so a
-// parallel test instance can't steal a live radio's slot. Returns true when the
-// caller should short-circuit to "declined" (return false) instead of showing
-// the modal.
-static bool automationDeclinesClientSlotDialog(const QString& radioLabel)
+// aether::resolveClientSlotAction() returns Decline for that case; this just
+// records why we bailed so parallel-run failures are diagnosable.
+static void logAutomationSlotDecline(const QString& radioLabel)
 {
-    if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION"))
-        return false;
     qCInfo(lcGui).noquote()
         << "Automation: declining slot-contended connect to" << radioLabel
         << "— no operator to resolve the client-slot dialog (#4401)";
-    return true;
 }
 
 bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
@@ -529,12 +524,24 @@ bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
         disconnectHandles->clear();
 
     const auto clients = buildDisconnectClients(info);
+    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
 
-    // When multiFLEX is disabled, any connected client blocks us — show the
-    // Connected Stations dialog so the user can disconnect them first.
+    switch (aether::resolveClientSlotAction(
+                info.multiFlexEnabled, clients.size(), maxSlices,
+                qEnvironmentVariableIsSet("AETHER_AUTOMATION"))) {
+    case aether::ClientSlotAction::Connect:
+        return true;
+    case aether::ClientSlotAction::Decline:
+        logAutomationSlotDecline(info.model);
+        return false;
+    case aether::ClientSlotAction::Prompt:
+        break;
+    }
+
+    // Contended and interactive: prompt. When multiFLEX is disabled any connected
+    // client blocks us — show the Connected Stations dialog so the user can
+    // disconnect them first; otherwise the model's slots are simply full.
     if (!info.multiFlexEnabled && !clients.isEmpty()) {
-        if (automationDeclinesClientSlotDialog(info.model))
-            return false;
         ConnectedStationsDialog::RadioMeta meta;
         meta.model    = info.model;
         meta.nickname = info.nickname;
@@ -562,12 +569,6 @@ bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
         return true;
     }
 
-    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
-    if (clients.isEmpty() || clients.size() < maxSlices)
-        return true;
-
-    if (automationDeclinesClientSlotDialog(info.model))
-        return false;
     ClientDisconnectDialog dialog(clients, maxSlices, this);
     if (dialog.exec() != QDialog::Accepted)
         return false;
@@ -584,18 +585,31 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
         disconnectHandles->clear();
 
     const auto clients = buildDisconnectClients(info);
+    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
 
     // licensedClients == 1 means the radio's multiFLEX license allows only one
     // simultaneous client — effectively mf_enable=0 from the SmartLink perspective.
     // WanRadioInfo defaults to 1 when licensed_clients is absent from the SmartLink
     // response (older firmware, partial parse), so this gate is fail-safe: it blocks
-    // rather than allows.  Log when we hit the default so field reports are diagnosable.
+    // rather than allows.
+    switch (aether::resolveClientSlotAction(
+                info.licensedClients > 1, clients.size(), maxSlices,
+                qEnvironmentVariableIsSet("AETHER_AUTOMATION"))) {
+    case aether::ClientSlotAction::Connect:
+        return true;
+    case aether::ClientSlotAction::Decline:
+        logAutomationSlotDecline(info.model);
+        return false;
+    case aether::ClientSlotAction::Prompt:
+        break;
+    }
+
+    // Contended and interactive: prompt. Log when we hit the licensedClients=1
+    // default so field reports are diagnosable.
     if (info.licensedClients <= 1 && !clients.isEmpty()) {
         if (info.licensedClients == 1)
             qCWarning(lcGui) << "MainWindow: WAN licensedClients=1 (may be default) — "
                                 "showing conflict dialog as a precaution";
-        if (automationDeclinesClientSlotDialog(info.model))
-            return false;
         ConnectedStationsDialog::RadioMeta meta;
         meta.model    = info.model;
         meta.nickname = info.nickname;
@@ -623,12 +637,6 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
         return true;
     }
 
-    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
-    if (clients.isEmpty() || clients.size() < maxSlices)
-        return true;
-
-    if (automationDeclinesClientSlotDialog(info.model))
-        return false;
     ClientDisconnectDialog dialog(clients, maxSlices, this);
     if (dialog.exec() != QDialog::Accepted)
         return false;
@@ -1954,8 +1962,11 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_titleBar) m_titleBar->setDiscovering(true);
     m_discovery.startListening();
 
-    const bool autoConnectToLastRadio =
-        AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True";
+    // A process-scoped override (AETHER_AUTOMATION_NO_AUTOCONNECT) keeps an
+    // automation/CI launch idle without flipping the persistent setting (#4401).
+    const bool autoConnectToLastRadio = aether::savedRadioAutoConnectAllowed(
+        qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT"),
+        AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True");
     const QString startupLastSerial =
         AppSettings::instance().value("LastConnectedRadioSerial").toString();
     if (!startupLastSerial.isEmpty() && autoConnectToLastRadio) {
@@ -1969,7 +1980,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected || m_radioModel.isConnected()) return;
-        if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
+        if (!aether::savedRadioAutoConnectAllowed(
+                qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT"),
+                AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True"))
             return;
         const QString lastSerial = AppSettings::instance()
             .value("LastConnectedRadioSerial").toString();

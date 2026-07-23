@@ -53,6 +53,7 @@
 #include "SpectrumWidget.h"
 #include "TitleBar.h"
 #include "core/AppSettings.h"
+#include "gui/AutoConnectPolicy.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 #include "core/LogManager.h"
@@ -245,7 +246,9 @@ void MainWindow::wireDiscovery()
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected) return;
-        if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
+        if (!aether::savedRadioAutoConnectAllowed(
+                qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT"),
+                AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True"))
             return;
         const QString lastSerial = AppSettings::instance()
             .value("LastConnectedRadioSerial").toString();
