@@ -40,6 +40,7 @@
 
 #include <QColor>
 #include <QPainter>
+#include <QThread>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -1302,9 +1303,19 @@ int MainWindow::injectMidiVfoCcForAutomation(int value)
         return 1;
     }
 
+    // Only block-queue when m_midiControl is genuinely on another thread — a
+    // same-thread BlockingQueuedConnection deadlocks, and a dead/quitting
+    // ext-ctrl event loop would hang the GUI (same guard idiom as the audio
+    // snapshot verbs in AutomationServer). m_midiControl normally lives on
+    // m_extCtrlThread, but don't assume it.
+    QThread* mgrThread = m_midiControl->thread();
+    const Qt::ConnectionType conn =
+        (!mgrThread || mgrThread == QThread::currentThread())
+            ? Qt::DirectConnection
+            : Qt::BlockingQueuedConnection;
     bool accepted = false;
     const bool invoked = QMetaObject::invokeMethod(
-        m_midiControl, "injectVfoCcForAutomation", Qt::BlockingQueuedConnection,
+        m_midiControl, "injectVfoCcForAutomation", conn,
         Q_RETURN_ARG(bool, accepted), Q_ARG(int, value));
     return invoked && accepted ? 0 : 1;
 #else

@@ -130,6 +130,10 @@ private:
     QVector<MidiBinding> m_bindings;
     QHash<quint32, int>  m_bindingIndex; // binding key → index into m_bindings
     QHash<quint32, MidiRelativeCcEncoding> m_relativeCcEncodings;
+    // Encoding state for the automation-only injectVfoCcForAutomation() path,
+    // kept separate from m_relativeCcEncodings so a test injection can never
+    // collide with (and mis-lock) a real controller's binding key.
+    MidiRelativeCcEncoding m_automationCcEncoding{MidiRelativeCcEncoding::Undetermined};
 
     bool    m_learning{false};
     QString m_learnParamId;
