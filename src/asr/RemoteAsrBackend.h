@@ -39,7 +39,11 @@ public:
     // config). Returns false only if no endpoint URL is configured.
     bool load(const QString& modelPath, QString* error) override;
     bool isLoaded() const override { return m_loaded; }
-    AsrTranscript transcribe(const std::vector<float>& pcm16k, QString* error) override;
+    // overlapMs (see IAsrBackend): ignored — remote servers speak the generic
+    // OpenAI transcription API, which has no token-timestamp contract we can
+    // rely on here. An overlap-carried segment will emit its duplicated
+    // leading words again — a known limitation, not silently mishandled.
+    AsrTranscript transcribe(const std::vector<float>& pcm16k, int overlapMs, QString* error) override;
     void unload() override { m_loaded = false; }
 
     // Encode 16 kHz mono float samples as a 16-bit PCM WAV byte buffer.

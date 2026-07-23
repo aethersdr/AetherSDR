@@ -75,8 +75,10 @@ QByteArray RemoteAsrBackend::encodeWav16(const std::vector<float>& pcm16k, int s
     return wav;
 }
 
-AsrTranscript RemoteAsrBackend::transcribe(const std::vector<float>& pcm16k, QString* error)
+AsrTranscript RemoteAsrBackend::transcribe(const std::vector<float>& pcm16k, int overlapMs,
+                                            QString* error)
 {
+    (void)overlapMs; // not applied here yet — see header comment
     if (!m_loaded || m_nam == nullptr) {
         if (error != nullptr) {
             *error = QStringLiteral("Remote backend not loaded.");

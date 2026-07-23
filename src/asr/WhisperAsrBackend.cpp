@@ -24,6 +24,13 @@ int chooseThreadCount()
     }
     return std::clamp(hw, 1, 4);
 }
+
+// Below this confidence, don't let the segment's tokens seed the next decode's
+// context — a garbled/low-confidence result is more likely to compound into a
+// worse one downstream (a known whisper hallucination-propagation failure
+// mode) than to help continuity. Not exposed/tuned yet; revisit if the
+// context-carry toggle turns out to need it adjustable too.
+constexpr float kContextCarryMinConfidence = 0.5f;
 } // namespace
 
 WhisperAsrBackend::WhisperAsrBackend()
@@ -75,7 +82,8 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     return true;
 }
 
-AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QString* error)
+AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, int overlapMs,
+                                             QString* error)
 {
     if (m_ctx == nullptr) {
         if (error != nullptr) {
@@ -87,12 +95,24 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
         return {};
     }
 
+    // Context carry (experimental): only actually condition on the previous
+    // call's tokens when the feature is on AND that previous result was
+    // confident enough to trust as a prompt. whisper.cpp stores the prompt
+    // itself (in m_ctx's internal state) between calls; no_context just gates
+    // whether it's used for this one.
+    const bool carryContext =
+        m_contextCarryEnabled && m_hadPreviousSegment && m_lastConfidence >= kContextCarryMinConfidence;
+
     whisper_full_params wparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     wparams.n_threads = m_threads;
     wparams.translate = false;
-    wparams.no_context = true;    // each over is independent
+    wparams.no_context = !carryContext;
     wparams.single_segment = true; // one utterance -> one segment
     wparams.no_timestamps = true;
+    // Per-token timestamps (DTW alignment) cost extra compute — only pay for
+    // them when this segment actually carries overlap audio (experimental) to
+    // trim by. The common case (overlapMs == 0) skips this entirely.
+    wparams.token_timestamps = overlapMs > 0;
     wparams.print_progress = false;
     wparams.print_realtime = false;
     wparams.print_timestamps = false;
@@ -110,24 +130,36 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
         return {};
     }
 
-    // Confidence = mean probability over the real (non-special) tokens. Special
-    // tokens (timestamps, <eot>, etc.) have ids >= the end-of-text token and are
-    // excluded so punctuation/formatting doesn't skew the score.
+    // Confidence = mean probability over the real (non-special), non-overlap
+    // tokens. Special tokens (timestamps, <eot>, etc.) have ids >= the
+    // end-of-text token and are excluded so punctuation/formatting doesn't
+    // skew the score. Text is rebuilt token-by-token (rather than via
+    // whisper_full_get_segment_text) so a segment carrying overlap audio can
+    // skip whatever tokens fall inside the duplicated leading window —
+    // whisper_token_data.t0/t1 are in centiseconds (10 ms units), relative to
+    // the start of THIS call's audio buffer, which lines up directly with
+    // AsrSegmenter's overlapMs (leading ms of pcm16k that repeats the tail of
+    // the previous segment).
     const whisper_token specialFloor = whisper_token_eot(m_ctx);
+    const int64_t overlapCentisec = overlapMs > 0 ? overlapMs / 10 : -1;
 
     QString text;
     double probSum = 0.0;
     int probCount = 0;
     const int segments = whisper_full_n_segments(m_ctx);
     for (int i = 0; i < segments; ++i) {
-        const char* seg = whisper_full_get_segment_text(m_ctx, i);
-        if (seg != nullptr) {
-            text += QString::fromUtf8(seg);
-        }
         const int nTokens = whisper_full_n_tokens(m_ctx, i);
         for (int t = 0; t < nTokens; ++t) {
             if (whisper_full_get_token_id(m_ctx, i, t) >= specialFloor) {
                 continue;
+            }
+            if (overlapCentisec >= 0
+                && whisper_full_get_token_data(m_ctx, i, t).t0 < overlapCentisec) {
+                continue; // inside the duplicated overlap window — already emitted last call
+            }
+            const char* tokText = whisper_full_get_token_text(m_ctx, i, t);
+            if (tokText != nullptr) {
+                text += QString::fromUtf8(tokText);
             }
             probSum += whisper_full_get_token_p(m_ctx, i, t);
             ++probCount;
@@ -137,7 +169,19 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     AsrTranscript result;
     result.text = text.trimmed();
     result.confidence = probCount > 0 ? static_cast<float>(probSum / probCount) : 0.0f;
+
+    m_hadPreviousSegment = !result.text.isEmpty();
+    m_lastConfidence = result.confidence;
+
     return result;
+}
+
+void WhisperAsrBackend::setContextCarryEnabled(bool on)
+{
+    m_contextCarryEnabled = on;
+    if (!on) {
+        m_hadPreviousSegment = false; // next call starts clean when re-enabled
+    }
 }
 
 void WhisperAsrBackend::unload()
@@ -146,6 +190,10 @@ void WhisperAsrBackend::unload()
         whisper_free(m_ctx);
         m_ctx = nullptr;
     }
+    // A new/different model has no relationship to whatever text the old one
+    // produced — don't carry a stale prompt into its first decode.
+    m_hadPreviousSegment = false;
+    m_lastConfidence = 0.0f;
 }
 
 std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QString& language,

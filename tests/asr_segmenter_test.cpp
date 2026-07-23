@@ -45,11 +45,11 @@ void appendTone(std::vector<float>& buf, int ms, float amp = 0.3f, float freq = 
     }
 }
 
-int totalSamples(const std::vector<std::vector<float>>& segs)
+int totalSamples(const std::vector<AsrSegmenter::ClosedSegment>& segs)
 {
     int n = 0;
     for (const auto& s : segs) {
-        n += static_cast<int>(s.size());
+        n += static_cast<int>(s.samples.size());
     }
     return n;
 }
@@ -79,7 +79,7 @@ int main()
         auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
         expect(out.size() == 1, "one tone burst -> one segment");
         if (out.size() == 1) {
-            const int len = static_cast<int>(out[0].size());
+            const int len = static_cast<int>(out[0].samples.size());
             const int lo = 700 * kRate / 1000; // >= tone + most of hangover
             const int hi = 900 * kRate / 1000; // <= tone + hangover + slop
             expect(len >= lo && len <= hi, "segment length is tone + hangover");
@@ -131,6 +131,67 @@ int main()
         appendTone(audio, 1600); // continuous speech, no silence
         auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
         expect(out.size() >= 2, "setMaxSegmentMs force-closes a long over into segments");
+        if (out.size() >= 2) {
+            expect(out[0].overlapMs == 0, "first force-closed segment carries no overlap (nothing before it)");
+            expect(out[1].overlapMs == 0, "overlap defaults to 0 (disabled) — no carry without setOverlapMs");
+        }
+    }
+
+    // Experimental segment overlap: a force-close carries trailing audio into
+    // the next segment and marks how much of it is duplicate.
+    {
+        AsrSegmenter seg;
+        seg.setMaxSegmentMs(500);
+        seg.setOverlapMs(200);
+        std::vector<float> audio;
+        appendTone(audio, 1600); // continuous speech, no silence -> repeated force-closes
+        auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        expect(out.size() >= 2, "overlap doesn't change segment count, just what's carried");
+        if (out.size() >= 2) {
+            expect(out[0].overlapMs == 0, "first segment still has no overlap (nothing precedes it)");
+            expect(out[1].overlapMs == 200, "second segment reports the configured overlap");
+            const int overlapSamples = 200 * kRate / 1000;
+            expect(static_cast<int>(out[1].samples.size()) > overlapSamples,
+                   "overlap-carrying segment holds more than just the carried tail");
+        }
+        expect(seg.inSpeech(), "still mid-utterance after a force-close continuation (no gap opened)");
+    }
+
+    // Overlap must NOT apply across a real hangover-close — that's a genuine
+    // pause, not a mid-word cut, so there's nothing to recover.
+    {
+        AsrSegmenter seg;
+        seg.setOverlapMs(300); // configured, but these utterances are well under maxSegmentMs
+        std::vector<float> audio;
+        appendSilence(audio, 100);
+        appendTone(audio, 400);
+        appendSilence(audio, 600); // real pause -> hangover closes it
+        appendTone(audio, 400);
+        appendSilence(audio, 400);
+        auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        expect(out.size() == 2, "two separated tones still -> two segments with overlap configured");
+        if (out.size() == 2) {
+            expect(out[0].overlapMs == 0, "first utterance has no overlap");
+            expect(out[1].overlapMs == 0, "hangover-close (real silence) never carries overlap forward");
+        }
+    }
+
+    // A force-close continuation that ends via flush() (stream stops mid-word,
+    // no trailing silence) still reports the carried overlap correctly.
+    {
+        AsrSegmenter seg;
+        seg.setMaxSegmentMs(500);
+        seg.setOverlapMs(200);
+        std::vector<float> audio;
+        appendTone(audio, 600); // triggers one force-close, leaves ~100ms in progress
+        auto out = seg.feed(audio.data(), static_cast<int>(audio.size()));
+        expect(out.size() == 1, "one force-close from 600ms at a 500ms cap");
+        auto flushed = seg.flush();
+        expect(flushed.size() == 1, "flush closes the continued (post-overlap) utterance");
+        if (flushed.size() == 1) {
+            expect(flushed[0].overlapMs == 200,
+                   "flush-closed continuation still reports the carried overlap");
+        }
     }
 
     // Runtime setter: raising the RMS threshold makes a moderate tone read as

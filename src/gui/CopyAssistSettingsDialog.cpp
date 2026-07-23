@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSlider>
+#include <QSpinBox>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -149,6 +150,40 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     thrRow->addWidget(m_spkThresholdValue);
     form->addRow(tr("Match threshold:"), thrRow);
 
+    // Experimental (RFC #4333 follow-up): not a stable feature yet, grouped
+    // separately so it reads as "try this, not a normal setting." Both apply
+    // live (no engine rebuild) so the effect can be A/B'd on the fly.
+    auto* expLabel = new QLabel(tr("Experimental"), this);
+    expLabel->setStyleSheet(QStringLiteral("font-weight: bold; margin-top: 6px;"));
+    form->addRow(expLabel);
+
+    m_contextCarry = new QCheckBox(tr("Carry context across segments"), this);
+    m_contextCarry->setToolTip(tr("Condition each decode on the previous segment's own text, "
+                                  "for continuity across segment boundaries. Gated internally by "
+                                  "the previous segment's confidence, so a garbled decode doesn't "
+                                  "poison the next one."));
+    connect(m_contextCarry, &QCheckBox::toggled, this, &CopyAssistSettingsDialog::contextCarryToggled);
+    form->addRow(m_contextCarry);
+
+    m_overlapEnabled = new QCheckBox(tr("Overlap segments"), this);
+    m_overlapEnabled->setToolTip(tr("Carry trailing audio across a force-closed segment boundary "
+                                    "so a word split by the cut isn't lost. Only applies when a "
+                                    "segment is cut off by the length cap, not a real pause."));
+    connect(m_overlapEnabled, &QCheckBox::toggled, this, [this](bool on) {
+        m_overlapMs->setEnabled(on);
+        emit overlapToggled(on);
+    });
+    form->addRow(m_overlapEnabled);
+
+    m_overlapMs = new QSpinBox(this);
+    m_overlapMs->setRange(0, 5000);
+    m_overlapMs->setSingleStep(50);
+    m_overlapMs->setValue(500);
+    m_overlapMs->setSuffix(tr(" ms"));
+    m_overlapMs->setEnabled(false);
+    connect(m_overlapMs, &QSpinBox::valueChanged, this, &CopyAssistSettingsDialog::overlapMsChanged);
+    form->addRow(tr("Overlap length:"), m_overlapMs);
+
     root->addLayout(form);
     root->addStretch(1); // headroom for further options added here later
 }
@@ -274,6 +309,36 @@ void CopyAssistSettingsDialog::setSpeakerThreshold(int percent)
 int CopyAssistSettingsDialog::speakerThreshold() const
 {
     return m_spkThreshold->value();
+}
+
+void CopyAssistSettingsDialog::setContextCarryEnabled(bool on)
+{
+    m_contextCarry->setChecked(on);
+}
+
+bool CopyAssistSettingsDialog::contextCarryEnabled() const
+{
+    return m_contextCarry->isChecked();
+}
+
+void CopyAssistSettingsDialog::setOverlapEnabled(bool on)
+{
+    m_overlapEnabled->setChecked(on); // fires toggled → enables the spinbox + emits
+}
+
+bool CopyAssistSettingsDialog::overlapEnabled() const
+{
+    return m_overlapEnabled->isChecked();
+}
+
+void CopyAssistSettingsDialog::setOverlapMs(int ms)
+{
+    m_overlapMs->setValue(ms);
+}
+
+int CopyAssistSettingsDialog::overlapMs() const
+{
+    return m_overlapMs->value();
 }
 
 } // namespace AetherSDR

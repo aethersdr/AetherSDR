@@ -26,7 +26,12 @@ public:
     // modelPath is a directory containing a sherpa-onnx model bundle.
     bool load(const QString& modelPath, QString* error) override;
     bool isLoaded() const override;
-    AsrTranscript transcribe(const std::vector<float>& pcm16k, QString* error) override;
+    // overlapMs (see IAsrBackend): ignored here. sherpa-onnx's offline
+    // recognizer has no per-token timestamp path wired up in this backend, so
+    // an overlap-carried segment will emit its duplicated leading words again
+    // — a known limitation, not silently mishandled. The experimental overlap
+    // feature is really a whisper-path thing for now.
+    AsrTranscript transcribe(const std::vector<float>& pcm16k, int overlapMs, QString* error) override;
     void unload() override;
 
 private:

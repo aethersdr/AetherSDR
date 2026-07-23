@@ -308,6 +308,36 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     connect(m_settings, &CopyAssistSettingsDialog::browseSpeakerModelRequested, this,
             [this] { promptSpeakerModel(); });
 
+    // Experimental (RFC #4333 follow-up), both live — no engine rebuild needed.
+    m_settings->setContextCarryEnabled(
+        AppSettings::instance().value(QStringLiteral("AsrContextCarryEnabled"), QStringLiteral("False"))
+            .toString() == QStringLiteral("True"));
+    m_settings->setOverlapEnabled(
+        AppSettings::instance().value(QStringLiteral("AsrOverlapEnabled"), QStringLiteral("False"))
+            .toString() == QStringLiteral("True"));
+    m_settings->setOverlapMs(
+        AppSettings::instance().value(QStringLiteral("AsrOverlapMs"), QStringLiteral("500"))
+            .toString().toInt());
+    connect(m_settings, &CopyAssistSettingsDialog::contextCarryToggled, this, [this](bool on) {
+        auto& st = AppSettings::instance();
+        st.setValue(QStringLiteral("AsrContextCarryEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
+        st.save();
+        m_asr->setContextCarryEnabled(on);
+    });
+    connect(m_settings, &CopyAssistSettingsDialog::overlapToggled, this, [this](bool on) {
+        auto& st = AppSettings::instance();
+        st.setValue(QStringLiteral("AsrOverlapEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
+        st.save();
+        // "Off" means 0ms to the segmenter (disabled); "on" resumes the configured length.
+        m_asr->setOverlapMs(on ? m_settings->overlapMs() : 0);
+    });
+    connect(m_settings, &CopyAssistSettingsDialog::overlapMsChanged, this, [this](int ms) {
+        saveInt("AsrOverlapMs", ms);
+        if (m_settings->overlapEnabled()) {
+            m_asr->setOverlapMs(ms);
+        }
+    });
+
     // Model download → engine load (the handlers read m_asr at call time, so they
     // survive an engine rebuild on backend switch).
     connect(m_models, &AsrModelManager::progress, this, [this](qint64 got, qint64 total) {
@@ -469,6 +499,20 @@ void CopyAssistController::applyTuning()
     m_asr->setSpeechRms(sensitivityToRms(
         s.value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
     m_asr->setSilenceDurationMs(s.value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
+
+    // Experimental (RFC #4333 follow-up) — a fresh engine (backend switch, model
+    // change) starts with these off/0 by default; re-apply the persisted state
+    // so they survive a rebuild, same as the tuning above.
+    const bool contextCarry =
+        s.value(QStringLiteral("AsrContextCarryEnabled"), QStringLiteral("False")).toString()
+        == QStringLiteral("True");
+    m_asr->setContextCarryEnabled(contextCarry);
+    const bool overlapOn =
+        s.value(QStringLiteral("AsrOverlapEnabled"), QStringLiteral("False")).toString()
+        == QStringLiteral("True");
+    m_asr->setOverlapMs(overlapOn
+        ? s.value(QStringLiteral("AsrOverlapMs"), QStringLiteral("500")).toString().toInt()
+        : 0);
 }
 
 void CopyAssistController::onEnableToggled(bool on)

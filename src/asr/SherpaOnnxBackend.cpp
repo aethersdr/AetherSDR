@@ -124,8 +124,10 @@ bool SherpaOnnxBackend::isLoaded() const
 #endif
 }
 
-AsrTranscript SherpaOnnxBackend::transcribe(const std::vector<float>& pcm16k, QString* error)
+AsrTranscript SherpaOnnxBackend::transcribe(const std::vector<float>& pcm16k, int overlapMs,
+                                             QString* error)
 {
+    (void)overlapMs; // not applied here yet — see header comment
     AsrTranscript out;
 #ifdef HAVE_SHERPA
     if (m_impl->recognizer == nullptr) {

@@ -151,7 +151,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    std::vector<std::vector<float>> segments =
+    std::vector<AsrSegmenter::ClosedSegment> segments =
         m_segmenter.feed(pcm16k.data(), static_cast<int>(pcm16k.size()));
     if (segments.empty()) {
         return;
@@ -165,9 +165,9 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    for (std::vector<float>& seg : segments) {
+    for (AsrSegmenter::ClosedSegment& seg : segments) {
         QString error;
-        const AsrTranscript result = m_backend->transcribe(seg, &error);
+        const AsrTranscript result = m_backend->transcribe(seg.samples, seg.overlapMs, &error);
         if (!error.isEmpty()) {
             emit errorOccurred(error);
             continue;
@@ -179,7 +179,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         int speaker = -1;
         if (m_embedder) {
             speaker = m_clusterer.assign(
-                m_embedder->embed(seg.data(), static_cast<int>(seg.size())));
+                m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
         }
         emit segmentText(result.text, result.confidence, speaker);
     }
@@ -206,6 +206,18 @@ void AsrWorker::setHangoverMs(int ms)
 void AsrWorker::setSpeakerThreshold(float t)
 {
     m_clusterer.setThreshold(t);
+}
+
+void AsrWorker::setOverlapMs(int ms)
+{
+    m_segmenter.setOverlapMs(ms);
+}
+
+void AsrWorker::setContextCarryEnabled(bool on)
+{
+    if (m_backend) {
+        m_backend->setContextCarryEnabled(on);
+    }
 }
 
 void AsrWorker::reset()
@@ -249,6 +261,8 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(this, &AsrEngine::requestSetSpeechRms, m_worker, &AsrWorker::setSpeechRms);
     connect(this, &AsrEngine::requestSetHangoverMs, m_worker, &AsrWorker::setHangoverMs);
     connect(this, &AsrEngine::requestSetSpeakerThreshold, m_worker, &AsrWorker::setSpeakerThreshold);
+    connect(this, &AsrEngine::requestSetOverlapMs, m_worker, &AsrWorker::setOverlapMs);
+    connect(this, &AsrEngine::requestSetContextCarryEnabled, m_worker, &AsrWorker::setContextCarryEnabled);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
 
     // Worker -> engine (queued back to the main thread).
@@ -358,6 +372,16 @@ void AsrEngine::setSilenceDurationMs(int ms)
 void AsrEngine::setSpeakerThreshold(float threshold)
 {
     emit requestSetSpeakerThreshold(threshold);
+}
+
+void AsrEngine::setOverlapMs(int ms)
+{
+    emit requestSetOverlapMs(ms);
+}
+
+void AsrEngine::setContextCarryEnabled(bool on)
+{
+    emit requestSetContextCarryEnabled(on);
 }
 
 void AsrEngine::reset()

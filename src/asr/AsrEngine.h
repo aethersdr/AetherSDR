@@ -52,6 +52,11 @@ public slots:
     void setSpeechRms(float rms);
     void setHangoverMs(int ms);
     void setSpeakerThreshold(float t);
+    // Experimental (RFC #4333 follow-up), see AsrSegmenter::Config::overlapMs
+    // and IAsrBackend::setContextCarryEnabled. Not yet user-exposed — for
+    // side-by-side comparison while tuning.
+    void setOverlapMs(int ms);
+    void setContextCarryEnabled(bool on);
     void reset();
 
 signals:
@@ -121,6 +126,15 @@ public:
     //  - speaker threshold: cosine match threshold for A/B/C clustering (0..1)
     void setSpeakerThreshold(float threshold);
 
+    // Experimental (RFC #4333 follow-up), applied live, no engine rebuild:
+    //  - segment overlap: ms of trailing audio carried across a force-closed
+    //    segment boundary, to recover a word split by the cut (0 = disabled)
+    //  - context carry: condition each decode on the backend's own previous
+    //    output, for continuity across segment boundaries (off = independent
+    //    decodes, the historical default)
+    void setOverlapMs(int ms);
+    void setContextCarryEnabled(bool on);
+
     void reset();
 
 signals:
@@ -140,6 +154,8 @@ signals:
     void requestSetSpeechRms(float rms);
     void requestSetHangoverMs(int ms);
     void requestSetSpeakerThreshold(float threshold);
+    void requestSetOverlapMs(int ms);
+    void requestSetContextCarryEnabled(bool on);
     void requestReset();
 
 private:

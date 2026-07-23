@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -36,18 +37,36 @@ public:
         // labeling (A/B/C…). Empty = no labeling. Also worker-consumed.
         std::string speakerModelPath;
         float speakerThreshold = 0.50f; // cosine threshold for the same speaker
+        // Experimental segment overlap (0 = disabled). When a segment is force-
+        // closed by maxSegmentMs (speech still ongoing, not a real silence gap),
+        // carry this many ms of trailing audio forward as the start of the next
+        // segment instead of dropping it — recovers a word split at the cut. Never
+        // applied on a hangover-based close, since speech had already stopped
+        // there (nothing to recover).
+        int overlapMs = 0;
+    };
+
+    // One closed utterance. `overlapMs` is the leading portion of `samples` (in
+    // ms) that duplicates the tail of the PREVIOUS closed segment — set only
+    // when the segmenter's overlap feature carried audio across a force-close;
+    // 0 for a normal (non-overlapping) segment. The backend uses this to avoid
+    // emitting the duplicated words/phrase twice.
+    struct ClosedSegment {
+        std::vector<float> samples;
+        int overlapMs = 0;
     };
 
     AsrSegmenter() : AsrSegmenter(Config{}) {}
     explicit AsrSegmenter(const Config& config);
 
     // Feed mono float samples in [-1, 1]. Returns any utterances that closed as
-    // a result of this input (each a contiguous sample buffer). Usually empty.
-    std::vector<std::vector<float>> feed(const float* samples, int count);
+    // a result of this input. Usually empty.
+    std::vector<ClosedSegment> feed(const float* samples, int count);
 
     // Close any in-progress utterance (end of stream / mode change). Returns it
-    // if it qualifies as speech, otherwise empty.
-    std::vector<std::vector<float>> flush();
+    // if it qualifies as speech, otherwise empty. Never carries overlap forward
+    // (there's no "next segment" at end of stream).
+    std::vector<ClosedSegment> flush();
 
     // Discard all buffered state without emitting.
     void reset();
@@ -66,15 +85,21 @@ public:
     void setMaxSegmentMs(int ms);
     void setSpeechRms(float rms);
     void setHangoverMs(int ms);
+    // Experimental: see Config::overlapMs. Takes effect on the next force-close.
+    void setOverlapMs(int ms) { m_config.overlapMs = std::max(0, ms); }
     int maxSegmentMs() const { return m_config.maxSegmentMs; }
     float speechRms() const { return m_config.speechRms; }
     int hangoverMs() const { return m_config.hangoverMs; }
+    int overlapMs() const { return m_config.overlapMs; }
 
     bool inSpeech() const { return m_inSpeech; }
 
 private:
     int framesToSamples(int ms) const;
-    void closeSegment(std::vector<std::vector<float>>& out);
+    // forceCap: true when this close is the maxSegmentMs cap firing mid-speech
+    // (a candidate to continue via overlap), false for a real hangover/end-of-
+    // stream close (utterance actually ended; never carries overlap forward).
+    void closeSegment(std::vector<ClosedSegment>& out, bool forceCap);
 
     Config m_config;
     int m_frameSamples = 160;
@@ -88,6 +113,7 @@ private:
     bool m_inSpeech = false;
     int m_trailingSilence = 0;      // samples of silence since last speech frame
     int m_speechSamples = 0;        // speech-only samples (excludes hangover), gates minSpeech
+    int m_pendingOverlapMs = 0;     // overlap (ms) already carried into the front of m_segment
 };
 
 } // namespace AetherSDR

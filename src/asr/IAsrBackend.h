@@ -35,10 +35,27 @@ public:
     // Transcribe one utterance of 16 kHz mono float samples in [-1, 1]. Returns
     // the recognized text + confidence (text empty for non-speech). Sets *error
     // on failure.
-    virtual AsrTranscript transcribe(const std::vector<float>& pcm16k, QString* error) = 0;
+    //
+    // overlapMs: leading portion (in ms) of pcm16k that duplicates the tail end
+    // of the PREVIOUS call's audio — the segmenter's segment-overlap feature
+    // (experimental) carries this much trailing audio forward across a
+    // force-closed segment so a word split at the boundary isn't lost. 0 means
+    // no overlap (the common case). Backends that can identify which part of
+    // their output corresponds to that leading audio should omit it from the
+    // returned text so it isn't emitted twice; backends that can't (most
+    // non-whisper backends) may just ignore this and pass the whole segment
+    // through, at the cost of a duplicated word/phrase at re-joined boundaries.
+    virtual AsrTranscript transcribe(const std::vector<float>& pcm16k, int overlapMs,
+                                      QString* error) = 0;
 
     // Release the loaded model. Called before destruction; idempotent.
     virtual void unload() = 0;
+
+    // Experimental: when true, condition each decode on the text the backend
+    // itself produced last call (whisper.cpp's no_context=false), for
+    // continuity across segment boundaries. Default is off (independent decodes)
+    // — the historical behavior. No-op for backends that don't support it.
+    virtual void setContextCarryEnabled(bool) {}
 };
 
 } // namespace AetherSDR

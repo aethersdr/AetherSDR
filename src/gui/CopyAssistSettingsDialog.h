@@ -9,6 +9,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSlider;
+class QSpinBox;
 
 namespace AetherSDR {
 
@@ -61,6 +62,17 @@ public:
     void setSpeakerThreshold(int percent);
     int speakerThreshold() const;
 
+    // Experimental (RFC #4333 follow-up), not yet a stable/committed feature —
+    // deliberately grouped as "Experimental" in the UI rather than mixed in
+    // with the settings above. See AsrEngine::setContextCarryEnabled/
+    // setOverlapMs for what each one actually does.
+    void setContextCarryEnabled(bool on);
+    bool contextCarryEnabled() const;
+    void setOverlapEnabled(bool on);
+    bool overlapEnabled() const;
+    void setOverlapMs(int ms);
+    int overlapMs() const;
+
 signals:
     void tierChanged(const QString& tierId);
     void gpuChanged(int index);
@@ -71,6 +83,9 @@ signals:
     void labelSpeakersToggled(bool on);
     void browseSpeakerModelRequested();
     void speakerThresholdChanged(int percent);
+    void contextCarryToggled(bool on);
+    void overlapToggled(bool on);
+    void overlapMsChanged(int ms);
 
 private:
     QComboBox* m_tier = nullptr;
@@ -87,6 +102,9 @@ private:
     QPushButton* m_spkBrowse = nullptr;
     QSlider* m_spkThreshold = nullptr;
     QLabel* m_spkThresholdValue = nullptr;
+    QCheckBox* m_contextCarry = nullptr;
+    QCheckBox* m_overlapEnabled = nullptr;
+    QSpinBox* m_overlapMs = nullptr;
 };
 
 } // namespace AetherSDR
