@@ -47,7 +47,7 @@ int main()
     std::vector<float> samples(raw.size() / sizeof(float));
     std::memcpy(samples.data(), raw.constData(), samples.size() * sizeof(float));
 
-    const AsrTranscript result = backend.transcribe(samples, &error);
+    const AsrTranscript result = backend.transcribe(samples, /*overlapMs=*/0, &error);
     if (!error.isEmpty()) {
         std::fprintf(stderr, "[FAIL] transcribe: %s\n", qPrintable(error));
         return 1;

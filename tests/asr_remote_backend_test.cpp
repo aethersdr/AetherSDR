@@ -107,7 +107,7 @@ int main(int argc, char** argv)
         expect(backend.load(QString(), &err), "load() succeeds with a configured URL");
 
         std::vector<float> pcm(1600, 0.25f); // 100 ms
-        const AsrTranscript result = backend.transcribe(pcm, &err);
+        const AsrTranscript result = backend.transcribe(pcm, /*overlapMs=*/0, &err);
         expect(err.isEmpty(), "transcribe reports no error");
         expect(result.text == QStringLiteral("hello world"), "parsed text from the endpoint");
         expect(std::abs(result.confidence - std::exp(-0.2f)) < 0.02f,

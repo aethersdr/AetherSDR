@@ -54,7 +54,7 @@ int main()
     }
 
     const std::vector<float> pcm = readWav16(wav);
-    const AsrTranscript r = backend.transcribe(pcm, &err);
+    const AsrTranscript r = backend.transcribe(pcm, /*overlapMs=*/0, &err);
     std::printf("       text: \"%s\"\n", r.text.toUtf8().constData());
     expect(!r.text.isEmpty(), "transcription is non-empty");
     expect(r.confidence > 0.0f, "confidence is set");
