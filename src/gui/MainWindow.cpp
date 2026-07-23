@@ -1721,14 +1721,9 @@ MainWindow::MainWindow(QWidget* parent)
     wireDaxIq();
 
     // ── Status bar telemetry ──────────────────────────────────────────────────
-    // Single source of truth for quality-level colors used by the footer label
-    // and the heartbeat throttle indicator.  Both must stay in sync.
-    auto qualityColor = [](const QString& quality) -> QString {
-        if (quality == "Fair") return QStringLiteral("#cc9900");
-        if (quality == "Poor") return QStringLiteral("#cc3333");
-        if (quality == "Good") return QStringLiteral("#00b4d8");
-        return QStringLiteral("#00cc66"); // Excellent / Very Good
-    };
+    // Quality-level colors come from networkQualityColor() (MainWindowHelpers)
+    // so the footer label and the diagnostics tooltip share one mapping and
+    // never diverge (e.g. "Off" is neutral grey in both, not green here).
     // Map an fps cap to the matching quality-level color for the throttle indicator.
     auto fpsCapColor = [](int fpsCap) -> QString {
         if (fpsCap <= 4) return QStringLiteral("#cc3333"); // Poor
@@ -1737,8 +1732,8 @@ MainWindow::MainWindow(QWidget* parent)
     };
 
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
-            this, [this, qualityColor](const QString& quality, int pingMs) {
-        const QString color = qualityColor(quality);
+            this, [this](const QString& quality, int pingMs) {
+        const QString color = networkQualityColor(quality);
         // Append fps cap so users understand why moving the fps slider has no effect.
         // Show "(restoring)" during the min-dwell hold so testers can distinguish
         // stuck throttle from a deliberate stability wait.
@@ -4703,9 +4698,9 @@ void MainWindow::buildUI()
     netTitle->setAlignment(Qt::AlignCenter);
     netVbox->addWidget(netTitle);
     m_networkLabel = new QLabel("");
-    m_networkLabel->setAccessibleName(QStringLiteral("Network status"));
+    m_networkLabel->setAccessibleName(tr("Network status"));
     m_networkLabel->setAccessibleDescription(
-        QStringLiteral("Network quality; double-click to open full diagnostics"));
+        tr("Network quality; double-click to open full diagnostics"));
     applyStatusBarCompactLabelStyle(m_networkLabel, QStringLiteral("{{color.text.label}}"));
     m_networkLabel->setTextFormat(Qt::RichText);
     m_networkLabel->setAlignment(Qt::AlignCenter);

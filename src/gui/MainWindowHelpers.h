@@ -48,6 +48,10 @@ bool macDaxDriverInstalled();
 
 QString formatNetworkMs(int ms);
 QString formatNetworkSeqErrors(int errors, int packets);
+// Single source of truth for network quality-level colors, shared by the
+// footer status label and the diagnostics tooltip so they never diverge.
+// "Off"/unknown maps to a neutral grey (disconnected is not a "good" state).
+QString networkQualityColor(const QString& quality);
 QString buildNetworkTooltip(const RadioModel& model,
                             int adaptiveFpsCap,
                             bool throttleRestorePending);

@@ -70,24 +70,6 @@ QString formatCategorySeqErrors(const PanadapterStream::CategoryStats& stats)
     return formatNetworkSeqErrors(stats.errors, stats.packets);
 }
 
-QString networkQualityColor(const QString& quality)
-{
-    if (quality == QStringLiteral("Excellent")
-            || quality == QStringLiteral("Very Good")) {
-        return QStringLiteral("#00cc66");
-    }
-    if (quality == QStringLiteral("Fair")) {
-        return QStringLiteral("#cc9900");
-    }
-    if (quality == QStringLiteral("Poor")) {
-        return QStringLiteral("#cc3333");
-    }
-    if (quality == QStringLiteral("Good")) {
-        return QStringLiteral("#00b4d8");
-    }
-    return QStringLiteral("#8aa8c0"); // Off / unknown
-}
-
 QString networkTooltipSection(const QString& title)
 {
     return QStringLiteral(
@@ -108,6 +90,24 @@ QString networkTooltipRow(const QString& label, const QString& value)
 }
 } // namespace
 
+QString networkQualityColor(const QString& quality)
+{
+    if (quality == QStringLiteral("Excellent")
+            || quality == QStringLiteral("Very Good")) {
+        return QStringLiteral("#00cc66");
+    }
+    if (quality == QStringLiteral("Fair")) {
+        return QStringLiteral("#cc9900");
+    }
+    if (quality == QStringLiteral("Poor")) {
+        return QStringLiteral("#cc3333");
+    }
+    if (quality == QStringLiteral("Good")) {
+        return QStringLiteral("#00b4d8");
+    }
+    return QStringLiteral("#8aa8c0"); // Off / unknown
+}
+
 QString buildNetworkTooltip(const RadioModel& model,
                             int adaptiveFpsCap,
                             bool throttleRestorePending)
@@ -126,7 +126,11 @@ QString buildNetworkTooltip(const RadioModel& model,
     const QString quality = model.networkQuality();
     QString html = QStringLiteral(
         "<html><body>"
-        "<table width='%1' cellspacing='0' cellpadding='3'>"
+        // Dark background so the fixed light foreground colors below stay
+        // legible regardless of the platform/theme tooltip base color (the
+        // status-bar tooltip has no global QToolTip palette). Matches the
+        // pairing used in PropDashboardDialog.
+        "<table width='%1' bgcolor='#102131' cellspacing='0' cellpadding='3'>"
         "<tr>"
         "<td colspan='2'>"
         "<span style='font-size:10pt; font-weight:600; color:#c8d8e8;'>"
