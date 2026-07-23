@@ -361,15 +361,17 @@ QJsonObject describeWidget(const QWidget* w)
     // Range for numeric controls — lets a driver validate against the real
     // bounds (scale) and detect wrapping/circular sliders without guessing
     // extremes (#3646).
-    if (auto* s = qobject_cast<const QAbstractSlider*>(w))
+    if (auto* s = qobject_cast<const QAbstractSlider*>(w)) {
         o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), s->minimum()},
                                                  {QStringLiteral("max"), s->maximum()}};
-    else if (auto* sb = qobject_cast<const QSpinBox*>(w))
+        o[QStringLiteral("sliderDown")] = s->isSliderDown();
+    } else if (auto* sb = qobject_cast<const QSpinBox*>(w)) {
         o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), sb->minimum()},
                                                  {QStringLiteral("max"), sb->maximum()}};
-    else if (auto* ds = qobject_cast<const QDoubleSpinBox*>(w))
+    } else if (auto* ds = qobject_cast<const QDoubleSpinBox*>(w)) {
         o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), ds->minimum()},
                                                  {QStringLiteral("max"), ds->maximum()}};
+    }
 
     // Full option list for a combo box, so a driver can verify the available
     // choices non-destructively — `value` reports only the active text, which
@@ -1987,6 +1989,11 @@ void AutomationServer::stop()
     if (!m_server)
         return;
 
+    // A phaseful gesture owns a synthetic left-button press. Release it before
+    // clients/widgets are torn down so a slider never remains logically down
+    // after the bridge stops.
+    cancelGesture(nullptr, QStringLiteral("automation bridge stopping"));
+
     // Safety: never leave the radio keyed when the bridge shuts down.
     if (m_txAllowed)
         forceUnkey("automation bridge stopping");
@@ -2170,6 +2177,7 @@ void AutomationServer::onDisconnected()
     auto* sock = qobject_cast<QLocalSocket*>(sender());
     if (!sock)
         return;
+    cancelGesture(sock, QStringLiteral("gesture owner disconnected"));
     m_buffers.remove(sock);
     if (m_logSubscribers.remove(sock) && m_logSubscribers.isEmpty() && m_logDrain)
         m_logDrain->stop();
@@ -2251,6 +2259,9 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
             QString(), QStringLiteral("radio"), QStringLiteral("inventory"),
         };
         return kSafeStreamActions.contains(normalizedAction);
+    }
+    if (name == QLatin1String("gesture")) {
+        return normalizedAction == QLatin1String("status");
     }
     return false;
 }
@@ -2490,6 +2501,22 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                     return err(QStringLiteral("dragAt requires a target and '<x> <y> <dx> <dy>'"));
                 }
                 return s.doDragAt(a.target, a.value);
+            });
+
+        add("gesture", {},
+            "gesture <begin|move|end|cancel|status> — phaseful pointer gesture",
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.action = vtok(p, 1);
+                if (a.action == QLatin1String("begin")) {
+                    a.target = vtok(p, 2);
+                    a.value = vjoin(p, 3);
+                } else {
+                    a.value = vjoin(p, 2);
+                }
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket* sock) -> QJsonObject {
+                return s.doGesture(a.action, a.target, a.value, sock);
             });
 
         add("showMenu", {QStringLiteral("openMenu")},
@@ -6259,6 +6286,61 @@ QJsonObject AutomationServer::doClose(const QString& target) const
     return r;
 }
 
+QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
+                                                 const QString& target,
+                                                 const QString& verb) const
+{
+    if (!widget->isVisible()) {
+        return err(QStringLiteral("refused: '") + target
+                   + QStringLiteral("' is not visible"));
+    }
+    if (!widget->isEnabled()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("refused: '") + target
+                 + QStringLiteral("' is disabled — pointer input would be dropped")},
+            {QStringLiteral("disabled"), true},
+            {QStringLiteral("class"), shortClassName(widget)},
+        };
+    }
+
+    if (!m_txAllowed) {
+        for (const QWidget* parent = widget; parent; parent = parent->parentWidget()) {
+            if (!isTransmitControl(parent)) {
+                continue;
+            }
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED transmit-related" << verb << "on" << target
+                << "(keying control in chain:" << shortClassName(parent) << ')';
+            return err(QStringLiteral("blocked: '") + target
+                       + QStringLiteral("' resolves into a transmit-keying control "
+                                        "(TX-safety guard). Enable \"Allow TX via MCP\" "
+                                        "in Radio Setup → Network (or set "
+                                        "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
+        }
+    }
+
+    if (m_txMaxPower >= 0) {
+        for (const QWidget* parent = widget; parent; parent = parent->parentWidget()) {
+            const QString accessibleName = parent->accessibleName();
+            if (accessibleName != QLatin1String("RF power")
+                && accessibleName != QLatin1String("Tune power")) {
+                continue;
+            }
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED" << verb << "on power slider" << accessibleName
+                << "— power ceiling" << m_txMaxPower << "is armed";
+            return err(QStringLiteral("blocked: '") + accessibleName
+                       + QStringLiteral("' pointer input would bypass the power "
+                                        "ceiling (AETHER_AUTOMATION_TX_MAX_POWER). "
+                                        "Use `invoke setValue`, which clamps."));
+        }
+    }
+
+    return {};
+}
+
 // ── Mouse-drag gesture synthesis (#3646 fidelity) ───────────────────────────
 // `drag <target> <dx> <dy>` synthesizes a press → moves → release so a resize
 // grip or slider handle is provable end-to-end, not just via seed + read-back.
@@ -6272,18 +6354,22 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
     if (!w) {
         return err(QStringLiteral("widget or window not found: ") + target);
     }
-    if (!w->isVisible()) {
-        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+    const QJsonObject safetyError = pointerSafetyError(
+        w, target, QStringLiteral("drag"));
+    if (!safetyError.isEmpty()) {
+        return safetyError;
     }
 
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    if (parts.size() < 2)
+    if (parts.size() < 2) {
         return err(QStringLiteral("drag requires '<dx> <dy>' in pixels (e.g. 'drag sizeGrip 80 60')"));
+    }
     bool okx = false, oky = false;
     const int dx = parts.at(0).toInt(&okx);
     const int dy = parts.at(1).toInt(&oky);
-    if (!okx || !oky)
+    if (!okx || !oky) {
         return err(QStringLiteral("drag dx/dy must be integers"));
+    }
 
     const QPoint start(w->width() / 2, w->height() / 2);
     const QPoint globalStart = w->mapToGlobal(start);
@@ -6326,30 +6412,10 @@ QJsonObject AutomationServer::doDragAt(const QString& target, const QString& val
     if (!w) {
         return err(QStringLiteral("widget or window not found: ") + target);
     }
-    if (!w->isVisible()) {
-        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
-    }
-    if (!w->isEnabled()) {
-        return err(QStringLiteral("refused: '") + target
-                   + QStringLiteral("' is disabled — the drag would be dropped"));
-    }
-
-    // A target-local drag is still raw mouse input: an unaccepted event can
-    // propagate to a keying ancestor. Honor the same opt-in gate as clickAt().
-    if (!m_txAllowed) {
-        for (const QWidget* p = w; p; p = p->parentWidget()) {
-            if (!isTransmitControl(p)) {
-                continue;
-            }
-            qCWarning(lcAutomation).noquote()
-                << "BLOCKED transmit-related dragAt on" << target
-                << "(keying control in chain:" << shortClassName(p) << ")";
-            return err(QStringLiteral("blocked: '") + target
-                       + QStringLiteral("' resolves into a transmit-keying control "
-                                        "(TX-safety guard). Enable \"Allow TX via MCP\" "
-                                        "in Radio Setup → Network (or set "
-                                        "AETHER_AUTOMATION_ALLOW_TX=1) to override."));
-        }
+    const QJsonObject safetyError = pointerSafetyError(
+        w, target, QStringLiteral("dragAt"));
+    if (!safetyError.isEmpty()) {
+        return safetyError;
     }
 
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -6432,6 +6498,223 @@ QJsonObject AutomationServer::doDragAt(const QString& target, const QString& val
         {QStringLiteral("dy"), dy},
         {QStringLiteral("modifiers"), static_cast<int>(modifiers)},
     };
+}
+
+// `gesture` keeps the left button down across requests on one QLocalSocket.
+// This is deliberately connection-owned: an MCP wrapper can hold that socket
+// while ordinary tools use independent short-lived sockets, so queued model or
+// radio updates and separate bridge requests get normal main-loop turns while
+// QAbstractSlider::isSliderDown() remains true. Losing the owner is the cleanup
+// signal; no caller-supplied session id can outlive its transport.
+QJsonObject AutomationServer::doGesture(const QString& action,
+                                        const QString& target,
+                                        const QString& value,
+                                        QLocalSocket* sock)
+{
+    const QString normalizedAction = action.trimmed().toLower();
+
+    auto active = [this]() {
+        return m_pointerGesture.owner && m_pointerGesture.widget;
+    };
+    auto response = [this, sock, &active]() {
+        QJsonObject result{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("active"), active()},
+            {QStringLiteral("leaseMs"), kPointerGestureLeaseMs},
+        };
+        if (!active()) {
+            return result;
+        }
+        result[QStringLiteral("target")] = m_pointerGesture.target;
+        result[QStringLiteral("class")] = shortClassName(m_pointerGesture.widget);
+        result[QStringLiteral("dx")] = m_pointerGesture.offset.x();
+        result[QStringLiteral("dy")] = m_pointerGesture.offset.y();
+        result[QStringLiteral("ownedByCaller")] = m_pointerGesture.owner == sock;
+        if (const auto* slider =
+                qobject_cast<const QAbstractSlider*>(m_pointerGesture.widget.data())) {
+            result[QStringLiteral("sliderDown")] = slider->isSliderDown();
+            result[QStringLiteral("value")] = slider->value();
+        }
+        return result;
+    };
+    auto parsePoint = [](const QString& text, bool optional, bool coordinates,
+                         QPoint* point) -> QString {
+        const QStringList parts = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (optional && parts.isEmpty()) {
+            return {};
+        }
+        if (parts.size() != 2) {
+            return coordinates
+                ? QStringLiteral("requires exactly '<x> <y>' integer coordinates")
+                : QStringLiteral("requires exactly '<dx> <dy>' integer offsets");
+        }
+        bool okX = false;
+        bool okY = false;
+        const int x = parts.at(0).toInt(&okX);
+        const int y = parts.at(1).toInt(&okY);
+        if (!okX || !okY) {
+            return coordinates
+                ? QStringLiteral("coordinates must be integers")
+                : QStringLiteral("offsets must be integers");
+        }
+        *point = QPoint(x, y);
+        return {};
+    };
+    auto send = [this](QEvent::Type type, Qt::MouseButton button,
+                       Qt::MouseButtons buttons) -> bool {
+        if (!m_pointerGesture.widget) {
+            return false;
+        }
+        const QPoint local = m_pointerGesture.startLocal + m_pointerGesture.offset;
+        const QPoint global = m_pointerGesture.globalStart + m_pointerGesture.offset;
+        QMouseEvent event(type, QPointF(local), QPointF(local), QPointF(global),
+                          button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(m_pointerGesture.widget, &event);
+        return m_pointerGesture.widget != nullptr;
+    };
+
+    if (normalizedAction == QLatin1String("status")) {
+        if (!m_pointerGesture.owner || !m_pointerGesture.widget) {
+            cancelGesture(nullptr, QStringLiteral("gesture target or owner disappeared"));
+        }
+        return response();
+    }
+
+    if (!sock) {
+        return err(QStringLiteral("gesture requires a live client connection"));
+    }
+
+    if (normalizedAction == QLatin1String("begin")) {
+        if (active()) {
+            return err(QStringLiteral("another phaseful gesture is already active"));
+        }
+        if (target.isEmpty()) {
+            return err(QStringLiteral("gesture begin requires a target"));
+        }
+        QWidget* widget = resolveWidget(target);
+        if (!widget) {
+            return err(QStringLiteral("widget or window not found: ") + target);
+        }
+        const QJsonObject safetyError = pointerSafetyError(
+            widget, target, QStringLiteral("gesture"));
+        if (!safetyError.isEmpty()) {
+            return safetyError;
+        }
+
+        QPoint start(widget->rect().center());
+        if (!value.trimmed().isEmpty()) {
+            const QString coordinateError = parsePoint(value, false, true, &start);
+            if (!coordinateError.isEmpty()) {
+                return err(QStringLiteral("gesture begin ") + coordinateError);
+            }
+            if (!widget->rect().contains(start)) {
+                return err(QStringLiteral("gesture begin point is outside '")
+                           + target + QStringLiteral("'"));
+            }
+        }
+
+        m_pointerGesture.owner = sock;
+        m_pointerGesture.widget = widget;
+        m_pointerGesture.target = target;
+        m_pointerGesture.startLocal = start;
+        m_pointerGesture.globalStart = widget->mapToGlobal(start);
+        m_pointerGesture.offset = QPoint();
+
+        if (!send(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton)) {
+            cancelGesture(sock, QStringLiteral("gesture target disappeared during press"));
+            return err(QStringLiteral("gesture target disappeared during press"));
+        }
+
+        if (!m_pointerGestureTimer) {
+            m_pointerGestureTimer = new QTimer(this);
+            m_pointerGestureTimer->setSingleShot(true);
+            connect(m_pointerGestureTimer, &QTimer::timeout, this, [this]() {
+                cancelGesture(nullptr, QStringLiteral("gesture inactivity timeout"));
+            });
+        }
+        m_pointerGestureTimer->start(kPointerGestureLeaseMs);
+        qCInfo(lcAutomation).noquote() << "gesture begin" << target << "at" << start;
+        return response();
+    }
+
+    if (!active() || m_pointerGesture.owner != sock) {
+        return err(QStringLiteral("no phaseful gesture is owned by this client"));
+    }
+
+    if (normalizedAction == QLatin1String("cancel")) {
+        cancelGesture(sock, QStringLiteral("gesture cancelled by client"));
+        return response();
+    }
+
+    if (normalizedAction != QLatin1String("move")
+        && normalizedAction != QLatin1String("end")) {
+        cancelGesture(sock, QStringLiteral("invalid gesture continuation"));
+        return err(QStringLiteral("gesture action must be begin, move, end, cancel, or status"));
+    }
+
+    QPoint offset = m_pointerGesture.offset;
+    const bool hasFinalOffset = normalizedAction == QLatin1String("end")
+        && !value.trimmed().isEmpty();
+    const QString offsetError = parsePoint(
+        value, normalizedAction == QLatin1String("end"), false, &offset);
+    if (!offsetError.isEmpty()) {
+        cancelGesture(sock, QStringLiteral("invalid gesture offset"));
+        return err(QStringLiteral("gesture ") + normalizedAction + QLatin1Char(' ')
+                   + offsetError + QStringLiteral("; gesture released"));
+    }
+    m_pointerGesture.offset = offset;
+
+    if (normalizedAction == QLatin1String("move") || hasFinalOffset) {
+        if (!send(QEvent::MouseMove, Qt::NoButton, Qt::LeftButton)) {
+            cancelGesture(sock, QStringLiteral("gesture target disappeared during move"));
+            return err(QStringLiteral("gesture target disappeared during move"));
+        }
+    }
+    if (normalizedAction == QLatin1String("move")) {
+        m_pointerGestureTimer->start(kPointerGestureLeaseMs);
+        return response();
+    }
+
+    const QString endedTarget = m_pointerGesture.target;
+    const QString endedClass = shortClassName(m_pointerGesture.widget);
+    const QPoint endedOffset = m_pointerGesture.offset;
+    cancelGesture(sock, QStringLiteral("gesture ended by client"));
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("active"), false},
+        {QStringLiteral("target"), endedTarget},
+        {QStringLiteral("class"), endedClass},
+        {QStringLiteral("dx"), endedOffset.x()},
+        {QStringLiteral("dy"), endedOffset.y()},
+    };
+}
+
+void AutomationServer::cancelGesture(QLocalSocket* owner, const QString& reason)
+{
+    if (owner && m_pointerGesture.owner != owner) {
+        return;
+    }
+    if (!m_pointerGesture.owner && !m_pointerGesture.widget) {
+        return;
+    }
+
+    if (m_pointerGestureTimer) {
+        m_pointerGestureTimer->stop();
+    }
+
+    const QString target = m_pointerGesture.target;
+    if (m_pointerGesture.widget) {
+        const QPoint local = m_pointerGesture.startLocal + m_pointerGesture.offset;
+        const QPoint global = m_pointerGesture.globalStart + m_pointerGesture.offset;
+        QMouseEvent release(QEvent::MouseButtonRelease,
+                            QPointF(local), QPointF(local), QPointF(global),
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(m_pointerGesture.widget, &release);
+    }
+
+    m_pointerGesture = PointerGesture{};
+    qCInfo(lcAutomation).noquote()
+        << "gesture release" << target << "—" << reason;
 }
 
 // hover <target> [leave]: synthesize pointer hover so hover-driven UI is

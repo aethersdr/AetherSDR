@@ -127,10 +127,10 @@ contributors to self-verify UI changes before requesting review.
      ```
    - **Windows**: use `python` (or `py -3`) instead of `python3`.
 
-**Tools exposed** (22 typed tools): introspection — `bridge_status`,
+**Tools exposed** (23 typed tools): introspection — `bridge_status`,
 `dump_tree` (with a `filter` arg), `grab_widget` (PNG inline; optional
 `path` for where the PNG is written, else a temp file),
-`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`
+`get_state`, `get_log`, `floors`, `streams`; driving — `invoke`, `gesture`
 (on a target-not-found failure it appends `did_you_mean` candidates),
 `shortcut`, `tune`, `slice`, `pan`, `record`, `mark`, `window`, `menu`;
 assert/await — `assert_state` / `wait_for` (read a model property and
@@ -264,6 +264,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`close <target>`](#close) | Close the target's top-level window. |
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
 | | [`dragAt <target> "<x> <y> <dx> <dy> [modifiers]"`](#dragat) | Drag from a target-local point with optional keyboard modifiers. |
+| | [`gesture <phase>`](#gesture) | Hold press/move/release across requests for delayed-event tests. |
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
 | | [`rightClick <target> [x y]`](#rightclick) | Trigger a mousePressEvent-based right-click menu. |
@@ -376,6 +377,7 @@ Each `<node>`:
   "text": "NR2",                           // checkable buttons: the label (value would just be "checked")
   "checked": false,                        // checkable buttons: explicit boolean check-state
   "range": { "min": 0, "max": 100 },       // numeric controls only (slider/spinbox)
+  "sliderDown": false,                     // sliders only: real QAbstractSlider press ownership
   "items": ["LSB","USB","AM","CW"],        // QComboBox only: full option list
   "currentIndex": 1,                       // QComboBox only: selected index
   "panIndex": 0,                           // SpectrumWidget only: pass to `grab pan`/`pan close`
@@ -1145,6 +1147,48 @@ TX-keying control unless transmit automation is explicitly enabled.
 ← {"ok":true,"target":"SpectrumWidget","class":"SpectrumWidget",
    "x":1564,"y":100,"dx":0,"dy":300,"modifiers":268435456}
 ```
+
+`drag` remains the backward-compatible one-shot form. It now enforces the same
+disabled-control, TX-keying, and `AETHER_AUTOMATION_TX_MAX_POWER` pointer rails
+as `clickAt`; it cannot be used to bypass those guards.
+
+### `gesture`
+Keep a real left-button gesture open across multiple main-loop requests. This is
+the phaseful counterpart to atomic [`drag`](#drag-alias-mouse), intended for
+testing behavior such as a delayed model/radio update arriving while
+`QAbstractSlider::isSliderDown()` is genuinely true.
+
+```json
+→ {"cmd":"gesture","action":"begin","target":"RF power"}
+← {"ok":true,"active":true,"sliderDown":true,"value":50,"leaseMs":60000}
+
+→ {"cmd":"gesture","action":"move","value":"0 -30"}
+← {"ok":true,"active":true,"sliderDown":true,"dx":0,"dy":-30}
+
+→ {"cmd":"gesture","action":"end"}
+← {"ok":true,"active":false,"target":"RF power","dx":0,"dy":-30}
+```
+
+Phases:
+
+- `begin <target> [x y]` presses at the widget center, or at optional local
+  coordinates. Only one phaseful gesture may exist in the app at once.
+- `move <dx> <dy>` sends a move at fixed-base offsets from the original press.
+- `status` is read-only and reports `active`, ownership, offsets, and
+  `sliderDown`/`value` for a slider.
+- `end [dx dy]` optionally moves to a final offset, then releases.
+- `cancel` releases at the current offset.
+
+The owning bridge connection must remain open between phases. The typed MCP
+`gesture` tool does this automatically while ordinary tools keep using separate
+connections, which is what lets an independent `invoke`, `dump_tree`, or delayed
+app event interleave. Raw clients must reuse one socket themselves.
+
+Safety is fail-closed: auth and observe-only checks apply to every phase; begin
+uses the same disabled-control, TX-keying, and power-ceiling rails as pointer
+clicks. End, cancel, malformed continuation, target destruction, client
+disconnect, bridge stop, or 60 seconds without a move all synthesize the release
+and clear ownership.
 
 ### `hover`
 Synthesize a pointer **hover** over a widget (no button pressed, unlike `drag`)
@@ -2292,7 +2336,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 50 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 51 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2307,6 +2351,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
 | `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
+| `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
 | `contextMenu` | — | contextMenu <target> [x y] — Qt context-menu path |
 | `rightClick` | — | rightClick <target> [x y] — mousePressEvent menu path |

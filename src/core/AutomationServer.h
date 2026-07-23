@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QMutex>
 #include <QJsonObject>
+#include <QPoint>
 #include <QString>
 
 #ifdef HAVE_WEBSOCKETS
@@ -165,6 +166,10 @@ class QsoRecorder;
 //                                  -> drag from a target-local point, optionally
 //                                     with control/meta/shift/alt held. This
 //                                     reaches modifier-only custom-widget paths.
+//   gesture begin <target> [x y]   -> hold a real left-button press open across
+//   gesture move <dx> <dy>            requests on the SAME client connection;
+//   gesture end [dx dy]               end/cancel/disconnect/error/timeout always
+//   gesture cancel|status             release it. Enables delayed-event proof.
 //   showMenu <target>              -> pop a QToolButton/QPushButton drop-down,
 //                                     posted onto the GUI loop with the window
 //                                     raised (crash-safe on backgrounded macOS).
@@ -376,6 +381,18 @@ private:
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
     QJsonObject doDrag(const QString& target, const QString& value) const;
     QJsonObject doDragAt(const QString& target, const QString& value) const;
+    // Phaseful pointer gesture (#4353). The owning QLocalSocket stays connected
+    // between begin/move/end so unrelated bridge clients and queued model/radio
+    // events can interleave while a slider is genuinely down. A single global
+    // owner avoids contradictory synthetic left-button states. Every terminal
+    // and error path calls cancelGesture(), which sends the release before
+    // forgetting the state.
+    QJsonObject doGesture(const QString& action, const QString& target,
+                          const QString& value, QLocalSocket* sock);
+    void cancelGesture(QLocalSocket* owner, const QString& reason);
+    QJsonObject pointerSafetyError(const QWidget* widget,
+                                   const QString& target,
+                                   const QString& verb) const;
     // hover <target> [leave]: synthesize pointer hover over a widget so
     // hover-driven UI (e.g. the HGauge mouse-over value readout on the TX
     // SWR/power/ALC meters) is provable end-to-end. Bare form sends a
@@ -577,6 +594,20 @@ private:
     QString       m_discoveryEntry;   // this instance's <pid>.json in m_discoveryDir
     QString       m_label;            // AETHER_AUTOMATION_LABEL (human instance tag)
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
+    struct PointerGesture {
+        QPointer<QLocalSocket> owner;
+        QPointer<QWidget> widget;
+        QString target;
+        QPoint startLocal;
+        QPoint globalStart;
+        QPoint offset;
+    };
+    PointerGesture m_pointerGesture;
+    QTimer* m_pointerGestureTimer{nullptr};
+    // Tool-call round trips can take several seconds each in an agent host.
+    // One minute leaves room for an independent request plus observation while
+    // still bounding an abandoned synthetic press.
+    static constexpr int kPointerGestureLeaseMs = 60000;
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
     QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
     QPointer<QsoRecorder> m_qsoRecorder;          // for record(); may be null

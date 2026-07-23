@@ -2689,6 +2689,21 @@ target_compile_definitions(radio_discovery_test PRIVATE AETHERSDR_TESTING)
 target_link_libraries(radio_discovery_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME radio_discovery_test COMMAND radio_discovery_test)
 
+# Agent automation bridge phaseful-gesture lifecycle (#4353). Uses two real
+# QLocalSocket clients so the regression proves an independent request can run
+# while a QSlider remains genuinely down, plus auth/read-only/TX cleanup rails.
+add_executable(automation_server_gesture_test
+    tests/automation_server_gesture_test.cpp
+)
+target_include_directories(automation_server_gesture_test PRIVATE src tests)
+target_link_libraries(automation_server_gesture_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+set_target_properties(automation_server_gesture_test PROPERTIES AUTOMOC ON)
+add_test(NAME automation_server_gesture_test COMMAND automation_server_gesture_test)
+set_tests_properties(automation_server_gesture_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
     src/core/ClientQuindarTone.cpp

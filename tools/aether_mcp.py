@@ -35,6 +35,7 @@ Env:
     AETHER_MCP_TOKEN    access token from Radio Setup → Network (if set)
 """
 
+import atexit
 import base64
 import difflib
 import glob
@@ -49,6 +50,9 @@ PROTOCOL_VERSION = "2024-11-05"
 SERVER_INFO = {"name": "aethersdr-automation", "version": "1.0.0"}
 REQUEST_TIMEOUT_S = 60
 MAX_INLINE_IMAGE_BYTES = 800_000  # larger grabs are returned as a path only
+
+_gesture_bridge = None
+_gesture_socket_path = None
 
 
 # --------------------------------------------------------------------------
@@ -141,14 +145,33 @@ def bridge_request(obj, timeout=REQUEST_TIMEOUT_S):
     # Attach the access token to every request so the bridge's auth gate
     # accepts it. Harmless when the bridge has no token configured (the
     # field is simply ignored). `ping` doesn't need it but sending it is fine.
-    token = os.environ.get("AETHER_MCP_TOKEN")
-    if token and "token" not in obj:
-        obj = dict(obj, token=token)
+    obj = _authenticated_request(obj)
     b = Bridge(sock_path, timeout)
     try:
         return b.request(obj)
     finally:
         b.close()
+
+
+def _authenticated_request(obj):
+    """Copy a request and attach the runtime token without logging it."""
+    token = os.environ.get("AETHER_MCP_TOKEN")
+    if token and "token" not in obj:
+        return dict(obj, token=token)
+    return obj
+
+
+def _close_gesture_bridge():
+    """Close the held gesture transport; app-side disconnect releases input."""
+    global _gesture_bridge, _gesture_socket_path
+    bridge = _gesture_bridge
+    _gesture_bridge = None
+    _gesture_socket_path = None
+    if bridge is not None:
+        bridge.close()
+
+
+atexit.register(_close_gesture_bridge)
 
 
 # --------------------------------------------------------------------------
@@ -432,6 +455,26 @@ TOOLS = [
             "expected": {"type": "string"},
             "selector": {"type": "string"},
         }, "required": ["model", "property", "expected"]},
+    },
+    {
+        "name": "gesture",
+        "description": (
+            "Hold a real pointer gesture open across MCP calls so independent "
+            "bridge requests and delayed app/model events can interleave while "
+            "a slider is genuinely down. Use begin(target, optional start x/y), "
+            "then move(dx/dy), status, and end(dx/dy) or cancel. The wrapper "
+            "keeps one private bridge connection for the gesture; any error, "
+            "disconnect, or server lease timeout releases it. TX and read-only "
+            "guards are enforced in the app."),
+        "inputSchema": {"type": "object", "properties": {
+            "action": {"type": "string",
+                       "enum": ["begin", "move", "end", "cancel", "status"]},
+            "target": {"type": "string",
+                       "description": "widget target, required for begin"},
+            "value": {"type": "string",
+                      "description": ("begin: optional local 'x y'; move/end: "
+                                      "fixed-base 'dx dy' offsets")},
+        }, "required": ["action"]},
     },
     {
         "name": "bridge_command",
@@ -745,6 +788,60 @@ def handle_tool(name, args):
                     out["last_error"] = last_err
                 return text_result(out)
             time.sleep(interval)
+
+    if name == "gesture":
+        global _gesture_bridge, _gesture_socket_path
+        action = str(args.get("action") or "").strip().lower()
+        if action not in ("begin", "move", "end", "cancel", "status"):
+            return error_result(
+                "gesture action must be begin, move, end, cancel, or status")
+
+        if action == "begin":
+            target = str(args.get("target") or "").strip()
+            if not target:
+                return error_result("gesture begin requires `target`")
+            if _gesture_bridge is not None:
+                return error_result(
+                    "a gesture is already active; end or cancel it first")
+            sock_path = bridge_socket_path()
+            if not sock_path:
+                return error_result(
+                    "no running AetherSDR automation bridge found")
+            try:
+                _gesture_bridge = Bridge(sock_path, REQUEST_TIMEOUT_S)
+                _gesture_socket_path = sock_path
+                req = {"cmd": "gesture", "action": "begin", "target": target}
+                if args.get("value") is not None:
+                    req["value"] = str(args["value"])
+                response = _gesture_bridge.request(_authenticated_request(req))
+            except Exception as exc:  # noqa: BLE001 — cleanup is the contract
+                _close_gesture_bridge()
+                return error_result(str(exc))
+            if not isinstance(response, dict) or not response.get("ok"):
+                _close_gesture_bridge()
+            return text_result(response)
+
+        if action == "status" and _gesture_bridge is None:
+            return text_result(bridge_request(
+                {"cmd": "gesture", "action": "status"}))
+        if _gesture_bridge is None:
+            return error_result("no active gesture; begin one first")
+
+        req = {"cmd": "gesture", "action": action}
+        if args.get("value") is not None:
+            req["value"] = str(args["value"])
+        try:
+            response = _gesture_bridge.request(_authenticated_request(req))
+        except Exception as exc:  # noqa: BLE001 — closing releases app input
+            _close_gesture_bridge()
+            return error_result(str(exc))
+
+        terminal = (action in ("end", "cancel")
+                    or (isinstance(response, dict)
+                        and response.get("active") is False))
+        if terminal or not isinstance(response, dict) or not response.get("ok"):
+            _close_gesture_bridge()
+        return text_result(response)
 
     if name == "bridge_command":
         req = args.get("request")
