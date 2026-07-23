@@ -4,10 +4,15 @@
 // every QMenu/QAction in the menu bar, their enable/disable wiring, and the
 // inline lambdas they trigger (~70 connects).
 //
-// Pure code motion from MainWindow.cpp — same class, no header changes.
+// The community-credits subsystem lives in Contribute.cpp; this TU retains
+// only the About-dialog button and its connection.
 
 #include "MainWindow.h"
 
+#ifdef AETHER_ASR_ENABLED
+#include "CopyAssistController.h"
+#include "CopyAssistPanel.h"
+#endif
 #include "AppletPanel.h"
 #include "DaxApplet.h"
 #include "PanadapterApplet.h"
@@ -15,6 +20,7 @@
 #include "RadioSetupDialog.h"
 #include "TciApplet.h"
 #include "ClientChainApplet.h"
+#include "Contribute.h"
 #include "DxClusterDialog.h"
 #include "HelpDialog.h"
 #include "MainWindowHelpers.h"
@@ -43,15 +49,18 @@
 #include "models/SliceModel.h"
 
 #include <QActionGroup>
+#include <QColor>
 #include <QCoreApplication>
 #include <QCheckBox>
 #include <QDesktopServices>
 #include <QFrame>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenuBar>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -993,6 +1002,9 @@ void MainWindow::buildMenuBar()
     connect(packetDecoderAction, &QAction::triggered,
             this, &MainWindow::showAx25HfPacketDecodeDialog);
 
+    // Copy Assist has no View-menu entry: it's shown/hidden by the status-bar
+    // "ASR" toggle (and the keyboard shortcut) via showCopyAssist().
+
     auto* smartSpotAct = viewMenu->addAction("Smart Spot Filtering");
     smartSpotAct->setCheckable(true);
     smartSpotAct->setToolTip(
@@ -1134,7 +1146,7 @@ void MainWindow::buildMenuBar()
         QDesktopServices::openUrl(QUrl("https://www.aethersdr.com"));
     });
     helpMenu->addAction("Donate to AetherSDR", this, []() {
-        QDesktopServices::openUrl(QUrl("https://opencollective.com/aethersdr"));
+        QDesktopServices::openUrl(QUrl("https://www.aethersdr.com/#sponsor"));
     });
     helpMenu->addAction(QString::fromUtf8("Submit your Idea... \xF0\x9F\x92\xA1"),
                         this, [this]() {
@@ -1292,6 +1304,21 @@ void MainWindow::buildMenuBar()
         AetherSDR::ThemeManager::instance().applyStyleSheet(sep2, "color: {{color.background.2}};");
         vbox->addWidget(sep2);
 
+        auto* communityCreditsButton = new QPushButton(QStringLiteral("Play Community Credits..."));
+        communityCreditsButton->setAccessibleName(QStringLiteral("Play AetherSDR community credits"));
+        communityCreditsButton->setAccessibleDescription(
+            QStringLiteral("Opens an animated thank-you to contributors and Open Collective supporters with music."));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            communityCreditsButton,
+            "QPushButton { background: {{color.background.1}}; color: {{color.accent.bright}}; "
+            "border: 1px solid {{color.accent}}; border-radius: 4px; padding: 7px 18px; "
+            "font-weight: bold; }"
+            "QPushButton:hover { background: {{color.background.2}}; }");
+        vbox->addWidget(communityCreditsButton, 0, Qt::AlignCenter);
+        connect(communityCreditsButton, &QPushButton::clicked, this, [this] {
+            showOrRaisePersistent(m_contributeDialog);
+        });
+
         // Footer
         auto* footer = new QLabel(
             "<div style='text-align:center;'>"
@@ -1350,5 +1377,31 @@ void MainWindow::buildMenuBar()
         });
     });
 }
+
+#ifdef AETHER_ASR_ENABLED
+void MainWindow::showCopyAssist()
+{
+    // Dock the Copy Assist panel under the waterfall of the active panadapter,
+    // the same way the CW decode panel docks. First open builds the panel and
+    // wires the ASR controller to it; subsequent invocations toggle visibility.
+    if (!m_copyAssistController) {
+        PanadapterApplet* applet = m_panStack ? m_panStack->activeApplet() : nullptr;
+        if (!applet) {
+            return;
+        }
+        m_copyAssistApplet = applet;
+        m_copyAssistController = new CopyAssistController(m_audio, applet->copyAssistPanel(), this);
+        // Seed the current frequency so the first "on start" log marker is correct
+        // even before any retune fires.
+        if (auto* s = activeSlice()) {
+            m_copyAssistController->setCurrentFrequency(s->frequency());
+        }
+    }
+    if (m_copyAssistApplet) {
+        m_copyAssistApplet->setCopyAssistVisible(!m_copyAssistApplet->isCopyAssistVisible());
+    }
+    updateKeyerAvailability(); // keep the status-bar ASR indicator in sync
+}
+#endif
 
 } // namespace AetherSDR

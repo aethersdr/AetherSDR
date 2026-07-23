@@ -16,6 +16,7 @@
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
 #include "EqApplet.h"
+#include "AetherClockApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
@@ -149,7 +150,7 @@ MeterSettings::Snapshot loadVuMeterSettings()
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS"
+    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -760,6 +761,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_waveApplet = new WaveApplet;
     m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, m_drawer, m_drawerLayout, "WAV"));
+
+    m_aetherClockApplet = new AetherClockApplet;
+    m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
 
     // CEQ and CMP intentionally have no toggle button in the tray —
     // their visibility follows DSP bypass state, driven externally
@@ -1418,6 +1422,8 @@ void AppletPanel::setControlsLocked(bool locked)
 void AppletPanel::setSlice(SliceModel* slice)
 {
     m_rxApplet->setSlice(slice);
+    if (m_aetherClockApplet)
+        m_aetherClockApplet->setSlice(slice);
 
     if (slice) {
         connect(slice, &SliceModel::modeChanged,

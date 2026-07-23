@@ -4226,6 +4226,7 @@ void RadioModel::onDisconnected()
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
+    m_nudgedDaxStreams.clear();  // re-arm the #1439 nudge one-shot on reconnect (#4383)
 
     // Reset radio-model-specific state — different radios have different
     // capabilities (APD, max power, pan count, TGXL, amplifier, XVTR, etc.)
@@ -5831,6 +5832,11 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         // The removed form carries no type= (state-machines.md §7.6) — route
         // by id; a non-dax_rx id is a harmless no-op in the registry.
         m_panStream->unregisterDaxStream(stream.streamId);
+        // Re-arm the #1439 nudge one-shot (#4383): a genuine `stream remove`
+        // (band switch / re-create) means the next create for a reused id must
+        // be allowed to nudge again. The transient unbind echo does NOT reach
+        // here (it carries no removed form), so it cannot re-arm.
+        m_nudgedDaxStreams.remove(stream.streamId);
         return;
     }
     if (kvs.value(QStringLiteral("type")) != QStringLiteral("dax_rx")) return;
@@ -5851,15 +5857,27 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         // no nudge is needed. Only when it did NOT auto-bind AND a slice carries
         // this channel do we re-assert `slice set dax=`. Deciding here is
         // race-free across transports (the create reply can precede this status
-        // on WAN/SmartLink); tied to a stream we own and initiated, never a
-        // status echo, so it cannot oscillate (#4009/#3305).
+        // on WAN/SmartLink). This IS a status-echo edge, so on its own it would
+        // oscillate — the per-stream one-shot below is what keeps it a genuine
+        // fire-once-per-create fallback and holds the #3305 invariant (#4009/#4383).
         const bool autoBound =
             !kvs.value(QStringLiteral("slice")).trimmed().isEmpty();
-        if (!autoBound && isConnected()) {
+        // One-shot gate (#4383): a re-assert of a live binding provokes the
+        // radio into a transient dax=0/dax=1 unbind→rebind, and during the
+        // unbind it re-broadcasts this stream status with an empty slice= —
+        // indistinguishable from "never auto-bound". Without a per-stream gate
+        // that echo re-enters !autoBound and fires the nudge again, forever
+        // (the ~12–15 Hz #4009 storm PR #4017 reintroduced). The stream id is
+        // constant across the whole unbind/rebind, so suppress every echo for
+        // an id we have already nudged; the set is cleared only on a real
+        // `stream remove` above, so a genuine re-create re-arms the fallback.
+        const bool alreadyNudged = m_nudgedDaxStreams.contains(stream.streamId);
+        if (!autoBound && !alreadyNudged && isConnected()) {
             for (auto* s : slices()) {
                 if (s && s->daxChannel() == ch) {
                     qCInfo(lcDax) << "RadioModel: dax_rx ch" << ch
                                   << "not auto-bound — sending #1439 nudge";
+                    m_nudgedDaxStreams.insert(stream.streamId);
                     sendCommand(QString("slice set %1 dax=%2")
                                     .arg(s->sliceId()).arg(ch));
                     break;

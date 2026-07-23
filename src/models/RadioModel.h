@@ -1142,6 +1142,11 @@ private:
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;
     QSet<quint32> m_externalDaxRxSeen;
+    // #1439 nudge one-shot (#4383): stream ids we have already re-asserted
+    // `slice set dax=` for. Armed on nudge send, cleared only on a real
+    // `stream remove` (unregisterDaxStream). Stops the radio's own transient
+    // empty-slice= unbind echo from re-triggering the nudge → #4009 storm.
+    QSet<quint32> m_nudgedDaxStreams;
     WanConnection* m_wanConn{nullptr};  // non-null when connected via SmartLink
     QString  m_wanPublicIp;
     quint16  m_wanUdpPort{4991};

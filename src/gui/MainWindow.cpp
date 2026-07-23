@@ -26,6 +26,9 @@
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
 #include "PanadapterApplet.h"
+#ifdef AETHER_ASR_ENABLED
+#include "CopyAssistController.h"
+#endif
 #include "PanadapterStack.h"
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
@@ -37,6 +40,7 @@
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
+#include "models/Nr2SettingsModel.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -3145,7 +3149,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // The radio echoes daxiq_channel in pan status on reconnect.
 
     // Save client-side DSP state before destructor disables them
-    s.setValue("ClientNr2Enabled", m_audio->nr2Enabled() ? "True" : "False");
+    Nr2SettingsModel::instance().setEnabled(m_audio->nr2Enabled());
     s.setValue("ClientRn2Enabled", m_audio->rn2Enabled() ? "True" : "False");
     s.setValue("ClientNr4Enabled", m_audio->nr4Enabled() ? "True" : "False");
     s.setValue("ClientDfnrEnabled", m_audio->dfnrEnabled() ? "True" : "False");
@@ -4441,6 +4445,15 @@ void MainWindow::buildUI()
     m_cwxIndicator->installEventFilter(this);
     hbox->addWidget(m_cwxIndicator);
 
+#ifdef AETHER_ASR_ENABLED
+    m_asrIndicator = new QLabel("ASR");
+    m_asrIndicator->setStyleSheet(greyIndLg);
+    m_asrIndicator->setCursor(Qt::PointingHandCursor);
+    m_asrIndicator->setToolTip("Speech-to-text (Copy Assist) — click to toggle");
+    m_asrIndicator->installEventFilter(this);
+    hbox->addWidget(m_asrIndicator);
+#endif
+
     m_dvkIndicator = new QLabel("DVK");
     m_dvkIndicator->setStyleSheet(greyIndLg);
     m_dvkIndicator->setCursor(Qt::PointingHandCursor);
@@ -4848,6 +4861,8 @@ void MainWindow::buildUI()
     connect(m_sHistoryExpireTimer, &QTimer::timeout,
             this, &MainWindow::expireSHistoryMarkers);
     m_sHistoryExpireTimer->start();
+
+    setupAetherClock();
 
     // CNN signal classifier — load model from next to the executable or ~/.config/AetherSDR/
     {
@@ -5528,19 +5543,19 @@ void MainWindow::onRadioMessage(const QString& text, MessageSeverity severity)
         qCWarning(lcGui) << "Radio M-message [Warning]:" << text;
         if (interlockMessage)
             break;
-        QMessageBox::warning(this, tr("Radio"), text);
+        FramelessMessageBox::warning(this, tr("Radio"), text);
         break;
     case MessageSeverity::Error:
         qCCritical(lcGui) << "Radio M-message [Error]:" << text;
         if (interlockMessage)
             break;
-        QMessageBox::critical(this, tr("Radio — Error"), text);
+        FramelessMessageBox::critical(this, tr("Radio — Error"), text);
         break;
     case MessageSeverity::Fatal:
         qCCritical(lcGui) << "Radio M-message [Fatal]:" << text;
         if (interlockMessage)
             break;
-        QMessageBox::critical(this, tr("Radio — Fatal"), text);
+        FramelessMessageBox::critical(this, tr("Radio — Fatal"), text);
         break;
     }
 }
@@ -5705,6 +5720,7 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
                     << " from_band=" << currentBand
                     << " to_band=" << memoryBand
                     << " key=" << stackKeyResult.key;
+                emit bandStackRestoreStarting(slicePanId);
                 clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
                 m_bandSettings.setCurrentBand(memoryBand);
                 // #4142: during the profile-load hold a bare sendCommand()
@@ -5946,6 +5962,7 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
         << " from_band=" << currentBand
         << " to_band=" << targetBand
         << " key=" << stackKeyResult.key;
+    emit bandStackRestoreStarting(slice->panId());
     clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
     m_bandSettings.setCurrentBand(targetBand);
     // #4142: the cross-band typed tune is the reported bug's worst variant —
@@ -6354,6 +6371,21 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     m_radioStateModeConn = connect(s, &SliceModel::modeChanged,
                                    this, [this](const QString&) { m_radioStateCoalesceTimer.start(); });
     publishRadioStateMqtt();
+#endif
+
+#ifdef AETHER_ASR_ENABLED
+    // A retune (or a switch to another slice) is a new listening context — clear
+    // the Copy Assist decode window so text from the old frequency doesn't linger,
+    // and mark the new frequency in the transcript log.
+    disconnect(m_copyAssistFreqConn);
+    m_copyAssistFreqConn = connect(s, &SliceModel::frequencyChanged, this, [this](double mhz) {
+        if (m_copyAssistController) {
+            m_copyAssistController->onRetune(mhz);
+        }
+    });
+    if (sliceId != prevId && m_copyAssistController) {
+        m_copyAssistController->onRetune(s->frequency());
+    }
 #endif
 
     qDebug() << "MainWindow: active slice set to" << sliceId;
@@ -7504,6 +7536,26 @@ void MainWindow::updateKeyerAvailability()
         m_dvkIndicator->setStyleSheet(txIsSsb ? kAvail : kDisabled);
     }
     m_dvkIndicator->setCursor(txIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
+
+#ifdef AETHER_ASR_ENABLED
+    // ASR (Copy Assist): the inverse of CWX — available in voice modes only,
+    // dimmed/disabled in CW and DIGx/RTTY. A receive-side decode, but gated on
+    // the same slice's mode as the other indicators for a consistent row.
+    if (m_asrIndicator) {
+        m_asrIndicator->setEnabled(txIsSsb);
+        const bool asrVisible =
+            m_copyAssistApplet && m_copyAssistApplet->isCopyAssistVisible();
+        if (txSlice && !txIsSsb && asrVisible) {
+            m_copyAssistApplet->setCopyAssistVisible(false);
+            m_asrIndicator->setStyleSheet(kDisabled);
+        } else if (asrVisible) {
+            m_asrIndicator->setStyleSheet(kActive);
+        } else {
+            m_asrIndicator->setStyleSheet(txIsSsb ? kAvail : kDisabled);
+        }
+        m_asrIndicator->setCursor(txIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    }
+#endif
 }
 
 void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz)
@@ -7555,50 +7607,102 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
 // registerShortcutActions() lives in MainWindow_Shortcuts.cpp (#3351 Phase 1c).
 void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
 {
-    auto& s = AppSettings::instance();
     auto* popup = new DspParamPopup(this);
+    Nr2SettingsModel& model = Nr2SettingsModel::instance();
+    const Nr2SettingsModel::Config initial = model.config();
+    const bool thresholdAvailable = initial.gainMethod == 2
+        || (!initial.legacyGeometryAndGainMapping
+            && initial.gainMethod == 0);
 
-    popup->addSlider("Reduction (dB)", 10, 300,
-        static_cast<int>(s.value("NR2GainMax", "1.50").toFloat() * 100),
+    const DspParamPopup::SliderControl reduction = popup->addSlider(
+        "Reduction", 50, 200,
+        static_cast<int>(std::lround(initial.gainMax * 100.0f)),
         [](int v) { return QString::number(v / 100.0f, 'f', 2); },
         [this](int v) {
-            float val = v / 100.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("NR2GainMax", QString::number(val, 'f', 2));
-            s.save();
+            const float val = v / 100.0f;
+            Nr2SettingsModel::instance().setGainMax(val);
             QMetaObject::invokeMethod(m_audio, [this, val]() { m_audio->setNr2GainMax(val); });
         });
 
-    popup->addSlider("Smoothing",  50, 98,
-        static_cast<int>(s.value("NR2GainSmooth", "0.85").toFloat() * 100),
+    const DspParamPopup::SliderControl naturalness = popup->addSlider(
+        "Naturalness", 0, 15,
+        static_cast<int>(std::lround(initial.gainFloor * 100.0f)),
         [](int v) { return QString::number(v / 100.0f, 'f', 2); },
         [this](int v) {
-            float val = v / 100.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("NR2GainSmooth", QString::number(val, 'f', 2));
-            s.save();
+            const float val = v / 100.0f;
+            Nr2SettingsModel::instance().setGainFloor(val);
+            QMetaObject::invokeMethod(m_audio, [this, val]() {
+                m_audio->setNr2GainFloor(val);
+            });
+        });
+
+    const DspParamPopup::SliderControl smoothing = popup->addSlider(
+        "Smoothing", 50, 98,
+        static_cast<int>(std::lround(initial.gainSmooth * 100.0f)),
+        [](int v) { return QString::number(v / 100.0f, 'f', 2); },
+        [this](int v) {
+            const float val = v / 100.0f;
+            Nr2SettingsModel::instance().setGainSmooth(val);
             QMetaObject::invokeMethod(m_audio, [this, val]() { m_audio->setNr2GainSmooth(val); });
         });
 
-    popup->addSlider("Voice Threshold", 1, 50,
-        static_cast<int>(s.value("NR2Qspp", "0.20").toFloat() * 100),
+    DspParamPopup::SliderControl threshold = popup->addSlider(
+        "Voice Threshold", 5, 50,
+        static_cast<int>(std::lround(initial.qspp * 100.0f)),
         [](int v) { return QString::number(v / 100.0f, 'f', 2); },
         [this](int v) {
-            float val = v / 100.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("NR2Qspp", QString::number(val, 'f', 2));
-            s.save();
+            const float val = v / 100.0f;
+            Nr2SettingsModel::instance().setQspp(val);
             QMetaObject::invokeMethod(m_audio, [this, val]() { m_audio->setNr2Qspp(val); });
-        });
+        },
+        thresholdAvailable,
+        thresholdAvailable
+            ? QStringLiteral("Speech-presence threshold used by this gain method.")
+            : QStringLiteral(
+                "Voice Threshold does not affect the selected gain method."));
 
-    popup->addCheckbox("AE Filter",
-        s.value("NR2AeFilter", "True").toString() == "True",
+    QCheckBox* aeFilter = popup->addCheckbox("AE Filter", initial.aeFilter,
         [this](bool on) {
-            auto& s = AppSettings::instance();
-            s.setValue("NR2AeFilter", on ? "True" : "False");
-            s.save();
+            Nr2SettingsModel::instance().setAeFilter(on);
             QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
         });
+
+    QCheckBox* legacy = popup->addCheckbox(
+        "Original NR2 (geometry + gain mapping)",
+        initial.legacyGeometryAndGainMapping,
+        [this](bool useOriginal) {
+            Nr2SettingsModel::instance()
+                .setLegacyGeometryAndGainMapping(useOriginal);
+            QMetaObject::invokeMethod(m_audio, [this, useOriginal]() {
+                m_audio->setNr2UseOriginalGeometry(useOriginal);
+            });
+        });
+
+    connect(&model, &Nr2SettingsModel::configChanged, popup,
+            [reduction, naturalness, smoothing, threshold, aeFilter, legacy]() {
+        const Nr2SettingsModel::Config config =
+            Nr2SettingsModel::instance().config();
+        reduction.slider->setValue(static_cast<int>(
+            std::lround(config.gainMax * 100.0f)));
+        naturalness.slider->setValue(static_cast<int>(
+            std::lround(config.gainFloor * 100.0f)));
+        smoothing.slider->setValue(static_cast<int>(
+            std::lround(config.gainSmooth * 100.0f)));
+        threshold.slider->setValue(static_cast<int>(
+            std::lround(config.qspp * 100.0f)));
+        aeFilter->setChecked(config.aeFilter);
+        legacy->setChecked(config.legacyGeometryAndGainMapping);
+
+        const bool available = config.gainMethod == 2
+            || (!config.legacyGeometryAndGainMapping
+                && config.gainMethod == 0);
+        threshold.setEnabled(available);
+        threshold.setToolTip(available
+            ? QStringLiteral(
+                "Speech-presence threshold used by this gain method.")
+            : QStringLiteral(
+                "Voice Threshold does not affect the selected gain method."));
+    });
 
     popup->finalize(
         [this]() { ensureAetherDspDialog(); },

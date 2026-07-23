@@ -21,12 +21,12 @@ namespace AetherSDR {
 class AudioEngine;
 class NvidiaAfxPack;
 
-// AetherDSP settings body — the QTabWidget + per-tab controls + AppSettings
-// persistence wiring shared by the modeless AetherDspDialog (Settings menu)
+// AetherDSP settings body — the QTabWidget + per-tab controls shared by the
+// modeless AetherDspDialog (Settings menu)
 // and the docked ClientRxDspApplet (PooDoo Audio RX side).
 //
-// Signals fire on every parameter change (after the new value lands in
-// AppSettings) so MainWindow can push the value into AudioEngine.  Both
+// Signals fire on every parameter change (after the new value lands in the
+// feature-owned settings model) so MainWindow can push it into AudioEngine. Both
 // the dialog and the applet expose a `widget()` accessor so callers can
 // connect to these signals directly.
 class AetherDspWidget : public QWidget {
@@ -63,11 +63,13 @@ public:
 signals:
     // NR2 parameter changes
     void nr2GainMaxChanged(float value);
+    void nr2GainFloorChanged(float value);
     void nr2GainSmoothChanged(float value);
     void nr2QsppChanged(float value);
     void nr2GainMethodChanged(int method);
     void nr2NpeMethodChanged(int method);
     void nr2AeFilterChanged(bool on);
+    void nr2UseOriginalGeometryChanged(bool useOriginal);
     // MNR parameter changes
     void mnrEnabledChanged(bool on);
     void mnrStrengthChanged(float value);
@@ -122,6 +124,8 @@ private:
     void setBnrRowDetail(int i, const QString& version, const QString& sha256, qint64 bytes,
                          const QString& newVersion = QString());
     void clearBnrRows();
+    void updateNr2ControlAvailability();
+    void syncNr2Settings();
 
     AudioEngine*    m_audio;
     QStackedWidget* m_dspStack{nullptr};
@@ -131,11 +135,15 @@ private:
     QButtonGroup* m_nr2GainGroup{nullptr};
     QButtonGroup* m_nr2NpeGroup{nullptr};
     QCheckBox*    m_nr2AeCheck{nullptr};
+    QCheckBox*    m_nr2OriginalGeometryCheck{nullptr};
     QSlider*      m_nr2GainMaxSlider{nullptr};
     QLabel*       m_nr2GainMaxLabel{nullptr};
+    QSlider*      m_nr2GainFloorSlider{nullptr};
+    QLabel*       m_nr2GainFloorLabel{nullptr};
     QSlider*      m_nr2SmoothSlider{nullptr};
     QLabel*       m_nr2SmoothLabel{nullptr};
     QSlider*      m_nr2QsppSlider{nullptr};
+    QLabel*       m_nr2QsppTitleLabel{nullptr};
     QLabel*       m_nr2QsppLabel{nullptr};
 
     // MNR controls

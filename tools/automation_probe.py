@@ -80,7 +80,11 @@ class Bridge:
             self._pipe = None
 
     def request(self, obj, timeout_seconds=None):
-        return self.request_line(json.dumps(obj), timeout_seconds)
+        request = dict(obj)
+        token = os.environ.get("AETHER_MCP_TOKEN")
+        if token and "token" not in request:
+            request["token"] = token
+        return self.request_line(json.dumps(request), timeout_seconds)
 
     def request_line(self, text, timeout_seconds=None):
         """Send one raw request line (JSON or bare positional) and return the
@@ -247,6 +251,14 @@ def _map_clickat(rest):
     raise SystemExit("error: clickAt needs <x> <y> or <target> <x> <y>")
 
 
+def _map_dragat(rest):
+    _need(rest, 5, "dragAt needs <target> <x> <y> <dx> <dy> [modifiers]")
+    for name, value in zip(("x", "y", "dx", "dy"), rest[1:5]):
+        if _as_int(value) is None:
+            sys.exit(f"error: dragAt {name} must be an integer, got {value!r}")
+    return {"target": rest[0], "value": " ".join(rest[1:])}
+
+
 def _map_rightclick(rest):
     if not rest:
         sys.exit("error: rightClick needs <target> [x y]")
@@ -371,11 +383,13 @@ MAPPERS = {
     "contextMenu": _map_target_value("contextMenu needs <target> [x y]"),
     "rightClick": _map_rightclick,
     "clickAt": _map_clickat,
+    "dragAt": _map_dragat,
     "hover": _map_hover,
     "tooltip": _map_tooltip,
     "resize": _map_resize,
     "connect": _map_action_value("connect needs <list|show|hide|local|ip|wait> [args]"),
     "slice": _map_action_value("slice needs an action"),
+    "memory": _map_action_value("memory needs <activate> <index> [panId]"),
     "waveform": _map_action_value(
         "waveform needs <start|stop|unregister|resync> [args]"),
     "pan": _map_action_value("pan needs <create|add|center|close|remove> [value]"),
@@ -496,7 +510,13 @@ def main():
                 # let the server's verb registry parse it. Note: the server
                 # re-splits on spaces, so multi-word arguments need a MAPPERS
                 # entry (or the JSON protocol) to survive quoting.
-                resp = bridge.request_line(" ".join([args.command] + args.rest))
+                if os.environ.get("AETHER_MCP_TOKEN"):
+                    req = {"cmd": args.command}
+                    if args.rest:
+                        req["args"] = " ".join(args.rest)
+                    resp = bridge.request(req)
+                else:
+                    resp = bridge.request_line(" ".join([args.command] + args.rest))
             print(json.dumps(resp, indent=2))
             if (args.command == "audioCapture"
                     and action in ("probeNr2Stereo", "probeDspStereo")

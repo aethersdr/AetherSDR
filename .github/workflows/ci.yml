@@ -65,6 +65,56 @@ jobs:
             -DENABLE_LIQUID_DSP=ON
           cmake --build build-liquid --target liquid-static -j$(nproc)
 
+  check-system-libs-linux:
+    runs-on: ubuntu-latest
+    container: debian:sid
+    # Debian sid is a rolling/unstable target, chosen to canary the build
+    # against the newest system libraries. Keep it advisory so upstream sid
+    # churn (a package bump or a momentarily-uninstallable dep) can't block
+    # unrelated PRs; flip this off (or pin a stable release) to make it a gate.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Install main dependencies
+        run: |
+          apt -U install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkgconf \
+            qt6-base-dev \
+            qt6-multimedia-dev \
+            qt6-serialbus-dev \
+            qt6-websockets-dev \
+            qtkeychain-qt6-dev \
+            libfftw3-dev \
+            libopus-dev \
+            qt6-shadertools-dev \
+            qt6-base-private-dev \
+            libhidapi-dev \
+            libonnxruntime-dev \
+            libpipewire-0.3-dev
+
+      - name: Install system library replacements
+        run: |
+          apt -U install -y --no-install-recommends \
+            libmspack-dev \
+            librtmidi-dev \
+            libasound2-dev \
+            zlib1g-dev \
+            libmosquitto-dev \
+            libliquid-dev
+
+      - name: Configure
+        run: |
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DENABLE_RADE=OFF
+
+      - name: Build
+        run: |
+          cmake --build build -j$(nproc)
+
   # Cross-platform build check — runs on every PR (no path gating).
   #
   # History: previously gated by a `check-paths` job on a hand-maintained
@@ -182,6 +232,15 @@ jobs:
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
             "-DENABLE_NVIDIA_AFX=ON",
             "-DREQUIRE_SERIALPORT=ON",
+            # ASR OFF for this PR sanity check: its job is Windows-only APP
+            # regressions (WASAPI, Q_OS_WIN), not ASR. Building whisper/ggml from
+            # source here linked the large static libs into AetherSDR.exe, and that
+            # memory-heavy link concurrently starved the small test-exe links on the
+            # 16 GB runner (link.exe stalling on a different test each run — dstar,
+            # CAT_Flex — none of which hang on main, which has no ASR). ASR-on-Windows
+            # is fully built + linked + packaged by the windows-installer workflow,
+            # so nothing is lost here.
+            "-DENABLE_ASR=OFF",
             "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
           )
@@ -198,7 +257,17 @@ jobs:
         run: cmake --build build --target build_opus -j $env:NUMBER_OF_PROCESSORS
 
       - name: Build
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+        # This job's purpose is to catch Windows-only compile/link regressions
+        # (WASAPI, Q_OS_WIN paths) that Linux/macOS CI can't see — served by
+        # linking the app plus the handful of portability tests run below, NOT the
+        # default `all` target. Building every *_test.exe relinked the same
+        # libraries into hundreds of tiny executables for no added Windows coverage
+        # (cross-platform test linkage is already exercised by the Linux/macOS CI
+        # that build AND run the full suite), and that link tail was stalling for
+        # hours on the runner. timeout-minutes fails fast (with logs) if it ever
+        # hangs again, instead of running to the 6-hour job limit.
+        timeout-minutes: 45
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test
 
       - name: Test ThumbDV portability paths
         run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure

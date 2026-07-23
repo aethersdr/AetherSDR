@@ -209,11 +209,18 @@ public:
     bool nr2Enabled() const { return m_nr2Enabled.load(); }
     // NR2 user-adjustable parameters (thread-safe via atomic in SpectralNR)
     void setNr2GainMax(float v);
+    void setNr2GainFloor(float v);
     void setNr2Qspp(float v);
     void setNr2GainSmooth(float v);
     void setNr2GainMethod(int method);
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
+    QJsonObject nr2RuntimeDiagnostics() const;
+    Q_INVOKABLE void setNr2UseOriginalGeometry(bool useOriginal);
+    bool nr2UseOriginalGeometry() const
+    {
+        return m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
+    }
     // Client-side RN2 (RNNoise neural noise suppression)
     Q_INVOKABLE void setRn2Enabled(bool on);
     bool rn2Enabled() const { return m_rn2Enabled.load(); }
@@ -735,6 +742,7 @@ private:
     void clearLegacyKiwiDspState();
     void resetExternalKiwiDspState(ExternalRxAudioSourceState& source);
     void clearExternalKiwiDspState(ExternalRxAudioSourceState& source);
+    std::unique_ptr<SpectralNR> createNr2Filter(const QString& label) const;
     std::unique_ptr<RNNoiseFilter> createRn2Filter(const QString& label) const;
     RNNoiseFilter* rn2ForSource(RxDspSource source,
                                 ExternalRxAudioSourceState* externalSource) const;
@@ -951,6 +959,7 @@ private:
     std::unique_ptr<SpectralNR> m_nr2;
     std::unique_ptr<SpectralNR> m_kiwiSdrNr2;
     std::atomic<bool> m_nr2Enabled{false};
+    std::atomic<bool> m_nr2UseOriginalGeometry{false};
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH
     std::unique_ptr<SpecbleachFilter> m_nr4;

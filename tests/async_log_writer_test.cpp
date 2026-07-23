@@ -29,7 +29,15 @@ void report(const char* name, bool ok)
 QByteArray readAll(const QString& path)
 {
     QFile f(path);
-    if (!f.open(QIODevice::ReadOnly))
+    // Read back with QIODevice::Text to mirror how AsyncLogWriter WRITES the
+    // file (it opens with QIODevice::Text so log files get native line endings).
+    // Without the matching flag this read is asymmetric: on Windows the writer
+    // emits "\r\n" while every expectation in this file is written as "\n", so
+    // each exact-match assertion failed on the platform's line-ending
+    // translation rather than on anything the writer got wrong. Text mode here
+    // normalises "\r\n" back to "\n" on read, making the comparisons
+    // line-ending agnostic on Windows and unchanged on POSIX.
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
         return {};
     return f.readAll();
 }
@@ -197,6 +205,33 @@ void testTokenFalsePositiveBoundary(const QString& dir)
                                           QStringLiteral("loaded keytoken=fixture_value_unchanged"));
     report("\\b prevents \"keytoken=\" from being treated as a token keyword",
            contents.contains(QStringLiteral("keytoken=fixture_value_unchanged")));
+}
+
+void testPersonalNameRedaction(const QString& dir)
+{
+    const QString path = dir + "/personal_names.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.smartlink"),
+        QStringLiteral("application user_settings first_name=Pat last_name=Jensen "
+                       "fullName='Pat Jensen' callsign=KK7GWY"));
+    report("SmartLink personal names are absent from disk logs",
+           !contents.contains(QStringLiteral("Pat"))
+           && !contents.contains(QStringLiteral("Jensen"))
+           && contents.count(QStringLiteral("***REDACTED***")) == 3
+           && contents.contains(QStringLiteral("callsign=KK7GWY")));
+}
+
+void testCoordinateRedaction(const QString& dir)
+{
+    const QString path = dir + "/coordinates.log";
+    const QString contents = writeAndRead(
+        path, QtDebugMsg, QStringLiteral("aether.connection"),
+        QStringLiteral("gps lat=47.6205#lon=-122.3493 latitude:47.6205 "
+                       "gps_longitude=-122.3493 location=47.6205,-122.3493"));
+    report("GPS and location coordinates are absent from disk logs",
+           !contents.contains(QStringLiteral("47.6205"))
+           && !contents.contains(QStringLiteral("-122.3493"))
+           && contents.count(QStringLiteral("***REDACTED***")) == 5);
 }
 
 void testMacDashRedaction(const QString& dir)
@@ -385,6 +420,8 @@ int main(int argc, char** argv)
     testSerialRedaction(dir);
     testTokenRedaction(dir);
     testTokenFalsePositiveBoundary(dir);
+    testPersonalNameRedaction(dir);
+    testCoordinateRedaction(dir);
     testMacDashRedaction(dir);
     testMacColonRedaction(dir);
     testClearLogTruncatesPriorButPreservesSubsequent(dir);

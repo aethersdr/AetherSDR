@@ -32,6 +32,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with auto-mode switch
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key & iambic paddles with full QSK, optional Quindar tones
+- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding; CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, and an optional remote OpenAI-compatible endpoint (see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md))
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
@@ -288,6 +289,8 @@ See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructio
 ## License
 
 AetherSDR is free and open-source software licensed under the [GNU General Public License v3](LICENSE).
+
+Bundled third-party libraries retain their own licenses (see each `third_party/<lib>/LICENSE`), all GPLv3-compatible. Notably, on-device speech-to-text uses **[whisper.cpp](https://github.com/ggml-org/whisper.cpp) and ggml** (MIT) — vendored under `third_party/whisper.cpp/` (Vulkan/Metal GPU backends included); Whisper model weights are downloaded on demand and are MIT-licensed, not redistributed in this repository.
 
 *AetherSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems.*
 *D-STAR is a registered trademark of Icom Inc. AetherSDR is not affiliated with or endorsed by Icom Inc.*

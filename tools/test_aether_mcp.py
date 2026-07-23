@@ -198,6 +198,98 @@ def test_token_attached():
         del os.environ["AETHER_MCP_TOKEN"]
 
 
+def test_gesture_session():
+    """A phaseful gesture must reuse one bridge connection until terminal."""
+    aether_mcp._close_gesture_bridge()
+    os.environ["AETHER_MCP_TOKEN"] = "gesture-secret"
+    instances = []
+
+    class _GestureBridge:
+        def __init__(self, sock_path, timeout):
+            self.sock_path = sock_path
+            self.timeout = timeout
+            self.requests = []
+            self.closed = False
+            instances.append(self)
+
+        def request(self, obj):
+            self.requests.append(obj)
+            action = obj.get("action")
+            return {"ok": True, "active": action not in ("end", "cancel"),
+                    "sliderDown": action not in ("end", "cancel")}
+
+        def close(self):
+            self.closed = True
+
+    original_bridge = aether_mcp.Bridge
+    original_sockpath = aether_mcp.bridge_socket_path
+    aether_mcp.Bridge = _GestureBridge
+    aether_mcp.bridge_socket_path = lambda: "/tmp/gesture.sock"
+    try:
+        begin = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "begin", "target": "RF power"})
+            ["content"][0]["text"])
+        move = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "move", "value": "12 0"})
+            ["content"][0]["text"])
+        status = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "status"})["content"][0]["text"])
+
+        check("gesture begin/move/status reuse one connection",
+              len(instances) == 1 and len(instances[0].requests) == 3,
+              str(instances))
+        check("gesture keeps slider down before end",
+              begin.get("sliderDown") and move.get("sliderDown")
+              and status.get("sliderDown"), str((begin, move, status)))
+        check("gesture requests carry runtime token",
+              all(r.get("token") == "gesture-secret"
+                  for r in instances[0].requests), str(instances[0].requests))
+
+        ended = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "end"})["content"][0]["text"])
+        check("gesture end closes held connection",
+              ended.get("active") is False and instances[0].closed
+              and aether_mcp._gesture_bridge is None, str(ended))
+
+        class _ExpiredGestureBridge(_GestureBridge):
+            def request(self, obj):
+                self.requests.append(obj)
+                if obj.get("action") == "status":
+                    return {"ok": True, "active": False}
+                return {"ok": True, "active": True}
+
+        aether_mcp.Bridge = _ExpiredGestureBridge
+        aether_mcp.handle_tool(
+            "gesture", {"action": "begin", "target": "RF power"})
+        expired = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "status"})["content"][0]["text"])
+        check("gesture status clears an expired held connection",
+              expired.get("active") is False and instances[-1].closed
+              and aether_mcp._gesture_bridge is None, str(expired))
+
+        class _FailingGestureBridge(_GestureBridge):
+            def request(self, obj):
+                self.requests.append(obj)
+                if obj.get("action") == "move":
+                    return {"ok": False, "error": "bad move"}
+                return {"ok": True, "active": True}
+
+        aether_mcp.Bridge = _FailingGestureBridge
+        aether_mcp.handle_tool(
+            "gesture", {"action": "begin", "target": "RF power"})
+        failed = json.loads(aether_mcp.handle_tool(
+            "gesture", {"action": "move", "value": "bad"})
+            ["content"][0]["text"])
+        check("gesture error closes transport for app-side release",
+              failed.get("ok") is False and instances[-1].closed
+              and aether_mcp._gesture_bridge is None, str(failed))
+    finally:
+        aether_mcp._close_gesture_bridge()
+        aether_mcp.Bridge = original_bridge
+        aether_mcp.bridge_socket_path = original_sockpath
+        os.environ.pop("AETHER_MCP_TOKEN", None)
+
+
 # ── JSON-RPC loop robustness (non-dict must not crash the loop) ──────────────
 
 def drive_main(lines):
@@ -373,6 +465,7 @@ def test_read_only_reflected():
 if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
+    test_gesture_session()
     test_jsonrpc_robustness()
     test_robustness_tools()
     test_fuzzy_suggest()

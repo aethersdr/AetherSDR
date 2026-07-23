@@ -23,6 +23,7 @@
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
 #include "AppletPanel.h"
+#include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
@@ -55,6 +56,7 @@
 #include "models/ProfileLoadCommand.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/Nr2SettingsModel.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -778,6 +780,9 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     connect(w, &AetherDspWidget::nr2GainMaxChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
     });
+    connect(w, &AetherDspWidget::nr2GainFloorChanged, this, [this](float v) {
+        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainFloor(v); });
+    });
     connect(w, &AetherDspWidget::nr2GainSmoothChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
     });
@@ -792,6 +797,12 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     });
     connect(w, &AetherDspWidget::nr2AeFilterChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
+    });
+    connect(w, &AetherDspWidget::nr2UseOriginalGeometryChanged,
+            this, [this](bool useOriginal) {
+        QMetaObject::invokeMethod(m_audio, [this, useOriginal]() {
+            m_audio->setNr2UseOriginalGeometry(useOriginal);
+        });
     });
     // NR4
     connect(w, &AetherDspWidget::nr4ReductionChanged, this, [this](float v) {
@@ -1026,7 +1037,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Deferred so the VFO widget exists for button sync.
         QTimer::singleShot(500, this, [this]() {
             auto& settings = AppSettings::instance();
-            if (settings.value("ClientNr2Enabled", "False").toString() == "True")
+            if (Nr2SettingsModel::instance().config().enabled)
                 enableNr2WithWisdom();
             else if (settings.value("ClientRn2Enabled", "False").toString() == "True")
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setRn2Enabled(true); });
@@ -2239,23 +2250,69 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->suspendNoiseFloorAutoAdjustUntil(m_profileLoadRadioStateWriteHoldUntilMs);
     }
 
-    struct PendingDbmRange {
-        bool active{false};
-        float minDbm{0.0f};
-        float maxDbm{0.0f};
-        qint64 requestedMs{0};
-    };
-    auto pendingDbm = std::make_shared<PendingDbmRange>();
-    auto dbmMatches = [](float leftMin, float leftMax, float rightMin, float rightMax) {
-        return std::abs(leftMin - rightMin) < 0.01f
-            && std::abs(leftMax - rightMax) < 0.01f;
-    };
+    auto pendingDbm = std::make_shared<DbmRangeTransition::Handshake>();
     auto setStreamDbmRange = [this, applet](float minDbm, float maxDbm, bool waitForEcho = false) {
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
             if (pan->panStreamId()) {
                 m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
             }
         }
+    };
+    auto applyAuthoritativeDbmRange = [this, applet, sw, setStreamDbmRange]
+                                      (const DbmRangeTransition::Range& range) {
+        sw->cancelPendingDbmRangeChange();
+        if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+            if (pan->panStreamId()) {
+                m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
+            }
+        }
+        setStreamDbmRange(range.minDbm, range.maxDbm);
+        sw->setDbmRange(range.minDbm, range.maxDbm);
+        sw->prepareForFftScaleChange();
+        sw->reacquireNoiseFloorLock();
+    };
+    auto reconcileDbmRangeFromModel = [this, applet, pendingDbm,
+                                       applyAuthoritativeDbmRange]() {
+        if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+            const DbmRangeTransition::HandshakeDecision decision =
+                pendingDbm->cancelForRadioAuthority(pan->minDbm(), pan->maxDbm());
+            if (decision.action == DbmRangeTransition::HandshakeAction::ReconcileRadioRange) {
+                applyAuthoritativeDbmRange(decision.range);
+            }
+        }
+    };
+    auto retireDbmRangeWithoutEcho = [this, applet, sw]() {
+        // Some Flex firmware accepts a display range command without echoing
+        // min_dbm/max_dbm. In that case the decoder is already using the range
+        // the radio adopted, so only retire the stale-echo guard; reverting to
+        // PanadapterModel here would restore the pre-command range and corrupt
+        // every subsequent FFT bin until another status happened to arrive.
+        sw->cancelPendingDbmRangeChange();
+        if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+            if (pan->panStreamId()) {
+                m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
+            }
+        }
+    };
+    auto finishDbmRangeHandshake = [pendingDbm, applyAuthoritativeDbmRange,
+                                    retireDbmRangeWithoutEcho](quint64 generation) {
+        const DbmRangeTransition::HandshakeDecision decision =
+            pendingDbm->finish(generation);
+        if (decision.action == DbmRangeTransition::HandshakeAction::ReconcileRadioRange) {
+            applyAuthoritativeDbmRange(decision.range);
+        } else if (decision.action
+                   == DbmRangeTransition::HandshakeAction::RetireWithoutEcho) {
+            retireDbmRangeWithoutEcho();
+        }
+    };
+    auto armDbmRangeHandshake = [sw, pendingDbm, finishDbmRangeHandshake]
+                                (float minDbm, float maxDbm) {
+        const quint64 generation = pendingDbm->arm(
+            minDbm, maxDbm, QDateTime::currentMSecsSinceEpoch());
+        QTimer::singleShot(kDbmRangeHandshakeTimeoutMs, sw,
+            [pendingDbm, finishDbmRangeHandshake, generation]() {
+                finishDbmRangeHandshake(generation);
+            });
     };
     auto sendDbmRangeCommand = [this, applet](float minDbm, float maxDbm) {
         if (!dbmRangeLooksPlausible(minDbm, maxDbm)) {
@@ -2286,6 +2343,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
+    QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
+    connect(this, &MainWindow::bandStackRestoreStarting,
+            sw, [applet, pendingDbm, reconcileDbmRangeFromModel]
+                (const QString& panId) {
+        if (applet->panId() == panId && pendingDbm->active()) {
+            reconcileDbmRangeFromModel();
+        }
+    });
     if (m_appletPanel && m_appletPanel->rxApplet()) {
         QObject::disconnect(m_appletPanel->rxApplet(), nullptr, sw, nullptr);
     }
@@ -2461,22 +2526,22 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //   b) in multi-pan setups, a level update on pan B doesn't incorrectly
         //      update pan A's dBm scale.
         connect(pan, &PanadapterModel::levelChanged,
-                sw, [sw, pendingDbm, dbmMatches, setStreamDbmRange](float minDbm, float maxDbm) {
-            if (pendingDbm->active) {
-                if (!dbmMatches(minDbm, maxDbm, pendingDbm->minDbm, pendingDbm->maxDbm)) {
-                    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-                    if (pendingDbm->requestedMs > 0
-                        && nowMs - pendingDbm->requestedMs > kDbmRangeHandshakeTimeoutMs) {
-                        pendingDbm->active = false;
-                        pendingDbm->requestedMs = 0;
-                    } else {
-                        setStreamDbmRange(pendingDbm->minDbm, pendingDbm->maxDbm, true);
-                        return;
-                    }
-                } else {
-                    pendingDbm->active = false;
-                    pendingDbm->requestedMs = 0;
-                }
+                sw, [sw, pendingDbm, setStreamDbmRange,
+                     applyAuthoritativeDbmRange](float minDbm, float maxDbm) {
+            const DbmRangeTransition::HandshakeDecision decision =
+                pendingDbm->observeRadioRange(
+                    minDbm, maxDbm, QDateTime::currentMSecsSinceEpoch(),
+                    kDbmRangeHandshakeTimeoutMs);
+            if (decision.action
+                == DbmRangeTransition::HandshakeAction::HoldRequestedRange) {
+                setStreamDbmRange(
+                    decision.range.minDbm, decision.range.maxDbm, true);
+                return;
+            }
+            if (decision.action
+                == DbmRangeTransition::HandshakeAction::ReconcileRadioRange) {
+                applyAuthoritativeDbmRange(decision.range);
+                return;
             }
             if (sw->isDraggingDbmScale()) {
                 return;
@@ -2598,7 +2663,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
 
     connect(sw, &SpectrumWidget::dbmRangeChangeRequested,
-            this, [this, applet, sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand]
+            this, [this, applet, sw, armDbmRangeHandshake,
+                   setStreamDbmRange, sendDbmRangeCommand]
                   (float minDbm, float maxDbm) {
         if (sw->kiwiSdrWaterfallActive()) {
             sw->setDbmRange(minDbm, maxDbm);
@@ -2641,15 +2707,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        pendingDbm->active = true;
-        pendingDbm->minDbm = minDbm;
-        pendingDbm->maxDbm = maxDbm;
-        pendingDbm->requestedMs = QDateTime::currentMSecsSinceEpoch();
+        armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
     });
     connect(sw, &SpectrumWidget::dbmRangeDragFinished,
-            this, [this, applet, sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+            this, [this, applet, sw, armDbmRangeHandshake,
+                   setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
         if (sw->kiwiSdrWaterfallActive()) {
             sw->setDbmRange(minDbm, maxDbm);
             sw->prepareForFftScaleChange();
@@ -2663,10 +2727,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        pendingDbm->active = true;
-        pendingDbm->minDbm = minDbm;
-        pendingDbm->maxDbm = maxDbm;
-        pendingDbm->requestedMs = QDateTime::currentMSecsSinceEpoch();
+        armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
     });
@@ -3656,8 +3717,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── Band selection ───────────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::bandSelected,
-            this, [this, applet](const QString& bandName, double freqMhz, const QString& mode,
-                                 const QString& stackKeyHint) {
+            this, [this, applet]
+                  (const QString& bandName, double freqMhz, const QString& mode,
+                   const QString& stackKeyHint) {
         qDebug() << "MainWindow: switching to band" << bandName
                  << "freq:" << freqMhz << "mode:" << mode;
 
@@ -3750,6 +3812,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 << " freq_hint_mhz=" << QString::number(freqMhz, 'f', 6)
                 << " mode_hint=" << mode
                 << " xvtr=" << xvtrForBandSummary(bandName, xvtrs);
+            // A band stack restore is radio-authoritative and may carry a dBm
+            // range different from a just-released scale drag. Abandon that
+            // client request before the band command so the restored range
+            // cannot be rejected as a stale echo and wedge FFT decoding.
+            emit bandStackRestoreStarting(applet->panId());
             clearSwrSweepForBandChange(-1, applet->panId(), bandName);
             m_bandSettings.setCurrentBand(bandName);
             // A band recall makes the radio drop+re-create this pan's slice;
