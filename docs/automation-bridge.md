@@ -40,8 +40,8 @@ production; it only exists when you ask for it via an env var.
 cmake --build build --parallel
 
 # 2. Launch the app with the bridge enabled.
-AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
-#   AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR &                            # Linux/Windows
+AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
+#   AETHER_AUTOMATION=1 ./build/AetherSDR &                            # Linux/Windows
 
 # 3. Drive it. The dependency-free probe needs no Qt:
 python3 tools/automation_probe.py ping
@@ -53,8 +53,9 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
-`AETHER_AUTOMATION_NO_AUTOCONNECT=1` suppresses saved-radio autoconnect during
-bridge runs; use the `connect` verb when a test intentionally needs a radio.
+Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting; a bridge
+run reconnects to the last radio just as an interactive launch does. Use the
+`connect` verb to drive a specific radio, or clear the setting to start idle.
 
 Parallel worktrees should give each bridge a stable automation identity and a
 human-readable agent name:
@@ -100,7 +101,7 @@ HIServices are unavailable, before AetherSDR reaches the automation bridge; with
 socket the bridge needs. Launch outside the command sandbox instead:
 
 ```bash
-QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
+QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
 ```
 
 ---

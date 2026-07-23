@@ -1928,11 +1928,8 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_titleBar) m_titleBar->setDiscovering(true);
     m_discovery.startListening();
 
-    const bool automationNoAutoConnect =
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT");
     const bool autoConnectToLastRadio =
-        !automationNoAutoConnect
-        && AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True";
+        AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True";
     const QString startupLastSerial =
         AppSettings::instance().value("LastConnectedRadioSerial").toString();
     if (!startupLastSerial.isEmpty() && autoConnectToLastRadio) {
@@ -1946,9 +1943,6 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected || m_radioModel.isConnected()) return;
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT")) {
-            return;
-        }
         if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()
