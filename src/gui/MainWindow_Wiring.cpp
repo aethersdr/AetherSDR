@@ -200,6 +200,13 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
     // command. Restoration is deferred until the full grace window elapses so
     // slice status arrival order can never choose the receiver.
     m_kiwiRebind.noteBandRecall(panId);
+    // Stamp this recall so the grace timer below only clears the Kiwi marker if
+    // it is still the latest recall for this pan. Without it, an overlapping
+    // recall (band button + memory spot / tune, now all routed here) would have
+    // the first timer clear the marker mid-rebuild of the second — the Kiwi
+    // half would lose the generation-safety the Center Lock half already has.
+    const quint64 bandRecallGeneration = ++m_bandRecallGeneration;
+    m_bandRecallGenerationByPan.insert(panId, bandRecallGeneration);
     const int lockedSliceId = centerLockSliceForPan(panId);
     SliceModel* lockedSlice = m_radioModel.slice(lockedSliceId);
     if (lockedSlice
@@ -222,8 +229,14 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
         lockedSlice ? lockedSlice->letter() : QString(),
         ownedSliceCount);
     QTimer::singleShot(kBandRecallRecreateGraceMs, this,
-                       [this, panId, centerLockGeneration]() {
-        m_kiwiRebind.clearBandRecall(panId);
+                       [this, panId, centerLockGeneration, bandRecallGeneration]() {
+        // Only the latest recall for this pan clears the Kiwi band-recall
+        // marker; a superseding recall now owns the window, so an older timer
+        // must not clear it out from under the in-flight rebuild.
+        if (m_bandRecallGenerationByPan.value(panId) == bandRecallGeneration) {
+            m_kiwiRebind.clearBandRecall(panId);
+            m_bandRecallGenerationByPan.remove(panId);
+        }
         if (centerLockGeneration == 0) {
             return;
         }
@@ -254,26 +267,25 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
             SliceModel* replacement = m_radioModel.slice(resolution.sliceId);
             if (replacement && replacement->panId() == panId
                 && m_radioModel.sliceMayBelongToUs(replacement->sliceId())) {
-                setCenterLockForPan(panId, replacement->sliceId(), true, false);
+                // persist=true self-persists and cancels any pending recall (a
+                // no-op here — resolveAfterGrace already consumed it).
+                setCenterLockForPan(panId, replacement->sliceId(), true, true);
                 if (centerLockActiveForSlice(replacement)) {
-                    persistCenterLockForSlice(replacement);
                     return;
                 }
             }
+            // Identified a slice but couldn't re-lock it: fall through and
+            // report it as missing (not ambiguous — the tracker WAS sure).
         }
 
         clearCenterLockForPan(panId, true);
-        if (resolution.kind
-            == CenterLockRebindTracker::Resolution::Kind::ReleaseMissing) {
-            showCenterLockReleaseNotification(
-                panId,
-                tr("The band change did not restore the locked slice."));
-        } else {
-            showCenterLockReleaseNotification(
-                panId,
-                tr("The band change restored a different slice layout, so "
-                   "the locked slice could not be identified safely."));
-        }
+        showCenterLockReleaseNotification(
+            panId,
+            resolution.kind
+                    == CenterLockRebindTracker::Resolution::Kind::ReleaseAmbiguous
+                ? tr("The band change restored a different slice layout, so "
+                     "the locked slice could not be identified safely.")
+                : tr("The band change did not restore the locked slice."));
     });
 }
 

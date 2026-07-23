@@ -1004,6 +1004,11 @@ private:
     // MainWindow owns their side effects and shared grace window.
     KiwiRebindTracker    m_kiwiRebind;
     CenterLockRebindTracker m_centerLockRebind;
+    // Per-pan band-recall generation: makes the shared grace timer's Kiwi
+    // marker clear generation-safe against overlapping recalls, the same way
+    // the Center Lock tracker guards its own resolution.
+    QHash<QString, quint64> m_bandRecallGenerationByPan;
+    quint64              m_bandRecallGeneration{0};
     static constexpr int kBandRecallRecreateGraceMs = 1500;
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
