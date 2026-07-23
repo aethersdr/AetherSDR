@@ -68,11 +68,19 @@ jobs:
   check-system-libs-linux:
     runs-on: ubuntu-latest
     container: debian:sid
+    # Debian sid is a rolling/unstable target, chosen to canary the build
+    # against the newest system libraries. Keep it advisory so upstream sid
+    # churn (a package bump or a momentarily-uninstallable dep) can't block
+    # unrelated PRs; flip this off (or pin a stable release) to make it a gate.
+    continue-on-error: true
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
       - name: Install main dependencies
         run: |
-          apt -U install -y \
+          apt -U install -y --no-install-recommends \
             build-essential \
             cmake \
             pkgconf \
@@ -91,16 +99,13 @@ jobs:
 
       - name: Install system library replacements
         run: |
-          apt -U install -y \
+          apt -U install -y --no-install-recommends \
             libmspack-dev \
             librtmidi-dev \
             libasound2-dev \
             zlib1g-dev \
             libmosquitto-dev \
             libliquid-dev
-
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Configure
         run: |
