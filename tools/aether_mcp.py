@@ -774,7 +774,7 @@ def handle_tool(name, args):
         return text_result(bridge_request(req))
 
     if name == "memory_profile":
-        req = {"cmd": "memory", "action": args["action"]}
+        req = {"cmd": "memprofile", "action": args["action"]}
         if args["action"] == "start":
             values = []
             if args.get("interval_ms") is not None:

@@ -70,7 +70,6 @@ class Bridge:
     def __init__(self, sock_path):
         self.sock_path = sock_path
         self._buf = b""
-        self._token = os.environ.get("AETHER_MCP_TOKEN", "")
         if sys.platform == "win32":
             # Qt named pipe: \\.\pipe\<name>. Open like a file.
             self._pipe = open(rf"\\.\pipe\{os.path.basename(sock_path)}", "r+b", buffering=0)
@@ -81,10 +80,11 @@ class Bridge:
             self._pipe = None
 
     def request(self, obj, timeout_seconds=None):
-        request_obj = dict(obj)
-        if self._token and "token" not in request_obj:
-            request_obj["token"] = self._token
-        return self.request_line(json.dumps(request_obj), timeout_seconds)
+        request = dict(obj)
+        token = os.environ.get("AETHER_MCP_TOKEN")
+        if token and "token" not in request:
+            request["token"] = token
+        return self.request_line(json.dumps(request), timeout_seconds)
 
     def request_line(self, text, timeout_seconds=None):
         """Send one raw request line (JSON or bare positional) and return the
@@ -403,7 +403,7 @@ MAPPERS = {
         "waveform needs <start|stop|unregister|resync> [args]"),
     "pan": _map_action_value("pan needs <create|add|center|close|remove> [value]"),
     "streams": _map_action_value(),
-    "memory": _map_action_value(),
+    "memprofile": _map_action_value(),
     "layout": _map_action_value("layout needs <rearrange <id> | get>"),
     "record": _map_action_value(),
     "testtone": _map_action_value(),

@@ -1774,14 +1774,14 @@ the default Layer-A inventory and `radio`/`inventory` reads remain available;
 tally, while `resync`/`refresh` send the `sub pan all` subscription command to
 the radio.
 
-### `memory`
+### `memprofile`
 Cross-platform process and subsystem memory profiling for long-running leak
 investigations. An instant snapshot combines the operating system's native
 process counters with explicitly sized application buffers and lightweight
 QObject lifecycle inventories:
 
 ```json
-→ {"cmd":"memory","action":"snapshot"}
+→ {"cmd":"memprofile","action":"snapshot"}
 ← {"ok":true,"schemaVersion":1,
    "process":{"residentMetric":"physicalFootprint","residentBytes":412876800,
               "privateBytes":355205120,"allocatorInUseBytes":287309824,
@@ -1804,13 +1804,13 @@ they are not byte-for-byte comparable across operating systems.
 The sampler is bounded and off until explicitly started:
 
 ```text
-memory start 5000 10000   # sample every 5 s, retain at most 10,000 points
-memory status             # current snapshot + compact trend report
-memory sample             # force an extra point now
-memory report             # compact report, no raw points
-memory samples            # compact report + retained raw points
-memory stop               # final point + compact report
-memory reset              # stop and release the retained series
+memprofile start 5000 10000   # sample every 5 s, retain at most 10,000 points
+memprofile status             # current snapshot + compact trend report
+memprofile sample             # force an extra point now
+memprofile report             # compact report, no raw points
+memprofile samples            # compact report + retained raw points
+memprofile stop               # final point + compact report
+memprofile reset              # stop and release the retained series
 ```
 
 JSON requests use `action` and, for `start`, `value: "<intervalMs>
@@ -2536,7 +2536,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
-| `memory` | — | memory <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
+| `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |

@@ -2867,13 +2867,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doStreams(a.action);
             });
 
-        add("memory", {},
-            "memory <snapshot|start|sample|status|report|samples|stop|reset> [intervalMs maxSamples]",
+        add("memprofile", {},
+            "memprofile <snapshot|start|sample|status|report|samples|stop|reset> [intervalMs maxSamples]",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
-                return s.doMemory(a.action.isEmpty() ? QStringLiteral("snapshot")
-                                                     : a.action,
-                                  a.value);
+                return s.doMemoryProfile(a.action.isEmpty() ? QStringLiteral("snapshot")
+                                                            : a.action,
+                                         a.value);
             });
 
         add("tci", {},
@@ -8477,7 +8477,7 @@ QJsonObject AutomationServer::recordMemorySample()
     return snapshot;
 }
 
-QJsonObject AutomationServer::doMemory(const QString& action, const QString& value)
+QJsonObject AutomationServer::doMemoryProfile(const QString& action, const QString& value)
 {
     const QString normalized = action.trimmed().toLower();
     if (normalized == QLatin1String("snapshot")) {
@@ -8496,7 +8496,7 @@ QJsonObject AutomationServer::doMemory(const QString& action, const QString& val
             intervalMs = parts.constFirst().toInt(&ok);
             if (!ok || intervalMs < 250 || intervalMs > 3600000) {
                 return err(QStringLiteral(
-                    "memory start intervalMs must be 250..3600000"));
+                    "memprofile start intervalMs must be 250..3600000"));
             }
         }
         if (parts.size() >= 2) {
@@ -8504,12 +8504,12 @@ QJsonObject AutomationServer::doMemory(const QString& action, const QString& val
             maxSamples = parts.at(1).toInt(&ok);
             if (!ok || maxSamples < 2 || maxSamples > 10000) {
                 return err(QStringLiteral(
-                    "memory start maxSamples must be 2..10000"));
+                    "memprofile start maxSamples must be 2..10000"));
             }
         }
         if (parts.size() > 2) {
             return err(QStringLiteral(
-                "memory start accepts only intervalMs and maxSamples"));
+                "memprofile start accepts only intervalMs and maxSamples"));
         }
 
         if (!m_memoryTimer) {
@@ -8607,7 +8607,7 @@ QJsonObject AutomationServer::doMemory(const QString& action, const QString& val
     }
 
     return err(QStringLiteral(
-        "memory requires snapshot|start|sample|status|report|samples|stop|reset"));
+        "memprofile requires snapshot|start|sample|status|report|samples|stop|reset"));
 }
 
 QJsonObject AutomationServer::doAudioCapture(const QString& action,

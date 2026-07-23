@@ -496,10 +496,11 @@ private:
     //                     waterfall the client view had already purged.
     //   streams reset   — clear the Layer-A orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
-    // Cross-platform process + subsystem memory profiler. `start` samples on a
-    // bounded main-thread timer; `report`/`stop` return deltas, slopes, fit
+    // Cross-platform process + subsystem memory profiler (the `memprofile`
+    // verb — distinct from the `memory` frequency-recall verb). `start` samples
+    // on a bounded main-thread timer; `report`/`stop` return deltas, slopes, fit
     // confidence, object-class growth, and raw samples on request.
-    QJsonObject doMemory(const QString& action, const QString& value);
+    QJsonObject doMemoryProfile(const QString& action, const QString& value);
     QJsonObject memorySnapshot() const;
     // Takes one snapshot, appends it to the bounded series, and returns it so
     // callers that also need to return the snapshot don't take a second one.

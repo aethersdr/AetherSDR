@@ -149,7 +149,7 @@ def main():
         print("warning: this bridge reports TX automation enabled; "
               "the memory soak never invokes TX", file=sys.stderr)
     started_wall = dt.datetime.now(dt.timezone.utc)
-    started = bridge.request({"cmd": "memory", "action": "start",
+    started = bridge.request({"cmd": "memprofile", "action": "start",
                               "value": f"{interval_ms} {max_samples}"})
     if not started.get("ok"):
         bridge.close()
@@ -182,7 +182,7 @@ def main():
                 next_tune = started_monotonic + (
                     tune_index * args.tune_interval)
             if now >= next_progress:
-                status = bridge.request({"cmd": "memory", "action": "status"})
+                status = bridge.request({"cmd": "memprofile", "action": "status"})
                 print(progress_line(status, deadline - now), flush=True)
                 next_progress = now + args.progress
             time.sleep(min(1.0, max(0.0, deadline - now)))
@@ -190,8 +190,8 @@ def main():
         interrupted = True
         print("interrupted; collecting the partial profile", file=sys.stderr)
 
-    stopped = bridge.request({"cmd": "memory", "action": "stop"})
-    samples = bridge.request({"cmd": "memory", "action": "samples"})
+    stopped = bridge.request({"cmd": "memprofile", "action": "stop"})
+    samples = bridge.request({"cmd": "memprofile", "action": "samples"})
     bridge.close()
     payload = {
         "format": "AetherSDR-memory-soak-v1",

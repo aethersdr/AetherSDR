@@ -165,12 +165,12 @@ def test_field_mapping():
                  {"action": "start", "interval_ms": 2000,
                   "max_samples": 500})[-1]
     check("memory_profile → cmd=memory action+bounded sampler args",
-          r.get("cmd") == "memory" and r.get("action") == "start"
+          r.get("cmd") == "memprofile" and r.get("action") == "start"
           and r.get("value") == "2000 500", str(r))
 
     r = run_tool("memory_profile", {"action": "snapshot"})[-1]
     check("memory_profile snapshot has no synthetic value",
-          r.get("cmd") == "memory" and r.get("action") == "snapshot"
+          r.get("cmd") == "memprofile" and r.get("action") == "snapshot"
           and "value" not in r, str(r))
 
     reqs = run_tool("bridge_command", {"request": {"cmd": "whoami"}})
