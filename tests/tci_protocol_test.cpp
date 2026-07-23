@@ -86,6 +86,86 @@ bool testRoutingPolicy()
     return true;
 }
 
+bool testWsjtxRoutingContracts()
+{
+    using Action = TciRoutingState::RouteAction;
+    using Owner = TciRoutingState::TxRouteOwner;
+
+    // WSJT-X programs VFO B after explicitly reporting split false. That
+    // steady false is compatibility state, not permission to erase VFO B.
+    TciRoutingState singleRoute;
+    TciProtocol singleProtocol(nullptr, &singleRoute);
+    singleProtocol.handleCommand(QStringLiteral("split_enable:0,false"));
+    const auto singleSplit = singleProtocol.takeSplitRequest();
+    if (!check(singleSplit && !singleSplit->enabled
+                && !singleRoute.setSplitRequested(singleSplit->enabled),
+            "WSJT-X single-slice steady split false must be a no-op")) {
+        return false;
+    }
+    singleProtocol.handleCommand(QStringLiteral("vfo:0,1,14076000"));
+    const auto singleVfo = singleProtocol.takeVfoRequest();
+    QVector<TciSliceEndpoint> singleTopology { { 4, true } };
+    const auto singleDecision = singleRoute.resolveVfoB(4, singleTopology);
+    if (!check(singleVfo && singleVfo->channel == 1
+                && singleVfo->frequencyHz == 14076000
+                && singleDecision.action == Action::Create,
+            "WSJT-X single-slice VFO B must create a distinct TX route")) {
+        return false;
+    }
+    singleRoute.bindCreatedRoute(4, 9);
+    QVector<TciSliceEndpoint> createdTopology { { 4, false }, { 9, true } };
+    if (!check(singleRoute.owner() == Owner::TciCreated
+                && singleRoute.resolvePttSlice(4, createdTopology) == 9,
+            "WSJT-X single-slice TRX must key the created VFO B slice")) {
+        return false;
+    }
+    singleProtocol.handleCommand(QStringLiteral("trx:0,true,tci"));
+    const auto singleTrx = singleProtocol.takeTrxRequest();
+    if (!check(singleTrx && singleTrx->transmitting,
+            "WSJT-X single-slice TRX request must survive route setup")) {
+        return false;
+    }
+
+    // With a reusable second slice, WSJT-X must promote it instead of
+    // allocating a third slice, then preserve it across steady split false.
+    TciRoutingState multiRoute;
+    TciProtocol multiProtocol(nullptr, &multiRoute);
+    multiProtocol.handleCommand(QStringLiteral("split_enable:0,false"));
+    const auto multiSplit = multiProtocol.takeSplitRequest();
+    QVector<TciSliceEndpoint> reusableTopology { { 4, true }, { 7, false } };
+    const auto reusableDecision = multiRoute.resolveVfoB(4, reusableTopology);
+    if (!check(multiSplit && !multiRoute.setSplitRequested(multiSplit->enabled)
+                && reusableDecision.action == Action::PromoteExisting
+                && reusableDecision.txSliceId == 7,
+            "WSJT-X multi-slice VFO B must reuse the second slice")) {
+        return false;
+    }
+    multiProtocol.handleCommand(QStringLiteral("vfo:0,1,14076000"));
+    const auto multiVfo = multiProtocol.takeVfoRequest();
+    QVector<TciSliceEndpoint> promotedTopology { { 4, false }, { 7, true } };
+    if (!check(multiVfo && multiVfo->channel == 1
+                && multiRoute.owner() == Owner::TciExisting
+                && multiRoute.resolvePttSlice(4, promotedTopology) == 7,
+            "WSJT-X multi-slice TRX must key the promoted VFO B slice")) {
+        return false;
+    }
+
+    // Satellite controllers own the selected TX slice. TCI may tune and key
+    // it, but a steady false split report must never move TX back to RX.
+    TciRoutingState externalRoute;
+    QVector<TciSliceEndpoint> satelliteTopology { { 4, false }, { 7, true } };
+    const auto externalDecision = externalRoute.resolveVfoB(4, satelliteTopology);
+    if (!check(externalDecision.action == Action::UseExisting
+                && externalDecision.owner == Owner::External
+                && !externalRoute.setSplitRequested(false)
+                && externalRoute.resolvePttSlice(4, satelliteTopology) == 7,
+            "WSJT-X external multi-slice route must preserve satellite TX ownership")) {
+        return false;
+    }
+
+    return true;
+}
+
 bool testDeferredCommands()
 {
     TciRoutingState routing;
@@ -221,7 +301,8 @@ int main(int argc, char** argv)
         }
     }
 
-    if (!testRoutingPolicy() || !testDeferredCommands() || !testDriveWireContract()) {
+    if (!testRoutingPolicy() || !testWsjtxRoutingContracts()
+        || !testDeferredCommands() || !testDriveWireContract()) {
         return 1;
     }
 

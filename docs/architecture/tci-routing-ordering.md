@@ -121,10 +121,10 @@ trx:0,true keys B without selecting A
 
 | Layer | Current coverage | Next required coverage |
 |---|---|---|
-| Pure routing | Single slice, reusable second slice, external TX, steady-false preservation, split edges, stable-ID removal | Multiple independent route requests and cross-pan receive-only endpoints |
+| Pure routing | Exact WSJT-X steady-false -> VFO B -> TRX sequences for single-slice creation, reusable second-slice promotion, and external satellite TX preservation; split edges and stable-ID removal | Multiple independent route requests and cross-pan receive-only endpoints |
 | Parser | VFO B, invalid VFO channel, split, TRX source, `tx_enable` direction, exact DRIVE/TUNE_DRIVE read/write forms, init topology/order | Invalid numeric/range corpus for every remaining routing command |
 | Radio sequencing | Completion-barrier implementation reviewed against Flex oracle | Fake delayed/rejected radio adapter with exact command transcript assertions |
-| WebSocket | Existing server/client smoke paths | Two-client sender/observer convergence and abrupt owner loss |
+| Automation / WebSocket | Fake server validates WSJT-X init negotiation, raw ordered `send`, bounded bidirectional `trace`, atomic export, read-only `routes`, and observe-only enforcement | Two-client sender/observer convergence and abrupt owner loss |
 | Real clients | Sequence matched to WSJT-X/JTDX source | Automated WSJT-X/JTDX startup, Rig/Fake It, repeated FT8 cycles |
 | Live radio | No RF required for frequency/split inspection | Dummy-load PTT confirmation, rejection injection, satellite full duplex |
 

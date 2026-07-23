@@ -305,7 +305,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X audio or SDC IQ-skimmer profile). |
+| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator plus ordered protocol and route diagnostics. |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -1982,9 +1982,58 @@ needed).
    "iqStarted":true,"iqFrames":412,"binaryFrames":412,"binaryBytes":3375104,
    "textMessages":37,"msSinceLastFrame":18}
 
+→ {"cmd":"tci","action":"send","value":"split_enable:0,false;vfo:0,1,14076000;"}
+← {"ok":true,"action":"send",
+   "command":"split_enable:0,false;vfo:0,1,14076000;","traceSeq":17}
+
+→ {"cmd":"tci","action":"trace","value":"status 50"}
+← {"ok":true,"capturing":true,"count":19,"lastSeq":19,
+   "entries":[
+     {"seq":16,"elapsedMs":43,"direction":"client->server",
+      "text":"split_enable:0,false;"},
+     {"seq":17,"elapsedMs":43,"direction":"client->server",
+      "text":"vfo:0,1,14076000;"},
+     {"seq":18,"elapsedMs":51,"direction":"server->client",
+      "text":"split_enable:0,false;"}
+   ]}
+
+→ {"cmd":"tci","action":"routes"}
+← {"ok":true,"contractVersion":1,"routeOwner":"external",
+   "splitRequested":false,"rxSliceId":4,"txSliceId":7,"ownsRoute":false,
+   "routeTransitionInFlight":false,"pendingRoutes":[],
+   "endpoints":[
+     {"trx":0,"sliceId":4,"panId":"0x40000000","frequencyHz":14074000,"tx":false},
+     {"trx":1,"sliceId":7,"panId":"0x40000001","frequencyHz":14076000,"tx":true}
+   ]}
+
 → {"cmd":"tci","action":"stop","value":"abrupt"}   // omit value for graceful audio_stop + close
 ← {"ok":true,"action":"stop","abrupt":true,"binaryFrames":412, …}
 ```
+
+The same commands have bare forms:
+
+```text
+tci send split_enable:0,false;vfo:0,1,14076000;
+tci trace start
+tci trace status 50
+tci trace stop
+tci trace clear
+tci trace export /tmp/tci-trace.json
+tci routes
+```
+
+`send` writes one raw client WebSocket frame, adding a final semicolon when
+needed. Embedded CR/LF and commands over 4096 characters are rejected.
+`trace start` resets sequence numbering and captures every semicolon-delimited
+command in both directions in a bounded 512-entry buffer. `trace export`
+atomically writes the complete retained transcript as JSON.
+
+`routes` is a read-only snapshot of the server's stable Flex slice routing,
+including route ownership (`external`, `tci-existing`, or `tci-created`),
+transition/deferred-command state, PTT ownership, and the current contiguous
+TCI receiver projection. `tci status` and `tci routes` remain available when
+the bridge is in observe-only mode; `send`, trace control/export, start, and
+stop are blocked.
 
 `stop abrupt` closes the socket without `audio_stop` or `iq_stop`; graceful
 stop sends the command matching the selected profile. This lets tests assert
@@ -2564,7 +2613,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
-| `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
+| `tci` | — | tci start\|status\|stop\|send\|trace\|routes — TCI simulator and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

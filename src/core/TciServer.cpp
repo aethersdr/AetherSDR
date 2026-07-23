@@ -17,6 +17,7 @@
 #include <QWebSocketServer>
 #include <QWebSocket>
 #include <QHostAddress>
+#include <QJsonArray>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -606,6 +607,96 @@ QVector<TciClientInfo> TciServer::connectedClients() const
         out.append(info);
     }
     return out;
+}
+
+QJsonObject TciServer::routingSnapshot() const
+{
+    const auto ownerName = [this]() {
+        switch (m_routingState.owner()) {
+        case TciRoutingState::TxRouteOwner::External:
+            return QStringLiteral("external");
+        case TciRoutingState::TxRouteOwner::TciExisting:
+            return QStringLiteral("tci-existing");
+        case TciRoutingState::TxRouteOwner::TciCreated:
+            return QStringLiteral("tci-created");
+        case TciRoutingState::TxRouteOwner::None:
+            return QStringLiteral("none");
+        }
+        return QStringLiteral("none");
+    };
+
+    QJsonArray endpoints;
+    if (m_model) {
+        const auto slices = m_model->slices();
+        for (int trx = 0; trx < slices.size(); ++trx) {
+            const SliceModel* slice = slices.at(trx);
+            if (!slice) {
+                continue;
+            }
+            endpoints.append(QJsonObject{
+                {QStringLiteral("trx"), trx},
+                {QStringLiteral("sliceId"), slice->sliceId()},
+                {QStringLiteral("panId"), slice->panId()},
+                {QStringLiteral("frequencyHz"),
+                    static_cast<qint64>(TciProtocol::mhzToHz(slice->frequency()))},
+                {QStringLiteral("tx"), slice->isTxSlice()},
+            });
+        }
+    }
+
+    QJsonArray pendingRoutes;
+    for (const PendingRouteCommand& pending : m_pendingRouteCommands) {
+        QJsonObject item{
+            {QStringLiteral("clientConnected"), !pending.client.isNull()},
+            {QStringLiteral("kind"),
+                pending.kind == PendingRouteCommand::Kind::Vfo
+                    ? QStringLiteral("vfo")
+                    : QStringLiteral("split")},
+        };
+        if (pending.kind == PendingRouteCommand::Kind::Vfo) {
+            item[QStringLiteral("trx")] = pending.vfo.trx;
+            item[QStringLiteral("channel")] = pending.vfo.channel;
+            item[QStringLiteral("frequencyHz")]
+                = static_cast<qint64>(pending.vfo.frequencyHz);
+        } else {
+            item[QStringLiteral("trx")] = pending.split.trx;
+            item[QStringLiteral("enabled")] = pending.split.enabled;
+        }
+        pendingRoutes.append(item);
+    }
+
+    QJsonObject ptt{
+        {QStringLiteral("owned"), !m_tciPttClient.isNull()},
+        {QStringLiteral("trx"), m_tciPttTrx},
+        {QStringLiteral("wantsAudio"), m_tciPttWantsAudio},
+        {QStringLiteral("requestedOn"), m_tciPttRequestedOn},
+        {QStringLiteral("confirmedOn"), m_tciPttConfirmedOn},
+        {QStringLiteral("cancelPending"), m_tciPttCancelPending},
+        {QStringLiteral("generation"), static_cast<qint64>(m_tciPttGeneration)},
+    };
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("contractVersion"), 1},
+        {QStringLiteral("serverRunning"), isRunning()},
+        {QStringLiteral("port"), static_cast<int>(port())},
+        {QStringLiteral("clientCount"), m_clients.size()},
+        {QStringLiteral("radioConnected"), m_model && m_model->isConnected()},
+        {QStringLiteral("radioTransmitting"), m_model && m_model->isRadioTransmitting()},
+        {QStringLiteral("splitRequested"), m_routingState.splitRequested()},
+        {QStringLiteral("rxSliceId"), m_routingState.rxSliceId()},
+        {QStringLiteral("txSliceId"), m_routingState.txSliceId()},
+        {QStringLiteral("routeOwner"), ownerName()},
+        {QStringLiteral("ownsRoute"), m_routingState.ownsRoute()},
+        {QStringLiteral("routeTransitionInFlight"), m_routeTransitionInFlight},
+        {QStringLiteral("routeTransitionGeneration"),
+            static_cast<qint64>(m_routeTransitionGeneration)},
+        {QStringLiteral("pendingVfoBCreate"), m_pendingVfoBCreate.has_value()},
+        {QStringLiteral("pendingTrx"), m_pendingTrxRequest.has_value()},
+        {QStringLiteral("pendingRoutes"), pendingRoutes},
+        {QStringLiteral("ptt"), ptt},
+        {QStringLiteral("endpoints"), endpoints},
+    };
 }
 
 void TciServer::onTextMessage(const QString& msg)

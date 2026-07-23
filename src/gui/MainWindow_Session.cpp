@@ -1688,6 +1688,15 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this]() { return automationKiwiSdrSnapshot(); });
     m_automation->setTxTimerSnapshotHandler(
         [this]() { return automationTxTimerSnapshot(); });
+    m_automation->setTciRouteSnapshotHandler([this]() {
+        if (!tciServer()) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("error"), QStringLiteral("TCI server unavailable")},
+            };
+        }
+        return tciServer()->routingSnapshot();
+    });
 
     // The access token lives in the OS secret store (QtKeychain), which reads
     // ASYNCHRONOUSLY. Defer start()/listen() into the token callback rather

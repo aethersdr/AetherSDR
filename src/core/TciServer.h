@@ -8,6 +8,7 @@
 #include <QPointer>
 #include <QElapsedTimer>
 #include <QHash>
+#include <QJsonObject>
 #include <QList>
 #include <QMap>
 #include <QSet>
@@ -58,6 +59,11 @@ public:
     bool isRunning() const;
     quint16 port() const;
     int clientCount() const { return m_clients.size(); }
+
+    // Automation-only diagnostics. This never changes protocol or radio state;
+    // it projects the routing state machine and deferred work into JSON for the
+    // local automation bridge's `tci routes` action.
+    QJsonObject routingSnapshot() const;
 
     // (ownsDaxChannel() and the cross-consumer peeking it existed for were
     // replaced by per-consumer holds in PanadapterStream's centralized DAX
