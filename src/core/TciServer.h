@@ -48,6 +48,7 @@ struct TciClientInfo {
 // Phase 2: binary RX/TX audio streaming
 class TciServer : public QObject {
     Q_OBJECT
+    friend class TciServerReviewTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -177,6 +178,10 @@ private:
         SliceModel* rxSlice,
         const QString& routeConfirmation = {},
         bool splitOnly = false);
+    void reportVfoBRouteFailure(QWebSocket* client,
+        const TciProtocol::VfoRequest& request,
+        const QString& reason,
+        bool rejectSplit);
     void prepareTxAudio();
     void startTxChrono(QWebSocket* client, int trx);
     void stopTxChrono();
@@ -272,6 +277,7 @@ private:
     QList<PendingRouteCommand> m_pendingRouteCommands;
     bool m_routeTransitionInFlight { false };
     quint64 m_routeTransitionGeneration { 0 };
+    QString m_lastRouteError;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence

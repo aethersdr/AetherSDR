@@ -45,15 +45,8 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
         return { RouteAction::PromoteExisting, m_txSliceId, m_owner };
     }
 
-    for (const TciSliceEndpoint& endpoint : endpoints) {
-        if (endpoint.sliceId != rxSliceId) {
-            m_rxSliceId = rxSliceId;
-            m_txSliceId = endpoint.sliceId;
-            m_owner = TxRouteOwner::TciExisting;
-            return { RouteAction::PromoteExisting, endpoint.sliceId, m_owner };
-        }
-    }
-
+    // A non-TX slice may be an operator's independent receiver. Without an
+    // explicit ownership signal, commandeering and retuning it is unsafe.
     m_rxSliceId = rxSliceId;
     m_txSliceId = -1;
     m_owner = TxRouteOwner::None;

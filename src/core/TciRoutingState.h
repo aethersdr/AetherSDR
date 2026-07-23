@@ -20,7 +20,6 @@ public:
     {
         None,
         External,
-        TciExisting,
         TciCreated,
     };
 
@@ -67,7 +66,7 @@ public:
     }
     bool ownsRoute() const
     {
-        return m_owner == TxRouteOwner::TciExisting || m_owner == TxRouteOwner::TciCreated;
+        return m_owner == TxRouteOwner::TciCreated;
     }
 
 private:

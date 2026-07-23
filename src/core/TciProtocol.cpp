@@ -71,15 +71,20 @@ QString TciProtocol::tciToSmartSDR(const QString& mode)
 
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
-    if (!m_model || !m_model->isConnected()) return nullptr;
-    auto slices = m_model->slices();
+    return resolveSliceForTrx(m_model, trx);
+}
+
+SliceModel* TciProtocol::resolveSliceForTrx(RadioModel* model, int trx)
+{
+    if (!model || !model->isConnected()) return nullptr;
+    const QList<SliceModel*> slices = model->slices();
     if (trx >= 0 && trx < slices.size())
         return slices.at(trx);
 
     // Compatibility fallback for clients that learned raw Flex slice ids from
     // older AetherSDR builds.
-    for (auto* s : m_model->slices()) {
-        if (s->sliceId() == trx) return s;
+    for (auto* s : slices) {
+        if (s && s->sliceId() == trx) return s;
     }
     // Fallback: first slice
     return slices.isEmpty() ? nullptr : slices.first();

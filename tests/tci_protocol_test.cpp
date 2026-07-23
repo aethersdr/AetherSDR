@@ -52,17 +52,17 @@ bool testRoutingPolicy()
     }
 
     routing.reset();
-    QVector<TciSliceEndpoint> reusable { { 4, true }, { 7, false } };
-    decision = routing.resolveVfoB(4, reusable);
-    if (!check(decision.action == Action::PromoteExisting && decision.txSliceId == 7
-                && decision.owner == Owner::TciExisting,
-            "VFO B must reuse a second owned slice before creating one")) {
+    QVector<TciSliceEndpoint> independentReceiver { { 4, true }, { 7, false } };
+    decision = routing.resolveVfoB(4, independentReceiver);
+    if (!check(decision.action == Action::Create && decision.txSliceId < 0
+                && decision.owner == Owner::TciCreated,
+            "VFO B must not commandeer an independent second receiver")) {
         return false;
     }
     if (!check(!routing.setSplitRequested(false)
-                && routing.ownsRoute()
-                && routing.txSliceId() == 7,
-            "WSJT-X steady split false must preserve the programmed VFO B route")) {
+                && !routing.ownsRoute()
+                && routing.txSliceId() < 0,
+            "steady split false must leave the independent receiver untouched")) {
         return false;
     }
 
@@ -72,8 +72,8 @@ bool testRoutingPolicy()
     if (!check(!routing.setSplitRequested(true), "duplicate split true must be idempotent")) {
         return false;
     }
-    if (!check(routing.setSplitRequested(false) && routing.ownsRoute(),
-            "split disable must retain route ownership until reclaim settles")) {
+    if (!check(routing.setSplitRequested(false) && !routing.ownsRoute(),
+            "split disable without a route must remain ownership-free")) {
         return false;
     }
 
@@ -126,27 +126,29 @@ bool testWsjtxRoutingContracts()
         return false;
     }
 
-    // With a reusable second slice, WSJT-X must promote it instead of
-    // allocating a third slice, then preserve it across steady split false.
+    // A second non-TX slice may be an operator's independent receiver. WSJT-X
+    // must leave it untouched and create a separately owned VFO B route.
     TciRoutingState multiRoute;
     TciProtocol multiProtocol(nullptr, &multiRoute);
     multiProtocol.handleCommand(QStringLiteral("split_enable:0,false"));
     const auto multiSplit = multiProtocol.takeSplitRequest();
-    QVector<TciSliceEndpoint> reusableTopology { { 4, true }, { 7, false } };
-    const auto reusableDecision = multiRoute.resolveVfoB(4, reusableTopology);
+    QVector<TciSliceEndpoint> occupiedTopology { { 4, true }, { 7, false } };
+    const auto occupiedDecision = multiRoute.resolveVfoB(4, occupiedTopology);
     if (!check(multiSplit && !multiRoute.setSplitRequested(multiSplit->enabled)
-                && reusableDecision.action == Action::PromoteExisting
-                && reusableDecision.txSliceId == 7,
-            "WSJT-X multi-slice VFO B must reuse the second slice")) {
+                && occupiedDecision.action == Action::Create,
+            "WSJT-X multi-slice VFO B must preserve an independent receiver")) {
         return false;
     }
     multiProtocol.handleCommand(QStringLiteral("vfo:0,1,14076000"));
     const auto multiVfo = multiProtocol.takeVfoRequest();
-    QVector<TciSliceEndpoint> promotedTopology { { 4, false }, { 7, true } };
+    multiRoute.bindCreatedRoute(4, 9);
+    QVector<TciSliceEndpoint> createdMultiTopology {
+        { 4, false }, { 7, false }, { 9, true }
+    };
     if (!check(multiVfo && multiVfo->channel == 1
-                && multiRoute.owner() == Owner::TciExisting
-                && multiRoute.resolvePttSlice(4, promotedTopology) == 7,
-            "WSJT-X multi-slice TRX must key the promoted VFO B slice")) {
+                && multiRoute.owner() == Owner::TciCreated
+                && multiRoute.resolvePttSlice(4, createdMultiTopology) == 9,
+            "WSJT-X multi-slice TRX must key the new route, not the other receiver")) {
         return false;
     }
 

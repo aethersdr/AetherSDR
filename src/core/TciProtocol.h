@@ -152,6 +152,11 @@ public:
     // slice is not in the model's list.
     static int tciTrxForSlice(RadioModel* model, const SliceModel* slice);
 
+    // Resolve a contiguous TCI receiver index, then the legacy raw Flex slice
+    // id, then the first slice for compatibility. Shared by parser and server
+    // command paths so GET and SET never target different receivers.
+    static SliceModel* resolveSliceForTrx(RadioModel* model, int trx);
+
     static long long mhzToHz(double mhz);
 
     // IQ center (DDS) for a slice = its populated panadapter center in Hz.

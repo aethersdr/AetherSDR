@@ -615,8 +615,6 @@ QJsonObject TciServer::routingSnapshot() const
         switch (m_routingState.owner()) {
         case TciRoutingState::TxRouteOwner::External:
             return QStringLiteral("external");
-        case TciRoutingState::TxRouteOwner::TciExisting:
-            return QStringLiteral("tci-existing");
         case TciRoutingState::TxRouteOwner::TciCreated:
             return QStringLiteral("tci-created");
         case TciRoutingState::TxRouteOwner::None:
@@ -694,6 +692,7 @@ QJsonObject TciServer::routingSnapshot() const
         {QStringLiteral("pendingVfoBCreate"), m_pendingVfoBCreate.has_value()},
         {QStringLiteral("pendingTrx"), m_pendingTrxRequest.has_value()},
         {QStringLiteral("pendingRoutes"), pendingRoutes},
+        {QStringLiteral("lastRouteError"), m_lastRouteError},
         {QStringLiteral("ptt"), ptt},
         {QStringLiteral("endpoints"), endpoints},
     };
@@ -944,19 +943,7 @@ void TciServer::onTextMessage(const QString& msg)
 
 SliceModel* TciServer::sliceForTrx(int trx) const
 {
-    if (!m_model || !m_model->isConnected()) {
-        return nullptr;
-    }
-    const QList<SliceModel*> slices = m_model->slices();
-    if (trx >= 0 && trx < slices.size()) {
-        return slices.at(trx);
-    }
-    for (SliceModel* slice : slices) {
-        if (slice && slice->sliceId() == trx) {
-            return slice;
-        }
-    }
-    return nullptr;
+    return TciProtocol::resolveSliceForTrx(m_model, trx);
 }
 
 QVector<TciSliceEndpoint> TciServer::routingEndpoints() const
@@ -1072,10 +1059,13 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
     const QString& routeConfirmation,
     bool splitOnly)
 {
-    if (!client || !m_model || !rxSlice || m_model->slices().size() >= m_model->maxSlices()) {
-        if (!routeConfirmation.isEmpty()) {
-            m_routingState.setSplitRequested(false);
-        }
+    if (!client || !m_model || !rxSlice) {
+        return;
+    }
+    if (m_model->slices().size() >= m_model->maxSlices()) {
+        reportVfoBRouteFailure(client, request,
+            QStringLiteral("cannot create VFO B: radio slice capacity reached"),
+            !routeConfirmation.isEmpty());
         return;
     }
 
@@ -1108,11 +1098,10 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
         const PendingVfoBCreate pending = *self->m_pendingVfoBCreate;
         self->m_pendingVfoBCreate.reset();
         if (code != 0) {
-            if (!pending.routeConfirmation.isEmpty()) {
-                self->m_routingState.setSplitRequested(false);
-            }
-            qCWarning(lcCat) << "TCI: VFO-B slice create rejected"
-                             << "code=" << Qt::hex << code << "body=" << body;
+            self->reportVfoBRouteFailure(pending.client, pending.request,
+                QStringLiteral("VFO-B slice create rejected: code=%1 body=%2")
+                    .arg(QString::number(code, 16), body),
+                !pending.routeConfirmation.isEmpty());
             self->finishRouteTransition(pending.transitionGeneration);
             return;
         }
@@ -1120,10 +1109,9 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
         bool idOk = false;
         const int sliceId = body.section(QLatin1Char(','), 0, 0).trimmed().toInt(&idOk);
         if (!idOk || !self->m_model || !self->m_model->slice(sliceId)) {
-            if (!pending.routeConfirmation.isEmpty()) {
-                self->m_routingState.setSplitRequested(false);
-            }
-            qCWarning(lcCat) << "TCI: VFO-B create reply had no settled slice" << body;
+            self->reportVfoBRouteFailure(pending.client, pending.request,
+                QStringLiteral("VFO-B create reply had no settled slice: %1").arg(body),
+                !pending.routeConfirmation.isEmpty());
             self->finishRouteTransition(pending.transitionGeneration);
             return;
         }
@@ -1156,9 +1144,14 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
                 return;
             }
             if (!pending.client || !selected) {
-                if (!pending.routeConfirmation.isEmpty()) {
-                    self->m_routingState.setSplitRequested(false);
+                if (self->m_model) {
+                    self->m_model->sendCommand(
+                        QStringLiteral("slice remove %1").arg(sliceId));
                 }
+                self->m_routingState.clearTciRoute();
+                self->reportVfoBRouteFailure(pending.client, pending.request,
+                    QStringLiteral("created VFO-B slice could not be selected for TX"),
+                    !pending.routeConfirmation.isEmpty());
                 self->finishRouteTransition(pending.transitionGeneration);
                 return;
             }
@@ -1171,6 +1164,32 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
             self->finishRouteTransition(pending.transitionGeneration);
         });
     });
+}
+
+void TciServer::reportVfoBRouteFailure(QWebSocket* client,
+    const TciProtocol::VfoRequest& request,
+    const QString& reason,
+    bool rejectSplit)
+{
+    m_lastRouteError = reason;
+    qCWarning(lcCat).noquote() << "TCI:" << reason;
+
+    if (rejectSplit) {
+        m_routingState.setSplitRequested(false);
+        broadcast(QStringLiteral("split_enable:%1,false;").arg(request.trx));
+    }
+
+    // TCI has no standard error frame. Return the authoritative channel-1
+    // projection so clients stop waiting for an acknowledgement and can detect
+    // that the requested frequency was not accepted.
+    if (client) {
+        if (SliceModel* fallback = sliceForTrx(request.trx)) {
+            replyText(client,
+                QStringLiteral("vfo:%1,1,%2;")
+                    .arg(request.trx)
+                    .arg(TciProtocol::mhzToHz(fallback->frequency())));
+        }
+    }
 }
 
 void TciServer::handleVfoRequest(QWebSocket* client, const TciProtocol::VfoRequest& request)
@@ -1413,6 +1432,14 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         return;
     }
     if (!request.transmitting) {
+        if (m_pendingTrxRequest && m_pendingTrxRequest->client == client) {
+            m_pendingTrxRequest.reset();
+        }
+        for (int i = m_pendingRouteCommands.size() - 1; i >= 0; --i) {
+            if (m_pendingRouteCommands.at(i).client == client) {
+                m_pendingRouteCommands.removeAt(i);
+            }
+        }
         // A client may only release a transmit session it owns. In particular,
         // never let a TCI "trx:false" unkey an operator, VOX, or another client.
         if (!m_tciPttClient || m_tciPttClient != client) {
@@ -1495,8 +1522,6 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
 
         if (wantsAudio) {
             self->prepareTxAudio();
-        }
-        if (wantsAudio) {
             self->m_model->setTransmit(true, TransmitModel::PttSource::Dax);
         } else {
             // Hardware-style TCI PTT shares the same preflight and Quindar

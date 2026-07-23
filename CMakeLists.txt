@@ -3860,6 +3860,13 @@ if(Qt6WebSockets_FOUND)
         aethercore Qt6::Core Qt6::Network Qt6::WebSockets
     )
     add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
+    target_include_directories(tci_server_review_test PRIVATE src tests)
+    target_link_libraries(tci_server_review_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.

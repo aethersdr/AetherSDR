@@ -2029,9 +2029,12 @@ command in both directions in a bounded 512-entry buffer. `trace export`
 atomically writes the complete retained transcript as JSON.
 
 `routes` is a read-only snapshot of the server's stable Flex slice routing,
-including route ownership (`external`, `tci-existing`, or `tci-created`),
+including route ownership (`external` or `tci-created`),
 transition/deferred-command state, PTT ownership, and the current contiguous
-TCI receiver projection. `tci status` and `tci routes` remain available when
+TCI receiver projection. `lastRouteError` records the latest route allocation
+or TX-selection failure; when no VFO-B slice can be created, the server also
+returns the authoritative channel-1 projection so a client does not wait for a
+missing acknowledgement. `tci status` and `tci routes` remain available when
 the bridge is in observe-only mode; `send`, trace control/export, start, and
 stop are blocked.
 
