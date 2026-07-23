@@ -182,6 +182,15 @@ jobs:
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
             "-DENABLE_NVIDIA_AFX=ON",
             "-DREQUIRE_SERIALPORT=ON",
+            # ASR OFF for this PR sanity check: its job is Windows-only APP
+            # regressions (WASAPI, Q_OS_WIN), not ASR. Building whisper/ggml from
+            # source here linked the large static libs into AetherSDR.exe, and that
+            # memory-heavy link concurrently starved the small test-exe links on the
+            # 16 GB runner (link.exe stalling on a different test each run — dstar,
+            # CAT_Flex — none of which hang on main, which has no ASR). ASR-on-Windows
+            # is fully built + linked + packaged by the windows-installer workflow,
+            # so nothing is lost here.
+            "-DENABLE_ASR=OFF",
             "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
           )
@@ -198,7 +207,17 @@ jobs:
         run: cmake --build build --target build_opus -j $env:NUMBER_OF_PROCESSORS
 
       - name: Build
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+        # This job's purpose is to catch Windows-only compile/link regressions
+        # (WASAPI, Q_OS_WIN paths) that Linux/macOS CI can't see — served by
+        # linking the app plus the handful of portability tests run below, NOT the
+        # default `all` target. Building every *_test.exe relinked the same
+        # libraries into hundreds of tiny executables for no added Windows coverage
+        # (cross-platform test linkage is already exercised by the Linux/macOS CI
+        # that build AND run the full suite), and that link tail was stalling for
+        # hours on the runner. timeout-minutes fails fast (with logs) if it ever
+        # hangs again, instead of running to the 6-hour job limit.
+        timeout-minutes: 45
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test
 
       - name: Test ThumbDV portability paths
         run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure

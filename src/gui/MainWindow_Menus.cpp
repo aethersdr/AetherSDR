@@ -8,6 +8,10 @@
 
 #include "MainWindow.h"
 
+#ifdef AETHER_ASR_ENABLED
+#include "CopyAssistController.h"
+#include "CopyAssistPanel.h"
+#endif
 #include "AppletPanel.h"
 #include "DaxApplet.h"
 #include "PanadapterApplet.h"
@@ -993,6 +997,9 @@ void MainWindow::buildMenuBar()
     connect(packetDecoderAction, &QAction::triggered,
             this, &MainWindow::showAx25HfPacketDecodeDialog);
 
+    // Copy Assist has no View-menu entry: it's shown/hidden by the status-bar
+    // "ASR" toggle (and the keyboard shortcut) via showCopyAssist().
+
     auto* smartSpotAct = viewMenu->addAction("Smart Spot Filtering");
     smartSpotAct->setCheckable(true);
     smartSpotAct->setToolTip(
@@ -1350,5 +1357,31 @@ void MainWindow::buildMenuBar()
         });
     });
 }
+
+#ifdef AETHER_ASR_ENABLED
+void MainWindow::showCopyAssist()
+{
+    // Dock the Copy Assist panel under the waterfall of the active panadapter,
+    // the same way the CW decode panel docks. First open builds the panel and
+    // wires the ASR controller to it; subsequent invocations toggle visibility.
+    if (!m_copyAssistController) {
+        PanadapterApplet* applet = m_panStack ? m_panStack->activeApplet() : nullptr;
+        if (!applet) {
+            return;
+        }
+        m_copyAssistApplet = applet;
+        m_copyAssistController = new CopyAssistController(m_audio, applet->copyAssistPanel(), this);
+        // Seed the current frequency so the first "on start" log marker is correct
+        // even before any retune fires.
+        if (auto* s = activeSlice()) {
+            m_copyAssistController->setCurrentFrequency(s->frequency());
+        }
+    }
+    if (m_copyAssistApplet) {
+        m_copyAssistApplet->setCopyAssistVisible(!m_copyAssistApplet->isCopyAssistVisible());
+    }
+    updateKeyerAvailability(); // keep the status-bar ASR indicator in sync
+}
+#endif
 
 } // namespace AetherSDR

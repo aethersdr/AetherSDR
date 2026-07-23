@@ -549,6 +549,14 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         toggleConnectionDialog();
         return true;
     }
+#ifdef AETHER_ASR_ENABLED
+    if (obj == m_asrIndicator && event->type() == QEvent::MouseButtonPress) {
+        if (!m_asrIndicator->isEnabled()) return true;
+        showCopyAssist();           // toggles the docked Copy Assist panel
+        updateKeyerAvailability();  // refresh the indicator's active/available style
+        return true;
+    }
+#endif
     if (obj == m_cwxIndicator && event->type() == QEvent::MouseButtonPress) {
         if (!m_cwxIndicator->isEnabled()) return true;
         bool show = !m_cwxPanel->isVisible();
