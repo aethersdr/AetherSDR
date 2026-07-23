@@ -995,11 +995,9 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 
     if (tileWidth == 0 || tileHeight == 0) return;
 
-    // FrameLowFreq and BinBandwidth arrive as either VitaFrequency (Hz × 2^20)
-    // or plain Hz; disambiguate on the raw integer magnitude so there is no
-    // upper frequency ceiling. The previous "divide then reject results above
-    // 1000 MHz" heuristic blacked out the waterfall for every transverter above
-    // 1 GHz (#3449, #1843, #1928, #2835). See VitaTileFrequency.h.
+    // FrameLowFreq and BinBandwidth are VITA fixed-point values (Hz × 2^20).
+    // Decode them unconditionally so a tile that overhangs slightly below DC
+    // cannot be mistaken for plain Hz (#4412). See VitaTileFrequency.h.
     const auto tileFreq = AetherSDR::Vita::decodeTileFrequencyMhz(frameLowRaw, binBwRaw);
     const double lowFreqMhz = tileFreq.lowMhz;
     const double binBwMhz   = tileFreq.binBwMhz;

@@ -1,5 +1,6 @@
 #include "SpectrumWidget.h"
 #include "DbmRangeTransition.h"
+#include "DssDcEdgeMath.h"
 #include "KiwiSdrTraceMath.h"
 #include "NativeWidgetTopology.h"
 #include "PanadapterRenderScheduler.h"
@@ -4336,18 +4337,26 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
                                            double frameBandwidthMhz,
                                            bool updateLiveSurface)
 {
+    QVector<float> repairedBins;
+    const QVector<float>* dssBins = &binsDbm;
+    if (!m_kiwiSdrWaterfallActive
+        && DssDcEdgeMath::viewStartsAtDc(m_centerMhz, m_bandwidthMhz)) {
+        repairedBins = DssDcEdgeMath::flattenLeadingSpike(binsDbm);
+        dssBins = &repairedBins;
+    }
+
     // Keep live DSS and retained scrollback DSS on the same waterfall-row cadence.
     if (m_wfLive && updateLiveSurface) {
         if (m_frequencyPreviewActive && m_waterfallWriteVisible) {
             const QVector<float>& previewBins = remapPreviewDssRow(
-                binsDbm, frameCenterMhz, frameBandwidthMhz);
+                *dssBins, frameCenterMhz, frameBandwidthMhz);
             pushDssLiveRow(m_dss, previewBins, false);
             ++m_frequencyPreviewRemappedDssRows;
         } else {
-            pushDssLiveRow(m_dss, binsDbm, !m_waterfallWriteVisible);
+            pushDssLiveRow(m_dss, *dssBins, !m_waterfallWriteVisible);
         }
     }
-    appendDssHistoryRow(binsDbm, frameCenterMhz, frameBandwidthMhz);
+    appendDssHistoryRow(*dssBins, frameCenterMhz, frameBandwidthMhz);
 }
 
 void SpectrumWidget::pushDssLiveRow(DssRenderer& dss,
@@ -10242,8 +10251,15 @@ void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
     const bool live = kiwiStream
         ? activeKiwiWaterfallState().live
         : m_nativeWaterfallState.live;
+    QVector<float> repairedBins;
+    const QVector<float>* dssBins = &binsDbm;
+    if (!kiwiStream
+        && DssDcEdgeMath::viewStartsAtDc(m_centerMhz, m_bandwidthMhz)) {
+        repairedBins = DssDcEdgeMath::flattenLeadingSpike(binsDbm);
+        dssBins = &repairedBins;
+    }
     if (live && updateLiveSurface) {
-        pushDssLiveRow(dss, binsDbm, true);
+        pushDssLiveRow(dss, *dssBins, true);
     }
 
     const FrequencyFrame requestedFrame{frameCenterMhz, frameBandwidthMhz};
@@ -10253,7 +10269,7 @@ void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
     const float fallbackDbm = kiwiStream
         ? kKiwiSdrWaterfallMinDbm
         : m_refLevel - m_dynamicRange;
-    retainDssHistoryRow(dss, binsDbm,
+    retainDssHistoryRow(dss, *dssBins,
                         stampFrame.centerMhz, stampFrame.bandwidthMhz,
                         fallbackDbm);
 }
