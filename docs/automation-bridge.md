@@ -57,6 +57,15 @@ Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting; a bridge
 run reconnects to the last radio just as an interactive launch does. Use the
 `connect` verb to drive a specific radio, or clear the setting to start idle.
 
+Running several bridges in parallel? Each one honours `AutoConnectToLastRadio`,
+so they all try to reconnect to the same saved radio. When a radio's client
+slots are already taken (or it is a single-client / non-multiFLEX radio), a
+bridge run **declines** rather than prompting or evicting another client — it
+stays disconnected and logs the decline instead of blocking on a dialog nobody
+can click. Give at most one instance the shared radio and clear
+`AutoConnectToLastRadio` on the others (or drive them with an explicit
+`connect`) so they start idle by design rather than by losing the slot race.
+
 Parallel worktrees should give each bridge a stable automation identity and a
 human-readable agent name:
 

@@ -504,6 +504,24 @@ static constexpr const char* kPaTempUnitSettingKey = "PaTempDisplayUnit";
 // isCwMomentaryActionId moved to MainWindow_Controllers.cpp (#3351 Phase 2a).
 
 // Shortcut-state helpers (textInputCaptured/shortcutGuard/...) lives in MainWindow_Shortcuts.cpp (#3351 Phase 1c).
+
+// Under the automation bridge there is no operator to answer a client-slot
+// contention dialog, so blocking on one hangs the headless instance (#4401).
+// A slot dialog is only reached once a slot is contended; in bridge mode we
+// decline instead of prompting — never auto-disconnecting another client, so a
+// parallel test instance can't steal a live radio's slot. Returns true when the
+// caller should short-circuit to "declined" (return false) instead of showing
+// the modal.
+static bool automationDeclinesClientSlotDialog(const QString& radioLabel)
+{
+    if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION"))
+        return false;
+    qCInfo(lcGui).noquote()
+        << "Automation: declining slot-contended connect to" << radioLabel
+        << "— no operator to resolve the client-slot dialog (#4401)";
+    return true;
+}
+
 bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
                                                QList<quint32>* disconnectHandles)
 {
@@ -515,6 +533,8 @@ bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
     // When multiFLEX is disabled, any connected client blocks us — show the
     // Connected Stations dialog so the user can disconnect them first.
     if (!info.multiFlexEnabled && !clients.isEmpty()) {
+        if (automationDeclinesClientSlotDialog(info.model))
+            return false;
         ConnectedStationsDialog::RadioMeta meta;
         meta.model    = info.model;
         meta.nickname = info.nickname;
@@ -546,6 +566,8 @@ bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
     if (clients.isEmpty() || clients.size() < maxSlices)
         return true;
 
+    if (automationDeclinesClientSlotDialog(info.model))
+        return false;
     ClientDisconnectDialog dialog(clients, maxSlices, this);
     if (dialog.exec() != QDialog::Accepted)
         return false;
@@ -572,6 +594,8 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
         if (info.licensedClients == 1)
             qCWarning(lcGui) << "MainWindow: WAN licensedClients=1 (may be default) — "
                                 "showing conflict dialog as a precaution";
+        if (automationDeclinesClientSlotDialog(info.model))
+            return false;
         ConnectedStationsDialog::RadioMeta meta;
         meta.model    = info.model;
         meta.nickname = info.nickname;
@@ -603,6 +627,8 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
     if (clients.isEmpty() || clients.size() < maxSlices)
         return true;
 
+    if (automationDeclinesClientSlotDialog(info.model))
+        return false;
     ClientDisconnectDialog dialog(clients, maxSlices, this);
     if (dialog.exec() != QDialog::Accepted)
         return false;
