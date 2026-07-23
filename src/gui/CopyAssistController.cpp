@@ -194,26 +194,23 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // reliable on Copy Assist's short VAD segments (it keys off ~30 s of audio).
     // The backend still handles "auto" (see WhisperAsrBackend::transcribe), left
     // dormant so re-adding it is a one-line change once detection is understood.
-    QString savedLang =
-        AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
-    bool savedLangSupported = false;
-    for (const AsrLanguage& lang : asrWhisperLanguages()) {
+    const std::vector<AsrLanguage> languages = asrWhisperLanguages();
+    for (const AsrLanguage& lang : languages) {
         m_settings->addLanguage(lang.code, lang.name);
-        if (lang.code == savedLang) {
-            savedLangSupported = true;
-        }
     }
-    if (!savedLangSupported) {
-        // Fall back to English for any value the model can't decode — mirrors the
-        // GPU-device clamp above. This also migrates the retired "auto" sentinel
-        // and any empty/stale code, keeping the dropdown and the engine in sync
-        // (a lingering "auto" would otherwise still trigger detection).
-        savedLang = QStringLiteral("en");
+    const QString savedLang =
+        AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
+    // Fall back to English for any value the model can't decode — mirrors the
+    // GPU-device clamp above. This also migrates the retired "auto" sentinel and
+    // any empty/stale code, keeping the dropdown and the engine in sync (a
+    // lingering "auto" would otherwise still trigger detection).
+    const QString effectiveLang = asrLanguageOrDefault(savedLang, languages);
+    if (effectiveLang != savedLang) {
         auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrLanguage"), savedLang);
+        st.setValue(QStringLiteral("AsrLanguage"), effectiveLang);
         st.save();
     }
-    m_settings->setCurrentLanguage(savedLang);
+    m_settings->setCurrentLanguage(effectiveLang);
     // The language selector only affects whisper/remote; sherpa-onnx takes its
     // language from the model, so hide it when sherpa is the active backend.
     m_settings->setLanguageSelectorVisible(m_backend != AsrBackendKind::SherpaOnnx);

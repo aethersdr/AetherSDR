@@ -99,14 +99,16 @@ AsrTranscript WhisperAsrBackend::transcribe(const std::vector<float>& pcm16k, QS
     wparams.print_special = false;
     wparams.suppress_blank = true;
 
-    // "auto" (or empty) → let whisper detect the language from the audio; any
-    // other value pins decoding to that language. whisper_full() treats a
-    // language of "auto" as detection on its own (see whisper.cpp), but set the
-    // flag explicitly too so the intent is unambiguous.
+    // "auto" (or empty) → let whisper detect the language from the audio and
+    // then transcribe it; any other value pins decoding to that language.
+    // whisper_full() treats a language of "auto" as detect-then-transcribe on
+    // its own. detect_language MUST stay false: when it is true whisper detects
+    // the language and returns early WITHOUT transcribing (whisper.cpp:
+    // `if (params.detect_language) return 0;`), which would yield empty output.
     const QByteArray langUtf8 = m_language.toUtf8();
     const bool autoDetect = langUtf8.isEmpty() || langUtf8 == "auto";
     wparams.language = autoDetect ? "auto" : langUtf8.constData();
-    wparams.detect_language = autoDetect;
+    wparams.detect_language = false;
 
     if (whisper_full(m_ctx, wparams, pcm16k.data(), static_cast<int>(pcm16k.size())) != 0) {
         if (error != nullptr) {

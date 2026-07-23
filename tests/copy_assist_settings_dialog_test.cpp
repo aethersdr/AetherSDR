@@ -4,6 +4,8 @@
 
 #include "gui/CopyAssistSettingsDialog.h"
 
+#include "asr/WhisperAsrBackend.h" // asrLanguageOrDefault (header-inline, whisper-free)
+
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
@@ -97,6 +99,25 @@ int main(int argc, char** argv)
         expect(langCombo != nullptr && langCombo->isVisibleTo(&dlg)
                    && langLabel != nullptr && langLabel->isVisibleTo(&dlg),
                "setLanguageSelectorVisible(true) shows label + combo together");
+    }
+
+    // ---- asrLanguageOrDefault: validate/migrate a saved language code -----
+    {
+        const std::vector<AsrLanguage> supported = {
+            {QStringLiteral("en"), QStringLiteral("English")},
+            {QStringLiteral("es"), QStringLiteral("Spanish")},
+            {QStringLiteral("fr"), QStringLiteral("French")},
+        };
+        expect(asrLanguageOrDefault(QStringLiteral("fr"), supported) == QStringLiteral("fr"),
+               "asrLanguageOrDefault keeps a supported code");
+        expect(asrLanguageOrDefault(QStringLiteral("auto"), supported) == QStringLiteral("en"),
+               "asrLanguageOrDefault migrates the retired \"auto\" sentinel to en");
+        expect(asrLanguageOrDefault(QString(), supported) == QStringLiteral("en"),
+               "asrLanguageOrDefault migrates an empty code to en");
+        expect(asrLanguageOrDefault(QStringLiteral("zz-nonesuch"), supported) == QStringLiteral("en"),
+               "asrLanguageOrDefault falls back to en for an unsupported code");
+        expect(asrLanguageOrDefault(QStringLiteral("en"), {}) == QStringLiteral("en"),
+               "asrLanguageOrDefault falls back to en when the list is empty");
     }
 
     // ---- Transcript file logging: state + toggle signal -------------------
