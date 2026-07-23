@@ -43,6 +43,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import socket
 import stat
 import subprocess
@@ -253,6 +254,10 @@ def _wait_for_owned_app(instance, timeout=25):
         try:
             ping = _request_at(instance["socket"], {"cmd": "ping"}, timeout=2,
                                authenticated=False)
+            # A tokenless privileged call must be REFUSED, not merely advertised
+            # as required — this demonstrates enforcement, not just the flag.
+            tokenless = _request_at(instance["socket"], {"cmd": "whoami"},
+                                    timeout=2, authenticated=False)
             whoami = _request_at(instance["socket"], {"cmd": "whoami"}, timeout=2)
         except (ConnectionError, FileNotFoundError, OSError, ValueError) as exc:
             last_error = str(exc)
@@ -260,6 +265,9 @@ def _wait_for_owned_app(instance, timeout=25):
             continue
         if not isinstance(ping, dict) or not ping.get("authRequired"):
             raise RuntimeError("fresh-build bridge did not require authentication")
+        if isinstance(tokenless, dict) and tokenless.get("ok"):
+            raise RuntimeError(
+                "fresh-build bridge accepted a tokenless privileged command")
         if not isinstance(whoami, dict) or not whoami.get("ok"):
             raise RuntimeError("authenticated whoami failed")
         if int(whoami.get("pid", -1)) != instance["process"].pid:
@@ -296,6 +304,25 @@ def _remove_owned_socket(instance):
         pass  # app-owned socket cleanup is best-effort after process exit
 
 
+def _signal_owned_process(process, sig):
+    """Signal the child's whole session, not just its PID.
+
+    The child is launched with start_new_session=True, so it is a session
+    leader (pgid == pid) and any helper subprocesses it spawns share that
+    group; signalling the group reaps them too. Fall back to the single
+    process if the group is already gone or on Windows (no POSIX groups)."""
+    if sys.platform != "win32":
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # group already reaped, or racing exit — fall back below
+    try:
+        (process.kill if sig == signal.SIGKILL else process.terminate)()
+    except OSError:
+        pass
+
+
 def _stop_owned_app():
     global _owned_app
     instance = _owned_app
@@ -303,17 +330,11 @@ def _stop_owned_app():
         return {"ok": True, "running": False}
     process = instance["process"]
     if process.poll() is None:
-        try:
-            process.terminate()
-        except OSError:
-            pass
+        _signal_owned_process(process, signal.SIGTERM)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            try:
-                process.kill()
-            except OSError:
-                pass
+            _signal_owned_process(process, signal.SIGKILL)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -340,6 +361,28 @@ def _stop_owned_app():
 
 
 atexit.register(_stop_owned_app)
+
+
+def _handle_shutdown_signal(signum, _frame):
+    # atexit does NOT run when the process is killed by a signal, and an MCP
+    # host shuts its server down with SIGTERM. Run the same cleanups atexit
+    # would (reap the owned child so the app, its socket, and the shared
+    # app/radio lock don't leak; release the held gesture transport), then die
+    # with the default disposition so the exit status still reflects the signal.
+    _stop_owned_app()
+    _close_gesture_bridge()
+    try:
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    except (OSError, ValueError):
+        os._exit(128 + signum)
+
+
+for _shutdown_signal in (signal.SIGTERM, signal.SIGINT):
+    try:
+        signal.signal(_shutdown_signal, _handle_shutdown_signal)
+    except (OSError, ValueError, AttributeError):
+        pass  # not the main thread, or the platform lacks this signal
 
 
 # --------------------------------------------------------------------------
@@ -924,6 +967,16 @@ def handle_tool(name, args):
         entries = discover_sockets()
         status = {"instances": entries, "active": None,
                   "token_configured_here": bool(os.environ.get("AETHER_MCP_TOKEN"))}
+        # A running owned app uses an explicit socket that never writes a
+        # discovery file, yet bridge_request routes to it; surface it so status
+        # reflects where commands actually go, not just discovered instances.
+        if _owned_app is not None and _owned_app["process"].poll() is None:
+            status["owned_instance"] = {
+                "socket": _owned_app["socket"],
+                "label": _owned_app["label"],
+                "pid": _owned_app["process"].pid,
+                "note": "MCP-owned fresh build; bridge commands route here.",
+            }
         if entries or os.environ.get("AETHER_MCP_SOCKET"):
             # ping needs no token and reveals whether the bridge requires one.
             try:

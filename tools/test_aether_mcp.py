@@ -312,6 +312,7 @@ def test_secure_app_instance():
     bridge_requests = []
     tx_allowed = [False]
     ignore_stop = [False]
+    accept_tokenless = [False]  # simulate a bridge that advertises but doesn't enforce auth
 
     class _Process:
         next_pid = 4200
@@ -352,6 +353,13 @@ def test_secure_app_instance():
             bridge_requests.append(obj)
             if obj.get("cmd") == "ping":
                 return {"ok": True, "authRequired": True}
+            # Model the real bridge's shared-secret gate: a privileged command
+            # without the matching token is refused (never ok). This lets the
+            # launch proof assert an actual tokenless rejection, not just the
+            # advertised authRequired flag.
+            if (obj.get("token") != os.environ.get("AETHER_MCP_TOKEN")
+                    and not accept_tokenless[0]):
+                return {"error": "unauthorized: this bridge requires a token"}
             instance = aether_mcp._owned_app
             return {
                 "ok": True,
@@ -409,6 +417,8 @@ def test_secure_app_instance():
                   and child_env.get("AETHER_AUTOMATION_IDENTITY") == launched.get("socket")
                   and child_env.get("AETHER_AUTOMATION_AGENT_NAME") == "secure-proof"
                   and "AETHER_AUTOMATION_ALLOW_TX" not in child_env, str(child_env.keys()))
+            whoami_reqs = [req for req in bridge_requests
+                           if req.get("cmd") == "whoami"]
             check("app_instance verifies exact authenticated identity",
                   launched.get("authenticated") is True
                   and launched.get("authRequired") is True
@@ -416,8 +426,12 @@ def test_secure_app_instance():
                   and launched.get("txAllowed") is False
                   and all("token" not in req for req in bridge_requests
                           if req.get("cmd") == "ping")
-                  and all(req.get("token") == "runtime-only-secret"
-                          for req in bridge_requests if req.get("cmd") == "whoami"),
+                  # The authenticated identity check carries the runtime token.
+                  and any(req.get("token") == "runtime-only-secret"
+                          for req in whoami_reqs)
+                  # The launch proof also sends a TOKENLESS whoami and requires
+                  # the bridge to refuse it — enforcement, not just the flag.
+                  and any("token" not in req for req in whoami_reqs),
                   str(launched))
             check("owned instance becomes the wrapper bridge target",
                   aether_mcp.bridge_socket_path() == launched.get("socket"), str(launched))
@@ -463,6 +477,20 @@ def test_secure_app_instance():
                   and refused_stop.get("running") is True
                   and aether_mcp._owned_app is not None, str(refused_stop))
             ignore_stop[0] = False
+            # The stubborn instance is reapable again now — clear it before the
+            # next launch (which refuses while an instance is still owned).
+            aether_mcp.handle_tool("app_instance", {"action": "stop"})
+
+            # #3: a bridge that ADVERTISES authRequired but ACCEPTS a tokenless
+            # privileged command must be refused (fail closed), not launched.
+            accept_tokenless[0] = True
+            insecure = aether_mcp.handle_tool(
+                "app_instance", {"action": "launch", "worktree": str(worktree),
+                                 "label": "insecure-proof"})
+            check("app_instance refuses a bridge that accepts tokenless commands",
+                  insecure.get("isError") is True
+                  and aether_mcp._owned_app is None, str(insecure))
+            accept_tokenless[0] = False
 
             if sys.platform != "win32":
                 non_socket_path = aether_mcp._instance_socket()
