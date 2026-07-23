@@ -367,6 +367,11 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
 
 CopyAssistController::~CopyAssistController() = default;
 
+PersistentDialog* CopyAssistController::settingsDialog() const
+{
+    return m_settings;
+}
+
 void CopyAssistController::clearDecode()
 {
     m_panel->clearText();

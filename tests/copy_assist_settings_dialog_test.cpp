@@ -1,8 +1,11 @@
 // Offline UI test for CopyAssistSettingsDialog (RFC #4333). Runs offscreen
-// (QT_QPA_PLATFORM=offscreen) and verifies the model-tier + compute-device
+// (QT_QPA_PLATFORM=offscreen) and verifies frameless-window behavior plus the
 // selectors that moved out of CopyAssistPanel into the modeless settings dialog.
 
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "gui/CopyAssistSettingsDialog.h"
+#include "gui/FramelessWindowTitleBar.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -28,9 +31,35 @@ void expect(bool condition, const char* description)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-copy-assist-settings-test"));
     QApplication app(argc, argv);
 
+    AppSettings::instance().load();
+    AppSettings::instance().setValue(QStringLiteral("FramelessWindow"),
+                                     QStringLiteral("True"));
     CopyAssistSettingsDialog dlg;
+    dlg.show();
+    app.processEvents();
+
+    auto* titleBar = dlg.findChild<FramelessWindowTitleBar*>();
+    expect((dlg.windowFlags() & Qt::FramelessWindowHint) != 0,
+           "saved frameless setting applies on construction");
+    expect(titleBar != nullptr && titleBar->isVisible(),
+           "frameless title bar is visible");
+
+    dlg.setFramelessMode(false);
+    app.processEvents();
+    expect((dlg.windowFlags() & Qt::FramelessWindowHint) == 0,
+           "runtime toggle restores native window chrome");
+    expect(titleBar != nullptr && !titleBar->isVisible(),
+           "frameless title bar hides in native mode");
+
+    dlg.setFramelessMode(true);
+    app.processEvents();
+    expect((dlg.windowFlags() & Qt::FramelessWindowHint) != 0,
+           "runtime toggle restores frameless window chrome");
+    expect(titleBar != nullptr && titleBar->isVisible(),
+           "frameless title bar returns in frameless mode");
 
     // ---- Tier selection emits the tier id ---------------------------------
     dlg.addTier(QStringLiteral("base"), QStringLiteral("Base"));
@@ -107,6 +136,15 @@ int main(int argc, char** argv)
         expect(!thrSpy.isEmpty() && thrSpy.last().at(0).toInt() == 65,
                "speakerThresholdChanged emits percent");
     }
+
+    dlg.resize(520, 360);
+    app.processEvents();
+    dlg.close();
+    expect(!AppSettings::instance()
+                .value(QStringLiteral("CopyAssistSettingsDialogGeometry"))
+                .toString()
+                .isEmpty(),
+           "dialog geometry is persisted on close");
 
     std::printf(g_failures == 0 ? "\nCopy Assist settings dialog: ALL PASS\n"
                                 : "\nCopy Assist settings dialog: %d FAILURE(S)\n",

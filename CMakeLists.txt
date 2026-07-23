@@ -3423,6 +3423,13 @@ if (ENABLE_ASR)
     add_executable(copy_assist_settings_dialog_test
         tests/copy_assist_settings_dialog_test.cpp
         src/gui/CopyAssistSettingsDialog.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+        src/core/ThemeManager.cpp
+        src/core/AppSettings.cpp
+        src/core/LogManager.cpp
+        src/core/AsyncLogWriter.cpp
     )
     target_include_directories(copy_assist_settings_dialog_test PRIVATE src)
     target_link_libraries(copy_assist_settings_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)

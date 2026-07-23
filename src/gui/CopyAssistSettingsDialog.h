@@ -1,6 +1,7 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
+
 #include <QString>
 
 class QCheckBox;
@@ -20,7 +21,7 @@ namespace AetherSDR {
 // lightweight offscreen unit test); the controller populates it, wires its
 // signals, and applies any theming. It mirrors the panel's old model/GPU API so
 // the controller's call sites move over unchanged.
-class CopyAssistSettingsDialog : public QDialog {
+class CopyAssistSettingsDialog : public PersistentDialog {
     Q_OBJECT
 public:
     explicit CopyAssistSettingsDialog(QWidget* parent = nullptr);

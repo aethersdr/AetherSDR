@@ -13,16 +13,13 @@
 namespace AetherSDR {
 
 CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
-    : QDialog(parent)
+    : PersistentDialog(tr("Copy Assist Settings"),
+                       QStringLiteral("CopyAssistSettingsDialogGeometry"),
+                       parent)
 {
     setObjectName(QStringLiteral("CopyAssistSettingsDialog"));
-    setWindowTitle(tr("Copy Assist Settings"));
-    setModal(false); // modeless: never blocks the main window
-    // Float above the app as a tool window (out of the taskbar), and let the
-    // window close button just hide it — the panel's ⚙ toggles it back.
-    setWindowFlags(windowFlags() | Qt::Tool);
 
-    auto* root = new QVBoxLayout(this);
+    auto* root = new QVBoxLayout(bodyWidget());
     auto* form = new QFormLayout;
     form->setLabelAlignment(Qt::AlignRight);
 
