@@ -2157,10 +2157,22 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
             : (m_autoBlackBtn && m_autoBlackBtn->isChecked()
                    ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
                    : "Waterfall black level. Decrease to darken the noise floor."));
+        // Set the accessible name unconditionally in both modes (like the gain
+        // and rate sliders) so a kiwi->flex switch never leaves a stale name.
+        // The flex-mode name mirrors applyAutoBlackMode's auto-on/off wording;
+        // applyAutoBlackMode still refreshes it as the mode cycles.
         if (kiwiMode) {
             m_blackSlider->setAccessibleName(tr("KiwiSDR waterfall floor"));
             m_blackSlider->setAccessibleDescription(
                 tr("Sets the minimum KiwiSDR waterfall display level in dBm."));
+        } else {
+            const bool autoOn = (m_autoBlackMode != 0);
+            m_blackSlider->setAccessibleName(autoOn
+                ? tr("Waterfall auto-black offset")
+                : tr("Waterfall black level"));
+            m_blackSlider->setAccessibleDescription(autoOn
+                ? tr("Sets the target offset from the measured noise floor.")
+                : tr("Sets the manual waterfall black level."));
         }
     }
     if (m_rateSlider) {
@@ -2183,7 +2195,8 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
             : "Use the measured noise floor for waterfall black level.");
         m_autoBlackBtn->setAccessibleDescription(kiwiMode
             ? tr("Applies the computed KiwiSDR waterfall floor and ceiling levels.")
-            : tr("Use the measured noise floor for waterfall black level."));
+            : tr("Cycles the waterfall auto-black mode: off (manual black "
+                 "level), software noise-floor estimate, or hardware level."));
         if (kiwiMode) {
             m_autoBlackBtn->setCheckable(true);
             m_autoBlackBtn->setText("Auto");
