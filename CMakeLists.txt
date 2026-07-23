@@ -542,6 +542,7 @@ set(CORE_SOURCES
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
+    src/core/AetherDspModePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
@@ -2864,6 +2865,15 @@ add_executable(audio_output_router_test
 target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
+
+# Pure mode-policy regression for global AetherDSP selection (#4415).
+add_executable(aether_dsp_mode_policy_test
+    tests/aether_dsp_mode_policy_test.cpp
+    src/core/AetherDspModePolicy.cpp
+)
+target_include_directories(aether_dsp_mode_policy_test PRIVATE src)
+target_link_libraries(aether_dsp_mode_policy_test PRIVATE Qt6::Core)
+add_test(NAME aether_dsp_mode_policy_test COMMAND aether_dsp_mode_policy_test)
 
 # Hardware-free state-machine coverage for the opt-in TX capture health
 # summary. Reproduces the Qt pull-mode Active -> Idle/full-buffer signature and
