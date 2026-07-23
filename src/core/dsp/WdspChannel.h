@@ -93,6 +93,7 @@ private:
 
     static bool validateConfig(const Config& config, std::string* error) noexcept;
     static int wdspMode(Mode mode) noexcept;
+    static std::size_t computeOutputBlockSize(const Config& config) noexcept;
 
     void open() noexcept;
     void close() noexcept;
@@ -101,6 +102,15 @@ private:
 
     int m_channelId = -1;
     Config m_config;
+    // Fixed for a given Config; cached at open()/reconfigure() so the real-time
+    // processIq() buffer-size check does not repeat a divide every block.
+    std::size_t m_outputBlockSize = 0;
+    // These two coordinate the real-time processIq() against control-thread
+    // operations. The handshake is Dekker-style — each side stores its own flag
+    // then reads the other's — which is only correct under sequential
+    // consistency, so every access below uses memory_order_seq_cst. Do NOT relax
+    // these to acquire/release: acq_rel does not order a store then a load of a
+    // different atomic across threads, and both sides could then proceed at once.
     std::atomic<unsigned> m_callbacksInFlight {0};
     std::atomic<bool> m_controlOperation {false};
     bool m_open = false;

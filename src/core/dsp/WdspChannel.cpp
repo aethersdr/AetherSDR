@@ -7,6 +7,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <thread>
 
 namespace {
 
@@ -78,13 +79,17 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
 WdspChannel::WdspChannel(int channelId, const Config& config) noexcept
     : m_channelId(channelId)
     , m_config(config)
+    , m_outputBlockSize(computeOutputBlockSize(config))
 {
 }
 
 WdspChannel::~WdspChannel()
 {
-    m_controlOperation.store(true, std::memory_order_release);
-    while (m_callbacksInFlight.load(std::memory_order_acquire) != 0) {
+    m_controlOperation.store(true, std::memory_order_seq_cst);
+    while (m_callbacksInFlight.load(std::memory_order_seq_cst) != 0) {
+        // Yield to the real-time thread we are draining rather than burning a
+        // core; avoids priority inversion if it was preempted mid-fexchange2.
+        std::this_thread::yield();
     }
     close();
     releaseChannelId(m_channelId);
@@ -96,16 +101,16 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                                                   std::span<float> outputRight) noexcept
 {
     if (inputI.size() != m_config.inputBlockSize || inputQ.size() != inputI.size() ||
-        outputLeft.size() != outputBlockSize() || outputRight.size() != outputLeft.size()) {
+        outputLeft.size() != m_outputBlockSize || outputRight.size() != outputLeft.size()) {
         return ProcessResult::InvalidBuffer;
     }
-    if (m_controlOperation.load(std::memory_order_acquire)) {
+    if (m_controlOperation.load(std::memory_order_seq_cst)) {
         return ProcessResult::Busy;
     }
 
-    m_callbacksInFlight.fetch_add(1, std::memory_order_acq_rel);
-    if (m_controlOperation.load(std::memory_order_acquire)) {
-        m_callbacksInFlight.fetch_sub(1, std::memory_order_release);
+    m_callbacksInFlight.fetch_add(1, std::memory_order_seq_cst);
+    if (m_controlOperation.load(std::memory_order_seq_cst)) {
+        m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
         return ProcessResult::Busy;
     }
 
@@ -116,7 +121,7 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
                const_cast<float*>(inputQ.data()),
                outputLeft.data(), outputRight.data(), &wdspError);
     const uint64_t allocationsAfter = wdspPortAllocationSequence();
-    m_callbacksInFlight.fetch_sub(1, std::memory_order_release);
+    m_callbacksInFlight.fetch_sub(1, std::memory_order_seq_cst);
 
     if (allocationsAfter != allocationsBefore) {
         return ProcessResult::AllocationViolation;
@@ -141,6 +146,7 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
 
     close();
     m_config = config;
+    m_outputBlockSize = computeOutputBlockSize(m_config);
     open();
     endControlOperation();
     return true;
@@ -186,8 +192,15 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
 
 std::size_t WdspChannel::outputBlockSize() const noexcept
 {
-    return m_config.inputBlockSize * static_cast<std::size_t>(m_config.outputSampleRate) /
-           static_cast<std::size_t>(m_config.inputSampleRate);
+    return m_outputBlockSize;
+}
+
+std::size_t WdspChannel::computeOutputBlockSize(const Config& config) noexcept
+{
+    // Exact: validateConfig() guarantees inputSampleRate > 0 and that
+    // inputBlockSize * outputSampleRate is a whole multiple of inputSampleRate.
+    return config.inputBlockSize * static_cast<std::size_t>(config.outputSampleRate) /
+           static_cast<std::size_t>(config.inputSampleRate);
 }
 
 uint64_t WdspChannel::allocationSequenceForTest() noexcept
@@ -278,11 +291,11 @@ bool WdspChannel::beginControlOperation() noexcept
 {
     bool expected = false;
     if (!m_controlOperation.compare_exchange_strong(expected, true,
-                                                    std::memory_order_acq_rel)) {
+                                                    std::memory_order_seq_cst)) {
         return false;
     }
-    if (m_callbacksInFlight.load(std::memory_order_acquire) != 0) {
-        m_controlOperation.store(false, std::memory_order_release);
+    if (m_callbacksInFlight.load(std::memory_order_seq_cst) != 0) {
+        m_controlOperation.store(false, std::memory_order_seq_cst);
         return false;
     }
     return true;
@@ -290,5 +303,5 @@ bool WdspChannel::beginControlOperation() noexcept
 
 void WdspChannel::endControlOperation() noexcept
 {
-    m_controlOperation.store(false, std::memory_order_release);
+    m_controlOperation.store(false, std::memory_order_seq_cst);
 }

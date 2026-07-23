@@ -160,9 +160,7 @@ if(WIN32)
         set(FFTW3_INCLUDE_DIRS "${FFTW3_ROOT}/include")
         set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
-    else()
-        message(WARNING "FFTW3 not found. Run scripts/setup/setup-fftw.ps1; vendored WDSP requires it.")
-    endif()
+    endif()   # not-found is handled by the unified FATAL_ERROR below
 else()
     if(PkgConfig_FOUND)
         pkg_check_modules(FFTW3 fftw3)
@@ -176,6 +174,16 @@ else()
             set(FFTW3_INCLUDE_DIRS ${FFTW3_INC})
         endif()
     endif()
+endif()
+
+# The vendored WDSP DSP library (third_party/wdsp) hard-requires FFTW3 — unlike
+# NR2, which had a fallback FFT. Fail at configure with a clear message instead
+# of letting the build proceed to a cryptic "undefined FFTW symbol" link error.
+if(NOT FFTW3_FOUND)
+    message(FATAL_ERROR
+        "FFTW3 is required by the vendored WDSP DSP library (third_party/wdsp) but "
+        "was not found. Install it and reconfigure — Linux: apt install libfftw3-dev; "
+        "macOS: brew install fftw; Windows: run scripts/setup/setup-fftw.ps1.")
 endif()
 
 # Bundled RADE (BSD-2) — FreeDV Radio Autoencoder digital voice codec
