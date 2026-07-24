@@ -32,6 +32,9 @@ layout(std140, binding = 0) uniform U {
     float padding18;
     float padding19;
     vec4  bgFill;             // plot background colour (for haze)
+    vec4  shadowBands[8];     // low u, high u, centre u, band alpha
+    vec4  shadowStyles[8];    // cue rgb, centre-line alpha
+    vec4  shadowMeta;         // descriptor count, enabled, plot width px, pad
 };
 
 layout(binding = 1) uniform sampler2D heightTex;  // R16F, dBm, ring-buffered rows
@@ -40,6 +43,7 @@ layout(location = 0) out float vLut;    // palette lookup coord (floor->peak gra
 layout(location = 1) out float vDepth;  // row depth 0..1 for haze/fade
 layout(location = 2) out float vEdge;   // edge tag passthrough
 layout(location = 3) out float vBoundaryFade;
+layout(location = 4) out float vFrequency;
 
 float sampleHistoryDbm(float texU, float historyV, float rows,
                        float remainingRows)
@@ -113,6 +117,7 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
+    vFrequency = u;
     // During startup, the newly exposed oldest slot fades in continuously over
     // the row interval. Keep the eviction fade anchored at the physical back
     // of the full history so it does not move one discrete slot per arrival.

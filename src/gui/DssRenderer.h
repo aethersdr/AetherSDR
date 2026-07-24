@@ -2,11 +2,14 @@
 
 #include <QColor>
 #include <QImage>
+#include <QPointF>
 #include <QSize>
 #include <QVector>
 #include <QtCore/qfloat16.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 
 // ─── Stacked-trace spectrum stream surface ──────────────────────────────────
@@ -41,6 +44,37 @@ public:
     // Colour uses a stable signal aperture independent of the Ref-level height
     // span. Otherwise a high Ref level compresses every real signal into blue.
     static constexpr float kColorSpanDb        = 45.0f;
+
+    // Project a normalized frequency coordinate onto the same perspective
+    // plane used by both DSS renderers. depth=0 is the full-width front edge;
+    // depth=1 is the narrowed back edge. Slice overlays use this helper so
+    // their apparent angle cannot drift from the FFT surface.
+    static QPointF projectPerspective(float frequencyUnit, float depth)
+    {
+        const float d = std::clamp(depth, 0.0f, 1.0f);
+        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        return QPointF(0.5f + (frequencyUnit - 0.5f) * width,
+                       1.0f - d * kDepthSpanFrac);
+    }
+
+    // Project a point onto the visible top of a DSS ridge. This is the CPU
+    // equivalent of dss_mesh.vert's height mapping and is used by overlays
+    // that must stay attached to the surface when the 3D floor moves.
+    static QPointF projectSurface(float frequencyUnit, float depth, float dbm,
+                                  float floorDbm, float rangeDb, float zCurve)
+    {
+        const float d = std::clamp(depth, 0.0f, 1.0f);
+        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        const float finiteDbm = std::isfinite(dbm) ? dbm : floorDbm;
+        const float strengthLinear = std::clamp(
+            (finiteDbm - floorDbm) / std::max(rangeDb, 1.0f),
+            0.0f, 1.0f);
+        const float strengthHeight = std::pow(
+            strengthLinear, std::max(zCurve, 0.05f));
+        QPointF point = projectPerspective(frequencyUnit, d);
+        point.ry() -= strengthHeight * kFrontMaxRidgeFrac * width;
+        return point;
+    }
 
     // Maps a dBm value to an RGB colour using the host's panadapter palette.
     using PaletteFn = std::function<QRgb(float dbm)>;
