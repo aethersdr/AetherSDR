@@ -652,6 +652,26 @@ void RadioModel::buildBackend()
     }   // end Flex-only wire-object connects (RFC #4288 Route A guard)
 }
 
+// RFC #4288 Route A: swap the backend to match the connect target's kind (demo
+// SimBackend vs real FlexBackend). A no-op when the kind is unchanged. The
+// teardown mirrors the dtor's (#502-ordered ~FlexBackend / ~SimBackend), which
+// runs on every shutdown — doing it once here, between connections, is the same
+// proven path. Generalizes to future non-Flex backends (HL2): route on the kind.
+void RadioModel::rebuildBackendForTarget(bool wantDemo)
+{
+    if (wantDemo == m_useDemoBackend && m_backend)
+        return;   // already the right backend
+
+    // Tear the current backend down (same sequence as the dtor).
+    m_flexBackend = nullptr;
+    m_backend.reset();     // ~Backend runs the ordered thread teardown
+    m_connection = nullptr;
+    m_panStream = nullptr;
+
+    m_useDemoBackend = wantDemo;
+    buildBackend();        // create + wire the new backend (Sim or Flex)
+}
+
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
 {
@@ -1816,6 +1836,12 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     clearAutomationSliceFixtures();
     m_automationGpsNtpServerAddress.clear();
 
+    // RFC #4288 Route A: pick the backend for THIS target. Connecting to the
+    // demo entry (matched by SimBackend's stable demo serial) swaps in a
+    // wire-less SimBackend; connecting to a real radio swaps back to FlexBackend.
+    // A no-op when the kind is unchanged.
+    rebuildBackendForTarget(info.serial == SimBackend::demoSerial());
+
     m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
     m_intentionalDisconnect = false;
@@ -1837,9 +1863,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                        info.guiClientStations,
                        info.guiClientIps,
                        info.guiClientHosts);
-    QMetaObject::invokeMethod(m_connection, [conn = m_connection, info] {
-        conn->connectToRadio(info);
-    });
+    if (m_useDemoBackend) {
+        // Wire-less SimBackend: start it through the IRadioBackend seam. There is
+        // no RadioConnection to dial; the backend synthesizes the connect itself.
+        RadioConnectRequest req;
+        req.serial = info.serial;
+        m_backend->connectRadio(req);
+    } else {
+        QMetaObject::invokeMethod(m_connection, [conn = m_connection, info] {
+            conn->connectToRadio(info);
+        });
+    }
 }
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
