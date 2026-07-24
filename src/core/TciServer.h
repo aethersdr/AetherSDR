@@ -155,6 +155,11 @@ private slots:
     void broadcastStatus();
 
 private:
+    // Rate-limited drive:/tune_drive: relay (#4161). queue* is the signal
+    // entry point; broadcast* does the de-duped send.
+    void queuePowerBroadcast();
+    void broadcastPower();
+
     void sendInitBurst(QWebSocket* client);
     // Diagnostic: log + send a text reply to one client (per-command echoes
     // bypass the central dispatch log, so route them here for visibility).
@@ -280,6 +285,19 @@ private:
     QString m_lastRouteError;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
+    // Rate limiter for drive:/tune_drive: (#4161). A power-slider drag steps
+    // the value ~40 times a second and each step is a separate radio command,
+    // so relaying every one floods remote clients. Leading edge is sent
+    // immediately (a client's own SET still echoes promptly); further changes
+    // inside the window collapse to one trailing send of the latest value.
+    QTimer*           m_powerRateTimer{nullptr};
+    bool              m_drivePending{false};      // rfPowerChanged since last flush
+    bool              m_tuneDrivePending{false};  // tunePowerChanged since last flush
+    int               m_lastDriveSent{-1};
+    int               m_lastTuneDriveSent{-1};
+    // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
+    // band-change slice recreation momentarily leaves no slice marked TX.
+    int               m_lastTxTrx{0};
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
     QPointer<QWebSocket> m_tciPttClient;

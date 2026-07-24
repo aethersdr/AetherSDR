@@ -68,8 +68,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool filterCutoffChanged = false;
 
     // ── Core transmit ──
-    changed |= assign(d.rfPower, m_rfPower);
-    changed |= assign(d.tunePower, m_tunePower);
+    // rf_power / tune_power emit inline (like max_power_level below): the
+    // radio restores per-band power on QSY, and TCI clients need that edge
+    // distinctly, not folded into the catch-all stateChanged() (#4161).
+    if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
+    if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
     changed |= assign(d.mox, m_mox);
     changed |= assign(d.transmitFreq, m_transmitFreq);
@@ -238,6 +241,7 @@ void TransmitModel::setRfPower(int power)
     power = qBound(0, power, 100);
     if (m_rfPower != power) {
         m_rfPower = power;
+        emit rfPowerChanged(power);
         emit stateChanged();
     }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
@@ -248,6 +252,7 @@ void TransmitModel::setTunePower(int power)
     power = qBound(0, power, 100);
     if (m_tunePower != power) {
         m_tunePower = power;
+        emit tunePowerChanged(power);
         emit stateChanged();
     }
     emit commandReady(QString("transmit set tunepower=%1").arg(power));
