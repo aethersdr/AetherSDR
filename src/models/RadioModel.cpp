@@ -6,6 +6,7 @@
 #include "DeclaredBands.h"
 #include "core/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
+#include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceModeRegistry.h"
@@ -503,7 +504,17 @@ RadioModel::RadioModel(QObject* parent)
     // init()/PanadapterStream::init() only allocate sockets/timers and neither
     // auto-connects nor emits — so there is no lost-signal window before our
     // statusReceived/etc. connections are made. Keep that true if init() grows.
-    {
+    if (m_useDemoBackend) {
+        // RFC #4288 Route A: a wire-less in-process simulator. It emits status /
+        // slices / spectrum / audio through the IRadioBackend seam directly, so
+        // there is no RadioConnection / PanadapterStream to harvest — m_connection
+        // and m_panStream stay null and the Flex-only wire connects below are
+        // skipped by their guard.
+        m_backend = std::make_unique<SimBackend>();
+        m_connection  = nullptr;
+        m_panStream   = nullptr;
+        m_flexBackend = nullptr;
+    } else {
         auto flex = std::make_unique<FlexBackend>();
         flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
         // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so

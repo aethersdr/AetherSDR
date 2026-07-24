@@ -762,6 +762,10 @@ private:
     // PanadapterStream and their worker threads; RadioModel keeps the two
     // NON-OWNING pointers below, obtained from the backend at construction.
     std::unique_ptr<IRadioBackend> m_backend;
+    // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
+    // simulator) instead of a FlexBackend. Selected per-connection from the target
+    // — see connectToRadio(). Also generalizes to future non-Flex backends (HL2).
+    bool m_useDemoBackend{false};
     // Transitional (aetherd RFC 2.3): RadioModel drives the backend's Flex
     // status decode from its status choke points while touchpoints convert
     // one at a time. Non-owning alias of m_backend; goes away once the backend
