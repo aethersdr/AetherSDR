@@ -81,6 +81,32 @@ private:
     // sensible default frequency/mode. Phase 2 grows this into the pan + meters.
     void emitInitialState();
 
+    // ---- Fault-injection harness (RFC #4288 #4 — land in v1) ----
+    // Reached via invokeExtension("sim", <fault>, …) — the IRadioBackend vendor-
+    // extension seam. Each fault drives AE down a fail-closed path so the
+    // regression suite can assert the app degrades safely (Jeremy's CI-testable
+    // angle). RX-only is preserved; nothing here can key TX. Faults:
+    //   swr <ratio>   — report high reflected power (SWR protection / fold-back)
+    //   dropslice     — remove the active slice (slice-gone teardown)
+    //   stallscope    — stop emitting spectrum/waterfall (scope-stall watchdog)
+    //   disconnect    — force a mid-op disconnect (reconnect/session teardown)
+    //   malformed     — emit a garbled status line (parser fail-closed; no retune-to-0)
+    //   clear         — cancel active faults, resume normal operation
+    // Returns true if the verb was a recognized fault (so invokeExtension can
+    // distinguish "handled" from "unknown extension").
+    bool applyFault(const QString& fault, const QVariant& arg);
+    void injectHighSwr(double ratio);   // define+report a high SWR meter reading
+    void injectDropSlice();             // push "slice 0 … removed" wire status
+    void injectMalformedStatus();       // push a deliberately garbled wire status line
+    void clearFaults();                 // stallscope resume; SWR back to nominal
+    // Route a synthetic wire status line through the owned RadioConnection's
+    // receive path (queued to its worker thread) so AE decodes it as radio-sent.
+    void pushFaultStatus(const QString& line);
+
+    bool   m_scopeStalled{false};   // stallscope: onAudioTick skips the spectrum emit
+    double m_lastSwr{1.0};          // last injected SWR (clearFaults resets to nominal)
+    static constexpr int kSwrMeterIndex = 90;   // synthetic meter slot for the SWR fault
+
     // Serialize a mono float frame to the 24 kHz STEREO float32 QByteArray
     // AudioEngine::feedAudioData() expects (each mono sample duplicated L=R).
     static QByteArray toStereoBytes(const QVector<float>& mono);

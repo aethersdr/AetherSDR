@@ -1448,6 +1448,25 @@ MainWindow::MainWindow(QWidget* parent)
                 QMetaObject::invokeMethod(ps, "loadDemoNoisePreset",
                     Qt::QueuedConnection, Q_ARG(QString, preset));
         });
+        // Fault-injection buttons (RFC #4288 #4) → backend->invokeExtension("sim",…),
+        // the same path the `sim` automation verb uses. The signal carries
+        // "<fault> [arg]" (e.g. "swr 3.5"); split on the first space.
+        connect(demo, &DemoApplet::demoFaultRequested, this,
+                [this](const QString& spec) {
+            IRadioBackend* backend = m_radioModel.backend();
+            if (!backend)
+                return;
+            const int sp = spec.indexOf(QLatin1Char(' '));
+            const QString fault = (sp < 0) ? spec : spec.left(sp);
+            QVariant arg;
+            if (sp >= 0) {
+                bool okD = false;
+                const double d = spec.mid(sp + 1).trimmed().toDouble(&okD);
+                arg = okD ? QVariant(d) : QVariant(spec.mid(sp + 1).trimmed());
+            }
+            backend->invokeExtension(QStringLiteral("sim"), fault.toLower(),
+                                     /*requestId=*/0, arg);
+        });
     }
 
     // Demo VFO tuning → the birdie demodulates against it (pitch shifts, zero-

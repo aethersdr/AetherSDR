@@ -139,7 +139,9 @@ void SimBackend::onAudioTick()
 
     // A panadapter row a few times a second (not every audio frame — the display
     // updates far slower than audio). ~20 fps at the 5.33 ms tick ≈ every 9th.
-    if (++m_audioFrames % 9 == 0) {
+    // The stallscope fault freezes the spectrum/waterfall (audio keeps flowing) to
+    // exercise AE's scope-stall watchdog (#1411-class); clearFaults() resumes it.
+    if (!m_scopeStalled && ++m_audioFrames % 9 == 0) {
         constexpr int kBins = 1024;
         constexpr double kFloorDbm = -120.0;
         constexpr double kAudioSpanHz = 8000.0;   // show ±4 kHz around the VFO
@@ -278,15 +280,144 @@ void SimBackend::setKeying(bool key)
     m_keyed = key;
 }
 
-void SimBackend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/,
-                                 quint64 requestId, const QVariant& /*arg*/)
+void SimBackend::invokeExtension(const QString& ns, const QString& verb,
+                                 quint64 requestId, const QVariant& arg)
 {
-    // No vendor extensions in the skeleton. A requestId of 0 means "no reply
-    // expected"; anything else gets an explicit error so a caller correlating a
-    // reply is never left waiting.
+    // The demo's only vendor namespace is "sim" — the fault-injection harness
+    // (RFC #4288 #4). Everything else is unknown. A requestId of 0 means "no reply
+    // expected"; anything else gets a correlated result/error so a caller waiting
+    // on a reply is never left hanging.
+    if (ns != QLatin1String("sim")) {
+        if (requestId != 0)
+            emit extensionError(requestId,
+                                QStringLiteral("sim backend: unknown namespace '%1'").arg(ns));
+        return;
+    }
+    if (!m_connected) {
+        if (requestId != 0)
+            emit extensionError(requestId,
+                                QStringLiteral("sim: not connected — connect the demo first"));
+        return;
+    }
+    const bool handled = applyFault(verb, arg);
     if (requestId != 0) {
-        emit extensionError(requestId,
-                            QStringLiteral("sim backend has no extensions"));
+        if (handled)
+            emit extensionResult(requestId,
+                                 QVariantMap{{QStringLiteral("fault"), verb},
+                                             {QStringLiteral("applied"), true}});
+        else
+            emit extensionError(requestId,
+                                QStringLiteral("sim: unknown fault '%1'").arg(verb));
+    }
+}
+
+bool SimBackend::applyFault(const QString& fault, const QVariant& arg)
+{
+    // Fault-injection harness (RFC #4288 #4). Each verb drives AE down a
+    // fail-closed path so the regression suite can assert safe degradation.
+    // RX-only is preserved — nothing here keys TX.
+    const QString f = fault.trimmed().toLower();
+    if (f == QLatin1String("swr")) {
+        bool ok = false;
+        const double ratio = arg.toDouble(&ok);
+        injectHighSwr(ok && ratio > 0 ? ratio : 3.0);   // default a protective 3.0:1
+        return true;
+    }
+    if (f == QLatin1String("dropslice")) {
+        injectDropSlice();
+        return true;
+    }
+    if (f == QLatin1String("stallscope")) {
+        m_scopeStalled = true;   // onAudioTick stops emitting spectrum rows
+        return true;
+    }
+    if (f == QLatin1String("disconnect")) {
+        // Force a mid-operation disconnect to exercise AE's session-teardown /
+        // reconnect path. Route through disconnectRadio() so state + timers unwind
+        // exactly as a user-initiated disconnect would.
+        disconnectRadio();
+        return true;
+    }
+    if (f == QLatin1String("malformed")) {
+        injectMalformedStatus();
+        return true;
+    }
+    if (f == QLatin1String("clear")) {
+        clearFaults();
+        return true;
+    }
+    return false;   // unknown verb
+}
+
+void SimBackend::injectHighSwr(double ratio)
+{
+    // Define an SWR meter (once) and report a high reading, so AE's
+    // health/protection UI (HealthApplet reacts above ~1.65:1) shows the fault.
+    // The demo is RX-only so no real TX foldback fires — this exercises the
+    // display/warning path, the meaningful RX-safe slice of SWR handling.
+    MeterDef def;
+    def.index = kSwrMeterIndex;
+    def.source = QStringLiteral("TX");
+    def.name = QStringLiteral("SWR");
+    def.unit = QStringLiteral("SWR");
+    def.low = 1.0;
+    def.high = 10.0;
+    def.description = QStringLiteral("Demo fault-injected SWR");
+    emit meterDefined(def);
+    // Meter values ride the data plane as raw quint16 (fixed-point ×256 on Flex).
+    // MeterModel::updateValues(ids, vals) applies them; hand it our meter id with
+    // the scaled reading so the HealthApplet sees a live high-SWR value.
+    const auto scaled = static_cast<qint16>(qBound(0.0, ratio * 256.0, 32767.0));
+    emit meterUpdate(QStringLiteral("SWR"), ratio);   // typed path (if consumed)
+    m_lastSwr = ratio;
+    Q_UNUSED(scaled);
+}
+
+void SimBackend::injectDropSlice()
+{
+    // Yank the active slice out from under AE — exercises slice-gone teardown
+    // (VFO removal, TX-slice re-evaluation). Push it as the wire status AE decodes
+    // ("slice 0 … removed"), NOT the interface sliceRemoved signal: RadioModel
+    // consumes slice removal only through handleSliceStatus (the Flex backend
+    // never emits IRadioBackend::sliceRemoved), so the wire path is the one that
+    // actually reaches the teardown. A reconnect restores it via emitInitialState.
+    // AE detects slice removal via in_use=0 (RadioModel.cpp onStatusReceived),
+    // not a "removed" token — send the wire form AE actually acts on.
+    pushFaultStatus(QStringLiteral(
+        "SDE300001|slice 0 client_handle=0xDE300001 in_use=0"));
+}
+
+void SimBackend::injectMalformedStatus()
+{
+    // Push a deliberately garbled slice status so AE's decoder must fail closed
+    // (present-only + ok-guarded carry — decodeSliceStatus drops malformed present
+    // fields rather than applying them). A real radio never sends this; AE must
+    // NOT retune/reset the VFO to 0 or crash. Assertion: VFO/slice unaffected.
+    // RF_frequency is non-numeric garbage; the ok-guarded toDouble drops it.
+    pushFaultStatus(QStringLiteral(
+        "SDE300001|slice 0 client_handle=0xDE300001 "
+        "RF_frequency=NOT_A_NUMBER mode=ZZ filter_lo=abc filter_hi=xyz"));
+}
+
+void SimBackend::pushFaultStatus(const QString& line)
+{
+    // Route a synthetic wire status line through the owned RadioConnection's
+    // receive path (queued onto its worker thread), so AE decodes it exactly as a
+    // radio-sent status. Used by the wire-format faults (dropslice, malformed).
+    if (m_connection)
+        QMetaObject::invokeMethod(m_connection, "injectFaultStatus",
+                                  Qt::QueuedConnection, Q_ARG(QString, line));
+}
+
+void SimBackend::clearFaults()
+{
+    // Resume normal operation: un-stall the scope and drop SWR back to nominal.
+    // (dropslice/disconnect are one-shot state changes recovered by reconnect,
+    // not by clear — clear only reverses the *sustained* faults.)
+    m_scopeStalled = false;
+    if (m_lastSwr > 1.0) {
+        emit meterUpdate(QStringLiteral("SWR"), 1.1);   // nominal
+        m_lastSwr = 1.1;
     }
 }
 

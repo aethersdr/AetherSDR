@@ -498,6 +498,9 @@ private:
     // hemisphere/minutes format and 8000-series decimal-degree format.
     QJsonObject doGps(const QString& action, const QString& format);
     QJsonObject doTune(const QString& value);
+    // Demo fault injection (RFC #4288 #4): route a fault to backend->
+    // invokeExtension("sim", …). No-op error on non-Sim backends.
+    QJsonObject doSimFault(const QString& fault, const QString& arg);
     // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
     // route to RadioModel::setTransmit — the exact calls the space-bar PTT filter
     // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated

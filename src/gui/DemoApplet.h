@@ -36,6 +36,10 @@ signals:
     void demoNoiseLevelChanged(const QString& channel, double levelDb);
     void demoNoiseKnobChanged(const QString& channel, const QString& knob, double value);
     void demoPresetRequested(const QString& presetName);
+    // Fault-injection harness (RFC #4288 #4): the user clicked a fault button.
+    // MainWindow routes this to the backend's invokeExtension("sim", fault, …).
+    // Same faults as the `sim` automation verb — this is the manual/live trigger.
+    void demoFaultRequested(const QString& fault);
 
 private:
     void buildUI();

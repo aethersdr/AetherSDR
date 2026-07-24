@@ -183,6 +183,13 @@ void RadioConnection::startSyntheticDemoConnect()
     });
 }
 
+void RadioConnection::injectFaultStatus(const QString& line)
+{
+    // Demo fault harness only — never touch a real socket connection.
+    if (m_syntheticDemo)
+        emitSyntheticStatus(line);
+}
+
 void RadioConnection::emitSyntheticStatus(const QString& line)
 {
     // Parse the raw status line into (object, kvs) exactly as the real receive

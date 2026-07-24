@@ -132,6 +132,52 @@ void DemoApplet::buildUI()
         ++r;
     }
     root->addLayout(grid);
+
+    // ── fault injection (RFC #4288 #4) ──────────────────────────────────────
+    // Manual/live trigger for the same faults the `sim` automation verb drives.
+    // Each button emits demoFaultRequested(<fault>); MainWindow forwards it to
+    // backend->invokeExtension("sim", …). Lets the demo show AE degrading safely
+    // (frozen scope, dropped slice, forced disconnect) on a click.
+    auto* faultTitle = new QLabel(QStringLiteral("Fault Injection"), this);
+    faultTitle->setStyleSheet(QStringLiteral("color:#f96;font-weight:bold;"));
+    root->addWidget(faultTitle);
+
+    // {label, fault-verb, optional arg}. Distinct amber styling from the noise
+    // controls so faults read as "danger", not routine.
+    struct FaultBtn { const char* label; const char* fault; const char* arg; };
+    static const FaultBtn kFaultBtns[] = {
+        {"High SWR",    "swr",        "3.5"},
+        {"Drop Slice",  "dropslice",  ""},
+        {"Stall Scope", "stallscope", ""},
+        {"Disconnect",  "disconnect", ""},
+        {"Malformed",   "malformed",  ""},
+        {"Clear",       "clear",      ""},
+    };
+    auto* faultRow = new QHBoxLayout();
+    faultRow->setSpacing(4);
+    for (const FaultBtn& fb : kFaultBtns) {
+        auto* b = new QPushButton(QString::fromLatin1(fb.label), this);
+        const bool isClear = QLatin1String(fb.fault) == QLatin1String("clear");
+        b->setStyleSheet(isClear
+            ? QStringLiteral("QPushButton{background:#243;color:#bfb;border:1px solid #465;"
+                             "border-radius:4px;padding:3px 7px;font-size:11px;}"
+                             "QPushButton:hover{background:#2a5a2a;}")
+            : QStringLiteral("QPushButton{background:#432;color:#fdb;border:1px solid #654;"
+                             "border-radius:4px;padding:3px 7px;font-size:11px;}"
+                             "QPushButton:hover{background:#6a4a2a;}"));
+        const QString fault = QString::fromLatin1(fb.fault);
+        const QString arg = QString::fromLatin1(fb.arg);
+        connect(b, &QPushButton::clicked, this, [this, fault, arg]() {
+            // swr carries its ratio as "swr 3.5"; the rest are bare verbs. The
+            // receiver splits on the first space.
+            emit demoFaultRequested(arg.isEmpty() ? fault
+                                                  : fault + QLatin1Char(' ') + arg);
+        });
+        faultRow->addWidget(b);
+    }
+    faultRow->addStretch();
+    root->addLayout(faultRow);
+
     root->addStretch();
 }
 

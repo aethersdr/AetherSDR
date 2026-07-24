@@ -11,6 +11,7 @@
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
+#include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
 #include "IConnectionAutomation.h" // gui-free connect/disconnect/dialog hook
 
 #include <QAction>
@@ -2626,6 +2627,15 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doCwx(a.action, a.value);
+            });
+
+        add("sim",
+            {},
+            "sim <swr|dropslice|stallscope|disconnect|malformed|clear> [arg] — "
+            "demo fault injection (RFC #4288; only valid when the demo is connected)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doSimFault(a.action, a.value);
             });
 
         add("record", {}, "record <start|stop|status|path|dir> [args]",
@@ -5584,6 +5594,48 @@ QJsonObject AutomationServer::doTune(const QString& value)
     s->setFrequency(mhz);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
                        {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
+}
+
+// ── Demo fault injection (RFC #4288 #4) ─────────────────────────────────────
+// Route a fault verb to the active backend's invokeExtension("sim", …). Only the
+// SimBackend recognizes the "sim" namespace; on a real radio this is a harmless
+// no-op error. The reply is fire-and-forget (requestId 0) — the fault's *effect*
+// is observed by the regression suite via the normal get/log surface (a stalled
+// scope, a dropped slice, a disconnect), not via a correlated result. That keeps
+// the assertion on AE's actual fail-closed behaviour, which is the point.
+QJsonObject AutomationServer::doSimFault(const QString& fault, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    IRadioBackend* backend = m_radioModel->backend();
+    if (!backend)
+        return err(QStringLiteral("no backend available"));
+    const QString f = fault.trimmed().toLower();
+    if (f.isEmpty())
+        return err(QStringLiteral("sim requires a fault: "
+                                  "swr|dropslice|stallscope|disconnect|malformed|clear"));
+    // Validate against the known fault set HERE so a typo is a synchronous error,
+    // not a silent fire-and-forget no-op (the dispatch below uses requestId 0).
+    static const QStringList kFaults = {
+        QStringLiteral("swr"), QStringLiteral("dropslice"),
+        QStringLiteral("stallscope"), QStringLiteral("disconnect"),
+        QStringLiteral("malformed"), QStringLiteral("clear")};
+    if (!kFaults.contains(f))
+        return err(QStringLiteral("sim: unknown fault '%1' — valid: %2")
+                       .arg(f, kFaults.join(QLatin1Char('|'))));
+
+    // The arg (if any) rides as a QVariant; swr uses it as the ratio, others ignore.
+    QVariant value;
+    if (!arg.trimmed().isEmpty()) {
+        bool okD = false;
+        const double d = arg.trimmed().toDouble(&okD);
+        value = okD ? QVariant(d) : QVariant(arg.trimmed());
+    }
+    backend->invokeExtension(QStringLiteral("sim"), f, /*requestId=*/0, value);
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("sim"), f},
+                       {QStringLiteral("note"),
+                        QStringLiteral("dispatched to backend; only SimBackend acts on it")}};
 }
 
 // ── Semantic transmitter keying (#3646 fidelity — item 3) ───────────────────

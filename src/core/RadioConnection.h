@@ -61,6 +61,13 @@ public slots:
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
 
+    // Demo fault harness (RFC #4288 #4): push a raw synthetic status line into
+    // the normal receive path (parse → statusReceived), exactly as the connect
+    // sequence does. Lets SimBackend inject faults that AE decodes as if the radio
+    // sent them (e.g. "slice 0 … removed"). Only acts while in synthetic-demo mode.
+    // A slot so SimBackend can invoke it queued onto this worker thread.
+    void injectFaultStatus(const QString& line);
+
 signals:
     void stateChanged(ConnectionState state);
     void connected();
