@@ -13,6 +13,7 @@
 #include "ClientFinalLimiter.h"
 #include "ClientTxTestTone.h"
 #include "ClientQuindarTone.h"
+#include "WsprBeacon.h"
 #include "QuindarLocalSink.h"
 #include "CwSidetoneGenerator.h"
 #include "CwSidetoneQAudioSink.h"
@@ -1703,6 +1704,7 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientReverbTx(std::make_unique<ClientReverb>())
     , m_clientFinalLimiterTx(std::make_unique<ClientFinalLimiter>())
     , m_clientTxTestTone(std::make_unique<ClientTxTestTone>())
+    , m_wsprBeacon(std::make_unique<WsprBeacon>())
     , m_clientQuindarTone(std::make_unique<ClientQuindarTone>())
 {
     // Recorder-sidetone generator: always enabled at a fixed, audible level and
@@ -1777,7 +1779,13 @@ AudioEngine::AudioEngine(QObject* parent)
     m_clientReverbTx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientFinalLimiterTx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientTxTestTone->prepare(DEFAULT_SAMPLE_RATE);
+    m_wsprBeacon->prepare(DEFAULT_SAMPLE_RATE);
     m_clientQuindarTone->prepare(DEFAULT_SAMPLE_RATE);
+    m_wsprPumpTimer = new QTimer(this);
+    m_wsprPumpTimer->setTimerType(Qt::PreciseTimer);
+    m_wsprPumpTimer->setInterval(5);
+    connect(m_wsprPumpTimer, &QTimer::timeout,
+            this, &AudioEngine::pumpWsprBeacon);
     loadClientEqSettings();      // restore persisted bands before first audio
     loadClientCompSettings();    // restore persisted comp params + chain order
     loadClientGateSettings();    // restore persisted gate params
@@ -8277,12 +8285,27 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
 
 void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
 {
+    // The built-in WSPR source owns the DAX TX stream for its one-shot frame.
+    // Ignore concurrent external DAX/TCI samples instead of interleaving two
+    // unrelated packet producers.
+    if (m_wsprBeacon && m_wsprBeacon->isActive()) {
+        return;
+    }
+    feedDaxTxAudioInternal(inPcm, true, false);
+}
+
+void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
+                                         bool markExternalSource,
+                                         bool forceRadioDaxRoute)
+{
     if (m_txStreamId == 0 || inPcm.isEmpty()) return;
 
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
     // packet producers don't collide on the same UDP path to the radio.
-    m_tciAudioTimer.start();
+    if (markExternalSource) {
+        m_tciAudioTimer.start();
+    }
 
     // Client-side TX DSP (compressor + EQ) is intentionally NOT
     // applied here.  This path is fed exclusively by TCI and DAX
@@ -8325,7 +8348,8 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
         emitScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE, true);
     }
 
-    if (!m_daxTxUseRadioRoute) {
+    const bool useRadioDaxRoute = forceRadioDaxRoute || m_daxTxUseRadioRoute;
+    if (!useRadioDaxRoute) {
         // Low-latency route: keep radio on mic path (dax=0) and packetize
         // exactly like voice TX (PCC 0x03E3 float32 stereo).
         constexpr int FLOAT_BYTES_PER_PKT = TX_SAMPLES_PER_PACKET * 2 * sizeof(float);
@@ -8350,7 +8374,7 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     }
 
     // Radio-native DAX route (dax=1): block DAX audio only when mic voice TX is active.
-    if (m_transmitting && !m_daxTxMode) return;
+    if (!forceRadioDaxRoute && m_transmitting && !m_daxTxMode) return;
     m_daxPreTxBuffer.clear();
 
     // Convert float32 stereo → int16 mono (reduced BW format, PCC 0x0123).
@@ -8405,6 +8429,68 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
         emit txPacketReady(pkt);
         m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
+}
+
+void AudioEngine::startWsprPump()
+{
+    m_wsprPumpedFrames = 0;
+    m_wsprPumpClock.start();
+    m_wsprPumpTimer->start();
+}
+
+void AudioEngine::stopWsprPump()
+{
+    m_wsprPumpTimer->stop();
+    m_wsprPumpClock.invalidate();
+    m_wsprPumpedFrames = 0;
+    m_txFloatAccumulator.clear();
+}
+
+void AudioEngine::pumpWsprBeacon()
+{
+    if (!m_wsprBeacon || !m_wsprBeacon->isActive()
+        || !m_wsprPumpClock.isValid()) {
+        stopWsprPump();
+        return;
+    }
+
+    const qint64 targetFrames = WsprBeacon::framesForElapsedNanoseconds(
+        m_wsprPumpClock.nsecsElapsed());
+    const qint64 dueFrames = targetFrames - m_wsprPumpedFrames;
+    if (dueFrames <= 0) {
+        return;
+    }
+
+    // Catching up a long worker-thread stall as a packet burst would destroy
+    // WSPR symbol timing. Abort instead; the dialog observes inactive audio
+    // and immediately unkeys.
+    constexpr qint64 kMaximumRecoverableFrames = 2400; // 100 ms at 24 kHz
+    if (dueFrames > kMaximumRecoverableFrames) {
+        qCWarning(lcAudio)
+            << "AudioEngine: WSPR pacing deadline missed by"
+            << dueFrames << "frames; aborting beacon";
+        m_wsprBeacon->stop();
+        stopWsprPump();
+        return;
+    }
+
+    const int frames = static_cast<int>(dueFrames);
+    m_wsprInt16Scratch.resize(
+        frames * 2 * static_cast<int>(sizeof(int16_t)));
+    m_wsprBeacon->process(
+        reinterpret_cast<int16_t*>(m_wsprInt16Scratch.data()), frames, 2);
+
+    const int sampleCount = frames * 2;
+    m_wsprFloatScratch.resize(
+        sampleCount * static_cast<int>(sizeof(float)));
+    const auto* input =
+        reinterpret_cast<const int16_t*>(m_wsprInt16Scratch.constData());
+    auto* output = reinterpret_cast<float*>(m_wsprFloatScratch.data());
+    for (int i = 0; i < sampleCount; ++i) {
+        output[i] = input[i] / 32768.0f;
+    }
+    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
+    m_wsprPumpedFrames += frames;
 }
 
 void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)

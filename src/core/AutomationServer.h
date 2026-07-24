@@ -20,6 +20,7 @@ class QWebSocket;
 #include <vector>
 
 #include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
+#include "AutomationTxWatchdog.h"
 #include "MemoryTelemetry.h"
 
 class QLocalServer;
@@ -334,10 +335,10 @@ public:
     QString authToken() const { return m_authToken; }
 
     // Runtime TX-automation gate (#3646). Mirrors AETHER_AUTOMATION_ALLOW_TX
-    // but operator-driven from Radio Setup → Network. Enabling arms the
-    // force-unkey watchdog; disabling force-unkeys immediately and disarms it.
-    // The env var still force-enables at start(); this lets the GUI toggle it
-    // live on a running bridge. Idempotent.
+    // but operator-driven from Radio Setup → Network. This is permission only:
+    // the force-unkey watchdog takes ownership when a TX-capable bridge action
+    // is accepted, never merely because the gate is enabled. The env var still
+    // force-enables at start(); this lets the GUI toggle it live. Idempotent.
     void setTxAllowed(bool allowed);
     bool txAllowed() const { return m_txAllowed; }
 
@@ -364,6 +365,8 @@ private slots:
     void onLogDrain();
 
 private:
+    friend class AutomationServerTestAccess;
+
     // Dispatch a single request line and return the response object. The socket
     // is needed for stateful per-client verbs (log subscribe/unsubscribe).
     QJsonObject handleLine(const QByteArray& line, QLocalSocket* sock);
@@ -393,7 +396,7 @@ private:
     QJsonObject saveWidgetGrab(QWidget* w, const QString& label,
                                const QString& path) const;
     QJsonObject doInvoke(const QString& target, const QString& action,
-                         const QString& value) const;
+                         const QString& value);
     // close <target>: close the target's top-level window (deferred to a clean
     // main-loop turn so a confirm-dialog closeEvent can't re-enter the socket
     // callback). Reaches the custom frameless title-bar close that `invoke …
@@ -402,8 +405,8 @@ private:
     // drag <target> <dx> <dy> | mouse <target> <dx> <dy>: synthesize a
     // press → move → release gesture so resize grips and slider handles are
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
-    QJsonObject doDrag(const QString& target, const QString& value) const;
-    QJsonObject doDragAt(const QString& target, const QString& value) const;
+    QJsonObject doDrag(const QString& target, const QString& value);
+    QJsonObject doDragAt(const QString& target, const QString& value);
     // Phaseful pointer gesture (#4353). The owning QLocalSocket stays connected
     // between begin/move/end so unrelated bridge clients and queued model/radio
     // events can interleave while a slider is genuinely down. A single global
@@ -468,7 +471,7 @@ private:
     // "containerClose" and only the first is reachable by invoke). TX-gated on the
     // whole ancestor chain; disabled widgets and (with the power ceiling armed)
     // the RF/Tune power sliders are refused.
-    QJsonObject doClickAt(const QString& target, const QString& value) const;
+    QJsonObject doClickAt(const QString& target, const QString& value);
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The
@@ -559,6 +562,9 @@ private:
     QJsonObject doAtu(const QString& action);
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
+    void armTxWatchdog();
+    void cancelTxWatchdogLease();
+    bool txWatchdogOwnsCurrentTransmit();
 
     // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
     // RX/config only; none of these key the transmitter.
@@ -600,7 +606,7 @@ private:
     // Fire a ShortcutManager action by id — the MIDI-controller dispatch path —
     // for actions with no key sequence and no menu entry (Band Zoom, Segment
     // Zoom, …). TX-keying ids stay behind AETHER_AUTOMATION_ALLOW_TX. (#4057)
-    QJsonObject doShortcut(const QString& id) const;
+    QJsonObject doShortcut(const QString& id);
     // Inject a learned VFO Tune Knob MIDI CC value through the controller
     // decoder. Automation-only, RX-only, and never persists a binding.
     QJsonObject doMidi(const QString& action, const QString& value) const;
@@ -715,10 +721,12 @@ private:
     static constexpr size_t kTciTraceMax = 512;
 #endif
 
-    // TX safety rails (active only when AETHER_AUTOMATION_ALLOW_TX is set).
+    // TX safety rails. The timer runs while automation TX is allowed, but the
+    // state machine arms only for an accepted automation-originated TX action.
     QTimer* m_txWatchdog{nullptr};
-    qint64  m_txKeyedSinceMs{0};   // when continuous key-down started (0 = idle)
+    AutomationTxWatchdog m_txWatchdogState;
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
+    static constexpr int kTxPendingLeaseMs{125000}; // next even WSPR slot (<120 s)
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)

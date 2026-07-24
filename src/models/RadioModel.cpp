@@ -1610,6 +1610,7 @@ QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) co
     const bool nonVoiceSource = (source == TransmitModel::PttSource::Tune
                               || source == TransmitModel::PttSource::TciHardware
                               || source == TransmitModel::PttSource::Dax
+                              || source == TransmitModel::PttSource::Wspr
                               || s->sliceId() == m_digitalVoiceTxSliceId);
     if (!nonVoiceSource
         && (mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL"))) {
@@ -1717,6 +1718,7 @@ QString RadioModel::radioInterlockNotificationMessage(const QMap<QString, QStrin
                 (m_interlockNotificationSource == TransmitModel::PttSource::Tune
                  || m_interlockNotificationSource == TransmitModel::PttSource::TciHardware
                  || m_interlockNotificationSource == TransmitModel::PttSource::Dax
+                 || m_interlockNotificationSource == TransmitModel::PttSource::Wspr
                  || s->sliceId() == m_digitalVoiceTxSliceId);
             if (!nonVoiceSource
                 && (mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL"))) {
@@ -4245,6 +4247,9 @@ void RadioModel::onDisconnected()
     m_daxTxActive = false;
     m_daxTxClientHandle = 0;
     m_daxTxCreatePending = false;
+    m_wsprTxOwnershipRequested = false;
+    m_wsprTxYieldAfterUse = false;
+    m_wsprTxReleaseWhenReady = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -7707,15 +7712,61 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                 return;
             }
 
+            const bool statusAlreadyAdoptedStream = m_daxTxStreamId == id;
             m_daxTxStreamId = id;
-            m_daxTxActive = false;
+            // Stream status normally precedes the create reply. Preserve the
+            // ownership bit if that status already adopted this exact stream.
+            if (!statusAlreadyAdoptedStream) {
+                m_daxTxActive = false;
+            }
             m_daxTxClientHandle = clientHandle();
             qCInfo(lcDax).noquote()
                 << "RadioModel: DAX TX create succeeded"
                 << QStringLiteral("stream=%1").arg(hexId(id));
             emit txAudioStreamReady(id);
+            if (m_wsprTxOwnershipRequested) {
+                sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(id)));
+            } else if (m_wsprTxReleaseWhenReady) {
+                sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
+                m_wsprTxReleaseWhenReady = false;
+            }
         });
     return true;
+}
+
+bool RadioModel::prepareWsprTransmit()
+{
+    // WSPR is generated in-process and sent through our own dax_tx stream.
+    // This is explicit operator intent from the PSK Reporter beacon controls;
+    // do not persist or restore the radio-authoritative DAX setting.
+    m_transmitModel.setDax(true);
+    m_wsprTxYieldAfterUse = !m_daxTxActive;
+    m_wsprTxOwnershipRequested = true;
+    m_wsprTxReleaseWhenReady = false;
+    if (!ensureDaxTxStream(DaxTxRequestReason::WsprBeacon)) {
+        m_wsprTxOwnershipRequested = false;
+        m_wsprTxYieldAfterUse = false;
+        return false;
+    }
+    if (m_daxTxStreamId != 0) {
+        sendCmd(QStringLiteral("stream set %1 tx=1")
+                    .arg(hexId(m_daxTxStreamId)));
+    }
+    return true;
+}
+
+void RadioModel::releaseWsprTransmit()
+{
+    if (m_wsprTxOwnershipRequested && m_wsprTxYieldAfterUse) {
+        if (m_daxTxStreamId != 0) {
+            sendCmd(QStringLiteral("stream set %1 tx=0")
+                        .arg(hexId(m_daxTxStreamId)));
+        } else if (m_daxTxCreatePending) {
+            m_wsprTxReleaseWhenReady = true;
+        }
+    }
+    m_wsprTxOwnershipRequested = false;
+    m_wsprTxYieldAfterUse = false;
 }
 
 QJsonObject RadioModel::troubleshootingSnapshot() const

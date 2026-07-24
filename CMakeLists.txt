@@ -559,6 +559,7 @@ set(CORE_SOURCES
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp
+    src/core/WsprBeacon.cpp
     src/core/ClientQuindarTone.cpp
     src/core/QuindarLocalSink.cpp
     src/core/CwSidetoneGenerator.cpp
@@ -3986,6 +3987,20 @@ target_include_directories(aetherclock_engine_test PRIVATE src)
 target_link_libraries(aetherclock_engine_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherclock_engine_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherclock_engine_test COMMAND aetherclock_engine_test)
+
+add_executable(wspr_beacon_test tests/wspr_beacon_test.cpp)
+target_include_directories(wspr_beacon_test PRIVATE src)
+target_link_libraries(wspr_beacon_test PRIVATE aethercore Qt6::Core)
+add_test(NAME wspr_beacon_test COMMAND wspr_beacon_test)
+
+add_executable(automation_tx_watchdog_test
+    tests/automation_tx_watchdog_test.cpp
+)
+target_include_directories(automation_tx_watchdog_test PRIVATE src)
+target_link_libraries(automation_tx_watchdog_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+add_test(NAME automation_tx_watchdog_test COMMAND automation_tx_watchdog_test)
 
 add_executable(aetherclock_model_test tests/aetherclock_model_test.cpp)
 target_include_directories(aetherclock_model_test PRIVATE src)

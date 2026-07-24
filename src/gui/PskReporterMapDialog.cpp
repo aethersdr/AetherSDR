@@ -1,18 +1,28 @@
 #include "PskReporterMapDialog.h"
 
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/aprs/AprsPacket.h"
 #include "core/MaidenheadLocator.h"
 #include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
+#include "core/TxKeyingMarker.h"
+#include "core/WsprBeacon.h"
 #include "map/MapView.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCursor>
 #include <QDateTime>
+#include <QDoubleSpinBox>
+#include <QGroupBox>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QStringList>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -22,6 +32,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
+
+#include <limits>
 
 namespace AetherSDR {
 
@@ -204,11 +216,13 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
 
 } // namespace
 
-PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
+PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
+                                           RadioModel* radioModel,
                                            PropForecastClient* propForecast,
                                            QWidget* parent)
     : PersistentDialog(tr("PSK Reporter"),
                        QStringLiteral("PskReporterMapGeometry"), parent)
+    , m_audioEngine(audioEngine)
     , m_radioModel(radioModel)
     , m_client(new PskReporterClient(this))
     , m_propForecast(propForecast)
@@ -274,6 +288,96 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     m_dxLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     topBar->addWidget(m_dxLabel);
     root->addLayout(topBar);
+
+    auto* beaconBox = new QGroupBox(tr("WSPR beacon"), bodyWidget());
+    beaconBox->setAccessibleName(tr("WSPR beacon transmitter"));
+    auto* beaconRow = new QHBoxLayout(beaconBox);
+    beaconRow->setContentsMargins(6, 4, 6, 4);
+    beaconRow->setSpacing(6);
+
+    beaconRow->addWidget(new QLabel(tr("Call:"), beaconBox));
+    m_beaconCallsign = new QLineEdit(beaconBox);
+    m_beaconCallsign->setMaxLength(6);
+    m_beaconCallsign->setFixedWidth(76);
+    m_beaconCallsign->setAccessibleName(tr("WSPR callsign"));
+    m_beaconCallsign->setAccessibleDescription(
+        tr("Standard callsign with a one-digit prefix"));
+    beaconRow->addWidget(m_beaconCallsign);
+
+    beaconRow->addWidget(new QLabel(tr("Grid:"), beaconBox));
+    m_beaconGrid = new QLineEdit(beaconBox);
+    m_beaconGrid->setMaxLength(4);
+    m_beaconGrid->setFixedWidth(58);
+    m_beaconGrid->setAccessibleName(tr("WSPR grid locator"));
+    m_beaconGrid->setAccessibleDescription(
+        tr("Four-character Maidenhead locator, for example CN85"));
+    beaconRow->addWidget(m_beaconGrid);
+
+    beaconRow->addWidget(new QLabel(tr("Band:"), beaconBox));
+    m_beaconBand = new QComboBox(beaconBox);
+    struct WsprBand {
+        const char* name;
+        double dialMhz;
+    };
+    static constexpr WsprBand kWsprBands[] = {
+        {"160m", 1.836600}, {"80m", 3.568600}, {"40m", 7.038600},
+        {"30m", 10.138700}, {"20m", 14.095600}, {"17m", 18.104600},
+        {"15m", 21.094600}, {"12m", 24.924600}, {"10m", 28.124600},
+        {"6m", 50.293000}
+    };
+    for (const WsprBand& band : kWsprBands) {
+        m_beaconBand->addItem(QString::fromLatin1(band.name), band.dialMhz);
+    }
+    m_beaconBand->setCurrentText(QStringLiteral("20m"));
+    m_beaconBand->setAccessibleName(tr("WSPR band"));
+    m_beaconBand->setAccessibleDescription(
+        tr("Selects the standard WSPR USB dial frequency"));
+    beaconRow->addWidget(m_beaconBand);
+
+    beaconRow->addWidget(new QLabel(tr("Reported:"), beaconBox));
+    m_beaconPower = new QComboBox(beaconBox);
+    for (const int dbm : {0, 3, 7, 10, 13, 17, 20, 23, 27, 30,
+                          33, 37, 40, 43, 47, 50, 53, 57, 60}) {
+        m_beaconPower->addItem(tr("%1 dBm").arg(dbm), dbm);
+    }
+    const int savedPowerIndex = m_beaconPower->findData(
+        pskSettings().value("beaconPowerDbm").toInt(30));
+    m_beaconPower->setCurrentIndex(savedPowerIndex >= 0 ? savedPowerIndex : 9);
+    m_beaconPower->setAccessibleName(tr("WSPR reported power"));
+    m_beaconPower->setAccessibleDescription(
+        tr("Transmitter power encoded in the WSPR message; this does not change RF power"));
+    m_beaconPower->setToolTip(
+        tr("Power encoded in the message; this does not change the radio's RF power"));
+    beaconRow->addWidget(m_beaconPower);
+
+    beaconRow->addWidget(new QLabel(tr("Offset:"), beaconBox));
+    m_beaconTone = new QDoubleSpinBox(beaconBox);
+    m_beaconTone->setRange(1400.0, 1600.0);
+    m_beaconTone->setDecimals(1);
+    m_beaconTone->setSingleStep(1.0);
+    m_beaconTone->setSuffix(tr(" Hz"));
+    m_beaconTone->setValue(
+        pskSettings().value("beaconToneHz").toDouble(1500.0));
+    m_beaconTone->setAccessibleName(tr("WSPR audio center frequency"));
+    m_beaconTone->setAccessibleDescription(
+        tr("Audio center from 1400 to 1600 hertz"));
+    m_beaconTone->setToolTip(
+        tr("Audio offset above the selected USB dial frequency"));
+    beaconRow->addWidget(m_beaconTone);
+
+    m_beaconButton = new QPushButton(tr("Transmit once"), beaconBox);
+    m_beaconButton->setAutoDefault(false);
+    markTxKeying(m_beaconButton);
+    m_beaconButton->setAccessibleName(tr("Transmit one WSPR beacon"));
+    m_beaconButton->setAccessibleDescription(
+        tr("Arms one transmission for the next even UTC minute"));
+    beaconRow->addWidget(m_beaconButton);
+
+    m_beaconStatus = new QLabel(tr("Idle"), beaconBox);
+    m_beaconStatus->setMinimumWidth(155);
+    m_beaconStatus->setAccessibleName(tr("WSPR beacon status"));
+    beaconRow->addWidget(m_beaconStatus, 1);
+    root->addWidget(beaconBox);
 
     m_mapView = new MapView(bodyWidget());
     m_mapView->setPathsVisible(m_pathsCheck->isChecked());
@@ -384,6 +488,21 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
             this, &PskReporterMapDialog::rebuildMarkers);
     connect(m_client, &PskReporterClient::statusChanged,
             m_statusLabel, &QLabel::setText);
+    connect(m_beaconButton, &QPushButton::clicked,
+            this, &PskReporterMapDialog::scheduleBeacon);
+    connect(m_beaconPower, &QComboBox::currentIndexChanged, this, [this] {
+        writePskSetting("beaconPowerDbm", m_beaconPower->currentData().toInt());
+    });
+    connect(m_beaconBand, &QComboBox::currentIndexChanged,
+            this, [this] { applyBeaconBand(true); });
+    connect(m_beaconTone, &QDoubleSpinBox::valueChanged, this, [](double hz) {
+        writePskSetting("beaconToneHz", hz);
+    });
+
+    m_beaconTimer = new QTimer(this);
+    m_beaconTimer->setInterval(50);
+    connect(m_beaconTimer, &QTimer::timeout,
+            this, &PskReporterMapDialog::updateBeaconState);
 
     if (m_radioModel != nullptr) {
         connect(m_radioModel, &RadioModel::gpsStatusChanged,
@@ -397,8 +516,275 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
                         restartClient();
                     }
                     updateHomeFromRadio();
+                    updateBeaconDefaults();
                 });
+        connect(&m_radioModel->transmitModel(),
+                &TransmitModel::transmittingChanged, this, [this](bool tx) {
+            if (!tx && m_beaconTransmitting) {
+                stopBeacon(tr("Stopped: transmitter unkeyed"));
+            }
+        });
     }
+    updateBeaconDefaults();
+}
+
+void PskReporterMapDialog::updateBeaconDefaults()
+{
+    if (m_radioModel == nullptr || m_beaconArmed) {
+        return;
+    }
+    if (m_beaconCallsign->text().trimmed().isEmpty()) {
+        m_beaconCallsign->setText(m_radioModel->callsign().trimmed().toUpper());
+    }
+    if (m_beaconGrid->text().trimmed().isEmpty()) {
+        m_beaconGrid->setText(m_radioModel->gpsGrid().trimmed().left(4).toUpper());
+    }
+    const SliceModel* slice = m_radioModel->txSlice();
+    if (slice != nullptr) {
+        const QSignalBlocker blocker(m_beaconBand);
+        int closest = 0;
+        double closestDistance = std::numeric_limits<double>::max();
+        for (int i = 0; i < m_beaconBand->count(); ++i) {
+            const double distance =
+                std::abs(m_beaconBand->itemData(i).toDouble() - slice->frequency());
+            if (distance < closestDistance) {
+                closest = i;
+                closestDistance = distance;
+            }
+        }
+        m_beaconBand->setCurrentIndex(closest);
+    }
+}
+
+void PskReporterMapDialog::setBeaconControlsEnabled(bool enabled)
+{
+    m_beaconCallsign->setEnabled(enabled);
+    m_beaconGrid->setEnabled(enabled);
+    m_beaconBand->setEnabled(enabled);
+    m_beaconPower->setEnabled(enabled);
+    m_beaconTone->setEnabled(enabled);
+}
+
+bool PskReporterMapDialog::applyBeaconBand(bool showStatus)
+{
+    if (m_radioModel == nullptr) {
+        if (showStatus) {
+            m_beaconStatus->setText(tr("Connect to a radio first"));
+        }
+        return false;
+    }
+    TransmitModel& tx = m_radioModel->transmitModel();
+    if (tx.isTransmitting() || tx.isTuning()) {
+        if (showStatus) {
+            m_beaconStatus->setText(tr("Transmitter is already in use"));
+        }
+        return false;
+    }
+    SliceModel* slice = m_radioModel->txSlice();
+    if (slice == nullptr) {
+        if (showStatus) {
+            m_beaconStatus->setText(tr("No TX slice is selected"));
+        }
+        return false;
+    }
+    if (slice->isLocked()) {
+        if (showStatus) {
+            m_beaconStatus->setText(tr("TX slice is locked"));
+        }
+        return false;
+    }
+
+    // Standard WSPR dial frequencies use upper sideband on every band. Keep
+    // both the slice display passband and radio TX passband comfortably around
+    // the selectable 1400–1600 Hz WSPR offset.
+    slice->tuneAndRecenter(m_beaconBand->currentData().toDouble());
+    slice->setMode(QStringLiteral("DIGU"));
+    slice->setFilterWidth(1200, 1800);
+    tx.setTxFilter(1200, 1800);
+    if (showStatus) {
+        const int timeoutMs = tx.interlockTimeout();
+        if (!WsprBeacon::isInterlockTimeoutSufficient(timeoutMs)) {
+            m_beaconStatus->setText(
+                tr("Tuned %1 DIGU · TX timeout %2 s; WSPR needs at least 120 s")
+                    .arg(m_beaconBand->currentText())
+                    .arg(timeoutMs / 1000));
+        } else {
+            m_beaconStatus->setText(
+                tr("Tuned %1 DIGU · filters 1200–1800 Hz")
+                    .arg(m_beaconBand->currentText()));
+        }
+    }
+    return true;
+}
+
+void PskReporterMapDialog::scheduleBeacon()
+{
+    if (m_beaconArmed || m_beaconTransmitting) {
+        stopBeacon(tr("Cancelled"));
+        return;
+    }
+    if (m_audioEngine == nullptr || m_radioModel == nullptr) {
+        m_beaconStatus->setText(tr("TX audio is unavailable"));
+        return;
+    }
+    if (m_audioEngine->isRadeMode()) {
+        m_beaconStatus->setText(tr("Stop RADE first"));
+        return;
+    }
+
+    TransmitModel& tx = m_radioModel->transmitModel();
+    if (tx.isTransmitting() || tx.isTuning()) {
+        m_beaconStatus->setText(tr("Transmitter is already in use"));
+        return;
+    }
+    SliceModel* slice = m_radioModel->txSlice();
+    if (slice == nullptr) {
+        m_beaconStatus->setText(tr("No TX slice is selected"));
+        return;
+    }
+    if (slice->isLocked()) {
+        m_beaconStatus->setText(tr("TX slice is locked"));
+        return;
+    }
+    const int timeoutMs = tx.interlockTimeout();
+    if (!WsprBeacon::isInterlockTimeoutSufficient(timeoutMs)) {
+        m_beaconStatus->setText(
+            tr("Radio TX timeout is %1 s; set Radio Setup → TX → Timeout to at least 120 s")
+                .arg(timeoutMs / 1000));
+        return;
+    }
+
+    const WsprBeacon::EncodeResult encoded = WsprBeacon::encode(
+        m_beaconCallsign->text(), m_beaconGrid->text(),
+        m_beaconPower->currentData().toInt());
+    if (!encoded) {
+        m_beaconStatus->setText(encoded.error);
+        return;
+    }
+
+    // Reassert the visible band/mode/filter selection in case another client
+    // changed the TX slice after the operator selected the WSPR band.
+    if (!applyBeaconBand(false)) {
+        m_beaconStatus->setText(tr("WSPR TX audio route is unavailable"));
+        return;
+    }
+    if (!m_radioModel->prepareWsprTransmit()) {
+        m_beaconStatus->setText(tr("WSPR TX audio route is unavailable"));
+        return;
+    }
+
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    constexpr qint64 kSlotMs = 2 * 60 * 1000;
+    m_beaconSlotMs = ((nowMs / kSlotMs) + 1) * kSlotMs;
+    m_beaconArmed = true;
+    m_beaconTransmitting = false;
+    m_beaconButton->setText(tr("Cancel"));
+    setBeaconControlsEnabled(false);
+    m_beaconTimer->start();
+    updateBeaconState();
+}
+
+void PskReporterMapDialog::stopBeacon(const QString& status)
+{
+    const bool ownedTransmit = m_beaconTransmitting;
+    m_beaconTimer->stop();
+    m_beaconArmed = false;
+    m_beaconTransmitting = false;
+    m_beaconSlotMs = 0;
+    m_beaconStopDeadlineMs = 0;
+    if (ownedTransmit && m_radioModel != nullptr
+        && m_radioModel->transmitModel().isTransmitting()) {
+        m_radioModel->transmitModel().requestPttOff(
+            TransmitModel::PttSource::Wspr);
+    }
+    if (m_radioModel != nullptr) {
+        m_radioModel->releaseWsprTransmit();
+    }
+    // Keep the generator active (and therefore holding silence) through the
+    // local unkey command so an external DAX source cannot leak into the tail.
+    if (m_audioEngine != nullptr && m_audioEngine->wsprBeacon() != nullptr) {
+        m_audioEngine->wsprBeacon()->stop();
+        QMetaObject::invokeMethod(
+            m_audioEngine, &AudioEngine::stopWsprPump, Qt::QueuedConnection);
+    }
+    m_beaconButton->setText(tr("Transmit once"));
+    setBeaconControlsEnabled(true);
+    m_beaconStatus->setText(status);
+}
+
+void PskReporterMapDialog::updateBeaconState()
+{
+    if (!m_beaconArmed || m_audioEngine == nullptr
+        || m_radioModel == nullptr) {
+        return;
+    }
+
+    WsprBeacon* beacon = m_audioEngine->wsprBeacon();
+    if (m_beaconTransmitting) {
+        if (!m_radioModel->hasWsprTxStream()) {
+            stopBeacon(tr("Stopped: WSPR TX audio ownership was lost"));
+            return;
+        }
+        if (QDateTime::currentMSecsSinceEpoch() > m_beaconStopDeadlineMs) {
+            stopBeacon(tr("Stopped: audio timeout"));
+            return;
+        }
+        if (beacon == nullptr || !beacon->isActive()) {
+            stopBeacon(tr("Stopped: audio source unavailable"));
+            return;
+        }
+        if (beacon->isComplete()) {
+            stopBeacon(tr("Complete"));
+            return;
+        }
+        const int symbol = std::max(0, beacon->currentSymbol());
+        m_beaconStatus->setText(
+            tr("Transmitting · symbol %1/%2")
+                .arg(std::min(symbol + 1, WsprBeacon::kSymbolCount))
+                .arg(WsprBeacon::kSymbolCount));
+        return;
+    }
+
+    const qint64 remainingMs =
+        std::max<qint64>(0, m_beaconSlotMs - QDateTime::currentMSecsSinceEpoch());
+    if (remainingMs > 0) {
+        m_beaconStatus->setText(
+            tr("Armed · starts in %1.%2 s")
+                .arg(remainingMs / 1000)
+                .arg((remainingMs % 1000) / 100));
+        return;
+    }
+
+    const WsprBeacon::EncodeResult encoded = WsprBeacon::encode(
+        m_beaconCallsign->text(), m_beaconGrid->text(),
+        m_beaconPower->currentData().toInt());
+    if (!encoded || beacon == nullptr) {
+        stopBeacon(encoded ? tr("WSPR audio unavailable") : encoded.error);
+        return;
+    }
+    if (!m_radioModel->hasWsprTxStream()) {
+        stopBeacon(tr("Stopped: WSPR TX audio stream is not ready"));
+        return;
+    }
+
+    // Arm the independent DAX generator before keying. The one-second
+    // generated-silence pre-roll matches the canonical WSPR start offset and
+    // lets the radio's MOX edge settle.
+    beacon->start(encoded.symbols, static_cast<float>(m_beaconTone->value()),
+                  -20.0f, WsprBeacon::kPreRollFrames);
+    QMetaObject::invokeMethod(
+        m_audioEngine, &AudioEngine::startWsprPump, Qt::QueuedConnection);
+    m_beaconStopDeadlineMs = QDateTime::currentMSecsSinceEpoch() + 115000;
+    TransmitModel& tx = m_radioModel->transmitModel();
+    tx.requestPttOn(TransmitModel::PttSource::Wspr);
+    if (!tx.isTransmitting()) {
+        beacon->stop();
+        stopBeacon(tr("Transmit request was blocked"));
+        return;
+    }
+    m_beaconTransmitting = true;
+    m_beaconButton->setText(tr("Stop"));
+    m_beaconStatus->setText(tr("Transmitting · pre-roll"));
 }
 
 void PskReporterMapDialog::updateHomeFromRadio()
@@ -588,6 +974,9 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
 
 void PskReporterMapDialog::closeEvent(QCloseEvent* event)
 {
+    if (m_beaconArmed || m_beaconTransmitting) {
+        stopBeacon(tr("Stopped"));
+    }
     // Stop hitting the network while the window is closed.
     m_client->stop();
     m_started = false;

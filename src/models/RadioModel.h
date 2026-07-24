@@ -291,6 +291,12 @@ public:
     void resetPanState();
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    bool prepareWsprTransmit();
+    void releaseWsprTransmit();
+    bool hasWsprTxStream() const
+    {
+        return m_daxTxStreamId != 0 && m_daxTxActive;
+    }
     QJsonObject troubleshootingSnapshot() const;
 
     // Memory channel cache
@@ -1143,6 +1149,9 @@ private:
     QMap<quint32, DaxStreamDebugState> m_daxStreamDebug;
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
+    bool        m_wsprTxOwnershipRequested{false};
+    bool        m_wsprTxYieldAfterUse{false};
+    bool        m_wsprTxReleaseWhenReady{false};
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;
