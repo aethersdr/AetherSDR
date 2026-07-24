@@ -1347,6 +1347,7 @@ if (ENABLE_ASR)
     target_sources(AetherSDR PRIVATE
         src/gui/AsrAudioTap.cpp
         src/gui/CopyAssistPanel.cpp
+        src/gui/CopyAssistSettings.cpp
         src/gui/CopyAssistSettingsDialog.cpp
         src/gui/CopyAssistController.cpp
     )

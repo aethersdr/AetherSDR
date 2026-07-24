@@ -5,8 +5,10 @@
 #include "gui/CopyAssistSettingsDialog.h"
 
 #include "asr/WhisperAsrBackend.h" // asrLanguageOrDefault (header-inline, whisper-free)
+#include "gui/CopyAssistSettings.h" // foldLegacyKeys (header-inline)
 
 #include <QApplication>
+#include <QJsonObject>
 #include <QComboBox>
 #include <QLabel>
 #include <QSignalSpy>
@@ -118,6 +120,36 @@ int main(int argc, char** argv)
                "asrLanguageOrDefault falls back to en for an unsupported code");
         expect(asrLanguageOrDefault(QStringLiteral("en"), {}) == QStringLiteral("en"),
                "asrLanguageOrDefault falls back to en when the list is empty");
+    }
+
+    // ---- CopyAssistSettings::foldLegacyKeys: flat -> nested migration -----
+    {
+        using namespace AetherSDR;
+        QMap<QString, QString> present;
+        present.insert(QStringLiteral("AsrLanguage"), QStringLiteral("es"));
+        present.insert(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("True"));
+        present.insert(QStringLiteral("AsrPanelHeight"), QStringLiteral("240"));
+
+        // Fold into an object that already has a migrated field: existing wins.
+        QJsonObject existing;
+        existing.insert(QStringLiteral("AsrLanguage"), QStringLiteral("fr"));
+        const QJsonObject merged =
+            CopyAssistSettings::foldLegacyKeys(present, existing);
+
+        expect(merged.value(QStringLiteral("AsrLanguage")).toString() == QStringLiteral("fr"),
+               "foldLegacyKeys does not overwrite an already-nested field");
+        expect(merged.value(QStringLiteral("AsrRemoteEnabled")).toString() == QStringLiteral("True"),
+               "foldLegacyKeys folds a present flat bool verbatim");
+        expect(merged.value(QStringLiteral("AsrPanelHeight")).toString() == QStringLiteral("240"),
+               "foldLegacyKeys folds a present flat int verbatim");
+
+        // Nothing present → object unchanged (fresh install / already migrated).
+        expect(CopyAssistSettings::foldLegacyKeys({}, QJsonObject{}).isEmpty(),
+               "foldLegacyKeys leaves an empty object empty when nothing is present");
+
+        // Every migrated key is a real, unique entry in the legacy list.
+        expect(CopyAssistSettings::legacyFlatKeys().size() == 21,
+               "legacyFlatKeys enumerates all 21 migrated Asr keys");
     }
 
     // ---- Transcript file logging: state + toggle signal -------------------
