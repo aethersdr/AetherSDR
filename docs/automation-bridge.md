@@ -40,8 +40,8 @@ production; it only exists when you ask for it via an env var.
 cmake --build build --parallel
 
 # 2. Launch the app with the bridge enabled.
-AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
-#   AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR &                            # Linux/Windows
+AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &   # macOS
+#   AETHER_AUTOMATION=1 ./build/AetherSDR &                            # Linux/Windows
 
 # 3. Drive it. The dependency-free probe needs no Qt:
 python3 tools/automation_probe.py ping
@@ -53,8 +53,9 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
-`AETHER_AUTOMATION_NO_AUTOCONNECT=1` suppresses saved-radio autoconnect during
-bridge runs; use the `connect` verb when a test intentionally needs a radio.
+Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting; a bridge
+run reconnects to the last radio just as an interactive launch does. Use the
+`connect` verb to drive a specific radio, or clear the setting to start idle.
 
 Parallel worktrees should give each bridge a stable automation identity and a
 human-readable agent name:
@@ -102,7 +103,7 @@ socket the bridge needs. When the MCP wrapper is configured, prefer its secure
 outside the command sandbox instead:
 
 ```bash
-QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
+QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
 ```
 
 ---
@@ -189,10 +190,10 @@ override; the token is never a command-line argument, MCP result, discovery
 field, log message, or settings value.
 
 Each launch gets a unique explicit local socket and safe label. The wrapper
-sets `AETHER_AUTOMATION_NO_AUTOCONNECT=1`, pins TX automation off with
-`AETHER_AUTOMATION_NO_TX=1`, removes any inherited TX-enable flag, and refuses
-success unless token-free `ping` reports that auth is required and authenticated
-`whoami` matches the exact child PID, socket, and label with `txAllowed:false`.
+pins TX automation off with `AETHER_AUTOMATION_NO_TX=1`, removes any inherited
+TX-enable flag, and refuses success unless token-free `ping` reports that auth
+is required and authenticated `whoami` matches the exact child PID, socket, and
+label with `txAllowed:false`.
 All other MCP tools then target that owned socket. `status` inspects only the
 owned process; `stop`, wrapper exit, or a failed launch terminates only that
 process and releases its socket.
@@ -348,7 +349,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X audio or SDC IQ-skimmer profile). |
+| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator plus ordered protocol and route diagnostics. |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -1977,11 +1978,11 @@ proves the co-hold path.
 Read the status-bar transmit timer's state. The timer sits just left of the
 **PC Audio** button and runs **only** for operator-driven phone/data transmits
 — MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
-TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
-QSK toggles the interlock per element, which would thrash a wall-clock timer).
-All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
-hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
-fades out.
+TUNE/two-tone carriers, internal ATU tuning, TCI-hardware or DAX transmits
+(external-app keying paths), **nor CW** (break-in/QSK toggles the interlock per
+element, which would thrash a wall-clock timer). These exclusions are gated in
+`RadioModel::operatorTransmitChanged`. It is hidden when idle; on unkey it
+holds the final elapsed reading for 15 s, then fades out.
 
 ```json
 → {"cmd":"get","model":"txtimer"}
@@ -1996,8 +1997,8 @@ flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
 it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
 dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
-`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
-throughout.
+`visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
+`visible=false` throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
@@ -2026,9 +2027,61 @@ needed).
    "iqStarted":true,"iqFrames":412,"binaryFrames":412,"binaryBytes":3375104,
    "textMessages":37,"msSinceLastFrame":18}
 
+→ {"cmd":"tci","action":"send","value":"split_enable:0,false;vfo:0,1,14076000;"}
+← {"ok":true,"action":"send",
+   "command":"split_enable:0,false;vfo:0,1,14076000;","traceSeq":17}
+
+→ {"cmd":"tci","action":"trace","value":"status 50"}
+← {"ok":true,"capturing":true,"count":19,"lastSeq":19,
+   "entries":[
+     {"seq":16,"elapsedMs":43,"direction":"client->server",
+      "text":"split_enable:0,false;"},
+     {"seq":17,"elapsedMs":43,"direction":"client->server",
+      "text":"vfo:0,1,14076000;"},
+     {"seq":18,"elapsedMs":51,"direction":"server->client",
+      "text":"split_enable:0,false;"}
+   ]}
+
+→ {"cmd":"tci","action":"routes"}
+← {"ok":true,"contractVersion":1,"routeOwner":"external",
+   "splitRequested":false,"rxSliceId":4,"txSliceId":7,"ownsRoute":false,
+   "routeTransitionInFlight":false,"pendingRoutes":[],
+   "endpoints":[
+     {"trx":0,"sliceId":4,"panId":"0x40000000","frequencyHz":14074000,"tx":false},
+     {"trx":1,"sliceId":7,"panId":"0x40000001","frequencyHz":14076000,"tx":true}
+   ]}
+
 → {"cmd":"tci","action":"stop","value":"abrupt"}   // omit value for graceful audio_stop + close
 ← {"ok":true,"action":"stop","abrupt":true,"binaryFrames":412, …}
 ```
+
+The same commands have bare forms:
+
+```text
+tci send split_enable:0,false;vfo:0,1,14076000;
+tci trace start
+tci trace status 50
+tci trace stop
+tci trace clear
+tci trace export /tmp/tci-trace.json
+tci routes
+```
+
+`send` writes one raw client WebSocket frame, adding a final semicolon when
+needed. Embedded CR/LF and commands over 4096 characters are rejected.
+`trace start` resets sequence numbering and captures every semicolon-delimited
+command in both directions in a bounded 512-entry buffer. `trace export`
+atomically writes the complete retained transcript as JSON.
+
+`routes` is a read-only snapshot of the server's stable Flex slice routing,
+including route ownership (`external` or `tci-created`),
+transition/deferred-command state, PTT ownership, and the current contiguous
+TCI receiver projection. `lastRouteError` records the latest route allocation
+or TX-selection failure; when no VFO-B slice can be created, the server also
+returns the authoritative channel-1 projection so a client does not wait for a
+missing acknowledgement. `tci status` and `tci routes` remain available when
+the bridge is in observe-only mode; `send`, trace control/export, start, and
+stop are blocked.
 
 `stop abrupt` closes the socket without `audio_stop` or `iq_stop`; graceful
 stop sends the command matching the selected profile. This lets tests assert
@@ -2608,7 +2661,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
-| `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
+| `tci` | — | tci start\|status\|stop\|send\|trace\|routes — TCI simulator and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

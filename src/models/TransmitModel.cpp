@@ -268,10 +268,9 @@ void TransmitModel::startTune(PttSource source)
         return;
 
     // Tag the initiating source so the status-bar operator TX timer can exclude
-    // a TCI/DAX-initiated tune (the radio reports both as source=SW). An
-    // operator tune (source=Tune) is neither TCI nor DAX, so it still shows the
-    // timer. Without this, an external-app tune inherits the stale Mox tag and
-    // wrongly runs the "operator-only" timer. (#4131 review)
+    // local TUNE carriers as well as TCI/DAX-initiated tune (the radio reports
+    // every software path as source=SW). Without this, tune inherits the stale
+    // Mox tag and wrongly runs the operator-only timer. (#4131 review)
     m_activePttSource = source;
 
     emit commandReady("transmit tune 1");
@@ -282,7 +281,7 @@ void TransmitModel::startTwoToneTune(PttSource source)
     if (!runPttPreflight(source, false))
         return;
 
-    m_activePttSource = source;   // exclude TCI/DAX-initiated tune (see startTune, #4131)
+    m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
     setTuneMode("two_tone");
     emit commandReady("transmit tune 1");
 }

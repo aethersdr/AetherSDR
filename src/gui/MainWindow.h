@@ -13,6 +13,7 @@
 #include "models/AntennaGeniusModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
+#include "core/AetherDspModePolicy.h"
 #include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
@@ -520,6 +521,11 @@ private:
                                              const QString& panId = QString());
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
+    // Show a decoder panel on exactly one applet — the current decoder target —
+    // and hide it on every other pan, so a moved target can't leave a stale
+    // dock (#4409). `setter` is setCwPanelVisible or setRttyPanelVisible.
+    void setDecoderPanelVisibleOnly(PanadapterApplet* target, bool shouldShow,
+                                    void (PanadapterApplet::*setter)(bool));
     void refreshCwDecodeState();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
     // service → contact card on the CW decode panel + lookup dialog.
@@ -748,6 +754,7 @@ private:
     RadioModel&       m_radioModel;
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
+    AetherDspModePolicy m_aetherDspModePolicy;
     QThread*          m_audioThread{nullptr};
     QMediaDevices*    m_audioDeviceMonitor{nullptr};
     QTimer            m_audioDeviceChangeTimer;
@@ -1221,6 +1228,9 @@ private:
     // by both the modeless AetherDspDialog and the docked ClientRxDspApplet
     // so they push every change into the engine identically.
     void wireAetherDspWidget(class AetherDspWidget* widget);
+    void updateAetherDspModePolicy();
+    QString activeAetherDspMethod() const;
+    void setAetherDspMethodEnabled(const QString& method, bool enabled);
     class ClientCompEditor* m_clientCompEditor{nullptr}; // lazy — created on first Edit… click
     class ClientGateEditor* m_clientGateEditor{nullptr}; // lazy — created on first Edit… click
     class ClientTubeEditor* m_clientTubeEditor{nullptr}; // lazy — created on first Edit… click

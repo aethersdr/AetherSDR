@@ -531,7 +531,9 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         QToolTip::hideText();
     }
     if (obj == m_networkLabel && event->type() == QEvent::ToolTip) {
-        const QString tooltip = buildNetworkTooltip(m_radioModel);
+        const QString tooltip = buildNetworkTooltip(m_radioModel,
+                                                     m_adaptiveFpsCap,
+                                                     m_radioModel.pendingThrottleLift());
         m_networkLabel->setToolTip(tooltip);
         auto* helpEvent = static_cast<QHelpEvent*>(event);
         QToolTip::showText(helpEvent->globalPos(), tooltip, m_networkLabel);

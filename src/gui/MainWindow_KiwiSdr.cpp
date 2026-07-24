@@ -1378,6 +1378,7 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         && kiwiWaterfallChannelAvailable;
     spectrum->setKiwiSdrWaterfallAvailable(kiwiWaterfallChannelAvailable);
     spectrum->setKiwiSdrWaterfallProfile(profileId);
+    spectrum->setKiwiSdrWaterfallRate(profile.waterfallRate);
     spectrum->setKiwiSdrWaterfallActive(kiwiWaterfallActive);
     const KiwiSdrWaterfallDisplayRange displayRange =
         m_kiwiSdrManager->waterfallDisplayRange(profileId);

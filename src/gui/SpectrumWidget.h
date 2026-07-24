@@ -211,6 +211,7 @@ public:
     void setKiwiSdrWaterfallProfile(const QString& profileId);
     void clearKiwiSdrWaterfallRows();
     void clearKiwiSdrWaterfallRowsForProfile(const QString& profileId);
+    void setKiwiSdrWaterfallRate(int rate);
     void setKiwiSdrWaterfallDisplayRange(float minDbm, float maxDbm,
                                          bool autoRange);
     void updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
@@ -227,6 +228,7 @@ public:
     void setNoiseFloorPosition(int pos);
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
+    void prepareForFftPixelScaleChange();
     void suspendNoiseFloorAutoAdjustUntil(qint64 untilMs);
     void resumeNoiseFloorAutoAdjust();
     void reacquireNoiseFloorLock();
@@ -836,6 +838,14 @@ private:
     void rebuildDssViewportFromHistory();
     void rebuildDssViewportFromHistoryForFrame(double centerMhz, double bandwidthMhz);
     void setWaterfallLive(bool live);
+    void startWaterfallScrollAnimation(float distanceRows = 1.0f);
+    void stopWaterfallScrollAnimation();
+    float waterfallScrollProgressRows() const;
+    float waterfallPresentationMsPerRow() const;
+    float waterfallTimeScaleMsPerRow() const;
+    void observeKiwiSdrWaterfallCadence(qint64 rowTimestampMs);
+    void resetKiwiSdrWaterfallCadence();
+    bool flexDssFftScaleSettling() const;
     void handleWaterfallFrequencyFrameChange(double oldCenterMhz,
                                              double oldBandwidthMhz,
                                              double newCenterMhz,
@@ -929,9 +939,13 @@ private:
 #ifdef AETHER_GPU_SPECTRUM
     void prepareWaterfallFrameUpload();
 #endif
+    // startScrollAnimation: begin the one-row scroll interpolation. Multi-row
+    // callers (updateWaterfallRow) pass false and issue a single start() for the
+    // whole tile instead of restarting the clock once per appended row.
     void appendVisibleRow(const QRgb* rowData,
                           double frameCenterMhz = -1.0,
-                          double frameBandwidthMhz = -1.0);
+                          double frameBandwidthMhz = -1.0,
+                          bool startScrollAnimation = true);
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
@@ -1040,11 +1054,11 @@ private:
     QRgb waterfallLevelToRgb(float level) const;
     static quint8 encodeWaterfallLevel(float level);
     std::array<QRgb, 256> waterfallHistoryColorLut() const;
-    // 3DSS surface colour for a normalised strength s in [0,1] (0 = noise floor,
-    // 1 = ref). The full colormap gradient, gamma-shaped by the "3D Gain"
-    // control. Shared by the GPU LUT bake and the CPU fallback so both paths
-    // colour identically (deliberately NOT dbmToRgb(), whose waterfall
-    // black-level window clipped the lower range to black).
+    // 3DSS surface colour for a normalised strength s in [0,1] across the stable
+    // colour aperture. The full colormap gradient is gamma-shaped by "3D Gain".
+    // Shared by the GPU LUT and CPU fallback so both paths colour identically
+    // (deliberately NOT dbmToRgb(), whose waterfall black-level window clipped
+    // the lower range to black).
     QRgb dssStrengthToRgb(float s) const;
 
     // 3DSS — rebuild/return the cached perspective surface for the given pixel
@@ -1060,9 +1074,10 @@ private:
     // Token folding the dbmToRgb() palette inputs so the 3DSS cache rebuilds
     // when the colour mapping (scheme/gain/floor) changes.
     quint64 dssPaletteToken() const;
-    // Unified noise-floor anchor (dBm, quantised) for the 3D surface.
+    // Source-selected floor anchor (dBm, quantised) for the 3D surface.
     float dssFloorDbm();
     float peekDssFloorDbm() const;
+    float kiwiDssPresentationFloorDbm(float fallbackFloorDbm) const;
     // dB span shown above the 3D floor anchor — follows the normal dBm scale,
     // with an upper cap so an excessively wide Flex window cannot flatten it.
     float dssSpanDb() const;
@@ -1086,6 +1101,12 @@ private:
     WaterfallStreamState m_nativeWaterfallState;
     WaterfallStreamState m_kiwiWaterfallState;
     QHash<QString, WaterfallStreamState> m_kiwiProfileWaterfallStates;
+    QHash<QString, ObservedWaterfallCadence> m_kiwiWaterfallCadenceByProfile;
+    QHash<QString, int> m_kiwiWaterfallRateByProfile;
+    // Presentation anchors outlive stream-row resets/rebinds. Motion cadence
+    // may reacquire independently; only an explicit rate change relatches time.
+    QHash<QString, StablePresentationAnchor> m_kiwiTimeScaleAnchorsByProfile;
+    QHash<QString, StablePresentationAnchor> m_kiwiDssFloorAnchorsByProfile;
     // True while the current waterfall state is the operator-visible source.
     // Hidden Flex/Kiwi updates temporarily swap their state into the current
     // fields; instrumentation and retention policy need to distinguish that
@@ -1251,6 +1272,10 @@ private:
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
     float m_dssFloorAnchorDbm{-1000.0f};
     bool  m_dssFloorAnchorValid{false};
+    // The radio can briefly deliver FFT packets encoded with the old y_pixels
+    // after acknowledging a new height. Keep those rows out of retained 3D
+    // history; the live 2D trace and waterfall continue normally.
+    qint64 m_flexDssFftScaleSettlingUntilMs{0};
     // Consumed by BOTH the GPU mesh and the CPU fallback surface, so these stay
     // outside the AETHER_GPU_SPECTRUM block below — the CPU paint path needs them
     // even when GPU spectrum rendering is disabled (older Qt / -DAETHER_GPU_SPECTRUM=OFF).
@@ -1271,6 +1296,12 @@ private:
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;
     int    m_wfWriteRow{0};  // ring buffer: next row to write (newest at top)
+    // A received row appears immediately, then the viewport advances it by one
+    // row over the observed row interval. This changes display position only;
+    // the retained radio rows remain discrete and authoritative.
+    QTimer* m_waterfallScrollTimer{nullptr};
+    QElapsedTimer m_waterfallScrollClock;
+    float m_waterfallScrollDistanceRows{1.0f};
     // Per-visible-row frequency frame, indexed by the physical waterfall ring
     // row. The GPU uses this to place each row in the current viewport without
     // flattening the entire live texture into one pan/zoom frame.
@@ -1715,9 +1746,8 @@ private:
     QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge line segments, static
     QRhiBuffer* m_dssMeshUbo{nullptr};       // dynamic uniforms
     // std140 UBO float count — must match dss_mesh.{vert,frag}'s U block AND the
-    // ubo[] writer in renderGpuFrame(). 8 surface scalars + texCols + the three
-    // frequency-preview scalars + vec4 bgFill.
-    static constexpr int kDssMeshUboFloats = 16;
+    // ubo[] writer in renderGpuFrame(). Five vec4 scalar groups plus bgFill.
+    static constexpr int kDssMeshUboFloats = 24;
     QRhiTexture* m_dssHeightTex{nullptr};    // R16F ring heightmap (cols x rows)
     QRhiTexture* m_dssPaletteTex{nullptr};   // 256x1 RGBA8 floor->peak LUT
     QRhiSampler* m_dssHeightSampler{nullptr};

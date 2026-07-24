@@ -315,6 +315,13 @@ public:
     {
         m_txTimerSnapshotHandler = std::move(handler);
     }
+    // Read-only TCI route-state provider. MainWindow supplies this from the
+    // active session's TciServer so AutomationServer stays independent of the
+    // external protocol implementation.
+    void setTciRouteSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_tciRouteSnapshotHandler = std::move(handler);
+    }
 
     // Shared-secret auth (#3646). When set to a non-empty token, every verb
     // except `ping` must carry a matching `token` field or it's rejected —
@@ -517,6 +524,11 @@ private:
     // callers that also need to return the snapshot don't take a second one.
     QJsonObject recordMemorySample();
     QJsonObject doTci(const QString& action, const QString& value);
+#ifdef HAVE_WEBSOCKETS
+    void appendTciTrace(const QString& direction, const QString& text);
+    void sendTciSimText(const QString& text);
+    QJsonObject tciTraceSnapshot(int limit = 100) const;
+#endif
     QJsonObject doAudioCapture(const QString& action,
                                const QString& arg,
                                const QString& path) const;
@@ -662,6 +674,7 @@ private:
     std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
     std::function<QJsonObject()> m_kiwiSdrSnapshotHandler;
     std::function<QJsonObject()> m_txTimerSnapshotHandler;
+    std::function<QJsonObject()> m_tciRouteSnapshotHandler;
     QJsonObject m_lastWaveformCommand;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
@@ -689,6 +702,17 @@ private:
     QString m_tciSimProfile{QStringLiteral("wsjtx")};
     QString m_tciSimCloseReason;
     QElapsedTimer m_tciSimTimer;
+    struct TciTraceEntry {
+        quint64 seq{0};
+        qint64 elapsedMs{0};
+        QString direction;
+        QString text;
+    };
+    std::deque<TciTraceEntry> m_tciTrace;
+    bool m_tciTraceEnabled{false};
+    quint64 m_tciTraceSeq{0};
+    QElapsedTimer m_tciTraceClock;
+    static constexpr size_t kTciTraceMax = 512;
 #endif
 
     // TX safety rails (active only when AETHER_AUTOMATION_ALLOW_TX is set).

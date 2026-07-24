@@ -138,6 +138,11 @@ private:
     QMap<QString, FloatingContainerWindow*> m_floatingWindows;
     QMap<QString, ContentFactory>           m_factories;
     QMap<QString, Meta>                     m_meta;
+
+    // True only while restoreState() is replaying saved state, so saveState()
+    // suppresses its durable flush during restore (it would just re-write what
+    // it is reading). User-gesture transitions always flush (#4427).
+    bool m_restoring{false};
 };
 
 } // namespace AetherSDR

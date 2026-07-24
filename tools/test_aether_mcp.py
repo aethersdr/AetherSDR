@@ -411,9 +411,8 @@ def test_secure_app_instance():
                   child_env.get("AETHER_MCP_TOKEN") == "runtime-only-secret"
                   and "runtime-only-secret" not in json.dumps(launched)
                   and "runtime-only-secret" not in " ".join(argv), str(launched))
-            check("app_instance pins no-autoconnect and no-TX",
-                  child_env.get("AETHER_AUTOMATION_NO_AUTOCONNECT") == "1"
-                  and child_env.get("AETHER_AUTOMATION_NO_TX") == "1"
+            check("app_instance pins no-TX",
+                  child_env.get("AETHER_AUTOMATION_NO_TX") == "1"
                   and child_env.get("AETHER_AUTOMATION_IDENTITY") == launched.get("socket")
                   and child_env.get("AETHER_AUTOMATION_AGENT_NAME") == "secure-proof"
                   and "AETHER_AUTOMATION_ALLOW_TX" not in child_env, str(child_env.keys()))

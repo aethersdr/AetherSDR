@@ -13,16 +13,15 @@
 namespace AetherSDR {
 
 CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
-    : QDialog(parent)
+    // Tool window: modeless helper that floats above the app and stays out of
+    // the taskbar, matching the pre-PersistentDialog behavior (#4414).
+    : PersistentDialog(tr("Copy Assist Settings"),
+                       QStringLiteral("CopyAssistSettingsDialogGeometry"),
+                       parent, /*toolWindow=*/true)
 {
     setObjectName(QStringLiteral("CopyAssistSettingsDialog"));
-    setWindowTitle(tr("Copy Assist Settings"));
-    setModal(false); // modeless: never blocks the main window
-    // Float above the app as a tool window (out of the taskbar), and let the
-    // window close button just hide it — the panel's ⚙ toggles it back.
-    setWindowFlags(windowFlags() | Qt::Tool);
 
-    auto* root = new QVBoxLayout(this);
+    auto* root = new QVBoxLayout(bodyWidget());
     auto* form = new QFormLayout;
     form->setLabelAlignment(Qt::AlignRight);
 
@@ -47,6 +46,19 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     // device picker at all).
     m_gpuLabel->hide();
     m_gpu->hide();
+
+    m_language = new QComboBox(this);
+    m_language->setObjectName(QStringLiteral("CopyAssistLanguageCombo"));
+    m_language->setAccessibleName(tr("Copy Assist language"));
+    m_language->setToolTip(tr("Spoken language to transcribe (multilingual models only)"));
+    connect(m_language, &QComboBox::currentIndexChanged, this,
+            [this](int) { emit languageChanged(currentLanguage()); });
+    // Explicit label (kept so the whole row can hide together) — the language
+    // selector only applies to the whisper/remote backends; sherpa-onnx picks
+    // its language from the loaded model, so the controller hides this row then.
+    m_languageLabel = new QLabel(tr("Language:"), this);
+    m_languageLabel->setObjectName(QStringLiteral("CopyAssistLanguageLabel"));
+    form->addRow(m_languageLabel, m_language);
 
     // Transcript-to-file logging. The checkbox is the master switch; the path row
     // (populated by the controller's file picker) enables with it.
@@ -201,6 +213,30 @@ void CopyAssistSettingsDialog::setGpuSelectorVisible(bool on)
 {
     m_gpuLabel->setVisible(on);
     m_gpu->setVisible(on);
+}
+
+void CopyAssistSettingsDialog::addLanguage(const QString& code, const QString& name)
+{
+    m_language->addItem(name, code);
+}
+
+void CopyAssistSettingsDialog::setCurrentLanguage(const QString& code)
+{
+    const int idx = m_language->findData(code);
+    if (idx >= 0) {
+        m_language->setCurrentIndex(idx);
+    }
+}
+
+QString CopyAssistSettingsDialog::currentLanguage() const
+{
+    return m_language->currentData().toString();
+}
+
+void CopyAssistSettingsDialog::setLanguageSelectorVisible(bool on)
+{
+    m_languageLabel->setVisible(on);
+    m_language->setVisible(on);
 }
 
 void CopyAssistSettingsDialog::setLogToFile(bool on)

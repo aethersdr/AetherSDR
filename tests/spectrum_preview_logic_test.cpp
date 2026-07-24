@@ -162,6 +162,196 @@ int testWaterfallPipelineSelection()
     return 0;
 }
 
+int testWaterfallScrollProgress()
+{
+    using namespace AetherSDR;
+    if (!nearlyEqual(waterfallScrollProgressRows(0, 40.0f), 0.0)
+        || !nearlyEqual(waterfallScrollProgressRows(10, 40.0f), 0.25)
+        || !nearlyEqual(waterfallScrollProgressRows(40, 40.0f), 1.0)
+        || !nearlyEqual(waterfallScrollProgressRows(80, 40.0f), 1.0)
+        || !nearlyEqual(waterfallScrollProgressRows(80, 40.0f, 3.0f), 2.0)
+        || !nearlyEqual(waterfallScrollProgressRows(160, 40.0f, 3.0f), 3.0)) {
+        return fail("waterfall scrolling should advance one row over one interval");
+    }
+    if (!nearlyEqual(waterfallScrollProgressRows(-1, 40.0f), 0.0)
+        || !nearlyEqual(waterfallScrollProgressRows(10, 0.0f), 0.0)
+        || !nearlyEqual(
+            waterfallScrollProgressRows(
+                10, std::numeric_limits<float>::quiet_NaN()),
+            0.0)) {
+        return fail("invalid waterfall timing should disable interpolation");
+    }
+    if (!nearlyEqual(
+            waterfallScrollSampleOffsetUnit(0.0f, 1.0f, 100), 0.01, 1.0e-6)
+        || !nearlyEqual(
+            waterfallScrollSampleOffsetUnit(0.5f, 1.0f, 100), 0.005, 1.0e-6)
+        || !nearlyEqual(
+            waterfallScrollSampleOffsetUnit(1.0f, 1.0f, 100), 0.0, 1.0e-6)
+        || !nearlyEqual(
+            waterfallScrollSampleOffsetUnit(1.0f, 3.0f, 100), 0.02, 1.0e-6)
+        || !nearlyEqual(
+            waterfallScrollSampleOffsetUnit(0.5f, 1.0f, 0), 0.0, 1.0e-6)) {
+        return fail("waterfall sample offset should preserve the row handoff");
+    }
+    return 0;
+}
+
+int testDssFftScaleSettleWindow()
+{
+    using namespace AetherSDR;
+    if (!dssFftScaleSettleActive(1000, 1750)
+        || dssFftScaleSettleActive(1750, 1750)
+        || dssFftScaleSettleActive(1800, 1750)
+        || dssFftScaleSettleActive(1000, 0)) {
+        return fail("3D FFT scale settling must end exactly at its deadline");
+    }
+    return 0;
+}
+
+int testDssStartupHistoryAvailability()
+{
+    using namespace AetherSDR;
+    if (!nearlyEqual(dssHistoryAvailability(4.0f, 4.0f), 0.0)
+        || !nearlyEqual(dssHistoryAvailability(3.5f, 4.0f), 0.5)
+        || !nearlyEqual(dssHistoryAvailability(3.0f, 4.0f), 1.0)
+        || !nearlyEqual(dssHistoryAvailability(2.0f, 4.0f), 1.0)
+        || !nearlyEqual(dssHistoryAvailability(
+                            std::numeric_limits<float>::quiet_NaN(), 4.0f),
+                        0.0)
+        || !nearlyEqual(dssHistoryAvailability(0.0f, 0.0f), 0.0)) {
+        return fail("3D FFT startup history should fade in continuously");
+    }
+    return 0;
+}
+
+int testObservedWaterfallCadence()
+{
+    using namespace AetherSDR;
+    ObservedWaterfallCadence cadence;
+    StablePresentationAnchor timeScaleAnchor;
+    if (observeWaterfallCadenceAndTimeScale(
+            cadence, timeScaleAnchor, 1000)
+        || cadence.valid
+        || !nearlyEqual(observedWaterfallMsPerRow(cadence, 75.0f), 75.0)
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, &timeScaleAnchor, 75.0f),
+            75.0)) {
+        return fail("first waterfall row should only seed cadence timing");
+    }
+    if (!observeWaterfallCadenceAndTimeScale(
+            cadence, timeScaleAnchor, 1100)
+        || !cadence.valid
+        || !nearlyEqual(cadence.msPerRow, 100.0)
+        || timeScaleAnchor.locked
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, &timeScaleAnchor),
+            100.0)) {
+        return fail("second waterfall row should establish observed cadence");
+    }
+    if (!observeWaterfallCadenceAndTimeScale(
+            cadence, timeScaleAnchor, 1220)
+        || !nearlyEqual(cadence.msPerRow, 110.0)
+        || timeScaleAnchor.locked
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, &timeScaleAnchor),
+            100.0)) {
+        return fail("waterfall cadence should smooth ordinary arrival jitter");
+    }
+    if (observeWaterfallCadenceAndTimeScale(
+            cadence, timeScaleAnchor, 1220)
+        || !nearlyEqual(cadence.msPerRow, 110.0)) {
+        return fail("duplicate waterfall timestamps must not change cadence");
+    }
+    if (!observeWaterfallCadenceAndTimeScale(
+            cadence, timeScaleAnchor, 1360)
+        || !nearlyEqual(cadence.msPerRow, 125.0)
+        || !timeScaleAnchor.locked
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, &timeScaleAnchor),
+            112.0)) {
+        return fail("Kiwi time scale should lock after startup acquisition");
+    }
+    if (!observeWaterfallCadenceAndTimeScale(
+            cadence, timeScaleAnchor, 1560)
+        || !nearlyEqual(cadence.msPerRow, 140.0)
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, &timeScaleAnchor),
+            112.0)) {
+        return fail("arrival jitter must not move the locked Kiwi time scale");
+    }
+    if (!nearlyEqual(
+            selectedWaterfallMsPerRow(false, 82.0f, &cadence), 82.0)
+        || !nearlyEqual(
+            selectedWaterfallMsPerRow(true, 82.0f, &cadence), 140.0)
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                false, 82.0f, &timeScaleAnchor),
+            82.0)
+        || !nearlyEqual(
+            selectedWaterfallMsPerRow(
+                true, 82.0f, nullptr, 95.0f),
+            95.0)
+        || !nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, nullptr, 95.0f),
+            95.0)) {
+        return fail("Kiwi cadence selection must not alter Flex timing");
+    }
+
+    cadence = ObservedWaterfallCadence{};
+    if (!nearlyEqual(
+            selectedWaterfallTimeScaleMsPerRow(
+                true, 82.0f, &timeScaleAnchor),
+            112.0)) {
+        return fail("Kiwi stream resets must preserve the locked time scale");
+    }
+    observeWaterfallCadence(cadence, 2000);
+    if (!observeWaterfallCadence(cadence, 7000)
+        || !nearlyEqual(cadence.msPerRow, 5000.0)) {
+        return fail("slow Kiwi waterfall rates must retain their full interval");
+    }
+    return 0;
+}
+
+int testStablePresentationAnchor()
+{
+    using namespace AetherSDR;
+    StablePresentationAnchor anchor;
+    if (observeStablePresentationAnchor(
+            anchor, std::numeric_limits<float>::quiet_NaN())
+        || anchor.hasValue) {
+        return fail("presentation anchors must reject invalid samples");
+    }
+    if (!observeStablePresentationAnchor(anchor, -101.1f, 3, 0.5f)
+        || !anchor.hasValue
+        || anchor.locked
+        || !nearlyEqual(
+            stablePresentationValue(anchor, -90.0f), -101.1, 1.0e-4)) {
+        return fail("first presentation sample should establish a fixed provisional value");
+    }
+    if (!observeStablePresentationAnchor(anchor, -99.9f, 3, 0.5f)
+        || anchor.locked
+        || !nearlyEqual(
+            stablePresentationValue(anchor, -90.0f), -101.1, 1.0e-4)) {
+        return fail("presentation acquisition should not move the provisional axis");
+    }
+    if (!observeStablePresentationAnchor(anchor, -100.2f, 3, 0.5f)
+        || !anchor.locked
+        || !nearlyEqual(stablePresentationValue(anchor, -90.0f), -100.5)) {
+        return fail("presentation anchor should lock to a quantized acquisition mean");
+    }
+    if (observeStablePresentationAnchor(anchor, -80.0f, 3, 0.5f)
+        || !nearlyEqual(stablePresentationValue(anchor, -90.0f), -100.5)) {
+        return fail("locked presentation anchors must ignore live measurement drift");
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -175,5 +365,20 @@ int main()
     if (const int result = testCommandThrottle(); result != 0) {
         return result;
     }
-    return testWaterfallPipelineSelection();
+    if (const int result = testWaterfallPipelineSelection(); result != 0) {
+        return result;
+    }
+    if (const int result = testWaterfallScrollProgress(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssFftScaleSettleWindow(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssStartupHistoryAvailability(); result != 0) {
+        return result;
+    }
+    if (const int result = testObservedWaterfallCadence(); result != 0) {
+        return result;
+    }
+    return testStablePresentationAnchor();
 }

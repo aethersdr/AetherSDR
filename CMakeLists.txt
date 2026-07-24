@@ -542,6 +542,7 @@ set(CORE_SOURCES
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
+    src/core/AetherDspModePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
@@ -602,6 +603,7 @@ set(CORE_SOURCES
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
+    src/core/TciRoutingState.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
@@ -1347,6 +1349,7 @@ if (ENABLE_ASR)
     target_sources(AetherSDR PRIVATE
         src/gui/AsrAudioTap.cpp
         src/gui/CopyAssistPanel.cpp
+        src/gui/CopyAssistSettings.cpp
         src/gui/CopyAssistSettingsDialog.cpp
         src/gui/CopyAssistController.cpp
     )
@@ -2865,6 +2868,15 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
+# Pure mode-policy regression for global AetherDSP selection (#4415).
+add_executable(aether_dsp_mode_policy_test
+    tests/aether_dsp_mode_policy_test.cpp
+    src/core/AetherDspModePolicy.cpp
+)
+target_include_directories(aether_dsp_mode_policy_test PRIVATE src)
+target_link_libraries(aether_dsp_mode_policy_test PRIVATE Qt6::Core)
+add_test(NAME aether_dsp_mode_policy_test COMMAND aether_dsp_mode_policy_test)
+
 # Hardware-free state-machine coverage for the opt-in TX capture health
 # summary. Reproduces the Qt pull-mode Active -> Idle/full-buffer signature and
 # verifies anomaly rate limiting without requiring PipeWire or an audio device.
@@ -3423,6 +3435,14 @@ if (ENABLE_ASR)
     add_executable(copy_assist_settings_dialog_test
         tests/copy_assist_settings_dialog_test.cpp
         src/gui/CopyAssistSettingsDialog.cpp
+        src/gui/CopyAssistSettings.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+        src/core/ThemeManager.cpp
+        src/core/AppSettings.cpp
+        src/core/LogManager.cpp
+        src/core/AsyncLogWriter.cpp
     )
     target_include_directories(copy_assist_settings_dialog_test PRIVATE src)
     target_link_libraries(copy_assist_settings_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -3883,6 +3903,20 @@ if(Qt6WebSockets_FOUND)
     target_include_directories(tci_protocol_test PRIVATE src)
     target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
+
+    add_executable(tci_automation_test tests/tci_automation_test.cpp)
+    target_include_directories(tci_automation_test PRIVATE src tests)
+    target_link_libraries(tci_automation_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
+    target_include_directories(tci_server_review_test PRIVATE src tests)
+    target_link_libraries(tci_server_review_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.

@@ -28,8 +28,6 @@ public:
     AsrTranscript transcribe(const std::vector<float>& pcm16k, QString* error) override;
     void unload() override;
 
-    void setLanguage(const QString& language) { m_language = language; }
-
 private:
     whisper_context* m_ctx = nullptr;
     QString m_language;
@@ -57,5 +55,37 @@ bool asrGpuAvailable();
 // All selectable GPU devices (discrete + integrated), in the order whisper's
 // gpu_device indexes them. Empty on CPU-only builds / GPU-less hosts.
 std::vector<AsrGpuDevice> asrGpuDevices();
+
+// A selectable transcription language: `code` is the ISO code passed to the
+// backend (e.g. "en", "es"); `name` is the English display name ("English").
+struct AsrLanguage {
+    QString code;
+    QString name;
+};
+
+// Every language the vendored whisper build supports, sorted by display name.
+// Multilingual models honor the choice; English-only (.en) models ignore it.
+// There is no "auto-detect" entry: passing a language of "auto" (or empty) to
+// whisperAsrBackendFactory still triggers detection in transcribe(), but the UI
+// does not offer that option — detection was unreliable on Copy Assist's short
+// VAD segments (whisper keys off ~30 s of audio), so the path is left dormant.
+std::vector<AsrLanguage> asrWhisperLanguages();
+
+// Coerce a persisted language code to one the model can actually decode:
+// returns `saved` when it appears in `supported`, otherwise falls back to
+// English ("en"). Used to validate/migrate the stored AsrLanguage (including
+// the retired "auto" sentinel and any empty/stale code) so the selector and the
+// engine can never disagree. Header-inline and whisper-free so it is unit
+// testable without linking the vendored library.
+inline QString asrLanguageOrDefault(const QString& saved,
+                                    const std::vector<AsrLanguage>& supported)
+{
+    for (const AsrLanguage& lang : supported) {
+        if (lang.code == saved) {
+            return saved;
+        }
+    }
+    return QStringLiteral("en");
+}
 
 } // namespace AetherSDR

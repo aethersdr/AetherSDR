@@ -1,4 +1,5 @@
 #include "gui/DssRenderer.h"
+#include "gui/DssDcEdgeMath.h"
 
 #include <QVector>
 
@@ -218,6 +219,42 @@ int testRowPlateauStats()
     return 0;
 }
 
+int testDcEdgeSpikeFlattening()
+{
+    QVector<float> captured(2255, -68.0f);
+    captured[0] = -48.0f;
+    captured[1] = -48.0f;
+    captured[2] = -56.0f;
+    captured[3] = -66.0f;
+
+    if (!AetherSDR::DssDcEdgeMath::viewStartsAtDc(0.4315127865,
+                                                  0.8630255730)) {
+        return fail("an exact zero-Hz low edge must enable DSS DC repair");
+    }
+    if (AetherSDR::DssDcEdgeMath::viewStartsAtDc(0.4485127865,
+                                                 0.8630255730)) {
+        return fail("a 17 kHz positive low edge must not enable DSS DC repair");
+    }
+
+    const QVector<float> repaired =
+        AetherSDR::DssDcEdgeMath::flattenLeadingSpike(captured);
+    for (int i = 0; i < 3; ++i) {
+        if (std::abs(repaired[i] + 68.0f) > 0.01f) {
+            return fail("captured leading DC spike bins must use the local baseline");
+        }
+    }
+    if (std::abs(repaired[3] - captured[3]) > 0.01f) {
+        return fail("DC repair must stop at the first non-outlier bin");
+    }
+
+    QVector<float> normal(2255, -68.0f);
+    normal[0] = -63.0f;
+    if (AetherSDR::DssDcEdgeMath::flattenLeadingSpike(normal) != normal) {
+        return fail("normal leading FFT variation must remain unchanged");
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -244,6 +281,9 @@ int main()
         return rc;
     }
     if (int rc = testRowPlateauStats(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testDcEdgeSpikeFlattening(); rc != 0) {
         return rc;
     }
 

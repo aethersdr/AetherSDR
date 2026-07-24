@@ -9,6 +9,10 @@ etc.) as numbered **receivers** (`trx` indexes in the TCI protocol).
 Since #2140 these indexes follow a contiguous numbering scheme rather
 than passing through raw Flex slice IDs.
 
+The receiver-index policy is only one half of the routing contract. Channel
+0/1, split, TX ownership, and acknowledgement ordering are defined in
+[TCI Routing and Ordering Contract](tci-routing-ordering.md).
+
 ## Rules
 
 1. **Contiguous `0..N-1` indexing.**
@@ -28,6 +32,12 @@ than passing through raw Flex slice IDs.
    slice whose raw Flex `sliceId()` matches.  If that also fails it falls
    back to the first owned slice.  This keeps older clients that cached
    raw Flex IDs functional in the common single-slice case.
+
+4. **Two channels per receiver.**
+   AetherSDR advertises `channels_count:2`. Channel 0 is the receiver's RX
+   slice. Channel 1 is the resolved radio-global TX slice for that RX route.
+   The route uses stable Flex slice IDs internally even if public TRX indexes
+   shift after topology changes.
 
 ## Spot Click Notifications
 
