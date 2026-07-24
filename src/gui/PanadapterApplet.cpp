@@ -827,9 +827,9 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
             return true;
         } else if (ev->type() == QEvent::MouseButtonRelease && m_copyAssistResizing) {
             m_copyAssistResizing = false;
+            // setValue() self-persists — no extra AppSettings::save() needed.
             CopyAssistSettings::setValue("AsrPanelHeight",
-                                             QString::number(m_copyAssistHeight));
-            AppSettings::instance().save();
+                                         QString::number(m_copyAssistHeight));
             return true;
         }
     }

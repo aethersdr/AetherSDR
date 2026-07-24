@@ -27,7 +27,6 @@ void ensureMigrated()
     if (done) {
         return;
     }
-    done = true;
 
     auto& s = AppSettings::instance();
     QMap<QString, QString> present;
@@ -37,8 +36,18 @@ void ensureMigrated()
         }
     }
     if (present.isEmpty()) {
-        return; // fresh install, or already migrated
+        // Nothing to fold. Latch `done` only once we can confirm this is a real
+        // loaded state — the nested root key already exists (migration ran, or a
+        // fresh install has since written a field). If BOTH the flat keys and the
+        // root object are absent we may simply be pre-load, so leave `done` unset
+        // and retry on the next access rather than permanently skipping migration
+        // and orphaning the user's settings.
+        if (s.contains(rootKey())) {
+            done = true;
+        }
+        return;
     }
+    done = true;
     const QJsonObject merged = foldLegacyKeys(present, readObject());
     s.setValue(rootKey(), QString::fromUtf8(QJsonDocument(merged).toJson(QJsonDocument::Compact)));
     for (auto it = present.constBegin(); it != present.constEnd(); ++it) {

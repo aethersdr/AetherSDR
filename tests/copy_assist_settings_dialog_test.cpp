@@ -2,12 +2,16 @@
 // (QT_QPA_PLATFORM=offscreen) and verifies the model-tier + compute-device
 // selectors that moved out of CopyAssistPanel into the modeless settings dialog.
 
+#include "TestSettingsProfile.h"
+
+#include "core/AppSettings.h"
 #include "gui/CopyAssistSettingsDialog.h"
 
 #include "asr/WhisperAsrBackend.h" // asrLanguageOrDefault (header-inline, whisper-free)
-#include "gui/CopyAssistSettings.h" // foldLegacyKeys (header-inline)
+#include "gui/CopyAssistSettings.h" // foldLegacyKeys + value/setValue
 
 #include <QApplication>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QComboBox>
 #include <QLabel>
@@ -33,7 +37,45 @@ void expect(bool condition, const char* description)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(
+        QStringLiteral("aether-copy-assist-migration-test"));
     QApplication app(argc, argv);
+
+    // ---- CopyAssistSettings migration: flat Asr* keys -> nested "CopyAssist" ---
+    // Exercises the stateful path (ensureMigrated + value/setValue round-trip
+    // through AppSettings), complementing the pure foldLegacyKeys checks below.
+    // Runs first so it is the first accessor call (the one-time migration).
+    {
+        auto& s = AppSettings::instance();
+        s.load();
+        // Seed a couple of legacy flat keys as an un-migrated profile would have.
+        s.setValue(QStringLiteral("AsrLanguage"), QStringLiteral("es"));
+        s.setValue(QStringLiteral("AsrPanelHeight"), QStringLiteral("240"));
+
+        expect(CopyAssistSettings::value(QStringLiteral("AsrLanguage"),
+                                         QStringLiteral("en")).toString()
+                   == QStringLiteral("es"),
+               "value() returns the migrated legacy value");
+        expect(!s.contains(QStringLiteral("AsrLanguage")),
+               "migration removes the flat AsrLanguage key");
+        expect(!s.contains(QStringLiteral("AsrPanelHeight")),
+               "migration folds every present flat key, not just the one read");
+
+        const QJsonObject nested = QJsonDocument::fromJson(
+            s.value(CopyAssistSettings::rootKey()).toString().toUtf8()).object();
+        expect(nested.value(QStringLiteral("AsrLanguage")).toString()
+                   == QStringLiteral("es"),
+               "nested CopyAssist object holds the folded language");
+        expect(nested.value(QStringLiteral("AsrPanelHeight")).toString()
+                   == QStringLiteral("240"),
+               "nested CopyAssist object holds every folded field");
+
+        CopyAssistSettings::setValue(QStringLiteral("AsrLanguage"),
+                                     QStringLiteral("fr"));
+        expect(CopyAssistSettings::value(QStringLiteral("AsrLanguage")).toString()
+                   == QStringLiteral("fr"),
+               "setValue then value round-trips through the nested object");
+    }
 
     CopyAssistSettingsDialog dlg;
 
