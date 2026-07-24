@@ -1,11 +1,12 @@
 // Offline UI test for CopyAssistSettingsDialog (RFC #4333). Runs offscreen
-// (QT_QPA_PLATFORM=offscreen) and verifies the model-tier + compute-device
+// (QT_QPA_PLATFORM=offscreen) and verifies frameless-window behavior plus the
 // selectors that moved out of CopyAssistPanel into the modeless settings dialog.
 
 #include "TestSettingsProfile.h"
 
 #include "core/AppSettings.h"
 #include "gui/CopyAssistSettingsDialog.h"
+#include "gui/FramelessWindowTitleBar.h"
 
 #include "asr/WhisperAsrBackend.h" // asrLanguageOrDefault (header-inline, whisper-free)
 #include "gui/CopyAssistSettings.h" // foldLegacyKeys + value/setValue
@@ -38,8 +39,10 @@ void expect(bool condition, const char* description)
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(
-        QStringLiteral("aether-copy-assist-migration-test"));
+        QStringLiteral("aether-copy-assist-settings-test"));
     QApplication app(argc, argv);
+
+    AppSettings::instance().load();
 
     // ---- CopyAssistSettings migration: flat Asr* keys -> nested "CopyAssist" ---
     // Exercises the stateful path (ensureMigrated + value/setValue round-trip
@@ -47,7 +50,6 @@ int main(int argc, char** argv)
     // Runs first so it is the first accessor call (the one-time migration).
     {
         auto& s = AppSettings::instance();
-        s.load();
         // Seed a couple of legacy flat keys as an un-migrated profile would have.
         s.setValue(QStringLiteral("AsrLanguage"), QStringLiteral("es"));
         s.setValue(QStringLiteral("AsrPanelHeight"), QStringLiteral("240"));
@@ -77,7 +79,38 @@ int main(int argc, char** argv)
                "setValue then value round-trips through the nested object");
     }
 
+    // Frameless-window behavior (from #4414) shares this offscreen harness.
+    AppSettings::instance().setValue(QStringLiteral("FramelessWindow"),
+                                     QStringLiteral("True"));
     CopyAssistSettingsDialog dlg;
+    dlg.show();
+    app.processEvents();
+
+    auto* titleBar = dlg.findChild<FramelessWindowTitleBar*>();
+    expect((dlg.windowFlags() & Qt::FramelessWindowHint) != 0,
+           "saved frameless setting applies on construction");
+    expect(titleBar != nullptr && titleBar->isVisible(),
+           "frameless title bar is visible");
+    // The dialog is a modeless tool window (out of the taskbar, floats above the
+    // app) — must survive the frameless toggle, not just the initial build (#4414).
+    expect(dlg.windowType() == Qt::Tool,
+           "settings dialog is a tool window on construction");
+
+    dlg.setFramelessMode(false);
+    app.processEvents();
+    expect((dlg.windowFlags() & Qt::FramelessWindowHint) == 0,
+           "runtime toggle restores native window chrome");
+    expect(titleBar != nullptr && !titleBar->isVisible(),
+           "frameless title bar hides in native mode");
+    expect(dlg.windowType() == Qt::Tool,
+           "tool window type is preserved in native mode");
+
+    dlg.setFramelessMode(true);
+    app.processEvents();
+    expect((dlg.windowFlags() & Qt::FramelessWindowHint) != 0,
+           "runtime toggle restores frameless window chrome");
+    expect(titleBar != nullptr && titleBar->isVisible(),
+           "frameless title bar returns in frameless mode");
 
     // ---- Tier selection emits the tier id ---------------------------------
     dlg.addTier(QStringLiteral("base"), QStringLiteral("Base"));
@@ -234,6 +267,15 @@ int main(int argc, char** argv)
         expect(!thrSpy.isEmpty() && thrSpy.last().at(0).toInt() == 65,
                "speakerThresholdChanged emits percent");
     }
+
+    dlg.resize(520, 360);
+    app.processEvents();
+    dlg.close();
+    expect(!AppSettings::instance()
+                .value(QStringLiteral("CopyAssistSettingsDialogGeometry"))
+                .toString()
+                .isEmpty(),
+           "dialog geometry is persisted on close");
 
     std::printf(g_failures == 0 ? "\nCopy Assist settings dialog: ALL PASS\n"
                                 : "\nCopy Assist settings dialog: %d FAILURE(S)\n",

@@ -21,13 +21,13 @@ class RFPower(ActionBase):
     def event_callback(self, event, data):
         if event == Input.Dial.Events.TURN_CW:
             self._power = min(100, self._power + 5)
-            self.plugin_base.tci.send(f"drive:{self._power};")
+            self.plugin_base.tci.send(f"drive:0,{self._power};")
         elif event == Input.Dial.Events.TURN_CCW:
             self._power = max(0, self._power - 5)
-            self.plugin_base.tci.send(f"drive:{self._power};")
+            self.plugin_base.tci.send(f"drive:0,{self._power};")
         elif event == Input.Key.Events.DOWN:
             # Key press cycles: 25 → 50 → 75 → 100 → 25
             self._power = (self._power + 25) % 125
             if self._power == 0:
                 self._power = 25
-            self.plugin_base.tci.send(f"drive:{self._power};")
+            self.plugin_base.tci.send(f"drive:0,{self._power};")

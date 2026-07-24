@@ -1724,14 +1724,9 @@ MainWindow::MainWindow(QWidget* parent)
     wireDaxIq();
 
     // ── Status bar telemetry ──────────────────────────────────────────────────
-    // Single source of truth for quality-level colors used by the footer label
-    // and the heartbeat throttle indicator.  Both must stay in sync.
-    auto qualityColor = [](const QString& quality) -> QString {
-        if (quality == "Fair") return QStringLiteral("#cc9900");
-        if (quality == "Poor") return QStringLiteral("#cc3333");
-        if (quality == "Good") return QStringLiteral("#00b4d8");
-        return QStringLiteral("#00cc66"); // Excellent / Very Good
-    };
+    // Quality-level colors come from networkQualityColor() (MainWindowHelpers)
+    // so the footer label and the diagnostics tooltip share one mapping and
+    // never diverge (e.g. "Off" is neutral grey in both, not green here).
     // Map an fps cap to the matching quality-level color for the throttle indicator.
     auto fpsCapColor = [](int fpsCap) -> QString {
         if (fpsCap <= 4) return QStringLiteral("#cc3333"); // Poor
@@ -1740,8 +1735,8 @@ MainWindow::MainWindow(QWidget* parent)
     };
 
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
-            this, [this, qualityColor](const QString& quality, int pingMs) {
-        const QString color = qualityColor(quality);
+            this, [this](const QString& quality, int pingMs) {
+        const QString color = networkQualityColor(quality);
         // Append fps cap so users understand why moving the fps slider has no effect.
         // Show "(restoring)" during the min-dwell hold so testers can distinguish
         // stuck throttle from a deliberate stability wait.
@@ -1754,13 +1749,9 @@ MainWindow::MainWindow(QWidget* parent)
         m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
             .arg(color, quality + capSuffix));
         Q_UNUSED(pingMs);
-        QString tooltip = buildNetworkTooltip(m_radioModel);
-        if (m_adaptiveFpsCap > 0) {
-            const QString throttleMsg = dwellPending
-                ? QStringLiteral("Adaptive throttle holding for link stability — restoring shortly\n\n")
-                : QString("Adaptive throttle active: %1 fps cap\n\n").arg(m_adaptiveFpsCap);
-            tooltip.prepend(throttleMsg);
-        }
+        const QString tooltip = buildNetworkTooltip(m_radioModel,
+                                                     m_adaptiveFpsCap,
+                                                     dwellPending);
         m_networkLabel->setToolTip(tooltip);
     });
 
@@ -1928,11 +1919,8 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_titleBar) m_titleBar->setDiscovering(true);
     m_discovery.startListening();
 
-    const bool automationNoAutoConnect =
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT");
     const bool autoConnectToLastRadio =
-        !automationNoAutoConnect
-        && AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True";
+        AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True";
     const QString startupLastSerial =
         AppSettings::instance().value("LastConnectedRadioSerial").toString();
     if (!startupLastSerial.isEmpty() && autoConnectToLastRadio) {
@@ -1946,9 +1934,6 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected || m_radioModel.isConnected()) return;
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT")) {
-            return;
-        }
         if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()
@@ -4246,25 +4231,13 @@ void MainWindow::buildUI()
             this, [this](const QString& panId) {
         m_radioModel.setActivePanId(panId);
 
-        // Update m_panApplet for the new active pan
+        // Update m_panApplet for the new active pan. setActivePanApplet()
+        // re-targets the decoders and refreshes the panels, so visibility
+        // follows the active slice (not whichever slice appears first on the
+        // newly active pan) and stale docks are cleared on every other pan
+        // (#4409).
         if (auto* applet = m_panStack->panadapter(panId))
             setActivePanApplet(applet);
-
-        // Show/hide CW decode panel based on the new active pan's slice mode
-        // — driven through refreshCwDecodeState() so the panel on the
-        // landed pan picks up the same RX/TX toggle gating the active
-        // slice does (#2417).
-        for (auto* sl : m_radioModel.slices()) {
-            if (sl->panId() == panId) {
-                const bool isCw = (sl->mode() == "CW" || sl->mode() == "CWL");
-                const bool anyOn = CwDecodeSettings::anyEnabled();
-                if (auto* applet = m_panStack->panadapter(panId))
-                    applet->setCwPanelVisible(isCw && anyOn);
-                refreshCwDecodeState();
-                refreshRttyDecodeState();
-                break;
-            }
-        }
     });
     splitter->setStretchFactor(0, 0);  // CWX panel: fixed width
     splitter->setStretchFactor(1, 0);  // DVK panel: fixed width
@@ -4719,10 +4692,15 @@ void MainWindow::buildUI()
     netTitle->setAlignment(Qt::AlignCenter);
     netVbox->addWidget(netTitle);
     m_networkLabel = new QLabel("");
+    m_networkLabel->setAccessibleName(tr("Network status"));
+    m_networkLabel->setAccessibleDescription(
+        tr("Network quality; double-click to open full diagnostics"));
     applyStatusBarCompactLabelStyle(m_networkLabel, QStringLiteral("{{color.text.label}}"));
     m_networkLabel->setTextFormat(Qt::RichText);
     m_networkLabel->setAlignment(Qt::AlignCenter);
-    m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel));
+    m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel,
+                                                   m_adaptiveFpsCap,
+                                                   m_radioModel.pendingThrottleLift()));
     m_networkLabel->installEventFilter(this);
     m_networkTooltipRefreshTimer.setInterval(1000);
     connect(&m_networkTooltipRefreshTimer, &QTimer::timeout, this, [this] {
@@ -4730,7 +4708,9 @@ void MainWindow::buildUI()
             m_networkTooltipRefreshTimer.stop();
             return;
         }
-        const QString tooltip = buildNetworkTooltip(m_radioModel);
+        const QString tooltip = buildNetworkTooltip(m_radioModel,
+                                                     m_adaptiveFpsCap,
+                                                     m_radioModel.pendingThrottleLift());
         m_networkLabel->setToolTip(tooltip);
         const QPoint pos = m_networkLabel->mapToGlobal(QPoint(m_networkLabel->width() / 2, 0));
         QToolTip::showText(pos, tooltip, m_networkLabel);
@@ -6616,8 +6596,15 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
     if (applet == m_panApplet) return;
     m_panApplet = applet;
 
+    // Re-target the decoders to the new active pan, then refresh so the moved
+    // panel becomes visible on the new target and is cleared on every other pan.
+    // route*() only hides the old target; refresh*() decides visibility from the
+    // active slice — pairing them here means every caller stays consistent
+    // without having to remember the follow-up refresh (#4409).
     routeCwDecoderOutput();
     routeRttyDecoderOutput();
+    refreshCwDecodeState();
+    refreshRttyDecodeState();
 }
 
 // Route CW decoder text/stats output to the pan that owns the active slice,
@@ -6639,6 +6626,10 @@ void MainWindow::routeCwDecoderOutput()
     disconnect(m_cwStatsConn);
 #endif
     if (m_cwDecoderApplet) {
+        // A panel can still be visible when startup status ordering moves the
+        // decoder target. Hide it before dropping ownership so a later refresh
+        // cannot leave an orphaned CW dock on the old pan (#4409).
+        m_cwDecoderApplet->setCwPanelVisible(false);
         disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         disconnect(&m_cwDecoderTx, &CwDecoder::textDecoded,
@@ -6712,6 +6703,23 @@ void MainWindow::routeCwDecoderOutput()
 // independent RX/TX toggles, MOX edges, and slice-mode changes all
 // converge on the same decision tree.
 // RTTY decoder routing lives in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
+void MainWindow::setDecoderPanelVisibleOnly(
+    PanadapterApplet* target, bool shouldShow,
+    void (PanadapterApplet::*setter)(bool))
+{
+    // Exactly one panel — the current decoder target — may be visible; every
+    // other applet is hidden so a target moved during startup status ordering
+    // can't leave an orphaned decoder dock behind (#4409).
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (applet)
+                (applet->*setter)(applet == target && shouldShow);
+        }
+    } else if (target) {
+        (target->*setter)(shouldShow);
+    }
+}
+
 void MainWindow::refreshCwDecodeState()
 {
     const bool rxOn = CwDecodeSettings::rxEnabled();
@@ -6725,8 +6733,8 @@ void MainWindow::refreshCwDecodeState()
     // text view is anchored to a CW slice's panadapter.  TX-side
     // decode is shown in the same panel, so if there's no CW slice in
     // view, there's no panel either.
-    if (m_cwDecoderApplet)
-        m_cwDecoderApplet->setCwPanelVisible(isCw && anyOn);
+    setDecoderPanelVisibleOnly(m_cwDecoderApplet, isCw && anyOn,
+                               &PanadapterApplet::setCwPanelVisible);
 
     // RX decoder runs only when RX-decode is on and the operator is
     // listening to a CW slice.  Non-CW slices feed unrelated audio,

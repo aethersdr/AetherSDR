@@ -1,6 +1,7 @@
 #ifdef HAVE_WEBSOCKETS
 #include "TciProtocol.h"
 #include "AppSettings.h"
+#include "TciRoutingState.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -13,6 +14,7 @@
 #include <QMetaObject>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -30,8 +32,9 @@ long long TciProtocol::mhzToHz(double mhz)
     return static_cast<long long>(std::round(mhz * 1e6));
 }
 
-TciProtocol::TciProtocol(RadioModel* model)
+TciProtocol::TciProtocol(RadioModel* model, TciRoutingState* routingState)
     : m_model(model)
+    , m_routingState(routingState)
 {}
 
 // ── Mode conversion ────────────────────────────────────────────────────────
@@ -68,18 +71,54 @@ QString TciProtocol::tciToSmartSDR(const QString& mode)
 
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
-    if (!m_model || !m_model->isConnected()) return nullptr;
-    auto slices = m_model->slices();
+    return resolveSliceForTrx(m_model, trx);
+}
+
+SliceModel* TciProtocol::resolveSliceForTrx(RadioModel* model, int trx)
+{
+    if (!model || !model->isConnected()) return nullptr;
+    const QList<SliceModel*> slices = model->slices();
     if (trx >= 0 && trx < slices.size())
         return slices.at(trx);
 
     // Compatibility fallback for clients that learned raw Flex slice ids from
     // older AetherSDR builds.
-    for (auto* s : m_model->slices()) {
-        if (s->sliceId() == trx) return s;
+    for (auto* s : slices) {
+        if (s && s->sliceId() == trx) return s;
     }
     // Fallback: first slice
     return slices.isEmpty() ? nullptr : slices.first();
+}
+
+SliceModel* TciProtocol::sliceForVfo(int trx, int channel) const
+{
+    SliceModel* rxSlice = sliceForTrx(trx);
+    if (!rxSlice || channel == 0 || !m_model) {
+        return rxSlice;
+    }
+
+    if (m_routingState && m_routingState->txSliceId() >= 0) {
+        if (SliceModel* routed = m_model->slice(m_routingState->txSliceId())) {
+            return routed;
+        }
+    }
+    if (SliceModel* txSlice = m_model->txSlice(); txSlice && txSlice != rxSlice) {
+        return txSlice;
+    }
+    return rxSlice;
+}
+
+int TciProtocol::txTrx() const
+{
+    if (!m_model) {
+        return 0;
+    }
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice && slice->isTxSlice()) {
+            return tciTrxForSlice(m_model, slice);
+        }
+    }
+    return 0;
 }
 
 // DDS = the IQ-stream center frequency a skimmer (CW Skimmer / SDC) decodes
@@ -135,7 +174,7 @@ QString TciProtocol::generateInitBurst()
     // the plural form — a singular-form command raises ValueError on
     // the client and aborts handshake parsing.  Implementation wins
     // over the PDF.
-    burst += QStringLiteral("channels_count:1;");
+    burst += QStringLiteral("channels_count:2;");
 
     // Identity chosen to bypass WSJT-X's TCI gain-reduction code path.
     // WSJT-X's TCITransceiver halves TX sample amplitude (K2 = 0.499/0x7FFF
@@ -171,6 +210,9 @@ QString TciProtocol::generateInitBurst()
             int trx = tciTrxForSlice(m_model, s);
             const long long hz = mhzToHz(s->frequency());
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
+            SliceModel* txVfo = sliceForVfo(trx, 1);
+            const long long txHz = mhzToHz(txVfo ? txVfo->frequency() : s->frequency());
+            burst += QStringLiteral("vfo:%1,1,%2;").arg(trx).arg(txHz);
             // dds: = IQ-stream center (panadapter center). Skimmers learn the
             // IQ center only from this; without it every spot is mis-mapped by
             // (slice − panCenter) Hz. (#3910)
@@ -201,7 +243,11 @@ QString TciProtocol::generateInitBurst()
             // "No TCI available" regardless of how many `vfo:` events it
             // receives.  (Source: rf-kit-gui_v198/operational_interface/
             // tciSupport.py, SplitThreadSafeValue.get() + extract_current_vfo.)
-            burst += QStringLiteral("split_enable:%1,false;").arg(trx);
+            burst += QStringLiteral("split_enable:%1,%2;")
+                         .arg(trx)
+                         .arg(m_routingState && m_routingState->splitRequested()
+                                 ? QStringLiteral("true")
+                                 : QStringLiteral("false"));
 
             // Lock
             burst += QStringLiteral("lock:%1,%2;")
@@ -236,19 +282,13 @@ QString TciProtocol::generateInitBurst()
         // Global TX state
         auto& tx = m_model->transmitModel();
         bool isTx = tx.isTransmitting();
-        int txTrx = 0;
-        for (auto* s : slices) {
-            if (s->isTxSlice()) {
-                txTrx = tciTrxForSlice(m_model, s);
-                break;
-            }
-        }
+        const int txTrxIndex = txTrx();
         // ESDR3 format requires TRX index prefix for drive commands.
         // Without it, WSJT-X/JTDX crash parsing args.at(1) on a 1-element list.
-        burst += QStringLiteral("drive:%1,%2;").arg(txTrx).arg(tx.rfPower());
-        burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrx).arg(tx.tunePower());
+        burst += QStringLiteral("drive:%1,%2;").arg(txTrxIndex).arg(tx.rfPower());
+        burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrxIndex).arg(tx.tunePower());
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
-        burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
+        burst += QStringLiteral("trx:%1,%2;").arg(txTrxIndex).arg(isTx ? "true" : "false");
 
         // Master AF volume — whole-radio (no trx prefix), same saved value
         // cmdVolume's GET returns, reported in dB per the TCI spec
@@ -298,6 +338,9 @@ QString TciProtocol::handleCommand(const QString& cmd)
     m_pendingNotification.clear();
     m_pendingMasterVolume = -1;
     m_pendingTxGain = -1;
+    m_vfoRequest.reset();
+    m_splitRequest.reset();
+    m_trxRequest.reset();
 
     if (cmd.isEmpty()) return {};
 
@@ -363,7 +406,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     // Bidirectional commands — isSet was already computed at the top of
     // this function, so the dispatch is uniform from here on.
 
-    if (name == "vfo")              return cmdVfo(args, isSet);
+    if (name == "vfo")              return cmdVfo(args, args.size() >= 3);
     if (name == "modulation")       return cmdModulation(args, isSet);
     if (name == "trx")              return cmdTrx(args, isSet);
     if (name == "tune")             return cmdTune(args, isSet);
@@ -405,6 +448,27 @@ QString TciProtocol::pendingNotification()
     return n;
 }
 
+std::optional<TciProtocol::VfoRequest> TciProtocol::takeVfoRequest()
+{
+    std::optional<VfoRequest> request = std::move(m_vfoRequest);
+    m_vfoRequest.reset();
+    return request;
+}
+
+std::optional<TciProtocol::SplitRequest> TciProtocol::takeSplitRequest()
+{
+    std::optional<SplitRequest> request = std::move(m_splitRequest);
+    m_splitRequest.reset();
+    return request;
+}
+
+std::optional<TciProtocol::TrxRequest> TciProtocol::takeTrxRequest()
+{
+    std::optional<TrxRequest> request = std::move(m_trxRequest);
+    m_trxRequest.reset();
+    return request;
+}
+
 // ── Command implementations ────────────────────────────────────────────────
 
 QString TciProtocol::cmdStart()
@@ -424,14 +488,22 @@ QString TciProtocol::cmdStop()
 QString TciProtocol::cmdVfo(const QStringList& args, bool isSet)
 {
     if (args.isEmpty()) return {};
-    int trx = args[0].toInt();
-    auto* s = sliceForTrx(trx);
-    if (!s) return {};
+    bool trxOk = false;
+    const int trx = args[0].toInt(&trxOk);
+    if (!trxOk || trx < 0)
+        return {};
+
+    bool channelOk = args.size() < 2;
+    const int channel = args.size() >= 2 ? args[1].toInt(&channelOk) : 0;
+    if (!channelOk || channel < 0 || channel > 1)
+        return {};
+    auto* s = sliceForVfo(trx, channel);
 
     if (!isSet) {
+        if (!s) return {};
         // Get: vfo:trx,channel,freq_hz;
         long long hz = static_cast<long long>(std::round(s->frequency() * 1e6));
-        return QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
+        return QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(hz);
     }
 
     // Set: vfo:trx,channel,freq_hz
@@ -439,24 +511,7 @@ QString TciProtocol::cmdVfo(const QStringList& args, bool isSet)
     bool ok;
     long long hz = args[2].toLongLong(&ok);
     if (!ok || hz < 0) return {};
-    double mhz = hz / 1e6;
-
-    // Same policy as RigctlProtocol::cmdSetFreq: recenter only for tunes
-    // that leave the pan's current span (band changes); in-span retunes
-    // (Doppler steps from satellite trackers) use autopan=0 so the pan
-    // stays put.
-    RadioModel* model = m_model;
-    QMetaObject::invokeMethod(s, [s, model, mhz]() {
-        bool inSpan = false;
-        if (auto* pan = model ? model->panadapter(s->panId()) : nullptr) {
-            const double halfBw = pan->bandwidthMhz() / 2.0;
-            inSpan = halfBw > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBw;
-        }
-        if (inSpan) s->setFrequency(mhz);
-        else        s->tuneAndRecenter(mhz);
-    }, Qt::QueuedConnection);
-
-    m_pendingNotification = QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
+    m_vfoRequest = VfoRequest { trx, channel, hz };
     return {};
 }
 
@@ -490,54 +545,33 @@ QString TciProtocol::cmdModulation(const QStringList& args, bool isSet)
 QString TciProtocol::cmdTrx(const QStringList& args, bool isSet)
 {
     if (args.isEmpty()) return {};
-    int trx = args[0].toInt();
+    bool trxOk = false;
+    const int trx = args[0].toInt(&trxOk);
+    if (!trxOk || trx < 0)
+        return {};
 
     if (!isSet) {
-        bool tx = m_model && m_model->transmitModel().isTransmitting();
+        const bool tx = m_model && m_model->isRadioTransmitting();
         return QStringLiteral("trx:%1,%2;").arg(trx).arg(tx ? "true" : "false");
     }
 
     if (args.size() < 2) return {};
-    bool tx = (args[1].toLower() == "true");
-    // Capture m_model by value, never `this`: this queued lambda can outlive
-    // the TciProtocol, which TciServer deletes synchronously when the client
-    // disconnects (#2814 use-after-free). Resolve the slice up front too.
-    auto* txSlice = tx ? sliceForTrx(trx) : nullptr;
-    QMetaObject::invokeMethod(m_model, [model = m_model, tx, txSlice]() {
-        // Assign TX to this TRX's slice before keying
-        if (tx && txSlice && !txSlice->isTxSlice())
-            txSlice->setTxSlice(true);
-        model->setTransmit(tx, TransmitModel::PttSource::Dax);
-    }, Qt::QueuedConnection);
-
-    m_pendingNotification = QStringLiteral("trx:%1,%2;")
-                                .arg(trx).arg(tx ? "true" : "false");
-    // Echo confirmation to sender — WSJT-X/JTDX wait for this ack
-    // and report "TCI failed to set ptt" if it never arrives.
-    return QStringLiteral("trx:%1,%2;").arg(trx).arg(tx ? "true" : "false");
+    const QString state = args[1].trimmed().toLower();
+    if (state != QStringLiteral("true") && state != QStringLiteral("false")) {
+        return {};
+    }
+    const QString source = args.size() >= 3 ? args[2].trimmed().toLower() : QString();
+    m_trxRequest = TrxRequest { trx, state == QStringLiteral("true"), source };
+    return {};
 }
 
-// ── TX_ENABLE: assign TX to a TRX (unidirectional) ─────────────────────────
+// ── TX_ENABLE: output-only TX assignment state ─────────────────────────────
 
 QString TciProtocol::cmdTxEnable(const QStringList& args)
 {
-    if (args.size() < 2) return {};
-    int trx = args[0].toInt();
-    bool enable = (args[1].toLower() == "true");
-
-    if (enable) {
-        auto* s = sliceForTrx(trx);
-        if (s && !s->isTxSlice()) {
-            QMetaObject::invokeMethod(s, [s]() {
-                s->setTxSlice(true);
-            }, Qt::QueuedConnection);
-        }
-    }
-
-    m_pendingNotification = QStringLiteral("tx_enable:%1,%2;")
-                                .arg(trx).arg(enable ? "true" : "false");
-    return QStringLiteral("tx_enable:%1,%2;")
-               .arg(trx).arg(enable ? "true" : "false");
+    Q_UNUSED(args);
+    // TCI 2.0 and Thetis define TX_ENABLE as server-to-client state only.
+    return {};
 }
 
 // ── TUNE: get/set tune state ───────────────────────────────────────────────
@@ -567,27 +601,38 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
 
 // ── DRIVE: get/set RF power ────────────────────────────────────────────────
 
-// DRIVE and TUNE_DRIVE are global commands per the TCI v2.0 spec — they have
-// no TRX prefix. Spec form: `drive;` for GET, `drive:N;` for SET. The
-// dispatcher's isSet heuristic (args.size() >= 2) is wrong for globals
-// (treats `drive:50;` as a GET). We override here: any args at all = SET,
-// no args = GET. We also accept the legacy TRX-prefixed form `drive:0,N;`
-// for backward compatibility — when 2+ args arrive, we take args[1] as the
-// value and ignore the trx index (drive is global anyway).
+// TCI v2.0 defines DRIVE and TUNE_DRIVE as per-transceiver commands:
+// one argument reads that TRX; two arguments set TRX,power. Every outbound
+// message must retain both fields because ESDR3-mode WSJT-X/JTDX read arg[1]
+// after matching arg[0], and a one-field `drive:0;` can crash receiver 0.
+// A no-argument read remains as an AetherSDR compatibility extension and
+// reports the current TX TRX.
 QString TciProtocol::cmdDrive(const QStringList& args, bool /*isSet*/)
 {
-    if (args.isEmpty()) {
-        int pwr = m_model ? m_model->transmitModel().rfPower() : 0;
-        return QStringLiteral("drive:%1;").arg(pwr);
+    int trx = txTrx();
+    if (args.size() <= 1) {
+        if (!args.isEmpty()) {
+            bool trxOk = false;
+            trx = args[0].toInt(&trxOk);
+            if (!trxOk || trx < 0) return {};
+        }
+        const int pwr = m_model ? m_model->transmitModel().rfPower() : 0;
+        return QStringLiteral("drive:%1,%2;").arg(trx).arg(pwr);
     }
-    bool ok;
-    int pwr = args[args.size() == 1 ? 0 : 1].toInt(&ok);
-    if (!ok) return {};
-    QMetaObject::invokeMethod(m_model, [model = m_model, pwr]() {
-        model->transmitModel().setRfPower(pwr);
-    }, Qt::QueuedConnection);
+    if (args.size() != 2) return {};
 
-    m_pendingNotification = QStringLiteral("drive:%1;").arg(pwr);
+    bool trxOk = false;
+    bool powerOk = false;
+    trx = args[0].toInt(&trxOk);
+    const int pwr = args[1].toInt(&powerOk);
+    if (!trxOk || trx < 0 || !powerOk || pwr < 0 || pwr > 100) return {};
+    if (m_model) {
+        QMetaObject::invokeMethod(m_model, [model = m_model, pwr]() {
+            model->transmitModel().setRfPower(pwr);
+        }, Qt::QueuedConnection);
+    }
+
+    m_pendingNotification = QStringLiteral("drive:%1,%2;").arg(trx).arg(pwr);
     return {};
 }
 
@@ -595,18 +640,30 @@ QString TciProtocol::cmdDrive(const QStringList& args, bool /*isSet*/)
 
 QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
 {
-    if (args.isEmpty()) {
-        int pwr = m_model ? m_model->transmitModel().tunePower() : 0;
-        return QStringLiteral("tune_drive:%1;").arg(pwr);
+    int trx = txTrx();
+    if (args.size() <= 1) {
+        if (!args.isEmpty()) {
+            bool trxOk = false;
+            trx = args[0].toInt(&trxOk);
+            if (!trxOk || trx < 0) return {};
+        }
+        const int pwr = m_model ? m_model->transmitModel().tunePower() : 0;
+        return QStringLiteral("tune_drive:%1,%2;").arg(trx).arg(pwr);
     }
-    bool ok;
-    int pwr = args[args.size() == 1 ? 0 : 1].toInt(&ok);
-    if (!ok) return {};
-    QMetaObject::invokeMethod(m_model, [model = m_model, pwr]() {
-        model->transmitModel().setTunePower(pwr);
-    }, Qt::QueuedConnection);
+    if (args.size() != 2) return {};
 
-    m_pendingNotification = QStringLiteral("tune_drive:%1;").arg(pwr);
+    bool trxOk = false;
+    bool powerOk = false;
+    trx = args[0].toInt(&trxOk);
+    const int pwr = args[1].toInt(&powerOk);
+    if (!trxOk || trx < 0 || !powerOk || pwr < 0 || pwr > 100) return {};
+    if (m_model) {
+        QMetaObject::invokeMethod(m_model, [model = m_model, pwr]() {
+            model->transmitModel().setTunePower(pwr);
+        }, Qt::QueuedConnection);
+    }
+
+    m_pendingNotification = QStringLiteral("tune_drive:%1,%2;").arg(trx).arg(pwr);
     return {};
 }
 
@@ -614,8 +671,8 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
 
 // mic_level bridges TransmitModel::setMicLevel() (the existing radio-side
 // setter wired into FlexLib via commandReady) to TCI clients.  Single arg
-// 0-100 (percent), global — mic is whole-radio, not per-trx — matching the
-// drive/tune_drive convention.  Accepts the legacy TRX-prefixed form
+// 0-100 (percent), global — mic is whole-radio, not per-trx. Accepts the
+// legacy TRX-prefixed form
 // `mic_level:0,N;` for forward compatibility with strict-spec clients (the
 // trx index is ignored since mic is global).
 //
@@ -764,22 +821,32 @@ QString TciProtocol::cmdXitOffset(const QStringList& args, bool isSet)
 QString TciProtocol::cmdSplitEnable(const QStringList& args, bool isSet)
 {
     if (args.isEmpty()) return {};
-    int trx = args[0].toInt();
+    bool trxOk = false;
+    const int trx = args[0].toInt(&trxOk);
+    if (!trxOk || trx < 0)
+        return {};
     auto* s = sliceForTrx(trx);
-    if (!s) return {};
-
     if (!isSet) {
-        // Split = TX slice is different from this slice
-        bool split = false;
-        for (auto* sl : m_model->slices()) {
-            if (sl->isTxSlice() && sl != s) { split = true; break; }
+        bool split = m_routingState && m_routingState->splitRequested();
+
+        if (!m_routingState && s && m_model) {
+            for (auto* sl : m_model->slices()) {
+                if (sl->isTxSlice() && sl != s) {
+                    split = true;
+                    break;
+                }
+            }
         }
-        return QStringLiteral("split_enable:%1,%2;")
-                   .arg(trx).arg(split ? "true" : "false");
+        return QStringLiteral("split_enable:%1,%2;").arg(trx).arg(split ? "true" : "false");
     }
 
-    // Set split — not fully controllable from TCI (would need to create a second slice)
-    // Just acknowledge
+    if (args.size() < 2)
+        return {};
+    const QString state = args[1].trimmed().toLower();
+    if (state != QStringLiteral("true") && state != QStringLiteral("false")) {
+        return {};
+    }
+    m_splitRequest = SplitRequest { trx, state == QStringLiteral("true") };
     return {};
 }
 
@@ -1646,7 +1713,8 @@ QString TciProtocol::cmdRxDseEnable(const QStringList& args, bool isSet)
 QString TciProtocol::cmdRxNfEnable(const QStringList& args, bool isSet)
 {
     // Notch filter module — maps to TNF global enable
-    // For now, acknowledge only (TNF is per-notch, not a global toggle in the same way)
+    // For now, acknowledge only (TNF is per-notch, not a global toggle in the
+    // same way)
     static bool nfEnabled = true;
     if (args.isEmpty()) return {};
     int trx = args[0].toInt();

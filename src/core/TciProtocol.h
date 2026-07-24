@@ -2,18 +2,40 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include <QString>
+#include <optional>
 
 namespace AetherSDR {
 
 class RadioModel;
 class SliceModel;
+class TciRoutingState;
 
 // TCI protocol handler — text command parser and response generator.
 // No I/O — receives a command string, returns the response.
 // Reference: https://github.com/ExpertSDR3/TCI (protocol v2.0)
 class TciProtocol {
 public:
-    explicit TciProtocol(RadioModel* model);
+    struct VfoRequest
+    {
+        int trx { -1 };
+        int channel { -1 };
+        long long frequencyHz { 0 };
+    };
+
+    struct SplitRequest
+    {
+        int trx { -1 };
+        bool enabled { false };
+    };
+
+    struct TrxRequest
+    {
+        int trx { -1 };
+        bool transmitting { false };
+        QString source;
+    };
+
+    explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr);
 
     // Process one TCI command (without trailing semicolon).
     // Returns response string (with trailing semicolon) or empty if no response.
@@ -26,6 +48,9 @@ public:
     // this returns a notification to broadcast to other clients.
     // Returns empty if no broadcast needed.
     QString pendingNotification();
+    std::optional<VfoRequest> takeVfoRequest();
+    std::optional<SplitRequest> takeSplitRequest();
+    std::optional<TrxRequest> takeTrxRequest();
 
     // After handleCommand(), if the command was a master-volume SET, this
     // returns the requested level (0-100). -1 means no master-volume change
@@ -114,6 +139,8 @@ private:
 
     // Helpers
     SliceModel* sliceForTrx(int trx) const;
+    SliceModel* sliceForVfo(int trx, int channel) const;
+    int txTrx() const;
 
 public:
     // Mode conversion (public for TciServer broadcast use)
@@ -125,6 +152,11 @@ public:
     // slice is not in the model's list.
     static int tciTrxForSlice(RadioModel* model, const SliceModel* slice);
 
+    // Resolve a contiguous TCI receiver index, then the legacy raw Flex slice
+    // id, then the first slice for compatibility. Shared by parser and server
+    // command paths so GET and SET never target different receivers.
+    static SliceModel* resolveSliceForTrx(RadioModel* model, int trx);
+
     static long long mhzToHz(double mhz);
 
     // IQ center (DDS) for a slice = its populated panadapter center in Hz.
@@ -135,7 +167,11 @@ public:
 private:
 
     RadioModel* m_model;
-    QString     m_pendingNotification;
+    TciRoutingState* m_routingState;
+    QString m_pendingNotification;
+    std::optional<VfoRequest> m_vfoRequest;
+    std::optional<SplitRequest> m_splitRequest;
+    std::optional<TrxRequest> m_trxRequest;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
     bool        m_started{false};  // client sent START

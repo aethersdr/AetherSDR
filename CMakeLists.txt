@@ -602,6 +602,7 @@ set(CORE_SOURCES
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
+    src/core/TciRoutingState.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
@@ -3425,6 +3426,10 @@ if (ENABLE_ASR)
         tests/copy_assist_settings_dialog_test.cpp
         src/gui/CopyAssistSettingsDialog.cpp
         src/gui/CopyAssistSettings.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+        src/core/ThemeManager.cpp
         src/core/AppSettings.cpp
         src/core/LogManager.cpp
         src/core/AsyncLogWriter.cpp
@@ -3888,6 +3893,20 @@ if(Qt6WebSockets_FOUND)
     target_include_directories(tci_protocol_test PRIVATE src)
     target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
+
+    add_executable(tci_automation_test tests/tci_automation_test.cpp)
+    target_include_directories(tci_automation_test PRIVATE src tests)
+    target_link_libraries(tci_automation_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
+    target_include_directories(tci_server_review_test PRIVATE src tests)
+    target_link_libraries(tci_server_review_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.

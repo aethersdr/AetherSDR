@@ -8,6 +8,7 @@ namespace AetherSDR {
 class AudioEngine;
 class CopyAssistPanel;
 class CopyAssistSettingsDialog;
+class PersistentDialog;
 class AsrEngine;
 class AsrModelManager;
 class AsrAudioTap;
@@ -34,6 +35,8 @@ class CopyAssistController : public QObject {
 public:
     CopyAssistController(AudioEngine* audio, CopyAssistPanel* panel, QObject* parent = nullptr);
     ~CopyAssistController() override;
+
+    PersistentDialog* settingsDialog() const;
 
     // Clear the transcript and drop any in-progress utterance — used on retune so
     // the decode window starts fresh for the new frequency.

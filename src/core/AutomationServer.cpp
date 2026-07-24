@@ -42,6 +42,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QRegularExpression>
@@ -2342,6 +2343,10 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
     if (name == QLatin1String("gesture")) {
         return normalizedAction == QLatin1String("status");
     }
+    if (name == QLatin1String("tci")) {
+        return normalizedAction == QLatin1String("status")
+            || normalizedAction == QLatin1String("routes");
+    }
     return false;
 }
 
@@ -2886,16 +2891,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("tci", {},
-            "tci start|status|stop — in-process TCI client simulator (JSON form only)",
-            // Historical quirk, preserved (#4174): tci never had a bare-line
-            // parse arm, so the default target/path fill leaves `action` empty
-            // and bare "tci start" reports the usage error below. The JSON
-            // form supplies action/value explicitly.
-            parseTargetPath,
+            "tci start|status|stop|send|trace|routes — TCI simulator and protocol diagnostics",
+            parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
-                if (a.action.isEmpty())
+                if (a.action.isEmpty()) {
                     return err(QStringLiteral(
-                        "tci requires an action (start [port|sdc [port]] | status | stop [abrupt])"));
+                        "tci requires start|status|stop|send|trace|routes"));
+                }
                 return s.doTci(a.action, a.value);
             });
 
@@ -8029,14 +8031,82 @@ QJsonObject AutomationServer::doDss(const QString& action,
 //                              resource-level lingering that emits no UDP (#3843).
 // `streams reset` clears the Layer-A orphan tally to re-baseline a before/after.
 // `tci start [port|sdc [port]] | status | stop [abrupt]` — in-process TCI
-// client simulator (#3305/#4009/#3913). The default WSJT-X profile negotiates
-// RX audio; the SDC profile negotiates 96 kHz IQ and sends `iq_start:0` for a
-// CW-skimmer-shaped end-to-end test. `stop abrupt` closes without the matching
-// stream-stop command so tests can assert disconnect cleanup.
+// client simulator (#3305/#4009/#3913). `send`, `trace`, and `routes` expose
+// deterministic protocol diagnostics without adding test commands to TCI.
+#ifdef HAVE_WEBSOCKETS
+void AutomationServer::appendTciTrace(const QString& direction, const QString& text)
+{
+    if (!m_tciTraceEnabled) {
+        return;
+    }
+    if (!m_tciTraceClock.isValid()) {
+        m_tciTraceClock.start();
+    }
+
+    const QStringList commands = text.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    for (const QString& command : commands) {
+        const QString normalized = command.trimmed();
+        if (normalized.isEmpty()) {
+            continue;
+        }
+        m_tciTrace.push_back(TciTraceEntry{
+            ++m_tciTraceSeq,
+            m_tciTraceClock.elapsed(),
+            direction,
+            normalized + QLatin1Char(';'),
+        });
+        while (m_tciTrace.size() > kTciTraceMax) {
+            m_tciTrace.pop_front();
+        }
+    }
+}
+
+void AutomationServer::sendTciSimText(const QString& text)
+{
+    if (!m_tciSim) {
+        return;
+    }
+    appendTciTrace(QStringLiteral("client->server"), text);
+    m_tciSim->sendTextMessage(text);
+}
+
+QJsonObject AutomationServer::tciTraceSnapshot(int limit) const
+{
+    limit = std::clamp(limit, 1, static_cast<int>(kTciTraceMax));
+    QJsonArray entries;
+    const size_t first = m_tciTrace.size() > static_cast<size_t>(limit)
+        ? m_tciTrace.size() - static_cast<size_t>(limit)
+        : 0;
+    for (size_t i = first; i < m_tciTrace.size(); ++i) {
+        const TciTraceEntry& entry = m_tciTrace[i];
+        entries.append(QJsonObject{
+            {QStringLiteral("seq"), static_cast<qint64>(entry.seq)},
+            {QStringLiteral("elapsedMs"), entry.elapsedMs},
+            {QStringLiteral("direction"), entry.direction},
+            {QStringLiteral("text"), entry.text},
+        });
+    }
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("capturing"), m_tciTraceEnabled},
+        {QStringLiteral("count"), static_cast<qint64>(m_tciTrace.size())},
+        {QStringLiteral("lastSeq"), static_cast<qint64>(m_tciTraceSeq)},
+        {QStringLiteral("entries"), entries},
+    };
+}
+#endif
+
 QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
 {
+    const QString normalizedAction = action.trimmed().toLower();
+    if (normalizedAction == QLatin1String("routes")) {
+        if (!m_tciRouteSnapshotHandler) {
+            return err(QStringLiteral("TCI route snapshot unavailable"));
+        }
+        return m_tciRouteSnapshotHandler();
+    }
+
 #ifndef HAVE_WEBSOCKETS
-    Q_UNUSED(action);
     Q_UNUSED(value);
     return err(QStringLiteral("TCI is not built into this binary (HAVE_WEBSOCKETS off)"));
 #else
@@ -8062,10 +8132,89 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         return o;
     };
 
-    if (action == QLatin1String("status"))
+    if (normalizedAction == QLatin1String("status"))
         return status();
 
-    if (action == QLatin1String("start")) {
+    if (normalizedAction == QLatin1String("send")) {
+        if (!m_tciSim || m_tciSim->state() != QAbstractSocket::ConnectedState) {
+            return err(QStringLiteral("TCI simulator is not connected"));
+        }
+        QString command = value.trimmed();
+        if (command.isEmpty()) {
+            return err(QStringLiteral("tci send requires a command"));
+        }
+        if (command.size() > 4096 || command.contains(QLatin1Char('\n'))
+            || command.contains(QLatin1Char('\r'))) {
+            return err(QStringLiteral("tci send command is invalid or too long"));
+        }
+        if (!command.endsWith(QLatin1Char(';'))) {
+            command += QLatin1Char(';');
+        }
+        sendTciSimText(command);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("send")},
+            {QStringLiteral("command"), command},
+            {QStringLiteral("traceSeq"), static_cast<qint64>(m_tciTraceSeq)},
+        };
+    }
+
+    if (normalizedAction == QLatin1String("trace")) {
+        const QString simplified = value.simplified();
+        const QString traceAction = simplified.section(QLatin1Char(' '), 0, 0).toLower();
+        const QString traceArg = simplified.section(QLatin1Char(' '), 1).trimmed();
+        if (traceAction.isEmpty() || traceAction == QLatin1String("status")) {
+            bool ok = false;
+            const int requested = traceArg.toInt(&ok);
+            return tciTraceSnapshot(ok ? requested : 100);
+        }
+        if (traceAction == QLatin1String("start")) {
+            m_tciTrace.clear();
+            m_tciTraceSeq = 0;
+            m_tciTraceClock.start();
+            m_tciTraceEnabled = true;
+            return tciTraceSnapshot();
+        }
+        if (traceAction == QLatin1String("stop")) {
+            m_tciTraceEnabled = false;
+            return tciTraceSnapshot();
+        }
+        if (traceAction == QLatin1String("clear")) {
+            m_tciTrace.clear();
+            m_tciTraceSeq = 0;
+            if (m_tciTraceEnabled) {
+                m_tciTraceClock.start();
+            } else {
+                m_tciTraceClock.invalidate();
+            }
+            return tciTraceSnapshot();
+        }
+        if (traceAction == QLatin1String("export")) {
+            if (traceArg.isEmpty()) {
+                return err(QStringLiteral("tci trace export requires a path"));
+            }
+            QSaveFile file(traceArg);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                return err(QStringLiteral("cannot open trace path: ") + file.errorString());
+            }
+            const QByteArray payload
+                = QJsonDocument(tciTraceSnapshot(static_cast<int>(kTciTraceMax)))
+                      .toJson(QJsonDocument::Indented);
+            if (file.write(payload) != payload.size() || !file.commit()) {
+                return err(QStringLiteral("cannot write trace path: ") + file.errorString());
+            }
+            return QJsonObject{
+                {QStringLiteral("ok"), true},
+                {QStringLiteral("action"), QStringLiteral("trace-export")},
+                {QStringLiteral("path"), QFileInfo(traceArg).absoluteFilePath()},
+                {QStringLiteral("bytes"), payload.size()},
+            };
+        }
+        return err(QStringLiteral(
+            "tci trace requires start|stop|clear|status [limit]|export <path>"));
+    }
+
+    if (normalizedAction == QLatin1String("start")) {
         if (m_tciSim)
             return err(QStringLiteral("tci sim already running — `tci stop` first"));
         const QStringList options = value.simplified().split(
@@ -8095,21 +8244,22 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         connect(m_tciSim, &QWebSocket::textMessageReceived,
                 this, [this](const QString& msg) {
             ++m_tciSimTextMsgs;
+            appendTciTrace(QStringLiteral("server->client"), msg);
             if (m_tciSimReady) return;
             const QStringList cmds = msg.split(QLatin1Char(';'));
             for (const QString& c : cmds) {
                 if (c.trimmed() == QLatin1String("ready")) {
                     m_tciSimReady = true;
                     if (m_tciSimProfile == QLatin1String("sdc")) {
-                        m_tciSim->sendTextMessage(QStringLiteral("iq_samplerate:96000;"));
-                        m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:24000;"));
-                        m_tciSim->sendTextMessage(QStringLiteral("iq_start:0;"));
+                        sendTciSimText(QStringLiteral("iq_samplerate:96000;"));
+                        sendTciSimText(QStringLiteral("audio_samplerate:24000;"));
+                        sendTciSimText(QStringLiteral("iq_start:0;"));
                         m_tciSimIqStarted = true;
                         qCInfo(lcAutomation)
                             << "tci sim: ready received — SDC IQ negotiation sent";
                     } else {
-                        m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:48000;"));
-                        m_tciSim->sendTextMessage(QStringLiteral("audio_start:0;"));
+                        sendTciSimText(QStringLiteral("audio_samplerate:48000;"));
+                        sendTciSimText(QStringLiteral("audio_start:0;"));
                         m_tciSimAudioStarted = true;
                         qCInfo(lcAutomation)
                             << "tci sim: ready received — WSJT-X audio_start sent";
@@ -8159,7 +8309,7 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
                            {QStringLiteral("port"), port}};
     }
 
-    if (action == QLatin1String("stop")) {
+    if (normalizedAction == QLatin1String("stop")) {
         if (!m_tciSim)
             return err(QStringLiteral("tci sim is not running"));
         const bool abrupt = value.trimmed().compare(QLatin1String("abrupt"),
@@ -8184,6 +8334,12 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
             sim->abort();
         } else {
             if (wasAudioStarted)
+                appendTciTrace(QStringLiteral("client->server"),
+                    QStringLiteral("audio_stop:0;"));
+            if (wasIqStarted)
+                appendTciTrace(QStringLiteral("client->server"),
+                    QStringLiteral("iq_stop:0;"));
+            if (wasAudioStarted)
                 sim->sendTextMessage(QStringLiteral("audio_stop:0;"));
             if (wasIqStarted)
                 sim->sendTextMessage(QStringLiteral("iq_stop:0;"));
@@ -8197,7 +8353,7 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     }
 
     return err(QStringLiteral(
-        "tci requires an action (start [port|sdc [port]] | status | stop [abrupt])"));
+        "tci requires start|status|stop|send|trace|routes"));
 #endif
 }
 

@@ -43,9 +43,13 @@ class PersistentDialog : public QDialog {
 public:
     // title:   Window title (and frameless chrome label).
     // geomKey: AppSettings key for geometry persistence.  Empty → no persist.
+    // toolWindow: keep the window out of the taskbar and floating above its
+    //   parent (Qt::Tool) instead of the default dialog window type (Qt::Dialog).
+    //   Preserved across the runtime frameless toggle.
     explicit PersistentDialog(const QString& title,
                               const QString& geomKey,
-                              QWidget* parent = nullptr);
+                              QWidget* parent = nullptr,
+                              bool toolWindow = false);
 
     void setFramelessMode(bool on);
 
@@ -69,6 +73,10 @@ private:
     void applyBodyLayoutMargins();
 
     QString                  m_geomKey;
+    // Base window type ORed back in after every setWindowFlags() — Qt::Dialog by
+    // default, Qt::Tool for tool windows. setFramelessMode() strips the window
+    // type bits, so this is how the choice survives a runtime chrome toggle.
+    Qt::WindowType           m_windowType{Qt::Dialog};
     FramelessWindowTitleBar* m_titleBar{nullptr};
     QWidget*                 m_body{nullptr};
     bool                     m_framelessOn{false};

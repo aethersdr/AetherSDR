@@ -94,8 +94,8 @@ function tciConnect(url) {
     tciReady = true;
     console.log('[tci] connected');
     // Seed the local gain mirrors from AE's actual current values. A bare verb
-    // is a GET; AE replies `volume:<v>;`/`drive:<v>;`/`mic_level:<v>;` which
-    // parseTci folds into radio.{volume,rfPower,micLevel}. Without this the
+    // is a GET; AE replies `volume:<v>;`/`drive:<trx>,<v>;`/`mic_level:<v>;`
+    // which parseTci folds into radio.{volume,rfPower,micLevel}. Without this the
     // mirror sits at the hard-coded defaults (50/100/50) until the first init
     // burst arrives — and AE's init burst doesn't always carry all three — so
     // the first ±5 press would jump from the default instead of the real value.

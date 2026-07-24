@@ -517,6 +517,11 @@ private:
                                              const QString& panId = QString());
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
+    // Show a decoder panel on exactly one applet — the current decoder target —
+    // and hide it on every other pan, so a moved target can't leave a stale
+    // dock (#4409). `setter` is setCwPanelVisible or setRttyPanelVisible.
+    void setDecoderPanelVisibleOnly(PanadapterApplet* target, bool shouldShow,
+                                    void (PanadapterApplet::*setter)(bool));
     void refreshCwDecodeState();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
     // service → contact card on the CW decode panel + lookup dialog.
