@@ -184,6 +184,19 @@ inline float dssHistoryAvailability(float sampleAge, float validRows)
     return std::clamp(validRows - sampleAge, 0.0f, 1.0f);
 }
 
+inline std::optional<float> dssRetainedSampleAge(float sourceAge,
+                                                 float remainingRows,
+                                                 float validRows)
+{
+    if (!std::isfinite(sourceAge) || !std::isfinite(remainingRows)
+        || !std::isfinite(validRows) || sourceAge < 0.0f
+        || remainingRows < 0.0f || validRows <= 0.0f
+        || sourceAge >= validRows) {
+        return std::nullopt;
+    }
+    return std::min(sourceAge + remainingRows, validRows - 1.0f);
+}
+
 struct StablePresentationAnchor {
     float value{0.0f};
     float acquisitionMean{0.0f};

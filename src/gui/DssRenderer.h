@@ -94,6 +94,9 @@ public:
 
     void invalidate() { m_dirty = true; }
     bool hasData() const { return m_count > 0; }
+    // Forget temporal filter inputs without discarding already-decoded dBm
+    // rows. Used when the upstream raw-pixel scale changes.
+    void resetInputSmoothing();
     void clear();
 
     // ── Data-model accessors for the GPU mesh path ──────────────────────────

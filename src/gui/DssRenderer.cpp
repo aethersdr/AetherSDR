@@ -208,15 +208,20 @@ std::array<float, DssRenderer::kCols> smoothDssRow(
 
 } // namespace
 
+void DssRenderer::resetInputSmoothing()
+{
+    m_rawHistCount = 0;
+    resetHistorySmoothing();
+}
+
 void DssRenderer::clear()
 {
     m_head  = 0;
     m_count = 0;
     m_dirty = true;
-    m_rawHistCount = 0;
     m_historyWriteRow = 0;
     m_historyRowCount = 0;
-    resetHistorySmoothing();
+    resetInputSmoothing();
 }
 
 quint64 DssRenderer::fixedStorageBytes() const

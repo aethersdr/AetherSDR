@@ -97,6 +97,27 @@ int testRetainedHistoryOffset()
     return 0;
 }
 
+int testInputScaleResetPreservesHistory()
+{
+    DssRenderer renderer;
+    renderer.setHistoryCapacityRows(12);
+    appendStableHistoryPeak(renderer, 180);
+    renderer.rebuildVisibleFromHistory(0, 14.0, 1.0, -200.0f);
+
+    const int visibleRowsBefore = renderer.rowCount();
+    const int historyRowsBefore = renderer.historyRowCount();
+    const int peakBefore = strongestBin(renderer);
+    renderer.resetInputSmoothing();
+
+    if (renderer.rowCount() != visibleRowsBefore
+        || renderer.historyRowCount() != historyRowsBefore
+        || strongestBin(renderer) != peakBefore) {
+        return fail("input scale reset must preserve decoded DSS history");
+    }
+
+    return 0;
+}
+
 int testRetainedHistoryCapacity()
 {
     DssRenderer renderer;
@@ -263,6 +284,9 @@ int main()
         return rc;
     }
     if (int rc = testRetainedHistoryOffset(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetPreservesHistory(); rc != 0) {
         return rc;
     }
     if (int rc = testRetainedHistoryCapacity(); rc != 0) {

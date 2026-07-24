@@ -221,6 +221,15 @@ int testDssStartupHistoryAvailability()
         || !nearlyEqual(dssHistoryAvailability(0.0f, 0.0f), 0.0)) {
         return fail("3D FFT startup history should fade in continuously");
     }
+    const std::optional<float> movingAge =
+        dssRetainedSampleAge(94.0f, 0.5f, 96.0f);
+    const std::optional<float> oldestAge =
+        dssRetainedSampleAge(95.0f, 1.0f, 96.0f);
+    if (!movingAge || !nearlyEqual(*movingAge, 94.5)
+        || !oldestAge || !nearlyEqual(*oldestAge, 95.0)
+        || dssRetainedSampleAge(96.0f, 0.0f, 96.0f).has_value()) {
+        return fail("3D FFT rear row should remain stable until eviction");
+    }
     return 0;
 }
 

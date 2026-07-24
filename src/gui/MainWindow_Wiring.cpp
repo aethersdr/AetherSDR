@@ -2471,6 +2471,13 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
                 || panYpixelsFor(swGuard.data()) != ypix) {
                 return;
             }
+            // A radio status echo updates both the model and stream decoder.
+            // Do not run the delayed fallback afterward: besides being
+            // redundant, it would restart the DSS scale-settle window for a
+            // width-only resize whose y_pixels never changed.
+            if (currentPan->fftYPixels() == ypix) {
+                return;
+            }
             m_radioModel.panStream()->setYPixels(streamId, ypix);
             swGuard->prepareForFftPixelScaleChange();
         };
