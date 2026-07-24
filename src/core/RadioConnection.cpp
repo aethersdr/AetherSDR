@@ -144,15 +144,23 @@ void RadioConnection::startSyntheticDemoConnect()
         // same lines a real Flex sends after `sub pan all`. Delayed slightly so
         // RadioModel's onConnected() handshake (which subscribes) has run first.
         // client_handle matches our handle so ownership is Claimed. Format/ids
-        // per flex-sim/PROTOCOL.md.
-        QTimer::singleShot(400, this, [this]() {
+        // per flex-sim/PROTOCOL.md. Kept short (50ms): the slice-list query is now
+        // answered "0" (see writeCommand), sending RadioModel into a 500ms defer
+        // waiting for this slice status — so it must land inside that window with
+        // margin. 50ms lets connected()/onConnected() run first without racing the
+        // defer. (RFC #4288 — the VFO=0 fix.)
+        QTimer::singleShot(50, this, [this]() {
             if (!m_syntheticDemo) return;
             emitSyntheticStatus(QStringLiteral(
-                // 40 kHz span (== the audio scene width the demo renders), so the
-                // synthetic noise + birdie fill the waterfall at default zoom
-                // instead of collapsing onto the VFO in a 200 kHz view. (RFC #4288)
+                // 8 kHz span — this MUST equal SimBackend's spectrum span
+                // (kAudioSpanHz), because the demo's spectrum row IS the ±4 kHz
+                // audio scene: AE stretches that row across the pan bandwidth, so
+                // if the pan is wider than the data (the old 40 kHz vs 8 kHz), the
+                // birdie renders at the wrong frequency and lands outside the RX
+                // passband. Matching the two makes the on-screen birdie position
+                // and the demodulated audio pitch agree. (RFC #4288 — birdie fix.)
                 "SDE300001|display pan 0x40000000 client_handle=0xDE300001 "
-                "waterfall=0x42000000 center=14.100 bandwidth=0.040 "
+                "waterfall=0x42000000 center=14.100 bandwidth=0.008 "
                 "min_dbm=-140 max_dbm=-20 x_pixels=1024 y_pixels=700 fps=25 "
                 "ant_list=ANT1"));
             emitSyntheticStatus(QStringLiteral(
@@ -382,6 +390,45 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 });
             }
             emit commandResponse(seq, 0, QString());
+            return;
+        }
+        // Slice list query: a real radio answers with the space-separated ids of
+        // its live slices. RadioModel's connect handshake queries this to decide
+        // whether to adopt existing slices or create a default one. We MUST report
+        // slice 0 here — otherwise RadioModel sees "(empty)", creates its own
+        // default slice at freq 0 (the VFO=0 bug), and never adopts the synthetic
+        // slice status pushed below. Reporting "0" sends RadioModel down the
+        // "radio has slices, defer to let status arrive" path (#3212), which the
+        // pushed slice status (RF_frequency=14.100000) then satisfies. (RFC #4288)
+        if (command == QLatin1String("slice list")) {
+            emit commandResponse(seq, 0, QStringLiteral("0"));
+            return;
+        }
+        // Panadapter create: a real radio replies with the new pan's id in the
+        // body (parsePanafallCreatePanId reads pan=/id=/bare-hex). If we returned
+        // an empty body, RadioModel logs "returned empty pan_id" and the pan is
+        // never claimed. We only reach here if RadioModel decided to create one;
+        // hand back our synthetic pan id so it claims 0x40000000 cleanly. (#4288)
+        if (command.startsWith(QLatin1String("display panafall create"))
+            || command.startsWith(QLatin1String("panadapter create"))) {
+            emit commandResponse(seq, 0, QStringLiteral("pan=0x40000000"));
+            return;
+        }
+        // Stream create: a real radio replies with the new stream's hex id in the
+        // body (parseCreateResponseStreamId). The demo has no real streams — its RX
+        // audio and spectrum flow over the IRadioBackend seam, not a stream — but
+        // RadioModel still issues "stream create type=remote_audio_rx …" on connect
+        // and logs "returned unparseable body" on an empty reply. Hand back a
+        // distinct synthetic stream id per type so the create parses cleanly and the
+        // log stays quiet; nothing downstream depends on the id for the demo. (#4288)
+        if (command.startsWith(QLatin1String("stream create"))) {
+            quint32 streamId = 0x0B00'0001u;                       // default synthetic id
+            if (command.contains(QLatin1String("remote_audio_rx"))) streamId = 0x0B00'0001u;
+            else if (command.contains(QLatin1String("remote_audio_tx"))) streamId = 0x0B00'0002u;
+            else if (command.contains(QLatin1String("netcw")))          streamId = 0x0B00'0003u;
+            else if (command.contains(QLatin1String("dax_rx")))         streamId = 0x0B00'0004u;
+            emit commandResponse(seq, 0,
+                                 QStringLiteral("0x%1").arg(streamId, 8, 16, QLatin1Char('0')));
             return;
         }
         // Every other command: acknowledge OK (code 0) so the GUI-client

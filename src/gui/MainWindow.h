@@ -98,6 +98,7 @@ class ConnectionPanel;
 class TitleBar;
 class KiwiSdrManager;
 class SpectrumWidget;
+class IRadioBackend;
 class PanadapterApplet;
 class PanadapterStack;
 class AdaptiveFilterEngine;
@@ -475,6 +476,11 @@ private:
         KiwiSdrUiSyncPanadapterStates = 0x08,
     };
     void scheduleKiwiSdrUiSync(int flags);
+    // (Re)wire the backend-owned seam signals (audioFrameReady/spectrumFrameReady)
+    // to the audio engine / spectrum renderer. Re-run on RadioModel::backendChanged
+    // so the connect-time Flex↔Sim backend swap doesn't leave them dangling on the
+    // destroyed backend (RFC #4288 — the demo "no audio / stuck connecting" fix).
+    void wireBackendSeam(AetherSDR::IRadioBackend* backend);
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);

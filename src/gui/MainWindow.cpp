@@ -1327,41 +1327,15 @@ MainWindow::MainWindow(QWidget* parent)
     // identical AudioEngine path. Harmless for real backends: FlexBackend never
     // emits audioFrameReady (its audio flows through PanadapterStream above), so
     // this connection simply stays idle unless a SimBackend is active.
-    if (auto* backend = m_radioModel.backend()) {
-        connect(backend, &IRadioBackend::audioFrameReady,
-                m_audio, &AudioEngine::feedAudioData);
-
-        // Spectrum seam (RFC #4288 Route A): activate the previously-dormant
-        // IRadioBackend::spectrumFrameReady. A SimBackend emits the panadapter
-        // FFT through the seam (float dBm bins packed as a QByteArray) instead of
-        // decoding VITA-49 UDP; render it exactly as the PanadapterStream path
-        // does (updateSpectrum on the matching pan). Idle for FlexBackend, which
-        // never emits it — its FFT flows through PanadapterStream::spectrumReady.
-        connect(backend, &IRadioBackend::spectrumFrameReady, this,
-                [this](int /*panId*/, const QByteArray& frame) {
-            if (m_shuttingDown || !m_panStack)
-                return;
-            const int n = static_cast<int>(frame.size() / sizeof(float));
-            if (n <= 0)
-                return;
-            QVector<float> bins(n);
-            memcpy(bins.data(), frame.constData(), n * sizeof(float));
-            // v1 demo has a single panadapter, so render to it (or the active
-            // spectrum before a pan is claimed on first connect). Multi-pan
-            // panId→pan matching is a later step, once the demo grows a rack.
-            if (auto* pan = m_radioModel.panadapters().value(0, nullptr)) {
-                if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    sw->updateSpectrum(bins);
-                    finishPanadapterConnectionAnimation();
-                    return;
-                }
-            }
-            if (auto* sw = spectrum()) {
-                sw->updateSpectrum(bins);
-                finishPanadapterConnectionAnimation();
-            }
-        });
-    }
+    // Wire the backend-owned seam signals (audio + spectrum). Done in a helper so
+    // it can be re-run whenever RadioModel rebuilds the backend — the connect-time
+    // Flex↔Sim swap (RFC #4288) destroys the old backend and builds a new one, and
+    // these connections must follow to the new instance or the demo comes up with
+    // no audio and no spectrum ("stuck connecting"). backendChanged fires after
+    // each (re)build.
+    wireBackendSeam(m_radioModel.backend());
+    connect(&m_radioModel, &RadioModel::backendChanged,
+            this, &MainWindow::wireBackendSeam);
     connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
             this, [this](const QString& source, const QString& sourceId,
                          const QByteArray& pcm, int sampleRate) {
@@ -1531,6 +1505,15 @@ MainWindow::MainWindow(QWidget* parent)
             m_radioInfoLabel->setText(m_radioModel.model());
         if (m_radioVersionLabel && !m_radioModel.version().isEmpty())
             m_radioVersionLabel->setText(m_radioModel.version());
+        // The station/nickname label is set once in onConnectionStateChanged, but
+        // the nickname can land afterwards via a radio-status delta — always true
+        // for the demo (SimBackend emits radioChanged ~150ms post-connect), so the
+        // box would otherwise stay blank. Refresh it here on the same late-arrival
+        // path. (RFC #4288 — the empty connected-box fix.)
+        if (m_stationLabel && !m_radioModel.nickname().isEmpty()) {
+            if (setStatusBarStationText(m_stationLabel, m_radioModel.nickname()))
+                updateStatusBarMinimumWidth();
+        }
     });
 
     // Propagate late-arriving SmartSDR+ subscription + dual-SCU diversity
@@ -5671,6 +5654,55 @@ void MainWindow::setPanadapterConnectionAnimation(bool visible, const QString& l
         if (auto* spectrumWidget = applet->spectrumWidget())
             spectrumWidget->setConnectionAnimationVisible(visible, nextLabel);
     }
+}
+
+void MainWindow::wireBackendSeam(IRadioBackend* backend)
+{
+    if (!backend)
+        return;
+    // Note: connections to a PRIOR backend are already gone — Qt drops a
+    // connection when either endpoint is destroyed, and RadioModel destroys the
+    // old backend before building the new one (rebuildBackendForTarget). So there
+    // is no duplicate-connection risk from re-running this per swap.
+
+    // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
+    // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the
+    // identical AudioEngine path. Harmless for real backends: FlexBackend never
+    // emits audioFrameReady (its audio flows through PanadapterStream), so this
+    // connection simply stays idle unless a SimBackend is active.
+    connect(backend, &IRadioBackend::audioFrameReady,
+            m_audio, &AudioEngine::feedAudioData);
+
+    // Spectrum seam (RFC #4288 Route A): activate the previously-dormant
+    // IRadioBackend::spectrumFrameReady. A SimBackend emits the panadapter FFT
+    // through the seam (float dBm bins packed as a QByteArray) instead of decoding
+    // VITA-49 UDP; render it exactly as the PanadapterStream path does
+    // (updateSpectrum on the matching pan). Idle for FlexBackend, which never
+    // emits it — its FFT flows through PanadapterStream::spectrumReady.
+    connect(backend, &IRadioBackend::spectrumFrameReady, this,
+            [this](int /*panId*/, const QByteArray& frame) {
+        if (m_shuttingDown || !m_panStack)
+            return;
+        const int n = static_cast<int>(frame.size() / sizeof(float));
+        if (n <= 0)
+            return;
+        QVector<float> bins(n);
+        memcpy(bins.data(), frame.constData(), n * sizeof(float));
+        // v1 demo has a single panadapter, so render to it (or the active
+        // spectrum before a pan is claimed on first connect). Multi-pan
+        // panId→pan matching is a later step, once the demo grows a rack.
+        if (auto* pan = m_radioModel.panadapters().value(0, nullptr)) {
+            if (auto* sw = m_panStack->spectrum(pan->panId())) {
+                sw->updateSpectrum(bins);
+                finishPanadapterConnectionAnimation();
+                return;
+            }
+        }
+        if (auto* sw = spectrum()) {
+            sw->updateSpectrum(bins);
+            finishPanadapterConnectionAnimation();
+        }
+    });
 }
 
 void MainWindow::finishPanadapterConnectionAnimation()

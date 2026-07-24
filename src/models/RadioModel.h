@@ -489,6 +489,15 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    // Emitted whenever the backend instance is (re)built — including the
+    // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
+    // m_backend is already destroyed and m_backend now points at the new one.
+    // Consumers that hold connections to backend-owned seam signals
+    // (audioFrameReady / spectrumFrameReady) MUST re-establish them here: those
+    // are wired once at MainWindow-ctor time to the startup backend, and the
+    // swap would otherwise leave them attached to the destroyed instance (the
+    // demo "no audio / stuck connecting" bug).
+    void backendChanged(IRadioBackend* backend);
     // Emitted whenever the local CW key transitions on/off — funnel for
     // serial CTS/DSR, MIDI Gate, TCI key, CWX, and HID encoder sources.
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local

@@ -53,6 +53,31 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
             this, &IRadioBackend::disconnected);
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
+
+    // RFC #4288 (the VFO=0 fix): on the live hybrid path the synthetic wire
+    // connection delivers Flex-format pan/slice status, but RadioModel decodes
+    // that wire status ONLY through FlexBackend (decodeSliceStatus /
+    // decodePanCenterBandwidth are m_flexBackend-gated), which is null in demo
+    // mode — so the frequency never reaches the models and the VFO reads 0. We
+    // bridge that by emitting the same information as NORMALIZED typed deltas
+    // through the IRadioBackend seam (radioChanged/panCenterBandwidthChanged/
+    // sliceChanged), which RadioModel wires for EVERY backend. Cross-thread
+    // (m_connection is on its worker thread) so this is a queued connection.
+    // Delayed 150ms so it lands AFTER RadioModel has created the SliceModel /
+    // claimed the pan from the wire status (~50ms) — sliceChanged only applies to
+    // an already-existing slice. m_connected gates onAudioTick(); set it here so
+    // the audio/spectrum tick also starts producing on the live path.
+    connect(m_connection, &RadioConnection::connected, this, [this]() {
+        m_connected = true;
+        m_audioTimer.start();
+        QTimer::singleShot(150, this, [this]() {
+            if (m_connected) emitInitialState();
+        });
+    });
+    connect(m_connection, &RadioConnection::disconnected, this, [this]() {
+        m_connected = false;
+        m_audioTimer.stop();
+    });
 }
 
 SimBackend::~SimBackend()
@@ -181,10 +206,25 @@ void SimBackend::emitInitialState()
     radio.slicesAvailable = capabilities().maxSlices;
     emit radioChanged(radio);
 
+    // Pan center/bandwidth via the typed seam. On the live (hybrid) path this is
+    // what actually drives the VFO/display: RadioModel decodes real Flex pan wire
+    // status only through FlexBackend (decodePanCenterBandwidth is m_flexBackend-
+    // gated), which is null in demo mode — so the wire "display pan center=14.100"
+    // the synthetic connection sends is delivered but never decoded. Emitting the
+    // normalized panCenterBandwidthChanged here bridges that gap through the seam
+    // RadioModel already wires for every backend. panId must match the wire pan id
+    // ("0x40000000") RadioModel claimed. (RFC #4288 — the VFO=0 fix.)
+    emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
+                                   m_sliceFreqMhz, kDemoPanBandwidthMhz);
+
     // One active slice on a sensible default, so the UI has something live to
-    // show the moment demo mode connects.
+    // show the moment demo mode connects. Same rationale as the pan above: the
+    // wire "slice 0 RF_frequency=14.100" is delivered but decodeSliceStatus is
+    // Flex-only, so without this typed emit the slice model never gets a
+    // frequency and the VFO reads 0.
     SliceDelta slice;
     slice.letter = QStringLiteral("A");
+    slice.panId = QStringLiteral("0x40000000");
     slice.frequency = m_sliceFreqMhz;
     slice.mode = m_sliceMode;
     slice.filterLow = m_filterLowHz;

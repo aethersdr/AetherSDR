@@ -103,6 +103,12 @@ private:
     int    m_filterHighHz{2900};
     static constexpr int kSliceId = 0;
     static constexpr int kPanId = 0;
+    // Demo pan span (MHz) = 8 kHz. MUST equal both the wire "display pan …
+    // bandwidth=0.008" (RadioConnection) AND the spectrum span kAudioSpanHz (8000
+    // Hz) in onAudioTick — the spectrum row is the audio scene, and AE stretches
+    // it across this pan width, so a mismatch puts the birdie at the wrong
+    // frequency / outside the passband. Keep all three in lockstep. (RFC #4288)
+    static constexpr double kDemoPanBandwidthMhz = 0.008;
 
     // ---- Path B owned wire objects (synthetic-demo mode) ----
     // Created on worker threads in the ctor (panStream first, matching

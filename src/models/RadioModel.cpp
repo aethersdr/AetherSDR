@@ -656,6 +656,12 @@ void RadioModel::buildBackend()
     connect(m_panStream, &PanadapterStream::meterDataReady,
             &m_meterModel, &MeterModel::updateValues);
     }   // end Flex-only wire-object connects (RFC #4288 Route A guard)
+
+    // Tell consumers the backend instance changed so they can re-wire connections
+    // to backend-owned seam signals (audioFrameReady/spectrumFrameReady). Critical
+    // for the connect-time Flex↔Sim swap: those signals are otherwise bound once at
+    // MainWindow-ctor time and would dangle on the destroyed backend. (RFC #4288)
+    emit backendChanged(m_backend.get());
 }
 
 // RFC #4288 Route A: swap the backend to match the connect target's kind (demo
@@ -2984,7 +2990,7 @@ void RadioModel::setPanNoiseFloorEnable(bool on)
 
 void RadioModel::onConnected()
 {
-    qCDebug(lcProtocol) << "RadioModel: connected";
+    qCDebug(lcProtocol) << "RadioModel: connected (demo=" << m_useDemoBackend << ")";
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
     // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
