@@ -4511,8 +4511,10 @@ void MainWindow::buildUI()
     // GPS satellites (top) + lock status (bottom) stacked
     auto* gpsStack = new QPushButton;
     gpsStack->setObjectName(QStringLiteral("gpsStatusButton"));
+    gpsStack->setFlat(true);
     gpsStack->setAutoDefault(false);
     gpsStack->setDefault(false);
+    gpsStack->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     gpsStack->setCursor(Qt::PointingHandCursor);
     gpsStack->setFocusPolicy(Qt::TabFocus);
     gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
@@ -4520,12 +4522,8 @@ void MainWindow::buildUI()
     gpsStack->setAccessibleDescription(
         QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
     ThemeManager::instance().applyStyleSheet(gpsStack, QStringLiteral(
-        "QPushButton { background: transparent; border: 1px solid transparent; "
-        "border-radius: 4px; padding: 1px 5px; }"
-        "QPushButton:hover { background: {{color.background.1}}; "
-        "border-color: {{color.border.strong}}; }"
-        "QPushButton:focus { border-color: {{color.border.accent}}; }"
-        "QPushButton:pressed { background: {{color.background.2}}; }"));
+        "QPushButton { background: transparent; border: none; padding: 0; }"
+        "QPushButton:focus { border-bottom: 1px solid {{color.border.accent}}; }"));
     connect(gpsStack, &QPushButton::clicked,
             this, &MainWindow::showGpsLocationDialog);
     reserveTelemetryStack(gpsStack, {
