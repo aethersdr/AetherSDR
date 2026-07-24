@@ -98,5 +98,20 @@ int main()
     expect("user override is not replaced when restriction clears",
            action.kind == AetherDspModePolicy::ActionKind::None);
 
+    // Restore, then a restriction that recurs BEFORE the engine confirms the
+    // enable (rapid mode churn). The restored method is still remembered, but a
+    // fresh restriction must re-disable it rather than silently skip and leave
+    // it processing a CW/digital stream.
+    AetherDspModePolicy racePolicy;
+    racePolicy.update(true, QStringLiteral("NR2"));   // disable, remembers NR2
+    action = racePolicy.update(false, {});            // restore -> Enable, keeps NR2
+    expect("race: clearing restriction emits restore",
+           action.kind == AetherDspModePolicy::ActionKind::Enable
+               && action.method == QStringLiteral("NR2"));
+    action = racePolicy.update(true, QStringLiteral("NR2")); // re-restrict before clear
+    expect("race: re-restriction before engine confirm re-disables",
+           action.kind == AetherDspModePolicy::ActionKind::Disable
+               && action.method == QStringLiteral("NR2"));
+
     return failures == 0 ? 0 : 1;
 }

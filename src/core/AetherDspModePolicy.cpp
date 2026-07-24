@@ -42,8 +42,14 @@ AetherDspModePolicy::Action AetherDspModePolicy::update(
         m_autoDisabledMethod.clear();
     }
 
-    if (restricted && !m_userOverride && m_autoDisabledMethod.isEmpty()
-        && !enabled.isEmpty()) {
+    // Disable an audible method under restriction. Re-disable also fires when
+    // the still-remembered method is the one enabled — a restriction that recurs
+    // after a restore but before the queued enable is observed (rapid mode
+    // churn) would otherwise be skipped and leave the method processing a
+    // CW/digital stream. `!enabled.isEmpty()` already means a method is on, so
+    // there is nothing to re-emit once it is off.
+    if (restricted && !m_userOverride && !enabled.isEmpty()
+        && (m_autoDisabledMethod.isEmpty() || m_autoDisabledMethod == enabled)) {
         m_autoDisabledMethod = enabled;
         return {ActionKind::Disable, enabled};
     }
