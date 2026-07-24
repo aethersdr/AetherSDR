@@ -103,6 +103,34 @@ double pointSegmentDistance(const QPointF &point, const QPointF &first, const QP
     return std::hypot(point.x() - closest.x(), point.y() - closest.y());
 }
 
+// Arc-length-uniform resampling of a guide path. This is the ONLY place the
+// sampling exists, so the cached and uncached paths are identical by
+// construction rather than by inspection.
+constexpr int kGuideDistanceSamples = 640;
+
+QVector<QPointF> sampleGuidePath(const QPainterPath &path) {
+    QVector<QPointF> samples;
+    if (path.isEmpty()) {
+        return samples;
+    }
+    samples.reserve(kGuideDistanceSamples + 1);
+    for (int i = 0; i <= kGuideDistanceSamples; ++i) {
+        samples.append(path.pointAtPercent(static_cast<double>(i) / kGuideDistanceSamples));
+    }
+    return samples;
+}
+
+double minimumDistanceToSamples(const QPointF &point, const QVector<QPointF> &samples) {
+    if (samples.size() < 2) {
+        return std::numeric_limits<double>::infinity();
+    }
+    double minimum = std::numeric_limits<double>::infinity();
+    for (int i = 1; i < samples.size(); ++i) {
+        minimum = std::min(minimum, pointSegmentDistance(point, samples[i - 1], samples[i]));
+    }
+    return minimum;
+}
+
 } // namespace
 
 CrossNeedleMeterGeometry CrossNeedleMeterGeometry::loadResource(QString *error) {
@@ -1299,33 +1327,38 @@ QPointF CrossNeedleMeterGeometry::powerReadingsAtIntersection(
                    inverseInterpolate(reflectedScale, reflectedAngleRadians) * safeMultiplier);
 }
 
+const QVector<QPointF> &CrossNeedleMeterGeometry::guideSamples(int index) const {
+    // The geometry is immutable after load, so the samples need no invalidation
+    // key -- same contract as swrLabelCenterCache. GUI-thread only.
+    if (swrGuideSampleCache.size() != swrGuides.size()) {
+        swrGuideSampleCache.clear();
+        swrGuideSampleCache.reserve(swrGuides.size());
+        for (const SwrGuide &guide : swrGuides) {
+            swrGuideSampleCache.append(sampleGuidePath(swrGuidePath(guide)));
+        }
+    }
+    return swrGuideSampleCache[index];
+}
+
 double CrossNeedleMeterGeometry::distanceToGuide(const QPointF &point,
                                                  const SwrGuide &guide) const {
-    const QPainterPath path = swrGuidePath(guide);
-    if (path.isEmpty()) {
-        return std::numeric_limits<double>::infinity();
+    for (int index = 0; index < swrGuides.size(); ++index) {
+        if (swrGuides[index].label == guide.label) {
+            return minimumDistanceToSamples(point, guideSamples(index));
+        }
     }
-
-    constexpr int kDistanceSamples = 640;
-    double minimum = std::numeric_limits<double>::infinity();
-    QPointF previous = path.pointAtPercent(0.0);
-    for (int i = 1; i <= kDistanceSamples; ++i) {
-        const QPointF current =
-            path.pointAtPercent(static_cast<double>(i) / kDistanceSamples);
-        minimum = std::min(minimum, pointSegmentDistance(point, previous, current));
-        previous = current;
-    }
-    return minimum;
+    // A synthetic guide that is not in the table: same sampler, just uncached.
+    return minimumDistanceToSamples(point, sampleGuidePath(swrGuidePath(guide)));
 }
 
 QString CrossNeedleMeterGeometry::nearestGuideLabel(const QPointF &point, double *distance) const {
     QString nearest;
     double minimum = std::numeric_limits<double>::infinity();
-    for (const SwrGuide &guide : swrGuides) {
-        const double candidate = distanceToGuide(point, guide);
+    for (int index = 0; index < swrGuides.size(); ++index) {
+        const double candidate = minimumDistanceToSamples(point, guideSamples(index));
         if (candidate < minimum) {
             minimum = candidate;
-            nearest = guide.label;
+            nearest = swrGuides[index].label;
         }
     }
     if (distance) {

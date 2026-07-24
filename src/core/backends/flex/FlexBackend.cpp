@@ -735,8 +735,11 @@ void FlexBackend::decodeAmplifierStatus(const QString& handle, const QString& mo
     }
     // RadioModel routes only power amps (PGXL) into this decode, so the handle is
     // the amp's — cache it for the encode path (#4198). Ignore the placeholder
-    // handle a first status can carry before the real one is assigned.
-    if (!handle.isEmpty() && handle != QLatin1String("0x00000000"))
+    // handle a first status can carry before the real one is assigned. Defense in
+    // depth (#4203): a pre-existing routing edge — a model-less TGXL status arriving
+    // before its handle is known — can fall through to here; refuse to cache a
+    // known-tuner handle so a later amp.operate can never mis-target the TGXL.
+    if (!handle.isEmpty() && handle != QLatin1String("0x00000000") && handle != m_tunerHandle)
         m_ampHandle = handle;
     // A non-empty, non-TGXL model marks a power amp (PGXL); the TunerGeniusXL is
     // the tuner and routes to TunerModel, not here.

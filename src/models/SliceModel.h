@@ -177,6 +177,11 @@ public:
     void setAudioMute(bool mute);
     void setExternalReceiveAudioReplacementMute(bool active,
                                                 bool restoreMute = false);
+    // A FLEX band-stack recall persists the slice's current audio_mute value.
+    // Temporarily restore the pre-replacement Flex mute before the band command
+    // so the KiwiSDR suppression mute is never written into the outgoing slot.
+    // The external receive presentation remains active throughout.
+    void prepareExternalReceiveAudioReplacementBandRecall(bool restoreMute);
     void setExternalReceiveAutoSquelch(bool on);
     bool externalReceiveReplacementActive() const
     {
@@ -269,6 +274,9 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Emitted after a local setter has issued a frequency command. Unlike
+    // frequencyChanged, radio-status application does not emit this signal.
+    void frequencyCommandIssued(double mhz);
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
     void filterChanged(int low, int high);
@@ -402,6 +410,7 @@ private:
     bool    m_qsk{false};
     bool    m_audioMute{false};
     bool    m_externalReceiveAudioReplacement{false};
+    bool    m_externalReceiveFlexAudioSuppressed{false};
     bool    m_externalReceiveAudioMute{false};
     float   m_externalReceiveAudioGain{70.0f};
     int     m_externalReceiveAudioPan{50};

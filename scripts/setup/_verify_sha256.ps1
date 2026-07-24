@@ -1,4 +1,4 @@
-# Shared SHA256 verifier for setup-script downloads — supply-chain hardening (#3665).
+﻿# Shared SHA256 verifier for setup-script downloads — supply-chain hardening (#3665).
 # Dot-source this, then: Confirm-Sha256 -Path <file> -Expected <hex>
 # Aborts the script (exit 1) on mismatch, so a tampered/MITM'd download never
 # reaches the extract/build step.

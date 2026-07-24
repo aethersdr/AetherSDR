@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build DeepFilterNet3 libdf library for Windows x64.
 
@@ -50,9 +50,9 @@ try {
         Write-Host "DeepFilterNet3 ready (pre-built) in $LibDir" -ForegroundColor Green
         exit 0
     }
-    Write-Host "Download succeeded but DLL not found — falling back to source build" -ForegroundColor Yellow
+    Write-Host "Download succeeded but DLL not found - falling back to source build" -ForegroundColor Yellow
 } catch {
-    Write-Host "Pre-built binary not available — falling back to source build" -ForegroundColor Yellow
+    Write-Host "Pre-built binary not available - falling back to source build" -ForegroundColor Yellow
 }
 
 # ── Check prerequisites ─────────────────────────────────────────────────

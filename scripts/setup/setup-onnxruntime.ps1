@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Download ONNX Runtime prebuilt binaries for Windows x64.
 
@@ -17,10 +17,12 @@
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\_verify_sha256.ps1"
 
-$OrtVersion = "1.18.1"
+# Pinned to the ONNX Runtime that sherpa-onnx bundles so a build with both shares
+# one runtime (no symbol-version clash). Keep in sync with setup-onnxruntime.sh.
+$OrtVersion = "1.27.0"
 $OrtUrl     = "https://github.com/microsoft/onnxruntime/releases/download/v${OrtVersion}/onnxruntime-win-x64-${OrtVersion}.zip"
-# SHA256 of the release zip (#3665). Bump alongside the version.
-$OrtSha256  = "53fb7226fe3cf16001afd1eae79e35f891a20e80bd686185d62ea878e6f9b1a6"
+# SHA256 of the release zip. Bump alongside the version.
+$OrtSha256  = "c5c81710938e68079ff1a192b04897faabe4b43830d48f39f27ecd4e16138bfc"
 $OutDir     = "third_party\onnxruntime"
 $ZipFile    = "third_party\onnxruntime-win-x64-${OrtVersion}.zip"
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Download and build hidapi for Windows x64.
 

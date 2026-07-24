@@ -27,6 +27,7 @@ layout(std140, binding = 0) uniform U {
     vec4 fillP;      // fillAlpha, heatMap (0/1), pad, pad
     vec4 fillColor;  // straight rgb, a unused
     vec4 darkColor;  // straight rgb (solid-mode base blend), a unused
+    vec4 lineColor;  // straight rgb — trace stroke, independent of fill (#4239); a unused
 };
 
 // Straight color + coverage → premultiplied.
@@ -128,7 +129,7 @@ void main()
         // out to halfWidth-1, a 1 px fade to halfWidth; the feather adds one
         // more 1 px annulus at low alpha. The first cut's fixed ±0.75 px
         // smoothstep band read as a soft "blurred" stroke at 1x DPI.
-        vec3 lineRgb = heat ? heatColor(t) : fillColor.rgb;
+        vec3 lineRgb = heat ? heatColor(t) : lineColor.rgb;
         float featherHalf = coreHalf + stroke.y;
         float covF = 1.0 - smoothstep(coreHalf, featherHalf, d);
         outc = over(outc, pm(lineRgb, stroke.w, covF));

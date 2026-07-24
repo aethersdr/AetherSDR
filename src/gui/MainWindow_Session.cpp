@@ -53,6 +53,7 @@
 #include "SpectrumWidget.h"
 #include "TitleBar.h"
 #include "core/AppSettings.h"
+#include "gui/AutoConnectPolicy.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/AutomationServer.h"
 #include "core/LogManager.h"
@@ -245,10 +246,9 @@ void MainWindow::wireDiscovery()
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected) return;
-        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT")) {
-            return;
-        }
-        if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
+        if (!aether::savedRadioAutoConnectAllowed(
+                qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT"),
+                AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True"))
             return;
         const QString lastSerial = AppSettings::instance()
             .value("LastConnectedRadioSerial").toString();
@@ -399,6 +399,15 @@ void MainWindow::wireRadioModel()
     // ── Wire up radio model ────────────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
+    // Slice Link: disconnect teardown never emits sliceRemoved (stale slices
+    // are staged for reconnect reclaim), so dissolve the link explicitly.
+    // Both transitions dissolve — a link never crosses a session boundary
+    // (one engaged on disconnected fixture slices must not survive into a
+    // live session either).
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        dissolveAllSliceLinks(connected ? "radio connected" : "radio disconnected");
+    });
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
@@ -454,6 +463,17 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, &MainWindow::prepareKiwiSdrBandRecallForPan);
+    connect(&m_radioModel, &RadioModel::panBandDispatchFailed,
+            this, [this](const QString& panId) {
+        // The band write never reached the wire, so re-arm the mute handoff
+        // (restores the KiwiSDR suppression the prepare step lifted). The rebind
+        // marker is owned by noteBandRecallForPan and self-expires via its own
+        // generation-guarded grace timer — don't clear it here or a concurrent
+        // recall's #4158/Center Lock window could be torn down early.
+        finishPreparedKiwiSdrBandRecallForPan(panId);
+    });
     // Re-bind a KiwiSDR replacement across a band-stack slice recreation (#4158).
     // A band recall DROPS then RE-CREATES the slice (same id, new band). The
     // tracker re-binds only when a rebind is pending for this id AND this pan
@@ -468,7 +488,10 @@ void MainWindow::wireRadioModel()
         if (profileId.isEmpty()) {
             return;
         }
-        setKiwiSdrVirtualAntennaForSlice(s->sliceId(), profileId);
+        // Automatic recreation re-bind: selectSlice=false so a band recall on a
+        // Kiwi slice that lives on a non-active pan can't steal the active slice.
+        setKiwiSdrVirtualAntennaForSliceInternal(s->sliceId(), profileId,
+                                                 /*selectSlice=*/false);
     });
     connect(&m_radioModel, &RadioModel::memoryChanged,
             this, &MainWindow::syncMemorySpot);
@@ -1597,6 +1620,53 @@ void MainWindow::wireDaxIq()
 // Kept out of the MainWindow.cpp monolith. The bridge is the endpoint MCP
 // clients connect to; MainWindow owns the server instance for its lifetime.
 
+QJsonObject MainWindow::automationTargetTune(double mhz)
+{
+    SliceModel* slice = activeSlice();
+    if (!slice) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"), QStringLiteral("no slice to tune")}};
+    }
+    if (slice->isLocked()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("refused: slice %1 is VFO-locked").arg(slice->letter())}};
+    }
+    if (m_swrSweep.running) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: SWR sweep is running")}};
+    }
+
+    applyTuneRequest(slice, mhz, TuneIntent::CommandedTargetCenter,
+                     "automation-target-tune");
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("targetTune"), mhz},
+                       {QStringLiteral("sliceId"), slice->sliceId()},
+                       {QStringLiteral("letter"), slice->letter()}};
+}
+
+QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
+                                                 const QString& preferredPanId)
+{
+    if (!m_radioModel.memories().contains(memoryIndex)) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no memory with index %1").arg(memoryIndex)}};
+    }
+    if (!activateMemorySpot(memoryIndex, preferredPanId)) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("memory %1 could not be activated")
+                                .arg(memoryIndex)}};
+    }
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("memory"), QStringLiteral("activate")},
+                       {QStringLiteral("index"), memoryIndex},
+                       {QStringLiteral("panId"), preferredPanId}};
+}
+
 bool MainWindow::startAutomationBridge(const QString& sockName)
 {
     if (m_automation && m_automation->isRunning())
@@ -1619,6 +1689,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setRadioModel(&radioModel());  // for the get() verb
     m_automation->setAudioEngine(audioEngine());
     m_automation->setQsoRecorder(qsoRecorder());  // for the record() verb
+    m_automation->setClockModel(m_clockModel);  // for the `get clock` verb
     m_automation->setConnectionDialogHost(this);
     m_automation->setConnectionAutomation(
         findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
@@ -1626,8 +1697,18 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
+    m_automation->setSliceLinkHandler(
+        [this](int aId, int bId, bool on) { return automationSetSliceLink(aId, bId, on); });
+    m_automation->setSliceLinkPeerQuery(
+        [this](int sliceId) { return sliceLinkPeerOf(sliceId); });
     m_automation->setTuneHandler(
-        [this](double mhz) { return automationTune(mhz); });
+        [this](double mhz, int sliceId) { return automationTune(mhz, sliceId); });
+    m_automation->setTargetTuneHandler(
+        [this](double mhz) { return automationTargetTune(mhz); });
+    m_automation->setMemoryActivateHandler(
+        [this](int memoryIndex, const QString& preferredPanId) {
+            return automationActivateMemory(memoryIndex, preferredPanId);
+        });
     m_automation->setReceiveSyncSnapshotHandler(
         [this]() { return automationReceiveSyncSnapshot(); });
     m_automation->setKiwiSdrSnapshotHandler(
@@ -1660,9 +1741,12 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // AETHER_AUTOMATION_ALLOW_TX into m_txAllowed and would otherwise
         // clobber a pre-start value. Fold in the persisted operator opt-in so
         // a GUI enable survives restart; setTxAllowed arms the watchdog.
+        const bool txPinnedOff =
+            qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
         guard->setTxAllowed(
-            qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
-            || AutomationBridgeSettings::txAllowed());
+            !txPinnedOff
+            && (qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
+                || AutomationBridgeSettings::txAllowed()));
         // Observe-only gate (#4188) — apply the persisted operator opt-in after
         // start() so the bridge comes up read-only if the box is checked. An env
         // override lets headless/CI pin the bridge observe-only regardless.
@@ -1694,6 +1778,11 @@ void MainWindow::setAutomationBridgeToken(const QString& token)
 
 void MainWindow::setAutomationTxAllowed(bool allowed)
 {
+    if (allowed && qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX")) {
+        qWarning().noquote()
+            << "Ignoring TX-automation enable while AETHER_AUTOMATION_NO_TX pins it off";
+        return;
+    }
     // Persist the operator opt-in (nested config) so it survives restart.
     AutomationBridgeSettings::setTxAllowed(allowed);
     // Push live so toggling takes effect on a running bridge immediately —

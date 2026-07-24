@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Download and build qtkeychain for Windows x64.
 
@@ -36,13 +36,26 @@ if (Test-Path "$OutDir\lib\cmake\Qt6Keychain\Qt6KeychainConfig.cmake") {
 }
 
 # ── Locate Qt ────────────────────────────────────────────────────────────
-# install-qt-action sets QT_ROOT_DIR; fall back to Qt6_DIR three levels up.
+# Resolve the Qt kit prefix from the first source that is set, most specific
+# first: install-qt-action's QT_ROOT_DIR, then Qt6_DIR (three levels up), then
+# an already-exported CMAKE_PREFIX_PATH (first entry of a ;-list), then qmake on
+# PATH (<prefix>/bin/qmake -> <prefix>). This keeps a local build working
+# whether or not the operator exported QT_ROOT_DIR.
 $QtPrefix = $env:QT_ROOT_DIR
 if (-not $QtPrefix -and $env:Qt6_DIR) {
     $QtPrefix = [System.IO.Path]::GetFullPath((Join-Path $env:Qt6_DIR "../../.."))
 }
+if (-not $QtPrefix -and $env:CMAKE_PREFIX_PATH) {
+    $QtPrefix = ($env:CMAKE_PREFIX_PATH -split ';')[0]
+}
 if (-not $QtPrefix) {
-    Write-Error "Qt not found. Set QT_ROOT_DIR or Qt6_DIR before running this script."
+    $qmake = Get-Command qmake -ErrorAction SilentlyContinue
+    if ($qmake) {
+        $QtPrefix = Split-Path -Parent (Split-Path -Parent $qmake.Source)
+    }
+}
+if (-not $QtPrefix) {
+    Write-Error "Qt not found. Set QT_ROOT_DIR, Qt6_DIR, or CMAKE_PREFIX_PATH, or put qmake on PATH before running this script."
     exit 1
 }
 Write-Host "Using Qt from: $QtPrefix" -ForegroundColor Cyan

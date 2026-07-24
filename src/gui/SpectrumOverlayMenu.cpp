@@ -1436,6 +1436,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
+        // Trace line color — independent of the fill color (#4239). Mirrors the
+        // "FFT Fill" row's color-button-in-column-1 layout for symmetry.
+        m_lineColorBtn = new QPushButton;
+        m_lineColorBtn->setObjectName("displayFftLineColorBtn");
+        m_lineColorBtn->setFixedSize(18, 18);
+        m_lineColorBtn->setStyleSheet(
+            QString("QPushButton { background: %1; border: 1px solid #506070;"
+                    " border-radius: 2px; }")
+                .arg(m_lineColor.name()));
+        m_lineColorBtn->setToolTip("Choose trace line color");
+        grid->addWidget(m_lineColorBtn, row, 1);
+
         auto* lineWidthSlider = new GuardedSlider(Qt::Horizontal);
         lineWidthSlider->setRange(0, 10);
         lineWidthSlider->setValue(4);
@@ -1449,7 +1461,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
         m_lineWidthSlider = lineWidthSlider;
         applyPrimarySliderStyle(m_lineWidthSlider);
-        grid->addWidget(m_lineWidthSlider, row, 1, 1, 2);
+        grid->addWidget(m_lineWidthSlider, row, 2);
 
         m_lineWidthLabel = new QLabel("2.0");
         m_lineWidthLabel->setStyleSheet(valStyle);
@@ -1462,6 +1474,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             float w = v * 0.5f;
             m_lineWidthLabel->setText(v == 0 ? "Off" : QString::number(w, 'f', 1));
             emit fftLineWidthChanged(w);
+        });
+        connect(m_lineColorBtn, &QPushButton::clicked, this, [this] {
+            QColor c = QColorDialog::getColor(m_lineColor, this, "FFT Line Color",
+                                               QColorDialog::DontUseNativeDialog);
+            if (c.isValid()) {
+                m_lineColor = c;
+                m_lineColorBtn->setStyleSheet(
+                    QString("QPushButton { background: %1; border: 1px solid #506070;"
+                            " border-radius: 2px; }")
+                        .arg(c.name()));
+                emit fftLineColorChanged(c);
+            }
         });
     }
 
@@ -1978,6 +2002,14 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
         m_blackSlider->setToolTip(autoOn
             ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
             : "Waterfall black level. Decrease to darken the noise floor.");
+        if (!m_kiwiWaterfallControlMode) {
+            m_blackSlider->setAccessibleName(autoOn
+                ? tr("Waterfall auto-black offset")
+                : tr("Waterfall black level"));
+            m_blackSlider->setAccessibleDescription(autoOn
+                ? tr("Sets the target offset from the measured noise floor.")
+                : tr("Sets the manual waterfall black level."));
+        }
     }
     if (emitSignals) {
         emit wfAutoBlackChanged(autoOn);
@@ -1998,7 +2030,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                bool autoBlackRadioSide,
                                                int renderMode,
                                                int dssFloorDepth,
-                                               int dssGain)
+                                               int dssGain,
+                                               const QColor& lineColor)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -2019,6 +2052,11 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     m_fillColorBtn->setStyleSheet(
         QString("QPushButton { background: %1; border: 1px solid #506070;"
                 " border-radius: 2px; }").arg(fillColor.name()));
+    m_lineColor = lineColor;
+    if (m_lineColorBtn)
+        m_lineColorBtn->setStyleSheet(
+            QString("QPushButton { background: %1; border: 1px solid #506070;"
+                    " border-radius: 2px; }").arg(lineColor.name()));
     m_gainSlider->setValue(gain);
     m_gainLabel->setText(QString::number(gain));
     m_blackManualValue     = black;
@@ -2105,6 +2143,12 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
         m_gainSlider->setToolTip(kiwiMode
             ? "KiwiSDR waterfall ceiling dBm. Auto sets this from the row's 98th percentile plus 30 dB."
             : "Waterfall color gain.");
+        m_gainSlider->setAccessibleName(kiwiMode
+            ? tr("KiwiSDR waterfall ceiling")
+            : tr("Waterfall color gain"));
+        m_gainSlider->setAccessibleDescription(kiwiMode
+            ? tr("Sets the maximum KiwiSDR waterfall display level in dBm.")
+            : tr("Sets the waterfall color gain from 0 to 100."));
     }
     if (m_blackSlider) {
         m_blackSlider->setRange(kiwiMode ? -260 : 0, kiwiMode ? 29 : 100);
@@ -2113,6 +2157,23 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
             : (m_autoBlackBtn && m_autoBlackBtn->isChecked()
                    ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
                    : "Waterfall black level. Decrease to darken the noise floor."));
+        // Set the accessible name unconditionally in both modes (like the gain
+        // and rate sliders) so a kiwi->flex switch never leaves a stale name.
+        // The flex-mode name mirrors applyAutoBlackMode's auto-on/off wording;
+        // applyAutoBlackMode still refreshes it as the mode cycles.
+        if (kiwiMode) {
+            m_blackSlider->setAccessibleName(tr("KiwiSDR waterfall floor"));
+            m_blackSlider->setAccessibleDescription(
+                tr("Sets the minimum KiwiSDR waterfall display level in dBm."));
+        } else {
+            const bool autoOn = (m_autoBlackMode != 0);
+            m_blackSlider->setAccessibleName(autoOn
+                ? tr("Waterfall auto-black offset")
+                : tr("Waterfall black level"));
+            m_blackSlider->setAccessibleDescription(autoOn
+                ? tr("Sets the target offset from the measured noise floor.")
+                : tr("Sets the manual waterfall black level."));
+        }
     }
     if (m_rateSlider) {
         m_rateSlider->setRange(kiwiMode ? 0 : WF_RATE_SLIDER_MIN,
@@ -2121,6 +2182,12 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
         m_rateSlider->setToolTip(kiwiMode
             ? "KiwiSDR waterfall rate. Auto follows the Flex waterfall rate."
             : "Waterfall rate.");
+        m_rateSlider->setAccessibleName(kiwiMode
+            ? tr("KiwiSDR waterfall rate")
+            : tr("Waterfall rate"));
+        m_rateSlider->setAccessibleDescription(kiwiMode
+            ? tr("Zero follows the Flex waterfall rate; values 1 to 4 request a fixed KiwiSDR rate.")
+            : tr("Sets the waterfall row update rate."));
     }
     if (m_autoBlackBtn) {
         m_autoBlackBtn->setToolTip(kiwiMode
@@ -2128,7 +2195,8 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
             : "Use the measured noise floor for waterfall black level.");
         m_autoBlackBtn->setAccessibleDescription(kiwiMode
             ? tr("Applies the computed KiwiSDR waterfall floor and ceiling levels.")
-            : tr("Use the measured noise floor for waterfall black level."));
+            : tr("Cycles the waterfall auto-black mode: off (manual black "
+                 "level), software noise-floor estimate, or hardware level."));
         if (kiwiMode) {
             m_autoBlackBtn->setCheckable(true);
             m_autoBlackBtn->setText("Auto");

@@ -24,6 +24,10 @@ public:
                                   const QString& text,
                                   StandardButtons buttons = Ok,
                                   StandardButton defaultButton = NoButton);
+    static StandardButton critical(QWidget* parent, const QString& title,
+                                   const QString& text,
+                                   StandardButtons buttons = Ok,
+                                   StandardButton defaultButton = NoButton);
     static StandardButton question(QWidget* parent, const QString& title,
                                    const QString& text,
                                    StandardButtons buttons = StandardButtons(Yes | No),

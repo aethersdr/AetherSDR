@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Download and prepare libopus prebuilt libraries for Windows x64.
 

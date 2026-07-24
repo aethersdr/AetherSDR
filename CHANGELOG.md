@@ -8,6 +8,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Operator workflow
+
+- Add Slice Link: right-click a panadapter to link two slices so tuning
+  either retunes the other — across panadapters, including Kiwi-sourced
+  slices. Propagation rides the shared tuning policy (lock/SWR guards,
+  reveal/pan-follow), suspends while a member is VFO-locked, and shows a ⇄
+  marker on both linked slices. Bridge: `slice link <a> <b> on|off` and a
+  `linkedTo` slice-snapshot field. (#4291 — @quelleck)
+
+### Audio, diagnostics & automation
+
+- Add an optional slice id to the automation bridge `tune` verb
+  (`tune <mhz> [sliceId]`, JSON `id` field) so scripts can drive a non-active
+  slice directly instead of the racy `slice select` → `tune` → re-select flap.
+  No id keeps today's active-slice behavior; lock, SWR-sweep, and Multi-Flex
+  ownership refusals apply to both forms. (#4324 — @quelleck)
+
 ## [v26.7.3] — 2026-07-19
 
 ### Cross-needle metering · radio-state fidelity · operating polish

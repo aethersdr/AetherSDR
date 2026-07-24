@@ -86,6 +86,39 @@ int main(int argc, char** argv)
            eq(parseDeclaredBands(QStringLiteral("2m,440,2m")),
               {QStringLiteral("2m"), QStringLiteral("440")}));
 
+    // Band-name aliases: a conventional spelling resolves to the canonical
+    // kBands name. "70cm" is what every ham + gateway spells UHF; AE names it
+    // "440" (see Aether-gate PRs #14/#15). The alias maps only to a name that
+    // already exists in kBands, so Principle VII is unchanged (junk still drops).
+    report("alias (70cm -> [440])",
+           eq(parseDeclaredBands(QStringLiteral("70cm")),
+              {QStringLiteral("440")}));
+    report("alias case-fold (70CM -> [440])",
+           eq(parseDeclaredBands(QStringLiteral("70CM")),
+              {QStringLiteral("440")}));
+    report("alias among reals (2m,70cm,23cm -> [2m,440,23cm])",
+           eq(parseDeclaredBands(QStringLiteral("2m,70cm,23cm")),
+              {QStringLiteral("2m"), QStringLiteral("440"), QStringLiteral("23cm")}));
+    // Both spellings sent -> dedup collapses to one canonical entry (either order).
+    report("alias dedup (440,70cm -> [440])",
+           eq(parseDeclaredBands(QStringLiteral("440,70cm")),
+              {QStringLiteral("440")}));
+    report("alias dedup (70cm,440 -> [440])",
+           eq(parseDeclaredBands(QStringLiteral("70cm,440")),
+              {QStringLiteral("440")}));
+    // Principle VII holds with aliasing on: the alias is kept, junk still dropped.
+    report("alias kept, junk dropped (70cm,junk -> [440])",
+           eq(parseDeclaredBands(QStringLiteral("70cm,junk")),
+              {QStringLiteral("440")}));
+    // An alias must be a *faithful* second spelling: it produces exactly what
+    // the canonical produces — same output, and (since the canonical renders)
+    // never a name the allow-list drops. This pins the observable half of the
+    // compile-time invariants (canonical exists AND is declarable); the shadow
+    // and declarability guarantees themselves are enforced by static_assert.
+    report("alias parse equals canonical parse (70cm == 440)",
+           eq(parseDeclaredBands(QStringLiteral("70cm")),
+              parseDeclaredBands(QStringLiteral("440"))));
+
     if (g_failed == 0) {
         std::printf("\nAll %d declared-bands tests passed.\n", g_total);
         return 0;

@@ -66,18 +66,27 @@ Hl2Backend : IRadioBackend
 │                       EP6 IQ ingest; owns the socket + its RX thread)
 │      emits: iqBlockReady(complex<float> block), linkUp/linkDown, dropStats
 │      accepts: setRxFrequencyHz(), setSampleRate(), setLnaGainDb()  (C&C)
-└── Hl2RxDsp          (engine-side RX chain on its own thread)
+└── Hl2Dsp            (engine-side fixed-block worker; one RX channel in Phase 1)
        in:  raw IQ blocks from MetisClient
+       owns: WdspChannel RX  → complete IQ-to-audio chain
        out: demodulated PCM  → audio outlet
             FFT magnitude bins → spectrum/waterfall outlet
             S-meter level      → meterUpdate
 ```
 
-`MetisClient` and `Hl2RxDsp` are a direct in-tree port of the proven
-`prototypes/hl2/hpsdr.py` primitives (register map, framing, DC-removed FFT).
-The DSP building blocks the chain needs — **liquid-dsp, FFTW, and the `WfmDsp`
-pattern — are already in the tree** (`docs/aetherd-headless-engine-design.md:309-318`),
-so `Hl2RxDsp` is assembly of existing parts, not new DSP.
+`MetisClient` ports the proven `prototypes/hl2/hpsdr.py` register map and
+framing primitives. `Hl2Dsp` replaces the spike's Python-only signal path with
+the production engine boundary described below.
+The modulation chain is not assembled from unrelated AetherSDR and WDSP stages.
+The backend owns one complete, preplanned `WdspChannel` RX chain. A read-only
+FFTW spectrum tap may observe raw IQ, but it is outside the audio path and may
+not mutate it. See `docs/architecture/wdsp-integration.md` for the lifetime,
+allocation, reconfiguration, and future TX contract.
+
+The wire and DSP threads meet through a bounded SPSC IQ queue. UDP ingest never
+waits for DSP. Queue starvation becomes a counted zero-IQ gap; overflow drops a
+whole oldest block and records the lost sample interval. Both conditions are
+observable backend metrics, not silent discontinuities.
 
 Everything in this box lives under `src/core/backends/hl2/`, which is **below the
 seam**: EB3 never inspects its includes and it may use any vendor/DSP header
@@ -91,7 +100,7 @@ needs. Adding the HL2 tree touches **no** ratchet baseline row and requires **no
 ## 3. Seam mapping
 
 Each `IRadioBackend` verb/signal → HL2 mechanism. "Engine DSP" means the field
-configures `Hl2RxDsp`, not the radio — the fundamental HL2 difference from Flex,
+configures `Hl2Dsp`, not the radio — the fundamental HL2 difference from Flex,
 where the same field would be a wire command.
 
 ### Intents DOWN
@@ -102,8 +111,8 @@ where the same field would be a wire command.
 | `disconnectRadio()` | Send Metis stop (`EF FE 04 00`), stop threads in reverse order. |
 | `isConnected()` | `MetisClient` link state (EP6 flowing). |
 | `setSliceFrequency(id, hz)` | `MetisClient::setRxFrequencyHz` → RX1 NCO `C0=0x04`. (Phase 1: single slice, `id` fixed.) |
-| `setSliceMode(id, mode)` | **Engine DSP** — selects the `Hl2RxDsp` demodulator (AM/SSB/CW/FM/…). HL2 ships raw IQ, so mode is purely engine-side. |
-| `setSliceFilter(id, lo, hi)` | **Engine DSP** — sets the demod passband in `Hl2RxDsp`. |
+| `setSliceMode(id, mode)` | **Engine DSP** — configures the backend-owned RX `WdspChannel` (AM/SSB/CW/FM/…). HL2 ships raw IQ, so mode is purely engine-side. |
+| `setSliceFilter(id, lo, hi)` | **Engine DSP** — configures the RX `WdspChannel` passband on the control path. |
 | `setKeying(bool)` | **Guarded no-op** — `capabilities().canTransmit == false`, so the engine TX guard (RFC §6) denies keying above the seam; the backend never keys. (TX is Phase 2+.) |
 | `invokeExtension(...)` | Stub, exactly like FlexBackend (FlexBackend::invokeExtension): if `requestId != 0`, emit `extensionError` immediately. HL2 advertises **no** extension namespaces (see §4). |
 
@@ -113,7 +122,7 @@ where the same field would be a wire command.
 |---|---|
 | `connected` / `disconnected` / `connectionError` | `MetisClient` link transitions. |
 | `sliceChanged(id, SliceDelta)` | Emitted from the backend's **own authoritative state**. HL2 has no status wire echoing frequency/mode back (unlike Flex's `decodeSliceStatus`); the engine is the source of truth, so the backend reflects the settings it applied. |
-| `meterUpdate("s-meter", v)` | `Hl2RxDsp` S-meter (dBFS → dBm via a calibration constant; TBD, refine like `flex-meter-learnings.md`). |
+| `meterUpdate("s-meter", v)` | `Hl2Dsp` S-meter (dBFS → dBm via a calibration constant; TBD, refine like `flex-meter-learnings.md`). |
 | `panCenterBandwidthChanged(panId, ctr, span)` | Center = RX1 NCO MHz; span = sample-rate MHz. Backend-emitted from its own config. |
 | `panRfGainChanged(panId, gain)` | LNA gain (−12…+48 dB) reflected back. |
 | `spectrumFrameReady` / `waterfallRowReady` / `audioFrameReady` | The DSP outlets — **but see §5 for how these actually reach the UI in Phase 1** (the interface's `QByteArray` data-plane signals are not the live path yet). |
@@ -188,7 +197,7 @@ types flowing off `PanadapterStream` and reached via `RadioModel::panStream()` �
 The concrete seam frame formats are **step-4 work, not final**
 (`IRadioBackend.h:210-216`; `aetherd-headless-engine-design.md:251-266`).
 
-**Proposal (Phase 1 relays existing types):** `Hl2RxDsp` produces the **same**
+**Proposal (Phase 1 relays existing types):** `Hl2Dsp` produces the **same**
 in-tree frame types the UI already consumes — `QVector<float>` dBm spectrum bins,
 `QByteArray` 24 kHz PCM. Rather than invent a step-4 format now, expose them the
 way RadioModel already consumes Flex's: the cleanest minimal option is a small
@@ -206,7 +215,9 @@ data plane, and multi-RX all wait for their respective later steps.
 
 ## 6. Explicitly out of scope for Phase 1
 
-- **Transmit.** `canTransmit=false`; `setKeying` is a guarded no-op. TX needs the
+- **Transmit.** `canTransmit=false`; `setKeying` is a guarded no-op. The WDSP
+  foundation can construct a TX channel for deterministic tests, but that is
+  deliberately disconnected from all radio I/O. Live TX needs the
   MOX bit + a TX-IQ data plane + the engine TX arbiter (RFC §6 / step 4-arbitration)
   and is deliberately deferred — it is also the only path that can key a radio, so
   keeping it out of Phase 1 is the safe default.
@@ -246,8 +257,14 @@ but clean-room is chosen to match project convention.
 **Resolved**
 - HL2 is one `IRadioBackend` implementor, RX-only in Phase 1 (RFC §5.5 Q3: one
   interface, `canTransmit=false`, guarded `setKeying`).
-- DSP is engine-side and encapsulated below the seam; consumers see the same
-  normalized signals (RFC §5.5, `IRadioBackend.h:50-53`).
+- DSP is engine-side and encapsulated below the seam. One backend-owned WDSP
+  channel owns the complete RX modulation chain; it is never interleaved with
+  `AudioEngine` stages. Consumers see the same normalized signals (RFC §5.5,
+  `IRadioBackend.h:50-53`).
+- FFT planning, allocation, and rate changes are control-path work. Live rate
+  changes prebuild a replacement channel and swap it at a block boundary.
+- Metis ingest and DSP communicate through a bounded SPSC queue with explicit
+  gap/overflow metrics; neither the UDP thread nor DSP callback blocks the other.
 - Below-seam placement under `src/core/backends/hl2/` — no EB3/tags impact.
 - Protocol authority named and consulted clean-room (Principle I / AGENTS.md:334).
 
@@ -268,13 +285,22 @@ but clean-room is chosen to match project convention.
 
 ## 9. Phasing
 
-1. **1a — MetisClient + Hl2RxDsp in-tree** (port the spike; unit-tested against
-   captured EP6 fixtures). No RadioModel change yet.
+0. **Foundation — complete.** Pinned WDSP 2.00 static library, portability
+   boundary, RAII channel owner, and deterministic RX/TX/lifecycle tests. This
+   phase has no radio I/O and cannot key hardware.
+1. **1a — MetisClient + Hl2Dsp in-tree** (port the spike; unit-tested against
+   captured EP6 fixtures and packet-gap cases). One RX `WdspChannel`; no
+   RadioModel change yet.
 2. **1b — backend-selection seam** (Gap A): `makeBackend`, Flex-sink adapter step.
 3. **1c — data-plane relay** (Gap B): HL2 DSP frames reach the existing UI path;
    first live in-app HL2 panadapter + audio.
 4. **1d — capabilities + connect UX**: family reporting, explicit-host connect,
    error surfacing.
 
-Later (own steps): discovery-driven selection, multi-RX, transmit, vendor
-extensions, migration to finalized step-4 binary frames.
+5. **Phase 2 — TX after RX soak.** Add a separate preplanned WDSP TX channel,
+   audio-to-EP2 buffering, hard operator-intent/MOX gates, and clear-MOX-first
+   teardown. Prove into a dummy load before advertising `canTransmit=true`.
+
+Later (own steps): discovery-driven selection, multi-RX, vendor extensions,
+migration to finalized step-4 binary frames, then the cross-platform receiver
+count/rate benchmark matrix in `wdsp-integration.md`.

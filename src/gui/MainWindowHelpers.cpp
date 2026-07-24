@@ -60,6 +60,8 @@ QString formatNetworkSeqErrors(int errors, int packets)
 }
 
 namespace {
+constexpr int kNetworkTooltipWidthPx = 300;
+
 // Distinct name (not an overload of formatNetworkSeqErrors): an
 // anonymous-namespace overload would hide the namespace-scope two-int
 // overload from unqualified lookup inside this TU.
@@ -67,9 +69,48 @@ QString formatCategorySeqErrors(const PanadapterStream::CategoryStats& stats)
 {
     return formatNetworkSeqErrors(stats.errors, stats.packets);
 }
+
+QString networkTooltipSection(const QString& title)
+{
+    return QStringLiteral(
+        "<tr><td colspan='2' style='color:#8aa8c0; font-size:8pt; padding-top:5px;'>"
+        "%1"
+        "</td></tr>")
+        .arg(title.toHtmlEscaped());
+}
+
+QString networkTooltipRow(const QString& label, const QString& value)
+{
+    return QStringLiteral(
+        "<tr>"
+        "<td width='52%' style='color:#8aa8c0; padding-right:18px;'>%1</td>"
+        "<td width='48%' align='right' style='color:#c8d8e8;'>%2</td>"
+        "</tr>")
+        .arg(label.toHtmlEscaped(), value.toHtmlEscaped());
+}
 } // namespace
 
-QString buildNetworkTooltip(const RadioModel& model)
+QString networkQualityColor(const QString& quality)
+{
+    if (quality == QStringLiteral("Excellent")
+            || quality == QStringLiteral("Very Good")) {
+        return QStringLiteral("#00cc66");
+    }
+    if (quality == QStringLiteral("Fair")) {
+        return QStringLiteral("#cc9900");
+    }
+    if (quality == QStringLiteral("Poor")) {
+        return QStringLiteral("#cc3333");
+    }
+    if (quality == QStringLiteral("Good")) {
+        return QStringLiteral("#00b4d8");
+    }
+    return QStringLiteral("#8aa8c0"); // Off / unknown
+}
+
+QString buildNetworkTooltip(const RadioModel& model,
+                            int adaptiveFpsCap,
+                            bool throttleRestorePending)
 {
     const PanadapterStream::CategoryStats audioStats =
         model.categoryStats(PanadapterStream::CatAudio);
@@ -82,30 +123,78 @@ QString buildNetworkTooltip(const RadioModel& model)
     const PanadapterStream::CategoryStats daxStats =
         model.categoryStats(PanadapterStream::CatDAX);
 
-    QStringList lines;
-    lines
-        << QString("Network: %1").arg(model.networkQuality())
-        << QString("Latency (RTT): %1").arg(formatNetworkMs(model.lastPingRtt()))
-        << QString("Max RTT (session): %1").arg(formatNetworkMs(model.maxPingRtt()))
-        << QString("Packet loss (%1s): %2")
-               .arg(model.packetLossWindowSeconds())
-               .arg(formatNetworkSeqErrors(model.packetLossWindowDrops(),
-                                           model.packetLossWindowPackets()))
-        << QString("Network jitter: %1").arg(formatNetworkMs(model.audioPacketJitterMs()))
-        << QString("Audio gap: %1 (max %2)")
-               .arg(formatNetworkMs(model.audioPacketGapMs()),
-                    formatNetworkMs(model.audioPacketGapMaxMs()))
-        << QString("Total sequence gaps: %1")
-               .arg(formatNetworkSeqErrors(model.packetDropCount(), model.packetTotalCount()))
-        << QString("Audio: %1").arg(formatCategorySeqErrors(audioStats))
-        << QString("FFT: %1").arg(formatCategorySeqErrors(fftStats))
-        << QString("Waterfall: %1").arg(formatCategorySeqErrors(waterfallStats))
-        << QString("Meters: %1").arg(formatCategorySeqErrors(meterStats))
-        << QString("DAX: %1").arg(formatCategorySeqErrors(daxStats))
-        << QString("UDP RX bytes: %1").arg(QLocale().formattedDataSize(model.rxBytes()))
-        << QString("UDP TX bytes: %1").arg(QLocale().formattedDataSize(model.txBytes()))
-        << "Double-click for full diagnostics";
-    return lines.join('\n');
+    const QString quality = model.networkQuality();
+    QString html = QStringLiteral(
+        "<html><body>"
+        // Dark background so the fixed light foreground colors below stay
+        // legible regardless of the platform/theme tooltip base color (the
+        // status-bar tooltip has no global QToolTip palette). Matches the
+        // pairing used in PropDashboardDialog.
+        "<table width='%1' bgcolor='#102131' cellspacing='0' cellpadding='3'>"
+        "<tr>"
+        "<td colspan='2'>"
+        "<span style='font-size:10pt; font-weight:600; color:#c8d8e8;'>"
+        "Network diagnostics"
+        "</span>&nbsp;&nbsp;"
+        "<span style='color:%2;'>&#9679; %3</span>"
+        "</td>"
+        "</tr>")
+        .arg(kNetworkTooltipWidthPx)
+        .arg(networkQualityColor(quality), quality.toHtmlEscaped());
+
+    if (adaptiveFpsCap > 0) {
+        const QString throttleStatus = throttleRestorePending
+            ? QStringLiteral("Adaptive throttle: %1 fps cap · restoring shortly")
+                  .arg(adaptiveFpsCap)
+            : QStringLiteral("Adaptive throttle: %1 fps cap").arg(adaptiveFpsCap);
+        html += QStringLiteral(
+            "<tr><td colspan='2' style='color:#ffc000;'>%1</td></tr>")
+                    .arg(throttleStatus.toHtmlEscaped());
+    }
+
+    html += networkTooltipSection(QStringLiteral("LINK TIMING"));
+    html += networkTooltipRow(QStringLiteral("Current RTT"),
+                              formatNetworkMs(model.lastPingRtt()));
+    html += networkTooltipRow(QStringLiteral("Session maximum"),
+                              formatNetworkMs(model.maxPingRtt()));
+    html += networkTooltipRow(QStringLiteral("Network jitter"),
+                              formatNetworkMs(model.audioPacketJitterMs()));
+    html += networkTooltipRow(
+        QStringLiteral("Audio gap"),
+        QStringLiteral("%1 · max %2")
+            .arg(formatNetworkMs(model.audioPacketGapMs()),
+                 formatNetworkMs(model.audioPacketGapMaxMs())));
+
+    html += networkTooltipSection(QStringLiteral("PACKET INTEGRITY"));
+    html += networkTooltipRow(
+        QStringLiteral("Recent loss (%1 s)").arg(model.packetLossWindowSeconds()),
+        formatNetworkSeqErrors(model.packetLossWindowDrops(),
+                               model.packetLossWindowPackets()));
+    html += networkTooltipRow(
+        QStringLiteral("Session sequence gaps"),
+        formatNetworkSeqErrors(model.packetDropCount(), model.packetTotalCount()));
+
+    html += networkTooltipSection(QStringLiteral("STREAM SEQUENCE GAPS"));
+    html += networkTooltipRow(QStringLiteral("Audio"), formatCategorySeqErrors(audioStats));
+    html += networkTooltipRow(QStringLiteral("FFT"), formatCategorySeqErrors(fftStats));
+    html += networkTooltipRow(QStringLiteral("Waterfall"),
+                              formatCategorySeqErrors(waterfallStats));
+    html += networkTooltipRow(QStringLiteral("Meters"), formatCategorySeqErrors(meterStats));
+    html += networkTooltipRow(QStringLiteral("DAX"), formatCategorySeqErrors(daxStats));
+
+    html += networkTooltipSection(QStringLiteral("UDP TRAFFIC"));
+    html += networkTooltipRow(QStringLiteral("Received"),
+                              QLocale().formattedDataSize(model.rxBytes()));
+    html += networkTooltipRow(QStringLiteral("Sent"),
+                              QLocale().formattedDataSize(model.txBytes()));
+    html += QStringLiteral(
+        "<tr>"
+        "<td colspan='2' style='color:#8aa8c0; padding-top:7px;'>"
+        "Double-click to open full diagnostics"
+        "</td>"
+        "</tr>"
+        "</table></body></html>");
+    return html;
 }
 
 // ─── TNF tooltip ─────────────────────────────────────────────────────────────
@@ -315,15 +404,19 @@ constexpr int kDefaultPanXpixels = 1024;
 constexpr int kDefaultPanYpixels = 700;
 constexpr int kMinPanXpixels = 100;
 constexpr int kMinPanYpixels = 20;
-constexpr int kMaxRadioPanPixels = 8192;
+// FLEX radios cap panadapter FFT frames at a 4096-bin boundary. Requesting
+// that boundary (or more) leaves the right edge malformed on firmware
+// 4.2.18/4.2.20, so stay one bin below it.
+constexpr int kMaxRadioPanXPixels = 4095;
+constexpr int kMaxRadioPanYPixels = 8192;
 
-int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels)
+int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels, int maximumPixels)
 {
     const double ratio = spectrum ? spectrum->devicePixelRatioF() : 1.0;
     const double dpr = std::isfinite(ratio) && ratio > 0.0 ? ratio : 1.0;
     return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)),
                       1,
-                      kMaxRadioPanPixels);
+                      maximumPixels);
 }
 } // namespace
 
@@ -332,7 +425,7 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
     if (!spectrum || spectrum->width() < kMinPanXpixels) {
         return kDefaultPanXpixels;
     }
-    return radioPixelsFor(spectrum, spectrum->width());
+    return radioPixelsFor(spectrum, spectrum->width(), kMaxRadioPanXPixels);
 }
 
 int panYpixelsFor(const SpectrumWidget* spectrum)
@@ -348,7 +441,8 @@ int panYpixelsFor(const SpectrumWidget* spectrum)
     // FFT bins arrive as radio-encoded pixel positions, not full-precision dBm
     // samples. Request render-device pixels and keep the historical 700 px
     // floor so zoomed traces have sub-screen-pixel precision.
-    return std::max(radioPixelsFor(spectrum, ypix), kDefaultPanYpixels);
+    return std::max(radioPixelsFor(spectrum, ypix, kMaxRadioPanYPixels),
+                    kDefaultPanYpixels);
 }
 
 bool panPixelDimensionsReady(const SpectrumWidget* spectrum)

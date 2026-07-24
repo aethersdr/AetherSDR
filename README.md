@@ -32,6 +32,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with auto-mode switch
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key & iambic paddles with full QSK, optional Quindar tones
+- **Copy Assist (speech-to-text)** — on-device transcription of received voice via whisper.cpp, docked under the waterfall with confidence color-coding; CPU or GPU (Vulkan/Metal, auto-detected), download-on-demand models, and an optional remote OpenAI-compatible endpoint (see [`docs/asr-copy-assist.md`](docs/asr-copy-assist.md))
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
@@ -181,22 +182,31 @@ binaries ship 6.8.3 LTS).
 ::    Professional / Enterprise) to match your install; run "vswhere" if unsure.
 "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 
-:: 2. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
+:: 2. Point at your Qt kit once, with forward slashes (CMake reads the path
+::    literally, so backslashes would be taken as escape sequences). Change the
+::    version/edition here to match your install; both steps below reuse it.
+::    setup-qtkeychain.ps1 (step 4) reads QT_ROOT_DIR; on CI that variable is
+::    exported by install-qt-action, so a local build has to set it explicitly
+::    or the script exits with "Qt not found".
+set "QT_KIT=C:/Qt/6.8.3/msvc2022_64"
+set "QT_ROOT_DIR=%QT_KIT%"
+
+:: 3. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
 powershell -File scripts\setup\setup-fftw.ps1
 
-:: 3. Build qtkeychain (needed for QRZ/SmartLink credential persistence).
+:: 4. Build qtkeychain (needed for QRZ/SmartLink credential persistence).
 ::    Downloads source and builds it against your Qt kit into third_party\qtkeychain\.
 ::    Skip this step and the build still succeeds, but QRZ/SmartLink passwords
 ::    won't be saved between runs.
 powershell -File scripts\setup\setup-qtkeychain.ps1
 
-:: 4. Configure. Ninja is required: the default Visual Studio generator is
+:: 5. Configure. Ninja is required: the default Visual Studio generator is
 ::    multi-config (it ignores CMAKE_BUILD_TYPE) and takes a different
 ::    manifest-embed path. Point CMAKE_PREFIX_PATH at your Qt kit so
 ::    find_package(Qt6) resolves.
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%QT_KIT%"
 
-:: 5. Build
+:: 6. Build
 cmake --build build --target AetherSDR
 ```
 
@@ -288,6 +298,8 @@ See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructio
 ## License
 
 AetherSDR is free and open-source software licensed under the [GNU General Public License v3](LICENSE).
+
+Bundled third-party libraries retain their own licenses (see each `third_party/<lib>/LICENSE`), all GPLv3-compatible. Notably, on-device speech-to-text uses **[whisper.cpp](https://github.com/ggml-org/whisper.cpp) and ggml** (MIT) — vendored under `third_party/whisper.cpp/` (Vulkan/Metal GPU backends included); Whisper model weights are downloaded on demand and are MIT-licensed, not redistributed in this repository.
 
 *AetherSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems.*
 *D-STAR is a registered trademark of Icom Inc. AetherSDR is not affiliated with or endorsed by Icom Inc.*

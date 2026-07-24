@@ -26,6 +26,7 @@
 #include <QPushButton>
 #include <QRadialGradient>
 #include <QScreen>
+#include <QScrollArea>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -51,6 +52,12 @@ constexpr int kButtonHoldMs = 650;
 constexpr int kDoubleTapGuardMs = 230;
 constexpr int kDefaultWheelLooseness = 45;
 constexpr int kDefaultWheelSensitivity = 50;
+// Non-compact window sizing (#3662/#4365): the smallest height the full
+// controller can shrink to (its content scrolls below this) and the width
+// floor the content is padded to. Shared by the constructor default and the
+// screen-clamped runtime path so the two never drift.
+constexpr int kNonCompactMinHeight = 610;
+constexpr int kNonCompactMinWidth = 430;
 constexpr const char* kVirtualWheelSettingsKey = "FlexControlVirtualWheel";
 constexpr const char* kLegacyWheelLoosenessKey = "FlexControlVirtualWheelLooseness";
 constexpr double kWheelPointerAnchorRadiusRatio = 0.10;
@@ -988,7 +995,7 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     theme::setContainer(this, QStringLiteral("dialog/flexControl"));
     setModal(false);
     setWindowModality(Qt::NonModal);
-    setMinimumSize(430, 610);
+    setMinimumSize(kNonCompactMinWidth, kNonCompactMinHeight);
 
     // applyStyleSheet (not raw setStyleSheet) so the {{color.slider.*}} +
     // {{color.accent.success}} tokens in the slider rules resolve at apply
@@ -999,9 +1006,26 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     // the rest of the FlexControl dialog stylesheet.
     AetherSDR::ThemeManager::instance().applyStyleSheet(
         bodyWidget(), QString::fromLatin1(kFlexControlStyle));
-    auto* root = new QVBoxLayout(bodyWidget());
+    auto* bodyLayout = new QVBoxLayout(bodyWidget());
+    bodyLayout->setContentsMargins(14, 14, 14, 14);
+    bodyLayout->setSpacing(0);
+
+    m_scrollArea = new QScrollArea(bodyWidget());
+    m_scrollArea->setObjectName(QStringLiteral("FlexControlScrollArea"));
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    bodyLayout->addWidget(m_scrollArea);
+
+    m_contentWidget = new QWidget(m_scrollArea);
+    m_contentWidget->setObjectName(QStringLiteral("FlexControlContent"));
+    m_scrollArea->setWidget(m_contentWidget);
+
+    auto* root = new QVBoxLayout(m_contentWidget);
+    m_contentLayout = root;
     root->setSizeConstraint(QLayout::SetMinimumSize);
-    root->setContentsMargins(14, 14, 14, 14);
+    root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(10);
 
     auto* header = new QFrame;
@@ -1722,9 +1746,15 @@ void FlexControlDialog::updateCompactMode()
         if (compact)
             m_deviceFrame->setMaximumHeight(m_deviceFrame->minimumSizeHint().height());
     }
-    if (auto* bodyLayout = bodyWidget()->layout()) {
-        bodyLayout->setAlignment(m_deviceFrame, compact ? Qt::AlignTop : Qt::Alignment());
-        bodyLayout->activate();
+    if (m_contentLayout) {
+        m_contentLayout->setAlignment(m_deviceFrame, compact ? Qt::AlignTop : Qt::Alignment());
+        m_contentLayout->activate();
+    }
+    if (m_contentWidget) {
+        m_contentWidget->adjustSize();
+    }
+    if (m_scrollArea) {
+        m_scrollArea->updateGeometry();
     }
 
     if (compact) {
@@ -1733,30 +1763,32 @@ void FlexControlDialog::updateCompactMode()
             applyCompactWindowSize();
         });
     } else {
-        QSize required = minimumSizeHint().expandedTo(QSize(430, 0));
+        QSize required = m_contentWidget
+            ? m_contentWidget->minimumSizeHint().expandedTo(QSize(kNonCompactMinWidth, 0))
+            : minimumSizeHint().expandedTo(QSize(kNonCompactMinWidth, 0));
 
-        // Never demand more vertical space than the display can show (#3662).
-        // The full (non-compact) layout is ~1100 px tall; on a short or
-        // DPI-scaled screen that exceeds the available workspace, so pinning
-        // it as a hard minimum opens the window taller than the screen with
-        // its bottom clipped and no way to shrink it back. Fall back to the
-        // existing compact layout, which fits, rather than clipping.
+        // Keep the full controller available even on a short or DPI-scaled
+        // screen (#3662). The content area scrolls when its intrinsic height
+        // exceeds the workspace, so screen fit no longer has to override the
+        // user's Compact preference.
         const int availH = availableScreenHeight();
-        if (availH > 0 && required.height() > availH
-            && m_compactButton && !m_compactButton->isChecked()) {
-            const QSignalBlocker blocker(m_compactButton);
-            m_compactButton->setChecked(true);
-            updateCompactMode();
-            return;
-        }
-        // Backstop: even when compact mode is unavailable, never enforce a
-        // minimum taller than the screen.
-        if (availH > 0 && required.height() > availH)
-            required.setHeight(availH);
+        // required is the content widget's intrinsic size; the window also needs
+        // the title bar + body margins around the scroll area, so add that
+        // chrome before resizing, then clamp to the screen so we never open
+        // taller than the workspace (the content scrolls when clamped).
+        int targetHeight = required.height() + windowChromeHeight();
+        if (availH > 0 && targetHeight > availH)
+            targetHeight = availH;
 
-        setMinimumSize(required);
-        if (isVisible() && (width() < required.width() || height() < required.height()))
-            resize(size().expandedTo(required));
+        const int minimumHeight = availH > 0 ? std::min(kNonCompactMinHeight, availH)
+                                             : kNonCompactMinHeight;
+        // Min width tracks the content's own minimum (>= kNonCompactMinWidth) so
+        // the horizontal-scroll-disabled scroll area can never be dragged narrow
+        // enough to clip the controller.
+        setMinimumSize(required.width(), minimumHeight);
+        if (isVisible()) {
+            resize(std::max(width(), required.width()), targetHeight);
+        }
     }
 }
 
@@ -1767,6 +1799,21 @@ int FlexControlDialog::availableScreenHeight() const
 {
     const QScreen* scr = screen();
     return scr ? scr->availableGeometry().height() : 0;
+}
+
+// Height the window needs on top of the scroll area's content: the frameless
+// title bar plus the body-layout margins around the scroll area. Measured from
+// live geometry, which is exact and content-independent once the dialog is
+// shown. Returns 0 before the first show so pre-show sizing is no worse than
+// the content-only fallback — the next visible re-fit adds the chrome.
+int FlexControlDialog::windowChromeHeight() const
+{
+    if (m_scrollArea && m_scrollArea->viewport() && isVisible()) {
+        const int chrome = height() - m_scrollArea->viewport()->height();
+        if (chrome > 0)
+            return chrome;
+    }
+    return 0;
 }
 
 void FlexControlDialog::applyCompactWindowSize()
@@ -1780,22 +1827,32 @@ void FlexControlDialog::applyCompactWindowSize()
         m_deviceFrame->layout()->activate();
         m_deviceFrame->setMaximumHeight(m_deviceFrame->minimumSizeHint().height());
     }
-    if (auto* bodyLayout = bodyWidget()->layout())
-        bodyLayout->activate();
+    if (m_contentLayout)
+        m_contentLayout->activate();
+    if (m_contentWidget)
+        m_contentWidget->adjustSize();
+    if (m_scrollArea)
+        m_scrollArea->updateGeometry();
 
-    QSize required = minimumSizeHint().expandedTo(QSize(410, 0));
+    QSize required = m_contentWidget
+        ? m_contentWidget->minimumSizeHint().expandedTo(QSize(410, 0))
+        : minimumSizeHint().expandedTo(QSize(410, 0));
+    // The window needs the title bar + body margins around the scroll area on
+    // top of the content's intrinsic height, or the fixed compact window opens
+    // a scrollbar's-worth too short.
     // Backstop (#3662): never pin a window taller than the screen, even in
     // compact mode. On a screen shorter than the compact layout's own minimum
     // the body may need to scroll, but the window stays fully on-screen and
     // resizable rather than clipping off the bottom edge.
     const int availH = availableScreenHeight();
-    if (availH > 0 && required.height() > availH)
-        required.setHeight(availH);
-    setMinimumSize(required);
-    setFixedHeight(required.height());
+    int targetHeight = required.height() + windowChromeHeight();
+    if (availH > 0 && targetHeight > availH)
+        targetHeight = availH;
+    setMinimumSize(required.width(), targetHeight);
+    setFixedHeight(targetHeight);
     if (isVisible()) {
         const int targetWidth = std::max(width(), required.width());
-        resize(targetWidth, required.height());
+        resize(targetWidth, targetHeight);
     }
 }
 

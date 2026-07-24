@@ -12,10 +12,12 @@
 #include "TunerApplet.h"
 #include "AmpApplet.h"
 #include "DemoApplet.h"
+#include "AcomApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
 #include "EqApplet.h"
+#include "AetherClockApplet.h"
 #include "WaveApplet.h"
 #include "ClientEqApplet.h"
 #include "ClientCompApplet.h"
@@ -149,7 +151,7 @@ MeterSettings::Snapshot loadVuMeterSettings()
 } // namespace
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS"
+    "PWR", "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS", "CLOCK"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -586,7 +588,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
         if (btn) {
             connect(btn, &QPushButton::toggled, this,
-                    [this, id, c, key](bool checked) {
+                    [c, key](bool checked) {
                 // Floating containers: raising = show the window,
                 // lowering = hide it.  The manager owns the window
                 // so we just toggle the container's visibility.
@@ -604,7 +606,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         // button on the ContainerTitleBar) back to the tray toggle
         // and settings so everything stays in sync.
         connect(c, &ContainerWidget::visibilityChanged, this,
-                [this, btn, key](bool visible) {
+                [btn, key](bool visible) {
             if (btn) {
                 QSignalBlocker b(btn);
                 btn->setChecked(visible);
@@ -744,6 +746,18 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
+    // ACOM S-series amplifier — independent of AMP (PGXL): a station can
+    // have both a radio-relayed PGXL and a direct-connected ACOM amplifier
+    // at once. See docs/architecture/acom-600s-amplifier-design.md.
+    m_acomApplet = new AcomApplet;
+    {
+        auto entry = makeEntry("ACOM", "ACOM Amplifier", m_acomApplet, false,
+                               m_drawer, m_drawerLayout);
+        m_acomBtn = entry.btn;
+        markHardwareConditional("ACOM");
+        m_appletOrder.append(entry);
+    }
+
     m_txApplet = new TxApplet;
     m_appletOrder.append(makeEntry("TX", "TX Controls", m_txApplet, true, m_drawer, m_drawerLayout));
 
@@ -758,6 +772,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_waveApplet = new WaveApplet;
     m_appletOrder.append(makeEntry("WAVE", "Waveform", m_waveApplet, true, m_drawer, m_drawerLayout, "WAV"));
+
+    m_aetherClockApplet = new AetherClockApplet;
+    m_appletOrder.append(makeEntry("CLOCK", "AetherClock", m_aetherClockApplet, false, m_drawer, m_drawerLayout, "CLK"));
 
     // CEQ and CMP intentionally have no toggle button in the tray —
     // their visibility follows DSP bypass state, driven externally
@@ -794,10 +811,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // already narrower so this is a no-op there.
     if (txDsp) txDsp->setMaximumWidth(280);
 
-    auto makeChildContainer = [this, txDsp](const QString& id,
-                                            const QString& title,
-                                            QWidget* applet,
-                                            int index) {
+    auto makeChildContainer = [this](const QString& id,
+                                     const QString& title,
+                                     QWidget* applet,
+                                     int index) {
         auto* child = m_containerMgr->createContainer(
             id, title, /*contentType=*/{}, /*parentId=*/"tx_dsp", index);
         if (child) child->setContent(applet);
@@ -1383,6 +1400,12 @@ void AppletPanel::setAmpVisible(bool visible)
     applyBarLayout();
 }
 
+void AppletPanel::setAcomVisible(bool visible)
+{
+    updateHardwareAvailability("ACOM", "Applet_ACOM", visible);
+    applyBarLayout();
+}
+
 void AppletPanel::setAgVisible(bool visible)
 {
     updateHardwareAvailability("AG", "Applet_AG", visible);
@@ -1410,6 +1433,8 @@ void AppletPanel::setControlsLocked(bool locked)
 void AppletPanel::setSlice(SliceModel* slice)
 {
     m_rxApplet->setSlice(slice);
+    if (m_aetherClockApplet)
+        m_aetherClockApplet->setSlice(slice);
 
     if (slice) {
         connect(slice, &SliceModel::modeChanged,

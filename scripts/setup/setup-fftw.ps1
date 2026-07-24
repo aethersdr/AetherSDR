@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Download and prepare FFTW3 prebuilt libraries for Windows x64.
 

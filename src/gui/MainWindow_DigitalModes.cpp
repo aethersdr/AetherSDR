@@ -158,6 +158,9 @@ void MainWindow::routeRttyDecoderOutput()
     if (target == m_rttyDecoderApplet) return;
 
     if (m_rttyDecoderApplet) {
+        // Keep the old pan from retaining a visible RTTY dock when startup
+        // status ordering or a slice switch moves decoder ownership (#4409).
+        m_rttyDecoderApplet->setRttyPanelVisible(false);
         disconnect(&m_rttyDecoder, &RttyDecoder::textDecoded,
                    m_rttyDecoderApplet, &PanadapterApplet::appendRttyText);
         disconnect(&m_rttyDecoder, &RttyDecoder::statsUpdated,
@@ -203,8 +206,8 @@ void MainWindow::refreshRttyDecodeState()
     // the panel manually via the slice context menu (future work).
     const bool isRtty = s && s->mode() == "RTTY";
 
-    if (m_rttyDecoderApplet)
-        m_rttyDecoderApplet->setRttyPanelVisible(isRtty);
+    setDecoderPanelVisibleOnly(m_rttyDecoderApplet, isRtty,
+                               &PanadapterApplet::setRttyPanelVisible);
 
     if (!isRtty) {
         if (m_rttyDecoder.isRunning()) m_rttyDecoder.stop();
@@ -1112,9 +1115,12 @@ void MainWindow::wireDaxSlice(SliceModel* slice)
 // a self-sustaining storm — the ~12-15 Hz `slice set dax` loop of #4009 and
 // the create/remove churn of #3626. Acquire/release are idempotent and the
 // manager's grace window absorbs the transient pair, so this path is
-// loop-free by construction. The #1439 dax_clients re-assert still exists,
-// but as a one-shot tied to `stream create` in RadioModel — command-initiated,
-// never echo-initiated.
+// loop-free by construction. The #1439 dax_clients re-assert still exists in
+// RadioModel::handleDaxRxStreamRegistry; it fires from the dax_rx status echo,
+// but a per-stream one-shot (m_nudgedDaxStreams, cleared only on `stream
+// remove`) gates it to fire at most once per create so the radio's own
+// transient unbind echo cannot re-trigger it — see #4383 (which reopened #4009
+// because that gate was originally missing).
 void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 {
     if (!slice || !m_daxBridge) return;
@@ -1194,18 +1200,25 @@ void MainWindow::activateWFM(int sliceId)
     m_wfmSliceId = sliceId;
 
     // Centre the pan (and with it the DAX IQ stream) on the slice — once.
-    // applyPanStatus updates the local model immediately so offsets computed
-    // before the radio echoes the new centre are already correct.
-    auto centerPanAtSlice = [this, s]() {
+    // requestPanCenter() updates the local model as it puts the command on the
+    // wire, so offsets computed before the radio echoes the new centre are
+    // already correct — and during a profile load it defers the write instead of
+    // letting it be dropped, which would have left the DAX IQ stream centred
+    // somewhere the client no longer believed it was (#4142).
+    // Returns whether the pan is centred on the slice NOW — a deferred
+    // recenter (profile-load hold) is a promise, not a fact, and the NCO
+    // must not be programmed as if it already happened.
+    auto centerPanAtSlice = [this, s]() -> bool {
         const QString panId = s->panId();
-        if (panId.isEmpty()) return;
+        if (panId.isEmpty()) return false;
         const double freq = s->frequency();
         auto* pan = m_radioModel.panadapter(panId);
-        if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
-        const QString freqStr = QString::number(freq, 'f', 6);
-        if (pan) pan->setCenterBandwidth(freq, -1.0);  // aetherd RFC 2.3
-        m_radioModel.sendCommand(
-            QString("display pan set %1 center=%2").arg(panId, freqStr));
+        // Effective (pending-else-model) compare suppresses re-requesting a
+        // recenter already deferred in flight; "centred now" is only true
+        // when the MODEL (radio truth) agrees (#4142).
+        if (pan && qFuzzyCompare(m_radioModel.effectivePanCenterMhz(panId), freq))
+            return qFuzzyCompare(pan->centerMhz(), freq);
+        return m_radioModel.requestPanCenter(panId, freq);
     };
     centerPanAtSlice();
 
@@ -1243,9 +1256,18 @@ void MainWindow::activateWFM(int sliceId)
             (sliceFreqMhz - pan->centerMhz()) * 1e6);
         if (qAbs(offsetHz) <= m_wfmDemod->maxFreqOffsetHz()) {
             m_wfmDemod->setFreqOffsetHz(offsetHz);
-        } else {
-            centerPanAtSlice();
+        } else if (centerPanAtSlice()) {
             m_wfmDemod->setFreqOffsetHz(0.0f);
+        } else {
+            // The recenter is deferred (profile-load hold) or could not be
+            // dispatched — the DAX IQ stream is still centred where the radio
+            // is. A zero offset here would tune the demod to the WRONG
+            // frequency; keep best-effort audio at the clamped edge of the IQ
+            // window instead. The deferred recenter self-heals at flush, and
+            // the next frequencyChanged converges the offset. (#4142)
+            const float maxOffsetHz = m_wfmDemod->maxFreqOffsetHz();
+            m_wfmDemod->setFreqOffsetHz(
+                std::clamp(offsetHz, -maxOffsetHz, maxOffsetHz));
         }
     });
 }

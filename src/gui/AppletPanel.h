@@ -32,11 +32,13 @@ class CrossNeedleMeterWidget;
 class TunerApplet;
 class AmpApplet;
 class DemoApplet;
+class AcomApplet;
 class TxApplet;
 class PhoneCwApplet;
 class PhoneApplet;
 class EqApplet;
 class WaveApplet;
+class AetherClockApplet;
 class ClientEqApplet;
 class ClientCompApplet;
 class ClientGateApplet;
@@ -95,11 +97,13 @@ public:
     TunerApplet*  tunerApplet()   { return m_tunerApplet; }
     AmpApplet*    ampApplet()     { return m_ampApplet; }
     DemoApplet*   demoApplet()    { return m_demoApplet; }
+    AcomApplet*   acomApplet()    { return m_acomApplet; }
     TxApplet*       txApplet()       { return m_txApplet; }
     PhoneCwApplet*  phoneCwApplet()  { return m_phoneCwApplet; }
     PhoneApplet*    phoneApplet()    { return m_phoneApplet; }
     EqApplet*       eqApplet()       { return m_eqApplet; }
     WaveApplet*     waveApplet() const { return m_waveApplet; }
+    AetherClockApplet* aetherClockApplet() const { return m_aetherClockApplet; }
     // Phase 7.1: each side has its own CEQ applet — clientEqTxApplet()
     // is the original "ceq" tile bound to TX, clientEqRxApplet() is
     // the new "ceq-rx" tile bound to RX.  clientEqApplet() retained as
@@ -154,6 +158,11 @@ public:
 
     // Show/hide the AMP button and applet based on amplifier presence.
     void setAmpVisible(bool visible);
+
+    // Show/hide the ACOM button and applet based on a direct ACOM amplifier
+    // connection. Independent of setAmpVisible — a station can have both a
+    // radio-relayed PGXL and a direct-connected ACOM amplifier at once.
+    void setAcomVisible(bool visible);
 
     // Show/hide the AG button and applet based on Antenna Genius presence.
     void setAgVisible(bool visible);
@@ -284,11 +293,14 @@ private:
     AmpApplet*   m_ampApplet{nullptr};
     DemoApplet*  m_demoApplet{nullptr};
     QPushButton* m_ampBtn{nullptr};
+    AcomApplet*  m_acomApplet{nullptr};
+    QPushButton* m_acomBtn{nullptr};
     TxApplet*      m_txApplet{nullptr};
     PhoneCwApplet* m_phoneCwApplet{nullptr};
     PhoneApplet*   m_phoneApplet{nullptr};
     EqApplet*      m_eqApplet{nullptr};
     WaveApplet*    m_waveApplet{nullptr};
+    AetherClockApplet* m_aetherClockApplet{nullptr};
     ClientEqApplet* m_clientEqTxApplet{nullptr};
     ClientEqApplet* m_clientEqRxApplet{nullptr};
     ClientCompApplet* m_clientCompApplet{nullptr};

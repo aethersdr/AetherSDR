@@ -9,10 +9,15 @@ class QSlider;
 class QTextEdit;
 class RangeSlider;
 
+class QVBoxLayout;
+
 namespace AetherSDR {
 
 class SpectrumWidget;
 class CallsignCard;
+#ifdef AETHER_ASR_ENABLED
+class CopyAssistPanel;
+#endif
 
 // Container for a single panadapter display (FFT spectrum + waterfall).
 // Adds a title bar with placeholder min/max/close buttons above the
@@ -39,6 +44,15 @@ public:
 
     void setMultiPanMode(bool multi);
     void setFloatingState(bool floating);
+
+#ifdef AETHER_ASR_ENABLED
+    // Copy Assist (ASR) decode dock — mirrors the CW decode panel: docked under
+    // the waterfall, resizable, hidden until shown. copyAssistPanel() lazily
+    // builds it and returns the content widget for the controller to drive.
+    CopyAssistPanel* copyAssistPanel();
+    void setCopyAssistVisible(bool visible);
+    bool isCopyAssistVisible() const;
+#endif
 
     // CW decode panel
     void setCwPanelVisible(bool visible);
@@ -110,6 +124,22 @@ private:
     QPushButton*    m_maxBtn{nullptr};
     QPushButton*    m_closeBtn{nullptr};
     bool            m_isFloating{false};
+
+    // Main vertical layout (SpectrumWidget + docks); kept so the Copy Assist
+    // dock can be inserted at the bottom on demand.
+    QVBoxLayout*  m_mainLayout{nullptr};
+
+#ifdef AETHER_ASR_ENABLED
+    // Copy Assist (ASR) dock — mirrors the CW decode panel's grip/resize.
+    void setCopyAssistHeight(int h);
+    QWidget*         m_copyAssistDock{nullptr};
+    QWidget*         m_copyAssistGrip{nullptr};
+    CopyAssistPanel* m_copyAssistPanel{nullptr};
+    int              m_copyAssistHeight{160};
+    bool             m_copyAssistResizing{false};
+    int              m_copyAssistResizeStartY{0};
+    int              m_copyAssistResizeStartH{0};
+#endif
 
     // CW decode
     QWidget*      m_cwPanel{nullptr};

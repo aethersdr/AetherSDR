@@ -2,11 +2,16 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "models/Nr2SettingsModel.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
 #include "core/AutomationServer.h"
+
+#ifdef Q_OS_MAC
+#include "MacStartupAbortGuard.h"
+#endif
 
 #include <QApplication>
 #include <QSurfaceFormat>
@@ -20,6 +25,8 @@
 #include <QDateTime>
 #include <QStandardPaths>
 #include <QTimer>
+#include <cstdio>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <io.h>
@@ -171,7 +178,36 @@ int main(int argc, char* argv[])
         }
     }
 
+#ifdef Q_OS_MAC
+    // SpectrumWidget and WaveformWidget require native Metal child views, but
+    // their surrounding raster-widget trees must not become native siblings.
+    // Together with WA_DontCreateNativeAncestors on those leaves, this avoids
+    // redundant window-sized Core Animation backing stores (#4339).
+    QApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
+
+    // A restricted launcher can deny QCocoa access to macOS GUI services.
+    // AppKit then calls abort() from HIServices while QApplication is being
+    // constructed. Scope the handler to this constructor only: runtime aborts
+    // must keep their normal crash semantics.
+    AetherSDR::MacStartupAbortGuard startupAbortGuard;
+    if (!startupAbortGuard.isArmed()) {
+        std::fputs("AetherSDR startup error: could not install the macOS GUI "
+                   "initialization guard; refusing to start.\n",
+                   stderr);
+        return EXIT_FAILURE;
+    }
+#endif
     QApplication app(argc, argv);
+
+#ifdef Q_OS_MAC
+    if (!startupAbortGuard.disarm()) {
+        std::fputs("AetherSDR startup error: could not restore the SIGABRT "
+                   "handler after GUI initialization; refusing to continue.\n",
+                   stderr);
+        return EXIT_FAILURE;
+    }
+#endif
+
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);
     app.setOrganizationName("AetherSDR");
@@ -363,6 +399,9 @@ int main(int argc, char* argv[])
     // to LogManager. SHistorySoftEdgeDb migration moved here for the same
     // reason.
     AetherSDR::AppSettings::instance().load();
+    // Construct the NR2 feature-owned settings model on the main thread after
+    // AppSettings is loaded. This also performs its one-time flat-key migration.
+    static_cast<void>(AetherSDR::Nr2SettingsModel::instance());
     AetherSDR::AppSettings::instance().initializeGuiClientIdentity();
     {
         auto& s = AetherSDR::AppSettings::instance();
