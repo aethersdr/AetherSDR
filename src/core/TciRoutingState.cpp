@@ -32,8 +32,12 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
 
     const int currentTx = currentTxSlice(endpoints);
     if (currentTx >= 0 && currentTx != rxSliceId) {
+        // Always track the current RX slice, even when the external TX slice is
+        // unchanged. removeSlice() keys off m_rxSliceId, so a stale value would
+        // let the wrong slice's removal tear the route down (and miss the real
+        // RX's removal).
+        m_rxSliceId = rxSliceId;
         if (currentTx != m_txSliceId) {
-            m_rxSliceId = rxSliceId;
             m_txSliceId = currentTx;
             m_owner = TxRouteOwner::External;
         }
@@ -61,8 +65,9 @@ int TciRoutingState::resolvePttSlice(int rxSliceId, const QVector<TciSliceEndpoi
 
     const int currentTx = currentTxSlice(endpoints);
     if (currentTx >= 0 && currentTx != rxSliceId) {
+        // Track the current RX slice unconditionally (see resolveVfoB).
+        m_rxSliceId = rxSliceId;
         if (currentTx != m_txSliceId) {
-            m_rxSliceId = rxSliceId;
             m_txSliceId = currentTx;
             m_owner = TxRouteOwner::External;
         }
