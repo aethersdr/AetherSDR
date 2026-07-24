@@ -291,6 +291,7 @@ public:
     QStringList globalProfiles() const { return m_globalProfiles; }
     QString activeGlobalProfile() const { return m_activeGlobalProfile; }
     void loadGlobalProfile(const QString& name);
+    void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
     void resetPanState();
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
