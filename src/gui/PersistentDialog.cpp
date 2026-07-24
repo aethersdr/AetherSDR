@@ -13,8 +13,10 @@ namespace AetherSDR {
 
 PersistentDialog::PersistentDialog(const QString& title,
                                    const QString& geomKey,
-                                   QWidget* parent)
-    : QDialog(parent), m_geomKey(geomKey)
+                                   QWidget* parent,
+                                   bool toolWindow)
+    : QDialog(parent), m_geomKey(geomKey),
+      m_windowType(toolWindow ? Qt::Tool : Qt::Dialog)
 {
     setWindowTitle(title);
 
@@ -45,7 +47,7 @@ void PersistentDialog::setFramelessMode(bool on)
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
 
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
+    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | m_windowType;
     flags.setFlag(Qt::FramelessWindowHint, on);
     setWindowFlags(flags);
     if (wasVisible) {

@@ -46,6 +46,10 @@ int main(int argc, char** argv)
            "saved frameless setting applies on construction");
     expect(titleBar != nullptr && titleBar->isVisible(),
            "frameless title bar is visible");
+    // The dialog is a modeless tool window (out of the taskbar, floats above the
+    // app) — must survive the frameless toggle, not just the initial build (#4414).
+    expect(dlg.windowType() == Qt::Tool,
+           "settings dialog is a tool window on construction");
 
     dlg.setFramelessMode(false);
     app.processEvents();
@@ -53,6 +57,8 @@ int main(int argc, char** argv)
            "runtime toggle restores native window chrome");
     expect(titleBar != nullptr && !titleBar->isVisible(),
            "frameless title bar hides in native mode");
+    expect(dlg.windowType() == Qt::Tool,
+           "tool window type is preserved in native mode");
 
     dlg.setFramelessMode(true);
     app.processEvents();

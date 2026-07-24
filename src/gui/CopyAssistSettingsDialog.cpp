@@ -13,9 +13,11 @@
 namespace AetherSDR {
 
 CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
+    // Tool window: modeless helper that floats above the app and stays out of
+    // the taskbar, matching the pre-PersistentDialog behavior (#4414).
     : PersistentDialog(tr("Copy Assist Settings"),
                        QStringLiteral("CopyAssistSettingsDialogGeometry"),
-                       parent)
+                       parent, /*toolWindow=*/true)
 {
     setObjectName(QStringLiteral("CopyAssistSettingsDialog"));
 
