@@ -1290,6 +1290,11 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
 {
     if (!w || !m_audio) return;
 
+    connect(w, &AetherDspWidget::dspMethodUserToggled,
+            this, [this](const QString&, bool) {
+        m_aetherDspModePolicy.noteUserOverride();
+    });
+
     // NR2
     connect(w, &AetherDspWidget::nr2GainMaxChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
@@ -1912,23 +1917,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
             refreshCwDecodeState();
             refreshRttyDecodeState();
 
-            // Disable client-side DSP in digital and CW modes — NR2/RN2/BNR
-            // corrupt digital data (#534) and suppress CW tones (#784)
-            bool disableDsp = (mode == "DIGU" || mode == "DIGL" || mode == "RTTY"
-                            || mode == "CW"   || mode == "CWL"  || mode == "NT");
-            if (disableDsp) {
-                if (m_audio->nr2Enabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr2Enabled(false); });
-                if (m_audio->rn2Enabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setRn2Enabled(false); });
-                if (m_audio->nr4Enabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr4Enabled(false); });
-                if (m_audio->dfnrEnabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });
-                if (m_audio->nvAfxEnabled())  // AFX is a speech denoiser too
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNvAfxEnabled(false); });
-            }
         }
+        // The radio supplies one already-mixed RX stream, so the most
+        // restrictive audible slice controls the global client DSP state.
+        updateAetherDspModePolicy();
 
         // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice,
         // so re-evaluate only when the TX slice changes mode (#4173).
@@ -2076,6 +2068,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     updateSplitState();
 
     refreshSliceLinkUi();
+    updateAetherDspModePolicy();
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -2270,6 +2263,7 @@ void MainWindow::onSliceRemoved(int id)
     // Removing one half of a split pair (e.g. external controller deletes the TX
     // slice) must re-derive the panadapter split-pair from the model. (#3726)
     updateSplitState();
+    updateAetherDspModePolicy();
 }
 
 void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
@@ -4696,10 +4690,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
+        updateAetherDspModePolicy();
     });
     connect(s, &SliceModel::audioMuteChanged, this, [this, s](bool) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
         syncFlexRxPanToAudioEngine();
+        updateAetherDspModePolicy();
     });
     connect(s, &SliceModel::audioPanChanged, this, [this, s](int) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);

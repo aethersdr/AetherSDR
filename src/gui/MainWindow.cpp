@@ -1039,6 +1039,21 @@ MainWindow::MainWindow(QWidget* parent)
         AppSettings::instance().value("AudioBufferMs", "100").toInt());
     m_audio->moveToThread(m_audioThread);
     m_audioThread->start();
+    const auto updateAetherDspPolicy = [this](bool) {
+        updateAetherDspModePolicy();
+    };
+    connect(m_audio, &AudioEngine::nr2EnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nr4EnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::mnrEnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::dfnrEnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::rn2EnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
+            this, updateAetherDspPolicy);
     // Start the CW-sidetone record pump on the audio thread (#2539): queued so
     // its QTimer is created + started on m_audio's thread after the move.
     QMetaObject::invokeMethod(m_audio, [ae = m_audio]() { ae->startCwRecordPump(); },
@@ -3132,12 +3147,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // DAX IQ channel is radio-authoritative — no client-side persistence needed.
     // The radio echoes daxiq_channel in pan status on reconnect.
 
-    // Save client-side DSP state before destructor disables them
-    Nr2SettingsModel::instance().setEnabled(m_audio->nr2Enabled());
-    s.setValue("ClientRn2Enabled", m_audio->rn2Enabled() ? "True" : "False");
-    s.setValue("ClientNr4Enabled", m_audio->nr4Enabled() ? "True" : "False");
-    s.setValue("ClientDfnrEnabled", m_audio->dfnrEnabled() ? "True" : "False");
-    s.setValue("ClientMnrEnabled", m_audio->mnrEnabled() ? "True" : "False");
+    // Persist an automatically-disabled method as enabled so quitting while an
+    // audible CW/digital slice is present does not erase the user's selection.
+    // A manual button override clears the remembered method, so actual visible
+    // state remains authoritative in that case.
+    const QString persistedAetherDspMethod =
+        m_aetherDspModePolicy.methodForPersistence(activeAetherDspMethod());
+    Nr2SettingsModel::instance().setEnabled(
+        persistedAetherDspMethod == QStringLiteral("NR2"));
+    s.setValue("ClientRn2Enabled",
+               persistedAetherDspMethod == QStringLiteral("RN2") ? "True" : "False");
+    s.setValue("ClientNr4Enabled",
+               persistedAetherDspMethod == QStringLiteral("NR4") ? "True" : "False");
+    s.setValue("ClientDfnrEnabled",
+               persistedAetherDspMethod == QStringLiteral("DFNR") ? "True" : "False");
+    s.setValue("ClientMnrEnabled",
+               persistedAetherDspMethod == QStringLiteral("MNR") ? "True" : "False");
     // BNR not persisted — requires manual enable each session
 
     s.save();

@@ -13,6 +13,7 @@
 #include "models/AntennaGeniusModel.h"
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
+#include "core/AetherDspModePolicy.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
@@ -750,6 +751,7 @@ private:
     RadioModel&       m_radioModel;
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
+    AetherDspModePolicy m_aetherDspModePolicy;
     QThread*          m_audioThread{nullptr};
     QMediaDevices*    m_audioDeviceMonitor{nullptr};
     QTimer            m_audioDeviceChangeTimer;
@@ -1221,6 +1223,9 @@ private:
     // by both the modeless AetherDspDialog and the docked ClientRxDspApplet
     // so they push every change into the engine identically.
     void wireAetherDspWidget(class AetherDspWidget* widget);
+    void updateAetherDspModePolicy();
+    QString activeAetherDspMethod() const;
+    void setAetherDspMethodEnabled(const QString& method, bool enabled);
     class ClientCompEditor* m_clientCompEditor{nullptr}; // lazy — created on first Edit… click
     class ClientGateEditor* m_clientGateEditor{nullptr}; // lazy — created on first Edit… click
     class ClientTubeEditor* m_clientTubeEditor{nullptr}; // lazy — created on first Edit… click

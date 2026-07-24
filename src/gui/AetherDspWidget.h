@@ -61,6 +61,10 @@ public:
     void setNr2Available(bool available, const QString& tooltip);
 
 signals:
+    // Explicit operator action, emitted before the engine request. Mode-based
+    // auto-disable policy uses this to let the button click win.
+    void dspMethodUserToggled(const QString& method, bool enabled);
+
     // NR2 parameter changes
     void nr2GainMaxChanged(float value);
     void nr2GainFloorChanged(float value);
