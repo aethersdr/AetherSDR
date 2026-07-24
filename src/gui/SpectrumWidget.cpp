@@ -4332,31 +4332,58 @@ void SpectrumWidget::appendDssHistoryRow(const QVector<float>& binsDbm,
                         dssHistoryFallbackDbm());
 }
 
+namespace {
+
+// Returns DC-spike-repaired bins for a native FLEX DSS row whose FRAME begins at
+// DC, else the input bins unchanged; `scratch` owns any repaired copy. Gates on
+// the frame's own coverage (where the row is stamped), falling back to the view
+// only when the frame is invalid — mirroring the stampFrame/requestedFrame
+// pattern so the repair tracks the row, not a diverging view (#4413 review).
+const QVector<float>& dcRepairedDssBins(QVector<float>& scratch,
+                                        const QVector<float>& binsDbm,
+                                        bool nativeStream,
+                                        double frameCenterMhz,
+                                        double frameBandwidthMhz,
+                                        double viewCenterMhz,
+                                        double viewBandwidthMhz)
+{
+    if (!nativeStream) {
+        return binsDbm;
+    }
+    const FrequencyFrame frame{frameCenterMhz, frameBandwidthMhz};
+    const double centerMhz = frame.isValid() ? frameCenterMhz : viewCenterMhz;
+    const double bwMhz = frame.isValid() ? frameBandwidthMhz : viewBandwidthMhz;
+    if (!DssDcEdgeMath::viewStartsAtDc(centerMhz, bwMhz)) {
+        return binsDbm;
+    }
+    scratch = DssDcEdgeMath::flattenLeadingSpike(binsDbm);
+    return scratch;
+}
+
+} // namespace
+
 void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
                                            double frameCenterMhz,
                                            double frameBandwidthMhz,
                                            bool updateLiveSurface)
 {
     QVector<float> repairedBins;
-    const QVector<float>* dssBins = &binsDbm;
-    if (!m_kiwiSdrWaterfallActive
-        && DssDcEdgeMath::viewStartsAtDc(m_centerMhz, m_bandwidthMhz)) {
-        repairedBins = DssDcEdgeMath::flattenLeadingSpike(binsDbm);
-        dssBins = &repairedBins;
-    }
+    const QVector<float>& dssBins = dcRepairedDssBins(
+        repairedBins, binsDbm, !m_kiwiSdrWaterfallActive,
+        frameCenterMhz, frameBandwidthMhz, m_centerMhz, m_bandwidthMhz);
 
     // Keep live DSS and retained scrollback DSS on the same waterfall-row cadence.
     if (m_wfLive && updateLiveSurface) {
         if (m_frequencyPreviewActive && m_waterfallWriteVisible) {
             const QVector<float>& previewBins = remapPreviewDssRow(
-                *dssBins, frameCenterMhz, frameBandwidthMhz);
+                dssBins, frameCenterMhz, frameBandwidthMhz);
             pushDssLiveRow(m_dss, previewBins, false);
             ++m_frequencyPreviewRemappedDssRows;
         } else {
-            pushDssLiveRow(m_dss, *dssBins, !m_waterfallWriteVisible);
+            pushDssLiveRow(m_dss, dssBins, !m_waterfallWriteVisible);
         }
     }
-    appendDssHistoryRow(*dssBins, frameCenterMhz, frameBandwidthMhz);
+    appendDssHistoryRow(dssBins, frameCenterMhz, frameBandwidthMhz);
 }
 
 void SpectrumWidget::pushDssLiveRow(DssRenderer& dss,
@@ -10252,14 +10279,11 @@ void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
         ? activeKiwiWaterfallState().live
         : m_nativeWaterfallState.live;
     QVector<float> repairedBins;
-    const QVector<float>* dssBins = &binsDbm;
-    if (!kiwiStream
-        && DssDcEdgeMath::viewStartsAtDc(m_centerMhz, m_bandwidthMhz)) {
-        repairedBins = DssDcEdgeMath::flattenLeadingSpike(binsDbm);
-        dssBins = &repairedBins;
-    }
+    const QVector<float>& dssBins = dcRepairedDssBins(
+        repairedBins, binsDbm, !kiwiStream,
+        frameCenterMhz, frameBandwidthMhz, m_centerMhz, m_bandwidthMhz);
     if (live && updateLiveSurface) {
-        pushDssLiveRow(dss, *dssBins, true);
+        pushDssLiveRow(dss, dssBins, true);
     }
 
     const FrequencyFrame requestedFrame{frameCenterMhz, frameBandwidthMhz};
@@ -10269,7 +10293,7 @@ void SpectrumWidget::pushDssRowForWaterfallStream(bool kiwiStream,
     const float fallbackDbm = kiwiStream
         ? kKiwiSdrWaterfallMinDbm
         : m_refLevel - m_dynamicRange;
-    retainDssHistoryRow(dss, *dssBins,
+    retainDssHistoryRow(dss, dssBins,
                         stampFrame.centerMhz, stampFrame.bandwidthMhz,
                         fallbackDbm);
 }

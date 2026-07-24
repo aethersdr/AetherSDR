@@ -32,7 +32,12 @@ inline QVector<float> flattenLeadingSpike(const QVector<float>& binsDbm)
         return binsDbm;
     }
 
-    const int referenceStart = std::min(8, count / 4);
+    // Bins we may replace at the head. Compute this first so the noise-baseline
+    // window can start past it — the median must never be sampled from the spike
+    // itself, or a longer-than-expected spike would inflate the baseline and
+    // under-repair (#4413 review).
+    const int candidateBins = std::clamp((count + 99) / 100, 4, 32);
+    const int referenceStart = std::max(8, candidateBins);
     const int referenceEnd = std::clamp(count / 20, referenceStart + 8, 128);
     QVector<float> referenceBins;
     referenceBins.reserve(referenceEnd - referenceStart);
@@ -56,7 +61,6 @@ inline QVector<float> flattenLeadingSpike(const QVector<float>& binsDbm)
         return binsDbm;
     }
 
-    const int candidateBins = std::clamp((count + 99) / 100, 4, 32);
     int replaceCount = 0;
     while (replaceCount < candidateBins
            && std::isfinite(binsDbm[replaceCount])
