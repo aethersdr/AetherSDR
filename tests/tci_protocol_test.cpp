@@ -331,9 +331,10 @@ int main(int argc, char** argv)
     }
 
     // A radio-supplied letter carrying TCI delimiters would corrupt framing
-    // for every client on the socket.
-    protocol.setActiveSlice(1, TciProtocol::sanitizeSliceLetter(
-                                   QStringLiteral("A;drive:0,100")));
+    // for every client on the socket. The RAW string is passed in on purpose:
+    // sanitizing is the setter's job, so the invariant does not depend on each
+    // caller remembering to pre-clean.
+    protocol.setActiveSlice(1, QStringLiteral("A;drive:0,100"));
     const QString sanitized =
         protocol.handleCommand(QStringLiteral("active_slice"));
     if (sanitized.count(QLatin1Char(';')) != 1
@@ -345,9 +346,20 @@ int main(int argc, char** argv)
     }
     protocol.setActiveSlice(1, QStringLiteral("C"));
 
-    // SET is ignored — focus is GUI-owned. A client must not be able to steal
-    // it, and must not desync every other client by appearing to.
-    if (!protocol.handleCommand(QStringLiteral("active_slice:0")).isEmpty()) {
+    // 0-1 args = GET, matching the split handleCommand() documents for every
+    // other command. active_slice has no per-TRX form, but `active_slice:0;` is
+    // the shape a client written against `rx_volume:0;` will send, so it is
+    // answered rather than silently dropped.
+    if (protocol.handleCommand(QStringLiteral("active_slice:0"))
+        != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr,
+                     "active_slice GET with a redundant trx arg must still report\n");
+        return 1;
+    }
+
+    // SET (2+ args) is ignored — focus is GUI-owned. A client must not be able
+    // to steal it, and must not desync every other client by appearing to.
+    if (!protocol.handleCommand(QStringLiteral("active_slice:0,1")).isEmpty()) {
         std::fprintf(stderr, "active_slice SET must not reply\n");
         return 1;
     }

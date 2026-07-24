@@ -37,25 +37,22 @@ QString TciProtocol::sanitizeSliceLetter(const QString& letter)
     return clean.left(2);
 }
 
+// Reports only what TciServer has pushed. There is deliberately no scan
+// fallback: -1 is not exclusively a startup state — TciServer also pushes it
+// when the focused slice is removed, and in that window the optimistic-set
+// overlap it was assumed to avoid IS possible (SliceModel::setActive() marks
+// the incoming slice before the radio echoes active=0 on the outgoing one, so
+// a scan can see two). Scanning there would answer a GET, or seed a newly
+// connected client's init burst, with a slice that was never broadcast, so
+// GET-polling and broadcast-listening clients would disagree about focus.
+// Staying silent keeps every path consistent with the broadcast stream.
 bool TciProtocol::resolveActiveSlice(int& trx, QString& letter) const
 {
-    if (m_activeTrx >= 0) {
-        trx = m_activeTrx;
-        letter = m_activeLetter;
-        return true;
-    }
-    // Startup fallback only: no focus change has been observed yet, so no
-    // optimistic-set window can be open and a scan is unambiguous.
-    if (!m_model)
+    if (m_activeTrx < 0)
         return false;
-    for (auto* s : m_model->slices()) {
-        if (s && s->isActive()) {
-            trx = tciTrxForSlice(m_model, s);
-            letter = sanitizeSliceLetter(s->letter());
-            return true;
-        }
-    }
-    return false;
+    trx = m_activeTrx;
+    letter = m_activeLetter;
+    return true;
 }
 
 long long TciProtocol::mhzToHz(double mhz)
@@ -1818,12 +1815,17 @@ QString TciProtocol::cmdDiguOffset(const QStringList& args, bool isSet)
 // steal it would change default UX for every connected surface, which is
 // RFC territory (GOVERNANCE.md, "What requires an RFC"). Silent ignore
 // matches the TCI convention for commands the server does not honor.
-// The GET form takes no arguments, so anything present is a SET attempt.
-// Branch on args rather than the shared 2+-args isSet heuristic, which is
-// built for `trx,value` commands — the same shape cmdVolume uses.
+//
+// GET/SET follows the same split handleCommand() documents for every other
+// command: 0-1 args = GET, 2+ = SET. active_slice has no per-TRX form, so the
+// lone argument in `active_slice:0;` is redundant — but that is the shape a
+// client written against the rest of this protocol (`rx_volume:0;`,
+// `rx_mute:0;`) will send, and answering it is strictly more useful than
+// silence. Replying to a would-be setter with the unchanged focus also tells
+// them the SET did not take, which silence cannot.
 QString TciProtocol::cmdActiveSlice(const QStringList& args)
 {
-    if (!args.isEmpty()) return {};   // SET — ignored, see above
+    if (args.size() >= 2) return {};   // SET — ignored, see above
     int trx = -1;
     QString letter;
     if (!resolveActiveSlice(trx, letter)) return {};

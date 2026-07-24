@@ -80,10 +80,16 @@ public:
     // trip TWO slices report active and a scan returns whichever comes first
     // in slice order. -1 = not yet known, in which case the scan is used as
     // the startup fallback (before any focus change has been observed).
+    // The letter is sanitized here, not just at the TciServer call site: this
+    // is the boundary the value crosses on its way to the wire, and a raw
+    // radio-supplied ',' or ';' would corrupt TCI framing for every client on
+    // the socket. Enforcing it in the setter keeps the invariant independent of
+    // any caller remembering (Principle VII). Sanitizing is idempotent, so the
+    // server sanitizing first costs nothing.
     void setActiveSlice(int trx, const QString& letter)
     {
         m_activeTrx = trx;
-        m_activeLetter = letter;
+        m_activeLetter = sanitizeSliceLetter(letter);
     }
     int activeTrx() const { return m_activeTrx; }
 
