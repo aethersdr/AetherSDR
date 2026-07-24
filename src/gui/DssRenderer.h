@@ -72,7 +72,7 @@ public:
         const float strengthHeight = std::pow(
             strengthLinear, std::max(zCurve, 0.05f));
         QPointF point = projectPerspective(frequencyUnit, d);
-        point.ry() -= strengthHeight * kFrontMaxRidgeFrac * width;
+        point.ry() -= static_cast<double>(strengthHeight) * kFrontMaxRidgeFrac * width;
         return point;
     }
 
