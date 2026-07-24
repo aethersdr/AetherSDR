@@ -4250,6 +4250,10 @@ void RadioModel::onDisconnected()
     m_wsprTxOwnershipRequested = false;
     m_wsprTxYieldAfterUse = false;
     m_wsprTxReleaseWhenReady = false;
+    // The radio is gone — there is nothing left to hand `transmit dax` back to,
+    // and the next connect re-reads it from status.
+    m_wsprTxRestoreDax = false;
+    m_wsprTxPreviousDax = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -7737,8 +7741,13 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
 bool RadioModel::prepareWsprTransmit()
 {
     // WSPR is generated in-process and sent through our own dax_tx stream.
-    // This is explicit operator intent from the PSK Reporter beacon controls;
-    // do not persist or restore the radio-authoritative DAX setting.
+    // `transmit dax` is a station-wide setting the operator (or SmartSDR DAX2
+    // on Windows, #2315) owns, so remember it and hand it back in
+    // releaseWsprTransmit(). Leaving dax=1 latched would silently kill the
+    // next mic voice TX on every platform where updateDaxTxMode() is compiled
+    // out (Windows / Linux without PipeWire). Mirrors the AX.25 TX path.
+    m_wsprTxPreviousDax = m_transmitModel.daxOn();
+    m_wsprTxRestoreDax = true;
     m_transmitModel.setDax(true);
     m_wsprTxYieldAfterUse = !m_daxTxActive;
     m_wsprTxOwnershipRequested = true;
@@ -7746,6 +7755,7 @@ bool RadioModel::prepareWsprTransmit()
     if (!ensureDaxTxStream(DaxTxRequestReason::WsprBeacon)) {
         m_wsprTxOwnershipRequested = false;
         m_wsprTxYieldAfterUse = false;
+        restoreWsprTransmitDax();
         return false;
     }
     if (m_daxTxStreamId != 0) {
@@ -7767,6 +7777,19 @@ void RadioModel::releaseWsprTransmit()
     }
     m_wsprTxOwnershipRequested = false;
     m_wsprTxYieldAfterUse = false;
+    restoreWsprTransmitDax();
+}
+
+// Hand `transmit dax` back to whatever owned it before the beacon armed.
+// Only writes when the beacon actually changed it, so an operator (or DAX2)
+// that already had dax=1 never sees a redundant command.
+void RadioModel::restoreWsprTransmitDax()
+{
+    if (!m_wsprTxRestoreDax)
+        return;
+    m_wsprTxRestoreDax = false;
+    if (m_transmitModel.daxOn() != m_wsprTxPreviousDax)
+        m_transmitModel.setDax(m_wsprTxPreviousDax);
 }
 
 QJsonObject RadioModel::troubleshootingSnapshot() const

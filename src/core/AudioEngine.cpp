@@ -8461,10 +8461,15 @@ void AudioEngine::pumpWsprBeacon()
         return;
     }
 
-    // Catching up a long worker-thread stall as a packet burst would destroy
-    // WSPR symbol timing. Abort instead; the dialog observes inactive audio
-    // and immediately unkeys.
-    constexpr qint64 kMaximumRecoverableFrames = 2400; // 100 ms at 24 kHz
+    // A worker-thread stall is recoverable. The generator is sample-accurate,
+    // so emitting the backlog only runs the radio's DAX buffer ahead of the
+    // wall clock — it does not shift symbol timing within the frame. This
+    // thread also carries the RX DSP chain, where a >100 ms hiccup (model
+    // load under m_dspMutex, device change, load spike) is ordinary, and
+    // aborting would cost the operator the whole 111.6 s frame plus a
+    // two-minute wait for the next slot. Only give up once the lag exceeds
+    // what a WSPR decoder tolerates against the slot boundary (~1 s).
+    constexpr qint64 kMaximumRecoverableFrames = WsprBeacon::kSampleRate;
     if (dueFrames > kMaximumRecoverableFrames) {
         qCWarning(lcAudio)
             << "AudioEngine: WSPR pacing deadline missed by"
@@ -8474,9 +8479,18 @@ void AudioEngine::pumpWsprBeacon()
         return;
     }
 
-    const int frames = static_cast<int>(dueFrames);
+    // Drain a backlog over several ticks so one catch-up never bursts more
+    // than ~340 ms (half a symbol) of packets at the radio in a single go.
+    constexpr qint64 kMaximumCatchUpFrames = WsprBeacon::kFramesPerSymbol / 2;
+    const int frames = static_cast<int>(
+        std::min(dueFrames, kMaximumCatchUpFrames));
     m_wsprInt16Scratch.resize(
         frames * 2 * static_cast<int>(sizeof(int16_t)));
+    // process() leaves the buffer untouched if the beacon was stopped from the
+    // GUI thread since the isActive() check above, and QByteArray::resize does
+    // not initialize the bytes it adds. Clear first so a stop landing inside
+    // that window can never put uninitialized memory on the air.
+    m_wsprInt16Scratch.fill('\0');
     m_wsprBeacon->process(
         reinterpret_cast<int16_t*>(m_wsprInt16Scratch.data()), frames, 2);
 

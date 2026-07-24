@@ -85,20 +85,39 @@ void testLeaseEndsWithTransmit()
 
 void testDelayedActionLease()
 {
+    // The pending window covers a deferred invoke/click plus one 500 ms poll,
+    // not an operator-scale delay.
     AutomationTxWatchdog watchdog;
     watchdog.arm(0);
-    watchdog.poll(false, 119'000, 20'000, 125'000);
+    watchdog.poll(false, 500, 20'000, 2'000);
     check(watchdog.isArmed(),
-          "pending lease survives a full WSPR slot wait");
-    watchdog.poll(true, 120'000, 20'000, 125'000);
-    check(watchdog.poll(true, 140'001, 20'000, 125'000)
+          "pending lease survives a deferred click across one poll");
+    watchdog.poll(true, 1'000, 20'000, 2'000);
+    check(watchdog.poll(true, 21'001, 20'000, 2'000)
               == AutomationTxWatchdog::Decision::ForceUnkey,
           "delayed automation key-up still receives the safety timeout");
 
     watchdog.arm(0);
-    watchdog.poll(false, 125'001, 20'000, 125'000);
+    watchdog.poll(false, 2'001, 20'000, 2'000);
     check(!watchdog.isArmed(),
           "an abandoned pending action cannot claim a future manual transmit");
+}
+
+// A bridge click that only *arms* a long-fuse feature (the WSPR beacon waits
+// for the next even UTC minute, then keys for 111.6 s) must not leave a lease
+// that later claims and truncates that transmission.
+void testLongFuseArmIsNotClaimed()
+{
+    AutomationTxWatchdog watchdog;
+    watchdog.arm(0);
+    for (int64_t nowMs = 500; nowMs < 120'000; nowMs += 500) {
+        watchdog.poll(false, nowMs, 20'000, 2'000);
+    }
+    check(!watchdog.isArmed(),
+          "an arm-only click does not hold a lease across the WSPR slot wait");
+    check(watchdog.poll(true, 140'000, 20'000, 2'000)
+              == AutomationTxWatchdog::Decision::None,
+          "the beacon's own key-up is not claimed by the arming click");
 }
 
 void testEnabledBridgeDoesNotUnkeyManualTransmit()
@@ -145,6 +164,7 @@ int main(int argc, char** argv)
     testAutomationTransmitTimesOut();
     testLeaseEndsWithTransmit();
     testDelayedActionLease();
+    testLongFuseArmIsNotClaimed();
     testEnabledBridgeDoesNotUnkeyManualTransmit();
     if (failures == 0) {
         std::puts("Automation TX watchdog tests passed");

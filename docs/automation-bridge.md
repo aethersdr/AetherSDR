@@ -2396,7 +2396,12 @@ launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`
 A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops an
 automation-originated continuous key that runs too long, and the bridge
 force-unkeys its own active TX lease on stop. Merely enabling TX permission
-does not apply this timeout to operator, DAX, or TCI transmissions. **Verify the
+does not apply this timeout to operator, DAX, or TCI transmissions. The lease
+covers the key-up an accepted action causes directly (allowing ~2 s for a
+deferred click); a bridge action that only *arms* a long-fuse feature — the
+WSPR beacon waits for the next even UTC minute, then keys for 111.6 s — is not
+claimed, so that transmission runs to completion under the feature's own
+timers rather than being cut at `TX_MAX_MS`. **Verify the
 TX antenna is your dummy load before keying** (`get slice tx txAntenna`, or set
 it with `slice txant ANT2`). Unkey/stop sub-actions are always allowed.
 

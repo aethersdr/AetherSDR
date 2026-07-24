@@ -52,7 +52,8 @@ private:
     void updateBeaconState();
     void updateBeaconDefaults();
     void setBeaconControlsEnabled(bool enabled);
-    bool applyBeaconBand(bool showStatus);
+    bool applyBeaconBand();
+    void restoreBeaconTxFilter();
 
     AudioEngine*         m_audioEngine{nullptr};
     RadioModel*         m_radioModel{nullptr};
@@ -79,6 +80,9 @@ private:
     QLabel*             m_beaconStatus{nullptr};
     qint64              m_beaconSlotMs{0};
     qint64              m_beaconStopDeadlineMs{0};
+    int                 m_beaconPrevTxFilterLow{0};
+    int                 m_beaconPrevTxFilterHigh{0};
+    bool                m_beaconTxFilterSaved{false};
     bool                m_beaconArmed{false};
     bool                m_beaconTransmitting{false};
     QLabel*             m_bandCondPills[4]{};

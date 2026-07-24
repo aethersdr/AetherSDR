@@ -726,7 +726,16 @@ private:
     QTimer* m_txWatchdog{nullptr};
     AutomationTxWatchdog m_txWatchdogState;
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
-    static constexpr int kTxPendingLeaseMs{125000}; // next even WSPR slot (<120 s)
+    // How long an armed-but-not-yet-keyed lease waits for the key-up it caused.
+    // Sized only to cover a deferred invoke/click (QTimer::singleShot(0)) plus
+    // one 500 ms watchdog poll. It must NOT span an operator-scale delay: a
+    // lease that outlives the action would claim — and force-unkey at
+    // m_txMaxKeyMs — whatever transmission happens to start next, which is the
+    // operator/DAX/TCI misattribution this state machine exists to prevent.
+    // Long-fuse features that merely *arm* from a bridge click (the WSPR
+    // beacon waits for the next even UTC minute, then keys for 111.6 s) are
+    // deliberately outside the lease: the bridge did not key them.
+    static constexpr int kTxPendingLeaseMs{2000};
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)

@@ -493,8 +493,14 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_beaconPower, &QComboBox::currentIndexChanged, this, [this] {
         writePskSetting("beaconPowerDbm", m_beaconPower->currentData().toInt());
     });
-    connect(m_beaconBand, &QComboBox::currentIndexChanged,
-            this, [this] { applyBeaconBand(true); });
+    // Selecting a band only previews where the beacon will go. The radio is
+    // not touched until the operator actually arms a transmission.
+    connect(m_beaconBand, &QComboBox::currentIndexChanged, this, [this] {
+        m_beaconStatus->setText(
+            tr("%1 · %2 MHz USB on transmit")
+                .arg(m_beaconBand->currentText())
+                .arg(m_beaconBand->currentData().toDouble(), 0, 'f', 6));
+    });
     connect(m_beaconTone, &QDoubleSpinBox::valueChanged, this, [](double hz) {
         writePskSetting("beaconToneHz", hz);
     });
@@ -565,33 +571,31 @@ void PskReporterMapDialog::setBeaconControlsEnabled(bool enabled)
     m_beaconTone->setEnabled(enabled);
 }
 
-bool PskReporterMapDialog::applyBeaconBand(bool showStatus)
+// Retune/reshape the TX slice for the selected WSPR band. Called ONLY from
+// scheduleBeacon(): selecting a band in the combo is a choice, not a command,
+// and must not retune the operator's slice or rewrite the station-wide TX
+// filter before they have armed anything.
+bool PskReporterMapDialog::applyBeaconBand()
 {
     if (m_radioModel == nullptr) {
-        if (showStatus) {
-            m_beaconStatus->setText(tr("Connect to a radio first"));
-        }
         return false;
     }
     TransmitModel& tx = m_radioModel->transmitModel();
     if (tx.isTransmitting() || tx.isTuning()) {
-        if (showStatus) {
-            m_beaconStatus->setText(tr("Transmitter is already in use"));
-        }
         return false;
     }
     SliceModel* slice = m_radioModel->txSlice();
-    if (slice == nullptr) {
-        if (showStatus) {
-            m_beaconStatus->setText(tr("No TX slice is selected"));
-        }
+    if (slice == nullptr || slice->isLocked()) {
         return false;
     }
-    if (slice->isLocked()) {
-        if (showStatus) {
-            m_beaconStatus->setText(tr("TX slice is locked"));
-        }
-        return false;
+
+    // `transmit filter_low/high` is a station-wide setting unrelated to this
+    // slice, so remember it and hand it back in stopBeacon(). Without that the
+    // operator's SSB TX stays stuck in a 600 Hz passband after one beacon.
+    if (!m_beaconTxFilterSaved) {
+        m_beaconPrevTxFilterLow = tx.txFilterLow();
+        m_beaconPrevTxFilterHigh = tx.txFilterHigh();
+        m_beaconTxFilterSaved = true;
     }
 
     // Standard WSPR dial frequencies use upper sideband on every band. Keep
@@ -601,20 +605,21 @@ bool PskReporterMapDialog::applyBeaconBand(bool showStatus)
     slice->setMode(QStringLiteral("DIGU"));
     slice->setFilterWidth(1200, 1800);
     tx.setTxFilter(1200, 1800);
-    if (showStatus) {
-        const int timeoutMs = tx.interlockTimeout();
-        if (!WsprBeacon::isInterlockTimeoutSufficient(timeoutMs)) {
-            m_beaconStatus->setText(
-                tr("Tuned %1 DIGU · TX timeout %2 s; WSPR needs at least 120 s")
-                    .arg(m_beaconBand->currentText())
-                    .arg(timeoutMs / 1000));
-        } else {
-            m_beaconStatus->setText(
-                tr("Tuned %1 DIGU · filters 1200–1800 Hz")
-                    .arg(m_beaconBand->currentText()));
-        }
-    }
     return true;
+}
+
+// Restore the station-wide TX filter the beacon borrowed. The slice frequency
+// and mode are deliberately left on the WSPR channel — the operator asked to
+// go there — but the transmit passband is not slice state.
+void PskReporterMapDialog::restoreBeaconTxFilter()
+{
+    if (!m_beaconTxFilterSaved || m_radioModel == nullptr) {
+        m_beaconTxFilterSaved = false;
+        return;
+    }
+    m_beaconTxFilterSaved = false;
+    m_radioModel->transmitModel().setTxFilter(m_beaconPrevTxFilterLow,
+                                              m_beaconPrevTxFilterHigh);
 }
 
 void PskReporterMapDialog::scheduleBeacon()
@@ -664,11 +669,12 @@ void PskReporterMapDialog::scheduleBeacon()
 
     // Reassert the visible band/mode/filter selection in case another client
     // changed the TX slice after the operator selected the WSPR band.
-    if (!applyBeaconBand(false)) {
+    if (!applyBeaconBand()) {
         m_beaconStatus->setText(tr("WSPR TX audio route is unavailable"));
         return;
     }
     if (!m_radioModel->prepareWsprTransmit()) {
+        restoreBeaconTxFilter();  // applyBeaconBand() already borrowed it
         m_beaconStatus->setText(tr("WSPR TX audio route is unavailable"));
         return;
     }
@@ -700,6 +706,7 @@ void PskReporterMapDialog::stopBeacon(const QString& status)
     if (m_radioModel != nullptr) {
         m_radioModel->releaseWsprTransmit();
     }
+    restoreBeaconTxFilter();
     // Keep the generator active (and therefore holding silence) through the
     // local unkey command so an external DAX source cannot leak into the tail.
     if (m_audioEngine != nullptr && m_audioEngine->wsprBeacon() != nullptr) {
