@@ -156,15 +156,6 @@ inline float waterfallScrollProgressRows(std::int64_t elapsedMs, float msPerRow,
                       0.0f, distanceRows);
 }
 
-inline float waterfallScrollProgressUnit(float progressRows, int textureRows)
-{
-    if (!std::isfinite(progressRows) || textureRows <= 0) {
-        return 0.0f;
-    }
-    return std::clamp(progressRows, 0.0f, 1.0f)
-        / static_cast<float>(textureRows);
-}
-
 inline float waterfallScrollSampleOffsetUnit(float progressRows,
                                               float distanceRows,
                                               int textureRows)

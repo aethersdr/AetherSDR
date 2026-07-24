@@ -181,12 +181,6 @@ int testWaterfallScrollProgress()
             0.0)) {
         return fail("invalid waterfall timing should disable interpolation");
     }
-    if (!nearlyEqual(waterfallScrollProgressUnit(0.5f, 100), 0.005, 1.0e-6)
-        || !nearlyEqual(waterfallScrollProgressUnit(2.0f, 100), 0.01, 1.0e-6)
-        || !nearlyEqual(
-            waterfallScrollProgressUnit(0.5f, 0), 0.0, 1.0e-6)) {
-        return fail("waterfall row progress should normalize to texture height");
-    }
     if (!nearlyEqual(
             waterfallScrollSampleOffsetUnit(0.0f, 1.0f, 100), 0.01, 1.0e-6)
         || !nearlyEqual(
