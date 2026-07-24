@@ -367,13 +367,24 @@ void ContainerManager::wireContainer(ContainerWidget* c)
 void ContainerManager::onFloatRequested()
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
-    if (c) floatContainer(c->id());
+    if (!c) return;
+    floatContainer(c->id());
+    // saveState() (called inside floatContainer) only mutates the in-memory
+    // AppSettings map. This slot fires on a genuine user gesture — NOT during
+    // restoreState(), which calls floatContainer() directly and bypasses it —
+    // so flush the transition to disk here. Without it, an abnormal
+    // termination before MainWindow::closeEvent()'s save() loses the dock
+    // state and the applet re-floats on next launch (#4427).
+    AppSettings::instance().save();
 }
 
 void ContainerManager::onDockRequested()
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
-    if (c) dockContainer(c->id());
+    if (!c) return;
+    dockContainer(c->id());
+    // Durable persist of the dock transition — see onFloatRequested (#4427).
+    AppSettings::instance().save();
 }
 
 void ContainerManager::onCloseRequested()
@@ -382,6 +393,8 @@ void ContainerManager::onCloseRequested()
     if (!c) return;
     c->setContainerVisible(false);
     saveState();
+    // Durable persist of the close transition — see onFloatRequested (#4427).
+    AppSettings::instance().save();
 }
 
 void ContainerManager::onAlwaysOnTopToggled(bool on)
@@ -390,6 +403,9 @@ void ContainerManager::onAlwaysOnTopToggled(bool on)
     if (!c) return;
     const QString id = c->id();
     AppSettings::instance().setValue(alwaysOnTopKeyFor(id), on);
+    // Durable persist — setValue() only touches the in-memory map, same
+    // latent gap as the float/dock transitions (#4427).
+    AppSettings::instance().save();
     if (auto* win = m_floatingWindows.value(id, nullptr)) {
         win->setAlwaysOnTop(on);
     }
