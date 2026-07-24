@@ -28,6 +28,9 @@ class QGraphicsOpacityEffect;
 class QDoubleSpinBox;
 class QGridLayout;
 class QPainter;
+class QHideEvent;
+class QResizeEvent;
+class QShowEvent;
 
 namespace AetherSDR {
 
@@ -347,8 +350,12 @@ protected:
     void wheelEvent(QWheelEvent* ev) override;
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseReleaseEvent(QMouseEvent* ev) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
+    void syncShadowGeometry();
     void updateSignalMeterTarget();
     void animateSignalMeter();
     // Build and push the current MeterInput (RX signal vs the selected TX meter)
@@ -518,6 +525,7 @@ private:
     QStackedWidget* m_tabStack{nullptr};
     QWidget*        m_tabBar{nullptr};
     int m_activeTab{-1};
+    QPointer<QWidget> m_shadowWidget;
 
     // Tab content widgets
     // Audio tab
