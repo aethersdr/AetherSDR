@@ -1585,6 +1585,29 @@ QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
         .arg(clampedManualGain);
 }
 
+QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
+                               double freqKhz)
+{
+    double tunedFreqKhz = freqKhz;
+    if (mode == QStringLiteral("cw")) {
+        // The Kiwi's 'freq' is the BFO/mixdown point, not a dial frequency:
+        // low_cut/high_cut are applied as an audio passband relative to it.
+        // Our CW passband is already centered on the sidetone pitch above
+        // (or, for CWL, below) the carrier, so sending freq=carrier puts the
+        // carrier at 0 Hz — outside the passband — and the tone is filtered
+        // out (#4423). Shift the BFO by the passband center so the carrier
+        // lands inside the passband and beats to the pitch tone, matching
+        // what the operator hears from the Flex sidetone.
+        const double pitchHz = (lowCutHz + highCutHz) / 2.0;
+        tunedFreqKhz -= pitchHz / 1000.0;
+    }
+    return QStringLiteral("SET mod=%1 low_cut=%2 high_cut=%3 freq=%4")
+        .arg(mode)
+        .arg(lowCutHz)
+        .arg(highCutHz)
+        .arg(tunedFreqKhz, 0, 'f', 3);
+}
+
 MeterReading meterUnavailable(MeterSource source, const QString& notes)
 {
     MeterReading reading;

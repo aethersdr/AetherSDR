@@ -294,6 +294,20 @@ int main()
         return fail("AGC command formatting is wrong");
     }
 
+    // #4423: Kiwi 'freq' is the BFO, so CW must shift it by the passband
+    // center (the sidetone pitch) or the carrier demodulates to DC and gets
+    // filtered out, leaving no audible tone even though the pip overlays it.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), 400, 800, 7000.0)
+            != QStringLiteral("SET mod=cw low_cut=400 high_cut=800 freq=6999.400")
+        || formatSoundTuneCommand(QStringLiteral("cw"), -800, -400, 7000.0)
+            != QStringLiteral("SET mod=cw low_cut=-800 high_cut=-400 freq=7000.600")
+        || formatSoundTuneCommand(QStringLiteral("usb"), 100, 2900, 7000.0)
+            != QStringLiteral("SET mod=usb low_cut=100 high_cut=2900 freq=7000.000")
+        || formatSoundTuneCommand(QStringLiteral("lsb"), -2900, -100, 7000.0)
+            != QStringLiteral("SET mod=lsb low_cut=-2900 high_cut=-100 freq=7000.000")) {
+        return fail("sound tune command formatting is wrong");
+    }
+
     const QVector<MsgToken> msgTokens = parseMsgTokens(
         QStringLiteral("MSG wb_only password_timeout inactivity_timeout=15 "
                        "kiwi_kick=1%2coperator%20request badp=5 =ignored"));

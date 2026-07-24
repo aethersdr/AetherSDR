@@ -1391,11 +1391,8 @@ void KiwiSdrClient::sendTrackedSliceToServer()
             << "high_cut=" << highCutHz;
         return;
     }
-    sendSoundCommand(QStringLiteral("SET mod=%1 low_cut=%2 high_cut=%3 freq=%4")
-        .arg(mode)
-        .arg(lowCutHz)
-        .arg(highCutHz)
-        .arg(freqKhz, 0, 'f', 3));
+    sendSoundCommand(KiwiSdrProtocol::formatSoundTuneCommand(
+        mode, lowCutHz, highCutHz, freqKhz));
 }
 
 void KiwiSdrClient::sendReceiverControlsToServer()
