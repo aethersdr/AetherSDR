@@ -414,15 +414,21 @@ QJsonObject clientInfoToJson(quint32 handle,
 void RadioModel::buildBackend()
 {
     if (m_useDemoBackend) {
-        // RFC #4288 Route A: a wire-less in-process simulator. It emits status /
-        // slices / spectrum / audio through the IRadioBackend seam directly, so
-        // there is no RadioConnection / PanadapterStream to harvest — m_connection
-        // and m_panStream stay null and the Flex-only wire connects below are
-        // skipped by their guard.
-        m_backend = std::make_unique<SimBackend>();
-        m_connection  = nullptr;
-        m_panStream   = nullptr;
-        m_flexBackend = nullptr;
+        // RFC #4288 hybrid: SimBackend is an IRadioBackend selected at this
+        // factory (the "SimBackend" the maintainer asked for), but it OWNS a
+        // RadioConnection + PanadapterStream in synthetic-demo mode and vends them
+        // here — just like FlexBackend. So RadioModel's ~46 m_connection->/
+        // m_panStream-> sites hit real objects that behave synthetically (no
+        // socket, no wire; the demo behaviour lives in RadioConnection::
+        // startSyntheticDemoConnect + PanadapterStream::tickSyntheticDemo), rather
+        // than deref null. This gives the seam-level backend choice without the
+        // ~46 hot-path null-guards a wire-less SimBackend would require (a
+        // wire-less connect crashed in test — see demo-mode-route-decision.md).
+        auto sim = std::make_unique<SimBackend>();
+        m_connection  = sim->connection();   // non-owning; SimBackend owns it
+        m_panStream   = sim->panStream();     // non-owning; SimBackend owns it
+        m_flexBackend = nullptr;              // no Flex alias in demo mode
+        m_backend = std::move(sim);
     } else {
         auto flex = std::make_unique<FlexBackend>();
         flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
@@ -1863,17 +1869,13 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                        info.guiClientStations,
                        info.guiClientIps,
                        info.guiClientHosts);
-    if (m_useDemoBackend) {
-        // Wire-less SimBackend: start it through the IRadioBackend seam. There is
-        // no RadioConnection to dial; the backend synthesizes the connect itself.
-        RadioConnectRequest req;
-        req.serial = info.serial;
-        m_backend->connectRadio(req);
-    } else {
-        QMetaObject::invokeMethod(m_connection, [conn = m_connection, info] {
-            conn->connectToRadio(info);
-        });
-    }
+    // Both demo and real go through the RadioConnection: the demo's connection
+    // (owned by SimBackend, hybrid) detects the demo serial in connectToRadio()
+    // and runs its synthetic-demo connect locally instead of dialing a socket,
+    // while a real radio dials as before. Same call, backend-appropriate behaviour.
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection, info] {
+        conn->connectToRadio(info);
+    });
 }
 
 void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort)
