@@ -1,6 +1,10 @@
 #include "core/backends/sim/SimBackend.h"
 
 #include <QtEndian>
+#include <QThread>
+
+#include "core/RadioConnection.h"
+#include "core/PanadapterStream.h"
 
 namespace AetherSDR {
 
@@ -20,9 +24,67 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     m_audio.setEnabled(NoiseMixer::Channel::Birdie, true);
     m_audio.setLevelDb(NoiseMixer::Channel::Birdie, -18.0);
     m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"), 1200.0);
+
+    // ---- Path B (RFC #4288): own a RadioConnection + PanadapterStream in
+    // synthetic-demo mode, mirroring FlexBackend's ctor (same load-bearing #502
+    // order: panStream thread FIRST, then connection). RadioModel harvests these
+    // via connection()/panStream() and drives them exactly as it drives Flex's.
+    // The synthetic behaviour is entirely inside those classes
+    // (RadioConnection::startSyntheticDemoConnect on a demo target,
+    // PanadapterStream::tickSyntheticDemo) — no new wire logic here.
+    m_networkThread = new QThread(this);
+    m_networkThread->setObjectName("SimPanadapterStream");
+    m_panStream = new PanadapterStream;   // no parent — moved to thread
+    m_panStream->moveToThread(m_networkThread);
+    connect(m_networkThread, &QThread::started, m_panStream, &PanadapterStream::init);
+    m_networkThread->start();
+
+    m_connThread = new QThread(this);
+    m_connThread->setObjectName("SimRadioConnection");
+    m_connection = new RadioConnection;   // no parent — moved to thread
+    m_connection->moveToThread(m_connThread);
+    connect(m_connThread, &QThread::started, m_connection, &RadioConnection::init);
+    m_connThread->start();
+
+    // Re-emit wire lifecycle as the interface's own signals (as FlexBackend does).
+    connect(m_connection, &RadioConnection::connected,
+            this, &IRadioBackend::connected);
+    connect(m_connection, &RadioConnection::disconnected,
+            this, &IRadioBackend::disconnected);
+    connect(m_connection, &RadioConnection::errorOccurred,
+            this, &IRadioBackend::connectionError);
 }
 
-SimBackend::~SimBackend() = default;
+SimBackend::~SimBackend()
+{
+    // Mirror FlexBackend teardown: sever our lifecycle observation first, then
+    // tear down connection (BlockingQueued disconnect → deleteLater → thread
+    // quit/wait), then panStream — the #502 order.
+    if (m_connection)
+        disconnect(m_connection, nullptr, this, nullptr);
+
+    if (m_connection && m_connThread && m_connThread->isRunning()) {
+        QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio,
+                                  Qt::BlockingQueuedConnection);
+        m_connection->deleteLater();
+        m_connThread->quit();
+        m_connThread->wait(3000);
+    } else {
+        delete m_connection;
+    }
+    m_connection = nullptr;
+
+    if (m_panStream && m_networkThread && m_networkThread->isRunning()) {
+        QMetaObject::invokeMethod(m_panStream, &PanadapterStream::stop,
+                                  Qt::BlockingQueuedConnection);
+        m_panStream->deleteLater();
+        m_networkThread->quit();
+        m_networkThread->wait(3000);
+    } else {
+        delete m_panStream;
+    }
+    m_panStream = nullptr;
+}
 
 QByteArray SimBackend::toStereoBytes(const QVector<float>& mono)
 {
