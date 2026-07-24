@@ -153,6 +153,33 @@ void SimBackend::onAudioTick()
     }
 }
 
+void SimBackend::setDemoNoiseEnabled(const QString& channel, bool on)
+{
+    bool ok = false;
+    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
+    if (ok) m_audio.setEnabled(c, on);
+}
+
+void SimBackend::setDemoNoiseLevel(const QString& channel, double levelDb)
+{
+    bool ok = false;
+    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
+    if (ok) m_audio.setLevelDb(c, levelDb);
+}
+
+void SimBackend::setDemoNoiseKnob(const QString& channel, const QString& knob,
+                                  double value)
+{
+    bool ok = false;
+    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
+    if (ok) m_audio.setKnob(c, knob, value);
+}
+
+void SimBackend::loadDemoNoisePreset(const QString& presetName)
+{
+    m_audio.loadPreset(presetName);
+}
+
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
 QString SimBackend::demoSerial()    { return QStringLiteral("DEMO-0001"); }
 

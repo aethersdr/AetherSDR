@@ -229,6 +229,7 @@
 #endif
 #include "core/PanadapterStream.h"
 #include "core/backends/IRadioBackend.h"   // seam: SimBackend::audioFrameReady wiring
+#include "core/backends/sim/SimBackend.h"  // dynamic_cast for demo noise controls
 #if defined(Q_OS_MAC)
 #include "core/VirtualAudioBridge.h"
 #include <QFileInfo>
@@ -1460,30 +1461,30 @@ MainWindow::MainWindow(QWidget* parent)
     // on the network thread, so these are Q_INVOKABLE and invoked QUEUED so the
     // mutation lands there (RFC #4288). No-ops unless the demo radio is connected.
     if (auto* demo = m_appletPanel->demoApplet()) {
+        // Route the noise controls to the SimBackend's NoiseMixer — the one whose
+        // output is actually audible (SimBackend::onAudioTick → audioFrameReady).
+        // PanadapterStream has a second, now-unused NoiseMixer left from the old
+        // shim path; wiring the applet to THAT one is why the controls did nothing.
+        // simBackend() returns nullptr unless the demo backend is active, so these
+        // are safely no-ops on a real radio. Same (main) thread → direct calls.
+        auto simBackend = [this]() -> SimBackend* {
+            return dynamic_cast<SimBackend*>(m_radioModel.backend());
+        };
         connect(demo, &DemoApplet::demoNoiseToggled, this,
-                [this](const QString& ch, bool on) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoNoiseEnabled",
-                    Qt::QueuedConnection, Q_ARG(QString, ch), Q_ARG(bool, on));
+                [simBackend](const QString& ch, bool on) {
+            if (auto* sim = simBackend()) sim->setDemoNoiseEnabled(ch, on);
         });
         connect(demo, &DemoApplet::demoNoiseLevelChanged, this,
-                [this](const QString& ch, double db) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoNoiseLevel",
-                    Qt::QueuedConnection, Q_ARG(QString, ch), Q_ARG(double, db));
+                [simBackend](const QString& ch, double db) {
+            if (auto* sim = simBackend()) sim->setDemoNoiseLevel(ch, db);
         });
         connect(demo, &DemoApplet::demoNoiseKnobChanged, this,
-                [this](const QString& ch, const QString& knob, double v) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoNoiseKnob",
-                    Qt::QueuedConnection, Q_ARG(QString, ch),
-                    Q_ARG(QString, knob), Q_ARG(double, v));
+                [simBackend](const QString& ch, const QString& knob, double v) {
+            if (auto* sim = simBackend()) sim->setDemoNoiseKnob(ch, knob, v);
         });
         connect(demo, &DemoApplet::demoPresetRequested, this,
-                [this](const QString& preset) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "loadDemoNoisePreset",
-                    Qt::QueuedConnection, Q_ARG(QString, preset));
+                [simBackend](const QString& preset) {
+            if (auto* sim = simBackend()) sim->loadDemoNoisePreset(preset);
         });
         // Fault-injection buttons (RFC #4288 #4) → backend->invokeExtension("sim",…),
         // the same path the `sim` automation verb uses. The signal carries

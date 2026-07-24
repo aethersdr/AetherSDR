@@ -54,6 +54,19 @@ public:
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
 
+    // ---- Demo noise controls (RFC #4288) ----
+    // Drive THIS backend's NoiseMixer (m_audio) — the one whose output you hear
+    // (onAudioTick → audioFrameReady). The DemoApplet's controls route here.
+    // (PanadapterStream has a SECOND, now-unused NoiseMixer from the old shim
+    // path; wiring the applet to that one is why the controls did nothing.) Same
+    // thread as the applet (SimBackend is not moved to a worker thread), so these
+    // are safe direct calls. The birdie "hz" knob is RF-anchored: it sets the
+    // carrier's offset above the VFO, matching the standalone tool's behaviour.
+    void setDemoNoiseEnabled(const QString& channel, bool on);
+    void setDemoNoiseLevel(const QString& channel, double levelDb);
+    void setDemoNoiseKnob(const QString& channel, const QString& knob, double value);
+    void loadDemoNoisePreset(const QString& presetName);
+
     // Identity advertised in the connect descriptor / radio-list entry. Stable so
     // the UI can label the demo entry and match it back after connect.
     static QString demoModelName();
