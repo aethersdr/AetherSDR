@@ -113,6 +113,7 @@ private:
     MidiControlManager*  m_midi{nullptr};
     UlanziDialCanvas*    m_canvas{nullptr};
     QList<Pill> m_pills;
+    bool m_isLoading{false};
 
     QLabel* m_statusLabel{nullptr};
     QLabel* m_lastEventLabel{nullptr};

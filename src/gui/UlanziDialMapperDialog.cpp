@@ -297,14 +297,15 @@ void UlanziDialMapperDialog::buildPills()
             }
         }
 
-        // MIDI Toggle/Trigger params — only the discrete-event types
-        // make sense on a button.  Continuous params would need a
+        // MIDI Toggle/Trigger/Gate params — only the discrete-event and gate
+        // types make sense on a button.  Continuous params would need a
         // rotary, which is intentionally not bound here.
 #ifdef HAVE_MIDI
         if (m_midi) {
             for (const auto& mp : m_midi->params()) {
                 if (mp.type != MidiParamType::Toggle &&
-                    mp.type != MidiParamType::Trigger) continue;
+                    mp.type != MidiParamType::Trigger &&
+                    mp.type != MidiParamType::Gate) continue;
                 p.combo->addItem(QStringLiteral("[MIDI %1] %2").arg(mp.category, mp.displayName),
                                  QStringLiteral("midi:%1").arg(mp.id));
             }
@@ -453,7 +454,7 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
 
 QString UlanziDialMapperDialog::actionSettingsKey(const QString& pillId)
 {
-    return QStringLiteral("UlanziDial/action/%1").arg(pillId);
+    return QStringLiteral("UlanziDial_action_%1").arg(pillId);
 }
 
 QString UlanziDialMapperDialog::defaultActionForPill(const QString& pillId)
@@ -477,6 +478,7 @@ QString UlanziDialMapperDialog::pillForSignature(const QString& signature)
 
 void UlanziDialMapperDialog::loadActions()
 {
+    m_isLoading = true;
     auto& s = AppSettings::instance();
     for (int i = 0; i < m_pills.size(); ++i) {
         if (!m_pills[i].combo) continue;
@@ -486,15 +488,18 @@ void UlanziDialMapperDialog::loadActions()
         const int idx = m_pills[i].combo->findData(actionId);
         if (idx >= 0) m_pills[i].combo->setCurrentIndex(idx);
     }
+    m_isLoading = false;
 }
 
 void UlanziDialMapperDialog::saveAction(int pillIndex)
 {
+    if (m_isLoading) return;
     if (pillIndex < 0 || pillIndex >= m_pills.size()) return;
     const Pill& p = m_pills[pillIndex];
     if (!p.combo) return;
     const QString actionId = p.combo->currentData().toString();
     AppSettings::instance().setValue(actionSettingsKey(p.id), actionId);
+    AppSettings::instance().save();
 }
 
 void UlanziDialMapperDialog::refreshPillLabel(int /*pillIndex*/)

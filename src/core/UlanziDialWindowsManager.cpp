@@ -271,7 +271,13 @@ void UlanziDialWindowsManager::emitKeyTransition(int linuxKey, int value)
     }
     if (linuxKey == KEY_LEFTCTRL || linuxKey == KEY_RIGHTCTRL) {
         m_ctrlDown = (value != 0);
-        if (!m_ctrlDown) { m_lastNonModKey = -1; m_prevsongAlongsideCtrl = false; }
+        if (!m_ctrlDown) {
+            if (m_lastNonModKey != -1) {
+                emit buttonEvent(chordSignature(m_lastNonModKey, m_prevsongAlongsideCtrl), 0);
+                m_lastNonModKey = -1;
+                m_prevsongAlongsideCtrl = false;
+            }
+        }
         return;
     }
     if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 1) {
