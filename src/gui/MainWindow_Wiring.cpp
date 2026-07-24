@@ -4920,7 +4920,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // cwPitchChanged (not phoneStateChanged) so this doesn't re-run on every
     // unrelated VOX/mic/dexp status update for every wired slice.
     connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged,
-            this, [this, s](int) { updateKiwiSdrVirtualTrackingForSlice(s); });
+            s, [this, s](int) { updateKiwiSdrVirtualTrackingForSlice(s); });
     connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
         updateAetherDspModePolicy();

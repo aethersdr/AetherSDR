@@ -1784,7 +1784,10 @@ int KiwiSdrClient::kiwiLowCutHz() const
         return 100;
     }
     if (mode == QStringLiteral("cw")) {
-        return 400;
+        // Symmetric about the carrier, matching how Flex reports its CW
+        // passband — formatSoundTuneCommand() shifts this by the CW pitch,
+        // so an already pitch-centered fallback would get shifted twice.
+        return -400;
     }
     if (mode == QStringLiteral("nfm")) {
         return -6000;
@@ -1806,7 +1809,7 @@ int KiwiSdrClient::kiwiHighCutHz() const
         return 2900;
     }
     if (mode == QStringLiteral("cw")) {
-        return 800;
+        return 400;
     }
     if (mode == QStringLiteral("nfm")) {
         return 6000;
