@@ -25,7 +25,10 @@ static QString extractField(const QString& block, const QString& fieldName)
     if (!m.hasMatch()) return {};
     int len = m.captured(1).toInt();
     int start = m.capturedEnd(0);
-    if (start + len > block.length()) return {};
+    // Compare against remaining space rather than computing start + len:
+    // len comes straight from the ADIF length token, so a crafted value near
+    // INT_MAX overflows the signed addition (UB) and slips past the guard.
+    if (len < 0 || len > block.length() - start) return {};
     return block.mid(start, len);
 }
 
