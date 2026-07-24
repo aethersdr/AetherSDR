@@ -816,6 +816,13 @@ RadioModel::RadioModel(QObject* parent)
                 // gating only on TUNE_IN_PROGRESS can briefly start (or
                 // prematurely resume) the operator-over timer when those
                 // statuses arrive out of order.
+                //
+                // Tag here, AFTER the inhibit gate above, and NOT in
+                // TransmitModel::atuStart() (which — unlike startTune — has no
+                // runPttPreflight of its own). Tagging before the gate would
+                // leave a stale Atu source on a blocked ATU, which a following
+                // bare hardware/VOX key (no source-bearing entry point) would
+                // inherit and be wrongly excluded from the operator TX timer.
                 m_transmitModel.noteActivePttSource(
                     TransmitModel::PttSource::Atu);
             }
