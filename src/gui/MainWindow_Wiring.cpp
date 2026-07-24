@@ -2478,7 +2478,7 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
                 return;
             }
             m_radioModel.panStream()->setYPixels(streamId, ypix);
-            swGuard->prepareForFftScaleChange();
+            swGuard->prepareForFftPixelScaleChange();
         };
 
         if (updateLocalDecoderImmediately) {
