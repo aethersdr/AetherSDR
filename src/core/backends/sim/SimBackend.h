@@ -8,7 +8,12 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/NoiseMixer.h"
 
+class QThread;
+
 namespace AetherSDR {
+
+class RadioConnection;
+class PanadapterStream;
 
 // SimBackend — a native, in-process synthetic radio (demo mode). It is the
 // second IRadioBackend implementor after FlexBackend, but unlike FlexBackend it
@@ -54,6 +59,17 @@ public:
     static QString demoModelName();
     static QString demoSerial();
 
+    // ---- Path B seam (RFC #4288): SimBackend OWNS a RadioConnection and a
+    // PanadapterStream in synthetic-demo mode, exactly as FlexBackend owns its
+    // real wire objects, and vends them here. RadioModel harvests these as
+    // non-owning pointers at the RadioModel.cpp:507 factory and drives them
+    // byte-for-byte as it drives FlexBackend's — the synthetic behaviour lives
+    // inside RadioConnection::startSyntheticDemoConnect() and
+    // PanadapterStream::tickSyntheticDemo() (both already built + verified). This
+    // lets the demo reuse AE's entire real connect + spectrum path unchanged. ----
+    RadioConnection*  connection() const { return m_connection; }
+    PanadapterStream* panStream()  const { return m_panStream; }
+
 private slots:
     // Frame tick (kFrameLen / kSampleRate, ~5.3 ms): mixes one audio frame and
     // emits it over the seam, plus a periodic spectrum row. Muted while keyed.
@@ -87,6 +103,17 @@ private:
     int    m_filterHighHz{2900};
     static constexpr int kSliceId = 0;
     static constexpr int kPanId = 0;
+
+    // ---- Path B owned wire objects (synthetic-demo mode) ----
+    // Created on worker threads in the ctor (panStream first, matching
+    // FlexBackend's load-bearing #502 order), torn down in the dtor. Non-owning
+    // getters connection()/panStream() delegate to them. The demo behaviour is
+    // driven entirely through these — SimBackend's own delta emission above is
+    // the pure-Path-A skeleton kept for the unit tests, dormant on the live path.
+    RadioConnection*  m_connection{nullptr};   // owned; lives on m_connThread
+    QThread*          m_connThread{nullptr};
+    PanadapterStream* m_panStream{nullptr};    // owned; lives on m_networkThread
+    QThread*          m_networkThread{nullptr};
 };
 
 }  // namespace AetherSDR
