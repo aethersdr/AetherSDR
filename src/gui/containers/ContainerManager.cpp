@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QString>
 #include <QStringList>
 
@@ -368,23 +369,16 @@ void ContainerManager::onFloatRequested()
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
+    // floatContainer() -> saveState() flushes to disk (unless restoring), so
+    // the transition survives an abnormal termination before closeEvent (#4427).
     floatContainer(c->id());
-    // saveState() (called inside floatContainer) only mutates the in-memory
-    // AppSettings map. This slot fires on a genuine user gesture — NOT during
-    // restoreState(), which calls floatContainer() directly and bypasses it —
-    // so flush the transition to disk here. Without it, an abnormal
-    // termination before MainWindow::closeEvent()'s save() loses the dock
-    // state and the applet re-floats on next launch (#4427).
-    AppSettings::instance().save();
 }
 
 void ContainerManager::onDockRequested()
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
-    dockContainer(c->id());
-    // Durable persist of the dock transition — see onFloatRequested (#4427).
-    AppSettings::instance().save();
+    dockContainer(c->id()); // dockContainer() -> saveState() flushes (#4427)
 }
 
 void ContainerManager::onCloseRequested()
@@ -392,9 +386,7 @@ void ContainerManager::onCloseRequested()
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
     c->setContainerVisible(false);
-    saveState();
-    // Durable persist of the close transition — see onFloatRequested (#4427).
-    AppSettings::instance().save();
+    saveState(); // saveState() flushes to disk (#4427)
 }
 
 void ContainerManager::onAlwaysOnTopToggled(bool on)
@@ -403,8 +395,8 @@ void ContainerManager::onAlwaysOnTopToggled(bool on)
     if (!c) return;
     const QString id = c->id();
     AppSettings::instance().setValue(alwaysOnTopKeyFor(id), on);
-    // Durable persist — setValue() only touches the in-memory map, same
-    // latent gap as the float/dock transitions (#4427).
+    // Always-on-top is its own key (not part of saveState()'s container blob),
+    // so flush it explicitly — setValue() only touches the in-memory map (#4427).
     AppSettings::instance().save();
     if (auto* win = m_floatingWindows.value(id, nullptr)) {
         win->setAlwaysOnTop(on);
@@ -413,6 +405,8 @@ void ContainerManager::onAlwaysOnTopToggled(bool on)
 
 void ContainerManager::onFloatingWindowDock(ContainerWidget* c)
 {
+    // Re-dock from the floating window (its close = dock). dockContainer() ->
+    // saveState() now flushes to disk, so this transition persists too (#4427).
     if (c) dockContainer(c->id());
 }
 
@@ -451,10 +445,25 @@ void ContainerManager::saveState() const
     AppSettings::instance().setValue(
         kSettingsKey,
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
+
+    // setValue() only mutates the in-memory AppSettings map. Flush a genuine
+    // transition (float/dock/close, via any slot) to disk here so it survives
+    // an abnormal termination before MainWindow::closeEvent()'s save(). Every
+    // saveState() caller reaches this one flush point, so no transition slot
+    // can forget to persist. Suppressed while restoreState() replays saved
+    // state, which would otherwise re-write what it is reading (#4427).
+    if (!m_restoring) {
+        AppSettings::instance().save();
+    }
 }
 
 void ContainerManager::restoreState()
 {
+    // Suppress saveState()'s per-transition disk flush for the duration of the
+    // replay (floatContainer() below calls saveState()); reset on any exit.
+    m_restoring = true;
+    const auto restoreGuard = qScopeGuard([this] { m_restoring = false; });
+
     const QString json = AppSettings::instance()
         .value(kSettingsKey, "").toString();
     if (json.isEmpty()) return;
