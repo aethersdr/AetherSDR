@@ -3845,16 +3845,16 @@ add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). Self-contained: the
-# backend speaks no wire, so it links only the class under test + Qt6::Core.
-add_executable(sim_backend_test
-    tests/sim_backend_test.cpp
-    src/core/backends/sim/SimBackend.cpp
-    src/core/backends/sim/NoiseMixer.cpp    # SimBackend holds a NoiseMixer member (Phase 2b audio)
-    src/core/backends/IRadioBackend.h   # header-only Q_OBJECT — AUTOMOC needs it for the base vtable/signals
-)
+# Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). SimBackend was once
+# wire-free, but Path B (RFC #4288) had it own a RadioConnection + PanadapterStream,
+# so it no longer links against a hand-picked subset of sources: those pull in
+# RadioDiscovery.h (<QUdpSocket>) at compile time and RadioConnection/PanadapterStream
+# symbols at link time. Link aethercore (which already contains SimBackend, NoiseMixer,
+# RadioConnection and PanadapterStream) exactly like flex_backend_lifecycle_test does,
+# so the dependency closure is resolved by the library rather than re-listed here.
+add_executable(sim_backend_test tests/sim_backend_test.cpp)
 target_include_directories(sim_backend_test PRIVATE src)
-target_link_libraries(sim_backend_test PRIVATE Qt6::Core Qt6::Test)
+target_link_libraries(sim_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
 if(UNIX)
     target_link_libraries(sim_backend_test PRIVATE pthread)
 endif()
