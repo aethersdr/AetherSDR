@@ -655,6 +655,13 @@ RadioModel::RadioModel(QObject* parent)
     connect(m_backend.get(), &IRadioBackend::profileChanged, this,
             [this](const ProfileDelta& delta) { applyProfileChanges(delta); });
 
+    // The connects below are to the backend's WIRE objects (RadioConnection +
+    // PanadapterStream). A FlexBackend vends them; a SimBackend (RFC #4288
+    // Route A) has none — it delivers status/slices/spectrum through the
+    // IRadioBackend seam signals wired above (radioChanged/sliceChanged/
+    // spectrumFrameReady/…). So this block is Flex-only; guard it on the wire
+    // objects existing.
+    if (m_connection && m_panStream) {
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
     // WHEN a dax_rx stream must exist (refcounted acquire/release from the
     // bridge/TCI/RADE); RadioModel is the command plane that makes it so.
@@ -722,6 +729,7 @@ RadioModel::RadioModel(QObject* parent)
     // Forward VITA-49 meter packets to MeterModel (cross-thread, auto-queued)
     connect(m_panStream, &PanadapterStream::meterDataReady,
             &m_meterModel, &MeterModel::updateValues);
+    }   // end Flex-only wire-object connects (RFC #4288 Route A guard)
 
     // Route tuner relay intents to the radio through the backend seam (#4092).
     // The model emits neutral intents; FlexBackend translates them to the SmartSDR
