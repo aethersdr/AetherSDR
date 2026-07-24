@@ -2685,7 +2685,8 @@ foreach(APP_SETTINGS_SCENARIO
         missing-live-temp
         missing-live-backup
         missing-live-corrupt
-        failed-load)
+        failed-load
+        display-slice-depth-default)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})

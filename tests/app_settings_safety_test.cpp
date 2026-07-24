@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "gui/DisplaySettings.h"
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -320,6 +321,23 @@ void testFailedLoadCannotSave()
            "failed loads cannot create a replacement temporary file");
 }
 
+void testThreeDSliceDepthDefaultAndOptOut()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    expect(DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow defaults on when the Display field is absent");
+
+    DisplaySettings::setThreeDSliceDepth(false);
+    expect(!DisplaySettings::threeDSliceDepth(),
+           "a persisted False keeps the user's 3D Slice Shadow opt-out");
+
+    DisplaySettings::setThreeDSliceDepth(true);
+    expect(DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow can be enabled again after opting out");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -355,6 +373,8 @@ int main(int argc, char** argv)
         testMissingLiveCorruptRecoveryFailsClosed();
     } else if (scenario == QStringLiteral("failed-load")) {
         testFailedLoadCannotSave();
+    } else if (scenario == QStringLiteral("display-slice-depth-default")) {
+        testThreeDSliceDepthDefaultAndOptOut();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return 2;

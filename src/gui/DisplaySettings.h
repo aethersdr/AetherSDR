@@ -44,10 +44,11 @@ public:
     }
 
     // Perspective shadow for slice markers and passbands in the 3D
-    // stacked-trace view. Global across panadapters; dormant in 2D.
+    // stacked-trace view. Global across panadapters; dormant in 2D. New
+    // installs default on, while a persisted False keeps the user's opt-out.
     static bool threeDSliceDepth()
     {
-        return readObj().value("threeDSliceDepth").toString("False") == "True";
+        return readObj().value("threeDSliceDepth").toString("True") == "True";
     }
 
     static void setThreeDSliceDepth(bool on)
