@@ -7,6 +7,8 @@
 #include "core/AppSettings.h"
 
 #include <QApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -134,6 +136,62 @@ void testSaveRestoreRoundTrip()
     report("beta hidden state restored",      beta  && !beta->isContainerVisible());
 }
 
+void testDockTransitionPersistsImmediately()
+{
+    auto& settings = AppSettings::instance();
+
+    QJsonObject rx;
+    rx["mode"] = "floating";
+    rx["visible"] = true;
+    rx["contentType"] = "";
+    rx["parent"] = "";
+
+    QJsonObject containers;
+    containers["RX"] = rx;
+
+    QJsonObject root;
+    root["version"] = 1;
+    root["containers"] = containers;
+
+    settings.setValue(
+        "ContainerTree",
+        QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
+    settings.save();
+    settings.reset();
+    settings.load();
+
+    {
+        QWidget panel;
+        auto* layout = new QVBoxLayout(&panel);
+        layout->setContentsMargins(0, 0, 0, 0);
+
+        ContainerManager manager;
+        ContainerWidget* container =
+            manager.createContainer("RX", "RX Controls");
+        layout->addWidget(container);
+
+        manager.restoreState();
+        report("seed state restores RX floating", container->isFloating());
+
+        manager.dockContainer("RX");
+        report("dock transition updates live RX state",
+               container->isPanelDocked());
+    }
+
+    // Simulate a new process without any final main-window shutdown save.
+    settings.reset();
+    settings.load();
+
+    const QJsonDocument persisted = QJsonDocument::fromJson(
+        settings.value("ContainerTree", "").toString().toUtf8());
+    const QString mode = persisted.object()
+        .value("containers").toObject()
+        .value("RX").toObject()
+        .value("mode").toString();
+    report("dock transition is durable before shutdown", mode == "panel",
+           mode.toStdString());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -151,6 +209,7 @@ int main(int argc, char** argv)
     testContentFactory();
     testFloatDockViaManager();
     testSaveRestoreRoundTrip();
+    testDockTransitionPersistsImmediately();
 
     std::printf("\n%s\n",
                 g_failed == 0

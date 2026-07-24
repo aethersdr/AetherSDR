@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopedValueRollback>
 #include <QString>
 #include <QStringList>
 
@@ -291,7 +292,7 @@ void ContainerManager::floatContainer(const QString& id)
     if (auto* tb = c->titleBar()) tb->setAlwaysOnTopState(aot);
 
     win->show();
-    saveState();
+    persistState();
 }
 
 void ContainerManager::dockContainer(const QString& id)
@@ -333,7 +334,7 @@ void ContainerManager::dockContainer(const QString& id)
         }
         released->show();
     }
-    saveState();
+    persistState();
 }
 
 void ContainerManager::setFramelessMode(bool on)
@@ -345,7 +346,7 @@ void ContainerManager::setFramelessMode(bool on)
 
 void ContainerManager::prepareShutdown()
 {
-    saveState();  // commit current floating/visibility state before closing windows
+    persistState();  // commit current floating/visibility state before closing windows
     for (auto* win : m_floatingWindows) {
         win->prepareShutdown();
     }
@@ -381,7 +382,7 @@ void ContainerManager::onCloseRequested()
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
     c->setContainerVisible(false);
-    saveState();
+    persistState();
 }
 
 void ContainerManager::onAlwaysOnTopToggled(bool on)
@@ -393,6 +394,7 @@ void ContainerManager::onAlwaysOnTopToggled(bool on)
     if (auto* win = m_floatingWindows.value(id, nullptr)) {
         win->setAlwaysOnTop(on);
     }
+    AppSettings::instance().save();
 }
 
 void ContainerManager::onFloatingWindowDock(ContainerWidget* c)
@@ -437,6 +439,19 @@ void ContainerManager::saveState() const
         QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
 }
 
+void ContainerManager::persistState() const
+{
+    // restoreState() calls floatContainer() while reconstructing the saved
+    // tree. Persisting those intermediate states could replace a complete
+    // multi-container tree if startup is interrupted part-way through.
+    if (m_restoringState) {
+        return;
+    }
+
+    saveState();
+    AppSettings::instance().save();
+}
+
 void ContainerManager::restoreState()
 {
     const QString json = AppSettings::instance()
@@ -449,6 +464,7 @@ void ContainerManager::restoreState()
     if (root.value("version").toInt() != kSchemaVersion) return;
 
     const QJsonObject containers = root.value("containers").toObject();
+    QScopedValueRollback<bool> restoringState(m_restoringState, true);
 
     // First pass: create every container without inserting children.
     // This guarantees parent containers exist before we try to parent

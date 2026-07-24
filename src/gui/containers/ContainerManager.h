@@ -110,6 +110,8 @@ public:
     //   }
     //
     // Phase 3 adds "parent" and "children" fields for nesting.
+    // User-driven window-state transitions flush this snapshot to disk
+    // immediately; saveState() itself only updates the AppSettings map.
     void saveState() const;
     void restoreState();
 
@@ -133,11 +135,13 @@ private:
     };
 
     void wireContainer(ContainerWidget* container);
+    void persistState() const;
 
     QMap<QString, QPointer<ContainerWidget>> m_containers;
     QMap<QString, FloatingContainerWindow*> m_floatingWindows;
     QMap<QString, ContentFactory>           m_factories;
     QMap<QString, Meta>                     m_meta;
+    bool                                    m_restoringState{false};
 };
 
 } // namespace AetherSDR
