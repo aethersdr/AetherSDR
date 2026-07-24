@@ -3585,14 +3585,6 @@ target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
 set_target_properties(antenna_alias_test PROPERTIES AUTOMOC ON)
 add_test(NAME antenna_alias_test COMMAND antenna_alias_test)
 
-# Pure autoconnect / client-slot contention policy (#4401) — header-only logic,
-# no Qt or MainWindow needed.
-add_executable(autoconnect_policy_test
-    tests/autoconnect_policy_test.cpp
-)
-target_include_directories(autoconnect_policy_test PRIVATE src)
-add_test(NAME autoconnect_policy_test COMMAND autoconnect_policy_test)
-
 add_executable(mqtt_antenna_alias_test
     tests/mqtt_antenna_alias_test.cpp
     src/core/MqttAntennaAlias.cpp

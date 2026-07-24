@@ -911,7 +911,6 @@ def handle_tool(name, args):
         socket_path = _instance_socket()
         child_env = os.environ.copy()
         child_env["AETHER_AUTOMATION"] = "1"
-        child_env["AETHER_AUTOMATION_NO_AUTOCONNECT"] = "1"
         child_env["AETHER_AUTOMATION_NO_TX"] = "1"
         child_env["AETHER_AUTOMATION_SOCKET"] = socket_path
         child_env["AETHER_AUTOMATION_LABEL"] = label

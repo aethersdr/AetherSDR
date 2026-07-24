@@ -53,22 +53,9 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
-Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting, so a
-bridge run reconnects to the last radio just as an interactive launch does. To
-keep a single launch idle **without** changing that persistent setting (which
-would also affect interactive use), set `AETHER_AUTOMATION_NO_AUTOCONNECT=1` —
-a process-scoped override that suppresses autoconnect for that instance only.
-Use the `connect` verb to drive a specific radio.
-
-Running several bridges in parallel? Each one that autoconnects honours
-`AutoConnectToLastRadio`, so they all try to reconnect to the same saved radio.
-When a radio's client slots are already taken (or it is a single-client /
-non-multiFLEX radio), a bridge run **declines** rather than prompting or
-evicting another client — it stays disconnected and logs the decline instead of
-blocking on a dialog nobody can click. Give at most one instance the shared
-radio and set `AETHER_AUTOMATION_NO_AUTOCONNECT=1` on the others (or drive them
-with an explicit `connect`) so they start idle by design rather than by losing
-the slot race.
+Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting; a bridge
+run reconnects to the last radio just as an interactive launch does. Use the
+`connect` verb to drive a specific radio, or clear the setting to start idle.
 
 Parallel worktrees should give each bridge a stable automation identity and a
 human-readable agent name:
@@ -203,10 +190,10 @@ override; the token is never a command-line argument, MCP result, discovery
 field, log message, or settings value.
 
 Each launch gets a unique explicit local socket and safe label. The wrapper
-sets `AETHER_AUTOMATION_NO_AUTOCONNECT=1`, pins TX automation off with
-`AETHER_AUTOMATION_NO_TX=1`, removes any inherited TX-enable flag, and refuses
-success unless token-free `ping` reports that auth is required and authenticated
-`whoami` matches the exact child PID, socket, and label with `txAllowed:false`.
+pins TX automation off with `AETHER_AUTOMATION_NO_TX=1`, removes any inherited
+TX-enable flag, and refuses success unless token-free `ping` reports that auth
+is required and authenticated `whoami` matches the exact child PID, socket, and
+label with `txAllowed:false`.
 All other MCP tools then target that owned socket. `status` inspects only the
 owned process; `stop`, wrapper exit, or a failed launch terminates only that
 process and releases its socket.
