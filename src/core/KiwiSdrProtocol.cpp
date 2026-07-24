@@ -1586,25 +1586,31 @@ QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
 }
 
 QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
-                               double freqKhz)
+                               double freqKhz, int cwPitchHz)
 {
+    int tunedLowCutHz = lowCutHz;
+    int tunedHighCutHz = highCutHz;
     double tunedFreqKhz = freqKhz;
-    if (mode == QStringLiteral("cw")) {
-        // The Kiwi's 'freq' is the BFO/mixdown point, not a dial frequency:
-        // low_cut/high_cut are applied as an audio passband relative to it.
-        // Our CW passband is already centered on the sidetone pitch above
-        // (or, for CWL, below) the carrier, so sending freq=carrier puts the
-        // carrier at 0 Hz — outside the passband — and the tone is filtered
-        // out (#4423). Shift the BFO by the passband center so the carrier
-        // lands inside the passband and beats to the pitch tone, matching
-        // what the operator hears from the Flex sidetone.
-        const double pitchHz = (lowCutHz + highCutHz) / 2.0;
-        tunedFreqKhz -= pitchHz / 1000.0;
+    if (mode == QStringLiteral("cw") && cwPitchHz != 0) {
+        // Flex reports the CW passband symmetric about the carrier (e.g.
+        // low_cut=-400 high_cut=400) — the sidetone pitch is a DSP shift
+        // Flex applies AFTER that filter, not something baked into it. The
+        // Kiwi has no such post-filter shift: 'freq' is the BFO/mixdown
+        // point and low_cut/high_cut are an audio passband relative to it.
+        // Sending freq=carrier with the passband as reported puts the
+        // carrier at 0 Hz (audible only as a DC thump, not a tone) — #4423.
+        // Reproduce the Flex behavior by shifting the whole receive chain
+        // by the pitch: move the BFO down so the carrier demodulates to
+        // +cwPitchHz, and slide the passband up by the same amount so that
+        // frequency is still inside it.
+        tunedLowCutHz += cwPitchHz;
+        tunedHighCutHz += cwPitchHz;
+        tunedFreqKhz -= cwPitchHz / 1000.0;
     }
     return QStringLiteral("SET mod=%1 low_cut=%2 high_cut=%3 freq=%4")
         .arg(mode)
-        .arg(lowCutHz)
-        .arg(highCutHz)
+        .arg(tunedLowCutHz)
+        .arg(tunedHighCutHz)
         .arg(tunedFreqKhz, 0, 'f', 3);
 }
 

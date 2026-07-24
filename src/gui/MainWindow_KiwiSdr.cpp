@@ -602,7 +602,8 @@ void MainWindow::setKiwiSdrVirtualAntennaForSliceInternal(int sliceId,
     m_kiwiSdrManager->assignSliceToProfile(
         sliceId, profileId, slice->frequency(), slice->mode(),
         slice->filterLow(), slice->filterHigh(), slice->panId(),
-        BandSettings::bandForFrequency(slice->frequency()));
+        BandSettings::bandForFrequency(slice->frequency()),
+        m_radioModel.transmitModel().cwPitch());
     updateKiwiSdrVirtualTrackingForSlice(slice);
     updateKiwiSdrVirtualAudioControlsForSlice(slice);
     updateKiwiSdrVirtualReceiverControlsForSlice(slice);
@@ -1035,7 +1036,8 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
     m_kiwiSdrManager->updateSliceTracking(
         slice->sliceId(), slice->frequency(), slice->mode(),
         slice->filterLow(), slice->filterHigh(), slice->panId(),
-        BandSettings::bandForFrequency(slice->frequency()));
+        BandSettings::bandForFrequency(slice->frequency()),
+        m_radioModel.transmitModel().cwPitch());
     if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
         m_kiwiSdrManager->updateWaterfallView(
             slice->sliceId(), slice->panId(), spectrum->centerMhz(),
@@ -1773,7 +1775,8 @@ void MainWindow::wireKiwiSdr()
                 spectrum ? spectrum->centerMhz() : slice->frequency(),
                 spectrum ? spectrum->bandwidthMhz() : 0.2,
                 spectrum ? spectrum->wfLineDuration() : 100,
-                BandSettings::bandForFrequency(slice->frequency()));
+                BandSettings::bandForFrequency(slice->frequency()),
+                m_radioModel.transmitModel().cwPitch());
         });
         if (m_audio) {
             connect(m_kiwiSdrManager, &KiwiSdrManager::decodedAudioReady,

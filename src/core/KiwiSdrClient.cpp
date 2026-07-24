@@ -975,7 +975,7 @@ void KiwiSdrClient::disconnectFromEndpoint()
 void KiwiSdrClient::setTrackedSlice(int sliceId, double frequencyMhz,
                                     const QString& mode, int filterLowHz,
                                     int filterHighHz, const QString& panId,
-                                    const QString& bandName)
+                                    const QString& bandName, int cwPitchHz)
 {
     const QString normalizedBandName = bandName.trimmed();
     if (m_trackedSliceId == sliceId
@@ -984,7 +984,8 @@ void KiwiSdrClient::setTrackedSlice(int sliceId, double frequencyMhz,
         && m_trackedFilterLowHz == filterLowHz
         && m_trackedFilterHighHz == filterHighHz
         && m_trackedPanId == panId
-        && m_trackedBandName == normalizedBandName) {
+        && m_trackedBandName == normalizedBandName
+        && m_trackedCwPitchHz == cwPitchHz) {
         return;
     }
 
@@ -998,6 +999,7 @@ void KiwiSdrClient::setTrackedSlice(int sliceId, double frequencyMhz,
     m_trackedFilterLowHz = filterLowHz;
     m_trackedFilterHighHz = filterHighHz;
     m_trackedPanId = panId;
+    m_trackedCwPitchHz = cwPitchHz;
     if (bandChanged) {
         resetWaterfallAutoScaleHistory();
     }
@@ -1392,7 +1394,7 @@ void KiwiSdrClient::sendTrackedSliceToServer()
         return;
     }
     sendSoundCommand(KiwiSdrProtocol::formatSoundTuneCommand(
-        mode, lowCutHz, highCutHz, freqKhz));
+        mode, lowCutHz, highCutHz, freqKhz, m_trackedCwPitchHz));
 }
 
 void KiwiSdrClient::sendReceiverControlsToServer()
