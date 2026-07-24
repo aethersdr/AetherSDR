@@ -85,6 +85,11 @@ constexpr int kDssMaxIncrementalUploadRows = 8;
 constexpr qint64 kDssFftPixelScaleSettleMs = 750;
 
 #ifdef AETHER_GPU_SPECTRUM
+// std140 float count of the waterfall UBO — must match the Uniforms block in
+// texturedquad.frag AND texturedquad_rowframes.frag, the buffer allocs in
+// initWaterfallPipeline(), and the uniforms[] writer in renderGpuFrame().
+constexpr int kWaterfallUboFloats = 8;
+
 QSize evenAlignedRhiSize(QSize size)
 {
     if (size.isEmpty()) {
@@ -4485,7 +4490,8 @@ void SpectrumWidget::appendLatestDssWaterfallRow(double frameCenterMhz,
 
 void SpectrumWidget::appendVisibleRow(const QRgb* rowData,
                                       double frameCenterMhz,
-                                      double frameBandwidthMhz)
+                                      double frameBandwidthMhz,
+                                      bool startScrollAnimation)
 {
     if (m_waterfall.isNull() || rowData == nullptr) {
         return;
@@ -4523,7 +4529,9 @@ void SpectrumWidget::appendVisibleRow(const QRgb* rowData,
     ++m_panStats.waterfallVisibleRows;
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallVisibleRows();
-    startWaterfallScrollAnimation();
+    if (startScrollAnimation) {
+        startWaterfallScrollAnimation();
+    }
 }
 
 void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
@@ -7234,12 +7242,17 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         appendHistoryRow(interpolatedLevels.constData(), nowMs);
         appendLatestDssWaterfallRow();
         if (m_wfLive) {
-            appendVisibleRow(interpolatedRow.constData());
+            // The whole tile gets one start() after the loop; don't restart the
+            // scroll clock once per appended row.
+            appendVisibleRow(interpolatedRow.constData(), -1.0, -1.0,
+                             /*startScrollAnimation=*/false);
         } else {
             rebuildWaterfallViewport();
         }
     }
-    if (m_wfLive && rowsToPush > 1) {
+    if (m_wfLive) {
+        // One scroll start for the whole tile (rowsToPush >= 1), replacing the
+        // per-row starts the appendVisibleRow calls above used to issue.
         startWaterfallScrollAnimation(static_cast<float>(rowsToPush));
     }
     m_prevTileLevels = levels;
@@ -10802,7 +10815,7 @@ bool SpectrumWidget::initWaterfallPipeline()
         QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer,
         sizeof(kQuadData)));
     std::unique_ptr<QRhiBuffer> ubo(r->newBuffer(
-        QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 8 * sizeof(float)));
+        QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, kWaterfallUboFloats * sizeof(float)));
     std::unique_ptr<QRhiTexture> colorTexture(r->newTexture(
         QRhiTexture::RGBA8, QSize(textureWidth, textureHeight)));
     std::unique_ptr<QRhiSampler> colorSampler(r->newSampler(
@@ -11061,7 +11074,7 @@ void SpectrumWidget::initOverlayPipeline()
     // uniform block that remaps the frequency-overlay texture. It stays at the
     // drag-start frame while band/spot/slice geometry follows the live GPU data.
     m_ovPreviewUbo = r->newBuffer(
-        QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 8 * sizeof(float));
+        QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, kWaterfallUboFloats * sizeof(float));
     const bool previewUboReady = m_ovPreviewUbo->create();
     m_ovPreviewSrb = r->newShaderResourceBindings();
     m_ovPreviewSrb->setBindings({
@@ -11732,6 +11745,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         0.0f,
         0.0f,
     };
+    static_assert(sizeof(uniforms) == kWaterfallUboFloats * sizeof(float),
+                  "waterfall UBO writer must match kWaterfallUboFloats, the "
+                  "buffer allocs, and the .frag Uniforms blocks");
     batch->updateDynamicBuffer(m_wfUbo, 0, sizeof(uniforms), uniforms);
 
     // The compact 3DSS height surface still shares one preview frame across its
@@ -12271,7 +12287,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 m_waterfallScrollClock.isValid()
                 ? scrollProgressRows
                 : m_waterfallScrollDistanceRows;
-            float ubo[kDssMeshUboFloats] = {
+            const float ubo[] = {
                 rowOffset,
                 floorDbm, rangeDb, m_dssZCurve,
                 DssRenderer::kBackWidthFrac, DssRenderer::kDepthSpanFrac,
@@ -12287,6 +12303,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<float>(m_bgFillColor.blueF()),
                 1.0f,                                         // bgFill vec4
             };
+            // Deduced size + assert so a missed field here (or in the shader U
+            // block / kDssMeshUboFloats) is a compile error, not silent garbage.
+            static_assert(sizeof(ubo) == kDssMeshUboFloats * sizeof(float),
+                          "DSS mesh UBO writer element count must equal "
+                          "kDssMeshUboFloats and the dss_mesh.{vert,frag} U block");
             batch->updateDynamicBuffer(m_dssMeshUbo, 0, sizeof(ubo), ubo);
         } else if (is3D) {
             // CPU cached-image fallback (no mesh pipeline). Rendered at a capped

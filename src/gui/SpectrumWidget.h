@@ -939,9 +939,13 @@ private:
 #ifdef AETHER_GPU_SPECTRUM
     void prepareWaterfallFrameUpload();
 #endif
+    // startScrollAnimation: begin the one-row scroll interpolation. Multi-row
+    // callers (updateWaterfallRow) pass false and issue a single start() for the
+    // whole tile instead of restarting the clock once per appended row.
     void appendVisibleRow(const QRgb* rowData,
                           double frameCenterMhz = -1.0,
-                          double frameBandwidthMhz = -1.0);
+                          double frameBandwidthMhz = -1.0,
+                          bool startScrollAnimation = true);
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
