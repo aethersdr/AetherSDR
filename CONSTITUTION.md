@@ -17,7 +17,7 @@ This block is regenerated on every constitution change; do not hand-edit below t
 
 | Field | Value |
 |---|---|
-| **Version** | 2.0.0 |
+| **Version** | 2.1.0 |
 | **Status** | `STABLE` |
 | **Applies to** | All AetherSDR contributions: source code, documentation, automation, release artifacts |
 
@@ -29,7 +29,8 @@ design preferences; each one encodes a failure that this project shipped,
 diagnosed, and fixed. Violating any of them reproduces that failure.
 
 AetherSDR is an open-source Qt6 client for FlexRadio SmartSDR-compatible
-radios. Authored using the
+radios and, via the aetherd backend seam, other radio families such as the
+Hermes-Lite 2. Authored using the
 [github/spec-kit](https://github.com/github/spec-kit) constitution
 template and conformant with the
 [Cisco Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
@@ -42,23 +43,44 @@ implementing a fix.
 
 ## Core Principles
 
-### I. FlexLib Is The Protocol Authority
+### I. The Radio-Side Implementation Is The Protocol Authority
 
-When debugging or implementing SmartSDR-protocol behavior (commands,
-status keys, VITA-49 layouts, slice semantics), the FlexLib C# source
-is the source of truth. Do not guess at command names, status-field
-spellings, or response shapes — grep FlexLib first, both the setter
-(what command is sent) and the parser (what status key is read). The
-two are frequently different (`sb_monitor` in status vs `mon` in
-command; `slice tune <id> <freq>` in modern usage, not the documented
-`slice t 0 <freq_mhz>`).
+When debugging or implementing a radio's protocol behavior (commands,
+status keys, register and bit semantics, IQ/VITA-49 layouts, slice
+semantics), the implementation that defines the radio side is the
+source of truth. Do not guess at command names, status-field spellings,
+register meanings, or response shapes — grep the authority first, both
+the setter (what the client sends) and the parser (what the radio
+actually reads). The two are frequently different.
+
+Each radio family names its authority:
+
+- **FlexRadio** — the FlexLib C# source. (`sb_monitor` in status vs
+  `mon` in command; `slice tune <id> <freq>` in modern usage, not the
+  documented `slice t 0 <freq_mhz>`.)
+- **Hermes-Lite 2** — the Hermes-Lite 2 gateware RTL, the Verilog under
+  `gateware/rtl/` — not the compiled bitfiles. (The config register's
+  `CONFIG_MERCURY` bit is decoded by no module: a client may send it,
+  but this hardware never reads it.)
+- **Any new family** — names its authority in its design note before
+  the first protocol code lands.
+
+A client is not an authority. Thetis and pihpsdr are authoritative for
+what a *client* does — pacing, ordering, connect sequence — and never
+for what the radio decodes. Consult them as references; do not promote
+one into the authority slot.
 
 *Why this is inviolable: every time a contributor has trusted a wiki
-page, an older comment, or model guesswork over FlexLib's actual
+page, an older comment, or model guesswork over the radio side's actual
 behavior, the resulting client commands have silently no-op'd on the
 radio. The failure mode is "I sent the command, the radio ignored it,
-nothing logged the mismatch." FlexLib doesn't have that ambiguity
-because it is the implementation the radio side was built against.*
+nothing logged the mismatch," and it is not hypothetical for either
+family — the Hermes-Lite 2 backend spent a development cycle crediting
+a fix to a config bit the gateware never decodes, and that wrong story
+reached a design note, a spike README, and THIRD_PARTY_LICENSES before
+anyone read the RTL. An authority does not carry that ambiguity: it is
+the implementation the radio side was built against, or — in the
+gateware case — it is the radio side.*
 
 ### II. The Radio Is Authoritative On Live State
 
