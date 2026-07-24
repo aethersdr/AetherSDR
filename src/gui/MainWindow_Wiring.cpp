@@ -4917,8 +4917,10 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // Re-send the tracked-slice command when the radio's CW pitch changes so
     // an already-active KiwiSDR CW session's BFO offset stays in sync (#4423)
     // instead of going stale until the next frequency/mode/filter edit.
-    connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
-            this, [this, s]() { updateKiwiSdrVirtualTrackingForSlice(s); });
+    // cwPitchChanged (not phoneStateChanged) so this doesn't re-run on every
+    // unrelated VOX/mic/dexp status update for every wired slice.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged,
+            this, [this, s](int) { updateKiwiSdrVirtualTrackingForSlice(s); });
     connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
         updateAetherDspModePolicy();

@@ -303,6 +303,10 @@ signals:
     // instead of phoneStateChanged for slot work that should NOT run on
     // every VOX/CW/dexp/mic-boost/etc. status update.
     void txFilterCutoffChanged(int lowHz, int highHz);
+    // Fires only when cwPitch actually changes. Use this instead of
+    // phoneStateChanged for slot work that should NOT run on every
+    // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).
+    void cwPitchChanged(int hz);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();
