@@ -641,6 +641,24 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     });
     root->addWidget(m_autoConnectCheck);
 
+    // Demo mode (RFC #4288): offer the synthetic "AetherSDR Demo — Simulator"
+    // entry in the radio list. Default on for discoverability; the choice
+    // persists. Toggling just writes the setting and shows/hides the entry — the
+    // connection (and backend selection) happens only when the user connects to
+    // it, exactly like a real radio.
+    m_showDemoCheck = new QCheckBox("Show the AetherSDR demo simulator", this);
+    m_showDemoCheck->setChecked(
+        AppSettings::instance().value("ShowDemoRadio", "True").toString() == "True");
+    m_showDemoCheck->setStyleSheet(lowBandwidthCheckStyle);
+    connect(m_showDemoCheck, &QCheckBox::toggled, this, [this](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("ShowDemoRadio", on ? "True" : "False");
+        s.save();
+        if (on) addDemoRadio();
+        else    removeDemoRadio();
+    });
+    root->addWidget(m_showDemoCheck);
+
     // ── Footer ────────────────────────────────────────────────────────────
     auto* footerRow = new QHBoxLayout;
     footerRow->setSpacing(8);

@@ -166,6 +166,7 @@ private:
     bool         m_manualConnectPending{false};
 
     QCheckBox*   m_autoConnectCheck{nullptr};
+    QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry
 
     QWidget*     m_linkOptionsWidget{nullptr};
     QLabel*      m_lowBwHintLabel{nullptr};
