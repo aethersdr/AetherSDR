@@ -1010,7 +1010,7 @@ private:
     bool             m_kiwiSdrAudioMuteChanging{false};
     bool             m_kiwiSdrAudioTransmitMuted{false};
     AetherSDR::KiwiSdrTxMuteLatch m_kiwiSdrTxMuteLatch;
-    int              m_kiwiSdrTxMaskEpoch{0};
+    AetherSDR::KiwiSdrTxMaskWatchdog m_kiwiSdrTxMaskWatchdog;
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
     struct KiwiSdrBandRecallPreparation {

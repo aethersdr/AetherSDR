@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // KiwiSDR transmit-mute latch (fork feature: warm Kiwi audio through TX).
 //
 // The Kiwi transmit gate should release on this client's optimistic local
@@ -49,6 +51,52 @@ struct KiwiSdrTxMuteLatch {
     {
         localTxSeen = false;
         localUnkeyPending = false;
+    }
+};
+
+// The latch half of MainWindow::kiwiSdrTransmitMuteRequired(), shared so the
+// unit test exercises the production clause instead of a copy: mute on the
+// local optimistic TX view, or on a radio-reported TX whose interlock term is
+// not masked as our own unkey tail. Caller-side terms that need MainWindow
+// state (full-duplex bypass, RADE EOO) stay with the caller.
+inline bool kiwiSdrTxMuteRequiredForLatch(const KiwiSdrTxMuteLatch& latch,
+                                          bool localTxActive,
+                                          bool radioTransmitting)
+{
+    return localTxActive || (radioTransmitting && !latch.radioTermMasked());
+}
+
+// A masked radio term is only ever this client's own unkey tail. When the
+// interlock names a transmitter that is not this client, the mask is provably
+// wrong and must end now instead of riding out the caller's timeout bound.
+// txOwnedByUs must stay true when ownership is unknown (no tx_client_handle
+// reported), so the unprovable case still falls back to the timeout.
+inline bool kiwiSdrTxMaskProvablyForeign(const KiwiSdrTxMuteLatch& latch,
+                                         bool radioTransmitting,
+                                         bool txOwnedByUs)
+{
+    return latch.radioTermMasked() && radioTransmitting && !txOwnedByUs;
+}
+
+// Bookkeeping that bounds the unkey-tail mask. The caller owns the actual
+// timer; this owns the episode counter that keeps a stale timer from expiring
+// a newer mask (re-key during the tail starts a new episode).
+struct KiwiSdrTxMaskWatchdog {
+    std::uint64_t epoch{0};
+
+    // Call on every mask-state transition. Returns true when the caller must
+    // arm its timeout for the mask episode that just began.
+    bool onMaskChanged(bool maskedNow)
+    {
+        ++epoch;
+        return maskedNow;
+    }
+
+    // A timer armed at armedEpoch may expire the latch only if no newer
+    // episode superseded it and the mask is still up.
+    bool shouldExpire(std::uint64_t armedEpoch, bool maskedNow) const
+    {
+        return armedEpoch == epoch && maskedNow;
     }
 };
 

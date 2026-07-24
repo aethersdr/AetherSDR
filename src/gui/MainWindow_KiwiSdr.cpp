@@ -1653,16 +1653,16 @@ bool MainWindow::kiwiSdrTransmitMuteRequired() const
     }
 
     const TransmitModel& tx = m_radioModel.transmitModel();
-    bool txActive = tx.isTransmitting() || tx.isTuning();
     // Follow the optimistic local unkey: after this client drops MOX the
     // radio keeps reporting TRANSMITTING for the interlock round trip plus
     // any hang timers, and that tail should not hold the Kiwi gate closed.
     // The radio term still mutes for TX this client never keyed (VOX, CAT,
     // other clients) — the latch masks it only during our own unkey tail.
-    if (!txActive && m_radioModel.isRadioTransmitting()
-        && !m_kiwiSdrTxMuteLatch.radioTermMasked()) {
-        txActive = true;
-    }
+    // The latch clause lives in KiwiSdrTxMutePolicy.h so the unit test
+    // exercises the production predicate rather than a copy.
+    bool txActive = AetherSDR::kiwiSdrTxMuteRequiredForLatch(
+        m_kiwiSdrTxMuteLatch, tx.isTransmitting() || tx.isTuning(),
+        m_radioModel.isRadioTransmitting());
 #ifdef HAVE_RADE
     txActive = txActive || m_radeEooPending;
 #endif
@@ -1679,9 +1679,19 @@ void MainWindow::syncKiwiSdrTransmitMute()
     const bool wasMasked = m_kiwiSdrTxMuteLatch.radioTermMasked();
     m_kiwiSdrTxMuteLatch.update(tx.isTransmitting() || tx.isTuning(),
                                 m_radioModel.isRadioTransmitting());
+    // The mask only ever covers our own unkey tail. When the interlock names
+    // another client as the transmitter, end the mask immediately instead of
+    // riding out the timeout below — the foreign TX must re-engage the mute
+    // now. Unreported ownership keeps txOwnedByUs() true, so the ambiguous
+    // case still falls back to the bounded timeout.
+    if (AetherSDR::kiwiSdrTxMaskProvablyForeign(
+            m_kiwiSdrTxMuteLatch, m_radioModel.isRadioTransmitting(),
+            m_radioModel.txOwnedByUs())) {
+        m_kiwiSdrTxMuteLatch.expire();
+    }
     if (m_kiwiSdrTxMuteLatch.radioTermMasked() != wasMasked) {
-        ++m_kiwiSdrTxMaskEpoch;
-        if (m_kiwiSdrTxMuteLatch.radioTermMasked()) {
+        if (m_kiwiSdrTxMaskWatchdog.onMaskChanged(
+                m_kiwiSdrTxMuteLatch.radioTermMasked())) {
             // Bound the mask: an interlock still reporting TRANSMITTING this
             // long after our local unkey is a foreign transmission (another
             // client, CAT, VOX) that must re-engage the mute. 2500 ms covers
@@ -1689,9 +1699,9 @@ void MainWindow::syncKiwiSdrTransmitMute()
             // break-in / tx_delay cap at 2000 ms).
             constexpr int kKiwiSdrUnkeyMaskTimeoutMs = 2500;
             QTimer::singleShot(kKiwiSdrUnkeyMaskTimeoutMs, this,
-                               [this, epoch = m_kiwiSdrTxMaskEpoch]() {
-                if (epoch != m_kiwiSdrTxMaskEpoch
-                    || !m_kiwiSdrTxMuteLatch.radioTermMasked()) {
+                               [this, epoch = m_kiwiSdrTxMaskWatchdog.epoch]() {
+                if (!m_kiwiSdrTxMaskWatchdog.shouldExpire(
+                        epoch, m_kiwiSdrTxMuteLatch.radioTermMasked())) {
                     return;
                 }
                 m_kiwiSdrTxMuteLatch.expire();

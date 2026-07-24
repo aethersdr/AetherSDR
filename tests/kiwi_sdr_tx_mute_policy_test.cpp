@@ -2,6 +2,7 @@
 
 #include <iostream>
 
+using AetherSDR::KiwiSdrTxMaskWatchdog;
 using AetherSDR::KiwiSdrTxMuteLatch;
 
 namespace {
@@ -12,16 +13,13 @@ bool expect(bool condition, const char* label)
     return condition;
 }
 
-// Mirrors MainWindow::kiwiSdrTransmitMuteRequired()'s use of the latch: the
-// radio term is ignored while masked.
+// The production predicate itself (KiwiSdrTxMutePolicy.h), so mutating the
+// clause breaks this suite — MainWindow::kiwiSdrTransmitMuteRequired() calls
+// the same function and only adds its full-duplex/RADE terms on top.
 bool muteRequired(const KiwiSdrTxMuteLatch& latch, bool localTx,
                   bool radioTx)
 {
-    bool txActive = localTx;
-    if (!txActive && radioTx && !latch.radioTermMasked()) {
-        txActive = true;
-    }
-    return txActive;
+    return AetherSDR::kiwiSdrTxMuteRequiredForLatch(latch, localTx, radioTx);
 }
 
 bool feed(KiwiSdrTxMuteLatch& latch, bool localTx, bool radioTx)
@@ -102,6 +100,55 @@ int main()
         ok &= expect(!feed(latch, false, false), "interlock clears: unmuted");
         ok &= expect(feed(latch, true, false), "fresh local key: muted");
         ok &= expect(!feed(latch, false, false), "fresh local unkey: unmuted");
+    }
+
+    {
+        // Foreign tx_client_handle inside our unkey tail: the mask is
+        // provably wrong and must end immediately (no 2500 ms wait). Our own
+        // tail (handle ours) and unreported ownership (txOwnedByUs stays
+        // true) must keep the mask and fall back to the timeout.
+        KiwiSdrTxMuteLatch latch;
+        feed(latch, true, true);
+        feed(latch, false, true);
+        ok &= expect(latch.radioTermMasked(), "own tail: masked");
+        ok &= expect(!AetherSDR::kiwiSdrTxMaskProvablyForeign(
+                         latch, true, true),
+                     "own tail, our handle: mask kept");
+        ok &= expect(!AetherSDR::kiwiSdrTxMaskProvablyForeign(
+                         latch, false, false),
+                     "interlock down: nothing to expire");
+        ok &= expect(AetherSDR::kiwiSdrTxMaskProvablyForeign(
+                         latch, true, false),
+                     "foreign handle while masked: expire now");
+        latch.expire();
+        ok &= expect(muteRequired(latch, false, true),
+                     "after foreign expiry: radio term mutes again");
+        ok &= expect(!AetherSDR::kiwiSdrTxMaskProvablyForeign(
+                         latch, true, false),
+                     "unmasked latch: foreign check is a no-op");
+    }
+
+    {
+        // Mask watchdog bookkeeping: arm only when a mask episode begins,
+        // and a fired timer may expire only its own episode.
+        KiwiSdrTxMaskWatchdog watchdog;
+        ok &= expect(watchdog.onMaskChanged(true),
+                     "mask rises: caller must arm the timeout");
+        const auto armed = watchdog.epoch;
+        ok &= expect(watchdog.shouldExpire(armed, true),
+                     "same episode, still masked: timer may expire");
+        ok &= expect(!watchdog.shouldExpire(armed, false),
+                     "mask already down: stale timer no-ops");
+        ok &= expect(!watchdog.onMaskChanged(false),
+                     "mask falls (re-key during tail): no new timer");
+        ok &= expect(!watchdog.shouldExpire(armed, true),
+                     "superseded episode: stale timer no-ops even if masked");
+        ok &= expect(watchdog.onMaskChanged(true),
+                     "next unkey tail: arm again");
+        ok &= expect(!watchdog.shouldExpire(armed, true),
+                     "old epoch stays invalid across episodes");
+        ok &= expect(watchdog.shouldExpire(watchdog.epoch, true),
+                     "new episode's own epoch expires normally");
     }
 
     if (!ok) {

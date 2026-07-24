@@ -111,6 +111,10 @@ public:
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
+    // True when the interlock's tx_client_handle is this client (or has
+    // never been reported) — false only when another client provably owns
+    // the transmitter. See the interlock status parse.
+    bool  txOwnedByUs() const { return m_txOwnedByUs; }
     // True while the local operator is keying a phone/data mode (MOX/PTT/VOX/
     // tune), false for TCI-hardware, DAX, and CW transmits. See
     // operatorTransmitChanged().
