@@ -1153,6 +1153,12 @@ private:
     std::mutex m_dspInitializationTasksMutex;
     bool m_dspInitializationStopping{false};
     std::atomic<bool> m_kiwiSdrAudioTransmitMuted{false};
+    // Audio-thread-only. TX mix gate for the delayed-Flex presentation path
+    // (mirrors ExternalRxAudioSourceState::txGateGain): with a Receive Sync
+    // delay applied, the presentation buffer holds pre-key-down RX audio
+    // that must ramp out of the mix at key-down instead of playing through
+    // the start of the transmission.
+    float             m_flexTxGateGain{1.0f};
     std::atomic<int>  m_flexReceivePresentationDelayMs{0};
     std::atomic<int>  m_kiwiReceivePresentationDelayMs{0};
     QString           m_externalKiwiReceivePresentationDelaySourceId;

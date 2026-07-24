@@ -2264,6 +2264,47 @@ AudioEngine::AudioEngine(QObject* parent)
             }
             const bool presentationPausedForTx =
                 kiwiTxGateEngaged && !anyKeepAudioDuringTx;
+            // Per-frame gate ramp step; depends only on the device rate, so
+            // compute it once for the Flex gate and every Kiwi source alike.
+            const float gateStep =
+                sampleRate > 0
+                    ? 1000.0f
+                          / (static_cast<float>(kKiwiSdrTxGateRampMs)
+                             * static_cast<float>(sampleRate))
+                    : 1.0f;
+            // Delayed-Flex transmit gate: with a Receive Sync delay applied,
+            // the Flex presentation buffer holds flexDelayMs of pre-key-down
+            // RX audio that would keep playing into the transmission — the
+            // radio's own TX-time zero-fill only reaches the speaker after
+            // the delay. Mirror the Kiwi design: buffers stay warm and
+            // aligned, only the mix contribution ramps. Inactive with no
+            // delay so undelayed TX monitor audio is untouched, and FDX
+            // never engages the TX mute in the first place.
+            const float flexGateTarget =
+                (kiwiTxGateEngaged && flexPresentationDelayMs > 0)
+                    ? 0.0f : 1.0f;
+            bool flexGateApplied = false;
+            auto applyFlexTxGate = [this, flexGateTarget, gateStep,
+                                    &flexGateApplied](QByteArray& pcm) {
+                flexGateApplied = true;
+                if (m_flexTxGateGain == 1.0f && flexGateTarget == 1.0f) {
+                    return;
+                }
+                auto* samples = reinterpret_cast<float*>(pcm.data());
+                const qsizetype count =
+                    pcm.size() / static_cast<qsizetype>(sizeof(float));
+                float gate = m_flexTxGateGain;
+                for (qsizetype i = 0; i + 1 < count; i += 2) {
+                    if (gate < flexGateTarget) {
+                        gate = std::min(flexGateTarget, gate + gateStep);
+                    } else if (gate > flexGateTarget) {
+                        gate = std::max(flexGateTarget, gate - gateStep);
+                    }
+                    samples[i] *= gate;
+                    samples[i + 1] *= gate;
+                }
+                m_flexTxGateGain = gate;
+            };
             auto emitOutputSource = [this, sampleRate, anyKiwiAudio](
                                         const QString& source,
                                         const QString& sourceId,
@@ -2289,6 +2330,7 @@ AudioEngine::AudioEngine(QObject* parent)
                 // already-processed RX output directly.
                 chunk = m_rxOutputBuffer.left(len);
                 m_rxOutputBuffer.remove(0, chunk.size());
+                applyFlexTxGate(chunk);
                 emitOutputSource(QStringLiteral("flex"), QString(), chunk,
                                  presentationPausedForTx);
             } else if (m_rxOutputBuffer.isEmpty() && m_radeRxBuffer.isEmpty()
@@ -2310,7 +2352,8 @@ AudioEngine::AudioEngine(QObject* parent)
                     (std::min(len, m_rxOutputBuffer.size()) / floatBytes)
                     * floatBytes;
                 if (rxTake > 0) {
-                    const QByteArray rxChunk = m_rxOutputBuffer.left(rxTake);
+                    QByteArray rxChunk = m_rxOutputBuffer.left(rxTake);
+                    applyFlexTxGate(rxChunk);
                     const auto* rx =
                         reinterpret_cast<const float*>(rxChunk.constData());
                     const qsizetype rxSamples = rxTake / floatBytes;
@@ -2351,14 +2394,6 @@ AudioEngine::AudioEngine(QObject* parent)
                                      presentationPausedForTx);
                 }
 
-                // Per-frame gate ramp step; depends only on the device rate,
-                // so compute it once for every source this tick.
-                const float gateStep =
-                    sampleRate > 0
-                        ? 1000.0f
-                              / (static_cast<float>(kKiwiSdrTxGateRampMs)
-                                 * static_cast<float>(sampleRate))
-                        : 1.0f;
                 for (const auto& source : m_externalKiwiSources) {
                     if (!source) {
                         continue;
@@ -2460,6 +2495,12 @@ AudioEngine::AudioEngine(QObject* parent)
                 for (qsizetype i = 0; i < totalSamples; ++i) {
                     out[i] = std::clamp(out[i] * mixGain, -1.0f, 1.0f);
                 }
+            }
+
+            if (!flexGateApplied) {
+                // Flex produced nothing this tick: snap its gate downward
+                // only, mirroring the per-source skip snap above.
+                m_flexTxGateGain = std::min(m_flexTxGateGain, flexGateTarget);
             }
 
             len = m_audioDevice->write(chunk);
