@@ -5,6 +5,7 @@
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
+#include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -196,6 +197,13 @@ public:
     ModelCapabilities capabilities() const {
         return capabilitiesFor(m_model);
     }
+
+    // The live BACKEND's capabilities (RadioCapabilities: canTransmit, canReboot,
+    // sample rates, …). Distinct from capabilities() above, which is the
+    // FlexLib-derived model table. Use this for anything the backend/seam owns —
+    // e.g. TX capability and reboot support, which differ by radio family (#4448).
+    // Non-inline: IRadioBackend is only forward-declared here.
+    RadioCapabilities backendCapabilities() const;
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -893,6 +901,14 @@ private:
     void ensureDefaultSlicePreferringRestoredPan();
     void stageSessionModelsForReconnect();
     void pruneStaleSessionModels(quint64 generation);
+    // Destroy every live AND staged slice/pan model unconditionally. Called on a
+    // radio-family switch, which is a hard radio change: no model from the old
+    // family may survive to be reclaimed as one of the new family (their slice
+    // indices and stream ids collide, and their command/TX/DV wiring differs, so
+    // a reclaimed cross-family slice is a partially-wired, broken slice). The
+    // serial-based reclaim guard cannot cover this — HL2 carries no chassis
+    // serial — so the switch drops the models outright. (#4448)
+    void dropAllSessionModelsForFamilySwitch();
 
     // aetherd Gap A (HL2 Phase 1c): the minimal backend-selection seam. Returns
     // the IRadioBackend for `family` ("flex" default, "hl2" for Hermes-Lite 2).

@@ -147,6 +147,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // convert (they are not part of this skeleton).
     caps.canTransmit = true;
     caps.hasTuner = true;
+    caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and

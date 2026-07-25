@@ -88,6 +88,19 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             emit disconnected();
         }
     });
+    // F4 (#4448): the radio never sent EP6 within the connect deadline — off,
+    // unreachable, or already streaming to another client. Surface it as a
+    // connection error and stop the Metis client so it does not sit half-open
+    // paying out C&C at a radio that will never answer.
+    connect(m_metis, &MetisClient::connectFailed, this, [this](const QString& reason) {
+        // This handler runs on the MAIN thread (queued from the io thread), but
+        // m_metis lives on the io thread — stop() touches its socket and timers,
+        // so it must run THERE, not here. A direct call is the affinity bug the
+        // destructor also guards against.
+        QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
+        m_connected = false;
+        emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
+    });
 
     // DSP outputs -> seam data plane + S-meter.
     connect(m_dsp, &Hl2RxDsp::spectrumReady, this,

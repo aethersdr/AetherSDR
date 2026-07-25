@@ -142,6 +142,24 @@ int main(int argc, char** argv)
     check(disconnectedSpy.count() == 1, "disconnect does not re-emit disconnected()");
     check(!backend.isConnected(), "isConnected() false after disconnect");
 
+    // ---- F4 (#4448): a connect to a radio that never answers must surface a
+    // connectionError (from MetisClient::connectFailed), not wedge silently. ----
+    {
+        Hl2Backend deadBackend;
+        QSignalSpy errorSpy(&deadBackend, &IRadioBackend::connectionError);
+        QSignalSpy connSpy(&deadBackend, &IRadioBackend::connected);
+        RadioConnectRequest deadReq;
+        deadReq.host = QStringLiteral("127.0.0.1");
+        deadReq.port = 1;   // nothing answers HPSDR here -> no EP6 ever arrives
+        deadBackend.connectRadio(deadReq);
+        // The connect watchdog fires after ~2 s of no EP6.
+        for (int i = 0; i < 60 && errorSpy.isEmpty(); ++i)
+            spin(100);
+        check(errorSpy.count() >= 1, "F4: no-EP6 connect emits connectionError");
+        check(connSpy.count() == 0, "F4: never reports connected() on a dead link");
+        check(!deadBackend.isConnected(), "F4: isConnected() false after connect failure");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_backend_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

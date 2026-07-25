@@ -1635,6 +1635,10 @@ void MainWindow::wirePanStreamTciSinks()
             tciServer(), &TciServer::onIqDataReady);
     connect(ps, &PanadapterStream::waterfallRowReady,
             tciServer(), &TciServer::onWaterfallRowReady);
+    // F6 (#4448): keeps TCI's channel→TRX routing cache truthful; previously
+    // subscribed inside TciServer, which left it disconnected after a family swap.
+    connect(ps, &PanadapterStream::daxStreamUnregistered,
+            tciServer(), &TciServer::onDaxStreamUnregistered);
 #endif
 }
 

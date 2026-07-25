@@ -1120,11 +1120,22 @@ void ConnectionPanel::onLocalConnectClicked()
     if (m_connected || row < 0 || row >= m_radios.size())
         return;
 
+    const RadioInfo& info = m_radios[row];
+    // F5 (#4448): a non-Flex family (HL2) is single-client under HPSDR Protocol 1
+    // — an in-use radio can't be shared, and connecting would wedge both clients.
+    // Fail closed. Flex multiFlex sharing is a separate, Flex-only path.
+    if (info.inUse && info.family != QLatin1String("flex")) {
+        setStatusText(QStringLiteral(
+            "%1 is already in use by another client and can't be shared.")
+            .arg(info.model));
+        return;
+    }
+
     auto& settings = AppSettings::instance();
     settings.setValue("LowBandwidthConnect", "False");
     settings.save();
 
-    emit connectRequested(m_radios[row]);
+    emit connectRequested(info);
 }
 
 void ConnectionPanel::onWanConnectClicked()
@@ -1495,11 +1506,25 @@ void ConnectionPanel::probeRadio(const QString& ip)
                     info.nickname = info.model;
                     info.serial   = mac.join(QLatin1Char(':'));
                     info.version  = QString::number(quint8(d.at(9)));
-                    info.status   = QStringLiteral("Available");
+                    // Status byte: 0x02 idle/available, 0x03 already streaming to
+                    // a client. Reflect it rather than hard-coding Available.
+                    const bool busy = quint8(d.at(2)) == 0x03;
+                    info.inUse    = busy;
+                    info.status   = busy ? QStringLiteral("In_Use")
+                                         : QStringLiteral("Available");
                     m_manualConnectPending = false;
                     m_manualConnectBtn->setText("Connect by IP");
                     m_manualConnectBtn->setEnabled(true);
                     updateActionState();
+                    if (busy) {
+                        // F5 (#4448): Protocol 1 is single-client. The radio is
+                        // already streaming to another client; fail closed rather
+                        // than wedging both. No takeover path exists yet.
+                        setManualMessage(QStringLiteral(
+                            "The Hermes-Lite 2 at %1 is already in use by another "
+                            "client and can't be shared.").arg(trimmedIp), true);
+                        return;
+                    }
                     setManualMessage(QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.")
                                          .arg(trimmedIp), false);
                     emit connectRequested(info);

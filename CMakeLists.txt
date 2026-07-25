@@ -3973,6 +3973,11 @@ target_include_directories(radiomodel_dax_null_test PRIVATE src)
 target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
 
+add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
+target_include_directories(hl2_family_transition_test PRIVATE src)
+target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)

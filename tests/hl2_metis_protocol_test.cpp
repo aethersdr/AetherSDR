@@ -107,14 +107,22 @@ int main()
             reply[3 + i] = static_cast<std::uint8_t>(0x10 + i);       // MAC
         reply[9] = 0x4A;                                              // gateware
         reply[10] = 0x06;                                            // board id: HL2
+        reply[20] = 0x02;                                           // receiver count
         const auto r = parseDiscoveryReply(reply);
         check(r.has_value(), "valid discovery reply parses");
         check(r && r->isHermesLite2(), "board 0x06 -> Hermes-Lite 2");
         check(r && r->mac[0] == 0x10 && r->mac[5] == 0x15, "MAC parsed");
         check(r && r->gatewareVersion == 0x4A, "gateware byte parsed");
+        check(r && r->numRx == 0x02, "receiver count (byte 20) parsed");
         check(r && !r->streaming, "status 0x02 -> not streaming");
         reply[2] = 0x03;
-        check(parseDiscoveryReply(reply)->streaming, "status 0x03 -> streaming");
+        check(parseDiscoveryReply(reply)->streaming, "status 0x03 -> streaming (busy)");
+        // Short replies omit byte 20 — numRx must fall back to 0, not read OOB.
+        std::array<std::uint8_t, 11> shortReply{};
+        shortReply[0] = 0xEF; shortReply[1] = 0xFE; shortReply[2] = 0x02;
+        shortReply[10] = 0x06;
+        const auto sr = parseDiscoveryReply(shortReply);
+        check(sr && sr->numRx == 0, "short reply -> numRx defaults to 0 (no OOB read)");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
     }

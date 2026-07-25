@@ -2000,6 +2000,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     if (wantFamily != m_family) {
         qCInfo(lcProtocol) << "RadioModel: switching backend family" << m_family
                            << "->" << wantFamily << "for" << info.address.toString();
+        // F1 (#4448): a family switch is a hard radio change — drop every live and
+        // staged slice/pan model so none can be reclaimed as a model of the new
+        // family with mismatched (or missing) command/TX/DV wiring.
+        dropAllSessionModelsForFamilySwitch();
         teardownBackend();
         setupBackend(wantFamily);
         emit backendRebuilt();
@@ -2322,6 +2326,12 @@ void RadioModel::forceDisconnect()
     // start the normal unexpected-disconnect reconnect path.
     if (m_wanConn) {
         m_wanConn->disconnectFromRadio();
+    } else if (!m_connection) {
+        // F3 (#4448): a non-Flex backend has no RadioConnection; tear down through
+        // the seam. Without this guard the m_connection->isConnected() below
+        // null-derefs (~250 ms after a reboot request, or on any forced drop).
+        if (m_backend)
+            m_backend->disconnectRadio();
     } else if (m_connection->isConnected()) {
         quint32 handle = clientHandle();
         QMetaObject::invokeMethod(m_connection, [conn = m_connection, handle]() {
@@ -2339,6 +2349,13 @@ void RadioModel::rebootRadio()
     // for WAN, so a SmartLink user clicking Reboot should send the command
     // and tear the link down the same way as a LAN user.
     if (!isConnected()) {
+        return;
+    }
+    // F3 (#4448): "radio reboot" is a SmartSDR command. A backend that does not
+    // support a client-triggered reboot (HL2) leaves canReboot=false; refuse so
+    // we neither send a meaningless command nor schedule the forceDisconnect that
+    // would follow. The UI also disables the button on this capability.
+    if (!backendCapabilities().canReboot) {
         return;
     }
     m_rebootInProgress = true;
@@ -2360,9 +2377,27 @@ void RadioModel::rebootRadio()
     });
 }
 
+RadioCapabilities RadioModel::backendCapabilities() const
+{
+    return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+}
+
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 {
     if (tx) {
+        // F2 (#4448): refuse keying on a backend that cannot transmit (HL2 is
+        // RX-only). This must come BEFORE any optimistic state mutation or
+        // command, so an RX-only radio can never be driven into a fake TX state
+        // (TX indicator, audio gate, waveform) by a PTT/MOX/DAX/TCI edge. Unkey
+        // (tx=false) is always allowed — it only ever clears state.
+        if (!backendCapabilities().canTransmit) {
+            emitInterlockNotification(
+                tr("This radio is receive-only and cannot transmit."),
+                QStringLiteral("rx-only-tx"),
+                txSlice() ? txSlice()->panId() : QString());
+            m_transmitModel.setTransmitting(false);
+            return;
+        }
         const QString message = localPttInterlockMessage(source);
         if (!message.isEmpty()) {
             const QString panId = txSlice() ? txSlice()->panId() : QString();
@@ -3769,6 +3804,52 @@ void RadioModel::pruneStaleSessionModels(quint64 generation)
         emit panadapterRemoved(it.key());
         it.value()->deleteLater();
     }
+}
+
+void RadioModel::dropAllSessionModelsForFamilySwitch()
+{
+    // Live models (present if the switch happens without a clean disconnect).
+    const QList<SliceModel*> liveSlices = m_slices;
+    m_slices.clear();
+    for (SliceModel* s : liveSlices) {
+        if (!s) continue;
+        emit sliceRemoved(s->sliceId());
+        emit slotOccupancyChanged(s->sliceId());
+        s->deleteLater();
+    }
+    const QMap<QString, PanadapterModel*> livePans = m_panadapters;
+    m_panadapters.clear();
+    for (auto it = livePans.cbegin(); it != livePans.cend(); ++it) {
+        if (!it.value()) continue;
+        emit panadapterRemoved(it.key());
+        it.value()->deleteLater();
+    }
+
+    // Staged (stale) models from the previous session — these are what the
+    // serial guard would have (failed to) prune.
+    const QMap<int, SliceModel*> staleSlices = m_staleSlices;
+    m_staleSlices.clear();
+    for (auto it = staleSlices.cbegin(); it != staleSlices.cend(); ++it) {
+        if (!it.value()) continue;
+        emit sliceRemoved(it.key());
+        emit slotOccupancyChanged(it.key());
+        it.value()->deleteLater();
+    }
+    const QMap<QString, PanadapterModel*> stalePans = m_stalePanadapters;
+    m_stalePanadapters.clear();
+    for (auto it = stalePans.cbegin(); it != stalePans.cend(); ++it) {
+        if (!it.value()) continue;
+        emit panadapterRemoved(it.key());
+        it.value()->deleteLater();
+    }
+
+    // Reset the session-identity state so nothing from the old family lingers as
+    // a reclaim candidate for the new one.
+    m_ownedSliceIds.clear();
+    m_foreignSliceOwners.clear();
+    m_activePanId.clear();
+    m_staleSessionSerial.clear();
+    m_chassisSerial.clear();
 }
 
 void RadioModel::disconnectPendingClientsThen(std::function<void()> continuation)

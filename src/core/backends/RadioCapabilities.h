@@ -39,6 +39,7 @@ struct RadioCapabilities {
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
 
     // Peripherals / features every family may or may not have
+    bool canReboot = false;        // supports a client-triggered radio reboot
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
