@@ -770,6 +770,7 @@ set(GUI_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/WaterfallHistoryBuffer.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
@@ -4209,6 +4210,20 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+
+add_executable(spectrum_overlay_wheel_guard_test
+    tests/spectrum_overlay_wheel_guard_test.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+)
+target_include_directories(spectrum_overlay_wheel_guard_test PRIVATE src)
+target_link_libraries(spectrum_overlay_wheel_guard_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(spectrum_overlay_wheel_guard_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_wheel_guard_test
+         COMMAND spectrum_overlay_wheel_guard_test)
+set_tests_properties(spectrum_overlay_wheel_guard_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp

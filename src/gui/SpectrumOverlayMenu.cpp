@@ -2,6 +2,7 @@
 #include "DspParamPopup.h"
 #include "MemoryBrowsePanel.h"
 #include "SpectrumWidget.h"
+#include "SpectrumOverlayWheelGuard.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "Theme.h"
@@ -335,7 +336,24 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     buildDisplayPanel();
     buildMemoryPanel();
 
-    // Prevent mouse/wheel events from falling through panels to the spectrum
+    m_wheelGuard = new SpectrumOverlayWheelGuard(this);
+    m_wheelGuard->setDisplayScrollArea(m_displayScroll);
+    m_wheelGuard->guardTree(
+        this, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_bandPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_antPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_daxPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_displayPanel,
+        SpectrumOverlayWheelGuard::BoundaryMode::ScrollDisplay);
+    m_wheelGuard->guardTree(
+        m_memoryPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+
+    // Mouse presses on panel backgrounds must not fall through to the
+    // spectrum. Wheel ownership is handled for every descendant above.
     for (auto* panel : {m_bandPanel, m_antPanel, m_daxPanel, m_displayPanel,
                         static_cast<QWidget*>(m_memoryPanel)})
         if (panel) panel->installEventFilter(this);
@@ -2744,6 +2762,12 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     xvGrid->addWidget(hfBtn, slot / XVTR_COLS, slot % XVTR_COLS);
 
     m_xvtrPanel->adjustSize();
+    if (m_wheelGuard) {
+        m_wheelGuard->guardTree(
+            m_bandPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+        m_wheelGuard->guardTree(
+            m_xvtrPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    }
 }
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
@@ -2754,19 +2778,15 @@ bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
             return true;
         }
     }
-    // Consume mouse/wheel events on sub-panels so they don't reach the spectrum
+    // Consume panel-background mouse events so they don't reach the spectrum.
+    // SpectrumOverlayWheelGuard owns wheel routing for panels and descendants.
     if (obj == m_bandPanel || obj == m_antPanel
         || obj == m_daxPanel || obj == m_displayPanel || obj == m_memoryPanel) {
-        if (event->type() == QEvent::Wheel
-            || event->type() == QEvent::MouseButtonPress
+        if (event->type() == QEvent::MouseButtonPress
             || event->type() == QEvent::MouseButtonRelease) {
             if (auto* panel = qobject_cast<QWidget*>(obj)) {
                 if (auto* mouseEvent = dynamic_cast<QMouseEvent*>(event);
                     mouseEvent && panel->childAt(mouseEvent->pos())) {
-                    return QWidget::eventFilter(obj, event);
-                }
-                if (auto* wheelEvent = dynamic_cast<QWheelEvent*>(event);
-                    wheelEvent && panel->childAt(wheelEvent->position().toPoint())) {
                     return QWidget::eventFilter(obj, event);
                 }
             }
