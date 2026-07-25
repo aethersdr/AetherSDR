@@ -113,7 +113,7 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     QElapsedTimer timer;
     timer.start();
     while (timer.elapsed() < timeoutMs) {
-        const int remaining = std::max(1, timeoutMs - static_cast<int>(timer.elapsed()));
+        const int remaining = (std::max)(1, timeoutMs - static_cast<int>(timer.elapsed()));
         if (!sock.waitForReadyRead(remaining))
             continue;
         while (sock.hasPendingDatagrams()) {
