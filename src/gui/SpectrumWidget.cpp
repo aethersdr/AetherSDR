@@ -5704,14 +5704,7 @@ void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
         ? QStringLiteral("Disconnected")
         : trimmedDetail;
     message.timeoutMs = 0;
-    // Owner-managed status: syncKiwiSdrPanadapterUiState re-asserts this card
-    // on every state/slice/waterfall event, so a user dismissal either lies
-    // (the card resurrects seconds later, even mid-fade) or — in a quiet
-    // Waiting state that never re-syncs — permanently hides the only
-    // disconnected-pan indicator while the pan looks healthy. Not
-    // user-dismissible; setKiwiSdrConnectionOverlay(false) is the sole owner
-    // of its lifecycle. (#3999 review)
-    message.dismissible = false;
+    message.dismissible = true;
     upsertOverlayMessage(std::move(message));
 }
 
