@@ -199,8 +199,10 @@ public:
         return server.m_lastDriveSent == -1 && server.m_lastTuneDriveSent == -1;
     }
 
-    // wireSlice seeds each flag relay from current state, then de-dups — a
-    // repeat of the same value does not re-announce.
+    // wireSlice schedules a de-duping change handler plus a *deferred* settled
+    // seed, both sharing one baseline. Nothing goes on the wire synchronously;
+    // after the settle window the seed announces the current value once, and a
+    // repeat edge does not re-announce.
     static bool flagRelaySeedsAndDeDups()
     {
         RadioModel model;
@@ -222,9 +224,11 @@ public:
         model.automationApplySliceFixture(0, QString(), &err);
         SliceModel* s0 = model.slice(0);
         if (!s0) return false;
-        server.wireSlice(s0->sliceId(), s0);     // as MainWindow_Session does; seeds
-        const bool seeded = !nb.isEmpty()
-            && nb.last() == QStringLiteral("rx_nb_enable:0,false;");
+        server.wireSlice(s0->sliceId(), s0);     // as MainWindow_Session does
+        if (!nb.isEmpty()) return false;         // seed is deferred, not sync
+        spin(450);                               // let the settled seed fire
+        const bool seeded
+            = nb == QStringList{QStringLiteral("rx_nb_enable:0,false;")};
 
         nb.clear();
         s0->setNb(true);                         // real edge → one broadcast
@@ -233,6 +237,79 @@ public:
 
         s0->setNb(true);                         // same value again → de-duped
         return seeded && oneOnChange && nb.size() == 1;
+    }
+
+    // The #4161 transient fix: on a band-change re-wire the seed reads the
+    // *settled* flag, not the recreated slice's pre-settle state, so a client
+    // sees exactly one correct edge — never a stale blip then a correction.
+    // Model it: wire a slice holding a pre-settle value, flip it inside the
+    // settle window (as the radio's restore does), and require the client to
+    // see only the final value, once. An immediate seed would emit the blip.
+    static bool flagSeedReadsSettledNotTransient()
+    {
+        RadioModel model;
+        QWebSocket sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QStringList nb;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&nb](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx")
+                    && msg.startsWith(QLatin1String("rx_nb_enable:")))
+                    nb << msg.trimmed();
+            });
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        if (!s0) return false;
+        s0->setNb(true);                         // recreated slice's pre-settle
+        nb.clear();
+        server.wireSlice(s0->sliceId(), s0);     // re-wire; seed deferred
+        spin(120);                               // still inside the window
+        s0->setNb(false);                        // radio restores settled value
+        // Handler announces the settled edge exactly once...
+        if (nb != QStringList{QStringLiteral("rx_nb_enable:0,false;")})
+            return false;
+        spin(400);                               // ...and the deferred seed de-dups.
+        return nb.size() == 1;
+    }
+
+    // A TX slice *closed* (removed with no recreation) must not leave
+    // m_lastTxTrx pointing at a dead index. The deferred cleanup resets it once
+    // the settle window passes with no live slice carrying that trx; a
+    // same-id recreation (band change) inside the window must not reset it.
+    static bool lastTxTrxResetsOnClose()
+    {
+        RadioModel model;
+        QWebSocket sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        model.automationApplySliceFixture(1, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        SliceModel* s1 = model.slice(1);
+        if (!s0 || !s1) return false;
+        server.wireSlice(s0->sliceId(), s0);
+        server.wireSlice(s1->sliceId(), s1);
+        SliceDelta txOn;
+        txOn.txSlice = true;
+        s1->applyChanges(txOn);                  // caches m_lastTxTrx = trx(s1)
+        const int cachedTrx = server.m_lastTxTrx;
+        if (cachedTrx == 0) return false;        // need non-zero to detect a reset
+
+        model.automationRemoveSliceFixture(1, &err);   // close it for good
+        // Immediately after removal the cache is untouched (band-change grace).
+        if (server.m_lastTxTrx != cachedTrx) return false;
+        spin(600);                               // past the 500 ms cleanup
+        return server.m_lastTxTrx == 0;
     }
 };
 
@@ -258,6 +335,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::powerCacheResetsWhenClientsLeave();
     const bool flagSeedsDeDups
         = AetherSDR::TciServerReviewTest::flagRelaySeedsAndDeDups();
+    const bool flagSeedSettled
+        = AetherSDR::TciServerReviewTest::flagSeedReadsSettledNotTransient();
+    const bool txTrxResets
+        = AetherSDR::TciServerReviewTest::lastTxTrxResetsOnClose();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -273,8 +354,13 @@ int main(int argc, char** argv)
                 cacheResets ? "PASS" : "FAIL");
     std::printf("%s  flag relay seeds and de-dups\n",
                 flagSeedsDeDups ? "PASS" : "FAIL");
+    std::printf("%s  flag seed reads settled, no band-change transient\n",
+                flagSeedSettled ? "PASS" : "FAIL");
+    std::printf("%s  m_lastTxTrx resets when TX slice is closed\n",
+                txTrxResets ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
+        && flagSeedSettled && txTrxResets
         ? 0 : 1;
 }

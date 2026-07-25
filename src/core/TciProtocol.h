@@ -152,6 +152,14 @@ public:
     // slice is not in the model's list.
     static int tciTrxForSlice(RadioModel* model, const SliceModel* slice);
 
+    // The single scan for "which trx is the TX slice", returning -1 when none
+    // is marked. Both TX-trx resolvers build on this so the scan lives in one
+    // place; they differ ONLY in how they map the -1 sentinel (txTrx() below
+    // returns 0 for the request/response wire; TciServer's async broadcast
+    // resolves -1 against a cached last-known trx, #4161). Keeping the scan
+    // shared means a future change to slice iteration can't drift one path.
+    static int txSliceTrxOrNone(RadioModel* model);
+
     // Resolve a contiguous TCI receiver index, then the legacy raw Flex slice
     // id, then the first slice for compatibility. Shared by parser and server
     // command paths so GET and SET never target different receivers.

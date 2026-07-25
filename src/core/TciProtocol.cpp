@@ -122,17 +122,23 @@ SliceModel* TciProtocol::sliceForVfo(int trx, int channel) const
 // (#4161). This path is driven by a client command arriving at an arbitrary
 // moment, so it only ever meets that window by coincidence, and a transiently
 // 0-labelled reply is the same fallback the burst has always emitted.
-int TciProtocol::txTrx() const
+int TciProtocol::txSliceTrxOrNone(RadioModel* model)
 {
-    if (!m_model) {
-        return 0;
+    if (!model) {
+        return -1;
     }
-    for (SliceModel* slice : m_model->slices()) {
+    for (SliceModel* slice : model->slices()) {
         if (slice && slice->isTxSlice()) {
-            return tciTrxForSlice(m_model, slice);
+            return tciTrxForSlice(model, slice);
         }
     }
-    return 0;
+    return -1;
+}
+
+int TciProtocol::txTrx() const
+{
+    const int trx = txSliceTrxOrNone(m_model);
+    return trx < 0 ? 0 : trx;  // request/response wire needs a concrete index
 }
 
 // DDS = the IQ-stream center frequency a skimmer (CW Skimmer / SDC) decodes

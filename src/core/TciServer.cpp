@@ -25,6 +25,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
+#include <memory>
 #include <utility>
 
 namespace AetherSDR {
@@ -86,25 +88,34 @@ constexpr int kPowerRateLimitMs = 100;
 // tciTrxForSlice                               → TciProtocol::tciTrxForSlice
 
 // TRX index of the current TX slice, or -1 when none is currently marked.
-// Note TciProtocol::txTrx() is the request/response twin of this and returns 0
-// rather than -1; see the comment there for why the two differ.
-// drive/tune_drive are radio-global but ship TRX-prefixed on the wire, so the
-// caller resolves -1 against a cached last-known TX trx: a band change on a
-// multi-slice setup recreates the TX slice and restores its TX flag *after*
-// the power change is processed, so a plain scan would momentarily find no TX
-// slice and mislabel drive with trx 0 (#4161). -1 (not 0) is returned for
-// "none" because trx 0 is a legitimate TX slice and must be distinguishable.
-int txTrxIndex(RadioModel* model)
+// Thin alias over TciProtocol::txSliceTrxOrNone() so the scan lives in one
+// place (see the header comment there). The async broadcast keeps the -1
+// sentinel and resolves it against a cached last-known TX trx: a band change
+// on a multi-slice setup recreates the TX slice and restores its TX flag
+// *after* the power change is processed, so a plain scan would momentarily
+// find no TX slice and mislabel drive with trx 0 (#4161). -1 (not 0) is
+// returned for "none" because trx 0 is a legitimate TX slice and must be
+// distinguishable.
+inline int txTrxIndex(RadioModel* model)
+{
+    return TciProtocol::txSliceTrxOrNone(model);
+}
+
+// True when some live slice currently maps to `trx`. Used to tell a genuine TX
+// slice *close* (nothing carries the cached trx anymore) apart from the
+// band-change recreation gap (the recreated slice carries the trx, it just has
+// not regained its TX flag yet). (#4161)
+bool trxHasLiveSlice(RadioModel* model, int trx)
 {
     if (!model) {
-        return -1;
+        return false;
     }
     for (auto* s : model->slices()) {
-        if (s->isTxSlice()) {
-            return TciProtocol::tciTrxForSlice(model, s);
+        if (s && TciProtocol::tciTrxForSlice(model, s) == trx) {
+            return true;
         }
     }
-    return -1;
+    return false;
 }
 
 } // namespace
@@ -258,6 +269,26 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 abortTciPtt();
             }
             m_tciDaxSlices.remove(sliceId);
+
+            // m_lastTxTrx caches the last TX slice's trx so a power change
+            // during the band-change slice-recreation gap still labels
+            // drive:/tune_drive: correctly (the recreated slice exists but has
+            // not regained its TX flag yet). A TX slice that is *closed* —
+            // removed with no recreation — would instead leave the cache
+            // pointing at a trx no live slice carries, mislabelling a later
+            // power change with a dead index. Tell the two apart by deferring
+            // past the ~340 ms settle window: a band change re-adds the slice
+            // (same id) well within it, so the cache still resolves to a live
+            // slice and this is a no-op; a genuine close leaves nothing carrying
+            // that trx and resets the cache to the burst's historical default.
+            if (!trxHasLiveSlice(m_model, m_lastTxTrx)) {
+                QTimer::singleShot(500, this, [this]() {
+                    if (m_model && !trxHasLiveSlice(m_model, m_lastTxTrx)) {
+                        m_lastTxTrx = 0;
+                    }
+                });
+            }
+
             auto* ps = m_model ? m_model->panStream() : nullptr;
             if (!ps) return;
             for (int ch = 1; ch <= 4; ++ch) {
@@ -2294,25 +2325,34 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
     // never told the radio accepted it (the command-echo path excludes the
     // sender).
     //
-    // Each relay is seeded from the slice's current state at wire time and
-    // then de-dups against that seed, dropping repeats. The de-dup is needed
-    // because SliceModel's emit discipline is uneven — nb/nr/anf/squelch/rit/
-    // xit re-emit on every status refresh whether or not the value moved,
-    // while apf/audioMute guard — and squelchChanged/ritChanged/xitChanged
-    // carry both the flag and its value, so spinning a RIT offset would
-    // otherwise re-announce an unchanged rit_enable on every step. De-duping
-    // here keeps this layer independent of that discipline.
+    // Each relay is a change handler that de-dups repeats, plus a seed that
+    // announces the current state after a (re)wire. Both share one baseline
+    // (`last`, starting "unsent") so a value is never announced twice. The
+    // de-dup is needed because SliceModel's emit discipline is uneven —
+    // nb/nr/anf/squelch/rit/xit re-emit on every status refresh whether or not
+    // the value moved, while apf/audioMute guard — and squelchChanged/
+    // ritChanged/xitChanged carry (flag, value), so spinning a RIT offset would
+    // otherwise re-announce an unchanged rit_enable on every step. The trailing
+    // int on those three signals is simply dropped: Qt binds a 1-arg slot to a
+    // 2-arg signal, so one helper serves both shapes (#4161 is scoped to the
+    // *_enable family; sql_level/rit_offset/xit_offset are out of scope).
     //
-    // The seed is required for the same
-    // reason #4160 needed one: RadioModel decodes the radio's slice status
-    // BEFORE it emits sliceAdded, and sliceAdded is what triggers this wiring
-    // -- so for a newly added slice every flag edge has already fired by the
-    // time we connect, and nothing re-fires it. A Flex band change recreates
-    // the slice, so without the seed a band change left every connected
-    // client's DSP mirror stale until the operator next touched that control.
+    // The seed is DEFERRED ~400 ms and reads the *settled* value, exactly like
+    // the frequency push below and for the same reason: a Flex band change
+    // recreates the slice, and RadioModel decodes the radio's slice status
+    // BEFORE it emits sliceAdded (the signal that triggers this wiring), so at
+    // wire time the recreated slice still holds pre-settle DSP state. An
+    // immediate seed would broadcast that stale value, then the radio's restore
+    // (~250-340 ms later) would broadcast the corrected one — flapping every
+    // flag on every band change. Deferring past the settle window announces
+    // exactly the settled value: if a restore edge lands inside the window the
+    // handler announces it and the seed de-dups; if the new band's value equals
+    // the recreated default no edge fires and the seed is what announces it (the
+    // per-flag analog of the #2824 vfo: case handled by the frequency push).
     //
-    // The seed is a no-op before any client connects (slices are wired at
-    // startup); a client connecting later gets this state from the init burst.
+    // The seed no-ops before any client connects (slices are wired at startup);
+    // a client connecting later gets this state from the init burst. QPointer
+    // guards a rapid band change that destroys the slice before the timer fires.
     auto emitFlag = [this](SliceModel* s, const char* cmd, bool on) {
         if (m_clients.isEmpty()) {
             return;
@@ -2323,57 +2363,53 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
                       .arg(on ? "true" : "false"));
     };
 
-    auto wireFlag = [this, slice, emitFlag](auto signal, const char* cmd, bool current) {
-        connect(slice, signal, this,
-                [slice, cmd, emitFlag, last = static_cast<int>(current)](bool on) mutable {
-            if (last == static_cast<int>(on)) {
+    auto wireFlag = [this, slice, emitFlag](auto signal, const char* cmd,
+                                            std::function<bool()> read) {
+        auto last = std::make_shared<int>(-1);  // -1 = nothing announced yet
+        // Change handler. A 1-arg slot binds both bool and (bool,int) signals.
+        connect(slice, signal, this, [slice, cmd, emitFlag, last](bool on) {
+            const int v = on ? 1 : 0;
+            if (*last == v) {
                 return;
             }
-            last = on;
+            *last = v;
             emitFlag(slice, cmd, on);
         });
-        emitFlag(slice, cmd, current);
-    };
-
-    wireFlag(&SliceModel::nbChanged,        "rx_nb_enable",  slice->nbOn());
-    wireFlag(&SliceModel::nrChanged,        "rx_nr_enable",  slice->nrOn());
-    wireFlag(&SliceModel::anfChanged,       "rx_anf_enable", slice->anfOn());
-    wireFlag(&SliceModel::apfChanged,       "rx_apf_enable", slice->apfOn());
-    wireFlag(&SliceModel::audioMuteChanged, "mute",          slice->audioMute());
-
-    // squelch/rit/xit carry (flag, value); only the flag is broadcast here.
-    // sql_level / rit_offset / xit_offset have the same gap but are out of
-    // scope for #4161, which is scoped to the *_enable family.
-    auto wireFlagWithValue = [this, slice, emitFlag](auto signal, const char* cmd, bool current) {
-        connect(slice, signal, this,
-                [slice, cmd, emitFlag, last = static_cast<int>(current)](bool on, int) mutable {
-            if (last == static_cast<int>(on)) {
+        // Deferred settled seed, sharing `last` so it can't double-announce.
+        QPointer<SliceModel> guard(slice);
+        QTimer::singleShot(400, this, [this, guard, cmd, emitFlag, last, read]() {
+            if (!guard || m_clients.isEmpty()) {
                 return;
             }
-            last = on;
-            emitFlag(slice, cmd, on);
+            const bool on = read();
+            const int v = on ? 1 : 0;
+            if (*last == v) {
+                return;
+            }
+            *last = v;
+            emitFlag(guard, cmd, on);
         });
-        emitFlag(slice, cmd, current);
     };
 
-    // Known limitation, sql_enable only. Three squelch sources are in play and
-    // they diverge ONLY when m_externalReceiveAudioReplacement is set (a KiwiSDR
-    // RX source replacing Flex RX audio):
-    //   - init burst reports receiveSquelchOn()  — the effective value
-    //   - this seed matches the burst (receiveSquelchOn())
-    //   - squelchChanged carries squelchOn()      — the Flex-side m_squelchOn
-    // In that mode the de-dup baseline (effective) and the first edge (Flex-side)
-    // can disagree, producing one spurious sql_enable edge on connect. In normal
-    // mode all three are equal and there is no divergence. This is NOT the
-    // false→true transient seen on a band change — that is the pre-settle timing
-    // race (the seed reads the recreated slice before the radio restores its
-    // squelch), and it converges regardless of source. Left as-is deliberately:
-    // a real fix aligns all three sources and can only be verified with a
-    // KiwiSDR RX source, which is out of this change's *_enable scope. The seed
-    // matches the burst so a freshly-connected client is at least self-consistent.
-    wireFlagWithValue(&SliceModel::squelchChanged, "sql_enable", slice->receiveSquelchOn());
-    wireFlagWithValue(&SliceModel::ritChanged,     "rit_enable", slice->ritOn());
-    wireFlagWithValue(&SliceModel::xitChanged,     "xit_enable", slice->xitOn());
+    wireFlag(&SliceModel::nbChanged,        "rx_nb_enable",  [slice]{ return slice->nbOn(); });
+    wireFlag(&SliceModel::nrChanged,        "rx_nr_enable",  [slice]{ return slice->nrOn(); });
+    wireFlag(&SliceModel::anfChanged,       "rx_anf_enable", [slice]{ return slice->anfOn(); });
+    wireFlag(&SliceModel::apfChanged,       "rx_apf_enable", [slice]{ return slice->apfOn(); });
+    wireFlag(&SliceModel::audioMuteChanged, "mute",          [slice]{ return slice->audioMute(); });
+
+    // squelch/rit/xit emit (flag, value); the value is dropped (see above).
+    // sql_enable keeps a known KiwiSDR-only quirk: three squelch sources are in
+    // play and diverge ONLY when m_externalReceiveAudioReplacement is set — the
+    // init burst and this seed report receiveSquelchOn() (effective), while
+    // squelchChanged carries squelchOn() (Flex-side). In that mode the seed and
+    // the first edge can disagree, producing one spurious sql_enable edge on
+    // connect; in normal mode all three are equal. Left as-is deliberately: a
+    // real fix aligns all three sources and can only be verified with a KiwiSDR
+    // RX source, out of this change's *_enable scope. (The band-change transient
+    // that used to compound this is gone now the seed is deferred and settled.)
+    wireFlag(&SliceModel::squelchChanged, "sql_enable", [slice]{ return slice->receiveSquelchOn(); });
+    wireFlag(&SliceModel::ritChanged,     "rit_enable", [slice]{ return slice->ritOn(); });
+    wireFlag(&SliceModel::xitChanged,     "xit_enable", [slice]{ return slice->xitOn(); });
 
     // State sync on (re)wire, deferred. A Flex band change (display pan set
     // band=) tears down and recreates the slice, so wireSlice() runs again for
