@@ -997,10 +997,17 @@ AudioEngine::externalKiwiSource(const QString& sourceId, bool create)
 }
 
 std::unique_ptr<SpectralNR>
-AudioEngine::createNr2Filter(const QString& label) const
+AudioEngine::createNr2Filter(const QString& label, bool forceLegacyGeometry) const
 {
-    const bool useOriginal = m_nr2UseOriginalGeometry.load(
-        std::memory_order_relaxed);
+    // The demo (SimBackend) delivers native 128-sample frames — exactly one hop of
+    // the ORIGINAL 256/2 geometry, but only half a hop of the improved 1024/4
+    // geometry (#4400). Under 1024/4 the tiny frames misalign the overlap-add
+    // cadence: audible wobble, over-attenuation, and the downstream DSP/RADE (which
+    // key off NR2's output) go dead. So the MAIN-source filter uses the original
+    // geometry when the connected source is the demo, while real radios and Kiwi
+    // (larger, hop-aligned blocks) keep the improved 1024 geometry.
+    const bool useOriginal = forceLegacyGeometry
+        || m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
     const int fftSize = useOriginal ? kNr2OriginalFftSize : kNr2FftSize;
     const int overlap = useOriginal ? kNr2OriginalOverlap : kNr2Overlap;
     auto filter = std::make_unique<SpectralNR>(
@@ -6339,7 +6346,9 @@ void AudioEngine::setNr2Enabled(bool on)
             qCWarning(lcAudio) << "AudioEngine: NR2 FFTW wisdom unavailable on enable;"
                                << "using runtime FFTW_MEASURE plans";
 #endif
-        m_nr2 = createNr2Filter(QStringLiteral("main RX"));
+        m_nr2 = createNr2Filter(
+            QStringLiteral("main RX"),
+            m_mainSourceLegacyNr2.load(std::memory_order_relaxed));
         if (!m_nr2) {
             emit nr2EnabledChanged(false);
             return;
@@ -6514,6 +6523,23 @@ void AudioEngine::setNr2UseOriginalGeometry(bool useOriginal)
     // presentation buffer, and startup estimator is rebuilt together.
     setNr2Enabled(false);
     setNr2Enabled(true);
+}
+
+void AudioEngine::setMainSourceLegacyNr2(bool legacy)
+{
+    const bool previous =
+        m_mainSourceLegacyNr2.exchange(legacy, std::memory_order_relaxed);
+    if (previous == legacy) {
+        return;
+    }
+    qCInfo(lcAudio).noquote()
+        << "AudioEngine: main-source NR2 geometry ->"
+        << (legacy ? "original 256/2 (demo)" : "1024/4 (real radio)");
+    // If NR2 is live, rebuild so the main filter picks up the new geometry now.
+    if (m_nr2Enabled.load(std::memory_order_relaxed)) {
+        setNr2Enabled(false);
+        setNr2Enabled(true);
+    }
 }
 
 

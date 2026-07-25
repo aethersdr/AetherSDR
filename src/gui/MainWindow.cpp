@@ -5736,6 +5736,17 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     connect(backend, &IRadioBackend::audioFrameReady,
             m_audio, &AudioEngine::feedAudioData);
 
+    // The demo delivers native 128-sample frames, which the improved 1024/4 NR2
+    // geometry (#4400) mangles (wobble + dead DSP/RADE); tell the engine to run
+    // the MAIN NR2 filter on the original 256/2 geometry while the demo is the
+    // source. Real backends clear it, so they keep the improved geometry.
+    if (m_audio) {
+        const bool isDemo = dynamic_cast<SimBackend*>(backend) != nullptr;
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, isDemo]() {
+            audio->setMainSourceLegacyNr2(isDemo);
+        }, Qt::QueuedConnection);
+    }
+
     // Spectrum seam (RFC #4288 Route A): activate the previously-dormant
     // IRadioBackend::spectrumFrameReady. A SimBackend emits the panadapter FFT
     // through the seam (float dBm bins packed as a QByteArray) instead of decoding
