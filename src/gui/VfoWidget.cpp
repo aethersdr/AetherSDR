@@ -801,6 +801,10 @@ void VfoWidget::buildUI()
         " padding: 1px 4px; }");
     m_collapsedFreqLabel->setAlignment(Qt::AlignCenter);
     m_collapsedFreqLabel->hide();
+    // Right-click → Add Spot must work in collapsed mode too (#4455); without
+    // this, clicks fall through to the SpectrumWidget underneath, which
+    // reports the cursor's step-snapped frequency instead of the VFO's.
+    m_collapsedFreqLabel->installEventFilter(this);
 
     // ── Frequency row (right-aligned, double-click to edit) ────────────────
     m_freqStack = new QStackedWidget;
@@ -5859,8 +5863,12 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
         beginDirectEntry();
         return true;
     }
-    // Right-click on frequency label → context menu
-    if (obj == m_freqLabel && event->type() == QEvent::MouseButtonPress) {
+    // Right-click on frequency label → context menu (also handles the
+    // collapsed-mode label, #4455). Double-click direct-entry is
+    // deliberately not mirrored here: m_freqStack (which holds the edit
+    // box) is hidden/mouse-transparent while collapsed and would need
+    // real repositioning work to become usable — left as a follow-up.
+    if ((obj == m_freqLabel || obj == m_collapsedFreqLabel) && event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton && m_slice) {
             QMenu menu(this);
