@@ -4632,6 +4632,9 @@ void MainWindow::applyTuneCenteringWrite(PanadapterModel* pan,
                                          SpectrumWidget* sw,
                                          double newCenterMhz)
 {
+    if (!pan)
+        return;
+
     switch (PanRecenterPolicy::recenterWrite(
                 kiwiSdrPanDisplaysKiwi(pan->panId()),
                 /*widgetOwnsViewDuringGesture=*/false)) {
