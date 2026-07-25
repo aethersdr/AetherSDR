@@ -2116,13 +2116,35 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     // (which resets the model without touching this label). (#2022)
     auto updateCount = [this] {
         if (m_spotCountLabel)
-            m_spotCountLabel->setText(QString("%1 spots").arg(m_spotModel->rowCount()));
+            m_spotCountLabel->setText(QString("%1 spots%2").arg(m_spotModel->rowCount())
+                                       .arg(m_spotListFrozen ? " (frozen)" : ""));
     };
     connect(m_spotModel, &QAbstractTableModel::rowsInserted, this, updateCount);
     connect(m_spotModel, &QAbstractTableModel::rowsRemoved, this, updateCount);
     connect(m_spotModel, &QAbstractTableModel::modelReset, this, updateCount);
     bottomRow->addWidget(m_spotCountLabel);
     bottomRow->addStretch();
+
+    // Pause the list so a spot stays put to click while new spots keep
+    // arriving in the background (#4145). Unfreezing flushes whatever
+    // buffered in m_spotBatch immediately rather than waiting for the
+    // next 1 Hz tick.
+    auto* freezeBtn = new QPushButton("Freeze");
+    freezeBtn->setObjectName("spotListFreezeBtn");
+    freezeBtn->setCheckable(true);
+    freezeBtn->setFixedWidth(60);
+    freezeBtn->setStyleSheet(kSpotHubToggle);
+    freezeBtn->setToolTip("Pause the spot list so new spots stop shifting\n"
+                          "rows while you're clicking one. Spots keep\n"
+                          "arriving in the background and appear once\n"
+                          "unfrozen.");
+    connect(freezeBtn, &QPushButton::toggled, this, [this, updateCount](bool on) {
+        m_spotListFrozen = on;
+        updateCount();
+        if (!on)
+            flushSpotBatch();
+    });
+    bottomRow->addWidget(freezeBtn);
 
     auto* clearBtn = new QPushButton("Clear");
     clearBtn->setObjectName("spotListClearBtn");
@@ -2851,7 +2873,7 @@ void DxClusterDialog::setTotalSpots(int count)
 
 void DxClusterDialog::flushSpotBatch()
 {
-    if (m_spotBatch.isEmpty()) return;
+    if (m_spotListFrozen || m_spotBatch.isEmpty()) return;
 
     auto isAtBottom = [](QAbstractScrollArea* w) {
         auto* sb = w->verticalScrollBar();

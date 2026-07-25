@@ -249,6 +249,9 @@ private:
     QTableView*            m_spotTable;
     BandFilterProxy*       m_proxyModel;
     QLabel*                m_spotCountLabel{nullptr};  // Spot List tab counter (#2022)
+    // While true, flushSpotBatch() leaves new spots buffered in m_spotBatch
+    // instead of inserting them, so the visible rows hold still (#4145).
+    bool                   m_spotListFrozen{false};
 
     // Display tab
     QLabel*            m_totalSpotsLabel{nullptr};
