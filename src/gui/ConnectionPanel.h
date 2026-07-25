@@ -93,6 +93,9 @@ private:
     void setCurrentMode(ConnectionMode mode);
     void updateLocalPageState();
     void updateSmartLinkUi();
+    // Right-click menu on a discovered radio row: set/clear a client-side
+    // nickname (non-Flex families only). pos is in m_radioList viewport coords.
+    void showRadioContextMenu(const QPoint& pos);
     void updateActionState();
     void updateLowBandwidthVisibility();
     void updateManualAdvancedVisibility();
