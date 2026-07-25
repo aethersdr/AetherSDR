@@ -1062,8 +1062,19 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_modelLabel),
                         0, 0);
 
-        m_nicknameEdit = new QLineEdit(m_model->nickname().isEmpty()
-            ? m_model->name() : m_model->nickname());
+        // Initial nickname text. For an HL2 the name lives in AppSettings (keyed
+        // by MAC), not on the radio, so read it back from there — otherwise the
+        // field would show the model default even after the operator set a custom
+        // name. Flex keeps its existing model-sourced behaviour.
+        QString initialNickname = m_model->nickname().isEmpty()
+            ? m_model->name() : m_model->nickname();
+        {
+            const RadioInfo info = m_model->lastRadioInfo();
+            if (info.family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
+                initialNickname = hl2::Hl2Discovery::effectiveNickname(
+                    info.serial, info.model.isEmpty() ? m_model->name() : info.model);
+        }
+        m_nicknameEdit = new QLineEdit(initialNickname);
         m_nicknameEdit->setStyleSheet(kEditStyle);
         grid->addWidget(makeInfoField(QStringLiteral("Nickname:"), m_nicknameEdit,
                                       kInfoRightLabelWidth),
@@ -1076,16 +1087,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         connect(m_nicknameEdit, &QLineEdit::editingFinished, this, [this] {
             const RadioInfo info = m_model->lastRadioInfo();
-            if (info.family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0) {
-                // An HL2 has no on-radio name store, so "radio name" is a no-op on
-                // the wire. Persist the operator's nickname client-side, keyed by
-                // the radio's MAC (== serial), so Hl2Discovery shows it in the
-                // picker on the next sweep. (aetherd HL2: custom nickname.)
+            // Only FlexRadio has an on-radio name store ("radio name" command).
+            // Every other family (HL2, the sim demo, any future non-Flex backend)
+            // has no wire to store a name, so the "radio name" command is a silent
+            // no-op there. For those, persist the operator's nickname client-side,
+            // keyed by the radio's stable serial, so discovery shows it in the
+            // picker on the next sweep and RadioSetup reads it back on reopen.
+            const bool isFlex =
+                info.family.isEmpty()   // legacy/default entries are Flex
+                || info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) == 0;
+            if (isFlex) {
+                m_model->sendCommand("radio name " + m_nicknameEdit->text());
+            } else {
                 AppSettings::instance().setValue(
                     hl2::Hl2Discovery::nicknameSettingsKey(info.serial),
                     m_nicknameEdit->text().trimmed());
-            } else {
-                m_model->sendCommand("radio name " + m_nicknameEdit->text());
             }
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
