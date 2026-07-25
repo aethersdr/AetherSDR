@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QString>
 #include <QTimer>
 #include <QVector>
@@ -131,7 +132,13 @@ private:
     // chain with no DSP change. spectrum() gives the matching panadapter render.
     // Muted while keyed (Principle VI): a demo radio never sounds live on TX.
     NoiseMixer m_audio;
-    QTimer     m_audioTimer;         // drives onAudioTick() at the frame rate
+    QTimer     m_audioTimer;         // oversampled tick; onAudioTick() paces itself
+    // Real-time frame pacing: a 5.333 ms frame is not an integer ms, so a fixed
+    // timer interval drifts (over/underproduces → sink drop/starve = wobble).
+    // onAudioTick() instead emits whole frames per REAL elapsed time, carrying the
+    // sub-frame remainder in m_audioDebtNs so the long-run rate is exactly 24 kHz.
+    QElapsedTimer m_audioClock;      // wall clock between ticks (nanoseconds)
+    qint64        m_audioDebtNs{0};  // un-emitted elapsed time carried forward
     bool       m_keyed{false};       // muted while keyed (Principle VI — never sounds live on TX)
     quint64    m_audioFrames{0};     // frame counter (throttles the spectrum row)
 

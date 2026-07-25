@@ -10,12 +10,16 @@ namespace AetherSDR {
 
 SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
 {
-    // Frame cadence: kFrameLen samples at kSampleRate ≈ 5.33 ms. A CoarseTimer
-    // is fine — feedAudioData() buffers, and demo audio needs no sample-accurate
-    // pacing. Started on connect, stopped on disconnect.
-    m_audioTimer.setTimerType(Qt::CoarseTimer);
-    m_audioTimer.setInterval(
-        (NoiseMixer::kFrameLen * 1000) / NoiseMixer::kSampleRate);
+    // Frame cadence: kFrameLen (128) samples at kSampleRate (24 kHz) = 5.333 ms
+    // of audio per frame — NOT an integer number of milliseconds. Any fixed-ms
+    // timer interval is therefore wrong: 5 ms overproduces ~6%, 6 ms underproduces
+    // ~11%, and the sink drops/starves the mismatch periodically = the audible
+    // wobble (measured). So we do NOT emit one frame per tick. Instead the timer
+    // runs faster than needed and each tick emits as many whole frames as the REAL
+    // elapsed time has earned, carrying the fractional-sample remainder forward.
+    // The long-run output rate is then exactly 24 kHz regardless of timer jitter.
+    m_audioTimer.setTimerType(Qt::PreciseTimer);
+    m_audioTimer.setInterval(3);   // oversample the deadline; onAudioTick paces itself
     connect(&m_audioTimer, &QTimer::timeout, this, &SimBackend::onAudioTick);
     // Give the demo something audible out of the box: a pink-noise floor plus a
     // birdie carrier — a scene that immediately shows what NR/notch can do.
@@ -77,6 +81,8 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(m_connection, &RadioConnection::disconnected, this, [this]() {
         m_connected = false;
         m_audioTimer.stop();
+        m_audioClock.invalidate();   // fresh pacing baseline on the next connect
+        m_audioDebtNs = 0;
     });
 }
 
@@ -131,25 +137,56 @@ void SimBackend::onAudioTick()
     if (!m_connected) {
         return;
     }
-    // Muted while keyed — a demo radio must never sound live on TX (Principle VI).
-    const QVector<float> frame = m_keyed
-        ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
-        : m_audio.mixFrame();
-    emit audioFrameReady(toStereoBytes(frame));
 
-    // A panadapter row a few times a second (not every audio frame — the display
-    // updates far slower than audio). ~20 fps at the 5.33 ms tick ≈ every 9th.
-    // The stallscope fault freezes the spectrum/waterfall (audio keeps flowing) to
-    // exercise AE's scope-stall watchdog (#1411-class); clearFaults() resumes it.
-    if (!m_scopeStalled && ++m_audioFrames % 9 == 0) {
-        constexpr int kBins = 1024;
-        constexpr double kFloorDbm = -120.0;
-        constexpr double kAudioSpanHz = 8000.0;   // show ±4 kHz around the VFO
-        const QVector<float> row =
-            m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
-        QByteArray bytes(reinterpret_cast<const char*>(row.constData()),
-                         row.size() * static_cast<int>(sizeof(float)));
-        emit spectrumFrameReady(kPanId, bytes);
+    // Emit exactly as many whole frames as REAL elapsed time has earned since the
+    // last tick, so the long-run rate is precisely kSampleRate regardless of the
+    // (jittery, integer-ms) timer. m_audioClock accumulates elapsed nanoseconds;
+    // each kFrameLen-sample frame is worth (kFrameLen / kSampleRate) seconds.
+    if (!m_audioClock.isValid()) {
+        m_audioClock.start();
+        m_audioDebtNs = 0;
+        return;   // establish the t0 baseline; first frames go out next tick
+    }
+    m_audioDebtNs += m_audioClock.nsecsElapsed();
+    m_audioClock.restart();
+
+    constexpr qint64 kNsPerFrame =
+        (static_cast<qint64>(NoiseMixer::kFrameLen) * 1'000'000'000)
+        / NoiseMixer::kSampleRate;   // ~5'333'333 ns
+
+    // Cap the catch-up burst so a long stall (debugger pause, scheduling gap)
+    // can't dump seconds of audio at once; drop the excess debt instead.
+    constexpr int kMaxFramesPerTick = 8;   // ~43 ms — plenty of headroom
+    int frames = static_cast<int>(m_audioDebtNs / kNsPerFrame);
+    if (frames > kMaxFramesPerTick) {
+        frames = kMaxFramesPerTick;
+        m_audioDebtNs = 0;   // resync after a gap rather than spiral
+    } else {
+        m_audioDebtNs -= static_cast<qint64>(frames) * kNsPerFrame;
+    }
+
+    for (int i = 0; i < frames; ++i) {
+        // Muted while keyed — a demo radio must never sound live on TX (Principle VI).
+        const QVector<float> frame = m_keyed
+            ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
+            : m_audio.mixFrame();
+        emit audioFrameReady(toStereoBytes(frame));
+
+        // A panadapter row a few times a second (not every audio frame — the
+        // display updates far slower than audio). ~20 fps at the 5.33 ms frame ≈
+        // every 9th. The stallscope fault freezes the spectrum/waterfall (audio
+        // keeps flowing) to exercise AE's scope-stall watchdog (#1411-class);
+        // clearFaults() resumes it.
+        if (!m_scopeStalled && ++m_audioFrames % 9 == 0) {
+            constexpr int kBins = 1024;
+            constexpr double kFloorDbm = -120.0;
+            constexpr double kAudioSpanHz = 8000.0;   // show ±4 kHz around the VFO
+            const QVector<float> row =
+                m_audio.spectrum(kBins, kFloorDbm, kAudioSpanHz, kBins / 2);
+            QByteArray bytes(reinterpret_cast<const char*>(row.constData()),
+                             row.size() * static_cast<int>(sizeof(float)));
+            emit spectrumFrameReady(kPanId, bytes);
+        }
     }
 }
 
@@ -219,6 +256,8 @@ void SimBackend::disconnectRadio()
         return;
     }
     m_audioTimer.stop();
+    m_audioClock.invalidate();   // reconnect re-establishes a fresh pacing baseline
+    m_audioDebtNs = 0;
     m_connected = false;
     emit sliceRemoved(kSliceId);
     emit disconnected();
