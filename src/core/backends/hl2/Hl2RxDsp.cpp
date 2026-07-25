@@ -21,6 +21,20 @@ Hl2RxDsp::~Hl2RxDsp() = default;
 
 bool Hl2RxDsp::configure(const Config& config, std::string* error)
 {
+    // Guard the rate/block inputs before the block-size division below. These
+    // can come straight from a RadioConnectRequest params override, where a
+    // missing or malformed "sampleRateHz" decodes to 0 (QVariant::toInt) — an
+    // integer divide-by-zero in the dspBlockSize computation. Reject at the
+    // boundary rather than crash or build a nonsensical WDSP channel.
+    if (config.inputSampleRateHz <= 0 || config.audioSampleRateHz <= 0
+        || config.dspBlockSize <= 0) {
+        if (error) {
+            *error = "Hl2RxDsp: input/audio sample rate and DSP block size "
+                     "must all be positive";
+        }
+        return false;
+    }
+
     m_config = config;
 
     WdspChannel::Config wc;

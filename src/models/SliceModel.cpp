@@ -193,12 +193,15 @@ void SliceModel::setMode(const QString& mode)
     // detector needs. A radio that owns its own DSP heals this by echoing a
     // mode-appropriate filter back; a backend that owns an engine-side chain
     // gets no such echo and simply keeps demodulating through the wrong filter.
-    // Normalize here so the model is correct for every backend, and push it as
-    // operator intent — the operator did ask for this mode, and a passband that
-    // cannot demodulate it is not a passband they chose.
+    //
+    // So normalize the model here and hand the corrected passband to the
+    // engine-side backend via filterCommandIssued (RadioModel only wires that
+    // signal for a non-Flex backend). The Flex path is deliberately NOT sent a
+    // proactive `filt`: the Flex radio heals the passband on the mode echo (as
+    // above), so pushing our mirror to the wire would only race — and override —
+    // the radio's own per-mode filter memory. Keeping the Flex wire path
+    // untouched is why the model normalize is decoupled from the wire send.
     if (normalizeFilterPolarity()) {
-        sendCommand(QString("filt %1 %2 %3")
-                        .arg(m_id).arg(m_filterLow).arg(m_filterHigh));
         emit filterChanged(m_filterLow, m_filterHigh);
         emit filterCommandIssued(m_filterLow, m_filterHigh);
     }

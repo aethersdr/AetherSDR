@@ -397,6 +397,9 @@ private:
     // Re-establish the connections bound to the backend's PanadapterStream after
     // RadioModel swapped backends for a different radio family.
     void rewirePanStreamAfterBackendSwap();   // MainWindow_Session.cpp
+    // RX-audio sinks fed by PanadapterStream::audioDataReady, shared by buildUI
+    // and the post-backend-swap rebind so the two never drift (#4448).
+    void wirePanStreamRxAudioSinks();         // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
     void wireExternalControllers(); // MainWindow_Controllers.cpp

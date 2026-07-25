@@ -29,6 +29,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwTrace.h"
+#include "gui/CwDecodeSettings.h"   // rxEnabled() gate for the RX-audio CW feed
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
 #include "core/PerfTelemetry.h"
@@ -1578,6 +1579,45 @@ void MainWindow::wireCatPorts()
 
 }
 
+// The RX-audio sinks fed by PanadapterStream::audioDataReady, in one place so
+// buildUI() and rewirePanStreamAfterBackendSwap() bind an identical set. The
+// stream is owned by the Flex backend and is destroyed/rebuilt on a family
+// swap (RadioModel::teardownBackend/setupBackend), which drops these — and Flex
+// RX audio itself rides audioDataReady, so a missed one is silence, not a
+// degraded feature. Keeping the list here (not open-coded in two places) is why
+// a new sink added to buildUI cannot silently go un-rebound after a swap.
+void MainWindow::wirePanStreamRxAudioSinks()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps)
+        return;   // RX-only/in-process backend (HL2/KiwiSDR): no VITA-49 stream
+
+    // Primary RX audio → QAudioSink.
+    connect(ps, &PanadapterStream::audioDataReady,
+            m_audio, &AudioEngine::feedAudioData);
+
+    // QSO recorder RX tap (float32). TX monitor + MOX gating are wired to
+    // AudioEngine/TransmitModel, which survive the swap, so they stay in buildUI.
+    if (m_qsoRecorder) {
+        connect(ps, &PanadapterStream::audioDataReady,
+                m_qsoRecorder, &QsoRecorder::feedRxAudio);
+    }
+
+    // CW decoder RX feed — gated live on the toggle so it need not rewire (#2417).
+    connect(ps, &PanadapterStream::audioDataReady,
+            &m_cwDecoder, [this](const QByteArray& pcm) {
+                if (CwDecodeSettings::rxEnabled())
+                    m_cwDecoder.feedAudio(pcm);
+            });
+
+    // RTTY decoder RX feed — gated on the decoder being running.
+    connect(ps, &PanadapterStream::audioDataReady,
+            &m_rttyDecoder, [this](const QByteArray& pcm) {
+                if (m_rttyDecoder.isRunning())
+                    m_rttyDecoder.feedAudio(pcm);
+            });
+}
+
 void MainWindow::rewirePanStreamAfterBackendSwap()
 {
     // RadioModel replaced the backend because the operator picked a radio of a
@@ -1588,6 +1628,10 @@ void MainWindow::rewirePanStreamAfterBackendSwap()
     auto* ps = m_radioModel.panStream();
     if (!ps)
         return;   // non-Flex backend: nothing owns these paths
+
+    // RX-audio sinks (incl. Flex RX audio itself) share the buildUI helper so
+    // the two sites can never drift; the rest of the rebind is stream-specific.
+    wirePanStreamRxAudioSinks();
 
     if (m_audio) {
         connect(m_audio, &AudioEngine::txPacketReady,

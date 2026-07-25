@@ -42,6 +42,21 @@ int main(int argc, char** argv)
     cfg.mode = WdspChannel::Mode::Usb;
     cfg.blockForOutput = true;   // deterministic audio for this offline burst feed
     std::string err;
+
+    // A zero input sample rate — as a missing/malformed "sampleRateHz" params
+    // override decodes to (QVariant::toInt) — must be rejected at the boundary,
+    // not divide-by-zero in the dsp_size computation (#4448). Guard runs before
+    // any state is touched, so the good configure below still succeeds.
+    {
+        Hl2RxDsp guardDsp;
+        Hl2RxDsp::Config bad = cfg;
+        bad.inputSampleRateHz = 0;
+        std::string guardErr;
+        check(!guardDsp.configure(bad, &guardErr),
+              "zero inputSampleRateHz is rejected, not a divide-by-zero");
+        check(!guardErr.empty(), "rejected configure reports an error string");
+    }
+
     check(dsp.configure(cfg, &err), err.empty() ? "Hl2RxDsp configures" : err.c_str());
 
     int audioCount = 0, specCount = 0;

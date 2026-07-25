@@ -166,7 +166,9 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         m_sampleRateHz = request.params.value(QStringLiteral("sampleRateHz")).toInt();
     if (request.params.contains(QStringLiteral("lnaGainDb")))
         m_lnaGainDb = request.params.value(QStringLiteral("lnaGainDb")).toInt();
-        m_dbRef.setLnaGainDb(m_lnaGainDb);   // never let these two drift apart
+    // m_dbRef is synced to the final m_lnaGainDb unconditionally at the seed
+    // below (right before the wire command), so it cannot drift regardless of
+    // which override params were supplied.
     if (request.params.contains(QStringLiteral("rxFrequencyHz")))
         m_rxFreqHz = request.params.value(QStringLiteral("rxFrequencyHz")).toDouble();
 

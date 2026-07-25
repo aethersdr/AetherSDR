@@ -1474,7 +1474,14 @@ void ConnectionPanel::probeRadio(const QString& ip)
                     break;
                 while (hpsdr.hasPendingDatagrams()) {
                     const QByteArray d = hpsdr.receiveDatagram().data();
-                    if (d.size() < 11 || quint8(d.at(0)) != 0xEF || quint8(d.at(1)) != 0xFE)
+                    // Reply layout: EF FE <st> MAC[6] gwver board. A bare 0xEFFE
+                    // is any openHPSDR radio (Hermes, Mercury, Red Pitaya, …);
+                    // only board id 0x06 at d[10] is a Hermes-Lite (2). Gate on
+                    // it so we don't drive a non-HL2 radio through the HL2 backend
+                    // — matching DiscoveryReply::isHermesLite2() (MetisProtocol.h)
+                    // that Hl2Discovery uses. size >= 11 keeps d.at(10) in bounds.
+                    if (d.size() < 11 || quint8(d.at(0)) != 0xEF
+                        || quint8(d.at(1)) != 0xFE || quint8(d.at(10)) != 0x06)
                         continue;
                     QStringList mac;
                     for (int i = 3; i < 9; ++i)
