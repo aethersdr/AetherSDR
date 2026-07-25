@@ -528,6 +528,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/dsp/WdspChannel.cpp
@@ -3964,6 +3965,21 @@ if(Qt6WebSockets_FOUND)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
+add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)
+target_include_directories(hl2_txdsp_test PRIVATE src)
+target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
+
+add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
+target_include_directories(hl2_tx_loopback_test PRIVATE src)
+target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+
+add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
+target_include_directories(hl2_tx_gate_test PRIVATE src)
+target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)

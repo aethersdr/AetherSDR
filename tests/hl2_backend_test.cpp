@@ -1,12 +1,15 @@
 // aetherd HL2 Phase 1b — Hl2Backend seam test. A capped fake HL2 on localhost
 // lets the backend connect and produce a panadapter frame; verifies the
-// IRadioBackend contract: capabilities (family=hl2, RX-only), connected on first
-// EP6, spectrumFrameReady wired to the data plane, sliceChanged on control
-// intents, setKeying as a no-op, invokeExtension's async-error stub, and
-// disconnected on stop. (Audio demod itself is covered by hl2_rxdsp_test.)
+// IRadioBackend contract: capabilities (family=hl2, transmit availability),
+// connected on first EP6, spectrumFrameReady wired to the data plane,
+// sliceChanged on control intents, keying, invokeExtension's async-error stub,
+// and disconnected on stop. (Audio demod itself is covered by hl2_rxdsp_test;
+// the transmit gate's wire-level behaviour by hl2_tx_gate_test.)
 
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
+
+#include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
@@ -73,10 +76,42 @@ int main(int argc, char** argv)
 
     Hl2Backend backend;
 
-    // ---- capabilities: RX-only HL2 ----
+    // ---- transmit availability follows the AUTOMATION gate ----
+    //
+    // An automation run defers to the bridge's own TX gate rather than to an
+    // HL2-specific flag. Constructing a second backend under AETHER_AUTOMATION
+    // with no permission must report RX-only and refuse to key.
+    {
+        qputenv("AETHER_AUTOMATION", "1");
+        qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
+        Hl2Backend gated;
+        const bool allowed = gated.capabilities().canTransmit;
+        // The persisted operator toggle also opens this gate, and it is a real
+        // user setting we must not stomp — so only assert the refusal when the
+        // environment we control is the only source in play.
+        if (!AutomationBridgeSettings::txAllowed()) {
+            check(!allowed, "automation without permission reports RX-only");
+        } else {
+            std::fprintf(stderr,
+                "note: operator TX toggle is ON, so the automation gate is open; "
+                "skipping the refusal assertion\n");
+        }
+        qputenv("AETHER_AUTOMATION_ALLOW_TX", "1");
+        Hl2Backend permitted;
+        check(permitted.capabilities().canTransmit,
+              "automation WITH permission may transmit");
+        qunsetenv("AETHER_AUTOMATION");
+        qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
+    }
+
+    // ---- capabilities ----
     const RadioCapabilities caps = backend.capabilities();
     check(caps.family == QLatin1String("hl2"), "family is hl2");
-    check(!caps.canTransmit, "canTransmit is false (RX-only)");
+    // canTransmit is no longer a constant. It reports transmit AVAILABILITY, so
+    // the engine's TX guard above the seam sees an RX-only radio exactly when
+    // this backend would refuse to key. This process has no AETHER_AUTOMATION
+    // set, so it is an interactive run and may transmit.
+    check(caps.canTransmit, "canTransmit is true for an interactive run");
     check(caps.maxSlices == 1, "one slice");
     check(caps.sampleRatesHz.contains(48000) && caps.sampleRatesHz.contains(384000), "sample rates");
     check(caps.extensionNamespaces.isEmpty(), "no extension namespaces advertised");
@@ -119,9 +154,13 @@ int main(int argc, char** argv)
     backend.setSliceFilter(0, 300, 2700);
     check(sliceCount >= sliceBefore + 3, "freq/mode/filter each emit sliceChanged");
 
-    // ---- keying is a no-op (RX-only) ----
+    // ---- keying does not disturb the link ----
+    // Whether this actually keys depends on the transmit gate above; what
+    // matters here is that asking does not upset the connection either way.
     backend.setKeying(true);
-    check(backend.isConnected(), "setKeying does not disrupt / cannot key");
+    check(backend.isConnected(), "setKeying(true) does not disrupt the link");
+    backend.setKeying(false);
+    check(backend.isConnected(), "setKeying(false) does not disrupt the link");
 
     // ---- invokeExtension honors the async contract ----
     backend.invokeExtension(QStringLiteral("hl2"), QStringLiteral("noop"), 42, {});

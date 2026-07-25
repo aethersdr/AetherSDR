@@ -22,8 +22,15 @@
 // captured/synthetic frames without hardware; MetisClient owns the UDP socket
 // and RX thread and calls into these functions.
 //
-// RX-ONLY BY CONSTRUCTION: every C0 register-address byte here is even, so the
-// MOX bit (C0 bit 0) is always 0 — these primitives cannot key the radio.
+// TRANSMIT: this layer CAN now encode a keyed frame. The old invariant here —
+// "every C0 register-address byte is even, so MOX (C0 bit 0) is always 0, so
+// these primitives cannot key the radio" — no longer holds, and pretending
+// otherwise would be worse than losing it.
+//
+// What replaces it is a gate one level up: MetisClient will not set MOX unless
+// transmit has been explicitly enabled, and hl2_tx_gate_test asserts that with
+// the gate off NO emitted frame ever carries C0 bit 0. The encoders below are
+// pure functions; encoding a keyed frame is not the same as sending one.
 
 namespace AetherSDR::hl2 {
 
@@ -43,10 +50,24 @@ inline constexpr std::size_t kFramePayload = 504;     // 63 RX samples * 8 bytes
 inline constexpr std::size_t kRxSampleBytes = 8;      // I[3] Q[3] mic[2], 24-bit BE
 inline constexpr int kSamplesPerPacket = 126;         // 63 per frame * 2 frames
 
-// C0 register-address bytes (address << 1, MOX=0). Odd values (TX NCO C0=0x02)
-// are deliberately absent — this backend never encodes them.
+// C0 register-address bytes (address << 1). Bit 0 is MOX, not part of the
+// address, so every constant here is even and keying is applied separately with
+// withMox() — see kC0MoxBit.
 inline constexpr std::uint8_t kC0Config = 0x00;   // addr 0x00: sample rate + #RX + ADC select
 inline constexpr std::uint8_t kC0Rx1Freq = 0x04;  // addr 0x02: RX1 NCO frequency (Hz, 32-bit BE)
+inline constexpr std::uint8_t kC0TxFreq  = 0x02;  // addr 0x01: TX1 NCO frequency (Hz, 32-bit BE)
+inline constexpr std::uint8_t kC0TxDrive = 0x12;  // addr 0x09: TX drive level + PA/ATU/Alex bits
+
+// MOX lives in C0 bit 0 of EVERY C&C frame, not in a register of its own: the
+// radio reads it from whatever bank happens to be in flight. So keying is a
+// property of the frame, and every bank has to carry it while transmitting.
+inline constexpr std::uint8_t kC0MoxBit = 0x01;
+
+// TX drive level occupies DATA[31:24] (C1). The Hermes-Lite 2 gateware decodes
+// only the top nibble [31:28], but the byte-wide field is what the reference
+// clients and hpsdrsim both read, so the value is carried as 0..255 and the
+// hardware takes the coarse part of it.
+inline constexpr int kTxDriveMax = 255;
 inline constexpr std::uint8_t kC0AdcGain = 0x14;  // addr 0x0a: AD9866 LNA gain
 // addr 0x0e. THIS ADDRESS MEANS TWO DIFFERENT THINGS, which is exactly the
 // class of trap the HL2 oracle warns about:
@@ -61,11 +82,15 @@ inline constexpr std::uint8_t kC0AdcGain = 0x14;  // addr 0x0a: AD9866 LNA gain
 // correctly framed, correctly paced, all-ZERO IQ — indistinguishable from a
 // dead antenna. Verified against hpsdrsim, whose rx_adc[] defaults to -1.
 //
-// On the HL2 itself the all-zero payload is inert: bit 15 clear leaves
-// hardware-managed TX gain disabled, which is already the default. BEFORE ANY
-// TX WORK, this must be reconciled — 0x0e is the register behind the T/R gain
-// switch (the mechanism Quisk uses) and PureSignal's unclipped feedback path,
-// and this round robin would otherwise zero it every third frame.
+// On the HL2 the all-zero payload is inert: bit 15 clear leaves hardware-managed
+// TX gain disabled, which is already the default — and transmit has since been
+// brought up and verified on air with it left that way, so this is NOT a
+// blocker for basic SSB.
+//
+// It still matters for two things neither of which is implemented: the T/R gain
+// switch (the mechanism Quisk uses for fast turnaround) and PureSignal's
+// unclipped feedback path. Both need 0x0e to carry a real value, and this round
+// robin would zero it every third frame.
 inline constexpr std::uint8_t kC0AdcAssignOrTxGain = 0x1C;
 
 // addr 0x39: sync / reset. DATA[7:4] = 0x8 resets every decimation filter
@@ -120,6 +145,102 @@ Cc ccAdcAssign() noexcept;
 // calling this from anywhere.
 Cc ccPipelineReset() noexcept;
 
+// TX1 NCO frequency in Hz (32-bit big-endian across C1..C4).
+Cc ccTxFreq(std::uint32_t hz) noexcept;
+// TX drive level (0..kTxDriveMax, carried in C1) plus the onboard PA enable.
+//
+// PA ENABLE IS 0x09[19], i.e. C2 bit 3, and it is NOT optional for a useful
+// transmission: with the PA off the only output is the AD9866's own DAC level,
+// which is milliwatts. Measured on hardware — a correct, modulated, keyed
+// transmission with the PA disabled produced forward-power counts of zero.
+//
+// Defaulted OFF so that enabling the power amplifier is always something a
+// caller did on purpose.
+Cc ccTxDrive(int level, bool paEnable = false) noexcept;
+// Set MOX (C0 bit 0) on a C&C bank. Keying is per-FRAME, so this is applied to
+// whichever bank is being sent rather than to one dedicated register.
+inline Cc withMox(Cc cc, bool keyed) noexcept
+{
+    cc[0] = static_cast<std::uint8_t>(keyed ? (cc[0] | kC0MoxBit)
+                                            : (cc[0] & ~kC0MoxBit));
+    return cc;
+}
+
+// Write 16-bit I/Q transmit samples into an EP2 packet built by ep2Packet().
+//
+// Host->radio sample layout is 8 bytes: 32 bits where Hermes put headphone
+// audio, then 16-bit I, then 16-bit Q, all big-endian. 63 samples per 512-byte
+// frame, two frames per packet.
+//
+// THE AUDIO SLOT IS NOT AUDIO. The HL2 has no codec, and the FIRST 32-bit
+// "audio" word after each frame's C&C bytes is repurposed as EADDR, the
+// extended-address register (base 0x3f). memcpy-ing a Hermes TX frame layout
+// writes garbage into it. We leave every audio slot zero, which keeps EADDR
+// zero, which is what "not using the extended space" has to look like.
+//
+// Samples beyond what the packet holds are ignored; a short span leaves the
+// remainder as transmit silence.
+void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
+                  std::span<const std::complex<float>> iq) noexcept;
+
+// Transmit samples carried per EP2 packet (63 per frame, two frames).
+inline constexpr int kTxSamplesPerPacket = 126;
+
+// ---- EP6 Command & Control responses (radio -> host) ----
+//
+// C0[7] is ACK, and it CHANGES HOW THE REST OF C0 IS READ (oracle §5):
+//   ACK == 0 (classic, free-running): C0[6:3] = RADDR[3:0], C0[2] Dot,
+//            C0[1] Dash (always 0 — the HL2 has no internal keyer), C0[0] PTT.
+//   ACK == 1 (reply to our RQST):     C0[6:1] = RADDR[5:0], C0[0] PTT.
+//
+// The radio free-runs through the classic addresses, so telemetry arrives
+// without asking. Verified against hpsdrsim's responder, whose C0 sequence is
+// 0, 8, 16, 24, 32 — i.e. RADDR 0..4 at C0[6:3].
+struct Ep6Response {
+    bool ack = false;
+    int raddr = 0;
+    bool ptt = false;
+    bool dot = false;
+    std::uint32_t data = 0;      // C1..C4, big-endian
+};
+
+// Decode the C&C bytes of one 512-byte EP6 frame. Returns nullopt if the frame
+// is not sync-framed.
+std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept;
+
+// Everything the classic response cycle carries. Fields are std::optional
+// because each RADDR carries only part of it, so "not seen yet" stays
+// distinguishable from "seen and zero" — a forward-power reading of 0 W is a
+// real measurement, and rendering it as a dash because we conflated the two
+// would be its own bug.
+struct Hl2Telemetry {
+    std::optional<int>  firmwareVersion;
+    std::optional<bool> adcOverload;
+    std::optional<bool> txInhibited;      // register bit is ACTIVE LOW; decoded here
+    std::optional<int>  txFifoCount;
+    std::optional<bool> txFifoUnderflow;
+    std::optional<bool> txFifoOverflow;
+    std::optional<int>  temperatureRaw;
+    std::optional<int>  forwardPowerRaw;
+    std::optional<int>  reversePowerRaw;
+    std::optional<int>  biasCurrentRaw;
+    bool ptt = false;
+
+    // Merge a decoded response in, leaving untouched fields alone.
+    void apply(const Ep6Response& r) noexcept;
+};
+
+// Standing-wave ratio from raw forward/reverse counts.
+//
+// The counts are UNCALIBRATED ADC readings, but SWR is a RATIO, so the unknown
+// scale factor cancels as long as both come from the same converter — which is
+// why SWR is meaningful here while absolute watts are not (oracle §6: "don't
+// pretend uncalibrated counts are watts").
+//
+// Returns nullopt when there is no forward power to speak of: SWR is undefined
+// with no carrier, and 1.0 would read as a perfect match rather than "unknown".
+std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept;
+
 // 64-byte Metis command: EF FE 04 <cmd>. cmd 0x01 = start IQ, 0x00 = stop.
 std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept;
 // Bit 7 of the run/stop byte is the gateware's watchdog_disable flag
@@ -158,7 +279,9 @@ struct DiscoveryReply {
 std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> pkt) noexcept;
 
 // Build a 1032-byte EP2 packet carrying two C&C registers (one per frame). The
-// 504-byte TX payload is all-zero (RX-only).
+// 504-byte payload is zero-filled, which is transmit SILENCE — ep2WriteTxIq()
+// overwrites it when there is audio to send. The zero fill is also what keeps
+// EADDR clear; see ep2WriteTxIq.
 std::array<std::uint8_t, kUsbPacketSize> ep2Packet(std::uint32_t seq, const Cc& a,
                                                    const Cc& b) noexcept;
 

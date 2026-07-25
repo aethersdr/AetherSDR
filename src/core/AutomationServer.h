@@ -720,6 +720,11 @@ private:
     QTimer* m_txWatchdog{nullptr};
     qint64  m_txKeyedSinceMs{0};   // when continuous key-down started (0 = idle)
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
+    // True while the transmission in progress was started BY THIS BRIDGE. The
+    // watchdog above is a runaway-script backstop, not an operator time limit,
+    // so it enforces only when this is set — otherwise it force-unkeys a human
+    // holding MOX mid-sentence.
+    bool    m_txBridgeInitiated{false};
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)

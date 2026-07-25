@@ -1370,6 +1370,15 @@ MainWindow::MainWindow(QWidget* parent)
     // single time-interleaved RX/TX stream.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
+    // Host-modulated backends (HL2) take their transmit audio from the SAME tap
+    // the recorder uses: fully processed, after the test tone, compressor and
+    // EQ. One path means the TONE button, the microphone and the recording all
+    // agree with what actually goes on the air. A Flex radio modulates on the
+    // radio side and ignores this.
+    connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
+            this, [this](const QByteArray& pcm) {
+        m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE);
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and

@@ -78,6 +78,7 @@ class AudioEngine : public QObject {
 
 public:
     static constexpr int DEFAULT_SAMPLE_RATE = 24000;
+    bool m_hostModulation = false;
 
     struct ReceivePresentationAudioQueues {
         int playbackQueuedMs{0};
@@ -119,6 +120,16 @@ public:
 
     // TX (microphone) – capture audio and send VITA-49 packets to radio
     Q_INVOKABLE bool startTxStream(const QHostAddress& radioAddress, quint16 radioPort);
+
+    // Host-modulating backend (HL2): run the TX audio chain even though no Flex
+    // stream id will ever be assigned.
+    //
+    // onTxAudioReady() gates on a stream id because for Flex that id IS the
+    // destination — no id means nowhere to send. A backend that modulates
+    // locally has a destination regardless, and the gate silently disabled the
+    // test tone as well, since the tone is injected inside that callback.
+    Q_INVOKABLE void setHostModulation(bool on) { m_hostModulation = on; }
+    bool hostModulation() const { return m_hostModulation; }
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")

@@ -2,6 +2,7 @@
 
 #include <QMetaType>
 
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR::hl2 {
@@ -108,6 +109,11 @@ void Hl2RxDsp::setAgc(int agcMode, double maximumGainDb)
         m_channel->setAgc(agcMode, maximumGainDb);
 }
 
+void Hl2RxDsp::setAudioMuted(bool muted)
+{
+    m_audioMuted = muted;
+}
+
 void Hl2RxDsp::setShift(double shiftHz)
 {
     m_shiftHz = shiftHz;
@@ -129,6 +135,14 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     const std::size_t block = static_cast<std::size_t>(m_config.dspBlockSize);
     std::size_t consumed = 0;
     while (m_iqBuffer.size() - consumed >= block) {
+        if (m_audioMuted) {
+            // Clock the audio channel with silence rather than skipping it.
+            // Skipping would let the pipeline's contents go stale and emerge on
+            // unmute; feeding zeros keeps latency constant and guarantees that
+            // what comes out when transmit ends is silence.
+            std::fill(m_i.begin(), m_i.end(), 0.0f);
+            std::fill(m_q.begin(), m_q.end(), 0.0f);
+        } else
         for (std::size_t n = 0; n < block; ++n) {
             m_i[n] = m_iqBuffer[consumed + n].real();
             // Conjugate for WDSP. The HPSDR wire order (I then Q, decoded in
