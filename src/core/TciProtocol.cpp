@@ -27,6 +27,34 @@ int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
     return index >= 0 ? index : slice->sliceId();
 }
 
+QString TciProtocol::sanitizeSliceLetter(const QString& letter)
+{
+    QString clean;
+    for (const QChar c : letter) {
+        if (c.isLetterOrNumber())
+            clean.append(c);
+    }
+    return clean.left(2);
+}
+
+// Reports only what TciServer has pushed. There is deliberately no scan
+// fallback: -1 is not exclusively a startup state — TciServer also pushes it
+// when the focused slice is removed, and in that window the optimistic-set
+// overlap it was assumed to avoid IS possible (SliceModel::setActive() marks
+// the incoming slice before the radio echoes active=0 on the outgoing one, so
+// a scan can see two). Scanning there would answer a GET, or seed a newly
+// connected client's init burst, with a slice that was never broadcast, so
+// GET-polling and broadcast-listening clients would disagree about focus.
+// Staying silent keeps every path consistent with the broadcast stream.
+bool TciProtocol::resolveActiveSlice(int& trx, QString& letter) const
+{
+    if (m_activeTrx < 0)
+        return false;
+    trx = m_activeTrx;
+    letter = m_activeLetter;
+    return true;
+}
+
 long long TciProtocol::mhzToHz(double mhz)
 {
     return static_cast<long long>(std::round(mhz * 1e6));
@@ -329,6 +357,17 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("volume:%1;")
                      .arg(volumeDbFromPercent(
                          AppSettings::instance().value("MasterVolume", "100").toInt()));
+
+        // Which slice holds GUI focus (#4160) — AetherSDR extension. Without
+        // it a control surface learns focus only from the next change event,
+        // so every dial it owns targets trx 0 until the operator happens to
+        // switch slices. Emitted pre-READY with the rest of the state dump.
+        int activeTrx = -1;
+        QString activeLetter;
+        if (resolveActiveSlice(activeTrx, activeLetter)) {
+            burst += QStringLiteral("active_slice:%1,%2;")
+                         .arg(activeTrx).arg(activeLetter);
+        }
     }
 
     // ── Phase 3: Audio / IQ stream configuration ──────────────────────
@@ -465,6 +504,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "rx_record")        return cmdRxRecord(args, isSet);
     if (name == "rx_play")          return cmdRxPlay(args, isSet);
     if (name == "tx_gain")          return cmdTxGain(args, isSet);
+    if (name == "active_slice")     return cmdActiveSlice(args);
 
     // Unknown command — ignore silently per TCI spec
     return {};
@@ -1792,6 +1832,34 @@ QString TciProtocol::cmdDiguOffset(const QStringList& args, bool isSet)
 }
 
 // ── Focus / TX frequency ───────────────────────────────────────────────────
+
+// `active_slice:<trx>;` — AetherSDR extension (#4160). Read-only: reports
+// which slice holds GUI focus so a control surface can follow the operator
+// instead of hardcoding trx 0.
+//
+// Not to be confused with `set_in_focus` below — that is the inverse
+// direction (a client asking us to raise our window).
+//
+// SET is deliberately ignored. Focus is GUI-owned; letting a remote client
+// steal it would change default UX for every connected surface, which is
+// RFC territory (GOVERNANCE.md, "What requires an RFC"). Silent ignore
+// matches the TCI convention for commands the server does not honor.
+//
+// GET/SET follows the same split handleCommand() documents for every other
+// command: 0-1 args = GET, 2+ = SET. active_slice has no per-TRX form, so the
+// lone argument in `active_slice:0;` is redundant — but that is the shape a
+// client written against the rest of this protocol (`rx_volume:0;`,
+// `rx_mute:0;`) will send, and answering it is strictly more useful than
+// silence. Replying to a would-be setter with the unchanged focus also tells
+// them the SET did not take, which silence cannot.
+QString TciProtocol::cmdActiveSlice(const QStringList& args)
+{
+    if (args.size() >= 2) return {};   // SET — ignored, see above
+    int trx = -1;
+    QString letter;
+    if (!resolveActiveSlice(trx, letter)) return {};
+    return QStringLiteral("active_slice:%1,%2;").arg(trx).arg(letter);
+}
 
 QString TciProtocol::cmdSetInFocus()
 {

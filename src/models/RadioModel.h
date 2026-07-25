@@ -637,11 +637,11 @@ signals:
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
-    // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX,
-    // tune) and false otherwise. Deliberately excludes TCI-hardware and DAX
-    // transmits (external-app keying paths, not the operator on the mic) and CW
-    // (break-in/QSK per-element keying would thrash a wall-clock timer). Drives
-    // the status-bar TX timer.
+    // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX)
+    // and false otherwise. Deliberately excludes TUNE/two-tone/ATU carriers,
+    // TCI-hardware/DAX transmits (external-app keying paths, not the operator
+    // on the mic), and CW (break-in/QSK per-element keying would thrash a
+    // wall-clock timer). Drives the status-bar TX timer.
     void operatorTransmitChanged(bool active);
     // Short operator-facing interlock warnings for the panadapter overlay.
     // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",
@@ -947,7 +947,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
-    bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not TCI/DAX)
+    bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not tune/ATU/TCI/DAX)
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
     qint64      m_interlockNotificationArmedUntilMs{0};

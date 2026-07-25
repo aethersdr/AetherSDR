@@ -38,6 +38,9 @@ public:
     static constexpr float kDepthSpanFrac     = 0.58f;  // baseline rise to the back
     static constexpr float kFrontMaxRidgeFrac = 0.46f;  // front ridge height / plot H
     static constexpr float kHaze              = 0.16f;  // fade toward bg with depth
+    // Colour uses a stable signal aperture independent of the Ref-level height
+    // span. Otherwise a high Ref level compresses every real signal into blue.
+    static constexpr float kColorSpanDb        = 45.0f;
 
     // Maps a dBm value to an RGB colour using the host's panadapter palette.
     using PaletteFn = std::function<QRgb(float dbm)>;

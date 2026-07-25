@@ -155,13 +155,15 @@ public:
         Footswitch   = 2,   // future: serial-PTT or other hardware path
         Tune         = 3,   // local TUNE/two-tone carrier
         Dax          = 4,   // external digital-audio PTT path
+        Atu          = 5,   // internal automatic-tuner carrier
     };
 
     // Source of the most recently *initiated* key-up. Set by the keying entry
-    // points (requestPttOn / RadioModel::setTransmit) so downstream consumers
-    // can tell an operator-driven MOX/PTT/VOX transmit from a TCI-hardware or
-    // DAX-triggered one — the radio interlock reports both local software paths
-    // as source=SW, so the distinction has to be captured here at the funnel.
+    // points (requestPttOn / RadioModel::setTransmit / RadioModel's ATU command
+    // gate) so downstream consumers can tell an operator-driven MOX/PTT/VOX
+    // transmit from an ATU/TCI-hardware/DAX-triggered one — the radio interlock
+    // reports these software paths as source=SW, so the distinction has to be
+    // captured here at the funnel.
     // Resets to Mox on full unkey so a subsequent hardware/VOX key (which never
     // flows through a source-bearing entry point) is treated as operator TX.
     PttSource activePttSource() const { return m_activePttSource; }

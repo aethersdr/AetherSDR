@@ -810,6 +810,22 @@ RadioModel::RadioModel(QObject* parent)
             if (transmitStartBlockedByInhibit(QStringLiteral("tune-start"))) {
                 return;
             }
+            if (cmd == "atu start") {
+                // Attribute the whole interlock cycle before dispatch. ATU and
+                // interlock statuses are independent asynchronous planes, so
+                // gating only on TUNE_IN_PROGRESS can briefly start (or
+                // prematurely resume) the operator-over timer when those
+                // statuses arrive out of order.
+                //
+                // Tag here, AFTER the inhibit gate above, and NOT in
+                // TransmitModel::atuStart() (which — unlike startTune — has no
+                // runPttPreflight of its own). Tagging before the gate would
+                // leave a stale Atu source on a blocked ATU, which a following
+                // bare hardware/VOX key (no source-bearing entry point) would
+                // inherit and be wrongly excluded from the operator TX timer.
+                m_transmitModel.noteActivePttSource(
+                    TransmitModel::PttSource::Atu);
+            }
             armInterlockNotification(m_pendingTransmitPreflightSource);
             m_pendingTransmitPreflightSource = TransmitModel::PttSource::Mox;
             applyTuneInhibit();
@@ -904,7 +920,7 @@ RadioModel::RadioModel(QObject* parent)
 
     // Drive the status-bar operator TX timer from actual transmit-state edges
     // (optimistic MOX/PTT plus interlock-driven VOX/footswitch/CW). The source
-    // gate inside updateOperatorTransmit() keeps TCI/DAX transmits out.
+    // gate inside updateOperatorTransmit() keeps TUNE/ATU/TCI/DAX transmits out.
     connect(&m_transmitModel, &TransmitModel::transmittingChanged, this,
             [this](bool) { updateOperatorTransmit(); });
     // Also recompute when the TX-slice mode changes (phone↔CW) or first resolves
@@ -2148,8 +2164,8 @@ void RadioModel::updateOperatorTransmit()
     // On a full unkey, forget the remembered PTT source. A subsequent
     // hardware-mic PTT, footswitch, or VOX key never flows through a
     // source-bearing entry point (the radio just starts transmitting), so
-    // without this reset it would inherit a stale TCI/DAX tag and be wrongly
-    // excluded from the operator TX timer.
+    // without this reset it would inherit a stale ATU/TCI/DAX tag and be
+    // wrongly excluded from the operator TX timer.
     if (!m_transmitModel.isTransmitting()
         && m_transmitModel.activePttSource() != TransmitModel::PttSource::Mox) {
         m_transmitModel.noteActivePttSource(TransmitModel::PttSource::Mox);
@@ -2169,11 +2185,15 @@ void RadioModel::updateOperatorTransmit()
     const QString txMode = (ts ? ts->mode() : m_transmitModel.txSliceMode())
                                .trimmed().toUpper();
     const bool modeIsCw = txMode.startsWith(QStringLiteral("CW"));
+    const bool sourceIsTuneCarrier =
+        src == TransmitModel::PttSource::Tune
+        || src == TransmitModel::PttSource::Atu;
     const bool op = RadioStatusOwnership::operatorTransmitActive(
         m_transmitModel.isTransmitting(),
         m_daxTxActive,
         src == TransmitModel::PttSource::TciHardware,
         src == TransmitModel::PttSource::Dax,
+        sourceIsTuneCarrier,
         modeIsCw);
 
     if (op == m_operatorTransmitting)

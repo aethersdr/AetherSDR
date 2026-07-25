@@ -47,8 +47,9 @@ int main(int argc, char** argv)
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
                      "transmit tune 1",
-                 }),
-                 "two-tone tune sets mode before starting tune");
+                 })
+                     && tx.activePttSource() == TransmitModel::PttSource::Tune,
+                 "two-tone tune sets mode and tags the tune source before starting");
 
     tx.applyChanges(td([](TransmitDelta& d){ d.tune = true; }));
     commands.clear();
@@ -67,6 +68,12 @@ int main(int argc, char** argv)
                      "transmit tune 1",
                  }),
                  "two-tone tune toggle starts two-tone when not tuning");
+
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands == QStringList({"transmit tune 1"})
+                     && tx.activePttSource() == TransmitModel::PttSource::Tune,
+                 "single-tone tune tags the tune source before starting");
 
     commands.clear();
     tx.setTuneMode("single_tone");

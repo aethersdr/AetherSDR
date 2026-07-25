@@ -1,14 +1,13 @@
 #version 440
 
-// Companion to dss_mesh.vert. Fill vertices (edge >= 0) are coloured by a
-// floor->peak palette LUT with a vertical gradient (ridge = signal colour,
-// floor = floor colour) and hazed toward the background with depth. Outline
-// vertices (edge < 0) draw a dim, depth-faded hairline along each ridge — the
-// per-row trace line.
+// Companion to dss_mesh.vert. Fill vertices (edge >= 0) draw the original
+// full-height coloured curtains on phase-stable geometry. Outline vertices
+// (edge < 0) draw the retained traces.
 
 layout(location = 0) in float vLut;
 layout(location = 1) in float vDepth;
 layout(location = 2) in float vEdge;
+layout(location = 3) in float vBoundaryFade;
 
 layout(std140, binding = 0) uniform U {
     float rowOffset;
@@ -23,6 +22,14 @@ layout(std140, binding = 0) uniform U {
     float frequencyScale;
     float frequencyOffset;
     float frequencyPreview;
+    float scrollProgressRows;
+    float texRows;
+    float scrollDistanceRows;
+    float colorRangeDb;
+    float validRows;
+    float padding17;
+    float padding18;
+    float padding19;
     vec4  bgFill;
 };
 
@@ -35,14 +42,15 @@ void main()
     float fade = clamp(1.0 - vDepth, 0.0, 1.0);   // 1 at front, 0 at back
 
     if (vEdge < -0.5) {
-        // Dim trace outline — light hairline, brighter at the front, fading back.
-        vec3  oc = mix(bgFill.rgb, vec3(0.92), 0.45 + 0.55 * fade);
-        float a  = 0.12 + 0.5 * fade;
+        // Original neutral ridge highlight over the amplitude-coloured curtain.
+        vec3 oc = mix(bgFill.rgb, vec3(0.92), 0.45 + 0.55 * fade);
+        float a = (0.12 + 0.5 * fade) * vBoundaryFade;
         fragColor = vec4(oc, a);
         return;
     }
 
     vec3 c = texture(paletteLut, vec2(clamp(vLut, 0.0, 1.0), 0.5)).rgb;
     c = mix(c, bgFill.rgb, clamp(vDepth * haze, 0.0, 1.0));
+    c = mix(bgFill.rgb, c, vBoundaryFade);
     fragColor = vec4(c, 1.0);
 }
