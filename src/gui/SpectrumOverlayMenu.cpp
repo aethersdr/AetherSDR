@@ -352,6 +352,13 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     m_wheelGuard->guardTree(
         m_memoryPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
 
+    // The panel can be opened before the panadapter reaches its restored
+    // height. Re-clamp it whenever that host subsequently resizes so the
+    // QScrollArea retains a real scroll range instead of extending off-screen.
+    if (parentWidget()) {
+        parentWidget()->installEventFilter(this);
+    }
+
     // Mouse presses on panel backgrounds must not fall through to the
     // spectrum. Wheel ownership is handled for every descendant above.
     for (auto* panel : {m_bandPanel, m_antPanel, m_daxPanel, m_displayPanel,
@@ -2372,27 +2379,34 @@ void SpectrumOverlayMenu::toggleDisplayPanel()
     hideAllSubPanels();
     if (!wasVisible) {
         m_displayPanelVisible = true;
-        int menuBottom = y() + height();
-        // Size from the scroll content's hint — QScrollArea::sizeHint() is
-        // font-metric-capped, not content-sized — then clamp to the parent
-        // height so short windows scroll instead of clipping (#3969).
-        const QSize contentHint = m_displayScroll->widget()->sizeHint();
-        int panelW = contentHint.width() + 2;   // panelLayout 1px margins
-        int panelH = contentHint.height() + 2;
-        const QWidget* host = m_displayPanel->parentWidget();
-        const int maxH = host ? host->height() : panelH;
-        if (panelH > maxH) {
-            panelH = maxH;
-            panelW += m_displayPanel->style()->pixelMetric(
-                QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
-        }
-        m_displayPanel->resize(panelW, panelH);
-        int panelY = menuBottom - panelH;
-        m_displayPanel->move(x() + width(), std::max(0, panelY));
+        layoutDisplayPanel();
         m_displayPanel->raise();
         m_displayPanel->show();
         m_menuBtns[kBtnDisplay]->setStyleSheet(kMenuBtnActive);
     }
+}
+
+void SpectrumOverlayMenu::layoutDisplayPanel()
+{
+    if (!m_displayPanel || !m_displayScroll || !m_displayScroll->widget()) {
+        return;
+    }
+
+    // Size from the scroll content's hint — QScrollArea::sizeHint() is
+    // font-metric-capped, not content-sized — then clamp to the current parent
+    // height so short or subsequently resized windows scroll instead of clip.
+    const QSize contentHint = m_displayScroll->widget()->sizeHint();
+    const QWidget* host = m_displayPanel->parentWidget();
+    const int hostHeight = host ? host->height() : contentHint.height() + 2;
+    const int scrollBarExtent = m_displayPanel->style()->pixelMetric(
+        QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
+    const QSize panelSize = constrainedDisplayPanelSize(
+        contentHint, hostHeight, scrollBarExtent);
+
+    m_displayPanel->resize(panelSize);
+    const int menuBottom = y() + height();
+    const int panelY = menuBottom - panelSize.height();
+    m_displayPanel->move(x() + width(), std::max(0, panelY));
 }
 
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
@@ -2772,6 +2786,11 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
 {
+    if (obj == parentWidget() && event->type() == QEvent::Resize
+        && m_displayPanelVisible) {
+        layoutDisplayPanel();
+    }
+
     if (event->type() == QEvent::MouseButtonDblClick) {
         if (auto* slider = qobject_cast<QSlider*>(obj)) {
             slider->setValue(50);

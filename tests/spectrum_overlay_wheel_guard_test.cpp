@@ -146,6 +146,24 @@ void testDisplayRouting()
            spectrum.wheelCount == 0);
 }
 
+void testDisplayPanelResizeClamp()
+{
+    const QSize contentHint(306, 594);
+    constexpr int scrollBarExtent = 14;
+
+    const QSize initialSize = constrainedDisplayPanelSize(
+        contentHint, 700, scrollBarExtent);
+    report("Display panel uses its content height when the host is tall",
+           initialSize == QSize(308, 596));
+
+    const QSize resized = constrainedDisplayPanelSize(
+        contentHint, 505, scrollBarExtent);
+    report("Display panel re-clamps after its host shrinks",
+           resized == QSize(322, 505));
+    report("re-clamped Display panel leaves scrollable overflow",
+           contentHint.height() > resized.height() - 2);
+}
+
 void testNonScrollableBoundaries()
 {
     SpectrumProbe spectrum;
@@ -215,6 +233,7 @@ int main(int argc, char** argv)
 
     std::printf("Spectrum overlay wheel ownership test harness\n\n");
     testDisplayRouting();
+    testDisplayPanelResizeClamp();
     testNonScrollableBoundaries();
 
     std::printf("\n%s\n",

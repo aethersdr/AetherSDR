@@ -21,6 +21,17 @@ constexpr const char* kBoundaryModeProperty =
 
 } // namespace
 
+QSize constrainedDisplayPanelSize(const QSize& contentHint, int hostHeight,
+                                  int scrollBarExtent)
+{
+    QSize panelSize(contentHint.width() + 2, contentHint.height() + 2);
+    if (panelSize.height() > hostHeight) {
+        panelSize.setHeight(hostHeight);
+        panelSize.rwidth() += scrollBarExtent;
+    }
+    return panelSize;
+}
+
 SpectrumOverlayWheelGuard::SpectrumOverlayWheelGuard(QObject* parent)
     : QObject(parent)
 {

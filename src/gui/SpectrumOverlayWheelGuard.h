@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QSize>
 
 class QEvent;
 class QScrollArea;
@@ -9,6 +10,9 @@ class QWheelEvent;
 class QWidget;
 
 namespace AetherSDR {
+
+QSize constrainedDisplayPanelSize(const QSize& contentHint, int hostHeight,
+                                  int scrollBarExtent);
 
 // Owns wheel routing at the boundary between SpectrumOverlayMenu's floating
 // widgets and the SpectrumWidget beneath them. Interactive controls that

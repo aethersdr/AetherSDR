@@ -219,6 +219,7 @@ private:
     void buildDaxPanel();
     void syncDaxPanel();
     void toggleDisplayPanel();
+    void layoutDisplayPanel();
     void buildDisplayPanel();
     void toggleMemoryPanel();
     void buildMemoryPanel();
