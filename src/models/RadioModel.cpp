@@ -7171,6 +7171,13 @@ void RadioModel::handleSliceStatus(int id,
                                 << "from previous session";
         } else {
             s = new SliceModel(id, this);
+            // Seed the manual-squelch-threshold default from the operator's
+            // last-used value, so a freshly created slice starts where they
+            // left off rather than at the hardcoded default (#3326) — this
+            // is only a starting point, not a live shared value; each
+            // slice's own threshold is independent from here on.
+            s->setManualSquelchLevel(
+                AppSettings::instance().value("LastManualSquelchLevel", "20").toInt());
             // Forward slice commands to the radio
             connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
                 sendSliceCommand(s, cmd);
