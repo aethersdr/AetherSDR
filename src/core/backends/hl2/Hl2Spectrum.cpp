@@ -21,6 +21,13 @@ Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
         sum += m_window[static_cast<std::size_t>(n)];
     }
     m_coherentGain = sum / 2.0;
+    // Guard the per-bin normalization divisor (used in process() below). A
+    // degenerate window sums to 0 — e.g. a length-2 Hanning, whose two endpoints
+    // are both 0 — which would make the magnitude divide produce inf. Unreachable
+    // at the production fftSize (1024) but cheap to make safe; with an all-zero
+    // window the input is zeroed anyway, so the bins come out 0 rather than inf.
+    if (m_coherentGain < 1e-9)
+        m_coherentGain = 1.0;
 
     m_in = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
     m_out = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));

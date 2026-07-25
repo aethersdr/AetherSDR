@@ -560,12 +560,10 @@ void MainWindow::wireRadioModel()
     // registered VITA-49 socket).  We do NOT start a separate mic TX
     // stream — that would open a QAudioSource and an unregistered UDP
     // socket, wasting resources and corrupting the shared packet counter.
-    // Route TX VITA-49 packets through the registered UDP socket. Flex-only (the
-    // socket lives on PanadapterStream); a non-Flex/RX-only backend has no
-    // panStream(), so guard rather than connect to a null receiver (aetherd Gap B).
-    if (m_radioModel.panStream())
-        connect(m_audio, &AudioEngine::txPacketReady,
-                m_radioModel.panStream(), &PanadapterStream::sendToRadio);
+    // Route TX VITA-49 packets through the registered UDP socket. Flex-only and
+    // stream-bound, so it goes through the shared helper the post-swap rebind
+    // also calls (aetherd Gap B; #4448).
+    wirePanStreamTxSink();
 
     connect(&m_radioModel, &RadioModel::txAudioStreamReady,
             this, [this](quint32 streamId) {
@@ -1561,15 +1559,9 @@ void MainWindow::wireCatPorts()
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming.
     // TCI audio feeds exclusively from DAX (not audioDataReady) so that
-    // audio_mute doesn't kill TCI audio (#1331).
-    if (m_radioModel.panStream()) {
-        connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-                tciServer(), &TciServer::onDaxAudioReady);
-        connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
-                tciServer(), &TciServer::onIqDataReady);
-        connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
-                tciServer(), &TciServer::onWaterfallRowReady);
-    }
+    // audio_mute doesn't kill TCI audio (#1331). Stream-bound, so it goes through
+    // the shared helper the post-swap rebind also calls (#4448).
+    wirePanStreamTciSinks();
 
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
@@ -1618,41 +1610,59 @@ void MainWindow::wirePanStreamRxAudioSinks()
             });
 }
 
+// TX VITA-49 packets → the registered PanadapterStream socket. Flex-only (the
+// socket lives on the stream); a non-Flex/RX-only backend has none. Shared by
+// wireRadioModel() and the post-swap rebind.
+void MainWindow::wirePanStreamTxSink()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps || !m_audio)
+        return;
+    connect(m_audio, &AudioEngine::txPacketReady, ps, &PanadapterStream::sendToRadio);
+}
+
+// TCI audio/IQ/waterfall feeds from PanadapterStream. Shared by the TCI wiring
+// and the post-swap rebind. Self-guards on HAVE_WEBSOCKETS so callers need not.
+void MainWindow::wirePanStreamTciSinks()
+{
+#ifdef HAVE_WEBSOCKETS
+    auto* ps = m_radioModel.panStream();
+    if (!ps || !tciServer())
+        return;
+    connect(ps, &PanadapterStream::daxAudioReady,
+            tciServer(), &TciServer::onDaxAudioReady);
+    connect(ps, &PanadapterStream::iqDataReady,
+            tciServer(), &TciServer::onIqDataReady);
+    connect(ps, &PanadapterStream::waterfallRowReady,
+            tciServer(), &TciServer::onWaterfallRowReady);
+#endif
+}
+
+// DAX-IQ raw-packet feed from PanadapterStream. Shared by wireDaxIq() and the
+// post-swap rebind.
+void MainWindow::wirePanStreamDaxIqSink()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps || !(m_appletPanel && m_appletPanel->daxIqApplet()))
+        return;
+    connect(ps, &PanadapterStream::iqDataReady,
+            &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
+}
+
 void MainWindow::rewirePanStreamAfterBackendSwap()
 {
     // RadioModel replaced the backend because the operator picked a radio of a
     // different family, and the backend owns the PanadapterStream. Qt already
     // removed every connection bound to the destroyed stream, so re-make exactly
-    // those. Connections that never touched the stream survived the swap and must
-    // NOT be repeated here or they would fire twice per signal.
-    auto* ps = m_radioModel.panStream();
-    if (!ps)
+    // those — and only those, through the same helpers the buildUI-time sites use,
+    // so a stream-bound sink can never be present at one site and missing here.
+    if (!m_radioModel.panStream())
         return;   // non-Flex backend: nothing owns these paths
 
-    // RX-audio sinks (incl. Flex RX audio itself) share the buildUI helper so
-    // the two sites can never drift; the rest of the rebind is stream-specific.
     wirePanStreamRxAudioSinks();
-
-    if (m_audio) {
-        connect(m_audio, &AudioEngine::txPacketReady,
-                ps, &PanadapterStream::sendToRadio);
-    }
-
-#ifdef HAVE_WEBSOCKETS
-    if (tciServer()) {
-        connect(ps, &PanadapterStream::daxAudioReady,
-                tciServer(), &TciServer::onDaxAudioReady);
-        connect(ps, &PanadapterStream::iqDataReady,
-                tciServer(), &TciServer::onIqDataReady);
-        connect(ps, &PanadapterStream::waterfallRowReady,
-                tciServer(), &TciServer::onWaterfallRowReady);
-    }
-#endif
-
-    if (m_appletPanel && m_appletPanel->daxIqApplet()) {
-        connect(ps, &PanadapterStream::iqDataReady,
-                &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
-    }
+    wirePanStreamTxSink();
+    wirePanStreamTciSinks();
+    wirePanStreamDaxIqSink();
 
     qCDebug(lcProtocol) << "MainWindow: re-bound PanadapterStream signals after backend swap";
 }
@@ -1708,8 +1718,9 @@ void MainWindow::wireDaxIq()
                 m_radioModel.panStream()->registerIqStream(streamId, ch);
         });
 
-        connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
-                &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
+        // Stream-bound: through the shared helper the post-swap rebind also calls
+        // (#4448). The daxIqModel/applet connects below survive a swap and stay.
+        wirePanStreamDaxIqSink();
         connect(&m_radioModel.daxIqModel(), &DaxIqModel::iqLevelReady,
                 m_appletPanel->daxIqApplet(), &DaxIqApplet::setDaxIqLevel);
         connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqEnableRequested,

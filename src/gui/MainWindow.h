@@ -397,9 +397,14 @@ private:
     // Re-establish the connections bound to the backend's PanadapterStream after
     // RadioModel swapped backends for a different radio family.
     void rewirePanStreamAfterBackendSwap();   // MainWindow_Session.cpp
-    // RX-audio sinks fed by PanadapterStream::audioDataReady, shared by buildUI
-    // and the post-backend-swap rebind so the two never drift (#4448).
+    // PanadapterStream-bound connect groups, each shared by its buildUI-time
+    // site and the post-backend-swap rebind so the two can never drift (#4448).
+    // Every stream-bound sink lives in one of these; a new one added here is
+    // automatically re-bound after a Flex->HL2->Flex swap.
     void wirePanStreamRxAudioSinks();         // MainWindow_Session.cpp
+    void wirePanStreamTxSink();               // MainWindow_Session.cpp
+    void wirePanStreamTciSinks();             // MainWindow_Session.cpp
+    void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
     void wireExternalControllers(); // MainWindow_Controllers.cpp
