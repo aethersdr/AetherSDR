@@ -204,7 +204,7 @@ static constexpr int BAND_BTN_W = 48;
 static constexpr int BAND_BTN_H = 26;
 
 static const QString kPanelStyle =
-    "QWidget { background: rgba(15, 15, 26, 220); "
+    "QWidget#antPanel, QWidget#daxPanel { background: rgba(15, 15, 26, 220); "
     "border: 1px solid #304050; border-radius: 3px; }";
 
 static const QString kLabelStyle =
@@ -378,7 +378,8 @@ void SpectrumOverlayMenu::setMemories(const QMap<int, MemoryEntry>& memories)
 void SpectrumOverlayMenu::buildBandPanel()
 {
     m_bandPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+    m_bandPanel->setObjectName(QStringLiteral("bandPanel"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget#bandPanel { background: rgba(15, 15, 26, 220); "
                                 "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_bandPanel->hide();
 
@@ -441,6 +442,7 @@ void SpectrumOverlayMenu::buildBandPanel()
 void SpectrumOverlayMenu::buildAntPanel()
 {
     m_antPanel = new QWidget(parentWidget());
+    m_antPanel->setObjectName(QStringLiteral("antPanel"));
     m_antPanel->setStyleSheet(kPanelStyle);
     m_antPanel->hide();
 
@@ -505,7 +507,9 @@ void SpectrumOverlayMenu::buildAntPanel()
         "border: 1px solid #0090e0; }"
         "QPushButton:hover { border: 1px solid #0090e0; }";
     m_loopRow = new QWidget(m_antPanel);
-    m_loopRow->setStyleSheet("QWidget { background: transparent; border: none; }");
+    m_loopRow->setObjectName(QStringLiteral("antLoopRow"));
+    m_loopRow->setStyleSheet(
+        "QWidget#antLoopRow { background: transparent; border: none; }");
     auto* loopRow = new QHBoxLayout(m_loopRow);
     loopRow->setContentsMargins(0, 0, 0, 0);
     loopRow->setSpacing(4);
@@ -1006,6 +1010,7 @@ void SpectrumOverlayMenu::syncAntPanel()
 void SpectrumOverlayMenu::buildDaxPanel()
 {
     m_daxPanel = new QWidget(parentWidget());
+    m_daxPanel->setObjectName(QStringLiteral("daxPanel"));
     m_daxPanel->setStyleSheet(kPanelStyle);
     m_daxPanel->hide();
 
@@ -2508,7 +2513,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_bandPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+    m_bandPanel->setObjectName(QStringLiteral("bandPanel"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget#bandPanel { background: rgba(15, 15, 26, 220); "
                                 "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_bandPanel->hide();
     m_bandPanel->installEventFilter(this);
@@ -2674,7 +2680,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_xvtrPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_xvtrPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+    m_xvtrPanel->setObjectName(QStringLiteral("xvtrPanel"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_xvtrPanel, "QWidget#xvtrPanel { background: rgba(15, 15, 26, 220); "
                                 "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_xvtrPanel->hide();
     m_xvtrPanel->installEventFilter(this);
