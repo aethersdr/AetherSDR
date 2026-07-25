@@ -40,6 +40,17 @@ public:
 
     [[nodiscard]] bool isRunning() const noexcept;
 
+    // AppSettings key for a user-assigned nickname for the HL2 with this serial
+    // (the MAC string). An HL2 has no on-radio name store (unlike Flex's
+    // "radio name" command), so the operator's custom name is persisted
+    // client-side, keyed by the radio's stable MAC, and read back here at
+    // discovery time. Shared with RadioSetupDialog so both sides agree on the key.
+    static QString nicknameSettingsKey(const QString& serial);
+    // The nickname to show for this serial: the saved custom name, or a default
+    // when none is set. Centralises the "custom or fall back" rule.
+    static QString effectiveNickname(const QString& serial,
+                                     const QString& fallback);
+
 signals:
     void radioDiscovered(const RadioInfo& info);
     void radioUpdated(const RadioInfo& info);
