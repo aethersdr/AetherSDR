@@ -1302,14 +1302,20 @@ void MainWindow::reconcileFlexPanGeometryAfterKiwiDisplay(
     const QString& panId, SpectrumWidget* spectrum)
 {
     if (!spectrum || !m_radioModel.isConnected()) {
+        m_kiwiLeaveReconcilePending.remove(panId);
         return;
     }
     // Never fight a live gesture — its own write path owns the view until
     // release, and a mid-animation pan-follow center is not operator intent.
+    // But this reconcile is the only thaw, so remember the pan and retry it when
+    // the gesture settles; otherwise the flex pan stays on the frozen
+    // kiwi-assignment span until an unrelated gesture happens to correct it.
     if (m_sliceDragInProgress || spectrum->panDragActive()
         || spectrum->frequencyRangeGestureActive()) {
+        m_kiwiLeaveReconcilePending.insert(panId);
         return;
     }
+    m_kiwiLeaveReconcilePending.remove(panId);
     const double widgetBwMhz = spectrum->bandwidthMhz();
     if (widgetBwMhz <= 0.0) {
         return;
@@ -1327,6 +1333,40 @@ void MainWindow::reconcileFlexPanGeometryAfterKiwiDisplay(
         return;
     }
     m_radioModel.requestPanCenter(panId, centerMhz, bwMhz);
+}
+
+void MainWindow::retryDeferredKiwiLeaveReconcile(const QString& panId)
+{
+    if (!m_kiwiLeaveReconcilePending.contains(panId)) {
+        return;
+    }
+    // The pan may have returned to kiwi display while the gesture ran — the
+    // deferred leave-reconcile is moot then (the widget view IS the kiwi view,
+    // and reconciling would push that frozen span to the radio).
+    if (kiwiSdrPanDisplaysKiwi(panId)) {
+        m_kiwiLeaveReconcilePending.remove(panId);
+        return;
+    }
+    SpectrumWidget* spectrum = m_panStack ? m_panStack->spectrum(panId) : nullptr;
+    if (!spectrum) {
+        m_kiwiLeaveReconcilePending.remove(panId);
+        return;
+    }
+    // Re-runs the full guard: if another gesture is still live it re-defers,
+    // otherwise it reconciles and clears the pending entry.
+    reconcileFlexPanGeometryAfterKiwiDisplay(panId, spectrum);
+}
+
+void MainWindow::retryAllDeferredKiwiLeaveReconcile()
+{
+    if (m_kiwiLeaveReconcilePending.isEmpty()) {
+        return;
+    }
+    const QList<QString> pending(m_kiwiLeaveReconcilePending.cbegin(),
+                                 m_kiwiLeaveReconcilePending.cend());
+    for (const QString& panId : pending) {
+        retryDeferredKiwiLeaveReconcile(panId);
+    }
 }
 
 void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)

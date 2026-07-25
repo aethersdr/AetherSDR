@@ -509,6 +509,12 @@ private:
     // were widget-local — see PanRecenterPolicy.h).
     void reconcileFlexPanGeometryAfterKiwiDisplay(const QString& panId,
                                                   SpectrumWidget* spectrum);
+    // Re-run a leave-kiwi reconcile that deferred because a gesture was live at
+    // the toggle. Called when a gesture settles, so the pan doesn't stay on the
+    // frozen kiwi-assignment span until an unrelated gesture happens to correct
+    // it.
+    void retryDeferredKiwiLeaveReconcile(const QString& panId);
+    void retryAllDeferredKiwiLeaveReconcile();
     void syncKiwiSdrPanadapterUiStates();
     enum KiwiSdrUiSyncFlag {
         KiwiSdrUiSyncAppletReceivers = 0x01,
@@ -1386,6 +1392,10 @@ private:
     bool m_sliceDragInProgress{false};
     int m_sliceDragTargetSliceId{-1};
     double m_sliceDragTargetMhz{0.0};
+    // Pans whose leave-kiwi geometry reconcile deferred behind a live gesture
+    // and must be retried when the gesture settles (see
+    // reconcileFlexPanGeometryAfterKiwiDisplay / retryDeferredKiwiLeaveReconcile).
+    QSet<QString> m_kiwiLeaveReconcilePending;
     qint64 m_sliceDragEchoHoldUntilMs{0};
     int centerLockSliceForPan(const QString& panId) const;
     bool centerLockActiveForSlice(const SliceModel* slice) const;

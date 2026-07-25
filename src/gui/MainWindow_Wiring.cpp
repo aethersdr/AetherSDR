@@ -3006,18 +3006,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 kiwiGestureLastViewUpdate->invalidate();
             });
     connect(sw, &SpectrumWidget::panDragSettled,
-            this, [updateKiwiWaterfallView,
+            this, [this, updateKiwiWaterfallView,
                    kiwiGestureLastViewUpdate](double centerMhz,
                                               double bandwidthMhz) {
                 updateKiwiWaterfallView(centerMhz, bandwidthMhz);
                 kiwiGestureLastViewUpdate->invalidate();
+                retryAllDeferredKiwiLeaveReconcile();
             });
     connect(sw, &SpectrumWidget::frequencyRangeSettled,
-            this, [updateKiwiWaterfallView,
+            this, [this, updateKiwiWaterfallView,
                    kiwiGestureLastViewUpdate](double centerMhz,
                                               double bandwidthMhz) {
                 updateKiwiWaterfallView(centerMhz, bandwidthMhz);
                 kiwiGestureLastViewUpdate->invalidate();
+                retryAllDeferredKiwiLeaveReconcile();
             });
     connect(sw, &SpectrumWidget::kiwiSdrDisplaySourceRequested,
             this, [this, applet](bool kiwi) {
@@ -4051,6 +4053,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 m_sliceDragEchoHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 350;
             }
             recenterCenterLocks();
+            // A leave-kiwi reconcile that deferred behind this drag can run now.
+            retryAllDeferredKiwiLeaveReconcile();
         }
     });
 

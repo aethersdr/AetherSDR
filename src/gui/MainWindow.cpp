@@ -7598,6 +7598,12 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
         kiwiDisplayActive, sw->bandwidthMhz(),
         pan ? pan->bandwidthMhz() : m_radioModel.panBandwidthMhz());
     const double targetMhz = (centerMhz > 0.0) ? centerMhz : s->frequency();
+    // Keep the view's low edge >= 0 Hz. The non-kiwi path clamps via
+    // requestPanCenter -> applyTuneCenteringWrite, but a kiwi-display pan renders
+    // widget-local with no radio echo to correct a negative edge, so a wide span
+    // on an LF/VLF/MW slice (0.137 - 0.25 = -0.113 MHz) would draw off-screen.
+    // Matches std::max(center, bw/2) in the sibling recenter paths.
+    const double viewCenterMhz = std::max(targetMhz, bandwidthMhz / 2.0);
 
     if (m_panStack) {
         if (auto* applet = m_panStack->panadapter(s->panId()))
@@ -7619,7 +7625,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // deferred, in which case the pan must keep showing truthful spectrum for the
     // span the radio still has.
     if (!centerDeferred) {
-        sw->setFrequencyRange(targetMhz, bandwidthMhz);
+        sw->setFrequencyRange(viewCenterMhz, bandwidthMhz);
     }
     pushSliceFrequencyToOverlays(s, targetMhz);
 
