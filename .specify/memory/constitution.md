@@ -33,8 +33,8 @@ design preferences; each one encodes a failure that this project shipped,
 diagnosed, and fixed. Violating any of them reproduces that failure.
 
 AetherSDR is an open-source Qt6 client for FlexRadio SmartSDR-compatible
-radios and, via the aetherd backend seam, other radio families such as the
-Hermes-Lite 2. Authored using the
+radios and, via the aetherd backend seam, is being extended to other radio
+families such as the Hermes-Lite 2. Authored using the
 [github/spec-kit](https://github.com/github/spec-kit) constitution
 template and conformant with the
 [Cisco Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
@@ -62,9 +62,10 @@ Each radio family names its authority:
 - **FlexRadio** — the FlexLib C# source. (`sb_monitor` in status vs
   `mon` in command; `slice tune <id> <freq>` in modern usage, not the
   documented `slice t 0 <freq_mhz>`.)
-- **Hermes-Lite 2** — the Hermes-Lite 2 gateware RTL, the Verilog under
-  `gateware/rtl/` — not the compiled bitfiles. (The config register's
-  `CONFIG_MERCURY` bit is decoded by no module: a client may send it,
+- **Hermes-Lite 2** — the Hermes-Lite 2 gateware RTL: the Verilog in the
+  upstream `softerhardware/Hermes-Lite2` repository, under `gateware/rtl/`
+  (not vendored here, and not the compiled bitfiles). (The config register's
+  `CONFIG_MERCURY` bit is decoded by no module there: a client may send it,
   but this hardware never reads it.)
 - **Any new family** — names its authority in its design note before
   the first protocol code lands.

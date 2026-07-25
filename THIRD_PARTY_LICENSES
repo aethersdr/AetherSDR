@@ -52,8 +52,8 @@ documented numeric ranges/behavior were used; no CuteSDR code is incorporated.
 
 The Hermes-Lite 2 radio backend implements HPSDR Protocol 1 ("Metis") — UDP
 discovery, the EP2/EP6 IQ frame layout, and the Command & Control register map
-(sample-rate/receiver config, the CONFIG_MERCURY ADC-source-select bit, RX NCO
-frequency, and the AD9866 extended-range LNA gain register). These wire-protocol
+(sample-rate/receiver config, RX NCO frequency, and the AD9866 LNA gain
+register). These wire-protocol
 facts were consulted clean-room and are expressed in original AetherSDR code
 (prototypes/hl2/ and, subsequently, the in-tree Hl2Backend). No openHPSDR,
 Hermes-Lite 2, or pihpsdr code is incorporated, vendored, translated, or linked
@@ -62,9 +62,14 @@ facts. The consulted facts are:
   - the Metis discovery handshake and EP2/EP6 1032-byte frame framing;
   - the C0 register-address encoding ((addr<<1)|MOX) and the config/RX-freq/
     gain register semantics; and
-  - the minimal round-robin C&C init a receiver requires (config incl.
-    CONFIG_MERCURY, RX1 frequency, LNA gain), verified against the pihpsdr
-    reference client's C&C construction.
+  - the minimal round-robin C&C init a receiver requires (config, RX1 frequency,
+    LNA gain), verified against the pihpsdr reference client's C&C construction.
+
+Note: the config register's CONFIG_MERCURY bit (C1 bit 6) is decoded by no
+module in the Hermes-Lite 2 gateware and is a no-op on that hardware; it is sent
+only for openHPSDR Hermes/Mercury compatibility. An earlier revision documented
+it as a required must-set — that was incorrect and is corrected here and in the
+HL2 design note and spike README.
 
   openHPSDR Protocol 1 (Programmer's guide) — HPSDR project, hosted by TAPR
   License:  GPL-2.0-or-later (consulted as a protocol specification only)
