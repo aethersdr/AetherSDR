@@ -1,5 +1,6 @@
 #include "core/backends/hl2/Hl2Discovery.h"
 
+#include "core/AppSettings.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QNetworkDatagram>
@@ -47,6 +48,19 @@ QString macToSerial(const std::array<std::uint8_t, 6>& mac)
 }
 
 }  // namespace
+
+QString Hl2Discovery::nicknameSettingsKey(const QString& serial)
+{
+    // Serial IS the MAC string (macToSerial). Namespaced under Hl2Nickname/.
+    return QStringLiteral("Hl2Nickname/") + serial;
+}
+
+QString Hl2Discovery::effectiveNickname(const QString& serial, const QString& fallback)
+{
+    const QString custom =
+        AppSettings::instance().value(nicknameSettingsKey(serial)).toString().trimmed();
+    return custom.isEmpty() ? fallback : custom;
+}
 
 Hl2Discovery::Hl2Discovery(QObject* parent) : QObject(parent)
 {
@@ -131,8 +145,10 @@ void Hl2Discovery::onReadyRead()
         info.port     = kMetisPort;
         info.model    = QStringLiteral("Hermes-Lite 2");
         info.name     = info.model;
-        info.nickname = info.model;
         info.serial   = macToSerial(reply->mac);
+        // An HL2 has no on-radio name store; show the operator's custom nickname
+        // (keyed by MAC/serial in AppSettings) if one is set, else the model name.
+        info.nickname = effectiveNickname(info.serial, info.model);
         info.version  = QString::number(reply->gatewareVersion);
         // A radio already streaming to another client answers with 0x03. Show it
         // as present-but-taken rather than hiding it.
@@ -150,7 +166,8 @@ void Hl2Discovery::onReadyRead()
             const RadioInfo& prev = it.value().info;
             const bool changed = prev.address != info.address
                               || prev.status  != info.status
-                              || prev.version != info.version;
+                              || prev.version != info.version
+                              || prev.nickname != info.nickname;
             it.value().info = info;
             if (changed)
                 emit radioUpdated(info);

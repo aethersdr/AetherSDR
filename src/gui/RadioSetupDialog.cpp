@@ -7,6 +7,7 @@
 #include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
+#include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -1069,7 +1070,18 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         1, 0);
 
         connect(m_nicknameEdit, &QLineEdit::editingFinished, this, [this] {
-            m_model->sendCommand("radio name " + m_nicknameEdit->text());
+            const RadioInfo info = m_model->lastRadioInfo();
+            if (info.family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0) {
+                // An HL2 has no on-radio name store, so "radio name" is a no-op on
+                // the wire. Persist the operator's nickname client-side, keyed by
+                // the radio's MAC (== serial), so Hl2Discovery shows it in the
+                // picker on the next sweep. (aetherd HL2: custom nickname.)
+                AppSettings::instance().setValue(
+                    hl2::Hl2Discovery::nicknameSettingsKey(info.serial),
+                    m_nicknameEdit->text().trimmed());
+            } else {
+                m_model->sendCommand("radio name " + m_nicknameEdit->text());
+            }
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
             m_model->sendCommand("radio callsign " + m_callsignEdit->text());
