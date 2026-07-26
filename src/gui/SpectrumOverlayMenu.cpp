@@ -2405,8 +2405,9 @@ void SpectrumOverlayMenu::layoutDisplayPanel()
 
     m_displayPanel->resize(panelSize);
     const int menuBottom = y() + height();
-    const int panelY = menuBottom - panelSize.height();
-    m_displayPanel->move(x() + width(), std::max(0, panelY));
+    const int panelY = constrainedDisplayPanelTop(
+        menuBottom, panelSize.height(), hostHeight);
+    m_displayPanel->move(x() + width(), panelY);
 }
 
 void SpectrumOverlayMenu::setWnbState(bool on, int level)

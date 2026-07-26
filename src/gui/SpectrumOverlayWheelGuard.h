@@ -14,6 +14,14 @@ namespace AetherSDR {
 QSize constrainedDisplayPanelSize(const QSize& contentHint, int hostHeight,
                                   int scrollBarExtent);
 
+// Top edge for the Display pane: bottom-anchored to the overlay menu, then
+// clamped so the whole panel stays inside the host. Anchoring alone is not
+// enough — when the panadapter is shorter than the menu, menuBottom exceeds
+// hostHeight and the pane's tail lands below the host's bottom edge, where the
+// parent clips it and no scroll offset can reach it (the height clamp in
+// constrainedDisplayPanelSize does not move the panel back up).
+int constrainedDisplayPanelTop(int menuBottom, int panelHeight, int hostHeight);
+
 // Owns wheel routing at the boundary between SpectrumOverlayMenu's floating
 // widgets and the SpectrumWidget beneath them. Interactive controls that
 // deliberately handle wheel input keep it; everything else is either routed

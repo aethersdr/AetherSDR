@@ -1,5 +1,9 @@
 #include "SpectrumOverlayWheelGuard.h"
 
+#include "GuardedSlider.h"   // ControlsLock
+
+#include <algorithm>
+
 #include <QAbstractItemView>
 #include <QAbstractSlider>
 #include <QAbstractSpinBox>
@@ -30,6 +34,14 @@ QSize constrainedDisplayPanelSize(const QSize& contentHint, int hostHeight,
         panelSize.rwidth() += scrollBarExtent;
     }
     return panelSize;
+}
+
+int constrainedDisplayPanelTop(int menuBottom, int panelHeight, int hostHeight)
+{
+    // Never push the bottom edge past the host: a child is clipped by its
+    // parent, so any overhang is dead space the scroll area cannot reveal.
+    const int lowestTop = std::max(0, hostHeight - panelHeight);
+    return std::clamp(menuBottom - panelHeight, 0, lowestTop);
 }
 
 SpectrumOverlayWheelGuard::SpectrumOverlayWheelGuard(QObject* parent)
@@ -100,15 +112,28 @@ bool SpectrumOverlayWheelGuard::eventFilter(QObject* watched, QEvent* event)
 
 bool SpectrumOverlayWheelGuard::intentionallyOwnsWheel(QWidget* widget) const
 {
-    if (qobject_cast<QAbstractSlider*>(widget)
-        || qobject_cast<QAbstractSpinBox*>(widget)
-        || qobject_cast<QAbstractItemView*>(widget)
-        || isScrollAreaViewport(widget)) {
+    // Navigation controls always keep the wheel — a list is scrolled by it,
+    // never valued by it, so the controls lock has nothing to protect there.
+    if (qobject_cast<QAbstractItemView*>(widget) || isScrollAreaViewport(widget)) {
         return true;
     }
 
+    // Value controls yield the wheel while the global controls lock is on
+    // (#745): sliders span most of every Display row, so without this the pane's
+    // scroll affordance is unreachable over the majority of its surface and a
+    // user wheeling to scroll silently retunes Averaging/FPS/Opacity instead.
+    // GuardedSlider/GuardedCombo already ignore the wheel when locked, but that
+    // only reaches the scroll area via Qt's parent propagation for spontaneous
+    // events; deciding it here makes the routing explicit and deterministic at
+    // the boundary this guard owns.
+    if (qobject_cast<QAbstractSlider*>(widget)
+        || qobject_cast<QAbstractSpinBox*>(widget)) {
+        return !ControlsLock::isLocked();
+    }
+
     if (QComboBox* combo = qobject_cast<QComboBox*>(widget)) {
-        return combo->view() && combo->view()->isVisible();
+        return !ControlsLock::isLocked() && combo->view()
+            && combo->view()->isVisible();
     }
 
     return false;

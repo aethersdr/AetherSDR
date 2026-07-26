@@ -1,10 +1,12 @@
 #include "gui/SpectrumOverlayWheelGuard.h"
+#include "gui/GuardedSlider.h"
 
 #include <QApplication>
 #include <QAbstractItemView>
 #include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QRect>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSlider>
@@ -164,6 +166,135 @@ void testDisplayPanelResizeClamp()
            contentHint.height() > resized.height() - 2);
 }
 
+// Mirrors SpectrumOverlayMenu::layoutDisplayPanel()'s composition of the two
+// pure helpers, so the geometry the widget actually receives is under test —
+// not just the size half of it.
+QRect displayPanelGeometry(const QSize& contentHint, int hostHeight,
+                           int scrollBarExtent, int menuBottom, int menuRight)
+{
+    const QSize panelSize = constrainedDisplayPanelSize(
+        contentHint, hostHeight, scrollBarExtent);
+    const int panelTop = constrainedDisplayPanelTop(
+        menuBottom, panelSize.height(), hostHeight);
+    return QRect(QPoint(menuRight, panelTop), panelSize);
+}
+
+void testDisplayPanelStaysInsideHost()
+{
+    const QSize contentHint(306, 594);
+    constexpr int scrollBarExtent = 14;
+    constexpr int menuRight = 40;
+    // The regression: a panadapter shorter than the overlay menu. Clamping the
+    // HEIGHT to the host is not enough — bottom-anchoring to the menu then
+    // pushes the pane's tail below the host, where the parent clips it and no
+    // scroll offset can reach it (#3969 follow-up).
+    constexpr int shortHost = 150;
+    constexpr int menuBottom = 194;
+
+    const QRect clipped = displayPanelGeometry(
+        contentHint, shortHost, scrollBarExtent, menuBottom, menuRight);
+    report("Display pane bottom stays inside a short host",
+           clipped.bottom() < shortHost);
+    report("Display pane top stays inside a short host",
+           clipped.top() >= 0);
+    report("short host still yields a full-height scrollable pane",
+           clipped.height() == shortHost);
+
+    // A pane short enough to sit entirely above menuBottom keeps its natural
+    // bottom-anchored placement — the clamp must not disturb the common case.
+    constexpr int tallHost = 700;
+    const QSize shortContent(306, 100);
+    const QRect anchored = displayPanelGeometry(
+        shortContent, tallHost, scrollBarExtent, menuBottom, menuRight);
+    report("Display pane stays bottom-anchored to the menu when it fits",
+           anchored.top() + anchored.height() == menuBottom);
+    report("Display pane bottom stays inside a tall host",
+           anchored.bottom() < tallHost);
+
+    // A pane taller than the menu's bottom edge is flush to the top rather
+    // than pushed off-screen (the pre-existing max(0, ...) behaviour).
+    const QRect topFlush = displayPanelGeometry(
+        contentHint, tallHost, scrollBarExtent, menuBottom, menuRight);
+    report("over-tall Display pane sits flush with the host top",
+           topFlush.top() == 0);
+
+    // Sweep: containment must hold for every host height, not just the two
+    // hand-picked cases above.
+    bool containedEverywhere = true;
+    for (int hostHeight = 20; hostHeight <= 900; ++hostHeight) {
+        const QRect geometry = displayPanelGeometry(
+            contentHint, hostHeight, scrollBarExtent, menuBottom, menuRight);
+        if (geometry.top() < 0 || geometry.bottom() >= hostHeight) {
+            containedEverywhere = false;
+            break;
+        }
+    }
+    report("Display pane is contained for every host height", containedEverywhere);
+}
+
+// Finding 3: sliders span most of each Display row, so wheeling to scroll would
+// otherwise change Averaging/FPS/Opacity. The project's existing global controls
+// lock (#745) is the opt-in that frees the wheel for scrolling; verify it
+// composes with the guard — the slider's ignored wheel must reach the guarded
+// content widget and be routed to the scroll area, never to the spectrum.
+void testControlsLockFreesDisplayScrolling()
+{
+    SpectrumProbe spectrum;
+    spectrum.resize(500, 300);
+
+    QWidget displayPanel(&spectrum);
+    displayPanel.resize(180, 180);
+    auto* panelLayout = new QVBoxLayout(&displayPanel);
+    QScrollArea scroll;
+    scroll.setWidgetResizable(true);
+    scroll.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    QWidget content;
+    content.setMinimumHeight(700);
+    auto* contentLayout = new QVBoxLayout(&content);
+    auto* slider = new GuardedSlider(Qt::Horizontal, &content);
+    slider->setRange(0, 100);
+    slider->setValue(50);
+    contentLayout->addWidget(slider);
+    contentLayout->addStretch();
+    scroll.setWidget(&content);
+    panelLayout->addWidget(&scroll);
+
+    SpectrumOverlayWheelGuard guard;
+    guard.setDisplayScrollArea(&scroll);
+    guard.guardTree(
+        &displayPanel,
+        SpectrumOverlayWheelGuard::BoundaryMode::ScrollDisplay);
+
+    spectrum.show();
+    displayPanel.show();
+    QApplication::processEvents();
+
+    // Unlocked: the slider deliberately owns the wheel (#570/#1026).
+    ControlsLock::setLocked(false);
+    scroll.verticalScrollBar()->setValue(0);
+    const int valueBefore = slider->value();
+    sendWheel(slider, 120);
+    report("unlocked Display slider still adjusts on wheel",
+           slider->value() != valueBefore);
+    report("unlocked Display slider does not scroll the pane",
+           scroll.verticalScrollBar()->value() == 0);
+    report("unlocked Display slider wheel does not reach SpectrumWidget",
+           spectrum.wheelCount == 0);
+
+    // Locked: the wheel scrolls the pane instead, over the sliders too.
+    ControlsLock::setLocked(true);
+    scroll.verticalScrollBar()->setValue(0);
+    const int lockedValueBefore = slider->value();
+    sendWheel(slider);
+    report("locked Display slider does not change value",
+           slider->value() == lockedValueBefore);
+    report("locked Display slider wheel scrolls the pane",
+           scroll.verticalScrollBar()->value() > 0);
+    report("locked Display slider wheel does not reach SpectrumWidget",
+           spectrum.wheelCount == 0);
+    ControlsLock::setLocked(false);
+}
+
 void testNonScrollableBoundaries()
 {
     SpectrumProbe spectrum;
@@ -234,6 +365,8 @@ int main(int argc, char** argv)
     std::printf("Spectrum overlay wheel ownership test harness\n\n");
     testDisplayRouting();
     testDisplayPanelResizeClamp();
+    testDisplayPanelStaysInsideHost();
+    testControlsLockFreesDisplayScrolling();
     testNonScrollableBoundaries();
 
     std::printf("\n%s\n",

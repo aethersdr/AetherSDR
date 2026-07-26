@@ -4214,6 +4214,7 @@ add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
 add_executable(spectrum_overlay_wheel_guard_test
     tests/spectrum_overlay_wheel_guard_test.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/DragValuePopup.cpp   # GuardedSlider.h (ControlsLock coverage)
 )
 target_include_directories(spectrum_overlay_wheel_guard_test PRIVATE src)
 target_link_libraries(spectrum_overlay_wheel_guard_test PRIVATE
