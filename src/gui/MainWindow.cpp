@@ -5750,11 +5750,26 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
 
     // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
     // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the
-    // identical AudioEngine path. Harmless for real backends: FlexBackend never
-    // emits audioFrameReady (its audio flows through PanadapterStream), so this
-    // connection simply stays idle unless a SimBackend is active.
-    connect(backend, &IRadioBackend::audioFrameReady,
-            m_audio, &AudioEngine::feedAudioData);
+    // identical AudioEngine path.
+    //
+    // SIM ONLY, and the cast is load-bearing. This was originally unconditional,
+    // on the reasoning that FlexBackend never emits audioFrameReady so the
+    // connection stays idle for "real backends". That holds for Flex and NOT for
+    // HL2: HL2 demodulates in-process and audioFrameReady is its ONLY audio
+    // route (Hl2Backend.cpp, emit audioFrameReady). It therefore arrived here
+    // AND via the RadioModel::backendAudioFrameReady relay in
+    // MainWindow_Session.cpp, whose gate — backendOwnsRxAudio() — excludes only
+    // the sim. Every HL2 frame was delivered twice and the engine consumed at
+    // double rate: measured 48043 Hz at the raw tap against a nominal 24000
+    // (ratio 2.002), audible as popping and crackling on every mode.
+    //
+    // Any future in-process backend needs the same treatment. The gate belongs
+    // on "does this backend own its RX audio", not on a list of families that
+    // happen not to emit the signal today.
+    if (dynamic_cast<SimBackend*>(backend) != nullptr) {
+        connect(backend, &IRadioBackend::audioFrameReady,
+                m_audio, &AudioEngine::feedAudioData);
+    }
 
     // The demo delivers native 128-sample frames, which the improved 1024/4 NR2
     // geometry (#4400) mangles (wobble + dead DSP/RADE); tell the engine to run
