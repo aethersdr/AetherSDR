@@ -4,12 +4,17 @@ Working notes from the HL2 receive bring-up on `feat/hl2-backend` (2026-07-24,
 macOS 26.5.2 / arm64). Written to be *studied*, not just read: the last section
 turns what happened into a proposed automated bring-up sequence.
 
-Status: HL2 receives, tunes, and demodulates AM and SSB with correct pitch on
-live hardware, with the slice decoupled from the DDC so the panadapter holds
-still while tuning. Sixteen commits, `e556ad01..91b45ee0`.
+Status: HL2 receives, transmits, and runs WSJT-X over TCI on live hardware —
+confirmed by 63 PSK Reporter spots on 14.074 DIGU. The slice is decoupled from
+the DDC so the panadapter holds still while tuning.
 
-Section 11 audits all of this against the independent correctness oracles at
-`/Users/patj/oracles/hl2/` and is the best starting point for the next session.
+Section 11 audits the receive bring-up against the independent correctness
+oracles at `/Users/patj/oracles/hl2/`.
+
+**Start here for a new backend:** §15 (receive handedness and tuning) and §5's
+sideband-selection rules. Those two describe the most expensive bug of the
+project — one that survived a full session of correct-looking measurements —
+and §15.6 is the checklist that would have caught it on day one.
 
 ---
 
@@ -163,6 +168,32 @@ ruling things out quickly.
 
 `validateConfig()` checks rate divisibility and the output-block arithmetic but
 **not** the `dsp_size`/`dsp_rate` relationship, which is how a bad value passed.
+
+### Sideband selection — the mode does NOT choose it
+
+Two facts that took a full session to establish, and that no amount of reading
+WDSP's headers would have given us. Both measured against WWV on live hardware.
+
+- **RX: the passband edges select the sideband, not the mode.** `SetRXAMode`
+  rebuilds the NBP stage from its own per-mode notion of the passband, so any
+  filter applied *before* the mode call is discarded by it. **Order is
+  load-bearing: mode first, then passband, and re-push the passband on every
+  mode set** — not only when its value changed.
+- **RX: WDSP's RXA selects the OPPOSITE sign to its passband bounds.** USB
+  configured `[+150, +3000]` passes *negative* analytic frequencies. Confirmed
+  independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
+  least intuitive fact in the whole backend and everything in §15 follows from
+  it.
+- **TX is the mirror image: the MODE selects the sideband and the bandpass is an
+  audio-domain magnitude.** `SetTXABandpassFreqs` wants **positive** edges for
+  every mode. Handing TX the RX table's signed pairs put LSB and DIGL on the
+  upper sideband — caught by `hl2_txdsp_test` before it shipped, which is why
+  `Hl2Backend` keeps two separate tables (`defaultPassbandForMode` signed for RX,
+  `defaultTxPassbandForMode` positive for TX).
+
+The trap: RX and TX use **opposite conventions**, and both look plausible. A
+table written for one and reused for the other is silently wrong on exactly half
+the modes.
 
 ### AGC
 
@@ -824,9 +855,16 @@ to the model method it calls, and confirm that method reaches
 
 Transmit went out on the WRONG SIDEBAND for the entire bring-up. The HPSDR wire
 order has the opposite handedness to the standard analytic convention; the
-receive path already compensated (conjugating with `-imag()` before WDSP, the
+receive path appeared to compensate (conjugating with `-imag()` before WDSP, the
 fix filed as "USB and LSB are swapped"), and transmit never got the same
 correction.
+
+> **Correction (see §15).** That receive-side `-imag()` was itself wrong. It
+> inverted every demodulated sideband, and a second error — feeding the
+> panadapter the raw wire — hid it. The reasoning recorded here ("RX already
+> compensates, TX needs the same") was right about the wire's handedness and
+> wrong about which stage should carry the correction. **Do not use this
+> paragraph as the model for a new backend; use §15.**
 
 **Every internal check agreed with the bug**, because the panadapter reads the
 same wire order as the transmitter. Our display and our transmission were
@@ -898,3 +936,152 @@ have exposed the bug was the one that always looked fine.
 - **PA temperature formula** is the HL2 wiki's, unverified against a reference.
   29.5 °C idle → 34 °C under load is plausible, not calibrated.
 - **`0x0e` T/R gain switch** and PureSignal's feedback path.
+- **Reference-oscillator calibration.** Measured **~200 Hz high at 10 MHz**
+  (≈20 ppm), consistently, in both sideband directions — i.e. the radio receives
+  above where it claims. Harmless for FT8 and unrelated to handedness (§15), but
+  it is a real frequency error with no calibration knob. A per-unit ppm trim
+  belongs alongside the power-calibration curve above.
+- **`RTTY` has no HL2 mode mapping.** It is advertised in the TCI
+  `modulations_list` and falls through `modeFromString` to the USB fallback —
+  the same class of silent defect as the `CW` gap in §15.7. Left unmapped rather
+  than guessed at; WDSP has no RTTY mode, so it needs a deliberate decision.
+
+---
+
+## 15. Receive handedness and tuning — the two-error trap
+
+The most expensive bug of the project, and the one most likely to recur verbatim
+on the next radio that owns its own DSP. Read this section before wiring IQ into
+any demodulator.
+
+### 15.1 What was wrong
+
+`Hl2RxDsp` handed the **demodulator** the conjugate of the wire IQ and the
+**spectrum** the raw wire. Both backwards — each was wired to the other's
+convention. The correct split follows from two measured facts:
+
+1. **The HPSDR wire is the conjugate of the analytic convention.** A signal
+   *above* the NCO arrives at a *negative* frequency.
+2. **WDSP's RXA selects the opposite sign to its passband bounds** (§5).
+
+So the **demodulator takes the RAW wire** — (1) and (2) cancel — and the
+**spectrum takes the CONJUGATE**, having no such quirk.
+
+```cpp
+// Hl2RxDsp::processIqBlock — the whole fix
+m_conjugated[n] = std::conj(iq[n]);      // spectrum: analytic convention
+m_spectrum->process(m_conjugated, ...);
+m_iqBuffer.insert(..., iq.begin(), iq.end());   // demodulator: raw wire
+```
+
+### 15.2 The slice shift is NOT part of the bug
+
+`shift = slice - NCO` is **correct** and derivable once handedness is settled:
+the wire puts a signal at `F` at `-(F - NCO)`, so mapping the slice's own
+frequency to baseband needs `-(slice - NCO) + shift == 0`.
+
+It looked like a co-conspirator, and flipping it was tried. It measurably broke
+off-centre tuning and `hl2_shift_test` caught it within one build. **Do not
+"fix" this sign.** It only ever looked wrong because it had been validated in
+LSB — the one mode the conjugation bug made correct.
+
+### 15.3 What the operator sees, and how to read it
+
+| Symptom | What it actually means |
+|---|---|
+| **LSB/DIGL work, USB/DIGU do not** | the chain is coherently inverted — NOT a broken mode |
+| Signals render on the wrong side of a correctly-drawn cursor | spectrum handedness |
+| Slice mistunes by ~2× its offset from the NCO | shift sign disagrees with IQ handedness |
+| TX gets spotted correctly, but only in the "wrong" mode | inversion is end-to-end, not display-only |
+
+The tell for *coherent inversion* is that everything works perfectly in the
+mirrored mode — including transmit, including third-party spots. A localized
+mode/filter bug cannot produce a fully functional radio under the wrong label.
+
+### 15.4 The measurement that settles it: force the shift to ZERO
+
+Two compensating errors cancel at normal off-centre tuning, so **any measurement
+taken at a non-zero shift sees a corrected result and proves nothing.** Zero
+shift is the one geometry where nothing can compensate.
+
+Force it by exploiting the NCO re-centre rule: tune far enough away that the NCO
+must jump, then land on the target — the NCO follows and the shift is exactly 0.
+
+```
+tune 7.100 MHz   (far)      -> NCO jumps
+tune 9.9985 MHz             -> NCO == dial, shift == 0
+```
+
+Then park a known carrier (WWV) 1500 Hz off the dial and ask which side each
+mode hears. Before the fix, at zero shift:
+
+| mode | heard | wanted | margin |
+|---|---|---|---|
+| usb | below dial | above | 100–300× |
+| digu | below dial | above | 100–300× |
+| lsb | above dial | below | 100–300× |
+| digl | above dial | below | 100–300× |
+
+After: all four correct, and at normal off-centre tuning the recovered tone is
+exactly the offset (1500 Hz on a 1500 Hz offset), which is what confirms the
+shift sign independently.
+
+### 15.5 Why every instrument agreed with the bug
+
+This is §14.6's lesson recurring, and it cost a second full session because the
+compensations were *not* obviously related to each other:
+
+- **The unit tests fed IQ no HL2 ever sends.** Both `hl2_rxdsp_test` and
+  `hl2_shift_test` generated textbook `exp(+jwt)`. The wire sends `exp(-jwt)`.
+  Correct expectations, wrong stimulus — so a mirrored panadapter *and* an
+  inverted demodulator both passed. **Test stimulus must use the wire's
+  convention, not the textbook's.**
+- **`hl2_shift_test` validated in LSB**, the one mode the inversion made
+  correct. A sideband test that runs in a single mode proves nothing about
+  handedness.
+- **The live sideband sweep put the test carrier at the pan centre.** A mirror
+  is invisible on its own axis. It confirmed "all four modes correct" while the
+  panadapter was visibly mirrored to the operator. **Never validate handedness
+  with a signal at the pan centre; always off-centre.**
+- **The audio path was correct** at normal tuning, so listening proved nothing.
+  The panadapter was the only consumer with no compensating error — the one
+  instrument telling the truth, and the one easiest to dismiss as "a display
+  bug".
+
+### 15.6 Bring-up checklist for the next DSP-owning backend
+
+Do these in order, before believing any audio:
+
+1. **Establish wire handedness first**, from the decoder, with a synthetic tone
+   of known sign. Write it down. Every later decision depends on it.
+2. **Conjugate exactly once**, at one place, and be explicit about which
+   consumer gets which. Two consumers with opposite needs is a design fact, not
+   an accident — comment it at the split.
+3. **Verify at zero shift** before verifying anything else. Compensating errors
+   cancel everywhere else.
+4. **Verify off-centre**, in **all four** SSB-family modes, against a known
+   carrier. Not one mode, not at the pan centre.
+5. **Check the panadapter against the demodulator explicitly.** They are
+   independent consumers of the same buffer and can disagree; if they do, one of
+   them is compensating for something.
+6. **Confirm from outside the system** (§14.6): a second receiver, or PSK
+   Reporter spots in the mode under test. This bring-up ended with 63 spots on
+   14.074 DIGU — the first evidence that could not have come from a
+   self-consistent loop.
+
+### 15.7 Related: mode changes must re-push the passband
+
+Separate defect, same session, same root category (order-of-operations against
+WDSP). `SetRXAMode` discards a passband applied before it, so the HL2's filter
+was effectively sticky across mode changes: arriving at DIGU from CW handed the
+decoder a ~500 Hz window and it decoded nothing, with the mode indicator
+correct. A radio that owns its DSP gets no mode echo to heal this — **the
+backend must supply a per-mode default passband itself**, applied on change so
+an operator's own filter edit survives (oracle addendum 2 §B3).
+
+Also fixed here: `modeFromString` knew `"CWU"` but not `"CW"` — the spelling
+`TciProtocol::tciToSmartSDR` produces for TCI's `cw`, and the one a Flex
+reports — so plain CW fell through to the USB fallback and was demodulated as
+SSB. `NFM` was missing for the same reason. **Any mode name that appears in the
+TCI `modulations_list` needs a mapping, or it silently becomes USB.** `RTTY`
+still has this gap.
