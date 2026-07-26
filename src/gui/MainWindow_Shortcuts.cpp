@@ -1035,9 +1035,12 @@ void MainWindow::registerShortcutActions()
 
         const double currentBw = sw->bandwidthMhz();
         // Clamp to limits so the final keypress snaps to exact min/max (#1458).
+        // Per-pan limits: the backend's reported range when it gave one, so a
+        // keyboard zoom stops where the receiver's data stops rather than at the
+        // FlexLib table's guess for an unrecognised model.
         const double newBw = std::clamp(currentBw * factor,
-                                        m_radioModel.minPanBandwidthMhz(),
-                                        m_radioModel.maxPanBandwidthMhz());
+                                        m_radioModel.panMinBandwidthMhz(s->panId()),
+                                        m_radioModel.panMaxBandwidthMhz(s->panId()));
         if (newBw == currentBw) return;  // already at the hard limit
 
         double newCenter = sw->centerMhz();

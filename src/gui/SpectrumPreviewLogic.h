@@ -175,13 +175,26 @@ inline bool dssFftScaleSettleActive(std::int64_t nowMs,
     return settleUntilMs > 0 && nowMs < settleUntilMs;
 }
 
-inline float dssHistoryAvailability(float sampleAge, float validRows)
+// Mirror of dss_mesh.vert's rear-visibility edge; it must track the shader
+// exactly, including which regime the scroll advance participates in.
+//
+// Full history (validRows >= rows): phase-stable. validRows - sourceAge is
+// permanently 1 for the oldest slot, so subtracting the advance would pulse
+// that permanent row 0 -> 1 on every arrival rather than fading anything in.
+//
+// Still filling (validRows < rows): the newest slot really is newly populated
+// each arrival, and dssRetainedSampleAge() clamps it onto its neighbour's row
+// for that one interval, so the advance is what fades the duplicate in.
+inline float dssHistoryAvailability(float sourceAge, float validRows,
+                                    float rows, float remainingRows)
 {
-    if (!std::isfinite(sampleAge) || !std::isfinite(validRows)
-        || validRows <= 0.0f) {
+    if (!std::isfinite(sourceAge) || !std::isfinite(validRows)
+        || !std::isfinite(rows) || !std::isfinite(remainingRows)
+        || validRows <= 0.0f || rows < 1.0f || remainingRows < 0.0f) {
         return 0.0f;
     }
-    return std::clamp(validRows - sampleAge, 0.0f, 1.0f);
+    const float fillFade = validRows < rows ? remainingRows : 0.0f;
+    return std::clamp(validRows - sourceAge - fillFade, 0.0f, 1.0f);
 }
 
 // Mirror of dss_mesh.vert sampleHistoryDbm()'s retained sample-age clamp, for

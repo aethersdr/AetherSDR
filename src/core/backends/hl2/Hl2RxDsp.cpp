@@ -114,11 +114,33 @@ void Hl2RxDsp::setAudioMuted(bool muted)
     m_audioMuted = muted;
 }
 
+void Hl2RxDsp::setSpectrumRateFps(int fps)
+{
+    m_spectrumIntervalMs = fps > 0 ? (1000 / fps) : 0;
+    // Do NOT reset the clock or the last-emit stamp. A rate change mid-stream
+    // should take effect on the next frame that comes due, not grant an
+    // immediate extra one — an operator dragging the FPS slider would
+    // otherwise fire a frame per drag step, which is exactly the burst this
+    // cap exists to prevent.
+}
+
 void Hl2RxDsp::setShift(double shiftHz)
 {
     m_shiftHz = shiftHz;
     if (m_channel)
         m_channel->setShift(shiftHz);
+}
+
+bool Hl2RxDsp::spectrumFrameDue()
+{
+    if (m_spectrumIntervalMs <= 0)
+        return true;                       // uncapped
+    if (!m_spectrumClock.isValid()) {
+        m_spectrumClock.start();
+        m_lastSpectrumMs = 0;
+        return true;                       // paint the first frame immediately
+    }
+    return (m_spectrumClock.elapsed() - m_lastSpectrumMs) >= m_spectrumIntervalMs;
 }
 
 void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
@@ -137,6 +159,12 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     //
     // So the DEMODULATOR wants the raw wire — (1) and (2) cancel — while the
     // SPECTRUM, which has no such quirk, wants the conjugate.
+    //
+    // Conjugated unconditionally, ahead of the frame-due branch below: the
+    // accumulator is fed on BOTH paths and it feeds the same FFT, so a raw
+    // block accumulated during a skipped interval would mirror part of the very
+    // next displayed frame. The cost is one pass over a block whichever branch
+    // runs, which is the cheap half of what the shaper already skips.
     m_conjugated.resize(iq.size());
     for (std::size_t n = 0; n < iq.size(); ++n)
         m_conjugated[n] = std::conj(iq[n]);
@@ -145,8 +173,38 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     // assumes. Fed the raw wire it drew the spectrum MIRRORED about the pan
     // centre — on 40 m that put FT8, which lives at 7.074..7.077, on screen at
     // 7.071..7.074, left of a correctly-drawn DIGU cursor.
-    if (m_spectrum->process(m_conjugated, m_bins) > 0)
-        emit spectrumReady(m_bins);
+    //
+    // The FFT sees the full-rate IQ, but only when a frame is
+    // actually due. Skipping the whole computation — not just the emit — is
+    // what keeps a wide span affordable; see setSpectrumRateFps.
+    //
+    // The accumulator is fed on BOTH paths, so a skipped interval advances the
+    // window rather than emptying it: whichever fftSize samples complete a frame
+    // when the next one comes due are a real, contiguous, correctly-scaled
+    // snapshot. The cost is that signals landing entirely between two displayed
+    // frames are not seen at all, which is the accepted trade for a display-rate
+    // panadapter.
+    //
+    // Feeding it is also what decouples the achieved rate from the span. Leaving
+    // the accumulator empty between frames means every due frame first has to
+    // refill from scratch, and that refill is ~9 EP6 blocks — 23.6 ms at 48 kHz
+    // against 3.0 ms at 384 kHz. Added to the interval, a 25 fps request landed
+    // at ~16 fps zoomed in and ~23 fps zoomed out: the rate tracked the span,
+    // which is the exact coupling this shaper exists to remove. Fed, the cost is
+    // bounded by one block instead (2.6 ms at 48 kHz, 0.3 ms at 384 kHz).
+    if (spectrumFrameDue()) {
+        // "Due" STAYS true until a frame actually completes: one EP6 block is
+        // 126 samples and a frame is 1024, so a frame boundary can be up to one
+        // block away even with a full window behind it.
+        if (m_spectrum->process(m_conjugated, m_bins) > 0) {
+            emit spectrumReady(m_bins);
+            m_lastSpectrumMs = m_spectrumClock.elapsed();
+        }
+    } else {
+        // Keep the window fed without paying for a transform. This is the whole
+        // saving at a wide span: the FFT is skipped, not merely its emit.
+        m_spectrum->accumulate(m_conjugated);
+    }
 
     // Audio: the RAW wire. See the note in the block loop below.
     m_iqBuffer.insert(m_iqBuffer.end(), iq.begin(), iq.end());

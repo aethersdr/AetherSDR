@@ -44,7 +44,11 @@ public:
     // value means "leave unchanged" (the radio may report one without the
     // other). Emits infoChanged when either value changes or when the center
     // is populated for the first time (even if it equals the placeholder).
-    void setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Returns true when a value actually changed (and infoChanged was emitted).
+    bool setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Force an infoChanged with the current values — for a backend re-asserting
+    // a span it refused to change. See the definition.
+    void republishCenterBandwidth();
     // A reclaimed model retains its numeric display state while reconnecting,
     // but that previous-session center is not authoritative until the radio
     // reports the new session's pan state.
@@ -55,6 +59,28 @@ public:
     // levelChanged when either bound actually changes; returns whether anything
     // changed so the caller can gate the panStream setDbmRange side-effect.
     bool setRange(double minDbm, double maxDbm);
+    // The span limits this pan can be zoomed between (MHz), as REPORTED by the
+    // backend — the X-axis counterpart to setRange's Y-axis bounds. Zero means
+    // "the backend never told us", which is distinct from a real limit of zero
+    // and is what keeps the Flex path on its existing model-derived clamp.
+    double minBandwidthMhz() const { return m_minBandwidthMhz; }
+    double maxBandwidthMhz() const { return m_maxBandwidthMhz; }
+    bool bandwidthLimitsKnown() const {
+        return m_minBandwidthMhz > 0.0 && m_maxBandwidthMhz > 0.0;
+    }
+    // Returns whether anything changed, so the caller can gate the re-clamp of
+    // the widgets already showing this pan.
+    bool setBandwidthLimits(double minMhz, double maxMhz);
+
+    // Client-authoritative display rates, for a backend whose radio reports no
+    // display state at all (HL2). On a Flex these arrive as radio status and the
+    // radio does the rate shaping itself; on a radio that just streams spectra,
+    // the operator's Display→FFT FPS and Display→Waterfall Rate sliders have
+    // nowhere to go — the wire text they used to emit was a Flex command that
+    // reached nothing — and the engine has to shape the stream itself. This is
+    // where the target it shapes to lives. Emits the same *Reported/*Changed
+    // pairs as the radio path so consumers cannot tell the two apart.
+    void setDisplayRates(int fps, int wfLineDurationMs);
     // Flex-specific WNB extension applied from the backend's namespaced
     // extensionStatus("flex","panWnb",…). Applies only the keys present;
     // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3
@@ -138,6 +164,7 @@ public:
 signals:
     void infoChanged(double centerMhz, double bandwidthMhz);
     void levelChanged(float minDbm, float maxDbm);
+    void bandwidthLimitsChanged(double minMhz, double maxMhz);
     void rxAntennaChanged(const QString& ant);
     void antListChanged(const QStringList& ants);
     void rfGainChanged(int gain);
@@ -174,6 +201,10 @@ private:
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};
+    // 0 = the backend has not reported span limits for this pan (see
+    // bandwidthLimitsKnown); the GUI then keeps its model-derived clamp.
+    double      m_minBandwidthMhz{0.0};
+    double      m_maxBandwidthMhz{0.0};
     QString     m_rxAntenna;
     QStringList m_antList;
     int         m_rfGain{0};

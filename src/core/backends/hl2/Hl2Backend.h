@@ -3,9 +3,10 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/dsp/WdspChannel.h"
 
+#include <QElapsedTimer>
 #include <QString>
-
 #include <QThread>
+#include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
@@ -47,6 +48,14 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz) override;
+    void setPanBandwidth(const QString& panId, double hz) override;
+
+private:
+    // The actual span change, after the throttle above has settled.
+    void applyPanBandwidth(double hz);
+
+public:
+    void setPanFrameRate(const QString& panId, int fps) override;
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
@@ -82,7 +91,31 @@ private:
     // shift and the NCO moved only when the target would leave the window.
     double m_rxFreqHz = 10'000'000.0;   // slice
     double m_ncoHz    = 10'000'000.0;   // DDC / pan centre
+    // The DDC rate, which IS the panadapter span (emitPanState).
+    //
+    // Defaults to the NARROWEST the hardware offers, and connectRadio then
+    // replaces it with whatever span the operator last chose (Hl2Settings).
+    // The widest costs ~8x the narrowest in both directions -- 25.2 vs 3.1 Mbps
+    // sustained UDP, 3048 vs 381 packets/second, and 8x the samples through
+    // WDSP's decimation front end -- so it is opted into, never imposed at
+    // connect on an operator who may be on wifi or a host that cannot carry it.
     int m_sampleRateHz = 48000;
+    // Zoom-sweep throttle for setPanBandwidth.
+    //
+    // Unlike a centre drag, which is cheap to forward, a span change is a
+    // BLOCKING WDSP reconfigure plus a settings write. A drag delivers commands
+    // every ~33 ms, and a sweep from the narrowest span to the widest crosses
+    // every intermediate rate — so the operator paid for two full rebuilds whose
+    // results were discarded before either was ever seen. Worse, those rebuilds
+    // run on the thread that paces EP2, and the gateware watchdog halts the
+    // stream if EP2 stops arriving.
+    //
+    // Leading edge applies immediately, so a single discrete zoom step still
+    // responds at once; anything arriving inside the cooldown is coalesced and
+    // the last one applied when it expires. (#4470)
+    static constexpr int kBandwidthThrottleMs = 150;
+    QTimer* m_bandwidthThrottle = nullptr;
+    double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
     QString m_mode = QStringLiteral("USB");
     int m_filterLowHz = 150;
     int m_filterHighHz = 3000;

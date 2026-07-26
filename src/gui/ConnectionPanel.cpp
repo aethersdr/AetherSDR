@@ -1205,9 +1205,17 @@ void ConnectionPanel::onLocalConnectClicked()
         return;
     }
 
-    auto& settings = AppSettings::instance();
-    settings.setValue("LowBandwidthConnect", "False");
-    settings.save();
+    // Low bandwidth mode is a slow-link concession, and for a Flex on the LAN it
+    // is meaningless — so a local Flex connect clears it. Do NOT clear it for
+    // other families: on the HL2 the same preference caps the panadapter span
+    // (there the span IS the data rate), and unconditionally writing False here
+    // meant that ceiling could never engage on the HL2's only discovery path.
+    // (#4470)
+    if (info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) == 0) {
+        auto& settings = AppSettings::instance();
+        settings.setValue("LowBandwidthConnect", "False");
+        settings.save();
+    }
 
     emit connectRequested(info);
 }
@@ -1599,6 +1607,13 @@ void ConnectionPanel::probeRadio(const QString& ip)
                             "client and can't be shared.").arg(trimmedIp), true);
                         return;
                     }
+                    // Save the operator's low-bandwidth choice before connecting.
+                    // This branch returns early, so it used to skip the
+                    // saveLowBandwidthPreference() the Flex probe path performs —
+                    // which on the HL2 is the setting that caps the panadapter
+                    // span, and this is the one mode where the checkbox is
+                    // actually on screen. Ticking it did nothing. (#4470)
+                    saveLowBandwidthPreference(m_lowBwCheck->isChecked());
                     setManualMessage(QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.")
                                          .arg(trimmedIp), false);
                     emit connectRequested(info);

@@ -531,6 +531,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
+    src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
@@ -2637,6 +2638,19 @@ add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
 target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
+
+# The RX DSP must demodulate at every IQ rate the operator can select by zooming.
+add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
+target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
+
+# The panadapter frame rate must follow the operator's slider, not the span
+# (#4470). Wall-clock paced, so it lives in its own target.
+add_executable(hl2_spectrum_rate_test tests/hl2_spectrum_rate_test.cpp)
+target_include_directories(hl2_spectrum_rate_test PRIVATE src)
+target_link_libraries(hl2_spectrum_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_spectrum_rate_test COMMAND hl2_spectrum_rate_test)
 
 add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
 target_include_directories(hl2_shift_test PRIVATE src)

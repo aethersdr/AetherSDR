@@ -211,15 +211,71 @@ int testDssFftScaleSettleWindow()
 int testDssStartupHistoryAvailability()
 {
     using namespace AetherSDR;
-    if (!nearlyEqual(dssHistoryAvailability(4.0f, 4.0f), 0.0)
-        || !nearlyEqual(dssHistoryAvailability(3.5f, 4.0f), 0.5)
-        || !nearlyEqual(dssHistoryAvailability(3.0f, 4.0f), 1.0)
-        || !nearlyEqual(dssHistoryAvailability(2.0f, 4.0f), 1.0)
-        || !nearlyEqual(dssHistoryAvailability(
-                            std::numeric_limits<float>::quiet_NaN(), 4.0f),
-                        0.0)
-        || !nearlyEqual(dssHistoryAvailability(0.0f, 0.0f), 0.0)) {
-        return fail("3D FFT startup history should fade in continuously");
+    // Grid ages are integral (sourceV * rows over a fixed grid) and validRows is
+    // an int row count, so at a FULL history availability is strictly binary:
+    // populated slots opaque, the rest hidden. No partial values are reachable.
+    constexpr float kRows = 96.0f;
+    if (!nearlyEqual(dssHistoryAvailability(96.0f, 96.0f, kRows, 0.0f), 0.0)
+        || !nearlyEqual(dssHistoryAvailability(95.0f, 96.0f, kRows, 0.0f), 1.0)
+        || !nearlyEqual(dssHistoryAvailability(94.0f, 96.0f, kRows, 0.0f), 1.0)
+        || !nearlyEqual(dssHistoryAvailability(0.0f, 96.0f, kRows, 0.0f), 1.0)) {
+        return fail("3D FFT rear visibility must be binary on a full history");
+    }
+    // Non-finite input and an empty history both fail closed to hidden.
+    if (!nearlyEqual(dssHistoryAvailability(
+                         std::numeric_limits<float>::quiet_NaN(), 96.0f,
+                         kRows, 0.0f),
+                     0.0)
+        || !nearlyEqual(dssHistoryAvailability(0.0f, 0.0f, kRows, 0.0f), 0.0)
+        || !nearlyEqual(dssHistoryAvailability(0.0f, 96.0f, kRows,
+                                              std::numeric_limits<float>::
+                                                  quiet_NaN()),
+                        0.0)) {
+        return fail("3D FFT rear visibility must fail closed on bad input");
+    }
+    // THE regression this guards (#4476): on a full history the oldest slot is
+    // permanently populated, so its opacity must not depend on where the scroll
+    // clock happens to be. Reinstating the advance term unconditionally makes
+    // this ramp 0 -> 1 and snap back on every delayed arrival — the rear pulse.
+    for (const float remainingRows : {0.0f, 0.25f, 0.5f, 1.0f, 3.0f}) {
+        if (!nearlyEqual(
+                dssHistoryAvailability(95.0f, 96.0f, kRows, remainingRows),
+                1.0)) {
+            return fail("3D FFT rear visibility must not pulse with scroll "
+                        "latency on a full history");
+        }
+    }
+    // While the history is still FILLING, the newest slot is genuinely new and
+    // dssRetainedSampleAge() clamps it onto its neighbour's row for one
+    // interval, so it must fade in over that interval rather than popping a
+    // duplicate curtain opaque. Dropping the advance term in this regime makes
+    // all three of these 1.0.
+    constexpr float kFilling = 10.0f;   // 10 of 96 rows populated
+    if (!nearlyEqual(dssHistoryAvailability(9.0f, kFilling, kRows, 1.0f), 0.0)
+        || !nearlyEqual(dssHistoryAvailability(9.0f, kFilling, kRows, 0.5f), 0.5)
+        || !nearlyEqual(dssHistoryAvailability(9.0f, kFilling, kRows, 0.0f),
+                        1.0)) {
+        return fail("3D FFT newest rear slot must fade in while history fills");
+    }
+    // ...and only the newest slot fades: settled slots behind it stay opaque
+    // regardless of the scroll clock, and unpopulated ones stay hidden.
+    if (!nearlyEqual(dssHistoryAvailability(8.0f, kFilling, kRows, 1.0f), 1.0)
+        || !nearlyEqual(dssHistoryAvailability(0.0f, kFilling, kRows, 1.0f), 1.0)
+        || !nearlyEqual(dssHistoryAvailability(10.0f, kFilling, kRows, 0.0f),
+                        0.0)) {
+        return fail("3D FFT fill fade must apply only to the newest slot");
+    }
+    // The visibility edge and the height path must agree about what exists: on
+    // a full history a slot is visible exactly when it has a retained sample.
+    for (const float sourceAge : {0.0f, 1.0f, 94.0f, 95.0f, 96.0f, 97.0f}) {
+        const bool visible =
+            dssHistoryAvailability(sourceAge, 96.0f, kRows, 0.0f) > 0.0f;
+        const bool hasSample =
+            dssRetainedSampleAge(sourceAge, 0.0f, 96.0f, kRows).has_value();
+        if (visible != hasSample) {
+            return fail("3D FFT rear visibility must agree with the height "
+                        "path's valid-range early-out");
+        }
     }
     const std::optional<float> movingAge =
         dssRetainedSampleAge(94.0f, 0.5f, 96.0f, 96.0f);
@@ -229,6 +285,18 @@ int testDssStartupHistoryAvailability()
         || !oldestAge || !nearlyEqual(*oldestAge, 95.0)
         || dssRetainedSampleAge(96.0f, 0.0f, 96.0f, 96.0f).has_value()) {
         return fail("3D FFT rear row should remain stable until eviction");
+    }
+    // The oldest slot's SAMPLE age is clamped to oldestRetainedAge, so it holds
+    // still under any scroll phase — this is the clamp that also makes it
+    // duplicate its neighbour for one interval while the history fills, which
+    // is why the fill fade above exists.
+    for (const float remainingRows : {0.0f, 0.5f, 1.0f, 4.0f}) {
+        const std::optional<float> clampedAge =
+            dssRetainedSampleAge(95.0f, remainingRows, 96.0f, 96.0f);
+        if (!clampedAge || !nearlyEqual(*clampedAge, 95.0)) {
+            return fail("3D FFT oldest retained sample age must not move with "
+                        "scroll latency");
+        }
     }
     // Fidelity to the shader's two clamps outside 1 <= validRows <= rows:
     // validRows > rows caps to rows (oldest age = rows - 1, not validRows - 1);

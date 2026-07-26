@@ -506,6 +506,13 @@ private:
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
     bool kiwiSdrPanDisplaysKiwi(const QString& panId) const;
+    // Apply a pan's span limits to its widget, widened to cover a KiwiSDR when
+    // this pan is displaying one. Every path that reports limits to a widget must
+    // go through here, or a local-backend report clamps a Kiwi zoom. (#4470)
+    void applyPanBandwidthLimitsToWidget(const QString& panId,
+                                        SpectrumWidget* spectrum,
+                                        double minMhz,
+                                        double maxMhz) const;
     void setKiwiSdrPanDisplaySource(const QString& panId, bool kiwi);
     void clearKiwiSdrPanDisplaySourceOverride(const QString& panId);
     void clearKiwiSdrPanDisplaySourceOverrides();

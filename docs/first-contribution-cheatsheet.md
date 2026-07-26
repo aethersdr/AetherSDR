@@ -51,7 +51,9 @@ you do not need to switch agents unless you want to.
 
 Current prices: **[claude.com/pricing](https://claude.com/pricing)**. If you
 hit a usage limit mid-session: nothing is lost, it resets the same day — and
-hitting it regularly is the upgrade signal, not a failure.
+hitting it regularly is the upgrade signal, not a failure. Before you upgrade,
+though, read [Two dials and one habit](#two-dials-and-one-habit) below — the
+habit in particular stretches a plan a long way.
 
 ### Which Codex plan?
 
@@ -99,6 +101,72 @@ agent drives it from here.
 3. It sounds confident even when wrong — **read what it proposes before you
    say yes.**
 4. Never paste passwords, private keys, or two-factor codes into the chat.
+
+## Two dials and one habit
+
+Making your plan last. Every agent above meters you somehow, and all three give
+you the same three levers — learn them once and they transfer.
+
+### Dial 1 — which model
+
+Your agent offers a fast, efficient model and a heavier, more capable one.
+**The efficient model is your barefoot hundred watts**: it handles the
+overwhelming majority of the work, all day. **The heavy model is the
+amplifier** — switch it on when the problem is genuinely difficult, and switch
+it back afterwards. Running the amp to work the local repeater is just heat.
+
+Your plan already picked a sensible default, and leaving it alone is a
+perfectly good strategy. Whatever the model menu actually lists is what your
+account can use — trust that menu over anything you read on a forum.
+
+### Dial 2 — how hard it thinks
+
+The harder a model reasons before answering, the more of your allowance each
+turn costs. Turn it **down** for mechanical work — renaming things,
+formatting, documentation, anything you could nearly do yourself. **Leave it
+alone** for ordinary fixes. Turn it **up** only for a bug that is genuinely
+fighting you.
+
+Or delegate the decision:
+`We're about to do something simple and mechanical. Should I turn your effort down for this?`
+
+### The habit that beats both dials: one task = one conversation
+
+Every message you send makes your agent re-read the **entire** conversation.
+All of it, every time. A long session that wandered across six different jobs
+is re-reading all six to answer a question about the seventh — and that, far
+more than either dial, is where an allowance actually goes.
+
+**So start a fresh conversation whenever you switch tasks.** It costs nothing,
+it makes the answers sharper, and it is the single most effective thing you can
+do to make a plan last. Your earlier conversations stay available if you need
+to go back to one.
+
+### Where the controls live
+
+In **Claude Code** all of it sits behind the `/` button in the prompt box — it
+opens a menu, so these are buttons to click, not commands to memorize:
+
+| Menu item | Typed equivalent | What it does |
+|---|---|---|
+| Switch model | `/model` | Pick the model — the list is your account's truth |
+| Effort | `/effort medium` | How hard it thinks: `low` … `max`, defaults to high |
+| Clear conversation | `/clear` | New task, clean page — the big one |
+| Account & usage | `/usage` | How much of your window and week you've used, and when they reset |
+
+**Copilot** and **Codex** put the same three levers in their own chat panels:
+look for the model picker, the reasoning or thinking setting, and the button
+that starts a new chat. The names differ; the economics don't.
+
+One caveat on usage figures: they count what you did on **this computer**.
+Chats you had in a browser count against the same limits but won't appear here.
+
+### Don't turn these on
+
+Multi-agent or "team" modes (they multiply token use several times over),
+"fast" modes (often billed separately from your subscription), and scheduled or
+looping tasks (they fire while you're away from the desk). None of them help a
+first contribution.
 
 ## The asks, in order
 
@@ -209,6 +277,9 @@ rest.` (scope control).
 | pull request (PR) | Your formal ask: "please take my change" — traffic to net control |
 | CI | Robots that build and test your change on every OS before a human looks |
 | merge | A maintainer accepts your change into the project — you can't press it, and that's the safety net |
+| context | Everything in the current conversation — your agent re-reads all of it on every message |
+| model | Which brain is on the job — efficient (barefoot) or heavy (the amplifier) |
+| effort | How hard your agent thinks before answering — turn it down for simple work |
 
 <details>
 <summary><b>If you want to know what the agent actually ran</b> (you never need this)</summary>
