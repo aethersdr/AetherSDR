@@ -2727,6 +2727,8 @@ add_executable(theme_manager_test
 target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
+set_tests_properties(theme_manager_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
@@ -4321,6 +4323,8 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
+set_tests_properties(flex_control_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -4339,6 +4343,8 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+set_tests_properties(pan_layout_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_overlay_wheel_guard_test
     tests/spectrum_overlay_wheel_guard_test.cpp
