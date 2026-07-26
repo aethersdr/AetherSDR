@@ -77,6 +77,19 @@ public:
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
+    // Receive AGC. mode is the neutral vocabulary the slice model uses —
+    // "off" / "slow" / "med" / "fast"; thresholdDb is the operator's 0..100
+    // AGC-threshold value. A backend whose hardware owns the AGC translates
+    // both to its wire protocol; one that owns an engine-side DSP chain
+    // configures that chain. Sent as a pair because a backend configuring a DSP
+    // AGC generally needs both to make either meaningful.
+    virtual void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) = 0;
+    // Move the panadapter's centre — the receiver's WINDOW, not the slice.
+    // A backend whose hardware streams a fixed window retunes it; one that
+    // owns a DDC moves the NCO. Without this the UI can pan the view locally
+    // while the data keeps arriving from the old window, and the waterfall
+    // (which carries its own frequency extent) drifts off the display.
+    virtual void setPanCenter(const QString& panId, double hz) = 0;
 
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the

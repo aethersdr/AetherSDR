@@ -52,8 +52,8 @@ documented numeric ranges/behavior were used; no CuteSDR code is incorporated.
 
 The Hermes-Lite 2 radio backend implements HPSDR Protocol 1 ("Metis") — UDP
 discovery, the EP2/EP6 IQ frame layout, and the Command & Control register map
-(sample-rate/receiver config, the CONFIG_MERCURY ADC-source-select bit, RX NCO
-frequency, and the AD9866 extended-range LNA gain register). These wire-protocol
+(sample-rate/receiver config, RX NCO frequency, and the AD9866 LNA gain
+register). These wire-protocol
 facts were consulted clean-room and are expressed in original AetherSDR code
 (prototypes/hl2/ and, subsequently, the in-tree Hl2Backend). No openHPSDR,
 Hermes-Lite 2, or pihpsdr code is incorporated, vendored, translated, or linked
@@ -61,17 +61,43 @@ into AetherSDR; the referenced sources are consulted only to verify protocol
 facts. The consulted facts are:
   - the Metis discovery handshake and EP2/EP6 1032-byte frame framing;
   - the C0 register-address encoding ((addr<<1)|MOX) and the config/RX-freq/
-    gain register semantics; and
-  - the minimal round-robin C&C init a receiver requires (config incl.
-    CONFIG_MERCURY, RX1 frequency, LNA gain), verified against the pihpsdr
-    reference client's C&C construction.
+    gain register semantics;
+  - the minimal round-robin C&C init a receiver requires (config, RX1 frequency,
+    LNA gain), verified against the pihpsdr reference client's C&C construction;
+  - the AD9866 LNA gain encoding, where C4 bit 6 selects the direct-value
+    mapping rather than the legacy inverted one (read from the gateware RTL,
+    whose own reset default sets that bit);
+  - the run/stop command byte's bit-7 "watchdog_disable" semantics (0 enables
+    the gateware watchdog, which halts the radio's stream when the client stops
+    sending EP2 — the mechanism that prevents a radio left streaming at a dead
+    endpoint), read from the Hermes-Lite 2 gateware RTL;
+  - the requirement to send Command & Control frames BEFORE the Metis start
+    command so the DDC latches sample rate, NCO and receiver count — a stream
+    started before any C&C has landed emits ADC-idle samples with Q pinned to
+    zero; and
+  - that the EP2 cadence follows the frame geometry (one EP2 frame per 126
+    samples, i.e. 2625 us at 48 kHz) rather than the EP6 arrival rate, so the
+    C&C stream cannot be starved by a stalled receive path.
 
   openHPSDR Protocol 1 (Programmer's guide) — HPSDR project, hosted by TAPR
   License:  GPL-2.0-or-later (consulted as a protocol specification only)
   Source:   https://github.com/TAPR/OpenHPSDR-Protocol1-Programmers
 
   Hermes-Lite 2:  Copyright (c) Steve Haynal (KF7O) and Hermes-Lite 2 contributors
-  Reference:      https://github.com/softerhardware/Hermes-Lite2  (wiki + gateware)
+  Note:           The upstream repository states no license. Consulted as a
+                  hardware-behaviour reference only (register/bit semantics read
+                  from the gateware RTL); no gateware code is incorporated.
+  Reference:      https://github.com/softerhardware/Hermes-Lite2
+                  (wiki + gateware; rtl/dsopenhpsdr1.v for the RUNSTOP /
+                  watchdog_disable bit semantics)
+
+  Thetis:    Copyright (c) Doug Wigley (W5WC), Richard Samphire (MW0LGE), and
+             Thetis contributors
+  License:   LGPL-2.1-or-later / GPL-2.0-or-later per file (consulted as a
+             behavioral reference only)
+  Source:    https://github.com/ramdor/Thetis
+             (Project Files/Source/ChannelMaster/networkproto1.c — the start
+             priming sequence and EP2 pacing behaviour)
 
   pihpsdr:   Copyright (c) Christoph van Wüllen (DL1YCF) and contributors
   License:   GPL-3.0-or-later (consulted as a behavioral reference only)

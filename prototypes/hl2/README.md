@@ -22,8 +22,9 @@ All protocol facts are consulted **clean-room** and re-expressed in original cod
 - openHPSDR Protocol 1 Programmer's guide (discovery, EP2/EP6 frames, C&C bytes)
 - Hermes‑Lite 2 wiki + gateware repo (board id `0x06`, register map, sample rates,
   the `0x0a` extended-range LNA gain register)
-- pihpsdr `src/old_protocol.c` (the round-robin C&C init sequence — this is where
-  the non-obvious **`CONFIG_MERCURY`** ADC-select bit came from)
+- pihpsdr `src/old_protocol.c` (the round-robin C&C init sequence — also where
+  the **`CONFIG_MERCURY`** bit came from, which later turned out to be a no-op on
+  HL2; see the correction below)
 
 ## Phases
 
@@ -35,13 +36,23 @@ All protocol facts are consulted **clean-room** and re-expressed in original cod
 | ✅ 0.4 spectrum | `spectrum.py` | FFT the IQ → panadapter, **data plane proven end-to-end** |
 | ⬜ 1 in-tree | design note → `src/core/backends/hl2/Hl2Backend` | port proven logic behind the seam |
 
-### The one non-obvious fact (phase 0.3/0.4)
+### The one non-obvious fact (phase 0.3/0.4) — **corrected 2026-07-24**
+
+> **This section's original diagnosis was wrong and is kept for the record.** It
+> claimed the flat-ADC-floor-noise symptom was caused by a missing
+> **`CONFIG_MERCURY` (C1 bit 6, 0x40)** "ADC-select" bit. Inspection of the
+> Hermes-Lite 2 gateware RTL shows the HL2 never decodes that bit
+> (`cmd_data[30]` appears in no module), so it cannot have been the fix. The real
+> cause is **ordering**: a stream started before any Command & Control frame has
+> landed emits ADC-idle samples. Priming with C&C frames *before* `metis-start`
+> is the cure — which is what the in-tree `MetisClient` now does. The same bit is
+> still sent for openHPSDR compatibility, and is harmless.
 
 A receiver that streams IQ but shows only **flat ADC-floor noise** at every
-frequency is missing the config register's **`CONFIG_MERCURY` (C1 bit 6, 0x40)**
-— it selects the ADC as the DDC's input source. Without it the NCO tunes into
-silence. The minimal working RX is a round-robin of **three** registers:
-`config` (speed | `CONFIG_MERCURY`, plus `0x04` duplex + `#RX` in C4),
+frequency needs C&C to land before the stream starts. The minimal working RX is
+a round-robin of **three** registers:
+`config` (speed + `#RX` in C4; the `CONFIG_MERCURY` and `0x04` duplex bits are
+sent for openHPSDR compatibility but ignored by HL2),
 **RX1 freq** (`C0=0x04`, 32-bit Hz BE — confirmed, *not* the `0x02` TX register),
 and **LNA gain** (`C0=0x14`, `C4 = 0x40 | (dB+12)`). Verified live: tuning WWV
 (10 MHz) puts its carrier at baseband DC ~50 dB over a clean noise floor.

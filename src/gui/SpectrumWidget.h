@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -102,6 +103,14 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_PROPERTY(double centerMhz READ centerMhz)
     Q_PROPERTY(double bandwidthMhz READ bandwidthMhz)
     Q_PROPERTY(int centerLockSliceId READ centerLockSliceId)
+    // Frequency extent of the most recently applied waterfall row. Each row
+    // carries its own [low,high] and is resampled into the current view, so a
+    // row whose extent disagrees with the pan renders at the wrong frequency —
+    // the "waterfall drifts off the panadapter" class of bug. Exposing it makes
+    // pan/waterfall alignment machine-checkable instead of eyeball-only.
+    // NaN until the first row arrives.
+    Q_PROPERTY(double wfRowLowMhz READ wfRowLowMhz)
+    Q_PROPERTY(double wfRowHighMhz READ wfRowHighMhz)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -557,6 +566,8 @@ public:
     void setSliceOverlayAdaptiveActive(int sliceId, bool active);
     void setCenterLockSliceId(int sliceId);
     int centerLockSliceId() const { return m_centerLockSliceId; }
+    double wfRowLowMhz() const { return m_lastWfRowLowMhz; }
+    double wfRowHighMhz() const { return m_lastWfRowHighMhz; }
     // Slice Link (cross-panadapter VFO link). MainWindow pushes every current
     // pair plus the roster of linkable slices — links may span pans, so the
     // context menu needs peers this pan's own overlays can't see.
@@ -712,6 +723,12 @@ signals:
     // Emitted when zoom/range interaction pauses or ends. Remote waterfall
     // providers use this to avoid resetting their stream on every zoom step.
     void frequencyRangeSettled(double centerMhz, double bandwidthMhz);
+
+    // Emitted when a gesture that was suppressing inbound pan geometry has
+    // released and a value was suppressed while it ran. The owner should
+    // re-push the authoritative pan centre/bandwidth; the widget deliberately
+    // does not replay the suppressed value (it may be a stale echo).
+    void panGeometryResyncNeeded();
     // Emitted when the user drags a filter edge to resize the passband.
     void filterChangeRequested(int lowHz, int highHz);
     // Emitted when the user adjusts the dBm scale (drag or arrows).
@@ -1142,6 +1159,9 @@ private:
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
     int m_centerLockSliceId{-1};
+    // Extent of the last waterfall row applied (see the Q_PROPERTY note).
+    double m_lastWfRowLowMhz{std::numeric_limits<double>::quiet_NaN()};
+    double m_lastWfRowHighMhz{std::numeric_limits<double>::quiet_NaN()};
     QVector<SliceLinkPair> m_sliceLinkPairs;
     QVector<SliceLinkCandidate> m_sliceLinkCandidates;
 
@@ -1447,6 +1467,19 @@ private:
     int  m_vfoDragLastX{0};                 // last cursor X during VFO drag (px)
     int  m_vfoDragEdgeHoldTicks{0};         // ticks held in edge zone (ramp)
     qint64 m_vfoDragPanEchoHoldUntilMs{0};  // ignore stale center echoes briefly after drag
+
+    // Authoritative pan geometry that arrived while a local gesture owned the
+    // view. Flex re-echoes pan status continuously, so DROPPING one was
+    // harmless — another arrives within milliseconds. A backend that emits
+    // geometry only when it CHANGES (edge-triggered, e.g. the HL2's NCO) has no
+    // second chance: the drop is permanent and the view stays stuck at the old
+    // center while the model, the slice and the waterfall have all moved. Hold
+    // the value instead and re-apply once the gesture releases — the inbound
+    // half of #4142's "defer, never drop".
+    bool    m_deferredRangeValid{false};
+    QTimer* m_deferredRangeTimer{nullptr};
+    void    deferIncomingRange(double centerMhz, double bandwidthMhz);
+    void    applyDeferredRangeIfIdle();
     bool m_vfoDragEdgePanDisabled{false};   // AETHER_NO_DRAG_EDGEPAN=1 escape hatch
     // Velocity knobs, env-tunable so the feel can be swept WITHOUT rebuilding:
     //   AETHER_DRAG_EDGEPAN_VMAX     — top speed, % of span width per second

@@ -404,6 +404,7 @@ private:
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
     QJsonObject doDrag(const QString& target, const QString& value) const;
     QJsonObject doDragAt(const QString& target, const QString& value) const;
+    QJsonObject doWheel(const QString& target, const QString& value) const;
     // Phaseful pointer gesture (#4353). The owning QLocalSocket stays connected
     // between begin/move/end so unrelated bridge clients and queued model/radio
     // events can interleave while a slider is genuinely down. A single global

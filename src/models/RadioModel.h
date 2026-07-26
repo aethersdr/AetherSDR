@@ -5,6 +5,7 @@
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
+#include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -78,6 +79,26 @@ public:
     // Access the underlying connection and panadapter stream
     RadioConnection*  connection()  { return m_connection; }
     PanadapterStream* panStream()   { return m_panStream; }
+
+    // DAX channel holds, null-safe.
+    //
+    // A PanadapterStream is the Flex VITA-49 transport; a backend that carries
+    // its own IQ (HL2, KiwiSDR) has none, and panStream() is then null. Every
+    // caller of these three used to dereference it bare, so activating RADE or
+    // the DAX bridge on such a backend was a segfault rather than a decline --
+    // the same crash already fixed once at the startDax() entry, reachable by
+    // four more paths behind it.
+    //
+    // Routing the family through here makes "no stream means no channels to
+    // hold" a property of the seam instead of something every call site has to
+    // remember, which is the point: the next backend should not be able to
+    // reintroduce this by adding a call.
+    //
+    // Returns false when there is no stream, so callers can report honestly
+    // rather than believing they hold a channel they do not.
+    bool acquireDaxChannel(int channel, PanadapterStream::DaxConsumer who);
+    void releaseDaxChannel(int channel, PanadapterStream::DaxConsumer who);
+    void releaseAllDaxChannels(PanadapterStream::DaxConsumer who);
     // Sub-models owned by RadioModel (main thread). (#502)
     MeterModel&       meterModel()       { return m_meterModel; }
     TunerModel&       tunerModel()       { return m_tunerModel; }
@@ -176,6 +197,13 @@ public:
     ModelCapabilities capabilities() const {
         return capabilitiesFor(m_model);
     }
+
+    // The live BACKEND's capabilities (RadioCapabilities: canTransmit, canReboot,
+    // sample rates, …). Distinct from capabilities() above, which is the
+    // FlexLib-derived model table. Use this for anything the backend/seam owns —
+    // e.g. TX capability and reboot support, which differ by radio family (#4448).
+    // Non-inline: IRadioBackend is only forward-declared here.
+    RadioCapabilities backendCapabilities() const;
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -558,6 +586,28 @@ signals:
                                  const QString& presentedHex);
     // Emitted when another GUI client forces this client to disconnect.
     void forcedDisconnectRequested();
+    // aetherd Gap B (HL2 Phase 1c, Step 1): the backend-neutral panadapter render
+    // feed. Signatures mirror PanadapterStream.h:212-218 exactly, so the UI binds
+    // its panadapter/waterfall rendering to these instead of the Flex-only
+    // PanadapterStream and the wiring is family-agnostic. A Flex session forwards
+    // its PanadapterStream into these 1:1 (signal-to-signal, no transformation);
+    // an HL2 session (Step 2) synthesises them from IRadioBackend::spectrumFrameReady.
+    // Per-RadioModel → per-session, which is exactly what the two-panadapter end
+    // state needs.
+    void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
+                              qint64 emittedNs);
+    void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
+                                  double lowFreqMhz, double highFreqMhz,
+                                  quint32 timecode, qint64 emittedNs);
+    void panFeedWaterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
+    // Demodulated RX audio from a backend that produces it in-process (HL2).
+    // 24 kHz stereo float32 — the format AudioEngine::feedAudioData expects.
+    // Flex never emits this; its audio arrives on the PanadapterStream path.
+    void backendAudioFrameReady(const QByteArray& pcm);
+    // The backend was replaced because the operator picked a radio of another
+    // family. Consumers holding backend-owned objects (PanadapterStream) must
+    // re-establish anything that binds to them directly.
+    void backendRebuilt();
     // Emitted when a panadapter's center frequency or bandwidth changes.
     void panadapterInfoChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the radio reports the panadapter's dBm display range.
@@ -734,6 +784,11 @@ private slots:
     void onDisconnected();
     void onConnectionError(const QString& msg);
     void onVersionReceived(const QString& version);
+    // aetherd Gap B (Step 2): adapt a backend that delivers spectra via the
+    // normalized IRadioBackend data-plane signal (e.g. HL2) into the neutral
+    // panFeed. Decodes the float32 frame and re-emits panFeedSpectrumReady. Flex
+    // never triggers this (it feeds panFeed via the PanadapterStream passthrough).
+    void onBackendSpectrumFrame(int panId, const QByteArray& frame);
 
 private:
     void handleRadioStatus(const QMap<QString, QString>& kvs);
@@ -846,11 +901,37 @@ private:
     void ensureDefaultSlicePreferringRestoredPan();
     void stageSessionModelsForReconnect();
     void pruneStaleSessionModels(quint64 generation);
+    // Destroy every live AND staged slice/pan model unconditionally. Called on a
+    // radio-family switch, which is a hard radio change: no model from the old
+    // family may survive to be reclaimed as one of the new family (their slice
+    // indices and stream ids collide, and their command/TX/DV wiring differs, so
+    // a reclaimed cross-family slice is a partially-wired, broken slice). The
+    // serial-based reclaim guard cannot cover this — HL2 carries no chassis
+    // serial — so the switch drops the models outright. (#4448)
+    void dropAllSessionModelsForFamilySwitch();
+
+    // aetherd Gap A (HL2 Phase 1c): the minimal backend-selection seam. Returns
+    // the IRadioBackend for `family` ("flex" default, "hl2" for Hermes-Lite 2).
+    // Replaces the hard-wired make_unique<FlexBackend>; a fuller step-3 registry
+    // supersedes it later. Flex-specific construction wiring (command sinks,
+    // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
+    // in the ctor, so a non-Flex backend simply skips it.
+    static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
+
+    // aetherd Gap B: build/destroy the backend for a radio family. The backend
+    // follows the radio the operator picks in the connection manager, so these
+    // run again on a family change — not just at construction.
+    void setupBackend(const QString& family);
+    void teardownBackend();
 
     // aetherd RFC step 2 (§5.5): the radio-facing seam. Held via std::unique_ptr
     // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
     // PanadapterStream and their worker threads; RadioModel keeps the two
     // NON-OWNING pointers below, obtained from the backend at construction.
+    // Radio family the live backend implements ("flex", "hl2"). Set by
+    // setupBackend(); compared against the picked radio's RadioInfo::family to
+    // decide whether a connect needs a different backend.
+    QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
     // Transitional (aetherd RFC 2.3): RadioModel drives the backend's Flex
     // status decode from its status choke points while touchpoints convert
@@ -864,6 +945,13 @@ private:
     std::atomic<quint32> m_seqCounter{1};
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
     PanadapterStream* m_panStream{nullptr};    // non-owning — owned by m_backend
+    // aetherd Gap B (Step 2c): geometry + row counter for backends that deliver
+    // spectra through IRadioBackend (HL2). Kept on RadioModel because such a
+    // backend has no PanadapterModel yet, and the neutral waterfall rows still
+    // need frequency edges.
+    double  m_backendPanCenterMhz{0.0};
+    double  m_backendPanBandwidthMhz{0.0};
+    quint32 m_backendWfTimecode{0};
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
     TunerModel       m_tunerModel;

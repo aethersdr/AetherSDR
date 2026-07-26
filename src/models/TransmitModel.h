@@ -270,6 +270,13 @@ signals:
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();
     void maxPowerLevelChanged(int maxWatts);
+    // Fire only when RF/tune power actually changes, from either the local
+    // setter or a radio status update. Use these instead of stateChanged()
+    // for anything that mirrors power to an external surface (#4161) — the
+    // radio restores per-band power on QSY, and a coarse stateChanged()
+    // listener cannot tell that apart from any other TX field moving.
+    void rfPowerChanged(int watts);
+    void tunePowerChanged(int watts);
     // Emitted when the radio reports the TX slice mode (e.g. "FDVU", "FDVL", "USB").
     // Value is empty string until the first transmit status is received.
     void txSliceModeChanged(const QString& mode);

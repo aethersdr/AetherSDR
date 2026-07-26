@@ -407,6 +407,26 @@ QJsonObject describeWidget(const QWidget* w)
             o[QStringLiteral("centerLockSliceId")] = centerLockSliceId.toInt();
             o[QStringLiteral("centerMhz")] = w->property("centerMhz").toDouble();
             o[QStringLiteral("bandwidthMhz")] = w->property("bandwidthMhz").toDouble();
+            // Pan/waterfall alignment. Each waterfall row carries its own
+            // frequency extent and is resampled into the current view, so a row
+            // whose extent disagrees with the pan renders at the wrong
+            // frequency. Publishing the last row's extent alongside the pan's
+            // own geometry — plus the signed centre error in Hz — turns
+            // "the waterfall looks off" into an assertable number.
+            const QVariant wfLow = w->property("wfRowLowMhz");
+            const QVariant wfHigh = w->property("wfRowHighMhz");
+            if (wfLow.isValid() && wfHigh.isValid()) {
+                const double lo = wfLow.toDouble();
+                const double hi = wfHigh.toDouble();
+                if (!std::isnan(lo) && !std::isnan(hi)) {
+                    o[QStringLiteral("wfRowLowMhz")] = lo;
+                    o[QStringLiteral("wfRowHighMhz")] = hi;
+                    o[QStringLiteral("wfRowCenterMhz")] = (lo + hi) / 2.0;
+                    o[QStringLiteral("wfRowSpanMhz")] = hi - lo;
+                    o[QStringLiteral("wfCenterErrorHz")] =
+                        ((lo + hi) / 2.0 - w->property("centerMhz").toDouble()) * 1.0e6;
+                }
+            }
         }
     }
 
@@ -2577,6 +2597,17 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doDrag(a.target, a.value);
             });
 
+        add("wheel", {QStringLiteral("scroll")},
+            "wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event "
+            "(positive steps = scroll up); drives wheel VFO tuning",
+            parseTargetRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.target.isEmpty())
+                    return err(QStringLiteral(
+                        "wheel requires a target and '<x> <y> <steps>'"));
+                return s.doWheel(a.target, a.value);
+            });
+
         add("dragAt", {},
             "dragAt <target> <x> <y> <dx> <dy> [control|meta|shift|alt,...]",
             parseTargetRest,
@@ -2720,8 +2751,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "slice requires an action (add|remove|select|tx|mode|diversity|"
-                        "centerlock|link|txant|rxant|rxsource|fixture|clearfixture)"));
+                        "slice requires an action (add|remove|select|tx|mode|filter|"
+                        "agc|diversity|centerlock|link|txant|rxant|rxsource|fixture|"
+                        "clearfixture)"));
                 return s.doSlice(a.action, a.value);
             });
 
@@ -5678,6 +5710,105 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("unchanged"), unchanged},
                            {QStringLiteral("requested"), !unchanged}};
     }
+    if (action == QLatin1String("filter")) {
+        // Set the RX passband explicitly: "slice filter <lowHz> <highHz>".
+        //
+        // This exists because the mode/filter split is a recurring source of
+        // silent divergence between the model and whatever the DSP was actually
+        // configured with. Changing mode mirrors the passband inside SliceModel
+        // (normalizeFilterPolarity) WITHOUT emitting the operator intent, so a
+        // backend that owns its own DSP chain — HL2 — can be left running the
+        // pre-mirror passband while get_state cheerfully reports the mirrored
+        // one. Measuring anything through the audio path is meaningless while
+        // the passband is unknown, so an agent needs a way to ASSERT it.
+        //
+        // Routed through setFilterWidth() rather than poking the fields: that is
+        // the operator-intent setter, so it emits filterCommandIssued and the
+        // value reaches IRadioBackend::setSliceFilter. It also runs the same
+        // polarity normalization the UI does, so the value that comes back is
+        // the canonical one the model will hold.
+        const QStringList parts =
+            arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                Qt::SkipEmptyParts);
+        if (parts.size() != 2) {
+            return err(QStringLiteral(
+                "slice filter requires '<lowHz> <highHz>' (e.g. '-3000 -150' for LSB, "
+                "'150 3000' for USB, '-4000 4000' for a carrier-straddling AM passband)"));
+        }
+        bool okLow = false, okHigh = false;
+        const int low = parts[0].toInt(&okLow);
+        const int high = parts[1].toInt(&okHigh);
+        if (!okLow || !okHigh)
+            return err(QStringLiteral("slice filter edges must be integers in Hz"));
+        if (low >= high)
+            return err(QStringLiteral("slice filter low edge must be below the high edge"));
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) { s = candidate; break; }
+        }
+        if (!s && !radio->slices().isEmpty())
+            s = radio->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice available to set a filter on"));
+
+        s->setFilterWidth(low, high);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("filter")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("mode"), s->mode()},
+                           {QStringLiteral("requestedLow"), low},
+                           {QStringLiteral("requestedHigh"), high},
+                           // Post-normalization values actually held by the model.
+                           {QStringLiteral("filterLow"), s->filterLow()},
+                           {QStringLiteral("filterHigh"), s->filterHigh()}};
+    }
+    if (action == QLatin1String("agc")) {
+        // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC
+        // through the same operator setters the RX applet uses, so the change
+        // emits agcCommandIssued and reaches IRadioBackend::setSliceAgc.
+        const QStringList parts =
+            arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral(
+                "slice agc requires '<off|slow|med|fast> [threshold]'"));
+        const QString mode = parts[0].toLower();
+        static const QStringList kModes{QStringLiteral("off"), QStringLiteral("slow"),
+                                        QStringLiteral("med"), QStringLiteral("fast")};
+        if (!kModes.contains(mode))
+            return err(QStringLiteral("agc mode must be one of: ")
+                       + kModes.join(QLatin1Char('/')));
+        int threshold = -1;
+        if (parts.size() >= 2) {
+            bool okT = false;
+            threshold = parts[1].toInt(&okT);
+            if (!okT || threshold < 0 || threshold > 100)
+                return err(QStringLiteral("agc threshold must be an integer 0..100"));
+        }
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) { s = candidate; break; }
+        }
+        if (!s && !radio->slices().isEmpty())
+            s = radio->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice available to set AGC on"));
+
+        // Threshold first: setAgcMode() emits the intent carrying BOTH values,
+        // so applying the threshold first means a single mode+threshold request
+        // reaches the backend as one coherent pair rather than as the new mode
+        // paired with the stale threshold.
+        if (threshold >= 0)
+            s->setAgcThreshold(threshold);
+        s->setAgcMode(mode);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("agc")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("agcMode"), s->agcMode()},
+                           {QStringLiteral("agcThreshold"), s->agcThreshold()}};
+    }
     if (action == QLatin1String("txant") || action == QLatin1String("rxant")) {
         // Set the transmit/receive antenna port deterministically. The GUI
         // controls are QMenu::exec() popups an invoke() can't drive without
@@ -6636,6 +6767,65 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
         {QStringLiteral("dx"), dx},
         {QStringLiteral("dy"), dy},
     };
+}
+
+QJsonObject AutomationServer::doWheel(const QString& target, const QString& value) const
+{
+    // Synthesize a real QWheelEvent. Wheel tuning is one of the four ways an
+    // operator moves the VFO, and it was the only one with no bridge verb — so
+    // it was the only one that could not be regression-tested. Steps are wheel
+    // detents (positive = away from the user / scroll up), converted at Qt's
+    // conventional 120 units per detent.
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+    const QJsonObject safetyError = pointerSafetyError(w, target, QStringLiteral("wheel"));
+    if (!safetyError.isEmpty())
+        return safetyError;
+
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 3)
+        return err(QStringLiteral("wheel requires '<x> <y> <steps> [modifiers]'"));
+    bool okx = false, oky = false, oks = false;
+    const int x = parts.at(0).toInt(&okx);
+    const int y = parts.at(1).toInt(&oky);
+    const int steps = parts.at(2).toInt(&oks);
+    if (!okx || !oky || !oks)
+        return err(QStringLiteral("wheel x/y/steps must be integers"));
+    if (steps == 0)
+        return err(QStringLiteral("wheel steps must be non-zero"));
+
+    const QPoint pos(x, y);
+    if (!w->rect().contains(pos))
+        return err(QStringLiteral("wheel point is outside the target widget"));
+
+    Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+    for (int i = 3; i < parts.size(); ++i) {
+        const QString m = parts.at(i).trimmed().toLower();
+        if (m == QStringLiteral("control") || m == QStringLiteral("ctrl"))
+            modifiers |= Qt::ControlModifier;
+        else if (m == QStringLiteral("shift"))
+            modifiers |= Qt::ShiftModifier;
+        else if (m == QStringLiteral("alt") || m == QStringLiteral("option"))
+            modifiers |= Qt::AltModifier;
+        else if (m == QStringLiteral("meta") || m == QStringLiteral("cmd"))
+            modifiers |= Qt::MetaModifier;
+        else if (m != QStringLiteral("none"))
+            return err(QStringLiteral("wheel unknown modifier: ") + parts.at(i));
+    }
+
+    const QPoint globalPos = w->mapToGlobal(pos);
+    const QPoint angle(0, steps * 120);
+    QWheelEvent ev(QPointF(pos), QPointF(globalPos), QPoint(0, 0), angle,
+                   Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(w, &ev);
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("wheel"), target},
+                       {QStringLiteral("x"), x},
+                       {QStringLiteral("y"), y},
+                       {QStringLiteral("steps"), steps},
+                       {QStringLiteral("angleDeltaY"), angle.y()}};
 }
 
 QJsonObject AutomationServer::doDragAt(const QString& target, const QString& value) const
