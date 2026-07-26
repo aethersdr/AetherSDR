@@ -78,7 +78,6 @@ class AudioEngine : public QObject {
 
 public:
     static constexpr int DEFAULT_SAMPLE_RATE = 24000;
-    bool m_hostModulation = false;
 
     struct ReceivePresentationAudioQueues {
         int playbackQueuedMs{0};
@@ -860,6 +859,10 @@ private:
     quint16       m_txPort{0};
     quint32       m_txStreamId{0};         // DAX TX stream
     quint32       m_remoteTxStreamId{0};  // remote_audio_tx (voice/VOX)
+    // Host-modulating backend (HL2): no Flex stream id will ever be assigned,
+    // so the TX gate keys off this instead. setHostModulation() is the single
+    // write path.
+    bool          m_hostModulation{false};
     quint8        m_txPacketCount{0};    // 4-bit, mod 16
     QByteArray    m_txAccumulator;       // accumulate PCM until 128 stereo pairs
     QByteArray    m_voxAccumulator;     // accumulate PCM for VOX/met_in_rx stream

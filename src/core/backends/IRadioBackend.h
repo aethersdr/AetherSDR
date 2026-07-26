@@ -98,16 +98,6 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
-    // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
-    //
-    // For backends that modulate on the host (HL2). A Flex radio does its own
-    // modulation from mic or DAX, so FlexBackend ignores this — hence a default
-    // no-op rather than a pure virtual.
-    //
-    // The audio is already shaped: AudioEngine has applied the test tone,
-    // compressor and EQ before this point. That is deliberate — the TONE button,
-    // the microphone and any future source all reach the air through ONE path,
-    // so what the operator monitors is what gets transmitted.
     // Tune carrier on/off.
     //
     // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
@@ -121,6 +111,16 @@ public:
     // implements it.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
+    // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
+    //
+    // For backends that modulate on the host (HL2). A Flex radio does its own
+    // modulation from mic or DAX, so FlexBackend ignores this — hence a default
+    // no-op rather than a pure virtual.
+    //
+    // The audio is already shaped: AudioEngine has applied the test tone,
+    // compressor and EQ before this point. That is deliberate — the TONE button,
+    // the microphone and any future source all reach the air through ONE path,
+    // so what the operator monitors is what gets transmitted.
     virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
     {
         Q_UNUSED(int16Stereo);
