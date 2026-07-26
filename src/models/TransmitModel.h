@@ -259,9 +259,9 @@ public:
 
 signals:
     void stateChanged();
-    // Typed RF-power change, for backends that set drive through the seam
-    // rather than by parsing the Flex command string above.
-    void rfPowerChanged(int percent);
+    // (rfPowerChanged is declared once below — main already has it for the
+    // external-surface mirror path; backends that set drive through the seam
+    // reuse that same signal rather than a duplicate. #4449 recovery.)
     // Keying and tune as INTENT rather than as a Flex command string.
     //
     // setMox() and startTune() emit "xmit N" / "transmit tune N" through
