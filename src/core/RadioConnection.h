@@ -121,7 +121,11 @@ private:
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     std::atomic<quint32> m_handle{0};
-    bool m_syntheticDemo{false};   // true while connected to the demo radio
+    // Written on the connection thread, read from the GUI and network threads
+    // (PanadapterStream::start, isSyntheticDemo callers) — so it needs the same
+    // treatment as its m_state/m_handle siblings above, which are atomic for
+    // exactly this reason.
+    std::atomic<bool> m_syntheticDemo{false};   // true while connected to the demo radio
     QString m_demoSliceMode{QStringLiteral("USB")};   // demo slice mode (USB/LSB/…)
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;  // fallback when kernel TCP_INFO unavailable

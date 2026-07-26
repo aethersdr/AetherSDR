@@ -109,6 +109,15 @@ void NoiseMixer::setNotches(const std::vector<Notch>& notches)
             m_notchWidthHz[std::lround(n.hz)] = n.widthHz;
         }
     }
+    // Drop biquad history for notches that are no longer active. m_notchState is
+    // keyed by round(hz) and was never pruned: with ANF tracking a tuned VFO it
+    // grew without bound, and re-using a frequency resurrected that notch's stale
+    // x1/x2/y1/y2 as a transient. Erase-by-key rather than clear(), so a notch
+    // that survives this call keeps its filter state and does not click.
+    for (auto it = m_notchState.begin(); it != m_notchState.end(); ) {
+        it = m_notchWidthHz.count(it->first) ? std::next(it)
+                                             : m_notchState.erase(it);
+    }
 }
 
 std::vector<NoiseMixer::Notch> NoiseMixer::autoNotchTones() const
@@ -183,11 +192,43 @@ void NoiseMixer::loadVoiceClip()
     QFile f(QStringLiteral(":/demo_voice.wav"));
     if (!f.open(QIODevice::ReadOnly)) return;
     const QByteArray raw = f.readAll();
-    // Minimal RIFF/WAVE parse: find the "data" chunk, take int16 mono @ 24 kHz.
-    const int hdr = raw.indexOf("data");
-    if (hdr < 0 || raw.size() < hdr + 8) return;
-    const int dataOff = hdr + 8;
-    const int nSamples = (raw.size() - dataOff) / 2;
+
+    // Minimal RIFF/WAVE parse: WALK the chunk list to find "data", rather than
+    // scanning for the literal bytes anywhere in the file. A bare indexOf("data")
+    // matches the first occurrence wherever it lands — inside a LIST/INFO chunk,
+    // or even in PCM data — and ignoring the declared chunk size means trailing
+    // chunks after the samples get decoded as audio. Safe for the currently
+    // bundled clip, wrong for any WAV carrying metadata before `data`.
+    auto u32 = [&raw](int off) -> quint32 {
+        return static_cast<quint32>(static_cast<quint8>(raw[off]))
+             | (static_cast<quint32>(static_cast<quint8>(raw[off + 1])) << 8)
+             | (static_cast<quint32>(static_cast<quint8>(raw[off + 2])) << 16)
+             | (static_cast<quint32>(static_cast<quint8>(raw[off + 3])) << 24);
+    };
+
+    // "RIFF" <size> "WAVE", then a sequence of <id><size><payload>, each chunk
+    // padded to an even length.
+    if (raw.size() < 12 || !raw.startsWith("RIFF") || raw.mid(8, 4) != "WAVE")
+        return;
+
+    int dataOff = -1;
+    qint64 dataLen = 0;
+    for (int pos = 12; pos + 8 <= raw.size(); ) {
+        const QByteArray id = raw.mid(pos, 4);
+        const qint64 len = static_cast<qint64>(u32(pos + 4));
+        const int payload = pos + 8;
+        if (len < 0 || payload + len > raw.size())
+            break;                       // truncated or malformed — take nothing
+        if (id == "data") {
+            dataOff = payload;
+            dataLen = len;
+            break;
+        }
+        pos = payload + static_cast<int>(len + (len & 1));   // chunks are word-aligned
+    }
+    if (dataOff < 0 || dataLen < 2) return;
+
+    const int nSamples = static_cast<int>(dataLen / 2);
     m_voiceSamples.resize(nSamples);
     const auto* s = reinterpret_cast<const qint16*>(raw.constData() + dataOff);
     for (int i = 0; i < nSamples; ++i)

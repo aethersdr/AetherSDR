@@ -208,34 +208,29 @@ bool PanadapterStream::start(RadioConnection* conn)
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
 
     if (conn && conn->isSyntheticDemo()) {
-        // Demo radio: no UDP source. Generate FFT lines locally and emit
-        // spectrumReady() on the demo pan stream, so the existing widget wiring
-        // paints them exactly as it would real radio frames. (RFC #4288 Stage 3)
+        // Demo radio: no UDP source, and NOTHING generated here either.
+        //
+        // This branch used to run a 20 fps 1024-bin spectrum timer and a 10 ms
+        // audio timer against a second NoiseMixer (m_demoAudio) — an earlier demo
+        // implementation that predates SimBackend. Since the RFC #4288 Route A
+        // re-home, SimBackend produces the demo's audio AND spectrum from its own
+        // mixer and this stream's render/audio signals are deliberately not
+        // wired, so both timers ran for the whole session with ZERO consumers:
+        // pure CPU burn, plus a second noise scene that could drift from the one
+        // the operator actually hears (the QSO recorder would have captured the
+        // wrong one had it been re-bound).
+        //
+        // Leaving them off also retires the kVisibleSpanHz/pan-bandwidth
+        // contradiction in tickSyntheticDemo(): that constant asserted a 40 kHz
+        // span matching a 0.040 MHz pan, but the demo pan is now 0.008 MHz.
+        // Nothing reads it any more.
+        //
+        // The stream object itself still exists and starts cleanly — RadioModel
+        // harvests it from SimBackend and the rest of AE treats it as a normal
+        // (idle) pan stream.
         m_syntheticPanStreamId = 0x40000000u;   // matches the display-pan status id
         m_syntheticElapsedS = 0.0;
         m_syntheticFrameIndex = 0;
-        // The startup scene is NOT hardcoded here — the DemoApplet is the single
-        // source of truth and pushes its control state to the demo setters when it
-        // becomes visible (MainWindow, on demo connect), so audio + UI can't drift.
-        // Until that push arrives the mixer is silent (all channels default off).
-        if (!m_syntheticTimer) {
-            m_syntheticTimer = new QTimer(this);
-            connect(m_syntheticTimer, &QTimer::timeout,
-                    this, &PanadapterStream::tickSyntheticDemo);
-        }
-        m_syntheticTimer->start(50);   // display: ~20 fps
-        // AUDIO gets its OWN fast, PRECISE timer — real RX audio is a smooth stream
-        // of small packets, not one big 50 ms lump. Delivering 50 ms batches on the
-        // coarse display timer arrived lumpy/jittery and warbled every sound. A
-        // 10 ms precise tick emitting ~240-sample chunks keeps the RX buffer fed
-        // evenly.
-        if (!m_syntheticAudioTimer) {
-            m_syntheticAudioTimer = new QTimer(this);
-            m_syntheticAudioTimer->setTimerType(Qt::PreciseTimer);
-            connect(m_syntheticAudioTimer, &QTimer::timeout,
-                    this, &PanadapterStream::tickSyntheticAudio);
-        }
-        m_syntheticAudioTimer->start(10);
         return true;
     }
 
