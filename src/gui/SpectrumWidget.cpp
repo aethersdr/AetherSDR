@@ -322,6 +322,9 @@ static constexpr int kPanDragSettleMs = 160;
 static constexpr int kFrequencyRangeCommandMs = 33;
 static constexpr int kFrequencyRangeSettleMs = 300;
 static constexpr int kResizeBufferSettleMs = 120;
+// Receiver AGC recovery window after TX→RX (#2117). Frames inside it read
+// several dB hot, so they neither feed waterfall history nor anchor a scale.
+static constexpr qint64 kPostTxAgcSettleMs = 400;
 static constexpr float kDbmReleasePreviewChangeThresholdDb = 0.05f;
 static constexpr float kDbmReleaseRebaseMinImprovementDb = 0.75f;
 static constexpr int kFilterEdgeGrabPx = 8;
@@ -1335,6 +1338,7 @@ QVariantMap SpectrumWidget::automationDssReset(bool kiwiStream)
     m_frequencyRangeCommandThrottle.clear();
     m_frequencyRangeCommandClock.invalidate();
     m_dssZoomFloorSync.clear();
+    m_dssZoomFloorSyncNotBeforeMs = 0;
     m_frequencyPreviewUpdateCount = 0;
     m_frequencyPreviewPresentCount = 0;
     m_frequencyPreviewCommitCount = 0;
@@ -3201,6 +3205,15 @@ void SpectrumWidget::armDssZoomFloorSyncAfterSettle()
         return;
     }
 
+    // The range command has only just gone out and the radio needs ~100-300 ms
+    // to switch bandwidth. The scale-drag release path arms with no delay at
+    // all — mouseReleaseEvent() calls scheduleFrequencyRangeSettleUpdate() and
+    // finishFrequencyRangeSettleUpdate() back to back — so without this hold
+    // the next frame (~33 ms away, still encoded at the pre-zoom bandwidth)
+    // would be accepted as the first post-settle frame and disarm the gate.
+    m_dssZoomFloorSyncNotBeforeMs =
+        QDateTime::currentMSecsSinceEpoch() + kFrequencyRangeSettleMs;
+
     // Keep the old anchor visible through the gesture, then discard only the
     // smoothed measurements. The first real post-settle FFT frame replaces
     // them; reprojected preview bins must never become the new scale anchor.
@@ -3220,6 +3233,28 @@ void SpectrumWidget::syncDssRangeFromFreshZoomFrame(const QVector<float>& bins)
     }
     if (!m_dssZoomFloorSync.waitingForFreshFrame()
         || m_transmitting || m_pendingDbmRangeEcho || bins.isEmpty()) {
+        return;
+    }
+
+    // Reject frames whose dBm encoding cannot be trusted yet — without
+    // consuming the arm, so the gate keeps waiting for a usable one:
+    //   • the radio has not finished switching bandwidth;
+    //   • the receiver AGC is still recovering from TX (#2117 blanks the
+    //     waterfall over the same window further down updateSpectrum());
+    //   • a y_pixels change is still settling, so bins decode against the old
+    //     height (the guard appendDssWaterfallRow() and
+    //     pushDssRowForWaterfallStream() already apply);
+    //   • a dBm-range rebase may be handing us reprojected preview bins;
+    //   • the operator is dragging the scale this would fight.
+    DssZoomFloorFrameGuards guards;
+    guards.nowMs = QDateTime::currentMSecsSinceEpoch();
+    guards.notBeforeMs = m_dssZoomFloorSyncNotBeforeMs;
+    guards.txEndMs = m_txEndMs;
+    guards.postTxSettleMs = kPostTxAgcSettleMs;
+    guards.scaleSettling = flexDssFftScaleSettling();
+    guards.rebaseActive = m_dbmReleaseRebaseUntilMs > 0;
+    guards.draggingDbmScale = isDraggingDbmScale();
+    if (!dssZoomFloorFrameTrusted(guards)) {
         return;
     }
 
@@ -6366,7 +6401,12 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // Nudges shift center by ~10% of halfBw; 25% threshold comfortably separates the two.
     const double halfBw = bandwidthMhz / 2.0;
     const bool bwChanged = (bandwidthMhz != m_bandwidthMhz);
-    if (bwChanged) {
+    // Only a change away from an already-established span is a zoom. This is
+    // the radio-echo entry point, so the first geometry push of a pan (no
+    // prior bandwidth) is the radio establishing it on connect — re-anchoring
+    // there would push a client-computed aperture over the min/max dBm the
+    // radio just restored for this GUIClientID (Constitution II/III).
+    if (bwChanged && m_bandwidthMhz > 0.0) {
         m_dssZoomFloorSync.noteBandwidthChange();
         if (!m_frequencyRangeSettlePending && m_dssZoomFloorSyncTimer) {
             m_dssZoomFloorSyncTimer->start();
@@ -7198,7 +7238,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         bool postTxBlanking = false;
         if (m_txEndMs > 0) {
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
-            if (now - m_txEndMs < 400)
+            if (now - m_txEndMs < kPostTxAgcSettleMs)
                 postTxBlanking = true;
             else
                 m_txEndMs = 0;
@@ -7266,7 +7306,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // window.
     if (m_txEndMs > 0) {
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
-        if (now - m_txEndMs < 400) return;
+        if (now - m_txEndMs < kPostTxAgcSettleMs) return;
         m_txEndMs = 0;
     }
 

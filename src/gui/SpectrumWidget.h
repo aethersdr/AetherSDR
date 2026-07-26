@@ -1302,6 +1302,10 @@ private:
     float m_dssFloorAnchorDbm{-1000.0f};
     bool  m_dssFloorAnchorValid{false};
     DssZoomFloorSyncGate m_dssZoomFloorSync;
+    // Earliest time an armed zoom sync may accept a frame. The radio needs
+    // ~100-300 ms to switch bandwidth; frames before this still carry the
+    // pre-zoom encoding.
+    qint64 m_dssZoomFloorSyncNotBeforeMs{0};
     // The radio can briefly deliver FFT packets encoded with the old y_pixels
     // after acknowledging a new height. Keep those rows out of retained 3D
     // history; the live 2D trace and waterfall continue normally.

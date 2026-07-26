@@ -159,6 +159,34 @@ private:
     bool m_waitingForFreshFrame{false};
 };
 
+// Windows in which an FFT frame's dBm encoding does not correspond to the
+// settled zoom, so it must not anchor the 3D floor. Kept out of the widget so
+// the timing policy is testable without a live radio or a QWidget.
+struct DssZoomFloorFrameGuards {
+    // std::int64_t, not qint64: this header stays Qt-free so the logic can be
+    // unit-tested without linking Qt. Callers pass qint64 epoch values.
+    std::int64_t nowMs{0};
+    std::int64_t notBeforeMs{0};    // radio still switching bandwidth
+    std::int64_t txEndMs{0};        // 0 when no recent TX→RX transition
+    std::int64_t postTxSettleMs{0}; // receiver AGC recovery window (#2117)
+    bool scaleSettling{false};      // y_pixels change still settling
+    bool rebaseActive{false};       // bins may be reprojected preview data
+    bool draggingDbmScale{false};
+};
+
+inline bool dssZoomFloorFrameTrusted(const DssZoomFloorFrameGuards& guards)
+{
+    if (guards.nowMs < guards.notBeforeMs) {
+        return false;
+    }
+    if (guards.txEndMs > 0
+        && guards.nowMs - guards.txEndMs < guards.postTxSettleMs) {
+        return false;
+    }
+    return !guards.scaleSettling && !guards.rebaseActive
+        && !guards.draggingDbmScale;
+}
+
 enum class WaterfallPipelineMode {
     Legacy,
     RowFrequencyFrames,
