@@ -5746,8 +5746,9 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         return;
     // Note: connections to a PRIOR backend are already gone — Qt drops a
     // connection when either endpoint is destroyed, and RadioModel destroys the
-    // old backend before building the new one (rebuildBackendForTarget). So there
-    // is no duplicate-connection risk from re-running this per swap.
+    // old backend before building the new one (teardownBackend/setupBackend on a
+    // family switch). So there is no duplicate-connection risk from re-running
+    // this per swap.
 
     // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
     // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the

@@ -78,6 +78,12 @@ public:
     // the UI can label the demo entry and match it back after connect.
     static QString demoModelName();
     static QString demoSerial();
+    // The backend-family string for the demo ("sim"), as understood by
+    // RadioModel::makeBackend()/setupBackend(). Single definition so the picker,
+    // the factory and any test all agree — this is THE selector for which backend
+    // a target gets, and a second parallel notion of "is this the demo" is exactly
+    // what let the demo run on a FlexBackend.
+    static QString familyName();
 
     // ---- Path B seam (RFC #4288): SimBackend OWNS a RadioConnection and a
     // PanadapterStream in synthetic-demo mode, exactly as FlexBackend owns its

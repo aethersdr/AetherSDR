@@ -1238,6 +1238,12 @@ void ConnectionPanel::addDemoRadio()
     demo.name = QStringLiteral("FLEX-6700");
     demo.model = SimBackend::demoModelName();
     demo.serial = SimBackend::demoSerial();
+    // The demo is its own BACKEND FAMILY, even though it impersonates a Flex in
+    // the picker. RadioModel::connectToRadio switches backends on this field, so
+    // leaving it empty (defaulting to "flex") made the family switch build a
+    // FlexBackend for the demo target — and the demo then ran on the wrong
+    // backend entirely. One selector, and this is it.
+    demo.family = SimBackend::familyName();
     demo.version = QStringLiteral("0.0.0.0");
     demo.nickname = QStringLiteral("Simulator (not on the air)");
     demo.callsign = QStringLiteral("DEMO");

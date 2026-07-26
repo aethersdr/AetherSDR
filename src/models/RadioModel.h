@@ -322,7 +322,6 @@ public:
     QString activeGlobalProfile() const { return m_activeGlobalProfile; }
     void loadGlobalProfile(const QString& name);
     void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
-    void rebuildBackendForTarget(bool wantDemo);   // swap backend kind at connect
     void resetPanState();
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
@@ -957,7 +956,6 @@ private:
     // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
     // simulator) instead of a FlexBackend. Selected per-connection from the target
     // — see connectToRadio(). Also generalizes to future non-Flex backends (HL2).
-    bool m_useDemoBackend{false};
     // Transitional (aetherd RFC 2.3): RadioModel drives the backend's Flex
     // status decode from its status choke points while touchpoints convert
     // one at a time. Non-owning alias of m_backend; goes away once the backend

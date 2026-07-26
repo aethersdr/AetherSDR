@@ -904,16 +904,6 @@ void RadioModel::teardownBackend()
 // is simply family "sim", which is what "wire it through the real SimBackend
 // factory" asked for. Kept as a named helper so the connect path reads clearly and
 // the demo/real decision stays in one place.
-void RadioModel::rebuildBackendForTarget(bool wantDemo)
-{
-    if (wantDemo == m_useDemoBackend && m_backend)
-        return;   // already the right backend kind
-    m_useDemoBackend = wantDemo;
-    teardownBackend();
-    setupBackend(wantDemo ? QStringLiteral("sim") : QStringLiteral("flex"));
-    emit backendChanged(m_backend.get());
-}
-
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
 {
@@ -2128,11 +2118,14 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     clearAutomationSliceFixtures();
     m_automationGpsNtpServerAddress.clear();
 
-    // RFC #4288 Route A: pick the backend for THIS target. Connecting to the
-    // demo entry (matched by SimBackend's stable demo serial) swaps in a
-    // wire-less SimBackend; connecting to a real radio swaps back to FlexBackend.
-    // A no-op when the kind is unchanged.
-    rebuildBackendForTarget(info.serial == SimBackend::demoSerial());
+    // RFC #4288 Route A: the demo is selected by its FAMILY ("sim") in the block
+    // above, exactly like HL2 — no separate demo path here. An earlier revision
+    // kept a parallel rebuildBackendForTarget(bool) alongside the family switch;
+    // the two disagreed (the demo RadioInfo carried the default family "flex"),
+    // so the family switch built a FlexBackend for the demo and the bool then
+    // early-returned believing the target was already correct. It also emitted
+    // only backendChanged, never backendRebuilt, leaving the rebuilt
+    // PanadapterStream with no sinks bound after a demo↔real swap. One selector.
 
     m_wanConn = nullptr;  // LAN mode
     m_lastInfo = info;
@@ -3809,7 +3802,7 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
 
 void RadioModel::onConnected()
 {
-    qCDebug(lcProtocol) << "RadioModel: connected (demo=" << m_useDemoBackend << ")";
+    qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
     // Belt-and-braces (#4122 review): the connect entry points clear fixtures,

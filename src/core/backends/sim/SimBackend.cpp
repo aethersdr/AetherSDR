@@ -221,11 +221,12 @@ void SimBackend::loadDemoNoisePreset(const QString& presetName)
 
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
 QString SimBackend::demoSerial()    { return QStringLiteral("DEMO-0001"); }
+QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
-    caps.family = QStringLiteral("sim");
+    caps.family = familyName();
     caps.model  = demoModelName();
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     caps.maxPanadapters = 1;
