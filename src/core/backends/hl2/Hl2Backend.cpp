@@ -426,12 +426,14 @@ void Hl2Backend::setSliceFrequency(int /*sliceId*/, double hz)
                 Q_ARG(std::uint32_t, static_cast<std::uint32_t>(hz < 0 ? 0 : hz)));
     }
 
-    // Shift by the slice's offset from the NCO, with the SAME sign. Measured,
-    // not reasoned: hl2_shift_test sweeps the stage and finds the mapping is
-    // exactly audio = tone + shift for positive values (a tone 800 Hz below the
-    // NCO lands at 2800 Hz of audio with the slice 2 kHz above it). The
-    // intuition that "bringing a signal down to baseband must be negative" is
-    // backwards here, and negative shifts push the signal out of the passband.
+    // Shift by the slice's offset from the NCO, with the SAME sign.
+    //
+    // Derivable, now that the handedness is settled: the wire puts a signal at
+    // frequency F at -(F - NCO), so mapping the slice's own frequency to
+    // baseband needs -(slice - NCO) + shift == 0, i.e. shift = slice - NCO.
+    // hl2_shift_test measures exactly that. (This sign is unchanged — it was
+    // right all along; what was wrong was the conjugation in Hl2RxDsp, which is
+    // why the stage looked correct only in LSB.)
     if (m_dsp)
         QMetaObject::invokeMethod(m_dsp, "setShift", Qt::QueuedConnection,
             Q_ARG(double, m_rxFreqHz - m_ncoHz));

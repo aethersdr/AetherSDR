@@ -126,11 +126,29 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     if (!m_channel)
         return;
 
-    // Panadapter: the FFT sees the full-rate IQ.
-    if (m_spectrum->process(iq, m_bins) > 0)
+    // The two consumers need OPPOSITE handedness, and each was wired to the
+    // other's. Two facts, both measured rather than reasoned:
+    //
+    //   1. The HPSDR wire is the conjugate of the analytic convention: a signal
+    //      ABOVE the NCO arrives at a NEGATIVE frequency.
+    //   2. WDSP's RXA, as configured here, selects the OPPOSITE sign to its
+    //      passband bounds — USB with [+150,+3000] passes negative frequencies.
+    //      (Confirmed independently by hl2_rxdsp_test and hl2_shift_test.)
+    //
+    // So the DEMODULATOR wants the raw wire — (1) and (2) cancel — while the
+    // SPECTRUM, which has no such quirk, wants the conjugate.
+    m_conjugated.resize(iq.size());
+    for (std::size_t n = 0; n < iq.size(); ++n)
+        m_conjugated[n] = std::conj(iq[n]);
+
+    // Panadapter: conjugated into the analytic convention Hl2Spectrum's fftshift
+    // assumes. Fed the raw wire it drew the spectrum MIRRORED about the pan
+    // centre — on 40 m that put FT8, which lives at 7.074..7.077, on screen at
+    // 7.071..7.074, left of a correctly-drawn DIGU cursor.
+    if (m_spectrum->process(m_conjugated, m_bins) > 0)
         emit spectrumReady(m_bins);
 
-    // Audio: buffer into fixed WdspChannel blocks.
+    // Audio: the RAW wire. See the note in the block loop below.
     m_iqBuffer.insert(m_iqBuffer.end(), iq.begin(), iq.end());
     const std::size_t block = static_cast<std::size_t>(m_config.dspBlockSize);
     std::size_t consumed = 0;
@@ -144,18 +162,23 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             std::fill(m_q.begin(), m_q.end(), 0.0f);
         } else
         for (std::size_t n = 0; n < block; ++n) {
-            m_i[n] = m_iqBuffer[consumed + n].real();
-            // Conjugate for WDSP. The HPSDR wire order (I then Q, decoded in
-            // MetisProtocol) produces a spectrum whose handedness is the
-            // opposite of what WDSP's sideband selection assumes, so USB
-            // demodulated the LOWER sideband and LSB the upper — audibly, the
-            // two sidebands were swapped while the panadapter looked right.
+            // NOT conjugated. This carried a `-imag()` on the stated reasoning
+            // that the HPSDR wire order is the opposite handedness to WDSP's
+            // convention. Measured against WWV on live hardware, it is not: with
+            // the slice shift forced to zero — the one geometry where no second
+            // error can compensate — that conjugation made USB hear signals
+            // BELOW the dial and LSB hear them above, by 100-300x in magnitude.
+            // Removing it puts every mode on the sideband it advertises.
             //
-            // Applied HERE and not in the decoder deliberately: Hl2Spectrum
-            // takes the same buffer and its handedness is already correct, so
-            // conjugating upstream would fix the audio and mirror the display.
-            // The narrow fix is that WDSP's convention differs from the wire's.
-            m_q[n] = -m_iqBuffer[consumed + n].imag();
+            // It survived because it never acted alone: the shift sign in
+            // Hl2Backend::setSliceFrequency was calibrated THROUGH this
+            // inversion and validated in LSB (hl2_shift_test), the one mode the
+            // inversion makes correct. The two did not cancel cleanly, though —
+            // they left the slice mistuned by twice its offset from the NCO,
+            // which is the "DIGU is ~3 kHz off" an operator sees at a 1.5 kHz
+            // offset. Both halves have to come out together.
+            m_i[n] = m_iqBuffer[consumed + n].real();
+            m_q[n] = m_iqBuffer[consumed + n].imag();
         }
         consumed += block;
 

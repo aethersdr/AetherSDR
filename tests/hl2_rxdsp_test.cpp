@@ -71,7 +71,13 @@ int main(int argc, char** argv)
     QObject::connect(&dsp, &Hl2RxDsp::spectrumReady, &dsp,
                      [&](const std::vector<float>& bins) { ++specCount; lastBins = bins; });
 
-    // Feed a +1 kHz complex tone (in the USB passband) as 126-sample blocks.
+    // Feed a signal 1 kHz ABOVE centre, IN WIRE ORDER — note the NEGATIVE sine.
+    //
+    // The HPSDR wire is the conjugate of the analytic convention, so a signal
+    // above centre arrives as exp(-j.2.pi.f.t). This generator emitted the
+    // textbook exp(+j...) — synthetic IQ no HL2 ever sends — and both assertions
+    // below passed against a chain that mirrored the panadapter and inverted
+    // every demodulated sideband.
     const int fs = 48000;
     const double f = 1000.0;
     const int total = fs / 2;                 // ~0.5 s
@@ -80,7 +86,7 @@ int main(int argc, char** argv)
         const double ph = 2.0 * kPi * f * n / fs;
         stream[static_cast<std::size_t>(n)] =
             0.3f * std::complex<float>(static_cast<float>(std::cos(ph)),
-                                       static_cast<float>(std::sin(ph)));
+                                       static_cast<float>(-std::sin(ph)));
     }
     std::span<const std::complex<float>> s(stream);
     for (std::size_t off = 0; off < s.size(); off += kSamplesPerPacket) {
@@ -121,9 +127,10 @@ int main(int argc, char** argv)
         const double weakAmp = 0.3 * 0.01;          // -40 dB
         for (int n = 0; n < total; ++n) {
             const double ph = 2.0 * kPi * f * n / fs;
+            // Wire order, same convention as the strong tone above.
             stream[static_cast<std::size_t>(n)] =
                 std::complex<float>(static_cast<float>(weakAmp * std::cos(ph)),
-                                    static_cast<float>(weakAmp * std::sin(ph)));
+                                    static_cast<float>(-weakAmp * std::sin(ph)));
         }
         // Feed several seconds: RXA_S_PK decays rather than jumping, so a short
         // burst measures the decay slope instead of the settled level.

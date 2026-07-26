@@ -16,6 +16,21 @@
 // appears at |delta| Hz of audio in LSB. So with the tone fixed relative to the
 // NCO and the slice moved UP by `offset`, the audio frequency must RISE by the
 // same amount.
+//
+// TWO conventions matter here and both were previously wrong, in ways that
+// cancelled and left this test passing against a broken chain:
+//
+//   Tone   is generated in WIRE order. The HPSDR wire is the CONJUGATE of the
+//          analytic convention, so a tone BELOW the NCO is exp(+j.w.t), not
+//          exp(-j.w.t). Feeding the textbook form meant this test's "800 Hz
+//          below" was really 800 Hz ABOVE.
+//   Shift  is what Hl2Backend actually sends, (slice - NCO). That sign is
+//          correct and unchanged; it only ever LOOKED wrong because it was
+//          validated in LSB, the one mode the conjugation bug made correct.
+//
+// Get either backwards and the stage looks correct while the radio mistunes by
+// twice the slice offset — the "DIGU is 3 kHz off" an operator sees at a
+// 1.5 kHz offset.
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 
@@ -119,24 +134,24 @@ int main(int argc, char** argv)
 
     // Tone 800 Hz BELOW the NCO. With the slice on the NCO (shift 0) LSB should
     // put it at 800 Hz of audio.
-    const double base = runTone(dsp, -800.0, 0.0);
+    const double base = runTone(dsp, 800.0, 0.0);
     std::fprintf(stderr, "offset     0 Hz -> audio %.0f Hz (expect ~800)\n", base);
     check(std::fabs(base - 800.0) < 120.0, "tone lands at 800 Hz with no shift");
 
     // Move the slice 2 kHz ABOVE the NCO. The tone is now 2800 Hz below the
     // slice, so the audio frequency must RISE to ~2800.
-    const double up2k = runTone(dsp, -800.0, 2000.0);
-    std::fprintf(stderr, "offset +2000 Hz -> audio %.0f Hz (expect ~2800)\n", up2k);
+    const double up2k = runTone(dsp, 800.0, 2000.0);
+    std::fprintf(stderr, "slice +2000 Hz -> audio %.0f Hz (expect ~2800)\n", up2k);
     check(std::fabs(up2k - 2800.0) < 200.0, "slice +2 kHz moves the tone to 2800 Hz");
 
     // And 4 kHz above.
-    const double up4k = runTone(dsp, -800.0, 4000.0);
-    std::fprintf(stderr, "offset +4000 Hz -> audio %.0f Hz (expect ~4800)\n", up4k);
+    const double up4k = runTone(dsp, 800.0, 4000.0);
+    std::fprintf(stderr, "slice +4000 Hz -> audio %.0f Hz (expect ~4800)\n", up4k);
     check(std::fabs(up4k - 4800.0) < 250.0, "slice +4 kHz moves the tone to 4800 Hz");
 
     // Returning the slice to the NCO must return the tone to where it started —
     // the stage is not accumulating.
-    const double back = runTone(dsp, -800.0, 0.0);
+    const double back = runTone(dsp, 800.0, 0.0);
     std::fprintf(stderr, "offset     0 Hz -> audio %.0f Hz (expect ~800 again)\n", back);
     check(std::fabs(back - 800.0) < 120.0, "shift back to 0 restores the tone");
 
