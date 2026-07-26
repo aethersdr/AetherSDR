@@ -55,11 +55,19 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
                                                  double toneHz, double amplitude,
                                                  double micGain, double seconds,
                                                  float* lastMicPeak = nullptr,
-                                                 bool alc = false)
+                                                 bool alc = false,
+                                                 const double* passband = nullptr)
 {
     Hl2TxDsp tx;
     Hl2TxDsp::Config cfg;
     cfg.mode = mode;
+    // Optional explicit passband. Hl2Backend pushes a sign-correct, mode-derived
+    // one; the struct default is a positive 300..2700 for every mode, so without
+    // this the sideband/passband interaction is never exercised at all.
+    if (passband) {
+        cfg.filterLowHz  = passband[0];
+        cfg.filterHighHz = passband[1];
+    }
     // ALC OFF by default in these tests. Every assertion below except the ALC's
     // own measures a fixed relationship between input and output, and an ALC
     // exists precisely to break fixed relationships.
@@ -145,6 +153,59 @@ int main(int argc, char** argv)
             check(upper > lower,
                   "LSB: wire-facing IQ puts energy on the UPPER side (conjugated)");
             check(-ratioDb > 30.0, "LSB: opposite sideband suppressed by >30 dB");
+        }
+    }
+
+    // ---- DIGU/DIGL transmit on the same sidebands as USB/LSB ----
+    //
+    // WSJT-X transmits in DIGU. These modes were never covered here, and the
+    // sideband is the whole question: an FT8 signal on the wrong sideband is
+    // both un-decodable and 3 kHz away from where the operator believes it is.
+    //
+    // Each is checked with the exact passband Hl2Backend now pushes for that
+    // mode, which is the combination that actually ships -- the assertions above
+    // only ever ran against the struct default, so the passband's effect on the
+    // sideband was untested until this block existed.
+    {
+        // POSITIVE for every mode. This is the TX convention, and it is the
+        // opposite of RX: here the MODE carries the sideband and the bandpass is
+        // an audio-domain magnitude. Feeding TX the RX table's signed pairs put
+        // LSB and DIGL on the upper sideband -- caught by this very block before
+        // it shipped, which is why the two tables are separate in Hl2Backend.
+        const double diguBand[2] = {150.0, 3000.0};
+        const double diglBand[2] = {150.0, 3000.0};
+        const double usbBand[2]  = {300.0, 2700.0};
+        const double lsbBand[2]  = {300.0, 2700.0};
+
+        struct Case { const char* name; WdspChannel::Mode mode; const double* band;
+                      bool wireUpper; };
+        // wireUpper mirrors the USB/LSB assertions above: the wire order is
+        // conjugated, so a USB-family mode lands on the LOWER wire bin.
+        const Case cases[] = {
+            {"USB",  WdspChannel::Mode::Usb,  usbBand,  false},
+            {"DIGU", WdspChannel::Mode::Digu, diguBand, false},
+            {"LSB",  WdspChannel::Mode::Lsb,  lsbBand,  true},
+            {"DIGL", WdspChannel::Mode::Digl, diglBand, true},
+        };
+
+        for (const Case& c : cases) {
+            const auto iq = modulate(c.mode, kTone, 0.5, 1.0, 1.0,
+                                     nullptr, false, c.band);
+            if (iq.empty()) {
+                check(false, "modulation produced IQ for this mode");
+                continue;
+            }
+            const double upper = binPower(iq, +kTone, kFsOut);
+            const double lower = binPower(iq, -kTone, kFsOut);
+            const double wanted = c.wireUpper ? upper : lower;
+            const double other  = c.wireUpper ? lower : upper;
+            const double suppDb = 20.0 * std::log10((wanted + 1e-12) / (other + 1e-12));
+            std::fprintf(stderr,
+                         "%-4s (passband %.0f..%.0f): +1kHz %.6f, -1kHz %.6f, "
+                         "suppression %.1f dB\n",
+                         c.name, c.band[0], c.band[1], upper, lower, suppDb);
+            check(wanted > other, "sideband is correct for this mode");
+            check(suppDb > 30.0, "opposite sideband suppressed by >30 dB");
         }
     }
 
