@@ -154,9 +154,11 @@ void SpectrumOverlayWheelGuard::routeToDisplayScroll(QWheelEvent* wheelEvent)
         return;
     }
 
-    QWidget* scrollArea = m_displayScrollArea->verticalScrollBar();
+    // Forward to the scroll BAR rather than the viewport: it applies the wheel
+    // directly without re-entering the viewport's own wheel handling.
+    QWidget* scrollBar = m_displayScrollArea->verticalScrollBar();
     const QPointF scrollPosition =
-        scrollArea->mapFromGlobal(wheelEvent->globalPosition().toPoint());
+        scrollBar->mapFromGlobal(wheelEvent->globalPosition().toPoint());
     QWheelEvent forwardedEvent(
         scrollPosition,
         wheelEvent->globalPosition(),
@@ -170,7 +172,7 @@ void SpectrumOverlayWheelGuard::routeToDisplayScroll(QWheelEvent* wheelEvent)
         wheelEvent->pointingDevice());
 
     m_forwardingDisplayWheel = true;
-    QCoreApplication::sendEvent(scrollArea, &forwardedEvent);
+    QCoreApplication::sendEvent(scrollBar, &forwardedEvent);
     m_forwardingDisplayWheel = false;
     wheelEvent->accept();
 }
