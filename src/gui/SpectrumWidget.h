@@ -1020,6 +1020,8 @@ private:
     void beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
                                  float newMinDbm, float newMaxDbm);
     void clearDbmReleaseRebase();
+    void armDssZoomFloorSyncAfterSettle();
+    void syncDssRangeFromFreshZoomFrame(const QVector<float>& bins);
     // Reset the baseline tracker — called on any input change (zoom,
     // band switch, manual dBm drag) so the next frame re-acquires
     // rather than smooths from a stale value.
@@ -1299,6 +1301,7 @@ private:
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
     float m_dssFloorAnchorDbm{-1000.0f};
     bool  m_dssFloorAnchorValid{false};
+    DssZoomFloorSyncGate m_dssZoomFloorSync;
     // The radio can briefly deliver FFT packets encoded with the old y_pixels
     // after acknowledging a new height. Keep those rows out of retained 3D
     // history; the live 2D trace and waterfall continue normally.
@@ -1398,6 +1401,7 @@ private:
     double m_frequencyRangePendingCenterMhz{0.0};
     QTimer* m_frequencyRangeSettleTimer{nullptr};
     QTimer* m_frequencyRangeCommandTimer{nullptr};
+    QTimer* m_dssZoomFloorSyncTimer{nullptr};
     QElapsedTimer m_frequencyRangeCommandClock;
     FrequencyRangeCommandThrottle m_frequencyRangeCommandThrottle;
     quint64 m_frequencyRangeCommandCount{0};

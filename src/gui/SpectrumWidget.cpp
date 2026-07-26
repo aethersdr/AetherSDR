@@ -1327,10 +1327,14 @@ QVariantMap SpectrumWidget::automationDssReset(bool kiwiStream)
     if (m_frequencyRangeCommandTimer) {
         m_frequencyRangeCommandTimer->stop();
     }
+    if (m_dssZoomFloorSyncTimer) {
+        m_dssZoomFloorSyncTimer->stop();
+    }
     m_frequencyRangeSettlePending = false;
     m_frequencyRangePendingValid = false;
     m_frequencyRangeCommandThrottle.clear();
     m_frequencyRangeCommandClock.invalidate();
+    m_dssZoomFloorSync.clear();
     m_frequencyPreviewUpdateCount = 0;
     m_frequencyPreviewPresentCount = 0;
     m_frequencyPreviewCommitCount = 0;
@@ -1816,6 +1820,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         emit frequencyRangeChangeRequested(command->centerMhz,
                                            command->bandwidthMhz);
     });
+    m_dssZoomFloorSyncTimer = new QTimer(this);
+    m_dssZoomFloorSyncTimer->setSingleShot(true);
+    m_dssZoomFloorSyncTimer->setInterval(kFrequencyRangeSettleMs);
+    connect(m_dssZoomFloorSyncTimer, &QTimer::timeout,
+            this, &SpectrumWidget::armDssZoomFloorSyncAfterSettle);
     m_resizeBufferSettleTimer = new QTimer(this);
     m_resizeBufferSettleTimer->setSingleShot(true);
     m_resizeBufferSettleTimer->setInterval(kResizeBufferSettleMs);
@@ -3180,6 +3189,73 @@ void SpectrumWidget::clearDbmReleaseRebase()
     m_dbmReleasePreviewOldMaxDbm = 0.0f;
     m_dbmReleasePreviewNewMinDbm = 0.0f;
     m_dbmReleasePreviewNewMaxDbm = 0.0f;
+}
+
+void SpectrumWidget::armDssZoomFloorSyncAfterSettle()
+{
+    const bool flex3dActive =
+        m_spectrumRenderMode == SpectrumRenderMode::Mode3D
+        && !m_kiwiSdrWaterfallActive;
+    m_dssZoomFloorSync.settle(flex3dActive);
+    if (!m_dssZoomFloorSync.waitingForFreshFrame()) {
+        return;
+    }
+
+    // Keep the old anchor visible through the gesture, then discard only the
+    // smoothed measurements. The first real post-settle FFT frame replaces
+    // them; reprojected preview bins must never become the new scale anchor.
+    m_measuredNoiseFloorDbm = -1000.0f;
+    resetNoiseFloorBaseline();
+    armNoiseFloorFastLock(5, 1);
+}
+
+void SpectrumWidget::syncDssRangeFromFreshZoomFrame(const QVector<float>& bins)
+{
+    const bool flex3dActive =
+        m_spectrumRenderMode == SpectrumRenderMode::Mode3D
+        && !m_kiwiSdrWaterfallActive;
+    if (!flex3dActive) {
+        m_dssZoomFloorSync.clear();
+        return;
+    }
+    if (!m_dssZoomFloorSync.waitingForFreshFrame()
+        || m_transmitting || m_pendingDbmRangeEcho || bins.isEmpty()) {
+        return;
+    }
+
+    const float frameFloorDbm = estimateNoiseFloorDbm(bins);
+    if (!m_dssZoomFloorSync.consumeFreshFrame(
+            std::isfinite(frameFloorDbm) && frameFloorDbm > -500.0f)) {
+        return;
+    }
+
+    m_measuredNoiseFloorDbm = frameFloorDbm;
+    m_dssFloorAnchorDbm = frameFloorDbm;
+    m_dssFloorAnchorValid = true;
+
+    const DbmRangeTransition::Range oldRange{
+        m_refLevel - m_dynamicRange, m_refLevel};
+    DbmRangeTransition::Range requestedRange =
+        DbmRangeTransition::manualRequestRange(
+            oldRange.minDbm, oldRange.maxDbm, true,
+            peekDssFloorDbm(), m_dynamicRange);
+    if (!clampDbmRange(requestedRange.minDbm, requestedRange.maxDbm)
+        || !DbmRangeTransition::materiallyDifferent(
+            oldRange, requestedRange,
+            kDbmReleasePreviewChangeThresholdDb)) {
+        markOverlayDirty();
+        return;
+    }
+
+    beginDbmRangeTransition(
+        oldRange.minDbm, oldRange.maxDbm,
+        requestedRange.minDbm, requestedRange.maxDbm);
+    m_refLevel = requestedRange.maxDbm;
+    m_dynamicRange = requestedRange.maxDbm - requestedRange.minDbm;
+    refreshNoiseFloorTarget();
+    markOverlayDirty();
+    emit dbmRangeChangeRequested(
+        requestedRange.minDbm, requestedRange.maxDbm);
 }
 
 void SpectrumWidget::resetNoiseFloorBaseline()
@@ -6290,6 +6366,12 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // Nudges shift center by ~10% of halfBw; 25% threshold comfortably separates the two.
     const double halfBw = bandwidthMhz / 2.0;
     const bool bwChanged = (bandwidthMhz != m_bandwidthMhz);
+    if (bwChanged) {
+        m_dssZoomFloorSync.noteBandwidthChange();
+        if (!m_frequencyRangeSettlePending && m_dssZoomFloorSyncTimer) {
+            m_dssZoomFloorSyncTimer->start();
+        }
+    }
     // Compare incoming center against the animation's *destination* (m_panCenterTarget),
     // not the mid-animation position (m_centerMhz). During a short retargetable
     // nudge, the animated center is far from its start, so a subsequent nudge
@@ -7028,6 +7110,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         m_fftFallbackSeedMask.clear();
     }
     m_bins = *spectrumBins;
+    syncDssRangeFromFreshZoomFrame(*spectrumBins);
 
     if (m_kiwiSdrWaterfallActive) {
         // The cached Flex FFT trace (m_bins, updated above) stays current for an
@@ -8959,6 +9042,13 @@ void SpectrumWidget::schedulePanDragSettleUpdate()
 void SpectrumWidget::scheduleFrequencyRangeSettleUpdate(double centerMhz,
                                                         double bandwidthMhz)
 {
+    // Every current caller is a bandwidth-zoom path (button, scale drag,
+    // native gesture, or wheel). Coalesce them so only the final settled
+    // bandwidth can arm a fresh-frame 3D floor resynchronization.
+    m_dssZoomFloorSync.noteBandwidthChange();
+    if (m_dssZoomFloorSyncTimer) {
+        m_dssZoomFloorSyncTimer->stop();
+    }
     m_frequencyRangeSettlePending = true;
     if (std::isfinite(centerMhz) && std::isfinite(bandwidthMhz)
         && centerMhz > 0.0 && bandwidthMhz > 0.0) {
@@ -8986,6 +9076,10 @@ void SpectrumWidget::finishFrequencyRangeSettleUpdate()
     requestFrequencyRangeChange(m_centerMhz, m_bandwidthMhz, true);
     m_frequencyRangeSettlePending = false;
     m_frequencyRangePendingValid = false;
+    if (m_dssZoomFloorSyncTimer) {
+        m_dssZoomFloorSyncTimer->stop();
+    }
+    armDssZoomFloorSyncAfterSettle();
     emit frequencyRangeSettled(m_centerMhz, m_bandwidthMhz);
 }
 

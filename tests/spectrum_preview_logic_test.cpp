@@ -132,6 +132,53 @@ int testCommandThrottle()
     return 0;
 }
 
+int testDssZoomFloorSyncGate()
+{
+    using namespace AetherSDR;
+    DssZoomFloorSyncGate gate;
+    if (gate.bandwidthChangeQueued() || gate.waitingForFreshFrame()
+        || gate.consumeFreshFrame(true)) {
+        return fail("3D zoom floor synchronization should start idle");
+    }
+
+    gate.noteBandwidthChange();
+    if (!gate.bandwidthChangeQueued() || gate.waitingForFreshFrame()
+        || gate.consumeFreshFrame(true)) {
+        return fail("3D zoom floor synchronization must wait for settle");
+    }
+
+    gate.settle(false);
+    if (gate.bandwidthChangeQueued() || gate.waitingForFreshFrame()
+        || gate.consumeFreshFrame(true)) {
+        return fail("2D or Kiwi zoom must not arm a Flex 3D floor sync");
+    }
+
+    gate.noteBandwidthChange();
+    gate.noteBandwidthChange();
+    gate.settle(true);
+    if (gate.bandwidthChangeQueued() || !gate.waitingForFreshFrame()
+        || gate.consumeFreshFrame(false)
+        || !gate.waitingForFreshFrame()) {
+        return fail("coalesced 3D zoom must wait for a usable FFT frame");
+    }
+    if (!gate.consumeFreshFrame(true) || gate.waitingForFreshFrame()
+        || gate.consumeFreshFrame(true)) {
+        return fail("only the first usable post-zoom FFT frame may resynchronize");
+    }
+
+    gate.noteBandwidthChange();
+    gate.settle(true);
+    gate.noteBandwidthChange();
+    if (!gate.bandwidthChangeQueued() || gate.waitingForFreshFrame()) {
+        return fail("a newer zoom must cancel an intermediate armed frame");
+    }
+    gate.clear();
+    if (gate.bandwidthChangeQueued() || gate.waitingForFreshFrame()) {
+        return fail("3D zoom floor synchronization should clear completely");
+    }
+    return 0;
+}
+
 int testWaterfallPipelineSelection()
 {
     using namespace AetherSDR;
@@ -387,6 +434,9 @@ int main()
         return result;
     }
     if (const int result = testCommandThrottle(); result != 0) {
+        return result;
+    }
+    if (const int result = testDssZoomFloorSyncGate(); result != 0) {
         return result;
     }
     if (const int result = testWaterfallPipelineSelection(); result != 0) {

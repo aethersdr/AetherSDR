@@ -118,6 +118,47 @@ private:
     std::optional<FrequencyRangeCommand> m_pending;
 };
 
+// Coalesces bandwidth changes into one post-settle 3D floor reacquisition.
+// A new zoom cancels any previously-armed frame so rapid gestures cannot
+// resynchronize against an intermediate bandwidth.
+class DssZoomFloorSyncGate {
+public:
+    void noteBandwidthChange()
+    {
+        m_bandwidthChangeQueued = true;
+        m_waitingForFreshFrame = false;
+    }
+
+    void settle(bool flex3dActive)
+    {
+        m_waitingForFreshFrame =
+            m_bandwidthChangeQueued && flex3dActive;
+        m_bandwidthChangeQueued = false;
+    }
+
+    bool consumeFreshFrame(bool frameReady)
+    {
+        if (!m_waitingForFreshFrame || !frameReady) {
+            return false;
+        }
+        m_waitingForFreshFrame = false;
+        return true;
+    }
+
+    void clear()
+    {
+        m_bandwidthChangeQueued = false;
+        m_waitingForFreshFrame = false;
+    }
+
+    bool bandwidthChangeQueued() const { return m_bandwidthChangeQueued; }
+    bool waitingForFreshFrame() const { return m_waitingForFreshFrame; }
+
+private:
+    bool m_bandwidthChangeQueued{false};
+    bool m_waitingForFreshFrame{false};
+};
+
 enum class WaterfallPipelineMode {
     Legacy,
     RowFrequencyFrames,
