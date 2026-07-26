@@ -36,8 +36,8 @@ static void check(bool cond, const char* what)
 
 static constexpr double kPi = 3.14159265358979323846;
 
-// Demodulate a +1 kHz tone at `rateHz` and return the peak |sample| of the
-// audio that came out.
+// Demodulate a tone 1 kHz above centre at `rateHz` and return the peak |sample|
+// of the audio that came out.
 static float demodPeakAt(int rateHz, std::size_t* outBlockSamples,
                          int* audioBlocks, std::string* err)
 {
@@ -67,7 +67,13 @@ static float demodPeakAt(int rateHz, std::size_t* outBlockSamples,
             peak = std::max(peak, std::abs(v));
     });
 
-    // 0.5 s of a +1 kHz tone, delivered as 126-sample EP6-shaped blocks.
+    // 0.5 s of a tone 1 kHz above centre, delivered as 126-sample EP6-shaped
+    // blocks — IN WIRE ORDER, note the NEGATIVE sine. The HPSDR wire is the
+    // conjugate of the analytic convention, so a signal above centre arrives as
+    // exp(-j.2.pi.f.t), and the demodulator is fed the raw wire (HERMES §16).
+    // The textbook exp(+j...) is synthetic IQ no HL2 ever sends, and against
+    // USB [150,3000] it is out of passband: this same generator produced
+    // audible audio only while the chain inverted every sideband.
     const double f = 1000.0;
     const int total = rateHz / 2;
     std::vector<std::complex<float>> blk;
@@ -75,7 +81,7 @@ static float demodPeakAt(int rateHz, std::size_t* outBlockSamples,
     for (int n = 0; n < total; ++n) {
         const double ph = 2.0 * kPi * f * n / rateHz;
         blk.emplace_back(0.3f * static_cast<float>(std::cos(ph)),
-                         0.3f * static_cast<float>(std::sin(ph)));
+                         0.3f * static_cast<float>(-std::sin(ph)));
         if (static_cast<int>(blk.size()) == kSamplesPerPacket) {
             dsp.processIqBlock(blk);
             blk.clear();

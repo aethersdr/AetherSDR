@@ -174,9 +174,9 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     // centre — on 40 m that put FT8, which lives at 7.074..7.077, on screen at
     // 7.071..7.074, left of a correctly-drawn DIGU cursor.
     //
-    // The FFT sees the full-rate IQ, but only when a frame is
-    // actually due. Skipping the whole computation — not just the emit — is
-    // what keeps a wide span affordable; see setSpectrumRateFps.
+    // The FFT sees the full-rate IQ, but only when a frame is actually due.
+    // Skipping the whole computation — not just the emit — is what keeps a wide
+    // span affordable; see setSpectrumRateFps.
     //
     // The accumulator is fed on BOTH paths, so a skipped interval advances the
     // window rather than emptying it: whichever fftSize samples complete a frame
