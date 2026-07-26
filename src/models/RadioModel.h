@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
+#include "core/GuiClientRegistrationState.h"
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
@@ -629,6 +630,9 @@ signals:
                                  const QString& presentedHex);
     // Emitted when another GUI client forces this client to disconnect.
     void forcedDisconnectRequested();
+    // Emitted before teardown when the radio rejects `client gui`. The UI uses
+    // this terminal signal to stop reconnect UX and preserve the radio's reason.
+    void guiClientRegistrationFailed(const QString& message);
     // aetherd Gap B (HL2 Phase 1c, Step 1): the backend-neutral panadapter render
     // feed. Signatures mirror PanadapterStream.h:212-218 exactly, so the UI binds
     // its panadapter/waterfall rendering to these instead of the Flex-only
@@ -909,6 +913,8 @@ private:
     // Voids one pan's deferred writes, loudly naming what was destroyed.
     void voidPendingPanWrites(const QString& panId, const QString& reason);
     void registerAsGuiClient(const QString& clientId);
+    void handleGuiClientRegistrationFailure(
+        const GuiClientRegistrationState::Result& result);
     void disconnectPendingClientsThen(std::function<void()> continuation);
     // LAN-only: subscribe to radio+client topics early, wait 400 ms for
     // the radio status burst, then check for a multiFLEX conflict before
@@ -916,8 +922,9 @@ private:
     void peekForMultiFlexConflictThen(std::function<void()> continuation);
     void handleForcedClientDisconnect();
     void handleDuplicateClientIdDisconnect();
-    // Shared transport teardown for a radio-initiated terminal disconnect
-    // (forced or duplicate-client-id); callers set m_intentionalDisconnect first.
+    // Shared transport teardown for a terminal session failure (forced,
+    // duplicate-client-id, or rejected GUI registration). Callers set
+    // m_intentionalDisconnect first.
     void closeConnectionForTerminalDisconnect();
     void resolveLiveGuiClientIdCollision();
     void applyKnownGuiClients(const QStringList& handles,
@@ -1370,6 +1377,7 @@ private:
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
     bool      m_forcedDisconnectInProgress{false};
+    GuiClientRegistrationState m_guiClientRegistrationState;
     // Suppress connection-error toasts between rebootRadio() and the next
     // successful reconnect — multiple `Connection refused` retries fire
     // while the radio is still booting and would otherwise spam the UI.

@@ -244,6 +244,7 @@ void MainWindow::wireDiscovery()
             return;
         }
         m_radioModel.setPendingClientDisconnects(disconnectHandles);
+        m_terminalConnectionError.clear();
         m_connPanel->setStatusText("Connecting…");
         m_userDisconnected = false;
         setPanadapterConnectionAnimation(true, "Connecting to radio…");
@@ -476,6 +477,23 @@ void MainWindow::wireRadioModel()
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
+            this, [this](const QString& message) {
+        // A rejected GUI registration is terminal for this attempt. Keep the
+        // reason visible, suppress both LAN and WAN automatic reconnect loops,
+        // and let the operator retry normally after freeing a radio slot.
+        m_userDisconnected = true;
+        m_wanReconnectTimer.stop();
+        m_wanReconnectAttemptInProgress = false;
+        m_terminalConnectionError = message;
+        setPanadapterConnectionAnimation(false);
+        if (m_reconnectDlg) {
+            QDialog* reconnectDialog = m_reconnectDlg;
+            m_reconnectDlg = nullptr;
+            reconnectDialog->close();
+            reconnectDialog->deleteLater();
+        }
+    });
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
             this, &MainWindow::onWanCertFingerprintMismatch);
     connect(&m_radioModel, &RadioModel::forcedDisconnectRequested,

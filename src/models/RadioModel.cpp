@@ -4301,6 +4301,30 @@ void RadioModel::handleDuplicateClientIdDisconnect()
     closeConnectionForTerminalDisconnect();
 }
 
+void RadioModel::handleGuiClientRegistrationFailure(
+    const GuiClientRegistrationState::Result& result)
+{
+    m_intentionalDisconnect = true;
+    m_reconnectTimer.stop();
+
+    const QString detail = result.detail.isEmpty()
+        ? tr("The radio rejected the request without additional detail.")
+        : result.detail;
+    const QString message =
+        tr("GUI client registration failed (%1): %2 "
+           "AetherSDR disconnected without retrying. Free a GUI client slot if "
+           "needed, then choose Connect to try again.")
+            .arg(hexCode(result.resultCode), detail);
+
+    qCWarning(lcProtocol).noquote()
+        << "RadioModel: terminal GUI client registration failure"
+        << QStringLiteral("code=%1").arg(hexCode(result.resultCode))
+        << QStringLiteral("detail=%1").arg(detail);
+    emit guiClientRegistrationFailed(message);
+    emit connectionError(message);
+    closeConnectionForTerminalDisconnect();
+}
+
 void RadioModel::registerAsGuiClient(const QString& clientId)
 {
     // aetherd Gap B: SmartSDR GUI-client registration is Flex-only. Every step
@@ -4326,12 +4350,34 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     if (AppSettings::instance().value("LowBandwidthConnect", "False").toString() == "True")
         sendCmd("client low_bw_connect");
 
+    m_guiClientRegistrationState.begin();
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
         if (code != 0) {
-            qCWarning(lcProtocol) << "RadioModel: client gui failed, code" << Qt::hex << code;
-        } else if (!body.trimmed().isEmpty()
-                   && !AppSettings::instance().guiClientIdentityIsTransient()) {
+            // A fatal M-message and the R reply are separate protocol lines. Let
+            // already-queued message delivery run once so an empty R body can
+            // still surface the radio's exact reason (for example F3000001).
+            QTimer::singleShot(0, this, [this, code, body] {
+                if (m_guiClientRegistrationState.phase()
+                    != GuiClientRegistrationState::Phase::AwaitingReply) {
+                    return;
+                }
+                const GuiClientRegistrationState::Result result =
+                    m_guiClientRegistrationState.complete(code, body);
+                handleGuiClientRegistrationFailure(result);
+            });
+            return;
+        }
+
+        const GuiClientRegistrationState::Result result =
+            m_guiClientRegistrationState.complete(code, body);
+        if (!result.accepted()) {
+            handleGuiClientRegistrationFailure(result);
+            return;
+        }
+
+        if (!body.trimmed().isEmpty()
+            && !AppSettings::instance().guiClientIdentityIsTransient()) {
             // Save our UUID for session persistence across restarts.
             // The radio restores slices/frequencies for a known UUID.
             auto& s = AppSettings::instance();
@@ -4759,6 +4805,7 @@ void RadioModel::restoreTuneInhibit()
 void RadioModel::onDisconnected()
 {
     qCDebug(lcProtocol) << "RadioModel: disconnected";
+    m_guiClientRegistrationState.reset();
 
     // #4142 — void any pan centers deferred during a profile load. The session
     // they belonged to is gone: the radio rebuilds its topology on reconnect, so
@@ -5497,6 +5544,7 @@ void RadioModel::onMessageReceived(const ParsedMessage& msg)
     }
 
     if (msg.type == MessageType::Message) {
+        m_guiClientRegistrationState.noteRadioMessage(msg.object, msg.severity);
         if (shouldSuppressRadioMessageNotice(msg.object, msg.severity)) {
             qCInfo(lcProtocol) << "Radio M-message [Info suppressed during connect]:" << msg.object;
             return;

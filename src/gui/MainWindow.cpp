@@ -5032,6 +5032,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_discovery.setConnected(connected, remoteConnection);
 
     if (connected) {
+        m_terminalConnectionError.clear();
         m_suppressStartupPanLayoutRearrange = false;
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
@@ -5322,7 +5323,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 #ifdef HAVE_WEBSOCKETS
         QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });
 #endif
-        m_connStatusLabel->setText("Disconnected");
+        const bool terminalConnectionFailure = !m_terminalConnectionError.isEmpty();
+        m_connStatusLabel->setText(terminalConnectionFailure ? "Error" : "Disconnected");
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
         setStatusBarStationText(m_stationLabel, QStringLiteral("N0CALL"));
@@ -5350,7 +5352,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
         updateStatusBarMinimumWidth();
         m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
         m_txIndicator->setText("TX");
-        m_connPanel->setStatusText("Not connected");
+        m_connPanel->setStatusText(
+            terminalConnectionFailure
+                ? tr("Error: %1").arg(m_terminalConnectionError)
+                : tr("Not connected"));
 #ifdef HAVE_HIDAPI
         // Safety: if latched PTT was active when the radio dropped, the radio is
         // now TX-off regardless.  Reset the latch flag so it stays in sync with
@@ -5394,7 +5399,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
 
-        setPanadapterConnectionAnimation(!m_userDisconnected, "Reconnecting to radio…");
+        setPanadapterConnectionAnimation(
+            !m_userDisconnected && !terminalConnectionFailure,
+            "Reconnecting to radio…");
+
+        if (terminalConnectionFailure) {
+            showConnectionDialog();
+        }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
         if (!m_userDisconnected && !m_reconnectDlg) {

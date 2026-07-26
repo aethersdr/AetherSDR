@@ -3629,6 +3629,23 @@ target_include_directories(gui_client_identity_policy_test PRIVATE src)
 target_link_libraries(gui_client_identity_policy_test PRIVATE Qt6::Core)
 add_test(NAME gui_client_identity_policy_test COMMAND gui_client_identity_policy_test)
 
+add_executable(gui_client_registration_state_test
+    tests/gui_client_registration_state_test.cpp
+)
+target_include_directories(gui_client_registration_state_test PRIVATE src)
+target_link_libraries(gui_client_registration_state_test PRIVATE Qt6::Core)
+add_test(NAME gui_client_registration_state_test COMMAND gui_client_registration_state_test)
+
+add_executable(gui_client_registration_recovery_test
+    tests/gui_client_registration_recovery_test.cpp
+)
+target_include_directories(gui_client_registration_recovery_test PRIVATE src tests)
+target_link_libraries(gui_client_registration_recovery_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test
+)
+add_test(NAME gui_client_registration_recovery_test
+         COMMAND gui_client_registration_recovery_test)
+
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp
 )

@@ -1209,6 +1209,7 @@ private:
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
+    QString m_terminalConnectionError; // preserved until the next explicit connect
     QPointer<class ThemeEditorDialog> m_themeEditorDialog; // Phase 5 — lazy, modeless
     void cancelTransmitFromIndicator();
     void beginProfileLoadRadioStateWriteHold(const QString& profileType, const QString& profileName);
