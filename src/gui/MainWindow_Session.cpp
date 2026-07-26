@@ -1579,6 +1579,18 @@ void MainWindow::wireCatPorts()
 // RX audio itself rides audioDataReady, so a missed one is silence, not a
 // degraded feature. Keeping the list here (not open-coded in two places) is why
 // a new sink added to buildUI cannot silently go un-rebound after a swap.
+bool MainWindow::backendOwnsRxAudio()
+{
+    // The demo (RFC #4288 Route A) is the one backend that BOTH vends a
+    // PanadapterStream and emits its own seam audio: SimBackend::onAudioTick →
+    // audioFrameReady carries the real demodulated demo audio, while the stream
+    // still carries the old shim's synthetic scene. Wiring both into
+    // feedAudioData() sums two independent streams at the sink — audible as
+    // wobble plus distortion, and recognisably "the waterfall you can hear".
+    // Backends with no PanadapterStream at all (HL2) never reach these sites.
+    return dynamic_cast<SimBackend*>(m_radioModel.backend()) != nullptr;
+}
+
 void MainWindow::wirePanStreamRxAudioSinks()
 {
     auto* ps = m_radioModel.panStream();
@@ -1592,13 +1604,11 @@ void MainWindow::wirePanStreamRxAudioSinks()
     // feedAudioData() sums two independent streams at the sink — audible as
     // wobble plus distortion, and recognisably "the waterfall you can hear".
     // The backend's own audio wins; the stream's other RX taps below stay wired.
-    const bool backendOwnsAudio =
-        dynamic_cast<SimBackend*>(m_radioModel.backend()) != nullptr;
-
-    // Primary RX audio → QAudioSink (Flex only; see above).
-    if (!backendOwnsAudio) {
+    // Primary RX audio → QAudioSink (skipped when the backend owns its audio).
+    if (!backendOwnsRxAudio()) {
         connect(ps, &PanadapterStream::audioDataReady,
-                m_audio, &AudioEngine::feedAudioData);
+                m_audio, &AudioEngine::feedAudioData,
+                Qt::UniqueConnection);
     }
 
     // QSO recorder RX tap (float32). TX monitor + MOX gating are wired to

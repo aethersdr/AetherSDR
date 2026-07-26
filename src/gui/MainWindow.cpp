@@ -1080,8 +1080,16 @@ MainWindow::MainWindow(QWidget* parent)
             disconnect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                        m_audio, &AudioEngine::feedAudioData);
         } else {
-            connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-                    m_audio, &AudioEngine::feedAudioData);
+            // Only restore the stream→sink feed for backends that actually use it.
+            // A backend that emits its own seam audio (the demo, RFC #4288 Route A)
+            // never had this connection — re-adding it here would resurrect the
+            // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
+            // Qt permits duplicates, so every unmute would stack another copy.
+            if (!backendOwnsRxAudio()) {
+                connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
+                        m_audio, &AudioEngine::feedAudioData,
+                        Qt::UniqueConnection);
+            }
         }
     });
 
@@ -1172,9 +1180,14 @@ MainWindow::MainWindow(QWidget* parent)
                        &PanadapterStream::audioDataReady,
                        m_audio, &AudioEngine::feedAudioData);
         } else {
-            connect(m_radioModel.panStream(),
-                    &PanadapterStream::audioDataReady,
-                    m_audio, &AudioEngine::feedAudioData);
+            // Same rule as the QSO-recorder unmute above: never resurrect the
+            // stream→sink feed for a backend that supplies its own seam audio.
+            if (!backendOwnsRxAudio()) {
+                connect(m_radioModel.panStream(),
+                        &PanadapterStream::audioDataReady,
+                        m_audio, &AudioEngine::feedAudioData,
+                        Qt::UniqueConnection);
+            }
         }
     });
 

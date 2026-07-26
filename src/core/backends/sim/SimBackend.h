@@ -145,6 +145,12 @@ private:
     // sub-frame remainder in m_audioDebtNs so the long-run rate is exactly 24 kHz.
     QElapsedTimer m_audioClock;      // wall clock between ticks (nanoseconds)
     qint64        m_audioDebtNs{0};  // un-emitted elapsed time carried forward
+    // TEMP DIAG — pointers into onAudioTick's function-static content stats so
+    // the per-frame loop can accumulate them. Remove with the diagnostic.
+    double* m_diagPeak{nullptr};
+    double* m_diagSumRms{nullptr};
+    int*    m_diagZero{nullptr};
+    int*    m_diagClip{nullptr};
     bool       m_keyed{false};       // muted while keyed (Principle VI — never sounds live on TX)
     quint64    m_audioFrames{0};     // frame counter (throttles the spectrum row)
 
@@ -158,6 +164,21 @@ private:
     QString m_agcMode{QStringLiteral("med")};
     int     m_agcThresholdDb{65};
     static constexpr int kSliceId = 0;
+
+public:
+    // One waterfall row per this many audio frames (see onAudioTick).
+    static constexpr int kSpectrumRowEveryNFrames = 9;
+    // The row cadence that follows, in whole ms — what the synthetic connect must
+    // declare as `line_duration`. #4425 made line_duration load-bearing: the
+    // renderer interpolates the waterfall/3D scroll over one line_duration between
+    // rows, so a value that disagrees with the real rate makes every animation cut
+    // off part-way and the display jump. Derived here so the declared value cannot
+    // drift from the emitted one. 9 × 128 / 24000 s = 48 ms.
+    static constexpr int kWaterfallLineDurationMs =
+        (kSpectrumRowEveryNFrames * NoiseMixer::kFrameLen * 1000)
+        / NoiseMixer::kSampleRate;
+
+private:
     static constexpr int kPanId = 0;
     // Demo pan span (MHz) = 8 kHz. MUST equal both the wire "display pan …
     // bandwidth=0.008" (RadioConnection) AND the spectrum span kAudioSpanHz (8000

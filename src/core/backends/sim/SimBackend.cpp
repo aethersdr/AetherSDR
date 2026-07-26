@@ -2,6 +2,10 @@
 
 #include <QtEndian>
 #include <QThread>
+#include <QDir>          // TEMP diag
+#include <QFile>         // TEMP diag
+#include <QTextStream>   // TEMP diag
+#include <cmath>         // TEMP diag
 
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
@@ -165,11 +169,62 @@ void SimBackend::onAudioTick()
         m_audioDebtNs -= static_cast<qint64>(frames) * kNsPerFrame;
     }
 
+    // TEMP DIAG — measure BOTH the delivery rate and the sample content, so a
+    // timing fault can be told apart from a bad-samples fault. Remove after use.
+    {
+        static QElapsedTimer s_clk;
+        static qint64 s_lastNs = 0;
+        static int  s_ticks = 0, s_framesOut = 0, s_zeroFrames = 0, s_clipFrames = 0;
+        static double s_sumDtMs = 0.0, s_peak = 0.0, s_sumRms = 0.0;
+        if (!s_clk.isValid()) s_clk.start();
+        const qint64 now = s_clk.nsecsElapsed();
+        if (s_lastNs) { s_sumDtMs += (now - s_lastNs) / 1.0e6; ++s_ticks; }
+        s_lastNs = now;
+        s_framesOut += frames;
+        if (s_ticks >= 400) {
+            QFile f(QDir::homePath() + "/sim-audio-diag.log");
+            if (f.open(QIODevice::Append | QIODevice::Text)) {
+                // framesOut/sec should be ~187.5 (24000/128) if pacing is correct.
+                const double secs = s_sumDtMs / 1000.0;
+                QTextStream(&f)
+                    << "ticks=" << s_ticks
+                    << " tickAvg=" << QString::number(s_sumDtMs / s_ticks, 'f', 2) << "ms"
+                    << " framesOut=" << s_framesOut
+                    << " frames/s=" << QString::number(secs > 0 ? s_framesOut / secs : 0, 'f', 1)
+                    << " (ideal 187.5)"
+                    << " peak=" << QString::number(s_peak, 'f', 4)
+                    << " avgRms=" << QString::number(s_framesOut ? s_sumRms / s_framesOut : 0, 'f', 4)
+                    << " zeroFrames=" << s_zeroFrames
+                    << " clipFrames=" << s_clipFrames << '\n';
+            }
+            s_ticks = 0; s_framesOut = 0; s_zeroFrames = 0; s_clipFrames = 0;
+            s_sumDtMs = 0; s_peak = 0; s_sumRms = 0;
+        }
+        // per-frame content stats are accumulated in the loop below
+        m_diagPeak = &s_peak; m_diagSumRms = &s_sumRms;
+        m_diagZero = &s_zeroFrames; m_diagClip = &s_clipFrames;
+    }
+
     for (int i = 0; i < frames; ++i) {
         // Muted while keyed — a demo radio must never sound live on TX (Principle VI).
         const QVector<float> frame = m_keyed
             ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
             : m_audio.mixFrame();
+        // TEMP DIAG — characterise the samples actually leaving the demo.
+        if (m_diagPeak) {
+            double sumSq = 0.0; double pk = 0.0; bool clipped = false;
+            for (float s : frame) {
+                const double a = std::abs(static_cast<double>(s));
+                sumSq += a * a;
+                if (a > pk) pk = a;
+                if (a > 0.999) clipped = true;
+            }
+            const double rms = frame.isEmpty() ? 0.0 : std::sqrt(sumSq / frame.size());
+            *m_diagSumRms += rms;
+            if (pk > *m_diagPeak) *m_diagPeak = pk;
+            if (pk < 1e-9) ++(*m_diagZero);
+            if (clipped)   ++(*m_diagClip);
+        }
         emit audioFrameReady(toStereoBytes(frame));
 
         // A panadapter row a few times a second (not every audio frame — the
@@ -177,7 +232,35 @@ void SimBackend::onAudioTick()
         // every 9th. The stallscope fault freezes the spectrum/waterfall (audio
         // keeps flowing) to exercise AE's scope-stall watchdog (#1411-class);
         // clearFaults() resumes it.
-        if (!m_scopeStalled && ++m_audioFrames % 9 == 0) {
+        if (!m_scopeStalled
+            && ++m_audioFrames % kSpectrumRowEveryNFrames == 0) {
+            // TEMP DIAG — spectrum-row spacing. The debt loop emits a VARIABLE
+            // number of frames per tick, so this every-9th-frame counter may now
+            // fire in clumps rather than evenly (~48 ms apart). Bursty rows would
+            // sample the noise scene at irregular intervals = jumping noise floor.
+            {
+                static QElapsedTimer s_rowClk;
+                static qint64 s_lastRowNs = 0;
+                static int s_rows = 0;
+                static double s_sum = 0.0, s_min = 1e9, s_max = 0.0;
+                if (!s_rowClk.isValid()) s_rowClk.start();
+                const qint64 nowNs = s_rowClk.nsecsElapsed();
+                if (s_lastRowNs) {
+                    const double dt = (nowNs - s_lastRowNs) / 1.0e6;
+                    s_sum += dt; ++s_rows;
+                    s_min = qMin(s_min, dt); s_max = qMax(s_max, dt);
+                    if (s_rows >= 60) {
+                        QFile f(QDir::homePath() + "/sim-audio-diag.log");
+                        if (f.open(QIODevice::Append | QIODevice::Text))
+                            QTextStream(&f) << "  SPECTRUM rows=" << s_rows
+                                << " avg=" << QString::number(s_sum / s_rows, 'f', 2)
+                                << "ms (ideal 48) min=" << QString::number(s_min, 'f', 2)
+                                << " max=" << QString::number(s_max, 'f', 2) << '\n';
+                        s_rows = 0; s_sum = 0; s_min = 1e9; s_max = 0;
+                    }
+                }
+                s_lastRowNs = nowNs;
+            }
             constexpr int kBins = 1024;
             constexpr double kFloorDbm = -120.0;
             constexpr double kAudioSpanHz = 8000.0;   // show ±4 kHz around the VFO
