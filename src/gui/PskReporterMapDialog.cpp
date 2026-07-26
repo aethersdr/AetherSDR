@@ -637,6 +637,13 @@ void PskReporterMapDialog::scheduleBeacon()
         return;
     }
 
+    // Ask the connected radio family whether it can key at all before any of
+    // the Flex-shaped preconditions below. An RX-only backend (RFC §6,
+    // capabilities().canTransmit == false) has no transmitter to check.
+    if (!m_radioModel->backendCanTransmit()) {
+        m_beaconStatus->setText(tr("This radio cannot transmit"));
+        return;
+    }
     TransmitModel& tx = m_radioModel->transmitModel();
     if (tx.isTransmitting() || tx.isTuning()) {
         m_beaconStatus->setText(tr("Transmitter is already in use"));
@@ -680,8 +687,9 @@ void PskReporterMapDialog::scheduleBeacon()
     }
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    constexpr qint64 kSlotMs = 2 * 60 * 1000;
-    m_beaconSlotMs = ((nowMs / kSlotMs) + 1) * kSlotMs;
+    m_beaconSlotMs = ((nowMs / kBeaconSlotMs) + 1) * kBeaconSlotMs;
+    m_beaconDeferrals = 0;
+    m_beaconDeferReason.clear();
     m_beaconArmed = true;
     m_beaconTransmitting = false;
     m_beaconButton->setText(tr("Cancel"));
@@ -698,6 +706,8 @@ void PskReporterMapDialog::stopBeacon(const QString& status)
     m_beaconTransmitting = false;
     m_beaconSlotMs = 0;
     m_beaconStopDeadlineMs = 0;
+    m_beaconDeferrals = 0;
+    m_beaconDeferReason.clear();
     if (ownedTransmit && m_radioModel != nullptr
         && m_radioModel->transmitModel().isTransmitting()) {
         m_radioModel->transmitModel().requestPttOff(
@@ -717,6 +727,21 @@ void PskReporterMapDialog::stopBeacon(const QString& status)
     m_beaconButton->setText(tr("Transmit once"));
     setBeaconControlsEnabled(true);
     m_beaconStatus->setText(status);
+}
+
+void PskReporterMapDialog::deferBeaconToNextSlot(const QString& reason)
+{
+    // Stay armed: the borrowed TX filter, `transmit dax`, and DAX TX stream
+    // ownership taken in scheduleBeacon() all remain held, so the next boundary
+    // only has to re-check readiness. Computed from the current time rather
+    // than by adding one slot to m_beaconSlotMs, so an arbitrarily long stall
+    // lands on the next real boundary instead of one already in the past.
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    m_beaconSlotMs = ((nowMs / kBeaconSlotMs) + 1) * kBeaconSlotMs;
+    ++m_beaconDeferrals;
+    // Carried by the countdown for the whole wait. Setting it as the status here
+    // would be overwritten by the next 50 ms tick and never be read.
+    m_beaconDeferReason = reason;
 }
 
 void PskReporterMapDialog::updateBeaconState()
@@ -752,13 +777,25 @@ void PskReporterMapDialog::updateBeaconState()
         return;
     }
 
-    const qint64 remainingMs =
-        std::max<qint64>(0, m_beaconSlotMs - QDateTime::currentMSecsSinceEpoch());
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 remainingMs = std::max<qint64>(0, m_beaconSlotMs - nowMs);
     if (remainingMs > 0) {
         m_beaconStatus->setText(
-            tr("Armed · starts in %1.%2 s")
+            tr("%1 · starts in %2.%3 s")
+                .arg(m_beaconDeferReason.isEmpty() ? tr("Armed")
+                                                   : m_beaconDeferReason)
                 .arg(remainingMs / 1000)
                 .arg((remainingMs % 1000) / 100));
+        return;
+    }
+
+    // Never start a frame we cannot finish inside its own slot. The GUI tick can
+    // be arbitrarily late — a suspend/resume, a modal stall, or a load spike —
+    // and a 111.6 s frame started well past the boundary runs into the next
+    // slot and cannot be decoded against this one. Beyond the tolerance a WSPR
+    // decoder holds against the slot edge, wait for the next boundary instead.
+    if (nowMs - m_beaconSlotMs > kBeaconMaxSlotLatenessMs) {
+        deferBeaconToNextSlot(tr("Re-armed · slot boundary was missed"));
         return;
     }
 
@@ -769,8 +806,17 @@ void PskReporterMapDialog::updateBeaconState()
         stopBeacon(encoded ? tr("WSPR audio unavailable") : encoded.error);
         return;
     }
+    // Arming a few hundred ms before a boundary leaves the radio's `stream
+    // create` still in flight at slot time. That is an ordinary race, not a
+    // failure, so roll to the next slot rather than throwing the operator's
+    // arming away — but give up after a bounded number of slots so a stream
+    // that never arrives cannot leave the beacon armed indefinitely.
     if (!m_radioModel->hasWsprTxStream()) {
-        stopBeacon(tr("Stopped: WSPR TX audio stream is not ready"));
+        if (m_beaconDeferrals >= kBeaconMaxDeferrals) {
+            stopBeacon(tr("Stopped: WSPR TX audio stream is not ready"));
+            return;
+        }
+        deferBeaconToNextSlot(tr("Re-armed · waiting for WSPR TX audio stream"));
         return;
     }
 

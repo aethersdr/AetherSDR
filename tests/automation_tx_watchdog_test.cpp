@@ -120,6 +120,58 @@ void testLongFuseArmIsNotClaimed()
           "the beacon's own key-up is not claimed by the arming click");
 }
 
+// A TX-marked bridge action that arms while an unrelated transmission is
+// already up must not adopt it. arm() is always called after its action has
+// been issued, so the caller passes the transmitter state sampled before
+// dispatch; without that, the immediate observe-poll claims whatever is keyed
+// and force-unkeys it at maxKeyMs — the misattribution the lease prevents.
+void testArmDoesNotAdoptPreExistingTransmit()
+{
+    AutomationTxWatchdog watchdog;
+    watchdog.arm(0, /*alreadyKeyed=*/true);
+    check(watchdog.poll(true, 0, 20'000, 2'000)
+              == AutomationTxWatchdog::Decision::None,
+          "arming beside a live transmission does not start the key timer");
+    check(!watchdog.hasObservedKeyed(),
+          "a transmission that predates the lease is never observed as its own");
+    check(watchdog.poll(true, 21'000, 20'000, 2'000)
+              == AutomationTxWatchdog::Decision::None,
+          "the adopted-transmission force-unkey never fires");
+    check(!watchdog.isArmed(),
+          "the unattributable lease retires with the pending window");
+}
+
+// The same lease must still work normally once the pre-existing transmission
+// ends: a later key-up is a real rising edge it can attribute to itself.
+void testArmAdoptsAfterPreExistingTransmitEnds()
+{
+    AutomationTxWatchdog watchdog;
+    watchdog.arm(0, /*alreadyKeyed=*/true);
+    watchdog.poll(true, 200, 20'000, 2'000);    // still someone else's TX
+    watchdog.poll(false, 400, 20'000, 2'000);   // it unkeys inside the window
+    check(watchdog.isArmed(),
+          "the lease survives the pre-existing transmission ending");
+    watchdog.poll(true, 600, 20'000, 2'000);    // now our own edge
+    check(watchdog.hasObservedKeyed(),
+          "a rising edge after the pre-existing TX ends is attributable");
+    check(watchdog.poll(true, 20'601, 20'000, 2'000)
+              == AutomationTxWatchdog::Decision::ForceUnkey,
+          "an attributable transmission still receives the safety timeout");
+}
+
+// An idle radio is the ordinary case and must be unaffected by the gate.
+void testArmOnIdleRadioStillAdoptsImmediately()
+{
+    AutomationTxWatchdog watchdog;
+    watchdog.arm(0, /*alreadyKeyed=*/false);
+    watchdog.poll(true, 0, 20'000, 2'000);
+    check(watchdog.hasObservedKeyed(),
+          "arming on an idle radio observes its own optimistic key edge");
+    check(watchdog.poll(true, 20'001, 20'000, 2'000)
+              == AutomationTxWatchdog::Decision::ForceUnkey,
+          "automation transmit from an idle start is still force-unkeyed");
+}
+
 void testEnabledBridgeDoesNotUnkeyManualTransmit()
 {
     RadioModel radio;
@@ -165,6 +217,9 @@ int main(int argc, char** argv)
     testLeaseEndsWithTransmit();
     testDelayedActionLease();
     testLongFuseArmIsNotClaimed();
+    testArmDoesNotAdoptPreExistingTransmit();
+    testArmAdoptsAfterPreExistingTransmitEnds();
+    testArmOnIdleRadioStillAdoptsImmediately();
     testEnabledBridgeDoesNotUnkeyManualTransmit();
     if (failures == 0) {
         std::puts("Automation TX watchdog tests passed");

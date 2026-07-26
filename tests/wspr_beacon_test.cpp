@@ -59,6 +59,27 @@ void testValidation()
     check(!WsprBeacon::encode(QStringLiteral("K1ABC"),
                               QStringLiteral("FN42"), 38),
           "non-standard WSPR power is rejected");
+    // callsignCharacter() maps a space to 36, so an embedded space clears the
+    // c3/c4/c5 >= 10 checks and would encode a call the operator never typed.
+    check(!WsprBeacon::encode(QStringLiteral("K1A C"),
+                              QStringLiteral("FN42"), 37),
+          "embedded space in a callsign is rejected, not silently encoded");
+    check(!WsprBeacon::encode(QStringLiteral("K1 BC"),
+                              QStringLiteral("FN42"), 37),
+          "embedded space before the suffix is rejected");
+    check(!WsprBeacon::encode(QStringLiteral("K1-BC"),
+                              QStringLiteral("FN42"), 37),
+          "punctuation in a callsign is rejected");
+    // Surrounding whitespace is still trimmed, and short calls still pad.
+    check(static_cast<bool>(WsprBeacon::encode(QStringLiteral("  K1ABC  "),
+                                               QStringLiteral("FN42"), 37)),
+          "surrounding whitespace is trimmed, not treated as an embedded space");
+    check(static_cast<bool>(WsprBeacon::encode(QStringLiteral("W1AW"),
+                                               QStringLiteral("FN31"), 37)),
+          "a short call that needs trailing pad spaces still encodes");
+    check(static_cast<bool>(WsprBeacon::encode(QStringLiteral("VE3ABC"),
+                                               QStringLiteral("FN25"), 37)),
+          "a full six-character call still encodes");
 }
 
 void testSampleTimingAndTailSilence()

@@ -8433,6 +8433,20 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
 
 void AudioEngine::startWsprPump()
 {
+    // Suppress the local mic capture path for the whole frame. onTxAudioReady()
+    // only bails out on m_daxTxMode; the WSPR feed passes
+    // markExternalSource=false (it is not TCI, and claiming so would corrupt
+    // the TCI-active diagnostics), so without this the mic path keeps building
+    // TX packets that share and advance m_txPacketCount with the WSPR dax_tx
+    // packets — two producers interleaving on one UDP path to the radio, with a
+    // scrambled packet-count sequence. The PipeWire DAX route happens to hold
+    // the mic silent, which is why this only bites on Windows and on Linux
+    // without PipeWire. Save/restore mirrors the AX.25 TX path.
+    if (!m_wsprSavedDaxTxMode) {
+        m_wsprPreviousDaxTxMode = isDaxTxMode();
+        m_wsprSavedDaxTxMode = true;
+    }
+    setDaxTxMode(true);
     m_wsprPumpedFrames = 0;
     m_wsprPumpClock.start();
     m_wsprPumpTimer->start();
@@ -8444,6 +8458,17 @@ void AudioEngine::stopWsprPump()
     m_wsprPumpClock.invalidate();
     m_wsprPumpedFrames = 0;
     m_txFloatAccumulator.clear();
+    // The forced WSPR feed buffers in the radio-native int16 route, so drop that
+    // residue too — a stop mid-symbol otherwise leaves a partial packet to be
+    // prepended to whatever fills the DAX TX stream next.
+    m_daxPreTxBuffer.clear();
+    // Guarded so the early-return callers in pumpWsprBeacon() (and a queued
+    // stop that lands after another one already ran) cannot clobber a genuine
+    // DAX TX mode with a stale saved value.
+    if (m_wsprSavedDaxTxMode) {
+        setDaxTxMode(m_wsprPreviousDaxTxMode);
+        m_wsprSavedDaxTxMode = false;
+    }
 }
 
 void AudioEngine::pumpWsprBeacon()

@@ -69,6 +69,22 @@ WsprBeacon::EncodeResult WsprBeacon::encode(const QString& callsign,
         result.error = QStringLiteral("Callsign must contain 3 to 6 characters");
         return result;
     }
+    // Reject anything that is not a bare type-1 call before the padding below
+    // introduces legitimate spaces. callsignCharacter() maps a space to 36, so
+    // an embedded space passes the c3/c4/c5 >= 10 checks further down and
+    // "K1A C" would encode and transmit as a call the operator never typed.
+    // The one leading space a short-prefix call needs is prepended after this,
+    // and trailing pad spaces come from leftJustified().
+    for (const QChar ch : call) {
+        const bool isUpperLetter =
+            ch >= QLatin1Char('A') && ch <= QLatin1Char('Z');
+        const bool isDigit = ch >= QLatin1Char('0') && ch <= QLatin1Char('9');
+        if (!isUpperLetter && !isDigit) {
+            result.error = QStringLiteral(
+                "Callsign must contain only letters and digits");
+            return result;
+        }
+    }
     if (call.size() >= 2 && call.at(1).isDigit()) {
         call.prepend(QLatin1Char(' '));
     }

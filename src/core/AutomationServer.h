@@ -736,6 +736,10 @@ private:
     // beacon waits for the next even UTC minute, then keys for 111.6 s) are
     // deliberately outside the lease: the bridge did not key them.
     static constexpr int kTxPendingLeaseMs{2000};
+    // Transmitter state sampled at the top of handleLine(), before any verb
+    // handler runs. armTxWatchdog() needs it because it is called after its
+    // action has already been issued and optimistically updated TransmitModel.
+    bool    m_txKeyedAtRequestStart{false};
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
     bool    m_readOnly{false};     // observe-only gate (#4188 area 6)

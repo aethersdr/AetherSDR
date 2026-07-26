@@ -298,6 +298,10 @@ public:
     {
         return m_daxTxStreamId != 0 && m_daxTxActive;
     }
+    // Whether the connected radio family can key at all (RFC §6:
+    // capabilities().canTransmit). An RX-only backend must never be offered a
+    // transmit action; fails closed when no backend is attached.
+    bool backendCanTransmit() const;
     QJsonObject troubleshootingSnapshot() const;
 
     // Memory channel cache

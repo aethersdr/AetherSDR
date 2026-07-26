@@ -7738,8 +7738,21 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
     return true;
 }
 
+bool RadioModel::backendCanTransmit() const
+{
+    return m_backend != nullptr && m_backend->capabilities().canTransmit;
+}
+
 bool RadioModel::prepareWsprTransmit()
 {
+    // Fail closed on an RX-only family before borrowing any station state. The
+    // UI refuses earlier with an operator-visible reason; this is the backstop
+    // so a future caller cannot reach the DAX/PTT path on a backend that has no
+    // transmitter. Today it would fail anyway, but only implicitly — the Flex
+    // `stream create` below would find no command sink (Principle VIII).
+    if (!backendCanTransmit()) {
+        return false;
+    }
     // WSPR is generated in-process and sent through our own dax_tx stream.
     // `transmit dax` is a station-wide setting the operator (or SmartSDR DAX2
     // on Windows, #2315) owns, so remember it and hand it back in

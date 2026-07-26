@@ -3067,6 +3067,20 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     QString cmd;
     VerbArgs a;
 
+    // Sample the transmitter before any verb handler runs. armTxWatchdog() is
+    // always called *after* its action has been issued, and the direct key verbs
+    // update TransmitModel optimistically, so by then "keyed" cannot distinguish
+    // "this action keyed it" from "it was already up". Only a pre-dispatch
+    // sample can, and adopting a transmission this request did not cause means
+    // force-unkeying it at m_txMaxKeyMs — the misattribution the lease exists to
+    // prevent (#3646).
+    m_txKeyedAtRequestStart = false;
+    if (m_radioModel) {
+        const TransmitModel& tx = m_radioModel->transmitModel();
+        m_txKeyedAtRequestStart =
+            tx.isTransmitting() || tx.isTuning() || tx.isMox();
+    }
+
     const QByteArray trimmed = line.trimmed();
     if (trimmed.startsWith('{')) {
         // JSON request, e.g.
@@ -5486,7 +5500,9 @@ void AutomationServer::forceUnkey(const char* reason)
 void AutomationServer::armTxWatchdog()
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    m_txWatchdogState.arm(now);
+    // Pass the pre-dispatch sample so a lease armed while an unrelated
+    // transmission is already up cannot adopt it (see handleLine()).
+    m_txWatchdogState.arm(now, m_txKeyedAtRequestStart);
 
     // Direct key verbs update TransmitModel optimistically. Observe that edge
     // immediately so disabling/stopping the bridge before the first 500 ms poll

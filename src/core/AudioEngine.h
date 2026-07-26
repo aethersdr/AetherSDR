@@ -1139,6 +1139,12 @@ private:
     qint64 m_wsprPumpedFrames{0};
     QByteArray m_wsprInt16Scratch;
     QByteArray m_wsprFloatScratch;
+    // DAX TX mode borrowed for the duration of a WSPR frame so the mic path
+    // cannot produce a second packet stream against the same m_txPacketCount.
+    // m_wsprSavedDaxTxMode makes start/stop idempotent — stopWsprPump() has
+    // several early-return callers.
+    bool m_wsprPreviousDaxTxMode{false};
+    bool m_wsprSavedDaxTxMode{false};
 
     // Stale session watchdog: detects when audio data is being written but
     // processedUSecs() hasn't advanced, indicating the WASAPI session is
