@@ -617,3 +617,18 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
         }
     }
 }
+
+QVector<bool> dssDepthVisibleSegments(const QVector<qreal>& yFrontToBack)
+{
+    if (yFrontToBack.size() < 2) {
+        return {};
+    }
+    QVector<bool> visible(yFrontToBack.size() - 1, true);
+    qreal silhouetteY = std::numeric_limits<qreal>::max();
+    for (qsizetype i = 1; i < yFrontToBack.size(); ++i) {
+        visible[i - 1] = yFrontToBack.at(i - 1) <= silhouetteY + 0.5
+            || yFrontToBack.at(i) <= silhouetteY + 0.5;
+        silhouetteY = std::min(silhouetteY, yFrontToBack.at(i - 1));
+    }
+    return visible;
+}

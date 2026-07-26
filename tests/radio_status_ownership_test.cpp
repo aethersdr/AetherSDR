@@ -316,6 +316,11 @@ void testDaxTxPolicy()
     };
     check(evaluateDaxTxPolicy(linuxNoBridgeRade).allowed,
           "Linux without hosted DAX still creates its own dax_tx stream for RadeModemTx (#2343)");
+
+    DaxTxPolicyContext windowsWspr = windowsExternalRoute;
+    windowsWspr.reason = DaxTxRequestReason::WsprBeacon;
+    check(evaluateDaxTxPolicy(windowsWspr).allowed,
+          "built-in WSPR creates its own dax_tx stream independently of DAX2");
 }
 
 void testUdpRegistrationPolicy()

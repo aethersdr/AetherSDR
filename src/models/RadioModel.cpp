@@ -1889,6 +1889,7 @@ QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) co
     const bool nonVoiceSource = (source == TransmitModel::PttSource::Tune
                               || source == TransmitModel::PttSource::TciHardware
                               || source == TransmitModel::PttSource::Dax
+                              || source == TransmitModel::PttSource::Wspr
                               || s->sliceId() == m_digitalVoiceTxSliceId);
     if (!nonVoiceSource
         && (mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL"))) {
@@ -1996,6 +1997,7 @@ QString RadioModel::radioInterlockNotificationMessage(const QMap<QString, QStrin
                 (m_interlockNotificationSource == TransmitModel::PttSource::Tune
                  || m_interlockNotificationSource == TransmitModel::PttSource::TciHardware
                  || m_interlockNotificationSource == TransmitModel::PttSource::Dax
+                 || m_interlockNotificationSource == TransmitModel::PttSource::Wspr
                  || s->sliceId() == m_digitalVoiceTxSliceId);
             if (!nonVoiceSource
                 && (mode == QStringLiteral("DIGU") || mode == QStringLiteral("DIGL"))) {
@@ -4713,6 +4715,13 @@ void RadioModel::onDisconnected()
     m_daxTxActive = false;
     m_daxTxClientHandle = 0;
     m_daxTxCreatePending = false;
+    m_wsprTxOwnershipRequested = false;
+    m_wsprTxYieldAfterUse = false;
+    m_wsprTxReleaseWhenReady = false;
+    // The radio is gone — there is nothing left to hand `transmit dax` back to,
+    // and the next connect re-reads it from status.
+    m_wsprTxRestoreDax = false;
+    m_wsprTxPreviousDax = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -8200,15 +8209,98 @@ bool RadioModel::ensureDaxTxStream(DaxTxRequestReason reason)
                 return;
             }
 
+            const bool statusAlreadyAdoptedStream = m_daxTxStreamId == id;
             m_daxTxStreamId = id;
-            m_daxTxActive = false;
+            // Stream status normally precedes the create reply. Preserve the
+            // ownership bit if that status already adopted this exact stream.
+            if (!statusAlreadyAdoptedStream) {
+                m_daxTxActive = false;
+            }
             m_daxTxClientHandle = clientHandle();
             qCInfo(lcDax).noquote()
                 << "RadioModel: DAX TX create succeeded"
                 << QStringLiteral("stream=%1").arg(hexId(id));
             emit txAudioStreamReady(id);
+            if (m_wsprTxOwnershipRequested) {
+                sendCmd(QStringLiteral("stream set %1 tx=1").arg(hexId(id)));
+            } else if (m_wsprTxReleaseWhenReady) {
+                sendCmd(QStringLiteral("stream set %1 tx=0").arg(hexId(id)));
+                m_wsprTxReleaseWhenReady = false;
+            }
         });
     return true;
+}
+
+bool RadioModel::prepareWsprTransmit()
+{
+    // Fail closed on an RX-only family before borrowing any station state. The
+    // UI refuses earlier with an operator-visible reason; this is the backstop
+    // so a future caller cannot reach the DAX/PTT path on a backend that has no
+    // transmitter. Today it would fail anyway, but only implicitly — the Flex
+    // `stream create` below would find no command sink (Principle VIII).
+    if (!backendCapabilities().canTransmit) {
+        return false;
+    }
+    // The beacon rides a Flex `dax_tx` stream, and no other family provides
+    // one — HL2 host-modulates and has no DAX at all. Check before borrowing
+    // any station state: ensureDaxTxStream() below issues `stream create` and
+    // returns true optimistically on the pending reply, so on a non-Flex
+    // backend whose command sink drops that command the prepare would "succeed"
+    // with a stream that never arrives, leaving `transmit dax` latched until
+    // the beacon times out and releases it several minutes later.
+    if (m_flexBackend == nullptr) {
+        return false;
+    }
+    // WSPR is generated in-process and sent through our own dax_tx stream.
+    // `transmit dax` is a station-wide setting the operator (or SmartSDR DAX2
+    // on Windows, #2315) owns, so remember it and hand it back in
+    // releaseWsprTransmit(). Leaving dax=1 latched would silently kill the
+    // next mic voice TX on every platform where updateDaxTxMode() is compiled
+    // out (Windows / Linux without PipeWire). Mirrors the AX.25 TX path.
+    m_wsprTxPreviousDax = m_transmitModel.daxOn();
+    m_wsprTxRestoreDax = true;
+    m_transmitModel.setDax(true);
+    m_wsprTxYieldAfterUse = !m_daxTxActive;
+    m_wsprTxOwnershipRequested = true;
+    m_wsprTxReleaseWhenReady = false;
+    if (!ensureDaxTxStream(DaxTxRequestReason::WsprBeacon)) {
+        m_wsprTxOwnershipRequested = false;
+        m_wsprTxYieldAfterUse = false;
+        restoreWsprTransmitDax();
+        return false;
+    }
+    if (m_daxTxStreamId != 0) {
+        sendCmd(QStringLiteral("stream set %1 tx=1")
+                    .arg(hexId(m_daxTxStreamId)));
+    }
+    return true;
+}
+
+void RadioModel::releaseWsprTransmit()
+{
+    if (m_wsprTxOwnershipRequested && m_wsprTxYieldAfterUse) {
+        if (m_daxTxStreamId != 0) {
+            sendCmd(QStringLiteral("stream set %1 tx=0")
+                        .arg(hexId(m_daxTxStreamId)));
+        } else if (m_daxTxCreatePending) {
+            m_wsprTxReleaseWhenReady = true;
+        }
+    }
+    m_wsprTxOwnershipRequested = false;
+    m_wsprTxYieldAfterUse = false;
+    restoreWsprTransmitDax();
+}
+
+// Hand `transmit dax` back to whatever owned it before the beacon armed.
+// Only writes when the beacon actually changed it, so an operator (or DAX2)
+// that already had dax=1 never sees a redundant command.
+void RadioModel::restoreWsprTransmitDax()
+{
+    if (!m_wsprTxRestoreDax)
+        return;
+    m_wsprTxRestoreDax = false;
+    if (m_transmitModel.daxOn() != m_wsprTxPreviousDax)
+        m_transmitModel.setDax(m_wsprTxPreviousDax);
 }
 
 QJsonObject RadioModel::troubleshootingSnapshot() const

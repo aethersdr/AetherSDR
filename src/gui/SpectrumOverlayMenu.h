@@ -24,6 +24,7 @@ namespace AetherSDR {
 class MemoryBrowsePanel;
 class KiwiSdrManager;
 class SliceModel;
+class SpectrumOverlayWheelGuard;
 
 // Floating overlay menu anchored to the top-left of the SpectrumWidget.
 // Open by default; collapses to a single arrow button when closed.
@@ -206,6 +207,7 @@ private:
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
+    SpectrumOverlayWheelGuard* m_wheelGuard{nullptr};
     void setKiwiWaterfallControlMode(bool kiwiMode);
     void toggle();
     void updateLayout();
@@ -217,6 +219,7 @@ private:
     void buildDaxPanel();
     void syncDaxPanel();
     void toggleDisplayPanel();
+    void layoutDisplayPanel();
     void buildDisplayPanel();
     void toggleMemoryPanel();
     void buildMemoryPanel();

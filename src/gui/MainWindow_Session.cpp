@@ -1929,7 +1929,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // TX-automation gate — set AFTER start(), which reads
         // AETHER_AUTOMATION_ALLOW_TX into m_txAllowed and would otherwise
         // clobber a pre-start value. Fold in the persisted operator opt-in so
-        // a GUI enable survives restart; setTxAllowed arms the watchdog.
+        // a GUI enable survives restart; accepted TX actions arm the watchdog.
         const bool txPinnedOff =
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
         guard->setTxAllowed(

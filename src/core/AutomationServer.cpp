@@ -1296,6 +1296,17 @@ bool isTransmitControl(const QWidget* w)
     return false;
 }
 
+bool hasTransmitControlInChain(const QWidget* widget)
+{
+    for (const QWidget* current = widget; current;
+         current = current->parentWidget()) {
+        if (isTransmitControl(current)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool hasOwnTransmitMarker(const QObject* object)
 {
     return object && object->property(kTxKeyingProperty).toBool();
@@ -1995,12 +2006,12 @@ bool AutomationServer::start(const QString& serverName)
         m_discoveryFile.clear();
     }
 
-    // TX safety rails (#3646): the watchdog force-unkeys the radio if it stays
-    // keyed past a limit — a backstop independent of whatever script drives us.
+    // TX safety rails (#3646): the watchdog force-unkeys the radio if an
+    // automation-originated transmission stays keyed past a limit.
     // Read the key-time / power-ceiling limits UNCONDITIONALLY so they also
     // apply when TX is enabled later via the GUI toggle (setTxAllowed) — they
-    // are watchdog policy, not an env-only feature. Only the watchdog *arming*
-    // is gated on TX actually being allowed.
+    // are watchdog policy, not an env-only feature. Permission starts the poll
+    // timer; only an accepted TX-capable bridge action claims a transmission.
     if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_MS"))
         m_txMaxKeyMs = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_MS");
     if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_POWER"))
@@ -2088,9 +2099,13 @@ void AutomationServer::stop()
     // after the bridge stops.
     cancelGesture(nullptr, QStringLiteral("automation bridge stopping"));
 
-    // Safety: never leave the radio keyed when the bridge shuts down.
-    if (m_txAllowed)
+    // Safety: terminate a bridge-owned transmission when the bridge shuts
+    // down, but never claim an unrelated operator/DAX/TCI transmission merely
+    // because TX automation permission happened to be enabled.
+    if (txBridgeOwnsCurrentTransmit())
         forceUnkey("automation bridge stopping");
+    else
+        clearTxBridgeInitiated();
 
     // Restore the user's real station name so live MultiFlex peers stop seeing
     // the agent name immediately (don't wait for the disconnect to drop it).
@@ -2165,10 +2180,10 @@ void AutomationServer::setTxAllowed(bool allowed)
         return;  // idempotent
     m_txAllowed = allowed;
     if (allowed) {
-        // Arm the force-unkey watchdog (mirrors the start()-time arming). The
+        // Start the force-unkey poller (mirrors the start()-time setup). The
         // TX_MAX_MS / TX_MAX_POWER limits are read unconditionally in start(),
         // so the same key-time and power-ceiling policy applies on this GUI
-        // path as on the env path.
+        // path as on the env path. Enabling permission does not claim TX.
         if (!m_txWatchdog) {
             m_txWatchdog = new QTimer(this);
             m_txWatchdog->setInterval(500);
@@ -2180,9 +2195,12 @@ void AutomationServer::setTxAllowed(bool allowed)
             << m_txMaxKeyMs << "ms, power ceiling"
             << (m_txMaxPower < 0 ? QStringLiteral("none") : QString::number(m_txMaxPower));
     } else {
-        // Disabling: never leave the radio keyed by a script mid-transmit,
-        // then disarm the watchdog. forceUnkey is a safe no-op if not keyed.
-        forceUnkey("TX automation disabled by operator");
+        // Disabling terminates a bridge-owned transmission, but leaves any
+        // unrelated local/DAX/TCI transmission alone.
+        if (txBridgeOwnsCurrentTransmit())
+            forceUnkey("TX automation disabled by operator");
+        else
+            clearTxBridgeInitiated();
         if (m_txWatchdog) {
             m_txWatchdog->stop();
             m_txWatchdog->deleteLater();
@@ -3081,6 +3099,20 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     QString cmd;
     VerbArgs a;
 
+    // Sample the transmitter before any verb handler runs. markTxBridgeInitiated()
+    // is always called *after* its action has been issued, and the key verbs
+    // update TransmitModel optimistically, so by then "keyed" cannot distinguish
+    // "this action keyed it" from "it was already up". Only a pre-dispatch
+    // sample can, and adopting a transmission this request did not cause means
+    // force-unkeying it at m_txMaxKeyMs — the misattribution m_txBridgeInitiated
+    // exists to prevent (#3646).
+    m_txKeyedAtRequestStart = false;
+    if (m_radioModel) {
+        const TransmitModel& tx = m_radioModel->transmitModel();
+        m_txKeyedAtRequestStart =
+            tx.isTransmitting() || tx.isTuning() || tx.isMox();
+    }
+
     const QByteArray trimmed = line.trimmed();
     if (trimmed.startsWith('{')) {
         // JSON request, e.g.
@@ -3485,7 +3517,7 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
 }
 
 QJsonObject AutomationServer::doInvoke(const QString& target, const QString& action,
-                                       const QString& value) const
+                                       const QString& value)
 {
     QWidget* w = resolveWidget(target);
     if (!w) {
@@ -3508,7 +3540,8 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             return err(QStringLiteral("action '") + target + QStringLiteral("' is disabled"));
         }
 
-        if (isTransmitAction(menuAction, menu) && !m_txAllowed) {
+        const bool transmitAction = isTransmitAction(menuAction, menu);
+        if (transmitAction && !m_txAllowed) {
             qCWarning(lcAutomation).noquote()
                 << "BLOCKED transmit-related QAction invoke on" << target;
             return err(QStringLiteral("blocked: '") + target
@@ -3560,6 +3593,9 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
         if (!done) {
             return err(QStringLiteral("failed to invoke QAction: ") + target);
+        }
+        if (transmitAction) {
+            markTxBridgeInitiated();
         }
 
         qCInfo(lcAutomation).noquote()
@@ -3616,7 +3652,8 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
-    if (isTransmitControl(w) && !m_txAllowed) {
+    const bool transmitControl = isTransmitControl(w);
+    if (transmitControl && !m_txAllowed) {
         qCWarning(lcAutomation).noquote()
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
@@ -3812,6 +3849,9 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     if (!done)
         return err(QStringLiteral("action '") + action + QStringLiteral("' not applicable to ")
                    + shortClassName(w));
+    if (transmitControl) {
+        markTxBridgeInitiated();
+    }
 
     qCInfo(lcAutomation).noquote()
         << "invoke" << action << "on" << target << "(" << shortClassName(w) << ")";
@@ -5476,8 +5516,10 @@ QJsonObject AutomationServer::doAtu(const QString& action)
 // watchdog and stop().
 void AutomationServer::forceUnkey(const char* reason)
 {
-    if (!m_radioModel)
+    if (!m_radioModel) {
+        clearTxBridgeInitiated();
         return;
+    }
     auto& tx = m_radioModel->transmitModel();
     tx.stopTune();
     tx.setMox(false);
@@ -5491,10 +5533,41 @@ void AutomationServer::forceUnkey(const char* reason)
     qCWarning(lcAutomation).noquote() << "TX force-unkey:" << reason;
 }
 
-// TX safety watchdog (#3646). Runs only when AETHER_AUTOMATION_ALLOW_TX is set.
-// Tracks how long the radio has been continuously keyed and force-unkeys past
-// the limit, so a hung or abandoned automation script can never leave a live
-// transmitter on. The limit is AETHER_AUTOMATION_TX_MAX_MS (default 20 s).
+void AutomationServer::markTxBridgeInitiated()
+{
+    // Refuse to claim a transmission that was already up when this request
+    // arrived. This function runs *after* its action was issued, and the key
+    // verbs update TransmitModel optimistically, so the live keyed state cannot
+    // distinguish "this action keyed it" from "it was already keyed". Claiming
+    // the latter means force-unkeying an operator, DAX, TCI, or WSPR-beacon
+    // transmission at m_txMaxKeyMs — the misattribution this flag exists to
+    // prevent. The cost is that a bridge action layered on top of a live
+    // transmission goes unpoliced, which is the safe direction to fail.
+    if (m_txKeyedAtRequestStart)
+        return;
+    m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();
+    m_txBridgeInitiated = true;
+}
+
+void AutomationServer::clearTxBridgeInitiated()
+{
+    m_txKeyedSinceMs = 0;
+    m_txBridgeInitiated = false;   // a later operator key is not ours
+}
+
+bool AutomationServer::txBridgeOwnsCurrentTransmit() const
+{
+    if (!m_radioModel || !m_txBridgeInitiated)
+        return false;
+    const TransmitModel& tx = m_radioModel->transmitModel();
+    return tx.isTransmitting() || tx.isTuning() || tx.isMox();
+}
+
+// TX safety watchdog (#3646). The poller runs while automation TX permission is
+// enabled, but it enforces only on a transmission claimed by an accepted
+// TX-capable bridge action (m_txBridgeInitiated). Operator MOX/TUNE and
+// WSPR/DAX/TCI transmissions are therefore outside its ownership.
+// The limit is AETHER_AUTOMATION_TX_MAX_MS (default 20 s).
 void AutomationServer::onTxWatchdog()
 {
     if (!m_radioModel)
@@ -6400,7 +6473,7 @@ QJsonObject AutomationServer::doWindow(const QString& action, const QString& tar
 // single-shots into the VFO entry), so no nested event loop. fired:true means
 // the handler RAN — handlers validate preconditions (connected, active slice)
 // and may no-op; verify effects via get/dumpTree, exactly like a MIDI press.
-QJsonObject AutomationServer::doShortcut(const QString& id) const
+QJsonObject AutomationServer::doShortcut(const QString& id)
 {
     if (id.isEmpty()) {
         return err(QStringLiteral("shortcut requires an action id, e.g. 'band_zoom'"));
@@ -6422,6 +6495,9 @@ QJsonObject AutomationServer::doShortcut(const QString& id) const
 
     switch (result) {
     case 0:  // MainWindow::ShortcutFireOk
+        break;
+    case 4:  // MainWindow::ShortcutFireTxOk
+        markTxBridgeInitiated();
         break;
     case 1:  // ShortcutFireUnknownId
         return err(QStringLiteral("unknown shortcut action id: ") + id);
@@ -6739,7 +6815,7 @@ QJsonObject AutomationServer::pointerSafetyError(const QWidget* widget,
 // re-map after a move. That matters for a QSizeGrip, whose parent (and therefore
 // the grip itself) shifts as the window resizes — re-mapping mid-drag would feed
 // the grip a compounding delta and overshoot the requested size.
-QJsonObject AutomationServer::doDrag(const QString& target, const QString& value) const
+QJsonObject AutomationServer::doDrag(const QString& target, const QString& value)
 {
     QWidget* w = resolveWidget(target);
     if (!w) {
@@ -6750,6 +6826,7 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
     if (!safetyError.isEmpty()) {
         return safetyError;
     }
+    const bool transmitControl = hasTransmitControlInChain(w);
 
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() < 2) {
@@ -6784,6 +6861,9 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
     send(QEvent::MouseMove, QPoint(dx * 2 / 3, dy * 2 / 3), Qt::NoButton, Qt::LeftButton);
     send(QEvent::MouseMove, QPoint(dx, dy), Qt::NoButton, Qt::LeftButton);
     send(QEvent::MouseButtonRelease, QPoint(dx, dy), Qt::LeftButton, Qt::NoButton);
+    if (transmitControl) {
+        markTxBridgeInitiated();
+    }
 
     qCInfo(lcAutomation).noquote()
         << "drag" << target << "by" << dx << dy;
@@ -6856,7 +6936,7 @@ QJsonObject AutomationServer::doWheel(const QString& target, const QString& valu
                        {QStringLiteral("angleDeltaY"), angle.y()}};
 }
 
-QJsonObject AutomationServer::doDragAt(const QString& target, const QString& value) const
+QJsonObject AutomationServer::doDragAt(const QString& target, const QString& value)
 {
     QWidget* w = resolveWidget(target);
     if (!w) {
@@ -6867,6 +6947,7 @@ QJsonObject AutomationServer::doDragAt(const QString& target, const QString& val
     if (!safetyError.isEmpty()) {
         return safetyError;
     }
+    const bool transmitControl = hasTransmitControlInChain(w);
 
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() < 4) {
@@ -6933,6 +7014,9 @@ QJsonObject AutomationServer::doDragAt(const QString& target, const QString& val
     send(QEvent::MouseMove, QPoint(dx * 2 / 3, dy * 2 / 3), Qt::NoButton, Qt::LeftButton);
     send(QEvent::MouseMove, QPoint(dx, dy), Qt::NoButton, Qt::LeftButton);
     send(QEvent::MouseButtonRelease, QPoint(dx, dy), Qt::LeftButton, Qt::NoButton);
+    if (transmitControl) {
+        markTxBridgeInitiated();
+    }
 
     qCInfo(lcAutomation).noquote()
         << "dragAt" << target << "from" << start << "by" << dx << dy
@@ -7073,6 +7157,10 @@ QJsonObject AutomationServer::doGesture(const QString& action,
         if (!send(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton)) {
             cancelGesture(sock, QStringLiteral("gesture target disappeared during press"));
             return err(QStringLiteral("gesture target disappeared during press"));
+        }
+        if (m_pointerGesture.widget
+            && hasTransmitControlInChain(m_pointerGesture.widget)) {
+            markTxBridgeInitiated();
         }
 
         if (!m_pointerGestureTimer) {
@@ -7587,7 +7675,7 @@ QJsonObject AutomationServer::doHitTest(const QString& target,
 // menu/dialog the click raises runs on a normal stack, mirroring the invoke()
 // re-entrancy fix.
 QJsonObject AutomationServer::doClickAt(const QString& target,
-                                        const QString& value) const
+                                        const QString& value)
 {
     const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     if (parts.size() < 2)
@@ -7653,7 +7741,8 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     // ancestor chain (see the function comment): an unaccepted press propagates
     // to parents, so every widget Qt could deliver this click to must pass.
     // (#3646 safety.)
-    if (!m_txAllowed) {
+    const bool transmitControl = hasTransmitControlInChain(w);
+    if (!m_txAllowed && transmitControl) {
         for (const QWidget* p = w; p; p = p->parentWidget()) {
             if (!isTransmitControl(p)) {
                 continue;
@@ -7697,6 +7786,9 @@ QJsonObject AutomationServer::doClickAt(const QString& target,
     const QPoint local = w->mapFromGlobal(global);
     QPointer<QWidget> wp = w;
     QPointer<QWidget> win = w->window();
+    if (transmitControl) {
+        markTxBridgeInitiated();
+    }
     QTimer::singleShot(0, qApp, [wp, win, local, global]() {
         if (!wp)
             return;

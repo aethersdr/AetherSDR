@@ -212,6 +212,7 @@ public:
     static constexpr int ShortcutFireUnknownId       = 1;
     static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
     static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
+    static constexpr int ShortcutFireTxOk            = 4;  // keysTx handler ran
     // Fire a registered ShortcutManager action by id — the exact path a MIDI
     // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
     // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
@@ -249,7 +250,7 @@ public:
     // immediately.
     void setAutomationBridgeToken(const QString& token);
     // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
-    // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
+    // Enabling grants permission; accepted TX actions arm the watchdog lease.
     void setAutomationTxAllowed(bool allowed);
     // Persist the observe-only opt-in and push it live (Radio Setup → Network).
     // When set, the bridge refuses every mutating verb (#4188 area 6).

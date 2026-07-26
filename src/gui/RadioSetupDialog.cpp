@@ -1622,7 +1622,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             txCheck->setToolTip(
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
-                "A force-unkey watchdog stays armed whenever this is on. You are\n"
+                "Bridge-originated TX is limited by a force-unkey watchdog. You are\n"
                 "responsible for anything transmitted. See docs/automation-bridge.md.");
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
@@ -1648,8 +1648,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                         "transmit-keying controls — MOX/PTT, TUNE, the ATU, and CWX "
                         "send — on your radio. Automated software will be able to put "
                         "a signal on the air.\n\n"
-                        "A force-unkey watchdog stays armed while this is enabled, but "
-                        "it is a backstop, not a guarantee. You, the operator, are "
+                        "A force-unkey watchdog limits bridge-originated TX, but it is "
+                        "a backstop, not a guarantee. You, the operator, are "
                         "ultimately responsible for all transmissions from your station "
                         "— including their content, timing, frequency, power, and "
                         "compliance with your license and local regulations.\n\n"

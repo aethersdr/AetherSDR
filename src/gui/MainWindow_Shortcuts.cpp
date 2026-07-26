@@ -1316,7 +1316,7 @@ int MainWindow::fireShortcutAction(const QString& id, bool allowTx)
         return ShortcutFireNoDirectHandler;
     }
     a->handler();
-    return ShortcutFireOk;
+    return a->keysTx ? ShortcutFireTxOk : ShortcutFireOk;
 }
 
 void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
