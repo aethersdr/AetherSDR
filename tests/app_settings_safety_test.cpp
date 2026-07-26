@@ -321,21 +321,22 @@ void testFailedLoadCannotSave()
            "failed loads cannot create a replacement temporary file");
 }
 
-void testThreeDSliceDepthDefaultAndOptOut()
+void testThreeDSliceDepthDefaultAndOptIn()
 {
     AppSettings& settings = AppSettings::instance();
     settings.load();
 
-    expect(DisplaySettings::threeDSliceDepth(),
-           "3D Slice Shadow defaults on when the Display field is absent");
-
-    DisplaySettings::setThreeDSliceDepth(false);
     expect(!DisplaySettings::threeDSliceDepth(),
-           "a persisted False keeps the user's 3D Slice Shadow opt-out");
+           "3D Slice Shadow defaults OFF when the Display field is absent, so "
+           "an upgrade never changes an existing user's display");
 
     DisplaySettings::setThreeDSliceDepth(true);
     expect(DisplaySettings::threeDSliceDepth(),
-           "3D Slice Shadow can be enabled again after opting out");
+           "a persisted True keeps the user's 3D Slice Shadow opt-in");
+
+    DisplaySettings::setThreeDSliceDepth(false);
+    expect(!DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow can be disabled again after opting in");
 }
 
 } // namespace
@@ -374,7 +375,7 @@ int main(int argc, char** argv)
     } else if (scenario == QStringLiteral("failed-load")) {
         testFailedLoadCannotSave();
     } else if (scenario == QStringLiteral("display-slice-depth-default")) {
-        testThreeDSliceDepthDefaultAndOptOut();
+        testThreeDSliceDepthDefaultAndOptIn();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return 2;

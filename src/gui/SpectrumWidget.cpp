@@ -68,7 +68,9 @@
 #include "core/PerfTelemetry.h"
 #include <QSoundEffect>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <iterator>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -11449,6 +11451,13 @@ void SpectrumWidget::initDssMeshPipeline()
 
 void SpectrumWidget::initDssDepthPipeline()
 {
+    // Idempotent + lazy: built on first CPU-image-fallback use, not at init.
+    // m_dssDepthVbo (created first below) doubles as the "already attempted"
+    // sentinel so a create() failure doesn't retry — and rebuild — every frame.
+    // releaseResources() nulls it, so a device reset re-arms the lazy build.
+    if (m_dssDepthVbo) {
+        return;
+    }
     QRhi* r = rhi();
     m_dssDepthVertexCount = 0;
 
@@ -11522,11 +11531,16 @@ void SpectrumWidget::updateDssDepthVertices(
         return;
     }
 
+    // Each quad/line is 6 vertices (2 triangles). Reserve the whole primitive
+    // up front so the cap can never split one mid-triangle — a partial primitive
+    // would render as a dangling shard. When the cap is hit we drop the trailing
+    // primitives whole and warn once rather than silently truncating geometry.
+    bool truncated = false;
+    const auto roomFor = [&](int verts) {
+        return m_dssDepthVertexCount + verts <= kDssDepthMaxVertices;
+    };
     const auto appendVertex = [&](const QPointF& point, const QColor& color,
                                   float edge) {
-        if (m_dssDepthVertexCount >= kDssDepthMaxVertices) {
-            return;
-        }
         const float x = static_cast<float>(
             point.x() * 2.0 / logicalSize.width() - 1.0);
         const float y = static_cast<float>(
@@ -11544,26 +11558,40 @@ void SpectrumWidget::updateDssDepthVertices(
                                 const QPointF& c, const QPointF& d,
                                 const QColor& frontColor,
                                 const QColor& backColor) {
+        if (!roomFor(6)) {
+            return false;
+        }
         appendVertex(a, frontColor, 0.0f);
         appendVertex(b, frontColor, 0.0f);
         appendVertex(c, backColor, 0.0f);
         appendVertex(a, frontColor, 0.0f);
         appendVertex(c, backColor, 0.0f);
         appendVertex(d, backColor, 0.0f);
+        return true;
     };
 
     for (const DssDepthBand& band : geometry.bands) {
         if (band.polygon.size() == 4) {
-            appendQuad(band.polygon.at(0), band.polygon.at(1),
-                       band.polygon.at(2), band.polygon.at(3),
-                       band.frontColor, band.backColor);
+            if (!appendQuad(band.polygon.at(0), band.polygon.at(1),
+                            band.polygon.at(2), band.polygon.at(3),
+                            band.frontColor, band.backColor)) {
+                truncated = true;
+                break;
+            }
         }
     }
     for (const DssDepthLine& line : geometry.lines) {
+        if (truncated) {
+            break;
+        }
         const QPointF delta = line.line.p2() - line.line.p1();
         const qreal length = std::hypot(delta.x(), delta.y());
         if (length <= 0.001) {
             continue;
+        }
+        if (!roomFor(6)) {
+            truncated = true;
+            break;
         }
         const qreal halfWidth = std::max<qreal>(0.45, line.width * 0.5);
         const QPointF normal(-delta.y() / length * halfWidth,
@@ -11578,6 +11606,16 @@ void SpectrumWidget::updateDssDepthVertices(
         appendVertex(aMinus, line.frontColor, -1.0f);
         appendVertex(bPlus, line.backColor, 1.0f);
         appendVertex(bMinus, line.backColor, -1.0f);
+    }
+    if (truncated) {
+        static bool warnedOnce = false;
+        if (!warnedOnce) {
+            warnedOnce = true;
+            qCWarning(lcGui)
+                << "SpectrumWidget: 3D slice projection vertex cap"
+                << kDssDepthMaxVertices
+                << "reached; trailing slice shadows dropped this frame";
+        }
     }
 
     if (m_dssDepthVertexCount > 0) {
@@ -11606,7 +11644,9 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
     initOverlayPipeline();
     initSpectrumPipeline();
     initDssMeshPipeline();
-    initDssDepthPipeline();
+    // initDssDepthPipeline() is deliberately NOT called here — its ~458 KB VBO
+    // and pipeline are only used on the CPU-image fallback, which most GPU
+    // systems never hit. Built lazily on first fallback use in renderGpuFrame.
 
     // Upload quad vertex data for both pipelines
     QRhiResourceUpdateBatch* batch = r->nextResourceUpdateBatch();
@@ -12516,7 +12556,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 m_waterfallScrollClock.isValid()
                 ? scrollProgressRows
                 : m_waterfallScrollDistanceRows;
-            std::array<float, kDssMeshUboFloats> ubo{
+            // Scalar UBO prefix as a deduced-size array so a dropped or added
+            // field is a COMPILE error here, not a silently zero-filled uniform.
+            // A bare std::array<float, kDssMeshUboFloats>{…} sized to the whole
+            // UBO would swallow a short initializer list (breaking e.g. preview
+            // zoom/pan) without complaint; the shadow descriptors are filled
+            // separately below.
+            constexpr int kDssMeshScalarFields = 24;  // through the bgFill vec4
+            const float uboScalars[] = {
                 rowOffset,
                 floorDbm, rangeDb, m_dssZCurve,
                 DssRenderer::kBackWidthFrac, DssRenderer::kDepthSpanFrac,
@@ -12532,11 +12579,18 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                 static_cast<float>(m_bgFillColor.blueF()),
                 1.0f,                                         // bgFill vec4
             };
+            static_assert(std::size(uboScalars) == kDssMeshScalarFields,
+                "a missed field here is a compile error, not silent garbage");
+            std::array<float, kDssMeshUboFloats> ubo{};
+            std::copy(std::begin(uboScalars), std::end(uboScalars),
+                      ubo.begin());
 
             // Slice shadows are decals evaluated by the DSS shader itself.
             // Because the mask modifies the existing curtain/ridge fragments,
             // it cannot hover above or cut through the rendered surface.
             constexpr int kShadowBandsOffset = 24;
+            static_assert(kShadowBandsOffset == kDssMeshScalarFields,
+                "shadow descriptors must begin right after the scalar prefix");
             constexpr int kShadowStylesOffset =
                 kShadowBandsOffset + kDssMeshShadowSlices * 4;
             constexpr int kShadowMetaOffset =
@@ -12555,6 +12609,40 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             const double shadowEndMhz =
                 shadowCenterMhz + shadowBandwidthMhz * 0.5;
             int shadowCount = 0;
+            const auto unitForShadowMhz = [&](double mhz) {
+                return static_cast<float>(
+                    (mhz - shadowStartMhz) / shadowBandwidthMhz);
+            };
+            // One shadow descriptor slot carries one passband band plus one
+            // marker cue (dss_mesh.frag). A band-less slot (bandAlpha 0) is a
+            // pure cue; a cue-less slot (cueAlpha 0) is a pure passband.
+            const auto writeShadowSlot = [&](float low, float high,
+                                             bool bandVisible, float cueCenter,
+                                             const QColor& cueColor,
+                                             bool cueVisible, bool active) {
+                if (shadowCount >= kDssMeshShadowSlices) {
+                    return false;
+                }
+                const int bandBase = kShadowBandsOffset + shadowCount * 4;
+                ubo.at(bandBase) = std::clamp(low, 0.0f, 1.0f);
+                ubo.at(bandBase + 1) = std::clamp(high, 0.0f, 1.0f);
+                ubo.at(bandBase + 2) = std::clamp(cueCenter, 0.0f, 1.0f);
+                ubo.at(bandBase + 3) =
+                    bandVisible ? (active ? 0.42f : 0.17f) : 0.0f;
+                const int styleBase = kShadowStylesOffset + shadowCount * 4;
+                ubo.at(styleBase) = static_cast<float>(cueColor.redF());
+                ubo.at(styleBase + 1) = static_cast<float>(cueColor.greenF());
+                ubo.at(styleBase + 2) = static_cast<float>(cueColor.blueF());
+                ubo.at(styleBase + 3) =
+                    cueVisible ? (active ? 0.36f : 0.11f) : 0.0f;
+                ++shadowCount;
+                return true;
+            };
+            // Match drawSliceMarkers / the CPU 3D fallback: the passband band
+            // and marker cue(s) are placed independently (an off-screen passband
+            // must not drop an on-screen cue, and vice versa); RTTY/DIGL draws a
+            // mark+space pair rather than a carrier cue; markerWidth == 0 draws
+            // the passband with no cue at all.
             const auto appendShadow = [&](const SliceOverlay& so) {
                 if (shadowCount >= kDssMeshShadowSlices
                     || !std::isfinite(shadowBandwidthMhz)
@@ -12563,47 +12651,81 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     || so.freqMhz > shadowEndMhz) {
                     return;
                 }
-                float low = static_cast<float>(
-                    (so.freqMhz + so.filterLowHz / 1.0e6
-                     - shadowStartMhz) / shadowBandwidthMhz);
-                float high = static_cast<float>(
-                    (so.freqMhz + so.filterHighHz / 1.0e6
-                     - shadowStartMhz) / shadowBandwidthMhz);
+                float low = unitForShadowMhz(
+                    so.freqMhz + so.filterLowHz / 1.0e6);
+                float high = unitForShadowMhz(
+                    so.freqMhz + so.filterHighHz / 1.0e6);
                 if (low > high) {
                     std::swap(low, high);
                 }
-                if (high < 0.0f || low > 1.0f) {
+                const bool bandVisible = !(high < 0.0f || low > 1.0f);
+
+                struct ShadowCue { float center; QColor color; };
+                std::array<ShadowCue, 2> cues;
+                int cueCount = 0;
+                const bool rtty = so.mode == QStringLiteral("RTTY")
+                    || so.mode == QStringLiteral("DIGL");
+                if (rtty) {
+                    double markMhz = so.freqMhz;
+                    if (so.mode == QStringLiteral("DIGL")) {
+                        markMhz -= so.rttyMark / 1.0e6;
+                    }
+                    const double spaceMhz = markMhz - so.rttyShift / 1.0e6;
+                    cues[cueCount++] = {unitForShadowMhz(markMhz),
+                        AetherSDR::ThemeManager::instance().color(
+                            "color.accent.success")};
+                    cues[cueCount++] = {unitForShadowMhz(spaceMhz),
+                        AetherSDR::ThemeManager::instance().color(
+                            "color.accent.danger")};
+                } else if (so.markerWidth > 0) {
+                    cues[cueCount++] = {unitForShadowMhz(so.freqMhz),
+                                        sliceColorForOverlay(so)};
+                }
+
+                // Cull each cue by its own position, matching appendLine.
+                std::array<ShadowCue, 2> visible;
+                int visibleCount = 0;
+                for (int i = 0; i < cueCount; ++i) {
+                    if (cues[i].center >= 0.0f && cues[i].center <= 1.0f) {
+                        visible[visibleCount++] = cues[i];
+                    }
+                }
+
+                if (!bandVisible && visibleCount == 0) {
                     return;
                 }
-                low = std::clamp(low, 0.0f, 1.0f);
-                high = std::clamp(high, 0.0f, 1.0f);
-                const float center = std::clamp(
-                    static_cast<float>(
-                        (so.freqMhz - shadowStartMhz)
-                        / shadowBandwidthMhz),
-                    0.0f, 1.0f);
-                const QColor cue = sliceColorForOverlay(so);
-                const int bandBase = kShadowBandsOffset + shadowCount * 4;
-                ubo.at(bandBase) = low;
-                ubo.at(bandBase + 1) = high;
-                ubo.at(bandBase + 2) = center;
-                ubo.at(bandBase + 3) = so.isActive ? 0.42f : 0.17f;
-                const int styleBase =
-                    kShadowStylesOffset + shadowCount * 4;
-                ubo.at(styleBase) = static_cast<float>(cue.redF());
-                ubo.at(styleBase + 1) = static_cast<float>(cue.greenF());
-                ubo.at(styleBase + 2) = static_cast<float>(cue.blueF());
-                ubo.at(styleBase + 3) = so.isActive ? 0.36f : 0.11f;
-                ++shadowCount;
-            };
-            for (const SliceOverlay& so : m_sliceOverlays) {
-                if (!so.isActive) {
-                    appendShadow(so);
+                if (visibleCount == 0) {
+                    // Passband only (markerWidth == 0, or all cues off-screen).
+                    writeShadowSlot(low, high, bandVisible,
+                                    (low + high) * 0.5f,
+                                    sliceColorForOverlay(so), false,
+                                    so.isActive);
+                    return;
                 }
-            }
-            for (const SliceOverlay& so : m_sliceOverlays) {
-                if (so.isActive) {
-                    appendShadow(so);
+                // First cue shares the passband slot; extra cues (RTTY space)
+                // take band-less slots until the descriptor budget is spent.
+                writeShadowSlot(low, high, bandVisible, visible[0].center,
+                                visible[0].color, true, so.isActive);
+                for (int i = 1; i < visibleCount; ++i) {
+                    if (!writeShadowSlot(0.0f, 0.0f, false, visible[i].center,
+                                         visible[i].color, true, so.isActive)) {
+                        break;
+                    }
+                }
+            };
+            // Only compute shadow descriptors when the effect is on; otherwise
+            // the loops are wasted per-frame work (the shader discards them via
+            // shadowMeta.y anyway).
+            if (m_threeDSliceDepth) {
+                for (const SliceOverlay& so : m_sliceOverlays) {
+                    if (!so.isActive) {
+                        appendShadow(so);
+                    }
+                }
+                for (const SliceOverlay& so : m_sliceOverlays) {
+                    if (so.isActive) {
+                        appendShadow(so);
+                    }
                 }
             }
             ubo.at(kShadowMetaOffset) = static_cast<float>(shadowCount);
@@ -12663,6 +12785,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         // because it shows/raises widgets, which must not happen mid-render.)
         repositionVfoFlags(specRect);
         if (!m_dssMeshReady) {
+            // Lazily build the fallback pipeline/VBO on first use (runs before
+            // beginPass, so resource creation is outside the render pass). Only
+            // when the effect is on — buildDssDepthGeometry returns empty
+            // otherwise, so the pipeline would sit unused.
+            if (m_threeDSliceDepth) {
+                initDssDepthPipeline();
+            }
             updateDssDepthVertices(
                 batch, buildDssDepthGeometry(specRect, dssFrameFloorDbm),
                 logicalSize);
