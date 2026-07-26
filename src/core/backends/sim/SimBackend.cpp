@@ -219,6 +219,34 @@ void SimBackend::loadDemoNoisePreset(const QString& presetName)
     m_audio.loadPreset(presetName);
 }
 
+void SimBackend::updateBirdieFromVfo()
+{
+    // Audio pitch from the RF offset, per sideband:
+    //   USB: pitch = carrier - VFO  (a carrier ABOVE the VFO is audible)
+    //   LSB: pitch = VFO - carrier  (a carrier BELOW the VFO is audible)
+    // A carrier on the "wrong" side gives a negative offset → clamp to silence,
+    // exactly like a real receiver: switch sideband and it disappears. Near zero
+    // it approaches zero-beat.
+    const double offsetHz = (m_birdieCarrierMhz - m_sliceFreqMhz) * 1.0e6;
+    const double audioHz = m_lsb ? -offsetHz : offsetHz;
+    m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
+                    std::max(0.0, audioHz));
+}
+
+void SimBackend::setDemoAnf(bool on)
+{
+    // Auto-notch: engage → notch the active tonal channels (birdie/cw), which the
+    // mixer already identifies via autoNotchTones(). Off → clear. (Manual TNF
+    // notches aren't tracked separately yet, same as the PanadapterStream demo.)
+    if (on) m_audio.setNotches(m_audio.autoNotchTones());
+    else    m_audio.setNotches({});
+}
+
+void SimBackend::setDemoNb(bool on)
+{
+    m_audio.setNoiseBlank(on);
+}
+
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
 QString SimBackend::demoSerial()    { return QStringLiteral("DEMO-0001"); }
 QString SimBackend::familyName()    { return QStringLiteral("sim"); }
@@ -311,6 +339,7 @@ void SimBackend::setSliceFrequency(int sliceId, double hz)
         return;
     }
     m_sliceFreqMhz = hz / 1.0e6;
+    updateBirdieFromVfo();            // tuning must move the audio we actually hear
     SliceDelta d;
     d.frequency = m_sliceFreqMhz;
     emit sliceChanged(kSliceId, d);   // radio is authoritative: echo the change back (Principle II)
@@ -322,6 +351,12 @@ void SimBackend::setSliceMode(int sliceId, const QString& mode)
         return;
     }
     m_sliceMode = mode;
+    // Lower-sideband family: LSB, DIGL, CWL. Everything else demodulates
+    // USB-style. Drives which side of the VFO the birdie is audible on.
+    const QString up = mode.toUpper();
+    m_lsb = (up == QLatin1String("LSB") || up == QLatin1String("DIGL")
+             || up == QLatin1String("CWL"));
+    updateBirdieFromVfo();
     SliceDelta d;
     d.mode = m_sliceMode;
     emit sliceChanged(kSliceId, d);

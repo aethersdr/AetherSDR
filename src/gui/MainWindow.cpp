@@ -1507,31 +1507,20 @@ MainWindow::MainWindow(QWidget* parent)
         });
     }
 
-    // Demo VFO tuning → the birdie demodulates against it (pitch shifts, zero-
-    // beats). RadioConnection catches the synthetic slice-tune and emits the new
-    // VFO freq; forward it to PanadapterStream (queued — mixer on the net thread).
-    if (auto* conn = m_radioModel.connection()) {
-        connect(conn, &RadioConnection::demoVfoChanged, this, [this](double mhz) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoVfoMhz",
-                    Qt::QueuedConnection, Q_ARG(double, mhz));
-        });
-        connect(conn, &RadioConnection::demoModeChanged, this, [this](const QString& m) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoMode",
-                    Qt::QueuedConnection, Q_ARG(QString, m));
-        });
-        connect(conn, &RadioConnection::demoAnfChanged, this, [this](bool on) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoAnf",
-                    Qt::QueuedConnection, Q_ARG(bool, on));
-        });
-        connect(conn, &RadioConnection::demoNbChanged, this, [this](bool on) {
-            if (auto* ps = m_radioModel.panStream())
-                QMetaObject::invokeMethod(ps, "setDemoNb",
-                    Qt::QueuedConnection, Q_ARG(bool, on));
-        });
-    }
+    // NOTE: demo VFO/mode/ANF/NB forwarding is NOT wired here.
+    //
+    // It used to be: four connects made in this constructor against the STARTUP
+    // backend's RadioConnection, forwarding to PanadapterStream's NoiseMixer.
+    // Both halves were wrong. (a) The sim swap replaces that connection and
+    // nothing rebound them, so on the demo they were dead. (b) Even bound, they
+    // targeted PanadapterStream's mixer — not SimBackend's m_audio, the one you
+    // actually hear — the same wrong-mixer bug already fixed for the applet
+    // controls.
+    //
+    // VFO and mode now need no forwarding at all: they arrive at SimBackend
+    // through the IRadioBackend seam (setSliceFrequency / setSliceMode), which is
+    // rebuilt per backend swap by construction, and drive the audible mixer from
+    // there. ANF/NB are wired per-swap in wireBackendSeam().
     connect(m_appletPanel->rxApplet(), &RxApplet::directEntryCommitted,
             this, [this](double mhz, const QString& source) {
         if (auto* s = activeSlice()) {
@@ -5767,6 +5756,22 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         QMetaObject::invokeMethod(m_audio, [audio = m_audio, isDemo]() {
             audio->setMainSourceLegacyNr2(isDemo);
         }, Qt::QueuedConnection);
+    }
+
+    // Demo ANF / NB → the AUDIBLE mixer (SimBackend::m_audio).
+    //
+    // Wired HERE, per backend swap, rather than once in the constructor: the
+    // signals come from the synthetic RadioConnection that SimBackend owns, so a
+    // ctor-time binding against the startup backend's connection is dead the
+    // moment the sim swaps in. Qt drops these automatically when the backend is
+    // destroyed, so re-running per swap cannot duplicate them.
+    if (auto* sim = dynamic_cast<SimBackend*>(backend)) {
+        if (auto* conn = sim->connection()) {
+            connect(conn, &RadioConnection::demoAnfChanged, sim,
+                    [sim](bool on) { sim->setDemoAnf(on); }, Qt::QueuedConnection);
+            connect(conn, &RadioConnection::demoNbChanged, sim,
+                    [sim](bool on) { sim->setDemoNb(on); }, Qt::QueuedConnection);
+        }
     }
 
     // Spectrum seam (RFC #4288 Route A): NOT rendered here.

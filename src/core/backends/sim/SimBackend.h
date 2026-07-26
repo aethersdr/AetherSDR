@@ -74,6 +74,15 @@ public:
     void setDemoNoiseKnob(const QString& channel, const QString& knob, double value);
     void loadDemoNoisePreset(const QString& presetName);
 
+    // Auto-notch and noise-blanker, applied to the mixer that actually feeds the
+    // speaker (m_audio). These used to live only on PanadapterStream's separate
+    // NoiseMixer — the inaudible one — so engaging ANF or NB did nothing you
+    // could hear. VFO and mode need no entry point here: they already arrive
+    // through the IRadioBackend seam (setSliceFrequency/setSliceMode) and now
+    // drive the birdie from there.
+    void setDemoAnf(bool on);
+    void setDemoNb(bool on);
+
     // Identity advertised in the connect descriptor / radio-list entry. Stable so
     // the UI can label the demo entry and match it back after connect.
     static QString demoModelName();
@@ -164,6 +173,14 @@ private:
     QString m_agcMode{QStringLiteral("med")};
     int     m_agcThresholdDb{65};
     static constexpr int kSliceId = 0;
+
+    // Birdie-vs-VFO geometry, mirroring PanadapterStream's demo behaviour but on
+    // the AUDIBLE mixer. The carrier sits a fixed 1200 Hz above the default VFO
+    // (matching the ctor's birdie pitch), so tuning across it sweeps the audio
+    // pitch down to zero-beat and out the far side.
+    bool   m_lsb{false};              // true when the slice mode is a lower sideband
+    double m_birdieCarrierMhz{14.100 + 1200.0 / 1.0e6};
+    void   updateBirdieFromVfo();     // recompute the birdie pitch from VFO+sideband
 
 public:
     // One waterfall row per this many audio frames (see onAudioTick).
