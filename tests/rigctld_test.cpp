@@ -2,10 +2,12 @@
 // Requires a running AetherSDR instance with rigctld enabled (default: localhost:4532).
 //
 // Build:  cmake --build build --target rigctld_test
-// Run:    ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+// Run:    ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw] [--no-split] [--pty PATH]
 //
 // PTT tests (section 6) and CW/Morse tests (section 11) are disabled by default.
 // Enable only when a dummy load or antenna is connected.
+// --no-split skips the split-VFO tests (section 5) for single-VFO targets that
+// cannot open a VFO B (e.g. the built-in demo/SimBackend, which is single-slice).
 // PTY test (section 16) runs automatically; skips if the per-user cat-A symlink cannot be opened.
 
 #include <QCommandLineOption>
@@ -1125,6 +1127,26 @@ void section5(RigctlClient& c, Runner& r, qint64 origFreq)
     }
 }
 
+void section5Skip(Runner& r)
+{
+    r.section(QStringLiteral("Section 5 — Split VFO  (skipped — --no-split; single-VFO target)"));
+    for (const auto* name : {
+             "5.1  get_split_vfo baseline",     "5.2  set_split_vfo 1 VFOB",
+             "5.3  split active",               "5.4  set_split_freq",
+             "5.5  get_split_freq",             "5.5b VFOA/VFOB independent",
+             "5.6  set_split_mode",             "5.7  get_split_mode",
+             "5.7b get_split_freq_mode",        "5.7c set_split_freq_mode",
+             "5.7d get_split_freq_mode confirm","5.7e set_split_mode round-trip",
+             "5.7f VFOB level independent",     "5.7g VFO-prefixed split setters",
+             "5.8  get_vfo_info VFOB split",    "5.9  disable split",
+             "5.9b split confirmed off",        "5.10 deferred stash path",
+             "5.10b stashed split freq applied","5.11 targetable VFOB auto-enable",
+             "5.12 implicit-enable reclaim",    "5.13 maxSlices guard on demand",
+             "5.14 establish split on demand",
+         })
+        r.skip(QLatin1String(name), QStringLiteral("--no-split set (single-VFO target)"));
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Section 6 — PTT  (optional — requires dummy load or antenna)
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1944,7 +1966,7 @@ void section13(const QString& host, quint16 port, int timeout,
 // Section 14 — Short-Form Character Mapping  (Hamlib source audit regression)
 // ═════════════════════════════════════════════════════════════════════════════
 
-void section14(RigctlClient& c, Runner& r)
+void section14(RigctlClient& c, Runner& r, bool doSplit)
 {
     r.section(QStringLiteral("Section 14 — Short-Form Character Mapping (Hamlib audit regression)"));
 
@@ -1998,10 +2020,17 @@ void section14(RigctlClient& c, Runner& r)
     r.check(QStringLiteral("14.6 'z' → get_xit returns XIT field"),
             c.ok(lines) && isInt(xitVal), xitVal);
 
-    // 14.7  'k' → get_split_freq_mode  (was missing before audit)
-    lines = c.send(QStringLiteral("k"));
-    r.check(QStringLiteral("14.7 'k' → get_split_freq_mode returns RPRT 0"),
-            c.ok(lines), lines.join(QStringLiteral(" | ")));
+    // 14.7  'k' → get_split_freq_mode  (was missing before audit). Returns RPRT 0
+    //       only when split is active; on a single-VFO target with no TX slice it
+    //       correctly returns RPRT -1, so skip it there (mirrors --no-split for §5).
+    if (doSplit) {
+        lines = c.send(QStringLiteral("k"));
+        r.check(QStringLiteral("14.7 'k' → get_split_freq_mode returns RPRT 0"),
+                c.ok(lines), lines.join(QStringLiteral(" | ")));
+    } else {
+        r.skip(QStringLiteral("14.7 'k' → get_split_freq_mode returns RPRT 0"),
+               QStringLiteral("--no-split set (single-VFO target — no split active)"));
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2310,6 +2339,9 @@ int main(int argc, char** argv)
         QStringLiteral("enable PTT tests (section 6) — requires dummy load or antenna"));
     QCommandLineOption cwOpt({QStringLiteral("cw")},
         QStringLiteral("enable CW/Morse tests (section 11) — requires --ptt and CW mode"));
+    QCommandLineOption noSplitOpt({QStringLiteral("no-split")},
+        QStringLiteral("skip split-VFO tests (section 5) — for single-VFO targets that "
+                       "cannot open a VFO B (e.g. the built-in demo/SimBackend)"));
     const QString defaultPty0 = defaultPtyPath(0);
     QCommandLineOption ptyOpt({QStringLiteral("pty")},
         QStringLiteral("PTY device path for section 16 (default: %1)").arg(defaultPty0),
@@ -2320,6 +2352,7 @@ int main(int argc, char** argv)
     parser.addOption(timeoutOpt);
     parser.addOption(pttOpt);
     parser.addOption(cwOpt);
+    parser.addOption(noSplitOpt);
     parser.addOption(ptyOpt);
     parser.process(app);
 
@@ -2328,6 +2361,7 @@ int main(int argc, char** argv)
     const int      timeout = parser.value(timeoutOpt).toInt();
     const bool     doPtt   = parser.isSet(pttOpt);
     const bool     doCw    = parser.isSet(cwOpt);
+    const bool     doSplit = !parser.isSet(noSplitOpt);
     const QString  ptyPath = parser.value(ptyOpt);
 
     std::cout << '\n' << bold(QStringLiteral("AetherSDR rigctld Test Suite")).toStdString() << '\n'
@@ -2371,7 +2405,8 @@ int main(int argc, char** argv)
     section2c(c, r, origFreq);
     section3(c, r, origMode, origPb);
     section4(c, r);
-    section5(c, r, origFreq);
+    if (doSplit) section5(c, r, origFreq);
+    else         section5Skip(r);
 
     if (doPtt) section6Ptt(c, r);
     else        section6Skip(r);
@@ -2386,7 +2421,7 @@ int main(int argc, char** argv)
 
     section12(c, r);
     section13(host, port, timeout, r, origFreq, origMode, origPb);
-    section14(c, r);
+    section14(c, r, doSplit);
     section15(c, r);
     sectionEdge(c, r);
     sectionPty(r, ptyPath);
