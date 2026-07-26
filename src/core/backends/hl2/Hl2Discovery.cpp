@@ -4,6 +4,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QNetworkDatagram>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QUdpSocket>
 
@@ -51,8 +52,15 @@ QString macToSerial(const std::array<std::uint8_t, 6>& mac)
 
 QString Hl2Discovery::nicknameSettingsKey(const QString& serial)
 {
-    // Serial IS the MAC string (macToSerial). Namespaced under Hl2Nickname/.
-    return QStringLiteral("Hl2Nickname/") + serial;
+    // Serial IS the MAC string (macToSerial), e.g. "AA:BB:CC:DD:EE:FF".
+    // AppSettings writes top-level keys as XML *element names* and silently drops
+    // any key that isn't ^[A-Za-z_][A-Za-z0-9_]*$ (AppSettings::save()), so the
+    // colons — and a '/' separator — would never reach disk: the nickname would
+    // survive the session in the in-memory map and vanish on restart. Fold every
+    // illegal character to '_' so the key is writable while staying per-MAC unique.
+    static const QRegularExpression kIllegal(QStringLiteral("[^A-Za-z0-9_]"));
+    return QStringLiteral("Hl2Nickname_")
+         + QString(serial).replace(kIllegal, QStringLiteral("_"));
 }
 
 QString Hl2Discovery::effectiveNickname(const QString& serial, const QString& fallback)
@@ -60,6 +68,15 @@ QString Hl2Discovery::effectiveNickname(const QString& serial, const QString& fa
     const QString custom =
         AppSettings::instance().value(nicknameSettingsKey(serial)).toString().trimmed();
     return custom.isEmpty() ? fallback : custom;
+}
+
+bool Hl2Discovery::nicknameLivesOnRadio(const RadioInfo& info)
+{
+    // RadioInfo::family defaults to "flex", and legacy/default-constructed
+    // entries leave it empty — both mean Flex, the only family with an
+    // on-radio name store.
+    return info.family.isEmpty()
+        || info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) == 0;
 }
 
 Hl2Discovery::Hl2Discovery(QObject* parent) : QObject(parent)

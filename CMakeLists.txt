@@ -2717,9 +2717,15 @@ add_test(NAME theme_manager_test COMMAND theme_manager_test)
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
     src/core/AppSettings.cpp
+    # Real Hl2Discovery, so the nickname-key scenario exercises the shipping key
+    # format instead of a copy of it (Qt6::Network/AUTOMOC are for its QObject
+    # + QUdpSocket; the test only calls its static helpers).
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
 )
+set_target_properties(app_settings_safety_test PROPERTIES AUTOMOC ON)
 target_include_directories(app_settings_safety_test PRIVATE src)
-target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core)
+target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core Qt6::Network)
 foreach(APP_SETTINGS_SCENARIO
         save-before-load
         load-then-save
@@ -2729,7 +2735,8 @@ foreach(APP_SETTINGS_SCENARIO
         missing-live-temp
         missing-live-backup
         missing-live-corrupt
-        failed-load)
+        failed-load
+        nickname-key-roundtrip)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})

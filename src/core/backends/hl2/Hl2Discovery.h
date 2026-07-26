@@ -50,6 +50,14 @@ public:
     // when none is set. Centralises the "custom or fall back" rule.
     static QString effectiveNickname(const QString& serial,
                                      const QString& fallback);
+    // True when this radio stores its own name (FlexRadio's "radio name"
+    // command), so the client must NOT keep a second copy. False for every
+    // family without an on-radio store — HL2, the sim, any future backend —
+    // which is exactly the set that persists client-side under the key above.
+    // Every site that decides "on-radio or client-side?" must call this: the
+    // connect-list menu, RadioSetup's read-back, and RadioSetup's write all
+    // have to agree, or a name gets saved somewhere it's never read from.
+    static bool nicknameLivesOnRadio(const RadioInfo& info);
 
 signals:
     void radioDiscovered(const RadioInfo& info);

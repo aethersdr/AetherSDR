@@ -1087,10 +1087,7 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     // connected); offering a client-side override here would create two sources
     // of truth. So the client-side nickname is only for families without an
     // on-radio store (HL2, sim, any future non-Flex backend).
-    const bool isFlex =
-        radio.family.isEmpty()
-        || radio.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) == 0;
-    if (isFlex)
+    if (hl2::Hl2Discovery::nicknameLivesOnRadio(radio))
         return;
 
     QMenu menu(this);
@@ -1104,6 +1101,7 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     if (!chosen)
         return;
 
+    bool changed = false;
     if (chosen == setNick) {
         bool ok = false;
         const QString current =
@@ -1112,11 +1110,20 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
             this, tr("Set Nickname"),
             tr("Nickname for %1:").arg(radio.model),
             QLineEdit::Normal, current, &ok);
-        if (ok)
+        if (ok) {
             AppSettings::instance().setValue(savedKey, name.trimmed());
+            changed = true;
+        }
     } else if (clearNick && chosen == clearNick) {
         AppSettings::instance().remove(savedKey);
+        changed = true;
     }
+
+    // Commit to disk now rather than riding on the shutdown save — a naming the
+    // operator just confirmed shouldn't be lost to a crash or a kill, and the
+    // rest of this panel (onLocalConnectClicked) saves eagerly for the same reason.
+    if (changed)
+        AppSettings::instance().save();
 
     // Reflect the change immediately: re-label this row from the saved setting
     // rather than waiting for the next discovery sweep.
