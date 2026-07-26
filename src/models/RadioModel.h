@@ -16,7 +16,6 @@
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
-#include "PanDisplayRateShaper.h"
 #include "ProfileLoadPanWriteQueue.h"
 #include "TunerModel.h"
 #include "AmpModel.h"
@@ -1010,19 +1009,26 @@ private:
     double  m_backendPanBandwidthMhz{0.0};
     quint32 m_backendWfTimecode{0};
 
-    // ---- display-rate shaping for raw-spectrum backends (HL2) --------------
-    // See PanDisplayRateShaper.h for why the shaping exists and why it averages
-    // in the power domain. Independent per feed: the two sliders are separate
-    // controls and routinely sit at different rates, so one shared accumulator
-    // would peg the slower feed to the faster one's cadence.
-    QHash<int, PanDisplayRateShaper> m_backendPanShapers;
-    QHash<int, PanDisplayRateShaper> m_backendWfShapers;
-    // Used when the pan model has no value yet. MainWindow seeds the model from
-    // the operator's sliders as soon as a pan is wired, so these cover only the
-    // window before that: 30 fps is the render target the panadapter is tuned
-    // for, and 100 ms matches SpectrumWidget's own m_wfLineDuration default so
-    // the waterfall's time axis is right from the very first row.
-    static constexpr int kBackendDefaultFps = 30;
+    // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
+    //
+    // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
+    // frames arrive here already at the operator's FFT FPS. The waterfall runs
+    // SLOWER than that — line_duration is its own control and typically 100 ms
+    // against 25-40 fps — so it needs one more gate, and only in that
+    // direction.
+    //
+    // A plain drop, not a coalesce. Frames are already scarce by the time they
+    // reach here, and combining them would mean a magnitude/log round trip per
+    // bin per frame for no gain the operator can see.
+    //
+    // It is also correctness, not just load: the widget scales its time axis
+    // from line_duration, so a row must actually represent line_duration of
+    // time. Unpaced, rows arrived at the full frame rate and the visible
+    // history was several times shorter than the axis claimed.
+    QHash<int, qint64> m_backendWfLastRowNs;
+    // Covers only the window before MainWindow seeds the pan model from the
+    // operator's sliders. 100 ms matches SpectrumWidget's own m_wfLineDuration
+    // default, so the time axis is right from the very first row.
     static constexpr int kBackendDefaultWfLineDurationMs = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;

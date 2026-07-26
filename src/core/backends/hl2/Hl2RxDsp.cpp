@@ -114,6 +114,16 @@ void Hl2RxDsp::setAudioMuted(bool muted)
     m_audioMuted = muted;
 }
 
+void Hl2RxDsp::setSpectrumRateFps(int fps)
+{
+    m_spectrumIntervalMs = fps > 0 ? (1000 / fps) : 0;
+    // Do NOT reset the clock or the last-emit stamp. A rate change mid-stream
+    // should take effect on the next frame that comes due, not grant an
+    // immediate extra one — an operator dragging the FPS slider would
+    // otherwise fire a frame per drag step, which is exactly the burst this
+    // cap exists to prevent.
+}
+
 void Hl2RxDsp::setShift(double shiftHz)
 {
     m_shiftHz = shiftHz;
@@ -121,14 +131,46 @@ void Hl2RxDsp::setShift(double shiftHz)
         m_channel->setShift(shiftHz);
 }
 
+bool Hl2RxDsp::spectrumFrameDue()
+{
+    if (m_spectrumIntervalMs <= 0)
+        return true;                       // uncapped
+    if (!m_spectrumClock.isValid()) {
+        m_spectrumClock.start();
+        m_lastSpectrumMs = 0;
+        return true;                       // paint the first frame immediately
+    }
+    return (m_spectrumClock.elapsed() - m_lastSpectrumMs) >= m_spectrumIntervalMs;
+}
+
 void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 {
     if (!m_channel)
         return;
 
-    // Panadapter: the FFT sees the full-rate IQ.
-    if (m_spectrum->process(iq, m_bins) > 0)
-        emit spectrumReady(m_bins);
+    // Panadapter: the FFT sees the full-rate IQ, but only when a frame is
+    // actually due. Skipping the whole computation — not just the emit — is
+    // what keeps a wide span affordable; see setSpectrumRateFps.
+    //
+    // The accumulator is still fed, so a skipped interval simply advances the
+    // window rather than desynchronising it: whichever 1024 samples happen to
+    // complete a frame when the next one comes due are a real, contiguous,
+    // correctly-scaled snapshot. The cost is that signals landing entirely
+    // between two displayed frames are not seen at all, which is the accepted
+    // trade for a display-rate panadapter.
+    if (spectrumFrameDue()) {
+        // "Due" STAYS true until a frame actually completes: one EP6 block is
+        // 126 samples and a frame is 1024, so it takes ~9 blocks to fill one.
+        if (m_spectrum->process(iq, m_bins) > 0) {
+            emit spectrumReady(m_bins);
+            m_lastSpectrumMs = m_spectrumClock.elapsed();
+        }
+    } else {
+        // Drop the accumulator rather than letting it straddle the gap. A
+        // frame built from samples on both sides of a skipped interval is not
+        // a contiguous window, and its FFT would smear every tone in it.
+        m_spectrum->reset();
+    }
 
     // Audio: buffer into fixed WdspChannel blocks.
     m_iqBuffer.insert(m_iqBuffer.end(), iq.begin(), iq.end());

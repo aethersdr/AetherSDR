@@ -48,6 +48,7 @@ public:
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz) override;
     void setPanBandwidth(const QString& panId, double hz) override;
+    void setPanFrameRate(const QString& panId, int fps) override;
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
@@ -83,12 +84,15 @@ private:
     // shift and the NCO moved only when the target would leave the window.
     double m_rxFreqHz = 10'000'000.0;   // slice
     double m_ncoHz    = 10'000'000.0;   // DDC / pan centre
-    // The DDC rate, which IS the panadapter span (emitPanState). Defaults to the
-    // WIDEST the hardware offers, not the narrowest: the span is the operator's
-    // whole view of the band, and 48 kHz gave them a 48 kHz window they had no
-    // way to widen — the zoom intent never reached this backend at all, so the
-    // default was in practice the only span the radio ever ran.
-    int m_sampleRateHz = 384000;
+    // The DDC rate, which IS the panadapter span (emitPanState).
+    //
+    // Defaults to the NARROWEST the hardware offers, and connectRadio then
+    // replaces it with whatever span the operator last chose (Hl2Settings).
+    // The widest costs ~8x the narrowest in both directions -- 25.2 vs 3.1 Mbps
+    // sustained UDP, 3048 vs 381 packets/second, and 8x the samples through
+    // WDSP's decimation front end -- so it is opted into, never imposed at
+    // connect on an operator who may be on wifi or a host that cannot carry it.
+    int m_sampleRateHz = 48000;
     QString m_mode = QStringLiteral("USB");
     int m_filterLowHz = 150;
     int m_filterHighHz = 3000;

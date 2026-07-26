@@ -9,6 +9,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include "core/AutomationBridgeSettings.h"
+#include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -49,6 +50,25 @@ constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 // step scales the span — so the operator's sense of "closer" is the ratio, and
 // matching that is what makes a zoom step land on the neighbouring rate rather
 // than skipping one.
+// The widest rate this session will offer.
+//
+// "Use low bandwidth mode" is an explicit statement that the link cannot carry
+// much, and on this radio the span IS the data rate: 384 kHz is 25.2 Mbps of
+// sustained UDP at 3048 packets/second. Offering it on a link the operator has
+// already told us is constrained would produce a connection that drops rather
+// than a display that is wide, so the ceiling comes down to 96 kHz (6.3 Mbps).
+//
+// Applied to the ADVERTISED limits as well as to requests, so the zoom control
+// stops at the real ceiling instead of letting the operator drag into a span
+// that will be silently refused.
+int maxIqSampleRateHz() noexcept
+{
+    constexpr int kLowBandwidthCeilingHz = 96000;
+    if (!Hl2Settings::lowBandwidth())
+        return kIqSampleRatesHz[std::size(kIqSampleRatesHz) - 1];
+    return kLowBandwidthCeilingHz;
+}
+
 int nearestIqSampleRateHz(double requestedHz) noexcept
 {
     // Below the narrowest rate there is nothing to interpolate toward, and log()
@@ -56,9 +76,12 @@ int nearestIqSampleRateHz(double requestedHz) noexcept
     if (!(requestedHz > 0.0))
         return kIqSampleRatesHz[0];
 
+    const int ceiling = maxIqSampleRateHz();
     int best = kIqSampleRatesHz[0];
     double bestDistance = std::numeric_limits<double>::infinity();
     for (const int rate : kIqSampleRatesHz) {
+        if (rate > ceiling)
+            break;                     // ascending list; nothing wider is offered
         const double distance =
             std::abs(std::log(requestedHz / static_cast<double>(rate)));
         if (distance < bestDistance) {
@@ -294,6 +317,16 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
         return;
     }
+
+    // The span the operator last chose, snapped to a rate we can actually run
+    // and to the current low-bandwidth ceiling. Applied BEFORE the explicit
+    // param below so an automation/test caller can still pin a rate outright.
+    //
+    // Restoring this is what lets the default stay at the cheap 48 kHz: the
+    // operator picks a wide span once and keeps it, instead of re-zooming every
+    // launch, and nobody who never asked for it pays 25 Mbps.
+    if (const double remembered = Hl2Settings::spanMhz(); remembered > 0.0)
+        m_sampleRateHz = nearestIqSampleRateHz(remembered * 1.0e6);
 
     // Optional overrides from the namespaced params.
     if (request.params.contains(QStringLiteral("sampleRateHz")))
@@ -575,11 +608,27 @@ void Hl2Backend::setPanBandwidth(const QString& /*panId*/, double hz)
         }
     }
 
+    // Remember it. The span is the operator's deliberate choice about how much
+    // network and CPU this radio may consume, so it survives the session rather
+    // than snapping back to the conservative default on the next launch.
+    // Written only after the reconfigure SUCCEEDED — persisting a rate the DSP
+    // just refused would make the failure permanent across restarts.
+    Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
+
     // A narrower window may no longer contain the slice: the usable passband
     // shrank, and a slice left outside it would sit in the roll-off (or off the
     // display entirely) with nothing to say why it went quiet. Re-running the
     // tune re-centres the NCO only if it has to, and re-emits both states.
     setSliceFrequency(kSliceId, m_rxFreqHz);
+}
+
+void Hl2Backend::setPanFrameRate(const QString& /*panId*/, int fps)
+{
+    // Straight through to the DSP, which skips the FFT itself when a frame is
+    // not due. Queued: the cap is read on the DSP thread.
+    if (m_dsp)
+        QMetaObject::invokeMethod(m_dsp, "setSpectrumRateFps", Qt::QueuedConnection,
+            Q_ARG(int, fps));
 }
 
 void Hl2Backend::setKeying(bool key)
@@ -811,8 +860,7 @@ void Hl2Backend::pushInitialState()
     emit panBandwidthLimitsChanged(
         QString::fromLatin1(kPanId),
         static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
-        static_cast<double>(kIqSampleRatesHz[std::size(kIqSampleRatesHz) - 1])
-            / 1.0e6);
+        static_cast<double>(maxIqSampleRateHz()) / 1.0e6);
 
     // Keying state is ours, not the radio's: a reconnect must never come up
     // keyed because the previous session ended mid-transmission.

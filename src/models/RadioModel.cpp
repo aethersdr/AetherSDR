@@ -3357,6 +3357,11 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
         if (!pan)
             return false;
         pan->setDisplayRates(fps, wfLineDurationMs);
+        // The FPS half goes DOWN to the backend, which caps its own frame
+        // production. Only the waterfall's line_duration is paced up here —
+        // see onBackendSpectrumFrame for why the two live in different places.
+        if (fps > 0)
+            m_backend->setPanFrameRate(panId, fps);
         return true;
     }
 
@@ -3798,36 +3803,39 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     const quint32 streamId = kNeutralPanStreamIdBase + static_cast<quint32>(panId);
     const qint64 nowNs = PerfTelemetry::nowNs();
 
-    // Both feeds are RATE SHAPED here rather than passed straight through. This
-    // is the only place a raw-spectrum backend's frames become render work, and
-    // the pan model carrying both target rates is in reach — see
-    // BackendFrameRateShaper for why the frame rate would otherwise be the IQ
-    // sample rate and why the coalescing averages in the power domain.
-    const PanadapterModel* pan = panadapter(neutralPanIdString(panId));
-    const int fps = (pan && pan->fps() > 0) ? pan->fps() : kBackendDefaultFps;
-    const int wfMs = (pan && pan->waterfallLineDuration() > 0)
-                         ? pan->waterfallLineDuration()
-                         : kBackendDefaultWfLineDurationMs;
-
-    QVector<float> shaped;
-    if (m_backendPanShapers[panId].feed(bins, nowNs, fps > 0 ? 1000 / fps : 0,
-                                        shaped)) {
-        emit panFeedSpectrumReady(streamId, shaped, nowNs);
-    }
+    // The PAN feed is already at the operator's rate — the backend caps its own
+    // production at the source (IRadioBackend::setPanFrameRate), where a frame
+    // that is not due costs nothing instead of being computed and discarded.
+    // So this is a straight pass-through.
+    emit panFeedSpectrumReady(streamId, bins, nowNs);
 
     // Drive the waterfall from the same frames. The backend supplies no separate
     // waterfall plane (Flex gets one from the radio), so the panadapter row IS
     // the waterfall row; it needs real band edges to scale against.
     //
-    // Shaped SEPARATELY against line_duration, not derived from the pan feed:
-    // that is what makes a row actually represent line_duration of time, which
-    // is the calibration the widget's time axis already assumes.
+    // Gated once more, because line_duration is a SEPARATE control and slower
+    // than the frame rate (100 ms against 25-40 fps). That gate is what makes a
+    // row actually represent line_duration of time — the calibration the
+    // widget's time axis already assumes.
     if (m_backendPanBandwidthMhz > 0.0) {
-        QVector<float> wfShaped;
-        if (m_backendWfShapers[panId].feed(bins, nowNs, wfMs, wfShaped)) {
+        const PanadapterModel* pan = panadapter(neutralPanIdString(panId));
+        const int wfMs = (pan && pan->waterfallLineDuration() > 0)
+                             ? pan->waterfallLineDuration()
+                             : kBackendDefaultWfLineDurationMs;
+        qint64& lastNs = m_backendWfLastRowNs[panId];
+        const qint64 dueNs = static_cast<qint64>(wfMs) * 1000000;
+        // First row goes out immediately: the interval is the gap BETWEEN rows,
+        // not a delay before the first one.
+        if (lastNs == 0 || (nowNs - lastNs) >= dueNs) {
+            // Advance BY the interval rather than resetting to now, so the row
+            // rate does not quantise down onto the frame grid. Clamped to one
+            // interval of backlog so a stall cannot produce a catch-up burst.
+            lastNs = (lastNs == 0) ? nowNs : lastNs + dueNs;
+            if (nowNs - lastNs > dueNs)
+                lastNs = nowNs - dueNs;
             const double half = m_backendPanBandwidthMhz / 2.0;
             emit panFeedWaterfallRowReady(
-                kNeutralWfStreamIdBase + static_cast<quint32>(panId), wfShaped,
+                kNeutralWfStreamIdBase + static_cast<quint32>(panId), bins,
                 m_backendPanCenterMhz - half, m_backendPanCenterMhz + half,
                 m_backendWfTimecode++, nowNs);
         }

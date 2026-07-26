@@ -9,13 +9,16 @@
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 
+#include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
+#include "core/backends/hl2/Hl2Settings.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QNetworkDatagram>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QUdpSocket>
@@ -59,6 +62,25 @@ int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
+
+    // The backend now RESTORES the operator's remembered span at connect, which
+    // makes the default-span assertion below depend on persisted state. Clear
+    // the owned "Hl2" object for the duration so the test measures the actual
+    // default, and put the operator's real value back at the end — these tests
+    // share the live settings file with the running application.
+    const QString kHl2Key = QStringLiteral("Hl2");
+    const QString savedHl2 =
+        AppSettings::instance().value(kHl2Key, QString{}).toString();
+    AppSettings::instance().remove(kHl2Key);
+    AppSettings::instance().save();
+    auto restoreHl2Settings = qScopeGuard([&] {
+        auto& s = AppSettings::instance();
+        if (savedHl2.isEmpty())
+            s.remove(kHl2Key);
+        else
+            s.setValue(kHl2Key, savedHl2);
+        s.save();
+    });
 
     // ---- capped fake HL2: a bounded number of EP6 so the WDSP demod stays quick ----
     QUdpSocket radio;
@@ -179,24 +201,26 @@ int main(int argc, char** argv)
     check(disconnectedSpy.count() == 1, "EP6 silence trips the watchdog -> disconnected()");
     check(!backend.isConnected(), "isConnected() false after the silence watchdog");
 
-    // ---- panadapter span: the widest window by default, and honest limits ----
+    // ---- panadapter span: the CHEAP window by default, and honest limits ----
     //
-    // The span an HL2 delivers IS its IQ sample rate, so these two facts are the
-    // whole of the zoom contract. Before this the backend defaulted to 48 kHz and
-    // reported no limits at all, so the GUI clamped against a FlexLib model table
-    // that falls through to 5.4 MHz for an unrecognised model — the operator got a
-    // 48 kHz window they could zoom fourteen times wider than the data, and the
-    // spectrum that was never sampled rendered as black bars.
+    // The span an HL2 delivers IS its IQ sample rate, so it is not a free
+    // display choice: the widest costs ~8x the narrowest in both directions —
+    // 25.2 vs 3.1 Mbps of sustained UDP, and 8x the samples through WDSP's
+    // decimation front end. With no remembered span the backend must therefore
+    // come up NARROW, so nobody pays for a view they did not ask for.
     check(!spanSpy.isEmpty(), "pan geometry published on connect");
     if (!spanSpy.isEmpty()) {
-        // Asserted on the FIRST report, which is the one that decides what the
-        // operator sees when the radio comes up.
+        // The FIRST report is the one that decides what the operator sees when
+        // the radio comes up.
         const double firstSpanMhz = spanSpy.first().at(2).toDouble();
-        check(qFuzzyCompare(firstSpanMhz, 0.384),
-              "connect comes up on the WIDEST span the hardware offers (384 kHz)");
+        check(qFuzzyCompare(firstSpanMhz, 0.048),
+              "with nothing remembered, connect comes up on the CHEAP 48 kHz span");
     }
     check(limitsSpy.count() >= 1, "span limits reported on connect");
     if (!limitsSpy.isEmpty()) {
+        // The zoom clamp's source. Without this the GUI falls back to a FlexLib
+        // model table that resolves to 5.4 MHz for an unrecognised model, and
+        // the operator could zoom 14x past the data — the black bars.
         check(qFuzzyCompare(limitsSpy.first().at(1).toDouble(), 0.048)
                   && qFuzzyCompare(limitsSpy.first().at(2).toDouble(), 0.384),
               "reported limits are the real rate range, 48 kHz .. 384 kHz");
@@ -267,6 +291,136 @@ int main(int argc, char** argv)
         const SliceDelta d = sliceSpy.last().at(1).value<SliceDelta>();
         check(d.frequency && qFuzzyCompare(*d.frequency, 14.1),
               "the slice stays on frequency across span changes");
+    }
+
+    // ---- the chosen span PERSISTS ----
+    //
+    // This is what makes the cheap default acceptable. Defaulting narrow with
+    // no memory would put the operator back where this whole change started —
+    // a 48 kHz window on every launch — so the wide view has to be chosen once
+    // and kept. The cost is then opted into rather than imposed.
+    //
+    // Stored as an owned nested object under the "Hl2" root key, per
+    // Constitution Principle V, not as a loose flat key.
+    {
+        // The last successful setPanBandwidth above was 192 kHz.
+        check(qFuzzyCompare(Hl2Settings::spanMhz(), 0.192),
+              "the applied span is written to the owned Hl2 settings object");
+
+        const QString raw =
+            AppSettings::instance().value(QStringLiteral("Hl2"), QString{}).toString();
+        check(raw.contains(QLatin1String("spanMhz")),
+              "persisted as a nested object under the single \"Hl2\" root key");
+        // Principle V is about the SHAPE, so assert there is no flat key too:
+        // a loose "Hl2SpanMhz" would satisfy a naive round-trip test and still
+        // violate the invariant.
+        check(AppSettings::instance()
+                  .value(QStringLiteral("Hl2SpanMhz"), QString{})
+                  .toString()
+                  .isEmpty(),
+              "no loose flat key was created alongside the object");
+
+        // And a fresh backend restores it, which is the half that actually
+        // reaches the operator on the next launch.
+        //
+        // Its OWN fake radio, deliberately: reviving the shared one would also
+        // answer the first backend's still-running EP2 pacer, bringing that
+        // link back up and making its disconnect assertions count a second
+        // cycle.
+        QUdpSocket radio2;
+        check(radio2.bind(QHostAddress::LocalHost, 0), "second fake radio binds");
+        std::uint32_t seq2 = 0;
+        QObject::connect(&radio2, &QUdpSocket::readyRead, &radio2, [&] {
+            while (radio2.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = radio2.receiveDatagram();
+                if (seq2 < kCap)
+                    radio2.writeDatagram(fakeEp6(seq2++), dg.senderAddress(),
+                                         dg.senderPort());
+            }
+        });
+
+        Hl2Settings::setSpanMhz(0.096);
+        Hl2Backend restored;
+        QSignalSpy restoredSpan(&restored,
+                                &IRadioBackend::panCenterBandwidthChanged);
+        RadioConnectRequest rr;
+        rr.host = QStringLiteral("127.0.0.1");
+        rr.port = radio2.localPort();
+        restored.connectRadio(rr);
+        spin(1200);
+        check(!restoredSpan.isEmpty(), "restored backend published pan geometry");
+        if (!restoredSpan.isEmpty()) {
+            check(qFuzzyCompare(restoredSpan.first().at(2).toDouble(), 0.096),
+                  "a fresh connect comes up on the REMEMBERED span, not the default");
+        }
+        restored.disconnectRadio();
+        spin(100);
+    }
+
+    // ---- "Use low bandwidth mode" caps the widest span on offer ----
+    //
+    // On this radio the span IS the data rate, so the widest is 25.2 Mbps of
+    // sustained UDP at 3048 packets/second. An operator who has ticked low
+    // bandwidth has told us the link cannot carry that, and offering it anyway
+    // would produce a connection that drops rather than a display that is wide.
+    //
+    // The ceiling must apply to the ADVERTISED limits as well as to requests,
+    // or the zoom control would let them drag into a span the backend then
+    // silently refuses — the display claiming a width the data never had, which
+    // is the same class of lie as the black bars.
+    {
+        const QString kLowBw = QStringLiteral("LowBandwidthConnect");
+        auto& s = AppSettings::instance();
+        const QString savedLowBw = s.value(kLowBw, QString{}).toString();
+        auto restoreLowBw = qScopeGuard([&] {
+            if (savedLowBw.isEmpty()) s.remove(kLowBw);
+            else                      s.setValue(kLowBw, savedLowBw);
+            s.save();
+        });
+
+        s.setValue(kLowBw, QStringLiteral("True"));
+        s.save();
+        check(Hl2Settings::lowBandwidth(), "low bandwidth mode reads back as set");
+
+        QUdpSocket radio3;
+        check(radio3.bind(QHostAddress::LocalHost, 0), "third fake radio binds");
+        std::uint32_t seq3 = 0;
+        QObject::connect(&radio3, &QUdpSocket::readyRead, &radio3, [&] {
+            while (radio3.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = radio3.receiveDatagram();
+                if (seq3 < kCap)
+                    radio3.writeDatagram(fakeEp6(seq3++), dg.senderAddress(),
+                                         dg.senderPort());
+            }
+        });
+
+        Hl2Backend capped;
+        QSignalSpy cappedLimits(&capped,
+                                &IRadioBackend::panBandwidthLimitsChanged);
+        QSignalSpy cappedSpan(&capped, &IRadioBackend::panCenterBandwidthChanged);
+        RadioConnectRequest cr;
+        cr.host = QStringLiteral("127.0.0.1");
+        cr.port = radio3.localPort();
+        capped.connectRadio(cr);
+        spin(1200);
+
+        check(!cappedLimits.isEmpty(), "capped backend reported span limits");
+        if (!cappedLimits.isEmpty()) {
+            check(qFuzzyCompare(cappedLimits.first().at(2).toDouble(), 0.096),
+                  "low bandwidth caps the advertised max span at 96 kHz");
+        }
+
+        // A request for the widest span must land on the ceiling, not above it.
+        cappedSpan.clear();
+        capped.setPanBandwidth(QStringLiteral("hl2"), 384000.0);
+        spin(60);
+        check(!cappedSpan.isEmpty(), "capped backend republished its span");
+        if (!cappedSpan.isEmpty()) {
+            check(qFuzzyCompare(cappedSpan.last().at(2).toDouble(), 0.096),
+                  "a 384 kHz request is held at the 96 kHz low-bandwidth ceiling");
+        }
+        capped.disconnectRadio();
+        spin(100);
     }
 
     // ---- disconnect ----

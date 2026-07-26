@@ -531,6 +531,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
+    src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
@@ -3948,13 +3949,6 @@ target_include_directories(aetherd_pan_decode_test PRIVATE src)
 target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
-
-# Display-rate shaping for backends that stream raw spectra (HL2): the frame
-# rate must follow the operator's sliders, not the IQ sample rate.
-add_executable(pan_display_rate_shaper_test tests/pan_display_rate_shaper_test.cpp)
-target_include_directories(pan_display_rate_shaper_test PRIVATE src)
-target_link_libraries(pan_display_rate_shaper_test PRIVATE Qt6::Core)
-add_test(NAME pan_display_rate_shaper_test COMMAND pan_display_rate_shaper_test)
 
 if(Qt6WebSockets_FOUND)
     add_executable(tci_protocol_test tests/tci_protocol_test.cpp)

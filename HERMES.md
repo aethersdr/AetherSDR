@@ -931,7 +931,7 @@ Fixed by making the whole loop honest:
 | Down | `IRadioBackend::setPanBandwidth` — HL2 snaps to the nearest real rate and reconfigures the DDC + WDSP chain |
 | Up | `panCenterBandwidthChanged` reports the span the radio ACTUALLY took |
 | Limits | `panBandwidthLimitsChanged` reports 48–384 kHz, so the zoom clamp stops where the data stops |
-| Default | the WIDEST rate, not the narrowest |
+| Default | the narrowest rate, then whatever span the operator last chose (§15.2) |
 
 The snap is **nearest by RATIO, not linear distance**. The rates are
 octave-spaced and zoom is multiplicative, so linear-nearest biases every request
@@ -946,7 +946,35 @@ case — every other row in its table agrees under both rules, so without it the
 a board hard enough to need a power cycle. The decimation filters settle on
 their own.
 
-### 15.2 The frame rate tracked the zoom, not the sliders
+### 15.2 The span is a COST, so it is opted into and remembered
+
+On this radio the span is not a free display choice — it IS the DDC rate, so it
+sets the wire load and the DSP load together:
+
+| Span | EP6 pkt/s | Sustained UDP | App CPU (measured, M-series) |
+|---|---|---|---|
+| 48 kHz | 381 | 3.1 Mbps | ~52% of one core |
+| 96 kHz | 762 | 6.3 Mbps | — |
+| 192 kHz | 1524 | 12.6 Mbps | — |
+| 384 kHz | 3048 | 25.2 Mbps | ~62% of one core |
+
+That rules out defaulting to the widest: 25 Mbps of sustained UDP at 3048
+packets/second would be imposed on every operator at connect, including on wifi
+and on hosts that cannot carry it. But defaulting to the narrowest with no
+memory is the original bug — a 48 kHz window on every launch.
+
+So the span **persists**, in the owned `Hl2` settings object (Principle V,
+`{"spanMhz":0.384}`). First run is the cheap default; an operator who wants the
+wide view chooses it once and keeps it.
+
+`Hl2Settings::lowBandwidth()` reads the connection panel's existing "Use low
+bandwidth mode" checkbox — READ ONLY, since that flat key is owned by the
+connection UI — and caps the widest offered span at **96 kHz**. The cap applies
+to the ADVERTISED limits as well as to requests, or the zoom control would let
+the operator drag into a span the backend then silently refuses: the display
+claiming a width the data never had, which is the same lie as the black bars.
+
+### 15.2.1 The frame rate tracked the zoom, not the sliders
 
 A backend that streams cooked spectra emits one frame per FFT block, so its
 frame rate is the **sample rate divided by the FFT size**:
@@ -955,42 +983,55 @@ frame rate is the **sample rate divided by the FFT size**:
  48 kHz / 1024 =  47 fps      384 kHz / 1024 = 375 fps
 ```
 
-Widening the default span therefore multiplied the render load eightfold.
-Measured on the live radio: **375 fps** at full zoom out. The Display→FFT FPS and
-Display→Waterfall Rate sliders governed neither — they emitted `display pan set
-… fps=` and `display panafall set … line_duration=`, Flex wire text addressed to
-a command interpreter this radio does not have.
+Measured on the live radio: **375 fps** at full zoom out. The Display->FFT FPS
+and Display->Waterfall Rate sliders governed neither — they emitted `display pan
+set … fps=` and `display panafall set … line_duration=`, Flex wire text
+addressed to a command interpreter this radio does not have.
 
 For the waterfall this was **correctness, not just load**: the widget scales its
 time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
 calibration made the visible history up to **37x shorter than it claimed**.
 
-`PanDisplayRateShaper` coalesces both feeds, independently, against their own
-slider. Two choices in it are load-bearing:
+**The cap lives at the SOURCE** (`Hl2RxDsp::setSpectrumRateFps`, reached through
+`IRadioBackend::setPanFrameRate`), where a frame that is not due costs nothing.
+An earlier cut of this coalesced frames downstream in `RadioModel` instead,
+averaging in the power domain to keep the noise floor stable across zoom. It
+worked, but it was the wrong place: it computed every one of the 375 FFTs and
+then spent 1024 `pow()` per frame per feed combining them — roughly *doubling*
+the spectrum-path cost at exactly the span where cost matters most.
 
-- **Averaging in the POWER domain.** Max-hold would LIFT the noise floor at wide
-  spans (the max of N noise samples grows with N) and dB-domain averaging would
-  DEPRESS it (Jensen). The trace is calibrated to dBm, so a level that moved with
-  zoom would be the display lying about signal strength. Dropping frames outright
-  was rejected for the same reason it loses brief signals: at 384 kHz a 30 fps
-  display would discard ~92% of the spectrum.
-- **Advancing the deadline BY the interval, not resetting it to now.** Resetting
-  quantizes the output onto the input grid — "first frame at or after the
-  deadline" always rounds up by up to one input period, and a 33 ms target fed at
-  25 ms intervals emits every 50 ms: **20 fps, not 30.** Caught by measurement on
-  the live radio, not by reading the code.
+| Spectrum path at 384 kHz | Calculated cost |
+|---|---|
+| FFT alone | 22.5 ms/s |
+| + downstream coalescing | 45.0 ms/s |
+| **source-side cap (shipped)** | **1.5 ms/s** |
 
-Measured on the real HL2 at 580 kHz AM, FFT FPS slider at 40, `line_duration`
-100 ms:
+Skipping ~93% of the FFTs outright is ~30x cheaper, and it dissolves the reason
+the power-domain averaging existed: nothing is combined, so every emitted frame
+is a real, unmodified FFT and no level can shift with zoom.
+
+Two details that are load-bearing:
+
+- **The accumulator is dropped on a skipped interval** (`Hl2Spectrum::reset`).
+  A frame built from samples on both sides of a gap is not a contiguous window,
+  and its FFT would smear every tone in it.
+- **The waterfall keeps a second gate** in `RadioModel`, because
+  `line_duration` is a separate and slower control. A plain drop, not a
+  coalesce — frames are already scarce by the time they arrive.
+
+The accepted trade: at 384 kHz and 25 fps the FFT sees a 2.7 ms window every
+40 ms, so a signal landing entirely between two displayed frames is not seen.
+That is standard for a display-rate panadapter, and it is the reason the
+averaging was considered at all.
+
+Measured on the real HL2 at 580 kHz AM, `line_duration` 100 ms:
 
 | Span | Pan | Waterfall |
 |---|---|---|
-| 384 kHz (zoomed out) | 39.5 fps | 10.0 rows/s |
-| 48 kHz (zoomed in) | 36.5 fps | 10.0 rows/s |
+| 384 kHz | 23.4 fps | 10.1 rows/s |
+| 48 kHz | ~25 fps | 10.0 rows/s |
 
-An 8x spread across the zoom range collapsed to ~8%. The residual is inherent:
-at 48 kHz the source only produces 46.9 fps, so a 40 fps target cannot be hit
-exactly on frame boundaries.
+An 8x spread across the zoom range, gone.
 
 ### 15.3 hpsdrsim cannot reproduce this
 

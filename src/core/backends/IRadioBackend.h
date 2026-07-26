@@ -118,6 +118,23 @@ public:
         Q_UNUSED(hz);
     }
 
+    // How often the operator wants panadapter frames, in frames per second.
+    //
+    // For a backend that streams cooked spectra there is no radio-side display
+    // engine to ask, so the Display->FFT FPS slider has nowhere to go — the
+    // Flex wire text it used to emit reached nothing — and the frame rate
+    // defaults to the IQ sample rate over the FFT size, which tracks the
+    // operator's ZOOM instead of their slider. Such a backend caps its own
+    // production here, at the source, where the FFT can be skipped rather than
+    // computed and thrown away.
+    //
+    // Default no-op: a Flex radio's own display engine paces its frames.
+    virtual void setPanFrameRate(const QString& panId, int fps)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(fps);
+    }
+
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the
     // backend only translates an already-authorized intent to its mechanism

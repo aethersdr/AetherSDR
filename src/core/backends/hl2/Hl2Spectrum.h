@@ -31,6 +31,12 @@ public:
     // partial frame is carried to the next call).
     int process(std::span<const std::complex<float>> iq, std::vector<float>& binsDbfs);
 
+    // Drop whatever partial frame has accumulated. Used when the display rate
+    // cap skips an interval: without it the next frame would be built from
+    // samples on both sides of the gap, which is not a contiguous window and
+    // would smear every tone in the FFT.
+    void reset() noexcept { m_acc.clear(); }
+
 private:
     void computeFrame(std::vector<float>& binsDbfs);
 

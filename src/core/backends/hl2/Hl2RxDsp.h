@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
 
 #include <complex>
@@ -71,6 +72,24 @@ public:
     // slice inside the passband without moving the DDC. Kept in m_config so a
     // later reconfigure() rebuilds the channel with the operator's offset.
     Q_INVOKABLE void setShift(double shiftHz);
+    // Cap how often a panadapter frame is produced, in frames per second.
+    //
+    // The FFT is SKIPPED entirely when a frame is not due, which is the whole
+    // point: this backend's natural frame rate is the IQ sample rate over the
+    // FFT size — 48000/1024 = 47 fps at the narrowest span but 384000/1024 =
+    // 375 fps at the widest — so the display rate used to track the operator's
+    // ZOOM rather than their Display->FFT FPS slider, and widening the span
+    // multiplied the render load eightfold.
+    //
+    // Limiting HERE rather than downstream is what makes it cheap. At 384 kHz
+    // and a 25 fps target this skips ~93% of the FFTs and the 1024-bin
+    // magnitude/log pass behind each one; coalescing the frames after the fact
+    // would compute every one of them and then spend MORE cpu combining them.
+    //
+    // fps <= 0 removes the cap. The rate is applied on a wall clock, so it
+    // holds across a sample-rate change without needing to be recomputed.
+    Q_INVOKABLE void setSpectrumRateFps(int fps);
+
     // Mute the DEMODULATOR while transmitting.
     //
     // Suppressing audio further downstream is not enough: this pipeline keeps
@@ -96,12 +115,21 @@ signals:
     void meterUpdate(float dbfs);                           // audio-RMS S-meter
 
 private:
+    // True when the next panadapter frame may be computed. Stays true until one
+    // actually completes, since a frame spans several EP6 blocks.
+    bool spectrumFrameDue();
+
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     Config m_config;
 
     bool m_audioMuted = false;
+    // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on
+    // the first block and only read/written on the DSP thread.
+    int m_spectrumIntervalMs = 0;
+    QElapsedTimer m_spectrumClock;
+    qint64 m_lastSpectrumMs = 0;
     std::vector<std::complex<float>> m_iqBuffer;   // IQ awaiting a full DSP block
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch
