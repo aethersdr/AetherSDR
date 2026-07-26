@@ -10,17 +10,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [v26.7.4] — 2026-07-26
 
-### A second radio family · demo mode · on-device speech-to-text
+### Demo mode · on-device speech-to-text · experimental Hermes-Lite 2
 
-91 commits since v26.7.3. This is the release where AetherSDR stops being a Flex-only client. **Hermes-Lite 2 support** lands on the aetherd `IRadioBackend` seam — receive, transmit, TCI signaling for WSJT-X, an operator-controllable panadapter span, and per-radio nicknames — making HL2 the first non-Flex radio family to run through the same UI as a FLEX-8600. The seam that made it possible also made **demo mode** possible: a synthetic `SimBackend` that generates its own audio and spectrum, so AetherSDR can now be demonstrated, developed against, and regression-tested with no hardware attached.
+93 commits since v26.7.3. The headline addition is **demo mode**: a synthetic `SimBackend` on the aetherd `IRadioBackend` seam that generates its own RX audio and matching panadapter, so AetherSDR can be demonstrated, developed against, and regression-tested with no hardware attached. **Experimental Hermes-Lite 2 support** lands on the same seam — receive, transmit, TCI signaling for WSJT-X, an operator-controllable panadapter span, and per-radio nicknames. HL2 is an early, experimental backend and is **not** a supported radio family yet; FlexRadio remains the supported target.
 
 Alongside those, **Copy Assist** brings on-device speech-to-text via whisper.cpp with a transcription-language selector, **AetherClock** decodes NIST time signals into an alignment display, and a new **GPS and station-location dashboard** surfaces position and timing. The 3D stacked-trace spectrum gets its largest polish pass yet — surface-mapped slice shadows, preserved history across scroll boundaries, and a series of edge-artifact and motion-smoothness fixes across both Flex and KiwiSDR sources.
 
 The automation bridge gains an observe-only mode, phaseful pointer gestures, subsystem memory telemetry, and a secured fresh-build MCP auth handoff. TCI broadcasts considerably more model state. Peripheral support adds ACOM S-series amplifiers.
 
-### Hermes-Lite 2 & the aetherd backend seam
+### Hermes-Lite 2 & the aetherd backend seam (experimental)
 
-- Add Hermes-Lite 2 receive support via the aetherd `IRadioBackend` seam — the first non-Flex radio family. (#4448 — @ten9876)
+> Hermes-Lite 2 is an **experimental** backend in this release, not a supported
+> radio family. FlexRadio remains the supported target.
+
+- Add Hermes-Lite 2 receive support via the aetherd `IRadioBackend` seam — the first non-Flex backend. (#4448 — @ten9876)
 - Add Hermes-Lite 2 transmit. (#4466 — @ten9876)
 - Add basic TCI signaling for HL2, enough to run WSJT-X over a Hermes-Lite 2. (#4471 — @jensenpat)
 - Make the HL2 panadapter span operator-controllable, with a 6 Mb low-bandwidth mode. (#4470 — @jensenpat)
@@ -36,6 +39,7 @@ The automation bridge gains an observe-only mode, phaseful pointer gestures, sub
 - Add on-device speech-to-text "Copy Assist" via whisper.cpp. (#4338 — @ten9876)
 - Add a Copy Assist transcription-language selector. (#4399 — @K5PTB)
 - Nest Copy Assist settings under a single configuration key (Principle V). (#4420 — @ten9876)
+- Move Copy Assist off the lossy visualization tap. It subscribed to `rxPostChainScopeReady`, an 8 ms-throttled *visualization* signal that discards whole blocks rather than skipping a repaint — with NR2 on, blocks arrive 5.33 ms apart and roughly half the speech samples were dropped, then spliced into a stream with a discontinuity at every join. Now driven from the unconditional, source-tagged presentation signal, which also stops a Kiwi running alongside a Flex from interleaving two receivers into one transcript. (#4486 via #4488 — @ten9876)
 - Fix frameless window support in Copy Assist Settings. (#4417 — @rfoust)
 
 ### Time & location
@@ -53,6 +57,7 @@ The automation bridge gains an observe-only mode, phaseful pointer gestures, sub
 - Smooth waterfall and 3D FFT motion for both Flex and KiwiSDR sources. (#4425 — @rfoust)
 - Smooth window resize and panadapter navigation with GPU previews. (#4303 — @rfoust)
 - Stabilize the 3D FFT rear edge during delayed row arrivals. (#4476 — @rfoust)
+- Resynchronize the 3D FFT floor after a bandwidth zoom. (#4477 — @rfoust)
 - Fix flat 3D FFT traces after dBm scale changes. (#4279 — @rfoust)
 - Fix the wide 3D stacked-trace right-edge artifact. (#4371 — @rfoust)
 - Fix the DC-edge 3D comb and a stalled waterfall. (#4413 — @rfoust)
@@ -149,7 +154,7 @@ The automation bridge gains an observe-only mode, phaseful pointer gestures, sub
 
 ### Contributors
 
-Big thanks to **@rfoust** (32 commits — the 3D FFT and waterfall pass, macOS fixes, automation gestures and MCP auth, NR2, and a long run of GUI polish), **@jensenpat** (14 commits — GPS dashboard, HL2 TCI and panadapter span, WDSP vendoring, WSPR beacon, TCI and controller work), **@ten9876** (maintainer, 9 commits — Hermes-Lite 2 receive and transmit, Copy Assist, observe-only bridge mode, CI and documentation), **@nigelfenton** (7 commits — demo mode / `SimBackend`, HL2 nicknames, reconnect state, band-name aliases, waterfall split), **@Ozy311** (6 commits — AetherClock engine and applet, Profile Manager Save, SWR guide memoization, Windows build prerequisites), **@aethersdr-agent** (the AetherClaude orchestrator, 6 commits — FFT trace color, dock persistence, DAX nudge gating, amp-handle guard, spot feedback, redacted issue-report logs), **@dawkagaming** (3 commits — system-library CI, RtMidi, udev rules), **@quelleck** (2 commits — Slice Link, bridge `tune` slice id), **@K5PTB** (2 commits — Copy Assist language selector, toggle labels), **@milenjb** (2 commits — TCI broadcasts), **@NF0T** (1 commit — ACOM S-series amplifiers), **@wa2n-code** (1 commit — Kiwi diversity volume), **@M7HNF-Ian** (1 commit — SpotHub columns), and **@skerker** (1 commit — MIDI VFO self-heal). Dependabot contributed 4 dependency bumps.
+Big thanks to **@rfoust** (33 commits — the 3D FFT and waterfall pass, macOS fixes, automation gestures and MCP auth, NR2, and a long run of GUI polish), **@jensenpat** (14 commits — GPS dashboard, HL2 TCI and panadapter span, WDSP vendoring, WSPR beacon, TCI and controller work), **@ten9876** (maintainer, 10 commits — experimental Hermes-Lite 2 receive and transmit, Copy Assist and its audio-tap fix, observe-only bridge mode, CI and documentation), **@nigelfenton** (7 commits — demo mode / `SimBackend`, HL2 nicknames, reconnect state, band-name aliases, waterfall split), **@Ozy311** (6 commits — AetherClock engine and applet, Profile Manager Save, SWR guide memoization, Windows build prerequisites), **@aethersdr-agent** (the AetherClaude orchestrator, 6 commits — FFT trace color, dock persistence, DAX nudge gating, amp-handle guard, spot feedback, redacted issue-report logs), **@dawkagaming** (3 commits — system-library CI, RtMidi, udev rules), **@quelleck** (2 commits — Slice Link, bridge `tune` slice id), **@K5PTB** (2 commits — Copy Assist language selector, toggle labels), **@milenjb** (2 commits — TCI broadcasts), **@NF0T** (1 commit — ACOM S-series amplifiers), **@wa2n-code** (1 commit — Kiwi diversity volume), **@M7HNF-Ian** (1 commit — SpotHub columns), and **@skerker** (1 commit — MIDI VFO self-heal). Dependabot contributed 4 dependency bumps.
 
 73, Jeremy KK7GWY & Claude (AI dev partner)
 

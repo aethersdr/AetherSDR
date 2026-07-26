@@ -32,12 +32,12 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Queued (next cycle)
 
-- **Hermes-Lite 2 follow-ups** — the backend shipped in v26.7.4 (receive,
-  transmit, TCI/WSJT-X, operator-controllable span, per-radio nicknames).
-  Remaining work is breadth rather than first light: wider mode coverage,
-  panadapter/waterfall parity with the Flex path, and hardening the raw-IQ
-  DSP chain (HL2 ships raw IQ, so the client does all tune/decimate/demodulate
-  work that a Flex does on-radio).
+- **Hermes-Lite 2 — from experimental to supported** — an experimental backend
+  landed in v26.7.4 (receive, transmit, TCI/WSJT-X, operator-controllable span,
+  per-radio nicknames), but HL2 is not a supported radio family yet. Getting
+  there means wider mode coverage, panadapter/waterfall parity with the Flex
+  path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client does
+  all the tune/decimate/demodulate work a Flex does on-radio).
 - **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
   public-receiver browser (per-receiver passwords, idle-release, and
   waterfall polish already landed in v26.7.2).
@@ -109,10 +109,11 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
-- **Hermes-Lite 2 — a second radio family** — receive, transmit, and TCI
-  signaling for WSJT-X, running through the same UI as a FLEX, on the aetherd
-  `IRadioBackend` seam. Includes an operator-controllable panadapter span with
-  a 6 Mb low-bandwidth mode and per-radio nicknames keyed by MAC (v26.7.4).
+- **Hermes-Lite 2 — experimental** — receive, transmit, and TCI signaling for
+  WSJT-X on the aetherd `IRadioBackend` seam, with an operator-controllable
+  panadapter span (6 Mb low-bandwidth mode) and per-radio nicknames keyed by
+  MAC. Early and experimental — **not** a supported radio family; FlexRadio
+  remains the supported target (v26.7.4).
 - **Built-in demo mode** — a synthetic `SimBackend` that generates its own RX
   audio and matching panadapter render, plus a fault-injection harness, so the
   app can be demonstrated, developed against, and regression-tested with no
