@@ -73,7 +73,7 @@ void PanadapterModel::setRfGainInfo(int low, int high, int step)
     emit rfGainInfoChanged(low, high, step);
 }
 
-void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
+bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
 {
     bool changed = false;
     if (centerMhz >= 0.0) {
@@ -94,6 +94,23 @@ void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
     if (changed) {
         emit infoChanged(m_centerMhz, m_bandwidthMhz);
     }
+    return changed;
+}
+
+// Re-announce the current centre/span even though neither changed.
+//
+// The setter above is change-gated, which is right for status echoes but wrong
+// for a backend REFUSING a request: the view applies a zoom optimistically, so
+// when the hardware snaps that request back to the span it already had, an
+// unchanged model value is precisely the case where the widget is left showing a
+// width the data never had. The backend has to be able to say "no, it is still
+// this" and have the view follow. (#4470)
+void PanadapterModel::republishCenterBandwidth()
+{
+    if (!m_centerKnown) {
+        return;
+    }
+    emit infoChanged(m_centerMhz, m_bandwidthMhz);
 }
 
 bool PanadapterModel::setRange(double minDbm, double maxDbm)

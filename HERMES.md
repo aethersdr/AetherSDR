@@ -1015,9 +1015,16 @@ is a real, unmodified FFT and no level can shift with zoom.
 
 Two details that are load-bearing:
 
-- **The accumulator is dropped on a skipped interval** (`Hl2Spectrum::reset`).
-  A frame built from samples on both sides of a gap is not a contiguous window,
-  and its FFT would smear every tone in it.
+- **The accumulator keeps filling on a skipped interval**
+  (`Hl2Spectrum::accumulate`) — it is the transform that is skipped, not the
+  feed. Dropping it instead (the first implementation) looked equivalent and was
+  not: a due frame then has to refill from empty, and that refill is
+  `fftSize / 126` EP6 blocks — 23.6 ms at 48 kHz against 3.0 ms at 384 kHz.
+  Added to the interval, a 25 fps request landed near **16 fps at 48 kHz** and
+  23 fps at 384 kHz, so the rate still tracked the span, which is the coupling
+  this shaper exists to remove. Feeding the window bounds that cost to a single
+  block (2.6 ms / 0.3 ms) and the frame stays contiguous either way, because no
+  sample is ever discarded. `hl2_spectrum_rate_test` measures the spread.
 - **The waterfall keeps a second gate** in `RadioModel`, because
   `line_duration` is a separate and slower control. A plain drop, not a
   coalesce — frames are already scarce by the time they arrive.
@@ -1045,6 +1052,14 @@ Measured on the real HL2 at 580 kHz AM, `line_duration` 100 ms:
 | 48 kHz | ~25 fps | 10.0 rows/s |
 
 An 8x spread across the zoom range, gone.
+
+Those two rows were measured on hardware against the intended design, and are
+what exposed the first implementation as wrong: it could not produce the 48 kHz
+row. Emptying the accumulator between frames put that corner near 16 fps, and
+the table's own numbers are what made the discrepancy visible rather than
+plausible. `hl2_spectrum_rate_test` now pins it offline, wall-clock paced, at
+every rate the gateware offers — 23-24 fps for a 25 fps request with a ~4%
+spread across the zoom range, against ~35% before the fix.
 
 ### 15.3 hpsdrsim cannot reproduce this
 

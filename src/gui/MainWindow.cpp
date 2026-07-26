@@ -1799,16 +1799,13 @@ MainWindow::MainWindow(QWidget* parent)
                 auto* sw = applet->spectrumWidget();
                 if (!sw) continue;
                 const QString panId = applet->panId();
-                const int userFps = sw->fftFps();
-                if (userFps > 0)
-                    m_radioModel.sendCommand(
-                        QString("display pan set %1 fps=%2").arg(panId).arg(userFps));
-                const int userWfMs = sw->wfLineDuration();
-                auto* pan = m_radioModel.panadapter(panId);
-                if (pan && !pan->waterfallId().isEmpty() && userWfMs > 0)
-                    m_radioModel.sendCommand(
-                        QString("display panafall set %1 line_duration=%2")
-                            .arg(pan->waterfallId()).arg(userWfMs));
+                // Route through requestPanDisplayRates, not raw Flex wire text: a
+                // backend that shapes its own display rate (HL2) has no Flex
+                // command sink, so the restore silently never arrived and an FPS
+                // change made while throttled was lost for good. The dispatcher
+                // picks the seam or the wire per backend. (#4470)
+                m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
+                                                    sw->wfLineDuration());
             }
         }
     });

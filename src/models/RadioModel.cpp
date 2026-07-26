@@ -494,7 +494,18 @@ void RadioModel::setupBackend(const QString& family)
                 pan->setWaterfallId(neutralWfIdString(0));
         }
         if (!pan) return;
-        pan->setCenterBandwidth(centerMhz, bandwidthMhz);
+        const bool spanChanged = pan->setCenterBandwidth(centerMhz, bandwidthMhz);
+        // A backend that snaps a requested span to fixed hardware rates (HL2
+        // offers four) reports back the span it actually runs. When that equals
+        // what the model already held, the change-gated setter emits nothing —
+        // and that is exactly the case the view most needs to hear about, because
+        // it applied the operator's request optimistically and is now wider than
+        // the data. Scoped to backends that stream raw spectra so Flex status
+        // echoes, which are frequent and never refuse anything, keep their
+        // existing no-op behaviour. (#4470)
+        if (!spanChanged && shapesDisplayRatesLocally()) {
+            pan->republishCenterBandwidth();
+        }
         // Legacy signal MainWindow still consumes (unchanged behavior).
         emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
     });
@@ -5228,6 +5239,14 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
     if (profileLoadRadioStateWritesHeld()) return;
     auto* pan = m_panadapters.value(panId, nullptr);
     if (!pan) return;
+    // A backend that shapes its own display rate has no Flex command sink, so the
+    // wire text below reached nothing and the congestion cap simply never applied
+    // to it — on the one backend where the frame cost is paid by THIS host.
+    // Route it the same way an operator's slider goes. (#4470)
+    if (shapesDisplayRatesLocally()) {
+        requestPanDisplayRates(panId, fpsCap, adaptiveWfMsForCap(fpsCap));
+        return;
+    }
     sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
     if (!pan->waterfallId().isEmpty())
         sendCommand(QString("display panafall set %1 line_duration=%2")

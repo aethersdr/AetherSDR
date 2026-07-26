@@ -2643,6 +2643,13 @@ target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
 
+# The panadapter frame rate must follow the operator's slider, not the span
+# (#4470). Wall-clock paced, so it lives in its own target.
+add_executable(hl2_spectrum_rate_test tests/hl2_spectrum_rate_test.cpp)
+target_include_directories(hl2_spectrum_rate_test PRIVATE src)
+target_link_libraries(hl2_spectrum_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_spectrum_rate_test COMMAND hl2_spectrum_rate_test)
+
 add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
 target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)

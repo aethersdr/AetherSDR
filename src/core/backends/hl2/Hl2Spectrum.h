@@ -31,10 +31,26 @@ public:
     // partial frame is carried to the next call).
     int process(std::span<const std::complex<float>> iq, std::vector<float>& binsDbfs);
 
-    // Drop whatever partial frame has accumulated. Used when the display rate
-    // cap skips an interval: without it the next frame would be built from
-    // samples on both sides of the gap, which is not a contiguous window and
-    // would smear every tone in the FFT.
+    // Append IQ WITHOUT transforming, keeping only the newest samples. Used
+    // while the display-rate cap is between frames: the window keeps filling, so
+    // when the next frame comes due it completes from recent contiguous samples
+    // instead of refilling from empty.
+    //
+    // Refilling was what made the achieved frame rate track the SPAN rather than
+    // the operator's slider. A frame is fftSize samples and an EP6 block is 126,
+    // so an empty accumulator costs ~9 block intervals before a frame can be
+    // emitted at all — 23.6 ms at 48 kHz but only 3.0 ms at 384 kHz. Feeding it
+    // instead bounds that to a single block.
+    //
+    // Caps at fftSize - 1 deliberately: older samples can never contribute to
+    // the next transform, and leaving the buffer exactly full would break
+    // process()'s frame-boundary detection (it fires on == fftSize after a
+    // push_back, so a pre-filled buffer would step straight past it and never
+    // emit another frame).
+    void accumulate(std::span<const std::complex<float>> iq);
+
+    // Drop whatever partial frame has accumulated. Used on a geometry change,
+    // where the samples either side genuinely describe different windows.
     void reset() noexcept { m_acc.clear(); }
 
 private:

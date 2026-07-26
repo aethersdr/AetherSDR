@@ -44,7 +44,11 @@ public:
     // value means "leave unchanged" (the radio may report one without the
     // other). Emits infoChanged when either value changes or when the center
     // is populated for the first time (even if it equals the placeholder).
-    void setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Returns true when a value actually changed (and infoChanged was emitted).
+    bool setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Force an infoChanged with the current values — for a backend re-asserting
+    // a span it refused to change. See the definition.
+    void republishCenterBandwidth();
     // A reclaimed model retains its numeric display state while reconnecting,
     // but that previous-session center is not authoritative until the radio
     // reports the new session's pan state.

@@ -534,6 +534,39 @@ void Hl2Backend::setPanCenter(const QString& /*panId*/, double hz)
 
 void Hl2Backend::setPanBandwidth(const QString& /*panId*/, double hz)
 {
+    if (hz <= 0.0)
+        return;
+
+    // Coalesce a zoom sweep. See kBandwidthThrottleMs: each span change is a
+    // blocking WDSP rebuild on the thread that paces EP2, and a drag delivers
+    // ~30 of them a second. Leading edge applies now so a discrete step is not
+    // delayed; the rest are collapsed into one.
+    if (!m_bandwidthThrottle) {
+        m_bandwidthThrottle = new QTimer(this);
+        m_bandwidthThrottle->setSingleShot(true);
+        m_bandwidthThrottle->setInterval(kBandwidthThrottleMs);
+        connect(m_bandwidthThrottle, &QTimer::timeout, this, [this] {
+            if (m_pendingBandwidthHz <= 0.0)
+                return;              // cooldown expired with nothing waiting
+            const double pending = m_pendingBandwidthHz;
+            m_pendingBandwidthHz = 0.0;
+            applyPanBandwidth(pending);
+            // Re-arm: a sweep still in progress must keep coalescing.
+            m_bandwidthThrottle->start();
+        });
+    }
+
+    if (m_bandwidthThrottle->isActive()) {
+        m_pendingBandwidthHz = hz;   // superseded by any later request
+        return;
+    }
+
+    applyPanBandwidth(hz);
+    m_bandwidthThrottle->start();
+}
+
+void Hl2Backend::applyPanBandwidth(double hz)
+{
     // Widening the window means running the DDC at a higher rate. There is no
     // continuous zoom here: the gateware offers four rates, so the request is
     // snapped to the nearest and the caller is told what it actually got via
@@ -544,6 +577,10 @@ void Hl2Backend::setPanBandwidth(const QString& /*panId*/, double hz)
         // display sitting on the operator's requested span — the model deferred
         // to us precisely so the view follows the radio, and re-emitting the
         // unchanged span is how the widget snaps back to what is real.
+        //
+        // The model's setter is change-gated, so RadioModel force-republishes for
+        // a raw-spectrum backend on exactly this path; without that the emit here
+        // is swallowed and the widget stays wider than the data. (#4470)
         emitPanState();
         return;
     }

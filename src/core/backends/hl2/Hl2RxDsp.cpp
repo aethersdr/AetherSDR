@@ -152,24 +152,32 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     // actually due. Skipping the whole computation — not just the emit — is
     // what keeps a wide span affordable; see setSpectrumRateFps.
     //
-    // The accumulator is still fed, so a skipped interval simply advances the
-    // window rather than desynchronising it: whichever 1024 samples happen to
-    // complete a frame when the next one comes due are a real, contiguous,
-    // correctly-scaled snapshot. The cost is that signals landing entirely
-    // between two displayed frames are not seen at all, which is the accepted
-    // trade for a display-rate panadapter.
+    // The accumulator is fed on BOTH paths, so a skipped interval advances the
+    // window rather than emptying it: whichever fftSize samples complete a frame
+    // when the next one comes due are a real, contiguous, correctly-scaled
+    // snapshot. The cost is that signals landing entirely between two displayed
+    // frames are not seen at all, which is the accepted trade for a display-rate
+    // panadapter.
+    //
+    // Feeding it is also what decouples the achieved rate from the span. Leaving
+    // the accumulator empty between frames means every due frame first has to
+    // refill from scratch, and that refill is ~9 EP6 blocks — 23.6 ms at 48 kHz
+    // against 3.0 ms at 384 kHz. Added to the interval, a 25 fps request landed
+    // at ~16 fps zoomed in and ~23 fps zoomed out: the rate tracked the span,
+    // which is the exact coupling this shaper exists to remove. Fed, the cost is
+    // bounded by one block instead (2.6 ms at 48 kHz, 0.3 ms at 384 kHz).
     if (spectrumFrameDue()) {
         // "Due" STAYS true until a frame actually completes: one EP6 block is
-        // 126 samples and a frame is 1024, so it takes ~9 blocks to fill one.
+        // 126 samples and a frame is 1024, so a frame boundary can be up to one
+        // block away even with a full window behind it.
         if (m_spectrum->process(iq, m_bins) > 0) {
             emit spectrumReady(m_bins);
             m_lastSpectrumMs = m_spectrumClock.elapsed();
         }
     } else {
-        // Drop the accumulator rather than letting it straddle the gap. A
-        // frame built from samples on both sides of a skipped interval is not
-        // a contiguous window, and its FFT would smear every tone in it.
-        m_spectrum->reset();
+        // Keep the window fed without paying for a transform. This is the whole
+        // saving at a wide span: the FFT is skipped, not merely its emit.
+        m_spectrum->accumulate(iq);
     }
 
     // Audio: buffer into fixed WdspChannel blocks.

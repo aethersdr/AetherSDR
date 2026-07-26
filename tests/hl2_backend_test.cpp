@@ -7,6 +7,8 @@
 // the transmit gate's wire-level behaviour by hl2_tx_gate_test.)
 
 #include "core/backends/IRadioBackend.h"
+#include "TestSettingsProfile.h"
+
 #include "core/backends/hl2/Hl2Backend.h"
 
 #include "core/AppSettings.h"
@@ -60,27 +62,31 @@ static void spin(int ms)
 
 int main(int argc, char** argv)
 {
+    // Redirect settings into a private temporary profile BEFORE QCoreApplication
+    // and before the first AppSettings touch.
+    //
+    // These tests read and write settings the backend now persists (the owned
+    // "Hl2" span object, and LowBandwidthConnect for the span ceiling). They used
+    // to do that in the operator's live file with scope guards to put it back,
+    // which is unsafe twice over: AppSettings::save() rewrites the whole file from
+    // an in-memory snapshot, so it can drop keys the running application wrote in
+    // the meantime, and any abort between the mutation and the guard leaves the
+    // operator's real configuration altered. (#4470)
+    TestSettingsProfile settingsProfile(QStringLiteral("hl2-backend-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "FAIL: could not create an isolated settings profile\n");
+        return 1;
+    }
+
     QCoreApplication app(argc, argv);
     qRegisterMetaType<SliceDelta>();
 
-    // The backend now RESTORES the operator's remembered span at connect, which
-    // makes the default-span assertion below depend on persisted state. Clear
-    // the owned "Hl2" object for the duration so the test measures the actual
-    // default, and put the operator's real value back at the end — these tests
-    // share the live settings file with the running application.
-    const QString kHl2Key = QStringLiteral("Hl2");
-    const QString savedHl2 =
-        AppSettings::instance().value(kHl2Key, QString{}).toString();
-    AppSettings::instance().remove(kHl2Key);
-    AppSettings::instance().save();
-    auto restoreHl2Settings = qScopeGuard([&] {
-        auto& s = AppSettings::instance();
-        if (savedHl2.isEmpty())
-            s.remove(kHl2Key);
-        else
-            s.setValue(kHl2Key, savedHl2);
-        s.save();
-    });
+    // The backend RESTORES the operator's remembered span at connect, so the
+    // default-span assertion below depends on persisted state. The isolated
+    // profile starts empty, so this measures the actual default with no
+    // save/restore dance against anyone's real configuration.
+    check(!Hl2Settings::spanMhz(),
+          "isolated profile starts with no remembered span");
 
     // ---- capped fake HL2: a bounded number of EP6 so the WDSP demod stays quick ----
     QUdpSocket radio;
@@ -257,10 +263,14 @@ int main(int argc, char** argv)
         {5.400, 0.384, "a 5.4 MHz request clamps to the widest real rate"},
         {0.000001, 0.048, "an absurdly narrow request floors at 48 kHz"},
     };
+    // Each row is a DISCRETE operator gesture, so it must clear the zoom-sweep
+    // throttle (kBandwidthThrottleMs = 150 ms) — otherwise consecutive rows are
+    // coalesced into one and the snapping under test never runs. The throttle
+    // itself is exercised separately below.
     for (const auto& c : cases) {
         spanSpy.clear();
         backend.setPanBandwidth(QStringLiteral("hl2"), c.requestMhz * 1.0e6);
-        spin(60);
+        spin(220);
         // Every request re-publishes, including one that changes nothing —
         // otherwise a zoom the hardware cannot honour would leave the display
         // sitting on the operator's requested span with no correction coming.
@@ -275,17 +285,58 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- a zoom SWEEP is coalesced, not applied step by step ----
+    //
+    // Every span change is a blocking WDSP reconfigure plus a settings write, and
+    // it runs on the thread that paces EP2 — the stream the gateware watchdog
+    // halts if it stops arriving. A drag delivers ~30 requests a second, and a
+    // sweep across the range crosses every intermediate rate, so applying each
+    // one meant paying for rebuilds whose results were discarded before anyone
+    // saw them.
+    //
+    // Contract: the FIRST request applies immediately (a discrete zoom step must
+    // not feel laggy), everything inside the cooldown is superseded, and the last
+    // one wins. What must NOT happen is one rebuild per request.
+    {
+        backend.setPanBandwidth(QStringLiteral("hl2"), 48000.0);
+        spin(220);                            // settle, so the sweep starts clean
+
+        QSignalSpy sweepSpy(&backend, &IRadioBackend::panCenterBandwidthChanged);
+        // A drag: eight requests well inside one cooldown, ending on 384 kHz.
+        for (const double mhz : {0.048, 0.060, 0.096, 0.120, 0.192, 0.240, 0.300, 0.384}) {
+            backend.setPanBandwidth(QStringLiteral("hl2"), mhz * 1.0e6);
+            spin(5);
+        }
+        const int duringSweep = sweepSpy.count();
+        spin(400);                            // let the trailing edge fire
+
+        check(duringSweep < 8,
+              "a zoom sweep is coalesced rather than applied request-by-request");
+        check(!sweepSpy.isEmpty(), "the sweep still produces a span report");
+        if (!sweepSpy.isEmpty()) {
+            const double settledMhz = sweepSpy.last().at(2).toDouble();
+            check(qFuzzyCompare(settledMhz, 0.384),
+                  "the sweep settles on the LAST requested span, not an "
+                  "intermediate one");
+            if (!qFuzzyCompare(settledMhz, 0.384)) {
+                std::fprintf(stderr, "  sweep settled at %.6f MHz (want 0.384), "
+                                     "%d reports during the sweep\n",
+                             settledMhz, duringSweep);
+            }
+        }
+    }
+
     // A rate change must not drag the tuned signal with it. The slice was left at
     // 14.100 MHz above; widening and narrowing the window around it has to leave
     // it exactly there.
     backend.setSliceFrequency(0, 14'100'000.0);
     backend.setPanBandwidth(QStringLiteral("hl2"), 384000.0);
-    spin(60);
+    spin(220);
     backend.setPanBandwidth(QStringLiteral("hl2"), 48000.0);
-    spin(60);
+    spin(220);
     QSignalSpy sliceSpy(&backend, &IRadioBackend::sliceChanged);
     backend.setPanBandwidth(QStringLiteral("hl2"), 192000.0);
-    spin(60);
+    spin(220);
     check(!sliceSpy.isEmpty(), "a span change re-publishes the slice");
     if (!sliceSpy.isEmpty()) {
         const SliceDelta d = sliceSpy.last().at(1).value<SliceDelta>();
@@ -369,15 +420,10 @@ int main(int argc, char** argv)
     // silently refuses — the display claiming a width the data never had, which
     // is the same class of lie as the black bars.
     {
+        // Isolated profile — set it and leave it; nothing outside this process
+        // reads this file.
         const QString kLowBw = QStringLiteral("LowBandwidthConnect");
         auto& s = AppSettings::instance();
-        const QString savedLowBw = s.value(kLowBw, QString{}).toString();
-        auto restoreLowBw = qScopeGuard([&] {
-            if (savedLowBw.isEmpty()) s.remove(kLowBw);
-            else                      s.setValue(kLowBw, savedLowBw);
-            s.save();
-        });
-
         s.setValue(kLowBw, QStringLiteral("True"));
         s.save();
         check(Hl2Settings::lowBandwidth(), "low bandwidth mode reads back as set");
