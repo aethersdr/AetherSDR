@@ -308,6 +308,99 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // ── active_slice (#4160) — AetherSDR extension, read-only ──────────
+    // Focus is unknown until TciServer observes an activeChanged(true), and
+    // there is no model here to scan: report nothing rather than guess trx 0,
+    // which is exactly the wrong answer the issue is about.
+    if (!protocol.handleCommand(QStringLiteral("active_slice")).isEmpty()) {
+        std::fprintf(stderr,
+                     "active_slice GET must stay silent while focus is unknown\n");
+        return 1;
+    }
+
+    // trx is positional and the operator never sees it; the display letter is
+    // what the GUI shows, so both are reported.
+    protocol.setActiveSlice(1, QStringLiteral("C"));
+    const QString activeGet =
+        protocol.handleCommand(QStringLiteral("active_slice"));
+    if (activeGet != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr,
+                     "active_slice GET should report trx and letter; got %s\n",
+                     activeGet.toUtf8().constData());
+        return 1;
+    }
+
+    // A radio-supplied letter carrying TCI delimiters would corrupt framing
+    // for every client on the socket. The RAW string is passed in on purpose:
+    // sanitizing is the setter's job, so the invariant does not depend on each
+    // caller remembering to pre-clean.
+    protocol.setActiveSlice(1, QStringLiteral("A;drive:0,100"));
+    const QString sanitized =
+        protocol.handleCommand(QStringLiteral("active_slice"));
+    if (sanitized.count(QLatin1Char(';')) != 1
+        || sanitized.count(QLatin1Char(',')) != 1) {
+        std::fprintf(stderr,
+                     "active_slice letter must not inject delimiters; got %s\n",
+                     sanitized.toUtf8().constData());
+        return 1;
+    }
+    protocol.setActiveSlice(1, QStringLiteral("C"));
+
+    // 0-1 args = GET, matching the split handleCommand() documents for every
+    // other command. active_slice has no per-TRX form, but `active_slice:0;` is
+    // the shape a client written against `rx_volume:0;` will send, so it is
+    // answered rather than silently dropped.
+    if (protocol.handleCommand(QStringLiteral("active_slice:0"))
+        != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr,
+                     "active_slice GET with a redundant trx arg must still report\n");
+        return 1;
+    }
+
+    // SET (2+ args) is ignored — focus is GUI-owned. A client must not be able
+    // to steal it, and must not desync every other client by appearing to.
+    if (!protocol.handleCommand(QStringLiteral("active_slice:0,1")).isEmpty()) {
+        std::fprintf(stderr, "active_slice SET must not reply\n");
+        return 1;
+    }
+    if (!protocol.pendingNotification().isEmpty()) {
+        std::fprintf(stderr, "active_slice SET must not notify other clients\n");
+        return 1;
+    }
+    if (protocol.handleCommand(QStringLiteral("active_slice"))
+        != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr, "active_slice SET must not change reported focus\n");
+        return 1;
+    }
+
+    // Focus can become unknown again: removing the focused slice renumbers
+    // trx and leaves nothing focused until the radio picks a new slice, so
+    // TciServer pushes -1. Report nothing rather than a stale trx.
+    protocol.setActiveSlice(-1, QString());
+    if (!protocol.handleCommand(QStringLiteral("active_slice")).isEmpty()) {
+        std::fprintf(stderr,
+                     "active_slice GET must stay silent once focus is cleared\n");
+        return 1;
+    }
+    // Removing an earlier slice renumbers trx while the letter stays put —
+    // exactly why the letter is reported alongside it.
+    protocol.setActiveSlice(0, QStringLiteral("C"));
+    if (protocol.handleCommand(QStringLiteral("active_slice"))
+        != QStringLiteral("active_slice:0,C;")) {
+        std::fprintf(stderr, "active_slice GET must track renumbered focus\n");
+        return 1;
+    }
+
+    // The greeting carries focus only alongside the rest of the per-slice
+    // state dump, so a model-less protocol must not synthesize one.
+    for (const QString& command : greeting) {
+        if (command.startsWith(QStringLiteral("active_slice"))) {
+            std::fprintf(stderr,
+                         "modelless TCI greeting must not emit active_slice\n");
+            return 1;
+        }
+    }
+
     std::printf("tci_protocol_test: all checks passed\n");
     return 0;
 }

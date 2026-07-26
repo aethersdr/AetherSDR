@@ -405,8 +405,12 @@ private:
     // drag <target> <dx> <dy> | mouse <target> <dx> <dy>: synthesize a
     // press → move → release gesture so resize grips and slider handles are
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
+    // Non-const: a drag can land on a TX-keying control, so these arm the
+    // automation TX lease (armTxWatchdog()). doWheel stays const — it drives
+    // no keying path.
     QJsonObject doDrag(const QString& target, const QString& value);
     QJsonObject doDragAt(const QString& target, const QString& value);
+    QJsonObject doWheel(const QString& target, const QString& value) const;
     // Phaseful pointer gesture (#4353). The owning QLocalSocket stays connected
     // between begin/move/end so unrelated bridge clients and queued model/radio
     // events can interleave while a slider is genuinely down. A single global

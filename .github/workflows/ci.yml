@@ -33,7 +33,7 @@ jobs:
     container: ghcr.io/ten9876/aethersdr-ci:latest
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -76,7 +76,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install main dependencies
         run: |
@@ -140,7 +140,7 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: 'true'
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Qt
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
@@ -285,7 +285,7 @@ jobs:
   check-macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install dependencies via Homebrew
         # Mirrors macos-dmg.yml's apple-silicon path.  Homebrew Qt targets

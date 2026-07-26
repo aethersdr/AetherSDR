@@ -50,6 +50,11 @@ struct RadioBindSettings {
 
 // Represents a discovered FlexRadio on the network.
 struct RadioInfo {
+    // aetherd Gap B (Step 2b): radio family discriminator. "flex" (default, so
+    // every existing Flex discovery/probe path is unchanged) or "hl2"
+    // (Hermes-Lite 2, from HPSDR discovery / the manual HL2 path). RadioModel
+    // routes the connect through the matching backend based on this.
+    QString family{QStringLiteral("flex")};
     QString name;           // e.g. "FLEX-6600"
     QString model;
     QString serial;

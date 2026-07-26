@@ -992,9 +992,14 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // disables/re-enables the button without the user having to reopen the
         // dialog. rebootRadio() also early-returns on disconnected, but the
         // disabled state makes the affordance discoverable rather than silent.
-        rebootBtn->setEnabled(m_model->isConnected());
-        connect(m_model, &RadioModel::connectionStateChanged,
-                rebootBtn, &QPushButton::setEnabled);
+        // F3 (#4448): also gate on the backend supporting a client reboot — HL2
+        // is RX-only with no reboot command, and offering it would send a
+        // meaningless command and trigger a forced disconnect.
+        rebootBtn->setEnabled(m_model->isConnected() && m_model->backendCapabilities().canReboot);
+        connect(m_model, &RadioModel::connectionStateChanged, rebootBtn,
+                [this, rebootBtn](bool connected) {
+            rebootBtn->setEnabled(connected && m_model->backendCapabilities().canReboot);
+        });
         connect(rebootBtn, &QPushButton::clicked, this, [this] {
             const bool wan = m_model->isWan();
             const QString body = wan

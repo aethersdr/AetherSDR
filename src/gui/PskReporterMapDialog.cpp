@@ -640,7 +640,7 @@ void PskReporterMapDialog::scheduleBeacon()
     // Ask the connected radio family whether it can key at all before any of
     // the Flex-shaped preconditions below. An RX-only backend (RFC §6,
     // capabilities().canTransmit == false) has no transmitter to check.
-    if (!m_radioModel->backendCanTransmit()) {
+    if (!m_radioModel->backendCapabilities().canTransmit) {
         m_beaconStatus->setText(tr("This radio cannot transmit"));
         return;
     }

@@ -184,6 +184,31 @@ inline float dssHistoryAvailability(float sampleAge, float validRows)
     return std::clamp(validRows - sampleAge, 0.0f, 1.0f);
 }
 
+// Mirror of dss_mesh.vert sampleHistoryDbm()'s retained sample-age clamp, for
+// unit testing. It must track the shader exactly, including the two clamps the
+// shader applies: cap validRows to [0, rows] (cappedValidRows) and floor the
+// oldest retained age at 0. Omitting them makes the mirror diverge from the GPU
+// path it validates outside 1 <= validRows <= rows (e.g. a negative age at
+// validRows = 0.5, or an uncapped age when validRows > rows). std::nullopt is
+// the analogue of the shader returning floorDbm (sample past the valid range).
+inline std::optional<float> dssRetainedSampleAge(float sourceAge,
+                                                 float remainingRows,
+                                                 float validRows,
+                                                 float rows)
+{
+    if (!std::isfinite(sourceAge) || !std::isfinite(remainingRows)
+        || !std::isfinite(validRows) || !std::isfinite(rows)
+        || sourceAge < 0.0f || remainingRows < 0.0f || rows < 1.0f) {
+        return std::nullopt;
+    }
+    const float cappedValidRows = std::clamp(validRows, 0.0f, rows);
+    if (sourceAge >= cappedValidRows) {
+        return std::nullopt;
+    }
+    const float oldestRetainedAge = std::max(cappedValidRows - 1.0f, 0.0f);
+    return std::min(sourceAge + remainingRows, oldestRetainedAge);
+}
+
 struct StablePresentationAnchor {
     float value{0.0f};
     float acquisitionMean{0.0f};

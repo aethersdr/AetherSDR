@@ -2644,24 +2644,29 @@ void SpectrumWidget::prepareForFftScaleChange()
     m_noiseFloorCandidateFrames = 0;
 }
 
+void SpectrumWidget::beginFftPixelScaleSettle()
+{
+    // Monotonic: never shorten a settle window already armed (e.g. by an
+    // earlier request in a rapid drag, or by the echo re-arm below).
+    m_flexDssFftScaleSettlingUntilMs = std::max(
+        m_flexDssFftScaleSettlingUntilMs,
+        QDateTime::currentMSecsSinceEpoch() + kDssFftPixelScaleSettleMs);
+}
+
 void SpectrumWidget::prepareForFftPixelScaleChange()
 {
     prepareForFftScaleChange();
-    m_flexDssFftScaleSettlingUntilMs =
-        QDateTime::currentMSecsSinceEpoch() + kDssFftPixelScaleSettleMs;
+    beginFftPixelScaleSettle();
 
-    // A y_pixels transition changes how raw FFT pixel values decode to dBm.
-    // Rows received before the radio echo (or queued immediately after it) are
-    // not comparable with the settled stream and must not survive in 3D
-    // history. Keep a Kiwi surface intact when only the hidden Flex decoder is
-    // changing.
+    // A y_pixels transition changes how future raw FFT pixel values decode to
+    // dBm. Already-decoded rows remain valid physical dBm samples, so preserve
+    // the visible surface and retained history across a resize. The settle gate
+    // rejects ambiguous in-flight rows; only its temporal filter inputs need
+    // resetting. Keep Kiwi state untouched when the hidden Flex decoder changes.
     DssRenderer& flexDss = m_kiwiSdrWaterfallActive
         ? m_nativeWaterfallState.dss
         : m_dss;
-    flexDss.clear();
-    if (!m_kiwiSdrWaterfallActive) {
-        resetDssUploadState();
-    }
+    flexDss.resetInputSmoothing();
 }
 
 void SpectrumWidget::setFftWeightedAvg(bool on) {
@@ -6183,6 +6188,47 @@ void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwid
     setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
 }
 
+void SpectrumWidget::deferIncomingRange(double centerMhz, double bandwidthMhz)
+{
+    // Record only that geometry WAS suppressed. The value itself is not kept:
+    // see applyDeferredRangeIfIdle() for why replaying it would be wrong.
+    Q_UNUSED(centerMhz);
+    Q_UNUSED(bandwidthMhz);
+    m_deferredRangeValid = true;
+    if (!m_deferredRangeTimer) {
+        m_deferredRangeTimer = new QTimer(this);
+        m_deferredRangeTimer->setSingleShot(true);
+        connect(m_deferredRangeTimer, &QTimer::timeout,
+                this, &SpectrumWidget::applyDeferredRangeIfIdle);
+    }
+    // Poll rather than hook every gesture-release site: the holds clear from
+    // several places (mouse release, animation end, a timed echo hold), and a
+    // missed hook would reinstate exactly the permanent-drop bug this fixes.
+    m_deferredRangeTimer->start(60);
+}
+
+void SpectrumWidget::applyDeferredRangeIfIdle()
+{
+    if (!m_deferredRangeValid)
+        return;
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const bool vfoDragPanEchoHold =
+        m_vfoDragPanEchoHoldUntilMs > 0 && nowMs < m_vfoDragPanEchoHoldUntilMs;
+    if (m_draggingPan || m_draggingVfo || vfoDragPanEchoHold
+        || m_frequencyRangeSettlePending) {
+        m_deferredRangeTimer->start(60);   // still busy — check again shortly
+        return;
+    }
+    m_deferredRangeValid = false;
+    // Deliberately do NOT replay the value we stashed. By the time a gesture
+    // releases, that value may be a stale echo — replaying it is exactly the
+    // "view claims a center the radio never took" failure #4142 exists to
+    // prevent. Instead ask the owner to re-push whatever the authoritative
+    // model holds RIGHT NOW. Correct for a chatty backend (the value is
+    // current) and for an edge-triggered one (this is its only second chance).
+    emit panGeometryResyncNeeded();
+}
+
 void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                                bool animateSmallNudges)
 {
@@ -6198,6 +6244,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         m_vfoDragPanEchoHoldUntilMs > 0 && nowMs < m_vfoDragPanEchoHoldUntilMs;
     if ((m_draggingPan || m_draggingVfo || vfoDragPanEchoHold)
         && mhzNearlyEqual(bandwidthMhz, m_bandwidthMhz)) {
+        deferIncomingRange(centerMhz, bandwidthMhz);
         return;
     }
 
@@ -6209,8 +6256,13 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         && m_frequencyRangePendingValid
         && !mhzNearlyEqual(centerMhz, m_centerMhz)
         && !mhzNearlyEqual(centerMhz, m_frequencyRangePendingCenterMhz)) {
+        deferIncomingRange(centerMhz, bandwidthMhz);
         return;
     }
+
+    // Past every hold: this value is being applied, so anything still deferred
+    // is superseded.
+    m_deferredRangeValid = false;
 
     const double oldCenterMhz = m_centerMhz;
     const double oldBandwidthMhz = m_bandwidthMhz;
@@ -7087,6 +7139,11 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     PerfUpdateScope perfScope(PerfUpdateScope::Kind::Waterfall);
     // Native waterfall tiles carry intensity values (int16/128.0f, ~96-120 on HF).
     if (binsIntensity.isEmpty()) return;
+    // Record the extent this row claims, before any early-out below, so an
+    // automated pan/waterfall alignment check sees what the producer asserted
+    // even when the row is not rendered (e.g. the Kiwi path).
+    m_lastWfRowLowMhz = lowFreqMhz;
+    m_lastWfRowHighMhz = highFreqMhz;
     ++m_panStats.nativeWaterfallCalls;
     if (m_kiwiSdrWaterfallActive) {
         ++m_panStats.nativeWaterfallHiddenCalls;
