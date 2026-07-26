@@ -1257,6 +1257,22 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
         return;
     }
 
+    // Seam backend (HL2): `slice set N tx=1` is Flex text with no counterpart on
+    // this plane, so the sendCmdPublic below would be swallowed AND this
+    // continuation would never run. Every caller opens a route transition
+    // around it, so a silent drop leaks m_routeTransitionInFlight forever and
+    // wedges TCI keying for the rest of the connection. Answer honestly instead
+    // of hanging: there is no seam verb to promote a slice, and the one slice
+    // such a radio has already returned true above (Hl2Backend publishes
+    // txSlice=true — its single slice IS the transmitter), so this only fires
+    // for a route that genuinely cannot be built.
+    if (!m_model->usesFlexCommandPlane()) {
+        qCWarning(lcCat) << "TCI: TX-slice selection unsupported on this radio"
+                         << "slice=" << sliceId;
+        continuation(false);
+        return;
+    }
+
     QPointer<TciServer> self(this);
     m_model->sendCmdPublic(QStringLiteral("slice set %1 tx=1").arg(sliceId),
         [self, sliceId, continuation = std::move(continuation)](
@@ -1284,6 +1300,29 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
     if (!client || !m_model || !rxSlice) {
         return;
     }
+
+    // Seam backend (HL2): `slice create` is Flex text this radio does not speak.
+    // The command below would be swallowed and its completion callback would
+    // never run, so the route transition opened just after it could never be
+    // closed -- and handleTrxRequest() defers every subsequent trx:true into
+    // m_pendingTrxRequest while a transition is in flight, so WSJT-X could not
+    // transmit again for the rest of the connection. That is the failure this
+    // guard exists to prevent, and the capacity test below does NOT catch it:
+    // maxSlices() is the model-string-derived Flex estimate (2 by default), not
+    // the backend's own maxSlices, so a single-slice HL2 looks like it has room.
+    //
+    // Refusing is also the honest answer, not merely the safe one: WSJT-X's
+    // "Split = Rig/Fake It" reaches exactly here, and reportVfoBRouteFailure
+    // sends split_enable:...,false; plus the authoritative channel-1 VFO, which
+    // is what makes it fall back to single-VFO operation instead of waiting.
+    if (!m_model->usesFlexCommandPlane()) {
+        reportVfoBRouteFailure(client, request,
+            QStringLiteral("this radio has no second VFO: split needs a TX slice "
+                           "it cannot create"),
+            !routeConfirmation.isEmpty());
+        return;
+    }
+
     if (m_model->slices().size() >= m_model->maxSlices()) {
         reportVfoBRouteFailure(client, request,
             QStringLiteral("cannot create VFO B: radio slice capacity reached"),

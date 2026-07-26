@@ -612,6 +612,8 @@ void RadioModel::setupBackend(const QString& family)
     connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
             [this](bool on) {
         if (m_backend && m_family != QLatin1String("flex")) {
+            if (on && !refuseKeyOnTransmitIncapableBackend())
+                return;
             m_backend->setKeying(on);
             // The MOX button and the PTT coordinator key here, NOT through
             // setTransmit(), so the raw-TX edge has to be published on this path
@@ -623,6 +625,15 @@ void RadioModel::setupBackend(const QString& family)
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
             [this](bool on) {
         if (m_backend && m_family != QLatin1String("flex")) {
+            if (on && !refuseKeyOnTransmitIncapableBackend()) {
+                // Un-latch TUNE as well. m_tune was already set optimistically
+                // (TransmitModel::startTune), and the button's toggle reads it,
+                // so leaving it set would strand TUNE "on" against a radio that
+                // never keyed. The re-entry through this same slot carries
+                // on=false and so skips the guard.
+                m_transmitModel.stopTune();
+                return;
+            }
             m_backend->setTune(on);
             // A tune carrier is a transmission. Hl2Backend::setTune() calls
             // setKeying(), so the radio is on the air — the raw-TX edge has to
@@ -1884,6 +1895,19 @@ void RadioModel::sendSliceCommand(SliceModel* slice, const QString& cmd)
 
 QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) const
 {
+    // Capability first, ahead of every other test including the DAX bypass
+    // below: a backend that reports it cannot transmit refuses the key under
+    // the seam, so letting the request run its optimistic path (Quindar intro,
+    // TX state, tune latch, the raw-TX edge) only builds a TX state the radio
+    // never entered. TransmitModel consults this from runPttPreflight(), which
+    // covers requestPttOn() — MOX, TCI hardware PTT, WSPR — and startTune().
+    // Guarded on m_backend so a torn-down model behaves exactly as before;
+    // setupBackend() otherwise guarantees one exists, and FlexBackend always
+    // reports canTransmit=true, so no Flex path changes.
+    if (m_backend && !backendCapabilities().canTransmit) {
+        return tr("This radio is receive-only and cannot transmit.");
+    }
+
     auto* s = txSlice();
     if (const QString message = transmitInhibitMessageForSlice(s);
         !message.isEmpty()) {
@@ -2470,6 +2494,33 @@ void RadioModel::rebootRadio()
 RadioCapabilities RadioModel::backendCapabilities() const
 {
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
+}
+
+// Shared key-on guard for the paths that do NOT go through setTransmit().
+//
+// setTransmit() refuses a key on a backend reporting canTransmit=false before
+// touching any state; MOX and TUNE reach the seam through
+// mox/tuneCommandIssued instead and had no such test. On an HL2 with the
+// automation TX gate closed, Hl2Backend::setKeying() logged "key refused" and
+// returned while this side still flipped m_radioTransmitting — so TciServer
+// broadcast trx:...,true; for a transmission that never happened, and its
+// "already transmitting" guard then rejected the next genuine TCI key. Nothing
+// on the air, and TCI keying dead until the flag cleared.
+//
+// Returns true when keying may proceed. On refusal it rolls the optimistic
+// transmit state back and raises the same interlock notification setTransmit()
+// uses, so the operator sees one consistent reason on every path.
+bool RadioModel::refuseKeyOnTransmitIncapableBackend()
+{
+    if (backendCapabilities().canTransmit)
+        return true;
+
+    emitInterlockNotification(
+        tr("This radio is receive-only and cannot transmit."),
+        QStringLiteral("rx-only-tx"),
+        txSlice() ? txSlice()->panId() : QString());
+    m_transmitModel.setTransmitting(false);
+    return false;
 }
 
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)

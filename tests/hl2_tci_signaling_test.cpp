@@ -29,6 +29,7 @@
 #include "core/AudioEngine.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/RadioDiscovery.h"
+#include "core/TciProtocol.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -36,6 +37,9 @@
 
 #include <QCoreApplication>
 #include <QSignalSpy>
+#ifdef HAVE_WEBSOCKETS
+#include <QWebSocket>
+#endif
 
 #include <cstdio>
 
@@ -81,6 +85,48 @@ class Hl2TciSignalingTest {
 public:
     static bool hostModulating(TciServer& server) {
         return server.hostModulatingBackend();
+    }
+
+    // The route-transition latch and the deferral queue it feeds. A transition
+    // that is opened and never closed is the failure mode under test, and it is
+    // invisible from outside: the socket stays up and the handshake still works.
+    static bool routeTransitionInFlight(TciServer& s) {
+        return s.m_routeTransitionInFlight;
+    }
+    static bool hasPendingTrx(TciServer& s) { return s.m_pendingTrxRequest.has_value(); }
+    static bool splitRequested(TciServer& s) { return s.m_routingState.splitRequested(); }
+
+    static void trx(TciServer& s, QWebSocket* c, const TciProtocol::TrxRequest& r) {
+        s.handleTrxRequest(c, r);
+    }
+
+    // The VFO-B route builder itself. Driven directly rather than through
+    // handleSplitRequest()/handleVfoRequest(), because those resolve their RX
+    // slice via TciProtocol::resolveSliceForTrx(), which returns null on a model
+    // that is not connected to real hardware — every assertion below it would
+    // then pass without the code under test ever running.
+    static void createVfoB(TciServer& s, QWebSocket* c,
+                           const TciProtocol::VfoRequest& r, SliceModel* rx,
+                           const QString& routeConfirmation, bool splitOnly) {
+        s.createTxSliceForVfoB(c, r, rx, routeConfirmation, splitOnly);
+    }
+    static void setSplitRequested(TciServer& s, bool on) {
+        s.m_routingState.setSplitRequested(on);
+    }
+    static bool pendingVfoBCreate(TciServer& s) {
+        return s.m_pendingVfoBCreate.has_value();
+    }
+
+    // Runs promoteTxSliceAndContinue and reports whether the continuation ran at
+    // all — the distinction that matters, since a continuation that never runs
+    // strands its caller's route transition rather than failing it.
+    static void promote(TciServer& s, int sliceId, bool* answered, bool* selected) {
+        *answered = false;
+        *selected = false;
+        s.promoteTxSliceAndContinue(sliceId, [answered, selected](bool ok) {
+            *answered = true;
+            *selected = ok;
+        });
     }
 };
 #endif
@@ -207,6 +253,158 @@ static void testTciSeesHostModulation()
     model.connectToRadio(hl2Info());
     check(Hl2TciSignalingTest::hostModulating(server),
           "HL2 host-modulates: TCI skips the Flex DAX TX route entirely");
+}
+#endif
+
+// ── Refusing to key, without faking a transmit ────────────────────────────
+//
+// setTransmit() refuses a key on a backend reporting canTransmit=false. MOX and
+// TUNE do not go through it -- they reach the seam through mox/tuneCommandIssued
+// -- and had no such test, so with the HL2 transmit gate closed the backend
+// logged "key refused" and returned while this side published the raw-TX edge
+// anyway. TciServer then broadcast trx:...,true; for a transmission that never
+// happened, and its "already transmitting" guard rejected the next genuine TCI
+// key: nothing on the air, and TCI keying dead until the flag cleared.
+static void testRefusedKeyPublishesNoTransmitEdge()
+{
+    // Reproduce the gate the way the product closes it: an automation run with
+    // no ALLOW_TX. Hl2Backend decides m_txAllowed once, in its constructor, so
+    // the environment has to be set before the backend is built.
+    qputenv("AETHER_AUTOMATION", "1");
+    qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
+
+    RadioModel model;
+    model.connectToRadio(hl2Info());
+    check(!model.backendCapabilities().canTransmit,
+          "fixture precondition: the HL2 transmit gate is closed");
+
+    QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
+
+    model.transmitModel().setMox(true);
+    check(edges.isEmpty(), "a refused MOX publishes no raw-TX edge");
+    check(!model.isRadioTransmitting(),
+          "a refused MOX leaves isRadioTransmitting() false");
+    check(!model.transmitModel().isTransmitting(),
+          "a refused MOX rolls back the optimistic MOX state");
+
+    // TUNE is the path a fix applied only to MOX would miss, and the one that
+    // latches: TransmitModel sets m_tune before the seam ever refuses.
+    model.transmitModel().startTune(TransmitModel::PttSource::Dax);
+    check(edges.isEmpty(), "a refused TUNE publishes no raw-TX edge");
+    check(!model.transmitModel().isTuning(),
+          "a refused TUNE does not leave the TUNE button latched on");
+
+    // The TCI hardware-PTT path. It keys through requestPttOn() -> setMox(),
+    // so it is refused in the preflight before any optimistic state is built.
+    model.transmitModel().requestPttOn(TransmitModel::PttSource::TciHardware);
+    check(edges.isEmpty(), "a refused TCI hardware PTT publishes no raw-TX edge");
+    check(!model.transmitModel().isTransmitting(),
+          "a refused TCI hardware PTT does not report a transmit");
+
+    qunsetenv("AETHER_AUTOMATION");
+}
+
+#ifdef HAVE_WEBSOCKETS
+// ── VFO B / split on a radio that has neither ─────────────────────────────
+//
+// WSJT-X with Split = Rig (or Fake It) sends split_enable:0,true; before it
+// transmits. On a single-slice radio that resolves to RouteAction::Create,
+// which issued a Flex `slice create` -- swallowed by a radio that speaks HPSDR,
+// with a completion callback that therefore never ran. The route transition
+// opened around it never closed, and handleTrxRequest() defers every trx:true
+// while one is in flight, so WSJT-X could not transmit again for the rest of
+// the connection with the rig still showing connected throughout.
+//
+// The capacity check ahead of the create does NOT catch this: maxSlices() is
+// the model-string-derived Flex estimate, so a one-slice HL2 looks like it has
+// room to make a second.
+static void testSeamBackendCannotWedgeOnVfoB()
+{
+    RadioModel model;
+    model.connectToRadio(hl2Info());
+
+    QString error;
+    if (!model.automationApplySliceFixture(0, QString(), &error)) {
+        check(false, "fixture precondition: a slice exists to route from");
+        std::fprintf(stderr, "  (%s)\n", qPrintable(error));
+        return;
+    }
+    // The HL2's single slice IS its transmitter (Hl2Backend publishes
+    // txSlice=true); the fixture seeds tx=0, so say so explicitly.
+    SliceDelta txFlag;
+    txFlag.txSlice = true;
+    model.slice(0)->applyChanges(txFlag);
+    check(model.maxSlices() > 1,
+          "fixture precondition: maxSlices() over-reports, so only the "
+          "command-plane guard can refuse the create");
+
+    TciServer server(&model);
+    QWebSocket client;
+
+    // What handleSplitRequest() does for WSJT-X's split_enable:0,true; once
+    // resolveVfoB() has returned RouteAction::Create: split already latched
+    // optimistically, the confirmation held back until the route exists.
+    Hl2TciSignalingTest::setSplitRequested(server, true);
+    Hl2TciSignalingTest::createVfoB(server, &client,
+                                    TciProtocol::VfoRequest{0, 1, 14074000},
+                                    model.slice(0),
+                                    QStringLiteral("split_enable:0,true;"), true);
+
+    check(!Hl2TciSignalingTest::routeTransitionInFlight(server),
+          "a refused VFO-B create leaves no route transition in flight");
+    check(!Hl2TciSignalingTest::pendingVfoBCreate(server),
+          "a refused VFO-B create leaves no create pending on a reply that "
+          "will never arrive");
+    check(!Hl2TciSignalingTest::splitRequested(server),
+          "a refused split is rolled back, not left half-armed");
+
+    // The whole point: the key that follows must not be deferred forever.
+    Hl2TciSignalingTest::trx(server, &client,
+                             TciProtocol::TrxRequest{0, true, QStringLiteral("tci")});
+    check(!Hl2TciSignalingTest::hasPendingTrx(server),
+          "the key after a refused split is handled, not queued behind a "
+          "transition that never ends");
+
+    // The plain channel-1 VFO route (WSJT-X's Fake It band hop) takes the same
+    // path with no split confirmation to withdraw.
+    Hl2TciSignalingTest::createVfoB(server, &client,
+                                    TciProtocol::VfoRequest{0, 1, 7074000},
+                                    model.slice(0), QString(), false);
+    check(!Hl2TciSignalingTest::routeTransitionInFlight(server),
+          "a refused VFO-B tune leaves no route transition in flight");
+}
+
+// promoteTxSliceAndContinue() has the same shape of trap: `slice set N tx=1` is
+// Flex text with no seam counterpart, and every caller opens a route transition
+// around it. A continuation that never runs strands that transition, so the
+// contract on a seam backend is to ANSWER -- false is fine, silence is not.
+static void testSeamBackendPromoteAlwaysAnswers()
+{
+    RadioModel model;
+    model.connectToRadio(hl2Info());
+
+    QString error;
+    if (!model.automationApplySliceFixture(0, QString(), &error)) {
+        check(false, "fixture precondition: a slice exists to promote");
+        return;
+    }
+    check(!model.slice(0)->isTxSlice(),
+          "fixture precondition: the slice is not already the TX slice");
+
+    TciServer server(&model);
+    bool answered = false, selected = false;
+    Hl2TciSignalingTest::promote(server, 0, &answered, &selected);
+    check(answered, "promoteTxSliceAndContinue answers on a seam backend");
+    check(!selected, "it answers 'not selected' -- there is no seam verb to promote");
+
+    // A slice that is ALREADY the TX slice still succeeds without a command:
+    // this is the path every HL2 TCI key takes, and it must not regress.
+    SliceDelta txFlag;
+    txFlag.txSlice = true;
+    model.slice(0)->applyChanges(txFlag);
+    Hl2TciSignalingTest::promote(server, 0, &answered, &selected);
+    check(answered && selected,
+          "an already-TX slice is selected with no command at all");
 }
 #endif
 
@@ -340,9 +538,14 @@ int main(int argc, char** argv)
     AetherSDR::testCommandPlanePredicate();
 #ifdef HAVE_WEBSOCKETS
     AetherSDR::testTciSeesHostModulation();
+    AetherSDR::testSeamBackendCannotWedgeOnVfoB();
+    AetherSDR::testSeamBackendPromoteAlwaysAnswers();
 #endif
     AetherSDR::testHostModulatedTxAudio();
     AetherSDR::testModeDefaultPassband();
+    // Last: it closes the HL2 transmit gate through the environment, and every
+    // test above needs it open.
+    AetherSDR::testRefusedKeyPublishesNoTransmitEdge();
 
     if (AetherSDR::g_failures == 0)
         std::fprintf(stderr, "hl2_tci_signaling_test: all checks passed\n");

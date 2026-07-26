@@ -1164,6 +1164,11 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Key-on guard for the MOX/TUNE seam paths, which do not run through
+    // setTransmit() and therefore missed its canTransmit test. Returns true when
+    // keying may proceed; on refusal it rolls back the optimistic transmit state
+    // and notifies, so no raw-TX edge is ever published for a refused key.
+    bool refuseKeyOnTransmitIncapableBackend();
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,

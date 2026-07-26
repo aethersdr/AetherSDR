@@ -77,9 +77,16 @@ static double dominantHz(const std::vector<float>& mono, int rate)
     return bestF;
 }
 
-// Feed a complex tone at `toneOffsetHz` relative to the NCO and return the
-// dominant audio frequency produced.
-static double runTone(Hl2RxDsp& dsp, double toneOffsetHz, double shiftHz)
+// Feed a complex tone and return the dominant audio frequency produced.
+//
+// `wireOffsetHz` is in WIRE sign, not analytic sign — the argument is used
+// directly as the phase increment of exp(j.w.t) fed to processIqBlock(), and the
+// HPSDR wire is the conjugate of the analytic convention (see the header note).
+// So a POSITIVE value here is a tone BELOW the NCO, which is why every call site
+// passes +800.0 for "800 Hz below". Read this parameter as "what the radio puts
+// on the wire", never as "offset from the NCO"; getting that backwards is the
+// exact trap this test exists to catch.
+static double runTone(Hl2RxDsp& dsp, double wireOffsetHz, double shiftHz)
 {
     dsp.setShift(shiftHz);
 
@@ -94,7 +101,7 @@ static double runTone(Hl2RxDsp& dsp, double toneOffsetHz, double shiftHz)
     constexpr int kWarmBlocks = 24;
     constexpr int kMeasureBlocks = 24;
     double phase = 0.0;
-    const double dp = 2.0 * kPi * toneOffsetHz / kInputRate;
+    const double dp = 2.0 * kPi * wireOffsetHz / kInputRate;
     for (int b = 0; b < kWarmBlocks + kMeasureBlocks; ++b) {
         std::vector<std::complex<float>> iq(kBlock);
         for (int k = 0; k < kBlock; ++k) {
