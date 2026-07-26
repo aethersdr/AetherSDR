@@ -756,14 +756,19 @@ void DStarModemPage::refreshService()
     const bool active = model.serviceActive();
     const bool stopping = model.serviceStopping();
     const QString state = model.serviceStateName();
+    const QString health = model.serviceHealthName();
     const QString detail = !model.serviceHealthDetail().isEmpty()
         ? model.serviceHealthDetail()
         : model.serviceStatusText();
 
-    m_serviceState->setText(state);
+    const bool noWaveformData = state == QLatin1String("Running")
+        && health == QLatin1String("No waveform data");
+    m_serviceState->setText(noWaveformData ? tr("No RX UDP") : state);
     m_serviceState->setToolTip(detail);
     m_serviceDot->setToolTip(detail.isEmpty() ? state : detail);
-    if (state == QLatin1String("Running")) {
+    if (noWaveformData) {
+        m_serviceDot->setStyleSheet(QStringLiteral("background:#d2ad74;"));
+    } else if (state == QLatin1String("Running")) {
         m_serviceDot->setStyleSheet(QStringLiteral("background:#64d36e;"));
     } else if (state == QLatin1String("Failed")) {
         m_serviceDot->setStyleSheet(QStringLiteral("background:#d2ad74;"));
@@ -795,7 +800,7 @@ void DStarModemPage::refreshService()
         sliceText = tr("No DSTR slice");
     }
     updateDStarSliceStateLabel(m_sliceState, sliceText);
-    m_footerState->setText(state.toUpper());
+    m_footerState->setText(noWaveformData ? tr("NO RX UDP") : state.toUpper());
 }
 
 void DStarModemPage::refreshConfiguration()

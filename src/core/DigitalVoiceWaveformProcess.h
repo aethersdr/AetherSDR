@@ -7,8 +7,11 @@
 #include <QObject>
 #include <QProcess>
 #include <QString>
+#include <QTimer>
 
 namespace AetherSDR {
+
+class DigitalVoiceWaveformProcessTestAccess;
 
 class DigitalVoiceWaveformProcess : public QObject
 {
@@ -59,6 +62,8 @@ signals:
     void sliceRestoreRequested(int sliceId, const QString& previousMode);
 
 private:
+    friend class DigitalVoiceWaveformProcessTestAccess;
+
     explicit DigitalVoiceWaveformProcess(QObject* parent = nullptr);
 
     void setState(State state, const QString& statusText = {});
@@ -72,8 +77,10 @@ private:
     void updateMetrics(DigitalVoiceWaveformMetrics metrics);
     void resetTelemetry(bool advanceGeneration);
     void setHealth(DigitalVoiceWaveformHealth health);
+    void updateRxStartupWatchdog();
 
     QProcess m_process;
+    QTimer m_rxStartupWatchdog;
     State m_state{State::Stopped};
     QString m_statusText;
     QString m_lastError;
