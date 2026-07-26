@@ -33,9 +33,11 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // synthetic-demo mode, mirroring FlexBackend's ctor (same load-bearing #502
     // order: panStream thread FIRST, then connection). RadioModel harvests these
     // via connection()/panStream() and drives them exactly as it drives Flex's.
-    // The synthetic behaviour is entirely inside those classes
-    // (RadioConnection::startSyntheticDemoConnect on a demo target,
-    // PanadapterStream::tickSyntheticDemo) — no new wire logic here.
+    // The synthetic wire behaviour lives in RadioConnection
+    // (startSyntheticDemoConnect on a demo target) — no new wire logic here. The
+    // PanadapterStream we vend stays deliberately IDLE: this backend produces the
+    // demo's audio and spectrum itself, from the one NoiseMixer below, so a single
+    // scene drives both what is heard and what is displayed.
     m_networkThread = new QThread(this);
     m_networkThread->setObjectName("SimPanadapterStream");
     m_panStream = new PanadapterStream;   // no parent — moved to thread
@@ -211,7 +213,22 @@ void SimBackend::setDemoNoiseKnob(const QString& channel, const QString& knob,
 {
     bool ok = false;
     const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_audio.setKnob(c, knob, value);
+    if (!ok) return;
+
+    // The birdie's "hz" knob is an AUDIO pitch the operator dials, but the birdie
+    // itself is anchored to an absolute RF carrier so it behaves like a real
+    // signal under tuning. So re-anchor the carrier to (current VFO + requested
+    // pitch) and let updateBirdieFromVfo() derive the pitch from there.
+    //
+    // Writing the knob straight through instead would leave m_birdieCarrierMhz at
+    // its hard-coded default, and the very next VFO nudge would recompute the
+    // pitch from that stale carrier — silently discarding what the operator dialled.
+    if (c == NoiseMixer::Channel::Birdie && knob == QLatin1String("hz")) {
+        m_birdieCarrierMhz = m_sliceFreqMhz + (m_lsb ? -value : value) / 1.0e6;
+        updateBirdieFromVfo();
+        return;
+    }
+    m_audio.setKnob(c, knob, value);
 }
 
 void SimBackend::loadDemoNoisePreset(const QString& presetName)
@@ -224,13 +241,24 @@ void SimBackend::updateBirdieFromVfo()
     // Audio pitch from the RF offset, per sideband:
     //   USB: pitch = carrier - VFO  (a carrier ABOVE the VFO is audible)
     //   LSB: pitch = VFO - carrier  (a carrier BELOW the VFO is audible)
-    // A carrier on the "wrong" side gives a negative offset → clamp to silence,
-    // exactly like a real receiver: switch sideband and it disappears. Near zero
-    // it approaches zero-beat.
+    // A carrier on the "wrong" side gives a negative offset → silence, exactly
+    // like a real receiver: switch sideband and it disappears. Near zero it
+    // approaches zero-beat.
+    //
+    // Anything outside the audio passband is silent too. That covers the wrong
+    // sideband (negative) AND a carrier far off frequency: offsetHz is an RF
+    // difference, so a band change makes it megahertz-scale, and feeding e.g.
+    // 7 MHz to a 24 kHz oscillator does not go quiet — it aliases back into the
+    // audio band as a loud screech exactly where silence is expected. Passing 0
+    // is what tells NoiseMixer "not audible" (see genBirdie).
+    static constexpr double kMinAudibleHz = 50.0;      // below this it is zero-beat
+    static constexpr double kMaxAudibleHz = 6000.0;    // generous SSB/CW passband,
+                                                       // well inside 12 kHz Nyquist
     const double offsetHz = (m_birdieCarrierMhz - m_sliceFreqMhz) * 1.0e6;
     const double audioHz = m_lsb ? -offsetHz : offsetHz;
+    const bool audible = audioHz >= kMinAudibleHz && audioHz <= kMaxAudibleHz;
     m_audio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
-                    std::max(0.0, audioHz));
+                    audible ? audioHz : 0.0);
 }
 
 void SimBackend::setDemoAnf(bool on)
@@ -291,7 +319,34 @@ void SimBackend::disconnectRadio()
     m_audioDebtNs = 0;
     m_connected = false;
     emit sliceRemoved(kSliceId);
-    emit disconnected();
+
+    // Tear the synthetic connection down too, rather than only emitting our own
+    // disconnected(). This is a Route A hybrid: RadioModel dials the demo through
+    // the vended RadioConnection (see the m_connection branch of
+    // connectToRadio()), so the connection is what the model treats as the live
+    // link — leaving it "Connected" while the backend says otherwise is what made
+    // isConnected() disagree with reality after `sim disconnect`.
+    //
+    // RadioConnection::disconnectFromRadio() has a synthetic branch that drops the
+    // handle, sets Disconnected and emits disconnected() — which reaches
+    // RadioModel::onDisconnected through the ONE wire-lifecycle path, and reaches
+    // our own ctor lambda (which clears m_connected / stops the timers) and our
+    // re-emit of IRadioBackend::disconnected for any seam listener. Queued: the
+    // connection lives on its own thread.
+    // Condition on whether the WIRE will report the disconnect, not merely on
+    // whether a connection object exists. Only RadioConnection's synthetic branch
+    // emits disconnected(); if we were never dialled through it (a bare
+    // connectRadio() seam intent, as in the unit test), delegating would tear down
+    // nothing and NOTHING would report the disconnect at all.
+    if (m_connection && m_connection->isSyntheticDemo()) {
+        QMetaObject::invokeMethod(m_connection,
+                                  [conn = m_connection] { conn->disconnectFromRadio(); });
+        // No emit here: that teardown comes back as RadioConnection::disconnected,
+        // which our ctor re-emits as IRadioBackend::disconnected. Emitting now
+        // would report the same disconnect twice on the seam.
+    } else {
+        emit disconnected();
+    }
 }
 
 bool SimBackend::isConnected() const { return m_connected; }
@@ -485,12 +540,8 @@ bool SimBackend::applyFault(const QString& fault, const QVariant& arg)
     return false;   // unknown verb
 }
 
-void SimBackend::injectHighSwr(double ratio)
+MeterDef SimBackend::swrMeterDef()
 {
-    // Define an SWR meter (once) and report a high reading, so AE's
-    // health/protection UI (HealthApplet reacts above ~1.65:1) shows the fault.
-    // The demo is RX-only so no real TX foldback fires — this exercises the
-    // display/warning path, the meaningful RX-safe slice of SWR handling.
     MeterDef def;
     def.index = kSwrMeterIndex;
     def.source = QStringLiteral("TX");
@@ -499,6 +550,20 @@ void SimBackend::injectHighSwr(double ratio)
     def.low = 1.0;
     def.high = 10.0;
     def.description = QStringLiteral("Demo fault-injected SWR");
+    return def;
+}
+
+void SimBackend::injectHighSwr(double ratio)
+{
+    // Define an SWR meter and report a high reading, exercising the meter decode
+    // and display path — the meaningful RX-safe slice of SWR handling (the demo is
+    // RX-only, so no real TX foldback fires).
+    //
+    // Scope note: this shows up in MeterModel and in automation `get meters`, but
+    // NOT in the HLTH applet. That applet only credits SWR while forward power
+    // qualifies (>= 0.75 W) and forces 1.0 otherwise, and the demo defines no
+    // FWDPWR meter — so do not read a quiet HLTH panel as this verb failing.
+    const MeterDef def = swrMeterDef();
     emit meterDefined(def);
     // Meter values ride the data plane as raw quint16 (fixed-point ×256 on Flex).
     // MeterModel::updateValues(ids, vals) applies them; hand it our meter id with
@@ -556,6 +621,11 @@ void SimBackend::clearFaults()
     // not by clear — clear only reverses the *sustained* faults.)
     m_scopeStalled = false;
     if (m_lastSwr > 1.0) {
+        // Re-assert the DEFINITION before the value. A disconnect in between runs
+        // RadioModel::onDisconnected -> MeterModel::clear(), which drops the def;
+        // updateValueByName() then finds no such meter and the clear is silently
+        // discarded. Defining is idempotent, so this is safe when it survived.
+        emit meterDefined(swrMeterDef());
         // "SOURCE:NAME" — same requirement as injectHighSwr(); a bare "SWR" is
         // dropped by RadioModel's handler, so the meter would have stayed pinned
         // at the fault value even after a clear.

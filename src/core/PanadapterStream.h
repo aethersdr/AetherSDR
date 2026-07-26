@@ -2,7 +2,6 @@
 
 #include "PacketLossConcealment.h"
 #include "core/backends/sim/SpectrumPatternGenerator.h"
-#include "core/backends/sim/NoiseMixer.h"   // demo-mode synthetic RX audio (RFC #4288)
 
 #include <QObject>
 #include <QUdpSocket>
@@ -68,7 +67,7 @@ public:
 
     QHostAddress localAddress() const { return m_localAddress; }
     quint16 localPort() const { return m_localPort; }
-    bool    hasReceivedPackets() const { return m_hasReceivedPacket; }
+    bool    hasReceivedPackets() const { return m_hasReceivedPacket.load(); }
     bool    isRunning() const;
 
     // Update the dBm range used to scale incoming FFT bins for a specific stream.
@@ -195,36 +194,6 @@ public:
     // caller's responsibility (NetworkSettings, on the GUI thread). (#3810)
     Q_INVOKABLE void setReceiveBufferSizeBytes(int bytes);
 
-    // ── Demo-mode noise scene (RFC #4288) ──────────────────────────────────
-    // Drive the synthetic-demo audio NoiseMixer from the GUI (the DemoApplet).
-    // The mixer is read on the network thread by tickSyntheticDemo(); these
-    // setters are Q_INVOKABLE so the GUI calls them via a QUEUED connection and
-    // the mutation lands on the network thread — no locking needed. channel is a
-    // NoiseMixer::Channel name (see NoiseMixer::name()). No-ops off the demo path.
-    Q_INVOKABLE void setDemoNoiseEnabled(const QString& channel, bool on);
-    Q_INVOKABLE void setDemoNoiseLevel(const QString& channel, double levelDb);
-    Q_INVOKABLE void setDemoNoiseKnob(const QString& channel, const QString& knob,
-                                      double value);
-    Q_INVOKABLE void loadDemoNoisePreset(const QString& presetName);
-
-    // Live VFO frequency for the demo (MHz). The birdie is anchored to an ABSOLUTE
-    // RF carrier; when the VFO moves, its AUDIO pitch = (carrier - VFO), so the
-    // tone shifts and zero-beats like a real signal, and its waterfall position
-    // slides — both derived from the same RF relationship. (RFC #4288)
-    Q_INVOKABLE void setDemoVfoMhz(double vfoMhz);
-
-    // Demo slice mode. USB: birdie pitch = carrier - VFO (carrier ABOVE the VFO is
-    // audible). LSB inverts it: pitch = VFO - carrier (carrier BELOW is audible).
-    // So switching sideband makes a carrier on the "wrong" side go silent, like a
-    // real receiver. (RFC #4288)
-    Q_INVOKABLE void setDemoMode(const QString& mode);
-
-    // Radio-side DSP the demo now MODELS so it audibly acts (RFC #4288):
-    //  ANF — auto-notch: on, it finds the active tonal channels (birdie/cw) and
-    //        notches them out of the audio, leaving broadband noise (like real HW).
-    //  NB  — noise blanker: on, a time-domain impulse gate blanks QRN/crash spikes.
-    Q_INVOKABLE void setDemoAnf(bool on);
-    Q_INVOKABLE void setDemoNb(bool on);
     // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
     // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
     int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }
@@ -396,34 +365,6 @@ private:
     QUdpSocket*     m_socket{nullptr};
     quint16         m_localPort{0};
 
-    // Demo mode (RFC #4288, Stage 3): when the connection is the synthetic demo
-    // radio there is no UDP source, so instead of binding a socket we run a timer
-    // that generates FFT lines with SpectrumPatternGenerator and emits
-    // spectrumReady() for the demo pan stream — exactly the signal the real UDP
-    // path would emit, so all downstream widget wiring is unchanged.
-    QTimer*  m_syntheticTimer{nullptr};       // display: ~20 fps
-    QTimer*  m_syntheticAudioTimer{nullptr};  // audio: fast precise ~10 ms stream
-    quint32  m_syntheticPanStreamId{0};
-    double   m_syntheticElapsedS{0.0};
-    quint64  m_syntheticFrameIndex{0};
-    // Demo-mode RX audio: the same NoiseMixer engine as SimBackend, driven from
-    // the synthetic tick. Each 50 ms tick emits ~50 ms of 24 kHz stereo float32
-    // over audioDataReady() — the identical signal the real UDP audio path emits,
-    // so it feeds AudioEngine::feedAudioData() (and thus NR) with no new wiring.
-    NoiseMixer m_demoAudio;
-    // RF-anchored birdie: the carrier sits at a fixed absolute frequency; the VFO
-    // moves under it. birdie audio Hz = (carrier - VFO), so tuning shifts the pitch
-    // (and zero-beats), and the display line tracks the same offset. Defaults put
-    // the carrier ~1.2 kHz above the 14.100 MHz demo VFO (the classic birdie).
-    double m_demoVfoMhz{14.100};
-    double m_demoBirdieCarrierMhz{14.100 + 1200.0 / 1.0e6};
-    bool   m_demoLsb{false};       // true when the demo slice mode is a lower sideband
-    QVector<float> m_demoAudioBuf; // rolling mono buffer: emit EXACTLY 50 ms/tick,
-                                   // carrying the sub-frame remainder so audio
-                                   // production stays sample-locked (no warble)
-    void tickSyntheticDemo();     // display + meters (50 ms)
-    void tickSyntheticAudio();    // RX audio stream (10 ms, precise)
-    void updateBirdieFromVfo();   // recompute the birdie audio Hz from carrier-VFO
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
@@ -507,7 +448,10 @@ private:
     QHostAddress m_radioAddress;
     quint16      m_radioPort{0};
     QHostAddress m_localAddress;
-    bool         m_hasReceivedPacket{false};
+    // Written on the network thread (first datagram), read from the GUI thread via
+    // hasReceivedPackets() (the connect health watchdog). Atomic for the same
+    // reason RadioConnection::m_syntheticDemo is.
+    std::atomic<bool> m_hasReceivedPacket{false};
 
     // WAN UDP registration and keepalive
     QTimer*  m_wanRegisterTimer{nullptr};   // 50ms: "client udp_register" until first packet

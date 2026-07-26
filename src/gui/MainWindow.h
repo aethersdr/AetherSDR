@@ -528,9 +528,12 @@ private:
     };
     void scheduleKiwiSdrUiSync(int flags);
     // (Re)wire the backend-owned seam signals (audioFrameReady/spectrumFrameReady)
-    // to the audio engine / spectrum renderer. Re-run on RadioModel::backendChanged
-    // so the connect-time Flex↔Sim backend swap doesn't leave them dangling on the
-    // destroyed backend (RFC #4288 — the demo "no audio / stuck connecting" fix).
+    // to the audio engine / spectrum renderer, plus the demo's ANF/NB and VFO/mode
+    // forwards. Re-run on RadioModel::backendRebuilt so the connect-time Flex<->Sim
+    // backend swap doesn't leave them dangling on the destroyed backend (RFC #4288 —
+    // the demo "no audio / stuck connecting" fix). Safe to re-run: Qt drops a
+    // connection when either endpoint dies, and the old backend is destroyed before
+    // the new one is built, so no duplicates. Guarded anyway - see the body.
     void wireBackendSeam(AetherSDR::IRadioBackend* backend);
     void noteBandRecallForPan(const QString& panId);
     void wirePanadapter(PanadapterApplet* applet);

@@ -158,9 +158,8 @@ void PanadapterStream::init()
 
 bool PanadapterStream::isRunning() const
 {
-    if (m_syntheticTimer && m_syntheticTimer->isActive()) {
-        return true;   // demo mode has no socket (RFC #4288)
-    }
+    // Truthful for the demo too: a demo stream binds no socket and runs no timer
+    // (SimBackend produces the demo's audio and spectrum), so it is not running.
     return m_socket && m_socket->state() == QAbstractSocket::BoundState;
 }
 
@@ -208,29 +207,20 @@ bool PanadapterStream::start(RadioConnection* conn)
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
 
     if (conn && conn->isSyntheticDemo()) {
-        // Demo radio: no UDP source, and NOTHING generated here either.
+        // Demo radio: nothing to bind and nothing to generate.
         //
-        // This branch used to run a 20 fps 1024-bin spectrum timer and a 10 ms
-        // audio timer against a second NoiseMixer (m_demoAudio) — an earlier demo
-        // implementation that predates SimBackend. Since the RFC #4288 Route A
-        // re-home, SimBackend produces the demo's audio AND spectrum from its own
-        // mixer and this stream's render/audio signals are deliberately not
-        // wired, so both timers ran for the whole session with ZERO consumers:
-        // pure CPU burn, plus a second noise scene that could drift from the one
-        // the operator actually hears (the QSO recorder would have captured the
-        // wrong one had it been re-bound).
+        // SimBackend (RFC #4288 Route A) produces the demo's audio AND its
+        // panadapter FFT from its own NoiseMixer and delivers both over the
+        // IRadioBackend seam, so one noise scene drives both what the operator
+        // hears and what the display shows. This stream is deliberately idle:
+        // an earlier revision ran a 20 fps 1024-bin spectrum timer and a 10 ms
+        // audio timer here against a SECOND NoiseMixer, which had no consumers
+        // at all (pure CPU burn) and risked drifting out of step with the scene
+        // actually being heard.
         //
-        // Leaving them off also retires the kVisibleSpanHz/pan-bandwidth
-        // contradiction in tickSyntheticDemo(): that constant asserted a 40 kHz
-        // span matching a 0.040 MHz pan, but the demo pan is now 0.008 MHz.
-        // Nothing reads it any more.
-        //
-        // The stream object itself still exists and starts cleanly — RadioModel
-        // harvests it from SimBackend and the rest of AE treats it as a normal
-        // (idle) pan stream.
-        m_syntheticPanStreamId = 0x40000000u;   // matches the display-pan status id
-        m_syntheticElapsedS = 0.0;
-        m_syntheticFrameIndex = 0;
+        // The stream object still exists and starts cleanly — RadioModel harvests
+        // it from SimBackend and the rest of AE treats it as a normal idle pan
+        // stream.
         return true;
     }
 
@@ -296,58 +286,6 @@ bool PanadapterStream::start(RadioConnection* conn)
 
     m_conn = conn;
     return true;
-}
-
-void PanadapterStream::tickSyntheticDemo()
-{
-    // One synthetic FFT line for the demo pan — render the SAME noise scene the
-    // audio is playing, so the waterfall SHOWS what you hear (pink slope, birdie
-    // carrier line, notch cuts), not a fixed unrelated pattern. m_demoAudio's
-    // spectrum() is floor-anchored grass + tonal lines. The audio scene spans a
-    // few kHz; map it into the middle ~40 kHz of the 200 kHz demo pan so the
-    // features are visible rather than collapsed onto the VFO. (RFC #4288)
-    constexpr int kBins = 1024;
-    constexpr double kFloorDbm = -140.0;         // == the demo pan's min_dbm, so the
-                                                 // noise floor sits ON the display bottom
-    constexpr double kVisibleSpanHz = 40000.0;   // audio Hz -> bin; MUST match the
-                                                 // demo pan bandwidth advertised in
-                                                 // RadioConnection (0.040 MHz) so the
-                                                 // scene fills the waterfall exactly
-    const QVector<float> bins =
-        m_demoAudio.spectrum(kBins, kFloorDbm, kVisibleSpanHz, kBins / 2);
-
-    emit spectrumReady(m_syntheticPanStreamId, bins, /*emittedNs*/ 0);
-
-    // (Audio is delivered separately on tickSyntheticAudio — a fast precise timer
-    //  — so it streams smoothly instead of in lumpy 50 ms batches.)
-
-    // Mark data as flowing so RadioModel's UDP-health watchdog doesn't warn that
-    // no spectrum arrived — the demo delivers frames here, just not over UDP.
-    m_hasReceivedPacket = true;
-
-    m_syntheticElapsedS += 0.05;   // 50 ms/tick
-    ++m_syntheticFrameIndex;
-}
-
-void PanadapterStream::tickSyntheticAudio()
-{
-    // Smooth RX audio: emit exactly one 10 ms chunk (240 samples) of the demo
-    // mix per precise 10 ms tick, from a rolling buffer topped up in whole
-    // 128-sample mixFrames. 24 kHz stereo float32 (L,R,L,R), the format
-    // AudioEngine::feedAudioData() consumes. Small, evenly-paced packets like a
-    // real radio — no lumpy batching, so no warble.
-    constexpr int kChunkMs = 10;
-    constexpr int kChunk = NoiseMixer::kSampleRate * kChunkMs / 1000;   // 240
-    while (m_demoAudioBuf.size() < kChunk)
-        m_demoAudioBuf += m_demoAudio.mixFrame();
-    QByteArray pcm(kChunk * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
-    auto* p = reinterpret_cast<float*>(pcm.data());
-    for (int i = 0; i < kChunk; ++i) {
-        p[2 * i] = m_demoAudioBuf[i];       // L
-        p[2 * i + 1] = m_demoAudioBuf[i];   // R
-    }
-    m_demoAudioBuf.remove(0, kChunk);       // carry the sub-frame remainder
-    emit audioDataReady(pcm);
 }
 
 bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
@@ -477,13 +415,6 @@ void PanadapterStream::stop()
     if (m_routedPrimeTimer) {
         m_routedPrimeTimer->stop();
     }
-    if (m_syntheticTimer) {
-        m_syntheticTimer->stop();   // demo (RFC #4288)
-    }
-    if (m_syntheticAudioTimer) {
-        m_syntheticAudioTimer->stop();
-    }
-    m_demoAudioBuf.clear();
     m_isWanMode = false;
     m_wanRegistered = false;
     m_wanClientHandle = 0;
@@ -1155,90 +1086,6 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 }
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────
-
-// ── Demo-mode noise scene setters (RFC #4288) ──────────────────────────────
-// Q_INVOKABLE → called from the GUI via a queued connection, so the mutation of
-// m_demoAudio runs on the network worker thread that also reads it in
-// tickSyntheticDemo(). No locking needed (same thread), matching the PLC pattern.
-void PanadapterStream::setDemoNoiseEnabled(const QString& channel, bool on)
-{
-    bool ok = false;
-    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_demoAudio.setEnabled(c, on);
-}
-
-void PanadapterStream::setDemoNoiseLevel(const QString& channel, double levelDb)
-{
-    bool ok = false;
-    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_demoAudio.setLevelDb(c, levelDb);
-}
-
-void PanadapterStream::setDemoNoiseKnob(const QString& channel, const QString& knob,
-                                        double value)
-{
-    // The birdie's "hz" knob is special: the birdie is RF-anchored, so its audio
-    // pitch is (carrier - VFO), not a fixed value. Interpret the knob as the
-    // carrier's OFFSET ABOVE THE VFO (Hz) → set the carrier RF freq and recompute
-    // the audio Hz from the live VFO. This keeps the applet control meaningful
-    // (drag = move the carrier) while tuning the VFO still demodulates it.
-    if (channel == QLatin1String("birdie") && knob == QLatin1String("hz")) {
-        m_demoBirdieCarrierMhz = m_demoVfoMhz + value / 1.0e6;
-        updateBirdieFromVfo();
-        return;
-    }
-    bool ok = false;
-    const NoiseMixer::Channel c = NoiseMixer::fromName(channel, &ok);
-    if (ok) m_demoAudio.setKnob(c, knob, value);
-}
-
-void PanadapterStream::loadDemoNoisePreset(const QString& presetName)
-{
-    m_demoAudio.loadPreset(presetName);
-}
-
-void PanadapterStream::setDemoVfoMhz(double vfoMhz)
-{
-    m_demoVfoMhz = vfoMhz;
-    updateBirdieFromVfo();
-}
-
-void PanadapterStream::setDemoAnf(bool on)
-{
-    // Auto-notch: engage → notch the active tonal channels (birdie/cw); the mixer
-    // already knows them via autoNotchTones(). Off → clear (but keep any manual
-    // TNF notches, which this simple demo doesn't track separately yet).
-    if (on) m_demoAudio.setNotches(m_demoAudio.autoNotchTones());
-    else    m_demoAudio.setNotches({});
-}
-
-void PanadapterStream::setDemoNb(bool on)
-{
-    m_demoAudio.setNoiseBlank(on);
-}
-
-void PanadapterStream::setDemoMode(const QString& mode)
-{
-    // Lower-sideband family: LSB, DIGL, CWL. Everything else demods USB-style.
-    const QString m = mode.toUpper();
-    m_demoLsb = (m == QLatin1String("LSB") || m == QLatin1String("DIGL")
-                 || m == QLatin1String("CWL"));
-    updateBirdieFromVfo();
-}
-
-void PanadapterStream::updateBirdieFromVfo()
-{
-    // Audio pitch from the RF offset, per sideband:
-    //   USB: pitch = carrier - VFO  (carrier ABOVE the VFO is audible)
-    //   LSB: pitch = VFO - carrier  (carrier BELOW the VFO is audible)
-    // A carrier on the "wrong" side gives a negative offset → clamp to silence,
-    // exactly like a real receiver: switch sideband and it disappears. Near zero
-    // it approaches zero-beat.
-    const double offsetHz = (m_demoBirdieCarrierMhz - m_demoVfoMhz) * 1.0e6;
-    const double audioHz = m_demoLsb ? -offsetHz : offsetHz;
-    m_demoAudio.setKnob(NoiseMixer::Channel::Birdie, QStringLiteral("hz"),
-                        std::max(0.0, audioHz));
-}
 
 void PanadapterStream::setPacketLossConcealment(bool on)
 {

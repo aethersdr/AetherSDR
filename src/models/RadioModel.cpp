@@ -861,18 +861,27 @@ void RadioModel::setupBackend(const QString& family)
     // through a Flex RadioConnection drives it through the neutral
     // IRadioBackend signals instead.
     //
-    // The guard was originally "!m_connection", on the reasoning that a non-Flex
-    // backend has no RadioConnection. SimBackend broke that assumption: as an
-    // RFC #4288 Route A hybrid it OWNS and vends a synthetic RadioConnection, so
-    // m_connection is non-null and these were never wired for the demo. The
-    // effect was that SimBackend::disconnectRadio() (the `sim disconnect` fault)
-    // emitted IRadioBackend::disconnected into nothing — the model stayed
-    // "connected" with dead audio, and `sim clear` could not recover it.
+    // The guard MUST mirror the connect dispatch in connectToRadio(): that does
+    // `if (m_connection) <dial the wire> else if (m_backend) <seam connect>`, so
+    // whichever side initiates the connect is the side that reports the lifecycle.
+    // Hence "!m_connection" here.
     //
-    // Condition is now "not the Flex path" rather than "no connection".
-    // FlexBackend never emits these signals, so wiring them would be harmless
-    // anyway; keeping the Flex path excluded preserves it byte-for-byte.
-    if (!m_flexBackend) {
+    // A previous revision relaxed this to "!m_flexBackend" so that
+    // SimBackend::disconnectRadio() (the `sim disconnect` fault) would be heard —
+    // it emitted IRadioBackend::disconnected into nothing, leaving the model
+    // "connected" with dead audio. But SimBackend is an RFC #4288 Route A hybrid:
+    // it vends a synthetic RadioConnection AND re-emits that connection's
+    // lifecycle as its own IRadioBackend signals. With the relaxed guard, sim was
+    // the one family where BOTH blocks were live, so a single wire event reached
+    // onConnected/onDisconnected TWICE — running registerAsGuiClient twice (two
+    // GUI-client batches, two 10 s UDP health timers, a second m_panStream->start()),
+    // emitting connectionStateChanged twice, and staging session models twice
+    // (which zeroed m_staleSessionOwnHandle and defeated the #3977 reclaim guard).
+    //
+    // The real fix for `sim disconnect` belongs on the other side of the seam:
+    // SimBackend::disconnectRadio() now tears down its synthetic connection, so the
+    // wire reports the disconnect through this single path. See SimBackend.cpp.
+    if (!m_connection) {
         connect(m_backend.get(), &IRadioBackend::connected,
                 this, &RadioModel::onConnected);
         connect(m_backend.get(), &IRadioBackend::disconnected,
@@ -908,11 +917,6 @@ void RadioModel::teardownBackend()
     m_panStream = nullptr;
 }
 
-// RFC #4288: swap between the demo and the real-radio backend at connect time.
-// Now a thin wrapper over the family-string seam that #4448 introduced — the demo
-// is simply family "sim", which is what "wire it through the real SimBackend
-// factory" asked for. Kept as a named helper so the connect path reads clearly and
-// the demo/real decision stays in one place.
 RadioModel::RadioModel(QObject* parent)
     : QObject(parent)
 {
@@ -1329,18 +1333,25 @@ QString RadioModel::digitalVoiceWaveformHealthDetail() const
 
 bool RadioModel::isConnected() const
 {
-    // aetherd Gap B: a backend that is not the Flex path owns its connection
-    // state behind the IRadioBackend seam.
+    // Whoever carries the link reports its state: a RadioConnection when one
+    // exists (Flex, and the demo's synthetic wire), otherwise the backend behind
+    // the seam (HL2). Mirrors both the connect dispatch in connectToRadio() and
+    // the lifecycle wiring in setupBackend().
     //
-    // The test was "!m_connection", using "owns no RadioConnection" as a proxy
-    // for "is not Flex". SimBackend (RFC #4288 Route A) breaks that: it vends a
-    // SYNTHETIC RadioConnection, so m_connection is non-null and this returned
-    // that object's state instead of the backend's. The synthetic connection
-    // stays up independently, so `sim disconnect` left the model reporting
-    // connected=true forever with dead audio.
-    if (!m_flexBackend)
-        return m_backend && m_backend->isConnected();
-    return m_connection->isConnected() || (m_wanConn && m_wanConn->isConnected());
+    // A previous revision keyed this on "!m_flexBackend" so the demo would answer
+    // from SimBackend instead — because `sim disconnect` used to drop the backend's
+    // state while leaving the synthetic connection "Connected", so this reported
+    // connected=true forever with dead audio. That is now fixed at the source:
+    // SimBackend::disconnectRadio() tears the synthetic connection down, so the
+    // connection is truthful for the demo too.
+    //
+    // Keying on the connection also preserves teardownBackend()'s fail-closed
+    // ordering: it nulls m_flexBackend BEFORE destroying the backend precisely so
+    // a status slot running during teardown cannot dereference a half-destroyed
+    // backend — which the "!m_flexBackend" form inverted into doing exactly that.
+    if (m_connection)
+        return m_connection->isConnected() || (m_wanConn && m_wanConn->isConnected());
+    return m_backend && m_backend->isConnected();
 }
 
 int RadioModel::maxSlicesForModel(const QString& model)
@@ -4400,6 +4411,16 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         // within 10 seconds (e.g. VPN blocks UDP), warn the user. (#894)
         QTimer::singleShot(10000, this, [this]() {
             if (!isConnected()) return;
+            // Flex-only check: it asks "did VITA-49 UDP arrive on the pan stream?",
+            // which is meaningful solely for a backend whose spectrum RIDES that
+            // UDP. The demo's spectrum arrives over the IRadioBackend seam and its
+            // pan stream binds no socket, so hasReceivedPackets() is false forever
+            // and this fired on every demo connect: a user-visible "No spectrum
+            // data received" error, status flipped to Error, and the panadapter
+            // connect animation cancelled — while demo spectrum and audio were
+            // working fine. (It also guards the m_panStream null deref for any
+            // backend that vends no stream at all.)
+            if (!m_flexBackend || !m_panStream) return;
             if (!m_wanConn && !m_panStream->hasReceivedPackets()) {
                 qCWarning(lcProtocol) << "RadioModel: no VITA-49 UDP data received after 10s"
                                       << "target=" << targetRadioIp()

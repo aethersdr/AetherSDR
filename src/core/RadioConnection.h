@@ -76,14 +76,15 @@ signals:
     void messageReceived(const ParsedMessage& msg);
     void pingRttMeasured(int ms);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
-    // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow forwards
-    // this to PanadapterStream::setDemoVfoMhz so the birdie demodulates against
-    // it (pitch shifts, zero-beats). (RFC #4288)
+    // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow's
+    // wireBackendSeam() forwards this to SimBackend::setSliceFrequency so the
+    // birdie demodulates against it (pitch shifts, zero-beats). (RFC #4288)
     void demoVfoChanged(double vfoMhz);
     // Demo mode: the user changed the slice mode (USB/LSB/…). Forwarded to
-    // PanadapterStream so the birdie demod picks the right sideband. (RFC #4288)
+    // SimBackend::setSliceMode so the birdie demod picks the right sideband.
     void demoModeChanged(const QString& mode);
-    // Demo radio-side DSP toggles → PanadapterStream models them audibly. (#4288)
+    // Demo radio-side DSP toggles → forwarded to SimBackend, which models them
+    // audibly on the mixer the operator actually hears. (RFC #4288)
     void demoAnfChanged(bool on);
     void demoNbChanged(bool on);
     void versionReceived(const QString& version);
@@ -126,7 +127,6 @@ private:
     // treatment as its m_state/m_handle siblings above, which are atomic for
     // exactly this reason.
     std::atomic<bool> m_syntheticDemo{false};   // true while connected to the demo radio
-    QString m_demoSliceMode{QStringLiteral("USB")};   // demo slice mode (USB/LSB/…)
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;  // fallback when kernel TCP_INFO unavailable
 

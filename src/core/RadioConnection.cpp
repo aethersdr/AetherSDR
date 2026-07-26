@@ -387,7 +387,6 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
                 const QString k = tok.left(eq);
                 const QString v = tok.mid(eq + 1);
                 if (k == QLatin1String("mode")) {
-                    m_demoSliceMode = v;
                     echo << QStringLiteral("mode=%1").arg(v);
                     emit demoModeChanged(v);
                 } else if (k == QLatin1String("filter_lo")

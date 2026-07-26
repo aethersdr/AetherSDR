@@ -31,7 +31,7 @@ public:
     void pushSceneToEngine();
 
 signals:
-    // User intents — MainWindow routes these to PanadapterStream::setDemoNoise*.
+    // User intents — MainWindow routes these to SimBackend::setDemoNoise*.
     void demoNoiseToggled(const QString& channel, bool on);
     void demoNoiseLevelChanged(const QString& channel, double levelDb);
     void demoNoiseKnobChanged(const QString& channel, const QString& knob, double value);

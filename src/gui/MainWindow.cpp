@@ -1372,11 +1372,18 @@ MainWindow::MainWindow(QWidget* parent)
     // it can be re-run whenever RadioModel rebuilds the backend — the connect-time
     // Flex↔Sim swap (RFC #4288) destroys the old backend and builds a new one, and
     // these connections must follow to the new instance or the demo comes up with
-    // no audio and no spectrum ("stuck connecting"). backendChanged fires after
-    // each (re)build.
+    // no audio and no spectrum ("stuck connecting").
+    //
+    // Driven by backendRebuilt(), the SAME signal that rebinds the PanadapterStream
+    // sinks (wireDiscovery). There used to be a second signal, backendChanged(),
+    // for exactly this call — and a backend swap needs BOTH rewirings, so emitting
+    // either one alone leaves half the wiring dangling. That is precisely what
+    // happened twice: the original revision emitted only backendChanged (pan sinks
+    // unbound), and the fix for that emitted only backendRebuilt (seam unbound —
+    // no demo audio, no ANF/NB, no legacy-NR2 geometry). One event, one signal.
     wireBackendSeam(m_radioModel.backend());
-    connect(&m_radioModel, &RadioModel::backendChanged,
-            this, &MainWindow::wireBackendSeam);
+    connect(&m_radioModel, &RadioModel::backendRebuilt, this,
+            [this] { wireBackendSeam(m_radioModel.backend()); });
     connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
             this, [this](const QString& source, const QString& sourceId,
                          const QByteArray& pcm, int sampleRate) {
@@ -5733,11 +5740,16 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
 {
     if (!backend)
         return;
-    // Note: connections to a PRIOR backend are already gone — Qt drops a
-    // connection when either endpoint is destroyed, and RadioModel destroys the
-    // old backend before building the new one (teardownBackend/setupBackend on a
-    // family switch). So there is no duplicate-connection risk from re-running
-    // this per swap.
+    // Connections to a PRIOR backend are already gone — Qt drops a connection when
+    // either endpoint is destroyed, and RadioModel destroys the old backend before
+    // building the new one (teardownBackend/setupBackend on a family switch).
+    //
+    // We still disconnect explicitly before each connect below, so this helper is
+    // idempotent even if called twice for the SAME live backend. That matters
+    // because doubling audioFrameReady → feedAudioData makes the engine consume at
+    // double rate — the audible scratchy buzz this branch already had to fix once —
+    // and Qt::UniqueConnection cannot protect the lambda connects at all.
+    disconnect(backend, &IRadioBackend::audioFrameReady, m_audio, nullptr);
 
     // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
     // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the
@@ -5767,10 +5779,32 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // destroyed, so re-running per swap cannot duplicate them.
     if (auto* sim = dynamic_cast<SimBackend*>(backend)) {
         if (auto* conn = sim->connection()) {
+            disconnect(conn, &RadioConnection::demoAnfChanged, sim, nullptr);
+            disconnect(conn, &RadioConnection::demoNbChanged, sim, nullptr);
             connect(conn, &RadioConnection::demoAnfChanged, sim,
                     [sim](bool on) { sim->setDemoAnf(on); }, Qt::QueuedConnection);
             connect(conn, &RadioConnection::demoNbChanged, sim,
                     [sim](bool on) { sim->setDemoNb(on); }, Qt::QueuedConnection);
+
+            // Demo VFO / mode → the AUDIBLE mixer, via the same seam intents a
+            // real backend receives.
+            //
+            // These have to be forwarded from the synthetic wire rather than left
+            // to RadioModel's seam calls: the demo's SliceModel is materialised by
+            // the synthetic `slice 0 …` status, and that creation path never wires
+            // the frequency/mode intents to the backend (it wires them to
+            // m_flexBackend, which is null in demo mode). So operator tuning
+            // reached the wire as "slice tune 0 …", RadioConnection re-emitted it
+            // as demoVfoChanged — and nothing consumed it. Result: the birdie
+            // never moved and sideband never changed, in demo mode only.
+            disconnect(conn, &RadioConnection::demoVfoChanged, sim, nullptr);
+            disconnect(conn, &RadioConnection::demoModeChanged, sim, nullptr);
+            connect(conn, &RadioConnection::demoVfoChanged, sim,
+                    [sim](double mhz) { sim->setSliceFrequency(0, mhz * 1.0e6); },
+                    Qt::QueuedConnection);
+            connect(conn, &RadioConnection::demoModeChanged, sim,
+                    [sim](const QString& mode) { sim->setSliceMode(0, mode); },
+                    Qt::QueuedConnection);
         }
     }
 

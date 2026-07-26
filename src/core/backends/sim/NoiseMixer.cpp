@@ -1,6 +1,7 @@
 #include "core/backends/sim/NoiseMixer.h"
 
 #include <QFile>
+#include <QtGlobal>   // qWarning
 
 #include <algorithm>
 #include <cmath>
@@ -125,7 +126,8 @@ std::vector<NoiseMixer::Notch> NoiseMixer::autoNotchTones() const
     std::vector<Notch> tones;
     for (Channel c : {Channel::Birdie, Channel::Cw}) {
         const ChannelState& s = m_ch.at(c);
-        if (s.enabled) tones.push_back({s.hz, 120.0});
+        // hz <= 0 is an inaudible carrier (see genBirdie) — nothing to notch.
+        if (s.enabled && s.hz > 0.0) tones.push_back({s.hz, 120.0});
     }
     return tones;
 }
@@ -197,8 +199,9 @@ void NoiseMixer::loadVoiceClip()
     // scanning for the literal bytes anywhere in the file. A bare indexOf("data")
     // matches the first occurrence wherever it lands — inside a LIST/INFO chunk,
     // or even in PCM data — and ignoring the declared chunk size means trailing
-    // chunks after the samples get decoded as audio. Safe for the currently
-    // bundled clip, wrong for any WAV carrying metadata before `data`.
+    // chunks after the samples get decoded as audio. The `fmt ` chunk is validated
+    // too, so an unsupported replacement asset is rejected outright instead of
+    // being played as noise at the wrong pitch.
     auto u32 = [&raw](int off) -> quint32 {
         return static_cast<quint32>(static_cast<quint8>(raw[off]))
              | (static_cast<quint32>(static_cast<quint8>(raw[off + 1])) << 8)
@@ -211,22 +214,47 @@ void NoiseMixer::loadVoiceClip()
     if (raw.size() < 12 || !raw.startsWith("RIFF") || raw.mid(8, 4) != "WAVE")
         return;
 
+    auto u16 = [&raw](int off) -> quint16 {
+        return static_cast<quint16>(static_cast<quint8>(raw[off]))
+             | (static_cast<quint16>(static_cast<quint8>(raw[off + 1])) << 8);
+    };
+
     int dataOff = -1;
     qint64 dataLen = 0;
+    bool haveFmt = false;
     for (int pos = 12; pos + 8 <= raw.size(); ) {
         const QByteArray id = raw.mid(pos, 4);
         const qint64 len = static_cast<qint64>(u32(pos + 4));
         const int payload = pos + 8;
-        if (len < 0 || payload + len > raw.size())
+        if (payload + len > raw.size())
             break;                       // truncated or malformed — take nothing
-        if (id == "data") {
+        if (id == "fmt ") {
+            // Validate the format instead of assuming it. The loop below decodes
+            // interleaved 16-bit PCM at kSampleRate; a stereo, 8/24/32-bit or
+            // differently-sampled clip would otherwise be read as garbage or play
+            // at the wrong pitch rather than being rejected. Bundled asset today,
+            // but this is the code path any replacement asset lands on.
+            if (len < 16) return;
+            const quint16 format   = u16(payload);        // 1 == WAVE_FORMAT_PCM
+            const quint16 channels = u16(payload + 2);
+            const quint32 rate     = u32(payload + 4);
+            const quint16 bits     = u16(payload + 14);
+            if (format != 1 || channels != 1 || bits != 16
+                || rate != static_cast<quint32>(kSampleRate)) {
+                qWarning("NoiseMixer: voice clip must be mono 16-bit PCM @ %d Hz "
+                         "(got format=%u ch=%u bits=%u rate=%u) - not loaded",
+                         kSampleRate, format, channels, bits, rate);
+                return;
+            }
+            haveFmt = true;
+        } else if (id == "data") {
             dataOff = payload;
             dataLen = len;
-            break;
+            break;                       // fmt always precedes data in a valid WAVE
         }
         pos = payload + static_cast<int>(len + (len & 1));   // chunks are word-aligned
     }
-    if (dataOff < 0 || dataLen < 2) return;
+    if (!haveFmt || dataOff < 0 || dataLen < 2) return;
 
     const int nSamples = static_cast<int>(dataLen / 2);
     m_voiceSamples.resize(nSamples);
@@ -309,11 +337,19 @@ void NoiseMixer::genCrashes(const ChannelState& c, float* out)
 
 void NoiseMixer::genBirdie(const ChannelState& c, float* out)
 {
+    // hz <= 0 means SILENT. Callers use it to say "this carrier is not audible"
+    // — the wrong sideband, or an offset outside the audio passband. This used to
+    // fall back to 1000.0, so "silence" was really a fixed 1 kHz tone that no
+    // amount of tuning could get rid of. The ctor seeds a sane default pitch
+    // (1 kHz), so a zero here is always deliberate.
+    if (c.hz <= 0.0) {
+        std::fill(out, out + kFrameLen, 0.0f);
+        return;
+    }
     // Continuous phase accumulation: advance by 2π·hz/rate per sample. A pitch
     // change (VFO tuning) then continues smoothly from the current phase instead
     // of jumping (which caused an audible warble as the pitch tracked the VFO).
-    const double hz = c.hz > 0 ? c.hz : 1000.0;
-    const double dphi = kTwoPi * hz / kSampleRate;
+    const double dphi = kTwoPi * c.hz / kSampleRate;
     for (int i = 0; i < kFrameLen; ++i) {
         out[i] = static_cast<float>(std::sin(m_birdiePhaseRad) * kNoiseRef * 1.2);
         m_birdiePhaseRad += dphi;
@@ -453,7 +489,8 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
             }
             break;
         case Channel::Birdie: {
-            const int b = binOf(s.hz > 0 ? s.hz : 1000.0);
+            if (s.hz <= 0.0) break;   // inaudible: draw nothing (see genBirdie)
+            const int b = binOf(s.hz);
             bump(b, floorDbm + 90.0 + lvl + 10.0);
             bump(b - 1, floorDbm + 90.0 + lvl - 6.0);
             bump(b + 1, floorDbm + 90.0 + lvl - 6.0);

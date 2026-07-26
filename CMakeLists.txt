@@ -4040,6 +4040,11 @@ target_include_directories(radiomodel_dax_null_test PRIVATE src)
 target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
 
+add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
+target_include_directories(demo_backend_swap_test PRIVATE src)
+target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME demo_backend_swap_test COMMAND demo_backend_swap_test)
+
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)

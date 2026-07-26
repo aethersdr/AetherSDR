@@ -141,6 +141,10 @@ private:
     bool   m_scopeStalled{false};   // stallscope: onAudioTick skips the spectrum emit
     double m_lastSwr{1.0};          // last injected SWR (clearFaults resets to nominal)
     static constexpr int kSwrMeterIndex = 90;   // synthetic meter slot for the SWR fault
+    // The SWR MeterDef, in one place: injectHighSwr() and clearFaults() both have
+    // to define it, and a mismatch between them would route the clear to a
+    // different meter than the fault.
+    static MeterDef swrMeterDef();
 
     // Serialize a mono float frame to the 24 kHz STEREO float32 QByteArray
     // AudioEngine::feedAudioData() expects (each mono sample duplicated L=R).
