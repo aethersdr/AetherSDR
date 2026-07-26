@@ -1,7 +1,6 @@
 #pragma once
 
 #include "PacketLossConcealment.h"
-#include "core/backends/sim/SpectrumPatternGenerator.h"
 
 #include <QObject>
 #include <QUdpSocket>
