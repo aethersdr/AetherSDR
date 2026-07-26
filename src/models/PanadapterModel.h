@@ -40,6 +40,21 @@ public:
     double centerMhz() const { return m_centerMhz; }
     bool centerKnown() const { return m_centerKnown; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
+    // True when a target frequency (MHz) lies within this pan's current span
+    // [center - bw/2, center + bw/2]. The single source of truth for the
+    // CAT/TCI VFO-tune recenter policy: in-span retunes keep autopan=0 (no
+    // yank), out-of-span targets recenter/re-band the display. Until the radio
+    // has reported a real center (centerKnown), m_centerMhz is a placeholder,
+    // so treat the target as out of span — that recenters, which is the safe
+    // direction and establishes the center. A non-positive bandwidth (span not
+    // yet known) is likewise never in span.
+    bool spanContainsMhz(double mhz) const {
+        if (!m_centerKnown) {
+            return false;
+        }
+        const double halfBw = m_bandwidthMhz / 2.0;
+        return halfBw > 0.0 && qAbs(mhz - m_centerMhz) <= halfBw;
+    }
     // Normalized setter driven by the backend (aetherd RFC 2.3). A negative
     // value means "leave unchanged" (the radio may report one without the
     // other). Emits infoChanged when either value changes or when the center

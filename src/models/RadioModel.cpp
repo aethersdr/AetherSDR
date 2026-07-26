@@ -4597,6 +4597,42 @@ bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
     return dispatchPanBand(panId, bandKey);
 }
 
+void RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
+{
+    if (!slice) {
+        return;
+    }
+    // Boundary validation (Principle VII): this is the single seam every CAT /
+    // rigctld retune funnels through, so reject an implausible frequency here
+    // once rather than in each caller. A non-positive or non-finite target
+    // (a client sending FA-5000;, a multi-step DN/UP that underflows, a parse
+    // that yielded NaN/inf) would otherwise be pushed optimistically into the
+    // model and broadcast via frequencyChanged before the radio rejects it.
+    if (!(mhz > 0.0 && std::isfinite(mhz))) {
+        return;
+    }
+    // Recenter policy: an in-span retune keeps autopan=0 (no yank — external
+    // Doppler software like SatPC32 steps every few seconds); an out-of-span or
+    // cross-band target uses tuneAndRecenter so the radio recenters/re-bands the
+    // panadapter. Both go through SliceModel, which updates the model frequency
+    // and emits frequencyChanged — that drives the client-side follow (Center
+    // Lock / Pan-Follows-VFO) the radio needs to actually move a centered slice.
+    // (A bare command via sendCmdPublic does NOT emit frequencyChanged, so the
+    // follow never runs and the tune doesn't stick on real hardware.) SliceModel
+    // itself guards the slice lock and no-op (freq unchanged), so no extra checks
+    // here. We issue no pan command directly — the client lock logic does, exactly
+    // as the GUI tune path does.
+    bool inSpan = false;
+    if (const PanadapterModel* pan = panadapter(slice->panId())) {
+        inSpan = pan->spanContainsMhz(mhz);
+    }
+    if (inSpan) {
+        slice->setFrequency(mhz);
+    } else {
+        slice->tuneAndRecenter(mhz);
+    }
+}
+
 double RadioModel::effectivePanCenterMhz(const QString& panId) const
 {
     if (const auto pending = m_pendingProfileLoadPanWrites.pendingCenter(panId)) {

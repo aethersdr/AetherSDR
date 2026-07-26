@@ -275,6 +275,23 @@ static const QSet<QString> kKnownModes = {
     QStringLiteral("RTTYR"),  QStringLiteral("None"),
 };
 
+// Poll a get_freq-style query until it reads the wanted Hz (within tolerance) or a
+// generous cap elapses; returns the last value seen. A tune updates the model
+// optimistically, so the readback is normally immediate; polling is belt-and-
+// suspenders so confirmations never depend on exact settle timing (fast simulator
+// or a slower real radio).
+static qint64 pollFreqField(RigctlClient& c, const QString& query, qint64 wantHz,
+                            int capMs = 1000, qint64 tolHz = 100)
+{
+    qint64 got = 0;
+    for (int elapsed = 0; elapsed < capMs; elapsed += 50) {
+        QThread::msleep(50);
+        got = c.field(c.send(query), QStringLiteral("Frequency")).toLongLong();
+        if (qAbs(got - wantHz) < tolHz) break;
+    }
+    return got;
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Section 1 — Connection & Initialization
 // ═════════════════════════════════════════════════════════════════════════════
@@ -397,16 +414,17 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
     const qint64 testFreq = origFreq + 1000;
     lines = c.send(QStringLiteral("\\set_freq %1").arg(testFreq));
     r.check(QStringLiteral("2.2  set_freq returns RPRT 0"), c.ok(lines));
-    QThread::msleep(150);
 
-    lines = c.send(QStringLiteral("\\get_freq"));
-    const qint64 confirmed = c.field(lines, QStringLiteral("Frequency")).toLongLong();
+    // Poll to the same 10 Hz tolerance the assert uses — the default 100 Hz
+    // would let the loop break while still 10–100 Hz off, then fail the assert
+    // with a misleading "matched but failed" result.
+    const qint64 confirmed = pollFreqField(c, QStringLiteral("\\get_freq"), testFreq, 1000, 10);
     r.check(QStringLiteral("2.3  get_freq confirms new frequency (%1 Hz)").arg(testFreq),
             qAbs(confirmed - testFreq) < 10,
             QStringLiteral("got %1").arg(confirmed));
 
     c.send(QStringLiteral("\\set_freq %1").arg(origFreq));
-    QThread::msleep(100);
+    pollFreqField(c, QStringLiteral("\\get_freq"), origFreq); // let the restore settle
 
     // 2.4  short form get
     lines = c.send(QStringLiteral("f"));
@@ -417,24 +435,23 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
     lines = c.send(QStringLiteral("F %1").arg(testFreq));
     r.check(QStringLiteral("2.5  short form \"F\" (set_freq) returns RPRT 0"), c.ok(lines));
     c.send(QStringLiteral("F %1").arg(origFreq));
-    QThread::msleep(100);
 
-    // 2.6  VFO-prefixed get_freq VFOA — same result as bare get_freq
-    lines = c.send(QStringLiteral("\\get_freq VFOA"));
+    // 2.6  VFO-prefixed get_freq VFOA — same result as bare get_freq (poll the
+    //      restore above to settle, then confirm VFOA reads the original freq)
+    const qint64 vfoaFreq = pollFreqField(c, QStringLiteral("\\get_freq VFOA"), gotFreq);
     r.check(QStringLiteral("2.6  get_freq VFOA returns same Hz as get_freq"),
-            c.ok(lines) && c.field(lines, QStringLiteral("Frequency")).toLongLong() == gotFreq,
-            c.field(lines, QStringLiteral("Frequency")));
+            vfoaFreq == gotFreq,
+            QStringLiteral("%1").arg(vfoaFreq));
 
     // 2.7  VFO-prefixed set_freq VFOA <hz>
     lines = c.send(QStringLiteral("\\set_freq VFOA %1").arg(testFreq));
     r.check(QStringLiteral("2.7  set_freq VFOA returns RPRT 0"), c.ok(lines));
-    QThread::msleep(50);
-    lines = c.send(QStringLiteral("\\get_freq VFOA"));
+    const qint64 vfoaSet = pollFreqField(c, QStringLiteral("\\get_freq VFOA"), testFreq);
     r.check(QStringLiteral("2.8  get_freq VFOA confirms VFO-prefixed set_freq"),
-            c.ok(lines) && std::abs(c.field(lines, QStringLiteral("Frequency")).toLongLong() - testFreq) < 100,
-            c.field(lines, QStringLiteral("Frequency")));
+            std::abs(vfoaSet - testFreq) < 100,
+            QStringLiteral("%1").arg(vfoaSet));
     c.send(QStringLiteral("\\set_freq %1").arg(origFreq));
-    QThread::msleep(50);
+    pollFreqField(c, QStringLiteral("\\get_freq"), origFreq); // restore before section 3
 
     // 2.8b  get_freq VFOB with no split — must return RIG_ENAVAIL (-8)
     lines = c.send(QStringLiteral("\\get_freq VFOB"));
@@ -464,6 +481,47 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
                                 [](const QString& l){ return l.startsWith(QLatin1String("RPRT")); });
     r.check(QStringLiteral("2.6  extended-mode response has echo, \"Frequency:\" label, and RPRT"),
             hasEcho && hasLabel && hasRprt, raw.join(QStringLiteral(" | ")));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)
+// ═════════════════════════════════════════════════════════════════════════════
+
+void section2c(RigctlClient& c, Runner& r, qint64 origFreq)
+{
+    r.section(QStringLiteral("Section 2c — Cross-Band Tune (VFO round-trip; pan-follow is CAT-invisible)"));
+
+    // A band change over CAT (WSJT-X/FLDigi "change band") must move the slice to
+    // the new band and have the radio recenter the panadapter so the pan follows —
+    // RadioModel::tuneSliceForCat(), the fix for the reported band-switch bug.
+    // rigctld exposes the slice frequency (get_freq) but NOT the panadapter center,
+    // so this guards the CAT round-trip across a real band boundary: the cross-band
+    // set_freq is accepted and the slice lands on the requested frequency without
+    // error, clamp, or revert. The pan-follow itself is confirmed visually.
+
+    // Target a different HF band than the current frequency: flip between 40 m
+    // (7.100 MHz) and 20 m (14.100 MHz) across the 10 MHz divide so this is always
+    // a genuine band change regardless of where the radio started.
+    const qint64 target = (origFreq < 10150000) ? 14100000 : 7100000;
+
+    QStringList lines = c.send(QStringLiteral("\\set_freq %1").arg(target));
+    r.check(QStringLiteral("2c.1  cross-band set_freq (%1 → %2 Hz) returns RPRT 0")
+                .arg(origFreq).arg(target),
+            c.ok(lines));
+    const qint64 confirmed = pollFreqField(c, QStringLiteral("\\get_freq"), target);
+    r.check(QStringLiteral("2c.2  get_freq confirms the slice followed to the new band (%1 Hz)").arg(target),
+            qAbs(confirmed - target) < 100,
+            QStringLiteral("got %1").arg(confirmed));
+
+    // Tune back across the boundary — verifies the reverse direction and restores
+    // the original band.
+    lines = c.send(QStringLiteral("\\set_freq %1").arg(origFreq));
+    r.check(QStringLiteral("2c.3  cross-band set_freq back to the original band returns RPRT 0"),
+            c.ok(lines));
+    const qint64 restored = pollFreqField(c, QStringLiteral("\\get_freq"), origFreq);
+    r.check(QStringLiteral("2c.4  get_freq confirms return to the original frequency (%1 Hz)").arg(origFreq),
+            qAbs(restored - origFreq) < 100,
+            QStringLiteral("got %1").arg(restored));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -2310,6 +2368,7 @@ int main(int argc, char** argv)
     section1(c, r);
     section1b(c, r);
     section2(c, r, origFreq);
+    section2c(c, r, origFreq);
     section3(c, r, origMode, origPb);
     section4(c, r);
     section5(c, r, origFreq);

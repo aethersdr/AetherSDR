@@ -821,6 +821,18 @@ public:
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
+    // Retune a slice on behalf of the CAT servers (rigctld / SmartCAT) so a band
+    // change made over CAT (WSJT-X/FLDigi "change band") is recentered instead of
+    // leaving the panadapter behind. Applies the recenter policy: in-span keeps
+    // autopan=0 (no yank — external Doppler software like SatPC32 steps every few
+    // seconds); an out-of-span or cross-band target uses tuneAndRecenter. Both go
+    // through SliceModel, which updates the model and emits frequencyChanged —
+    // required to drive the client-side follow (Center Lock / Pan-Follows-VFO)
+    // that lets the radio actually move a centered slice. We issue no pan command
+    // directly; the client lock logic does, exactly as the GUI path does. Call on
+    // the GUI thread (owns SliceModel).
+    void tuneSliceForCat(SliceModel* slice, double mhz);
+
     // Effective pan geometry: the deferred pending value if one is queued,
     // else the live model value, else NaN when the pan is unknown. Caller-side
     // no-op guards must compare against THIS, not the raw model — during the

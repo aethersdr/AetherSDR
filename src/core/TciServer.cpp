@@ -1287,9 +1287,8 @@ void TciServer::tuneSliceAndConfirm(
 
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
     bool inSpan = false;
-    if (PanadapterModel* pan = m_model->panadapter(slice->panId())) {
-        const double halfBandwidth = pan->bandwidthMhz() / 2.0;
-        inSpan = halfBandwidth > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBandwidth;
+    if (const PanadapterModel* pan = m_model->panadapter(slice->panId())) {
+        inSpan = pan->spanContainsMhz(mhz);
     }
 
     // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).
