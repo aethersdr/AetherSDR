@@ -43,6 +43,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QRegularExpression>
@@ -407,6 +408,26 @@ QJsonObject describeWidget(const QWidget* w)
             o[QStringLiteral("centerLockSliceId")] = centerLockSliceId.toInt();
             o[QStringLiteral("centerMhz")] = w->property("centerMhz").toDouble();
             o[QStringLiteral("bandwidthMhz")] = w->property("bandwidthMhz").toDouble();
+            // Pan/waterfall alignment. Each waterfall row carries its own
+            // frequency extent and is resampled into the current view, so a row
+            // whose extent disagrees with the pan renders at the wrong
+            // frequency. Publishing the last row's extent alongside the pan's
+            // own geometry — plus the signed centre error in Hz — turns
+            // "the waterfall looks off" into an assertable number.
+            const QVariant wfLow = w->property("wfRowLowMhz");
+            const QVariant wfHigh = w->property("wfRowHighMhz");
+            if (wfLow.isValid() && wfHigh.isValid()) {
+                const double lo = wfLow.toDouble();
+                const double hi = wfHigh.toDouble();
+                if (!std::isnan(lo) && !std::isnan(hi)) {
+                    o[QStringLiteral("wfRowLowMhz")] = lo;
+                    o[QStringLiteral("wfRowHighMhz")] = hi;
+                    o[QStringLiteral("wfRowCenterMhz")] = (lo + hi) / 2.0;
+                    o[QStringLiteral("wfRowSpanMhz")] = hi - lo;
+                    o[QStringLiteral("wfCenterErrorHz")] =
+                        ((lo + hi) / 2.0 - w->property("centerMhz").toDouble()) * 1.0e6;
+                }
+            }
         }
     }
 
@@ -2343,6 +2364,10 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
     if (name == QLatin1String("gesture")) {
         return normalizedAction == QLatin1String("status");
     }
+    if (name == QLatin1String("tci")) {
+        return normalizedAction == QLatin1String("status")
+            || normalizedAction == QLatin1String("routes");
+    }
     return false;
 }
 
@@ -2573,6 +2598,17 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doDrag(a.target, a.value);
             });
 
+        add("wheel", {QStringLiteral("scroll")},
+            "wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event "
+            "(positive steps = scroll up); drives wheel VFO tuning",
+            parseTargetRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                if (a.target.isEmpty())
+                    return err(QStringLiteral(
+                        "wheel requires a target and '<x> <y> <steps>'"));
+                return s.doWheel(a.target, a.value);
+            });
+
         add("dragAt", {},
             "dragAt <target> <x> <y> <dx> <dy> [control|meta|shift|alt,...]",
             parseTargetRest,
@@ -2716,8 +2752,9 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "slice requires an action (add|remove|select|tx|mode|diversity|"
-                        "centerlock|link|txant|rxant|rxsource|fixture|clearfixture)"));
+                        "slice requires an action (add|remove|select|tx|mode|filter|"
+                        "agc|diversity|centerlock|link|txant|rxant|rxsource|fixture|"
+                        "clearfixture)"));
                 return s.doSlice(a.action, a.value);
             });
 
@@ -2896,16 +2933,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("tci", {},
-            "tci start|status|stop — in-process TCI client simulator (JSON form only)",
-            // Historical quirk, preserved (#4174): tci never had a bare-line
-            // parse arm, so the default target/path fill leaves `action` empty
-            // and bare "tci start" reports the usage error below. The JSON
-            // form supplies action/value explicitly.
-            parseTargetPath,
+            "tci start|status|stop|send|trace|routes — TCI simulator and protocol diagnostics",
+            parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
-                if (a.action.isEmpty())
+                if (a.action.isEmpty()) {
                     return err(QStringLiteral(
-                        "tci requires an action (start [port|sdc [port]] | status | stop [abrupt])"));
+                        "tci requires start|status|stop|send|trace|routes"));
+                }
                 return s.doTci(a.action, a.value);
             });
 
@@ -5686,6 +5720,105 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("unchanged"), unchanged},
                            {QStringLiteral("requested"), !unchanged}};
     }
+    if (action == QLatin1String("filter")) {
+        // Set the RX passband explicitly: "slice filter <lowHz> <highHz>".
+        //
+        // This exists because the mode/filter split is a recurring source of
+        // silent divergence between the model and whatever the DSP was actually
+        // configured with. Changing mode mirrors the passband inside SliceModel
+        // (normalizeFilterPolarity) WITHOUT emitting the operator intent, so a
+        // backend that owns its own DSP chain — HL2 — can be left running the
+        // pre-mirror passband while get_state cheerfully reports the mirrored
+        // one. Measuring anything through the audio path is meaningless while
+        // the passband is unknown, so an agent needs a way to ASSERT it.
+        //
+        // Routed through setFilterWidth() rather than poking the fields: that is
+        // the operator-intent setter, so it emits filterCommandIssued and the
+        // value reaches IRadioBackend::setSliceFilter. It also runs the same
+        // polarity normalization the UI does, so the value that comes back is
+        // the canonical one the model will hold.
+        const QStringList parts =
+            arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                Qt::SkipEmptyParts);
+        if (parts.size() != 2) {
+            return err(QStringLiteral(
+                "slice filter requires '<lowHz> <highHz>' (e.g. '-3000 -150' for LSB, "
+                "'150 3000' for USB, '-4000 4000' for a carrier-straddling AM passband)"));
+        }
+        bool okLow = false, okHigh = false;
+        const int low = parts[0].toInt(&okLow);
+        const int high = parts[1].toInt(&okHigh);
+        if (!okLow || !okHigh)
+            return err(QStringLiteral("slice filter edges must be integers in Hz"));
+        if (low >= high)
+            return err(QStringLiteral("slice filter low edge must be below the high edge"));
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) { s = candidate; break; }
+        }
+        if (!s && !radio->slices().isEmpty())
+            s = radio->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice available to set a filter on"));
+
+        s->setFilterWidth(low, high);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("filter")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("mode"), s->mode()},
+                           {QStringLiteral("requestedLow"), low},
+                           {QStringLiteral("requestedHigh"), high},
+                           // Post-normalization values actually held by the model.
+                           {QStringLiteral("filterLow"), s->filterLow()},
+                           {QStringLiteral("filterHigh"), s->filterHigh()}};
+    }
+    if (action == QLatin1String("agc")) {
+        // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC
+        // through the same operator setters the RX applet uses, so the change
+        // emits agcCommandIssued and reaches IRadioBackend::setSliceAgc.
+        const QStringList parts =
+            arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
+                                Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral(
+                "slice agc requires '<off|slow|med|fast> [threshold]'"));
+        const QString mode = parts[0].toLower();
+        static const QStringList kModes{QStringLiteral("off"), QStringLiteral("slow"),
+                                        QStringLiteral("med"), QStringLiteral("fast")};
+        if (!kModes.contains(mode))
+            return err(QStringLiteral("agc mode must be one of: ")
+                       + kModes.join(QLatin1Char('/')));
+        int threshold = -1;
+        if (parts.size() >= 2) {
+            bool okT = false;
+            threshold = parts[1].toInt(&okT);
+            if (!okT || threshold < 0 || threshold > 100)
+                return err(QStringLiteral("agc threshold must be an integer 0..100"));
+        }
+
+        SliceModel* s = nullptr;
+        for (SliceModel* candidate : radio->slices()) {
+            if (candidate->isActive()) { s = candidate; break; }
+        }
+        if (!s && !radio->slices().isEmpty())
+            s = radio->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice available to set AGC on"));
+
+        // Threshold first: setAgcMode() emits the intent carrying BOTH values,
+        // so applying the threshold first means a single mode+threshold request
+        // reaches the backend as one coherent pair rather than as the new mode
+        // paired with the stale threshold.
+        if (threshold >= 0)
+            s->setAgcThreshold(threshold);
+        s->setAgcMode(mode);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("slice"), QStringLiteral("agc")},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {QStringLiteral("agcMode"), s->agcMode()},
+                           {QStringLiteral("agcThreshold"), s->agcThreshold()}};
+    }
     if (action == QLatin1String("txant") || action == QLatin1String("rxant")) {
         // Set the transmit/receive antenna port deterministically. The GUI
         // controls are QMenu::exec() popups an invoke() can't drive without
@@ -6686,6 +6819,65 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
         {QStringLiteral("dx"), dx},
         {QStringLiteral("dy"), dy},
     };
+}
+
+QJsonObject AutomationServer::doWheel(const QString& target, const QString& value) const
+{
+    // Synthesize a real QWheelEvent. Wheel tuning is one of the four ways an
+    // operator moves the VFO, and it was the only one with no bridge verb — so
+    // it was the only one that could not be regression-tested. Steps are wheel
+    // detents (positive = away from the user / scroll up), converted at Qt's
+    // conventional 120 units per detent.
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+    const QJsonObject safetyError = pointerSafetyError(w, target, QStringLiteral("wheel"));
+    if (!safetyError.isEmpty())
+        return safetyError;
+
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 3)
+        return err(QStringLiteral("wheel requires '<x> <y> <steps> [modifiers]'"));
+    bool okx = false, oky = false, oks = false;
+    const int x = parts.at(0).toInt(&okx);
+    const int y = parts.at(1).toInt(&oky);
+    const int steps = parts.at(2).toInt(&oks);
+    if (!okx || !oky || !oks)
+        return err(QStringLiteral("wheel x/y/steps must be integers"));
+    if (steps == 0)
+        return err(QStringLiteral("wheel steps must be non-zero"));
+
+    const QPoint pos(x, y);
+    if (!w->rect().contains(pos))
+        return err(QStringLiteral("wheel point is outside the target widget"));
+
+    Qt::KeyboardModifiers modifiers = Qt::NoModifier;
+    for (int i = 3; i < parts.size(); ++i) {
+        const QString m = parts.at(i).trimmed().toLower();
+        if (m == QStringLiteral("control") || m == QStringLiteral("ctrl"))
+            modifiers |= Qt::ControlModifier;
+        else if (m == QStringLiteral("shift"))
+            modifiers |= Qt::ShiftModifier;
+        else if (m == QStringLiteral("alt") || m == QStringLiteral("option"))
+            modifiers |= Qt::AltModifier;
+        else if (m == QStringLiteral("meta") || m == QStringLiteral("cmd"))
+            modifiers |= Qt::MetaModifier;
+        else if (m != QStringLiteral("none"))
+            return err(QStringLiteral("wheel unknown modifier: ") + parts.at(i));
+    }
+
+    const QPoint globalPos = w->mapToGlobal(pos);
+    const QPoint angle(0, steps * 120);
+    QWheelEvent ev(QPointF(pos), QPointF(globalPos), QPoint(0, 0), angle,
+                   Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(w, &ev);
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("wheel"), target},
+                       {QStringLiteral("x"), x},
+                       {QStringLiteral("y"), y},
+                       {QStringLiteral("steps"), steps},
+                       {QStringLiteral("angleDeltaY"), angle.y()}};
 }
 
 QJsonObject AutomationServer::doDragAt(const QString& target, const QString& value) const
@@ -8081,14 +8273,82 @@ QJsonObject AutomationServer::doDss(const QString& action,
 //                              resource-level lingering that emits no UDP (#3843).
 // `streams reset` clears the Layer-A orphan tally to re-baseline a before/after.
 // `tci start [port|sdc [port]] | status | stop [abrupt]` — in-process TCI
-// client simulator (#3305/#4009/#3913). The default WSJT-X profile negotiates
-// RX audio; the SDC profile negotiates 96 kHz IQ and sends `iq_start:0` for a
-// CW-skimmer-shaped end-to-end test. `stop abrupt` closes without the matching
-// stream-stop command so tests can assert disconnect cleanup.
+// client simulator (#3305/#4009/#3913). `send`, `trace`, and `routes` expose
+// deterministic protocol diagnostics without adding test commands to TCI.
+#ifdef HAVE_WEBSOCKETS
+void AutomationServer::appendTciTrace(const QString& direction, const QString& text)
+{
+    if (!m_tciTraceEnabled) {
+        return;
+    }
+    if (!m_tciTraceClock.isValid()) {
+        m_tciTraceClock.start();
+    }
+
+    const QStringList commands = text.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    for (const QString& command : commands) {
+        const QString normalized = command.trimmed();
+        if (normalized.isEmpty()) {
+            continue;
+        }
+        m_tciTrace.push_back(TciTraceEntry{
+            ++m_tciTraceSeq,
+            m_tciTraceClock.elapsed(),
+            direction,
+            normalized + QLatin1Char(';'),
+        });
+        while (m_tciTrace.size() > kTciTraceMax) {
+            m_tciTrace.pop_front();
+        }
+    }
+}
+
+void AutomationServer::sendTciSimText(const QString& text)
+{
+    if (!m_tciSim) {
+        return;
+    }
+    appendTciTrace(QStringLiteral("client->server"), text);
+    m_tciSim->sendTextMessage(text);
+}
+
+QJsonObject AutomationServer::tciTraceSnapshot(int limit) const
+{
+    limit = std::clamp(limit, 1, static_cast<int>(kTciTraceMax));
+    QJsonArray entries;
+    const size_t first = m_tciTrace.size() > static_cast<size_t>(limit)
+        ? m_tciTrace.size() - static_cast<size_t>(limit)
+        : 0;
+    for (size_t i = first; i < m_tciTrace.size(); ++i) {
+        const TciTraceEntry& entry = m_tciTrace[i];
+        entries.append(QJsonObject{
+            {QStringLiteral("seq"), static_cast<qint64>(entry.seq)},
+            {QStringLiteral("elapsedMs"), entry.elapsedMs},
+            {QStringLiteral("direction"), entry.direction},
+            {QStringLiteral("text"), entry.text},
+        });
+    }
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("capturing"), m_tciTraceEnabled},
+        {QStringLiteral("count"), static_cast<qint64>(m_tciTrace.size())},
+        {QStringLiteral("lastSeq"), static_cast<qint64>(m_tciTraceSeq)},
+        {QStringLiteral("entries"), entries},
+    };
+}
+#endif
+
 QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
 {
+    const QString normalizedAction = action.trimmed().toLower();
+    if (normalizedAction == QLatin1String("routes")) {
+        if (!m_tciRouteSnapshotHandler) {
+            return err(QStringLiteral("TCI route snapshot unavailable"));
+        }
+        return m_tciRouteSnapshotHandler();
+    }
+
 #ifndef HAVE_WEBSOCKETS
-    Q_UNUSED(action);
     Q_UNUSED(value);
     return err(QStringLiteral("TCI is not built into this binary (HAVE_WEBSOCKETS off)"));
 #else
@@ -8114,10 +8374,89 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         return o;
     };
 
-    if (action == QLatin1String("status"))
+    if (normalizedAction == QLatin1String("status"))
         return status();
 
-    if (action == QLatin1String("start")) {
+    if (normalizedAction == QLatin1String("send")) {
+        if (!m_tciSim || m_tciSim->state() != QAbstractSocket::ConnectedState) {
+            return err(QStringLiteral("TCI simulator is not connected"));
+        }
+        QString command = value.trimmed();
+        if (command.isEmpty()) {
+            return err(QStringLiteral("tci send requires a command"));
+        }
+        if (command.size() > 4096 || command.contains(QLatin1Char('\n'))
+            || command.contains(QLatin1Char('\r'))) {
+            return err(QStringLiteral("tci send command is invalid or too long"));
+        }
+        if (!command.endsWith(QLatin1Char(';'))) {
+            command += QLatin1Char(';');
+        }
+        sendTciSimText(command);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("send")},
+            {QStringLiteral("command"), command},
+            {QStringLiteral("traceSeq"), static_cast<qint64>(m_tciTraceSeq)},
+        };
+    }
+
+    if (normalizedAction == QLatin1String("trace")) {
+        const QString simplified = value.simplified();
+        const QString traceAction = simplified.section(QLatin1Char(' '), 0, 0).toLower();
+        const QString traceArg = simplified.section(QLatin1Char(' '), 1).trimmed();
+        if (traceAction.isEmpty() || traceAction == QLatin1String("status")) {
+            bool ok = false;
+            const int requested = traceArg.toInt(&ok);
+            return tciTraceSnapshot(ok ? requested : 100);
+        }
+        if (traceAction == QLatin1String("start")) {
+            m_tciTrace.clear();
+            m_tciTraceSeq = 0;
+            m_tciTraceClock.start();
+            m_tciTraceEnabled = true;
+            return tciTraceSnapshot();
+        }
+        if (traceAction == QLatin1String("stop")) {
+            m_tciTraceEnabled = false;
+            return tciTraceSnapshot();
+        }
+        if (traceAction == QLatin1String("clear")) {
+            m_tciTrace.clear();
+            m_tciTraceSeq = 0;
+            if (m_tciTraceEnabled) {
+                m_tciTraceClock.start();
+            } else {
+                m_tciTraceClock.invalidate();
+            }
+            return tciTraceSnapshot();
+        }
+        if (traceAction == QLatin1String("export")) {
+            if (traceArg.isEmpty()) {
+                return err(QStringLiteral("tci trace export requires a path"));
+            }
+            QSaveFile file(traceArg);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                return err(QStringLiteral("cannot open trace path: ") + file.errorString());
+            }
+            const QByteArray payload
+                = QJsonDocument(tciTraceSnapshot(static_cast<int>(kTciTraceMax)))
+                      .toJson(QJsonDocument::Indented);
+            if (file.write(payload) != payload.size() || !file.commit()) {
+                return err(QStringLiteral("cannot write trace path: ") + file.errorString());
+            }
+            return QJsonObject{
+                {QStringLiteral("ok"), true},
+                {QStringLiteral("action"), QStringLiteral("trace-export")},
+                {QStringLiteral("path"), QFileInfo(traceArg).absoluteFilePath()},
+                {QStringLiteral("bytes"), payload.size()},
+            };
+        }
+        return err(QStringLiteral(
+            "tci trace requires start|stop|clear|status [limit]|export <path>"));
+    }
+
+    if (normalizedAction == QLatin1String("start")) {
         if (m_tciSim)
             return err(QStringLiteral("tci sim already running — `tci stop` first"));
         const QStringList options = value.simplified().split(
@@ -8147,21 +8486,22 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         connect(m_tciSim, &QWebSocket::textMessageReceived,
                 this, [this](const QString& msg) {
             ++m_tciSimTextMsgs;
+            appendTciTrace(QStringLiteral("server->client"), msg);
             if (m_tciSimReady) return;
             const QStringList cmds = msg.split(QLatin1Char(';'));
             for (const QString& c : cmds) {
                 if (c.trimmed() == QLatin1String("ready")) {
                     m_tciSimReady = true;
                     if (m_tciSimProfile == QLatin1String("sdc")) {
-                        m_tciSim->sendTextMessage(QStringLiteral("iq_samplerate:96000;"));
-                        m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:24000;"));
-                        m_tciSim->sendTextMessage(QStringLiteral("iq_start:0;"));
+                        sendTciSimText(QStringLiteral("iq_samplerate:96000;"));
+                        sendTciSimText(QStringLiteral("audio_samplerate:24000;"));
+                        sendTciSimText(QStringLiteral("iq_start:0;"));
                         m_tciSimIqStarted = true;
                         qCInfo(lcAutomation)
                             << "tci sim: ready received — SDC IQ negotiation sent";
                     } else {
-                        m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:48000;"));
-                        m_tciSim->sendTextMessage(QStringLiteral("audio_start:0;"));
+                        sendTciSimText(QStringLiteral("audio_samplerate:48000;"));
+                        sendTciSimText(QStringLiteral("audio_start:0;"));
                         m_tciSimAudioStarted = true;
                         qCInfo(lcAutomation)
                             << "tci sim: ready received — WSJT-X audio_start sent";
@@ -8211,7 +8551,7 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
                            {QStringLiteral("port"), port}};
     }
 
-    if (action == QLatin1String("stop")) {
+    if (normalizedAction == QLatin1String("stop")) {
         if (!m_tciSim)
             return err(QStringLiteral("tci sim is not running"));
         const bool abrupt = value.trimmed().compare(QLatin1String("abrupt"),
@@ -8236,6 +8576,12 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
             sim->abort();
         } else {
             if (wasAudioStarted)
+                appendTciTrace(QStringLiteral("client->server"),
+                    QStringLiteral("audio_stop:0;"));
+            if (wasIqStarted)
+                appendTciTrace(QStringLiteral("client->server"),
+                    QStringLiteral("iq_stop:0;"));
+            if (wasAudioStarted)
                 sim->sendTextMessage(QStringLiteral("audio_stop:0;"));
             if (wasIqStarted)
                 sim->sendTextMessage(QStringLiteral("iq_stop:0;"));
@@ -8249,7 +8595,7 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     }
 
     return err(QStringLiteral(
-        "tci requires an action (start [port|sdc [port]] | status | stop [abrupt])"));
+        "tci requires start|status|stop|send|trace|routes"));
 #endif
 }
 

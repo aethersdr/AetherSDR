@@ -337,6 +337,38 @@ void SimBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
     emit sliceChanged(kSliceId, d);
 }
 
+void SimBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
+{
+    // The demo has no hardware AGC and no engine-side DSP chain to configure, so
+    // there is nothing to translate the intent onto — but dropping it silently
+    // would leave the UI showing a setting the "radio" never acknowledged. Record
+    // it and echo it back, so the demo behaves like a radio that accepted the
+    // change (Principle II: the radio is authoritative about its own state).
+    if (!m_connected || sliceId != kSliceId) {
+        return;
+    }
+    m_agcMode = mode;
+    m_agcThresholdDb = thresholdDb;
+    SliceDelta d;
+    d.agcMode = m_agcMode;
+    d.agcThreshold = m_agcThresholdDb;
+    emit sliceChanged(kSliceId, d);
+}
+
+void SimBackend::setPanCenter(const QString& panId, double hz)
+{
+    // The demo's panadapter centre is driven by its owned PanadapterStream (Route
+    // A), which paints a fixed synthetic window around the slice, so there is no
+    // DDC/NCO to move here. Accept the intent and re-assert the pan state so the
+    // display and the model stay in agreement rather than drifting apart.
+    Q_UNUSED(panId);
+    if (!m_connected) {
+        return;
+    }
+    emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
+                                   hz / 1.0e6, kDemoPanBandwidthMhz);
+}
+
 void SimBackend::setKeying(bool key)
 {
     // RX-only (capabilities().canTransmit == false): the engine TX guard above

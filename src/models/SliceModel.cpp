@@ -56,6 +56,18 @@ bool SliceModel::filterPolarityLsbFamily(const QString& mode)
     return mode == "LSB" || mode == "DIGL" || mode == "FDVL";
 }
 
+// Modes whose passband must STRADDLE the carrier rather than sit to one side of
+// it. These demodulate both sidebands and, for AM/SAM, need the carrier itself:
+// an envelope detector fed a passband that excludes DC is detecting a
+// suppressed-carrier signal, which is audible as distortion rather than as
+// silence — so the failure looks like "the audio sounds off", not like a filter
+// problem.
+bool SliceModel::filterCarrierStraddlingFamily(const QString& mode)
+{
+    return mode == "AM" || mode == "SAM" || mode == "DSB" || mode == "DRM"
+        || mode == "FM" || mode == "NFM" || mode == "WFM" || mode == "WBFM";
+}
+
 bool SliceModel::normalizeFilterPolarity()
 {
     // Mirror across the carrier, preserving BOTH edges (asymmetric-safe):
@@ -65,6 +77,25 @@ bool SliceModel::normalizeFilterPolarity()
     // the discarded-edge regression #3092 worked around by excluding FDV.
     // Sign-guarded and idempotent: values already in canonical form (and
     // carrier-straddling passbands) are left untouched.
+    // Carrier-straddling modes: a passband inherited from a sideband mode sits
+    // entirely to one side of the carrier and must be mirrored out to span it.
+    // 150..3000 (a USB passband) becomes -3000..3000 — 6 kHz of AM, with the
+    // carrier back inside the filter. Sign-guarded and idempotent: a passband
+    // that already straddles zero is left exactly as the operator set it, so
+    // narrow AM and a deliberately asymmetric passband both survive.
+    if (filterCarrierStraddlingFamily(m_mode)) {
+        const bool straddlesCarrier = m_filterLow < 0 && m_filterHigh > 0;
+        if (straddlesCarrier)
+            return false;
+        const int halfWidthHz =
+            std::max(std::abs(m_filterLow), std::abs(m_filterHigh));
+        if (halfWidthHz <= 0)
+            return false;
+        m_filterLow  = -halfWidthHz;
+        m_filterHigh =  halfWidthHz;
+        return true;
+    }
+
     const bool usbFam = filterPolarityUsbFamily(m_mode);
     const bool lsbFam = filterPolarityLsbFamily(m_mode);
     if ((usbFam && m_filterLow < 0 && m_filterHigh <= 0)
@@ -155,6 +186,25 @@ void SliceModel::setMode(const QString& mode)
     // and routes it through the TX-inhibit-guarded slice sink.
     emit modeChangeRequested(mode);
     emit modeChanged(mode);
+
+    // The passband belongs to the mode. Changing mode without re-checking it
+    // leaves the previous mode's filter in place — switching USB -> AM kept
+    // 150..3000, an upper-sideband passband that EXCLUDES the carrier the AM
+    // detector needs. A radio that owns its own DSP heals this by echoing a
+    // mode-appropriate filter back; a backend that owns an engine-side chain
+    // gets no such echo and simply keeps demodulating through the wrong filter.
+    //
+    // So normalize the model here and hand the corrected passband to the
+    // engine-side backend via filterCommandIssued (RadioModel only wires that
+    // signal for a non-Flex backend). The Flex path is deliberately NOT sent a
+    // proactive `filt`: the Flex radio heals the passband on the mode echo (as
+    // above), so pushing our mirror to the wire would only race — and override —
+    // the radio's own per-mode filter memory. Keeping the Flex wire path
+    // untouched is why the model normalize is decoupled from the wire send.
+    if (normalizeFilterPolarity()) {
+        emit filterChanged(m_filterLow, m_filterHigh);
+        emit filterCommandIssued(m_filterLow, m_filterHigh);
+    }
 }
 
 void SliceModel::setFilterWidth(int low, int high)
@@ -178,6 +228,7 @@ void SliceModel::setFilterWidth(int low, int high)
     // FlexAPI: "filt <id> <low_hz> <high_hz>"
     sendCommand(QString("filt %1 %2 %3").arg(m_id).arg(low).arg(high));
     emit filterChanged(low, high);
+    emit filterCommandIssued(low, high);
 }
 
 // ── Adaptive RX filter (RFC #3878) ──────────────────────────────────────
@@ -257,6 +308,7 @@ void SliceModel::applyAdaptiveFilter(int low, int high)
     m_filterHigh = high;
     sendCommand(QString("filt %1 %2 %3").arg(m_id).arg(low).arg(high));
     emit filterChanged(low, high);
+    emit filterCommandIssued(low, high);
 }
 
 void SliceModel::setRxAntenna(const QString& ant)
@@ -471,6 +523,7 @@ void SliceModel::setAgcMode(const QString& mode)
     m_agcMode = mode;
     sendCommand(QString("slice set %1 agc_mode=%2").arg(m_id).arg(mode));
     emit agcModeChanged(mode);
+    emit agcCommandIssued(m_agcMode, m_agcThreshold);
 }
 
 void SliceModel::setAgcThreshold(int value)
@@ -493,6 +546,7 @@ void SliceModel::setAgcThreshold(int value)
     m_agcThreshold = value;
     sendCommand(QString("slice set %1 agc_threshold=%2").arg(m_id).arg(value));
     emit agcThresholdChanged(value);
+    emit agcCommandIssued(m_agcMode, m_agcThreshold);
 }
 
 void SliceModel::setAgcOffLevel(int value)

@@ -527,6 +527,12 @@ set(CORE_SOURCES
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
+    src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
+    src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
+    src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
+    src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
@@ -545,6 +551,7 @@ set(CORE_SOURCES
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioOutputRouter.cpp
+    src/core/AetherDspModePolicy.cpp
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
@@ -605,6 +612,7 @@ set(CORE_SOURCES
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
+    src/core/TciRoutingState.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
@@ -1351,6 +1359,7 @@ if (ENABLE_ASR)
     target_sources(AetherSDR PRIVATE
         src/gui/AsrAudioTap.cpp
         src/gui/CopyAssistPanel.cpp
+        src/gui/CopyAssistSettings.cpp
         src/gui/CopyAssistSettingsDialog.cpp
         src/gui/CopyAssistController.cpp
     )
@@ -2603,6 +2612,44 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
+add_executable(hl2_metis_protocol_test
+    tests/hl2_metis_protocol_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_metis_protocol_test PRIVATE src)
+add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
+
+# HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
+add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
+target_include_directories(hl2_metis_client_test PRIVATE src)
+target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+
+# HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
+add_executable(hl2_spectrum_test
+    tests/hl2_spectrum_test.cpp
+    src/core/backends/hl2/Hl2Spectrum.cpp)
+target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(hl2_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
+
+# HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
+add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
+target_include_directories(hl2_rxdsp_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
+
+add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
+target_include_directories(hl2_shift_test PRIVATE src)
+target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
+
+# HL2 backend — IRadioBackend seam contract against a capped fake HL2.
+add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
+target_include_directories(hl2_backend_test PRIVATE src)
+target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -2868,6 +2915,15 @@ add_executable(audio_output_router_test
 target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
+
+# Pure mode-policy regression for global AetherDSP selection (#4415).
+add_executable(aether_dsp_mode_policy_test
+    tests/aether_dsp_mode_policy_test.cpp
+    src/core/AetherDspModePolicy.cpp
+)
+target_include_directories(aether_dsp_mode_policy_test PRIVATE src)
+target_link_libraries(aether_dsp_mode_policy_test PRIVATE Qt6::Core)
+add_test(NAME aether_dsp_mode_policy_test COMMAND aether_dsp_mode_policy_test)
 
 # Hardware-free state-machine coverage for the opt-in TX capture health
 # summary. Reproduces the Qt pull-mode Active -> Idle/full-buffer signature and
@@ -3427,6 +3483,14 @@ if (ENABLE_ASR)
     add_executable(copy_assist_settings_dialog_test
         tests/copy_assist_settings_dialog_test.cpp
         src/gui/CopyAssistSettingsDialog.cpp
+        src/gui/CopyAssistSettings.cpp
+        src/gui/PersistentDialog.cpp
+        src/gui/FramelessResizer.cpp
+        src/gui/FramelessWindowTitleBar.cpp
+        src/core/ThemeManager.cpp
+        src/core/AppSettings.cpp
+        src/core/LogManager.cpp
+        src/core/AsyncLogWriter.cpp
     )
     target_include_directories(copy_assist_settings_dialog_test PRIVATE src)
     target_link_libraries(copy_assist_settings_dialog_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
@@ -3588,14 +3652,6 @@ target_include_directories(antenna_alias_test PRIVATE src)
 target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
 set_target_properties(antenna_alias_test PROPERTIES AUTOMOC ON)
 add_test(NAME antenna_alias_test COMMAND antenna_alias_test)
-
-# Pure autoconnect / client-slot contention policy (#4401) — header-only logic,
-# no Qt or MainWindow needed.
-add_executable(autoconnect_policy_test
-    tests/autoconnect_policy_test.cpp
-)
-target_include_directories(autoconnect_policy_test PRIVATE src)
-add_test(NAME autoconnect_policy_test COMMAND autoconnect_policy_test)
 
 add_executable(mqtt_antenna_alias_test
     tests/mqtt_antenna_alias_test.cpp
@@ -3935,9 +3991,37 @@ if(Qt6WebSockets_FOUND)
     target_include_directories(tci_protocol_test PRIVATE src)
     target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
+
+    add_executable(tci_automation_test tests/tci_automation_test.cpp)
+    target_include_directories(tci_automation_test PRIVATE src tests)
+    target_link_libraries(tci_automation_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_automation_test COMMAND tci_automation_test)
+
+    add_executable(tci_server_review_test tests/tci_server_review_test.cpp)
+    target_include_directories(tci_server_review_test PRIVATE src tests)
+    target_link_libraries(tci_server_review_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets
+    )
+    add_test(NAME tci_server_review_test COMMAND tci_server_review_test)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
+add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
+target_include_directories(hl2_dbref_test PRIVATE src)
+add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
+
+add_executable(radiomodel_dax_null_test tests/radiomodel_dax_null_test.cpp)
+target_include_directories(radiomodel_dax_null_test PRIVATE src)
+target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
+
+add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
+target_include_directories(hl2_family_transition_test PRIVATE src)
+target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)

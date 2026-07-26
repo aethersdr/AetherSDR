@@ -51,6 +51,12 @@ public:
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
+    // Added to IRadioBackend by the HL2 backend (#4448). The demo has no hardware
+    // AGC and no DDC, but it must not silently swallow either intent: it records
+    // them and echoes the slice state back so the UI reflects what the operator
+    // set (Principle II — the radio is authoritative about its own state).
+    void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    void setPanCenter(const QString& panId, double hz) override;
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
@@ -147,6 +153,10 @@ private:
     QString m_sliceMode{QStringLiteral("USB")};
     int    m_filterLowHz{100};
     int    m_filterHighHz{2900};
+    // Slice AGC (#4448 seam addition). Defaults mirror the slice model's own so
+    // the first echo reports what the UI already shows.
+    QString m_agcMode{QStringLiteral("med")};
+    int     m_agcThresholdDb{65};
     static constexpr int kSliceId = 0;
     static constexpr int kPanId = 0;
     // Demo pan span (MHz) = 8 kHz. MUST equal both the wire "display pan …

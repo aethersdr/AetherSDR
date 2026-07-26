@@ -1227,8 +1227,11 @@ void SpectrumOverlayMenu::updateLayout()
 void SpectrumOverlayMenu::buildDisplayPanel()
 {
     m_displayPanel = new QWidget(parentWidget());
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_displayPanel, "QWidget { background: rgba(15, 15, 26, 220); "
-                                   "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
+    m_displayPanel->setObjectName(QStringLiteral("displayPanel"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_displayPanel,
+        "QWidget#displayPanel { background: rgba(15, 15, 26, 220); "
+        "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_displayPanel->hide();
 
     // #3969: the panel's ~24 rows exceed a short window's height, so the grid
@@ -1247,10 +1250,16 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_displayScroll->setFrameShape(QFrame::NoFrame);
     m_displayScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_displayScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    m_displayScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
-    m_displayScroll->viewport()->setStyleSheet("background: transparent; border: none;");
+    m_displayScroll->setStyleSheet(
+        "QScrollArea#displayPanelScroll { background: transparent; border: none; }");
+    m_displayScroll->viewport()->setObjectName(
+        QStringLiteral("displayPanelViewport"));
+    m_displayScroll->viewport()->setStyleSheet(
+        "QWidget#displayPanelViewport { background: transparent; border: none; }");
     auto* displayContent = new QWidget;
-    displayContent->setStyleSheet("background: transparent; border: none;");
+    displayContent->setObjectName(QStringLiteral("displayPanelContent"));
+    displayContent->setStyleSheet(
+        "QWidget#displayPanelContent { background: transparent; border: none; }");
     m_displayScroll->setWidget(displayContent);
     panelLayout->addWidget(m_displayScroll);
 
@@ -1366,10 +1375,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     makeHeader("PANADAPTER");
     {
         auto* toggleRow = new QWidget;
-        // The Display panel's QWidget { border: 1px solid } cascades to this
-        // QWidget container and would otherwise draw a 1 px frame around the
-        // whole Heat Map / Grid / Wt Avg row.  Override locally.
-        toggleRow->setStyleSheet("QWidget { border: none; background: transparent; }");
+        toggleRow->setObjectName(QStringLiteral("displayPanelToggleRow"));
+        toggleRow->setStyleSheet(
+            "QWidget#displayPanelToggleRow { border: none; background: transparent; }");
         auto* toggleLayout = new QHBoxLayout(toggleRow);
         toggleLayout->setContentsMargins(0, 2, 0, 2);
         toggleLayout->setSpacing(3);

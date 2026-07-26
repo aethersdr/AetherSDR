@@ -53,22 +53,9 @@ python3 tools/automation_probe.py demo --out /tmp/phase0   # → tree.json + pan
 to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
-Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting, so a
-bridge run reconnects to the last radio just as an interactive launch does. To
-keep a single launch idle **without** changing that persistent setting (which
-would also affect interactive use), set `AETHER_AUTOMATION_NO_AUTOCONNECT=1` —
-a process-scoped override that suppresses autoconnect for that instance only.
-Use the `connect` verb to drive a specific radio.
-
-Running several bridges in parallel? Each one that autoconnects honours
-`AutoConnectToLastRadio`, so they all try to reconnect to the same saved radio.
-When a radio's client slots are already taken (or it is a single-client /
-non-multiFLEX radio), a bridge run **declines** rather than prompting or
-evicting another client — it stays disconnected and logs the decline instead of
-blocking on a dialog nobody can click. Give at most one instance the shared
-radio and set `AETHER_AUTOMATION_NO_AUTOCONNECT=1` on the others (or drive them
-with an explicit `connect`) so they start idle by design rather than by losing
-the slot race.
+Saved-radio autoconnect follows the `AutoConnectToLastRadio` setting; a bridge
+run reconnects to the last radio just as an interactive launch does. Use the
+`connect` verb to drive a specific radio, or clear the setting to start idle.
 
 Parallel worktrees should give each bridge a stable automation identity and a
 human-readable agent name:
@@ -203,10 +190,10 @@ override; the token is never a command-line argument, MCP result, discovery
 field, log message, or settings value.
 
 Each launch gets a unique explicit local socket and safe label. The wrapper
-sets `AETHER_AUTOMATION_NO_AUTOCONNECT=1`, pins TX automation off with
-`AETHER_AUTOMATION_NO_TX=1`, removes any inherited TX-enable flag, and refuses
-success unless token-free `ping` reports that auth is required and authenticated
-`whoami` matches the exact child PID, socket, and label with `txAllowed:false`.
+pins TX automation off with `AETHER_AUTOMATION_NO_TX=1`, removes any inherited
+TX-enable flag, and refuses success unless token-free `ping` reports that auth
+is required and authenticated `whoami` matches the exact child PID, socket, and
+label with `txAllowed:false`.
 All other MCP tools then target that owned socket. `status` inspects only the
 owned process; `stop`, wrapper exit, or a failed launch terminates only that
 process and releases its socket.
@@ -355,14 +342,14 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`targettune <mhz>`](#targettune) | Absolute tune through the commanded-target and band-stack path. |
 | | [`memory activate <index> [panId]`](#memory) | Recall a radio memory through the normal UI policy. |
-| | [`slice <action>`](#slice) | add/remove/select/tx/mode/diversity/centerlock/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/mode/filter/agc/diversity/centerlock/txant/rxant/rxsource. |
 | **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X audio or SDC IQ-skimmer profile). |
+| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator plus ordered protocol and route diagnostics. |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -1136,6 +1123,8 @@ re-poll `get slices`.
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
+| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
+| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
 | `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `link` | `<sliceIdA> <sliceIdB> <on\|off>` | engage or dissolve one cross-panadapter Slice Link pair through the same MainWindow handler as the context menu; multiple independent pairs are supported, but each owned non-diversity slice may belong to only one pair — assert each pair via the reciprocal `linkedTo` snapshot fields |
@@ -1991,11 +1980,11 @@ proves the co-hold path.
 Read the status-bar transmit timer's state. The timer sits just left of the
 **PC Audio** button and runs **only** for operator-driven phone/data transmits
 — MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
-TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
-QSK toggles the interlock per element, which would thrash a wall-clock timer).
-All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
-hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
-fades out.
+TUNE/two-tone carriers, internal ATU tuning, TCI-hardware or DAX transmits
+(external-app keying paths), **nor CW** (break-in/QSK toggles the interlock per
+element, which would thrash a wall-clock timer). These exclusions are gated in
+`RadioModel::operatorTransmitChanged`. It is hidden when idle; on unkey it
+holds the final elapsed reading for 15 s, then fades out.
 
 ```json
 → {"cmd":"get","model":"txtimer"}
@@ -2010,8 +1999,8 @@ flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
 it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
 dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
-`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
-throughout.
+`visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
+`visible=false` throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
@@ -2040,9 +2029,61 @@ needed).
    "iqStarted":true,"iqFrames":412,"binaryFrames":412,"binaryBytes":3375104,
    "textMessages":37,"msSinceLastFrame":18}
 
+→ {"cmd":"tci","action":"send","value":"split_enable:0,false;vfo:0,1,14076000;"}
+← {"ok":true,"action":"send",
+   "command":"split_enable:0,false;vfo:0,1,14076000;","traceSeq":17}
+
+→ {"cmd":"tci","action":"trace","value":"status 50"}
+← {"ok":true,"capturing":true,"count":19,"lastSeq":19,
+   "entries":[
+     {"seq":16,"elapsedMs":43,"direction":"client->server",
+      "text":"split_enable:0,false;"},
+     {"seq":17,"elapsedMs":43,"direction":"client->server",
+      "text":"vfo:0,1,14076000;"},
+     {"seq":18,"elapsedMs":51,"direction":"server->client",
+      "text":"split_enable:0,false;"}
+   ]}
+
+→ {"cmd":"tci","action":"routes"}
+← {"ok":true,"contractVersion":1,"routeOwner":"external",
+   "splitRequested":false,"rxSliceId":4,"txSliceId":7,"ownsRoute":false,
+   "routeTransitionInFlight":false,"pendingRoutes":[],
+   "endpoints":[
+     {"trx":0,"sliceId":4,"panId":"0x40000000","frequencyHz":14074000,"tx":false},
+     {"trx":1,"sliceId":7,"panId":"0x40000001","frequencyHz":14076000,"tx":true}
+   ]}
+
 → {"cmd":"tci","action":"stop","value":"abrupt"}   // omit value for graceful audio_stop + close
 ← {"ok":true,"action":"stop","abrupt":true,"binaryFrames":412, …}
 ```
+
+The same commands have bare forms:
+
+```text
+tci send split_enable:0,false;vfo:0,1,14076000;
+tci trace start
+tci trace status 50
+tci trace stop
+tci trace clear
+tci trace export /tmp/tci-trace.json
+tci routes
+```
+
+`send` writes one raw client WebSocket frame, adding a final semicolon when
+needed. Embedded CR/LF and commands over 4096 characters are rejected.
+`trace start` resets sequence numbering and captures every semicolon-delimited
+command in both directions in a bounded 512-entry buffer. `trace export`
+atomically writes the complete retained transcript as JSON.
+
+`routes` is a read-only snapshot of the server's stable Flex slice routing,
+including route ownership (`external` or `tci-created`),
+transition/deferred-command state, PTT ownership, and the current contiguous
+TCI receiver projection. `lastRouteError` records the latest route allocation
+or TX-selection failure; when no VFO-B slice can be created, the server also
+returns the authoritative channel-1 projection so a client does not wait for a
+missing acknowledgement. `tci status` and `tci routes` remain available when
+the bridge is in observe-only mode; `send`, trace control/export, start, and
+stop are blocked.
 
 `stop abrupt` closes the socket without `audio_stop` or `iq_stop`; graceful
 stop sends the command matching the selected profile. This lets tests assert
@@ -2579,7 +2620,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 53 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 54 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2593,6 +2634,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
+| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event |
 | `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
 | `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
@@ -2622,7 +2664,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
-| `tci` | — | tci start\|status\|stop — in-process TCI client simulator (JSON form only) |
+| `tci` | — | tci start\|status\|stop\|send\|trace\|routes — TCI simulator and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

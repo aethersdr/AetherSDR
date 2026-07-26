@@ -351,6 +351,9 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
         return;
     }
 #endif
+    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR"};
+    emit dspMethodUserToggled(QString::fromLatin1(kNames[index]), nowChecked);
+
     // Always bring this DSP's panel forward, regardless of new check
     // state — toggling off keeps the panel visible so the user can
     // re-enable from the same place.

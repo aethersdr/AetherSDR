@@ -1,6 +1,7 @@
 #include "CopyAssistController.h"
 
 #include "CopyAssistPanel.h"
+#include "CopyAssistSettings.h"
 #include "CopyAssistSettingsDialog.h"
 
 #include "asr/AsrEngine.h"
@@ -9,7 +10,6 @@
 #include "asr/RemoteAsrBackend.h"
 #include "asr/SherpaOnnxBackend.h"
 #include "asr/WhisperAsrBackend.h"
-#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 #include "gui/AsrAudioTap.h"
 
@@ -49,9 +49,8 @@ float sensitivityToRms(int percent)
 
 void saveInt(const char* key, int value)
 {
-    auto& s = AetherSDR::AppSettings::instance();
-    s.setValue(QString::fromLatin1(key), QString::number(value));
-    s.save();
+    // Persists into the nested Copy Assist config object (setValue saves).
+    AetherSDR::CopyAssistSettings::setValue(QString::fromLatin1(key), QString::number(value));
 }
 
 // Turn the user's base log path into a per-day file by inserting today's date
@@ -71,15 +70,17 @@ QString datedLogPath(const QString& base)
 
 AetherSDR::RemoteAsrConfig readRemoteConfig()
 {
-    auto& s = AetherSDR::AppSettings::instance();
+    // This helper lives in the file's anonymous namespace (outside
+    // AetherSDR::), so CopyAssistSettings must be fully qualified here.
+    using AetherSDR::CopyAssistSettings::value;
     AetherSDR::RemoteAsrConfig cfg;
-    cfg.url = s.value(QStringLiteral("AsrRemoteUrl"), QString()).toString();
-    cfg.apiKey = s.value(QStringLiteral("AsrRemoteApiKey"), QString()).toString();
-    cfg.model = s.value(QStringLiteral("AsrRemoteModel"), QStringLiteral("whisper-1")).toString();
+    cfg.url = value(QStringLiteral("AsrRemoteUrl"), QString()).toString();
+    cfg.apiKey = value(QStringLiteral("AsrRemoteApiKey"), QString()).toString();
+    cfg.model = value(QStringLiteral("AsrRemoteModel"), QStringLiteral("whisper-1")).toString();
     // Share the Copy Assist language selection with the remote endpoint. "auto"
     // is left empty so an OpenAI-compatible server does its own detection rather
     // than being handed a non-standard language value.
-    const QString lang = s.value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
+    const QString lang = value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
     cfg.language = (lang == QStringLiteral("auto")) ? QString() : lang;
     return cfg;
 }
@@ -115,13 +116,13 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // Remember a previously-picked custom model so its filename shows in the list
     // (and the file-picker defaults to it) across restarts.
     m_customModelPath =
-        AppSettings::instance().value(QStringLiteral("AsrCustomModelPath"), QString()).toString();
+        CopyAssistSettings::value(QStringLiteral("AsrCustomModelPath"), QString()).toString();
     if (!m_customModelPath.isEmpty()) {
         m_settings->setTierLabel(QString::fromLatin1(kCustomTierId),
                                  tr("Custom: %1").arg(QFileInfo(m_customModelPath).fileName()));
     }
     m_sherpaModelDir =
-        AppSettings::instance().value(QStringLiteral("AsrSherpaModelDir"), QString()).toString();
+        CopyAssistSettings::value(QStringLiteral("AsrSherpaModelDir"), QString()).toString();
     if (!m_sherpaModelDir.isEmpty()) {
         m_settings->setTierLabel(QString::fromLatin1(kSherpaTierId),
                                  tr("Sherpa: %1").arg(QDir(m_sherpaModelDir).dirName()));
@@ -130,8 +131,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // Initial backend: remote if previously configured+enabled, else the
     // GPU-class model when a GPU exists, else the platform default.
     const bool remoteConfigured =
-        AppSettings::instance()
-                .value(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("False"))
+        CopyAssistSettings::value(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("False"))
                 .toString() == QStringLiteral("True")
         && !readRemoteConfig().url.isEmpty();
     if (remoteConfigured) {
@@ -178,8 +178,8 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             m_settings->addGpuDevice(g.index, g.name);
         }
         m_settings->addGpuDevice(-1, tr("CPU")); // force-CPU option
-        int saved = AppSettings::instance()
-                        .value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0")).toString().toInt();
+        int saved =
+            CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0")).toString().toInt();
         if (saved != -1 && (saved < 0 || saved >= static_cast<int>(gpus.size()))) {
             saved = 0;
         }
@@ -199,16 +199,14 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_settings->addLanguage(lang.code, lang.name);
     }
     const QString savedLang =
-        AppSettings::instance().value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
+        CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en")).toString();
     // Fall back to English for any value the model can't decode — mirrors the
     // GPU-device clamp above. This also migrates the retired "auto" sentinel and
     // any empty/stale code, keeping the dropdown and the engine in sync (a
     // lingering "auto" would otherwise still trigger detection).
     const QString effectiveLang = asrLanguageOrDefault(savedLang, languages);
     if (effectiveLang != savedLang) {
-        auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrLanguage"), effectiveLang);
-        st.save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrLanguage"), effectiveLang);
     }
     m_settings->setCurrentLanguage(effectiveLang);
     // The language selector only affects whisper/remote; sherpa-onnx takes its
@@ -239,9 +237,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         }
     });
     connect(m_settings, &CopyAssistSettingsDialog::languageChanged, this, [this](const QString& code) {
-        auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrLanguage"), code);
-        st.save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrLanguage"), code);
         // Language is fixed at backend construction (whisper factory arg /
         // remote config), so a change needs an engine rebuild — same as GPU.
         m_tap->setEnabled(false);
@@ -254,14 +250,12 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // Transcript-to-file logging. Restore the path first, then the checkbox, so
     // the toggle handler sees a path and doesn't prompt during restore.
     m_settings->setLogFilePath(
-        AppSettings::instance().value(QStringLiteral("AsrLogFilePath"), QString()).toString());
+        CopyAssistSettings::value(QStringLiteral("AsrLogFilePath"), QString()).toString());
     m_settings->setLogToFile(
-        AppSettings::instance().value(QStringLiteral("AsrLogToFile"), QStringLiteral("False"))
+        CopyAssistSettings::value(QStringLiteral("AsrLogToFile"), QStringLiteral("False"))
             .toString() == QStringLiteral("True"));
     connect(m_settings, &CopyAssistSettingsDialog::logToFileToggled, this, [this](bool on) {
-        auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrLogToFile"), on ? QStringLiteral("True") : QStringLiteral("False"));
-        st.save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrLogToFile"), on ? QStringLiteral("True") : QStringLiteral("False"));
         if (on && m_settings->logFilePath().isEmpty()) {
             promptLogFile(); // enabling with no file yet → ask for one
         }
@@ -272,9 +266,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // Learned Silero VAD. Restore path then checkbox (so the toggle handler sees
     // the path and doesn't prompt during restore).
     m_settings->setVadModelPath(
-        AppSettings::instance().value(QStringLiteral("AsrVadModelPath"), QString()).toString());
+        CopyAssistSettings::value(QStringLiteral("AsrVadModelPath"), QString()).toString());
     m_settings->setUseSileroVad(
-        AppSettings::instance().value(QStringLiteral("AsrVadEnabled"), QStringLiteral("False"))
+        CopyAssistSettings::value(QStringLiteral("AsrVadEnabled"), QStringLiteral("False"))
             .toString() == QStringLiteral("True"));
     // Separate download manager for the Silero VAD model (auto-fetched + SHA-
     // verified + cached like the whisper tiers, so enabling it just works).
@@ -293,9 +287,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_settings->setUseSileroVad(false);
     });
     connect(m_settings, &CopyAssistSettingsDialog::useSileroVadToggled, this, [this](bool on) {
-        auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrVadEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
-        st.save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrVadEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
         if (!m_constructed) {
             return; // restore: the initial buildEngine() already applies the VAD
         }
@@ -325,21 +317,19 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_settings->setLabelSpeakers(false);
     });
     m_settings->setSpeakerModelPath(
-        AppSettings::instance().value(QStringLiteral("AsrSpeakerModelPath"), QString()).toString());
+        CopyAssistSettings::value(QStringLiteral("AsrSpeakerModelPath"), QString()).toString());
     m_settings->setSpeakerThreshold(
-        AppSettings::instance().value(QStringLiteral("AsrSpeakerThreshold"), QStringLiteral("50"))
+        CopyAssistSettings::value(QStringLiteral("AsrSpeakerThreshold"), QStringLiteral("50"))
             .toString().toInt());
     m_settings->setLabelSpeakers(
-        AppSettings::instance().value(QStringLiteral("AsrSpeakerEnabled"), QStringLiteral("False"))
+        CopyAssistSettings::value(QStringLiteral("AsrSpeakerEnabled"), QStringLiteral("False"))
             .toString() == QStringLiteral("True"));
     connect(m_settings, &CopyAssistSettingsDialog::speakerThresholdChanged, this, [this](int pct) {
         saveInt("AsrSpeakerThreshold", pct);
         m_asr->setSpeakerThreshold(pct / 100.0f); // live, no engine rebuild
     });
     connect(m_settings, &CopyAssistSettingsDialog::labelSpeakersToggled, this, [this](bool on) {
-        auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrSpeakerEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
-        st.save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
         if (!m_constructed) {
             return;
         }
@@ -376,13 +366,12 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
 
     // Live VAD tuning (reads m_asr at call time → survives engine rebuild).
-    auto& s = AppSettings::instance();
-    m_panel->setBufferMs(s.value(QStringLiteral("AsrDecodeBufferMs"), QStringLiteral("20000")).toString().toInt());
-    m_panel->setSensitivity(s.value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt());
-    m_panel->setSilenceMs(s.value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
-    m_panel->setFontPx(s.value(QStringLiteral("AsrFontPx"), QStringLiteral("13")).toString().toInt());
+    m_panel->setBufferMs(CopyAssistSettings::value(QStringLiteral("AsrDecodeBufferMs"), QStringLiteral("20000")).toString().toInt());
+    m_panel->setSensitivity(CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt());
+    m_panel->setSilenceMs(CopyAssistSettings::value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
+    m_panel->setFontPx(CopyAssistSettings::value(QStringLiteral("AsrFontPx"), QStringLiteral("13")).toString().toInt());
     m_panel->setNewlineOnSilence(
-        s.value(QStringLiteral("AsrNewlineOnSilence"), QStringLiteral("False")).toString()
+        CopyAssistSettings::value(QStringLiteral("AsrNewlineOnSilence"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
     connect(m_panel, &CopyAssistPanel::bufferMsChanged, this, [this](int ms) {
         m_asr->setDecodeBufferMs(ms);
@@ -399,10 +388,8 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     connect(m_panel, &CopyAssistPanel::fontPxChanged, this,
             [](int px) { saveInt("AsrFontPx", px); });
     connect(m_panel, &CopyAssistPanel::newlineOnSilenceChanged, this, [](bool on) {
-        auto& st = AppSettings::instance();
-        st.setValue(QStringLiteral("AsrNewlineOnSilence"),
+        CopyAssistSettings::setValue(QStringLiteral("AsrNewlineOnSilence"),
                     on ? QStringLiteral("True") : QStringLiteral("False"));
-        st.save();
     });
 
     buildEngine();
@@ -410,6 +397,11 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
 }
 
 CopyAssistController::~CopyAssistController() = default;
+
+PersistentDialog* CopyAssistController::settingsDialog() const
+{
+    return m_settings;
+}
 
 void CopyAssistController::clearDecode()
 {
@@ -440,30 +432,29 @@ void CopyAssistController::buildEngine()
     m_tap = nullptr;
     delete m_asr;
 
-    const int gpuDevice = AppSettings::instance()
-                              .value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0"))
-                              .toString().toInt();
-    const QString language = AppSettings::instance()
-                                 .value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
-                                 .toString();
+    const int gpuDevice =
+        CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0"))
+            .toString().toInt();
+    const QString language =
+        CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
+            .toString();
     // Optional learned (Silero) VAD — an .onnx path enables it in the worker;
     // empty (or the toggle off) keeps the built-in energy VAD.
     AsrSegmenter::Config segConfig;
-    auto& appSettings = AppSettings::instance();
-    if (appSettings.value(QStringLiteral("AsrVadEnabled"), QStringLiteral("False")).toString()
+    if (CopyAssistSettings::value(QStringLiteral("AsrVadEnabled"), QStringLiteral("False")).toString()
         == QStringLiteral("True")) {
         segConfig.vadModelPath =
-            appSettings.value(QStringLiteral("AsrVadModelPath"), QString()).toString().toStdString();
+            CopyAssistSettings::value(QStringLiteral("AsrVadModelPath"), QString()).toString().toStdString();
     }
     // Optional speaker labeling (A/B/C…): a speaker-embedding .onnx path + the
     // cosine match threshold (stored 0–100 → 0.0–1.0).
-    if (appSettings.value(QStringLiteral("AsrSpeakerEnabled"), QStringLiteral("False")).toString()
+    if (CopyAssistSettings::value(QStringLiteral("AsrSpeakerEnabled"), QStringLiteral("False")).toString()
         == QStringLiteral("True")) {
         segConfig.speakerModelPath =
-            appSettings.value(QStringLiteral("AsrSpeakerModelPath"), QString()).toString().toStdString();
+            CopyAssistSettings::value(QStringLiteral("AsrSpeakerModelPath"), QString()).toString().toStdString();
     }
     segConfig.speakerThreshold =
-        appSettings.value(QStringLiteral("AsrSpeakerThreshold"), QStringLiteral("50"))
+        CopyAssistSettings::value(QStringLiteral("AsrSpeakerThreshold"), QStringLiteral("50"))
             .toString().toInt() / 100.0f;
     switch (m_backend) {
     case AsrBackendKind::Remote:
@@ -511,11 +502,10 @@ void CopyAssistController::buildEngine()
 
 void CopyAssistController::applyTuning()
 {
-    auto& s = AppSettings::instance();
-    m_asr->setDecodeBufferMs(s.value(QStringLiteral("AsrDecodeBufferMs"), QStringLiteral("20000")).toString().toInt());
+    m_asr->setDecodeBufferMs(CopyAssistSettings::value(QStringLiteral("AsrDecodeBufferMs"), QStringLiteral("20000")).toString().toInt());
     m_asr->setSpeechRms(sensitivityToRms(
-        s.value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
-    m_asr->setSilenceDurationMs(s.value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
+        CopyAssistSettings::value(QStringLiteral("AsrSensitivity"), QStringLiteral("80")).toString().toInt()));
+    m_asr->setSilenceDurationMs(CopyAssistSettings::value(QStringLiteral("AsrSilenceMs"), QStringLiteral("300")).toString().toInt());
 }
 
 void CopyAssistController::onEnableToggled(bool on)
@@ -550,8 +540,7 @@ void CopyAssistController::onTierChanged(const QString& tierId)
             return;
         }
         m_customModelPath = path;
-        AppSettings::instance().setValue(QStringLiteral("AsrCustomModelPath"), path);
-        AppSettings::instance().save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrCustomModelPath"), path);
         m_settings->setTierLabel(QString::fromLatin1(kCustomTierId),
                                  tr("Custom: %1").arg(QFileInfo(path).fileName()));
         setBackend(AsrBackendKind::Whisper, tierId);
@@ -562,8 +551,7 @@ void CopyAssistController::onTierChanged(const QString& tierId)
             return;
         }
         m_sherpaModelDir = dir;
-        AppSettings::instance().setValue(QStringLiteral("AsrSherpaModelDir"), dir);
-        AppSettings::instance().save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrSherpaModelDir"), dir);
         m_settings->setTierLabel(QString::fromLatin1(kSherpaTierId),
                                  tr("Sherpa: %1").arg(QDir(dir).dirName()));
         setBackend(AsrBackendKind::SherpaOnnx, tierId);
@@ -611,8 +599,7 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
     // Leaving the remote backend clears the persisted auto-connect flag so the
     // next launch starts on the local engine.
     if (prev == AsrBackendKind::Remote && kind != AsrBackendKind::Remote) {
-        AppSettings::instance().setValue(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("False"));
-        AppSettings::instance().save();
+        CopyAssistSettings::setValue(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("False"));
     }
 
     // Only a change of backend kind needs a fresh engine; switching models within
@@ -701,12 +688,10 @@ bool CopyAssistController::promptRemoteConfig()
         return false;
     }
 
-    auto& s = AppSettings::instance();
-    s.setValue(QStringLiteral("AsrRemoteUrl"), urlEdit->text().trimmed());
-    s.setValue(QStringLiteral("AsrRemoteApiKey"), keyEdit->text());
-    s.setValue(QStringLiteral("AsrRemoteModel"), modelEdit->text().trimmed());
-    s.setValue(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("True"));
-    s.save();
+    CopyAssistSettings::setValue(QStringLiteral("AsrRemoteUrl"), urlEdit->text().trimmed());
+    CopyAssistSettings::setValue(QStringLiteral("AsrRemoteApiKey"), keyEdit->text());
+    CopyAssistSettings::setValue(QStringLiteral("AsrRemoteModel"), modelEdit->text().trimmed());
+    CopyAssistSettings::setValue(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("True"));
     return true;
 }
 
@@ -750,8 +735,7 @@ void CopyAssistController::promptVadModel()
         return;
     }
     m_settings->setVadModelPath(path);
-    AppSettings::instance().setValue(QStringLiteral("AsrVadModelPath"), path);
-    AppSettings::instance().save();
+    CopyAssistSettings::setValue(QStringLiteral("AsrVadModelPath"), path);
     rebuildEngine();
 }
 
@@ -789,8 +773,7 @@ void CopyAssistController::ensureVadModel()
 void CopyAssistController::onVadModelReady(const QString& path)
 {
     m_settings->setVadModelPath(path);
-    AppSettings::instance().setValue(QStringLiteral("AsrVadModelPath"), path);
-    AppSettings::instance().save();
+    CopyAssistSettings::setValue(QStringLiteral("AsrVadModelPath"), path);
     rebuildEngine();
 }
 
@@ -828,8 +811,7 @@ void CopyAssistController::ensureSpeakerModel()
 void CopyAssistController::onSpeakerModelReady(const QString& path)
 {
     m_settings->setSpeakerModelPath(path);
-    AppSettings::instance().setValue(QStringLiteral("AsrSpeakerModelPath"), path);
-    AppSettings::instance().save();
+    CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerModelPath"), path);
     rebuildEngine();
 }
 
@@ -849,8 +831,7 @@ void CopyAssistController::promptSpeakerModel()
         return;
     }
     m_settings->setSpeakerModelPath(path);
-    AppSettings::instance().setValue(QStringLiteral("AsrSpeakerModelPath"), path);
-    AppSettings::instance().save();
+    CopyAssistSettings::setValue(QStringLiteral("AsrSpeakerModelPath"), path);
     rebuildEngine();
 }
 
@@ -886,8 +867,7 @@ void CopyAssistController::promptLogFile()
         return;
     }
     m_settings->setLogFilePath(path);
-    AppSettings::instance().setValue(QStringLiteral("AsrLogFilePath"), path);
-    AppSettings::instance().save();
+    CopyAssistSettings::setValue(QStringLiteral("AsrLogFilePath"), path);
 }
 
 bool CopyAssistController::appendLogRaw(const QString& text)

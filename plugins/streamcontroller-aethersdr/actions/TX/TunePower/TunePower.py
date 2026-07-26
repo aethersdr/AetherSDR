@@ -21,12 +21,12 @@ class TunePower(ActionBase):
     def event_callback(self, event, data):
         if event == Input.Dial.Events.TURN_CW:
             self._power = min(100, self._power + 5)
-            self.plugin_base.tci.send(f"tune_drive:{self._power};")
+            self.plugin_base.tci.send(f"tune_drive:0,{self._power};")
         elif event == Input.Dial.Events.TURN_CCW:
             self._power = max(0, self._power - 5)
-            self.plugin_base.tci.send(f"tune_drive:{self._power};")
+            self.plugin_base.tci.send(f"tune_drive:0,{self._power};")
         elif event == Input.Key.Events.DOWN:
             self._power = (self._power + 10) % 110
             if self._power == 0:
                 self._power = 10
-            self.plugin_base.tci.send(f"tune_drive:{self._power};")
+            self.plugin_base.tci.send(f"tune_drive:0,{self._power};")

@@ -2,18 +2,40 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include <QString>
+#include <optional>
 
 namespace AetherSDR {
 
 class RadioModel;
 class SliceModel;
+class TciRoutingState;
 
 // TCI protocol handler — text command parser and response generator.
 // No I/O — receives a command string, returns the response.
 // Reference: https://github.com/ExpertSDR3/TCI (protocol v2.0)
 class TciProtocol {
 public:
-    explicit TciProtocol(RadioModel* model);
+    struct VfoRequest
+    {
+        int trx { -1 };
+        int channel { -1 };
+        long long frequencyHz { 0 };
+    };
+
+    struct SplitRequest
+    {
+        int trx { -1 };
+        bool enabled { false };
+    };
+
+    struct TrxRequest
+    {
+        int trx { -1 };
+        bool transmitting { false };
+        QString source;
+    };
+
+    explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr);
 
     // Process one TCI command (without trailing semicolon).
     // Returns response string (with trailing semicolon) or empty if no response.
@@ -26,6 +48,9 @@ public:
     // this returns a notification to broadcast to other clients.
     // Returns empty if no broadcast needed.
     QString pendingNotification();
+    std::optional<VfoRequest> takeVfoRequest();
+    std::optional<SplitRequest> takeSplitRequest();
+    std::optional<TrxRequest> takeTrxRequest();
 
     // After handleCommand(), if the command was a master-volume SET, this
     // returns the requested level (0-100). -1 means no master-volume change
@@ -47,7 +72,33 @@ public:
     // TciServer directly (same pattern as pendingMasterVolume).
     int pendingTxGain() const { return m_pendingTxGain; }
 
+    // Which TCI TRX currently holds GUI focus (#4160). TciServer owns this
+    // value and pushes it in — it cannot be derived reliably by scanning
+    // slices for isActive(): SliceModel::setActive() sets the new slice's
+    // flag optimistically (SliceModel.cpp, #3854 review) while the outgoing
+    // slice keeps its flag until the radio echoes active=0, so for one round
+    // trip TWO slices report active and a scan returns whichever comes first
+    // in slice order. -1 = not yet known, in which case the scan is used as
+    // the startup fallback (before any focus change has been observed).
+    // The letter is sanitized here, not just at the TciServer call site: this
+    // is the boundary the value crosses on its way to the wire, and a raw
+    // radio-supplied ',' or ';' would corrupt TCI framing for every client on
+    // the socket. Enforcing it in the setter keeps the invariant independent of
+    // any caller remembering (Principle VII). Sanitizing is idempotent, so the
+    // server sanitizing first costs nothing.
+    void setActiveSlice(int trx, const QString& letter)
+    {
+        m_activeTrx = trx;
+        m_activeLetter = sanitizeSliceLetter(letter);
+    }
+    int activeTrx() const { return m_activeTrx; }
+
 private:
+    // Resolves the focused slice into its trx and display letter, falling
+    // back to a slice scan while m_activeTrx is -1. Returns false when there
+    // is no model or no slice reports active.
+    bool resolveActiveSlice(int& trx, QString& letter) const;
+
     // Command handlers — return response string or empty
     QString cmdVfo(const QStringList& args, bool isSet);
     QString cmdModulation(const QStringList& args, bool isSet);
@@ -79,6 +130,7 @@ private:
     // AetherSDR extensions (DVK record/play)
     QString cmdRxRecord(const QStringList& args, bool isSet);
     QString cmdRxPlay(const QStringList& args, bool isSet);
+    QString cmdActiveSlice(const QStringList& args);
     QString cmdSpot(const QStringList& args);
     QString cmdSpotDelete(const QStringList& args);
     QString cmdSpotClear();
@@ -114,16 +166,37 @@ private:
 
     // Helpers
     SliceModel* sliceForTrx(int trx) const;
+    SliceModel* sliceForVfo(int trx, int channel) const;
+    int txTrx() const;
 
 public:
     // Mode conversion (public for TciServer broadcast use)
     static QString smartsdrToTci(const QString& mode);
     static QString tciToSmartSDR(const QString& mode);
 
+    // Slice display letter for `active_slice` (#4160), public for the same
+    // reason. `index_letter` is radio-supplied, and a stray ',' or ';' in it
+    // would corrupt the TCI framing for every client, so it is reduced to the
+    // short alphanumeric label it is meant to be (Principle VII).
+    static QString sanitizeSliceLetter(const QString& letter);
+
     // Map a slice to its contiguous TCI TRX index (0..N-1) within the
     // owned-slice list.  Falls back to the raw Flex sliceId() if the
     // slice is not in the model's list.
     static int tciTrxForSlice(RadioModel* model, const SliceModel* slice);
+
+    // The single scan for "which trx is the TX slice", returning -1 when none
+    // is marked. Both TX-trx resolvers build on this so the scan lives in one
+    // place; they differ ONLY in how they map the -1 sentinel (txTrx() below
+    // returns 0 for the request/response wire; TciServer's async broadcast
+    // resolves -1 against a cached last-known trx, #4161). Keeping the scan
+    // shared means a future change to slice iteration can't drift one path.
+    static int txSliceTrxOrNone(RadioModel* model);
+
+    // Resolve a contiguous TCI receiver index, then the legacy raw Flex slice
+    // id, then the first slice for compatibility. Shared by parser and server
+    // command paths so GET and SET never target different receivers.
+    static SliceModel* resolveSliceForTrx(RadioModel* model, int trx);
 
     static long long mhzToHz(double mhz);
 
@@ -135,9 +208,15 @@ public:
 private:
 
     RadioModel* m_model;
-    QString     m_pendingNotification;
+    TciRoutingState* m_routingState;
+    QString m_pendingNotification;
+    std::optional<VfoRequest> m_vfoRequest;
+    std::optional<SplitRequest> m_splitRequest;
+    std::optional<TrxRequest> m_trxRequest;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
+    int         m_activeTrx{-1};             // -1 = focus not yet known (#4160)
+    QString     m_activeLetter;              // focused slice's display letter (#4160)
     bool        m_started{false};  // client sent START
 };
 

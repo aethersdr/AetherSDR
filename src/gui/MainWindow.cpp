@@ -128,7 +128,6 @@
 #include "models/BandPlanManager.h"
 #include "models/XvtrPolicy.h"
 #include "core/BandStackSettings.h"
-#include "gui/AutoConnectPolicy.h"
 #include "gui/BandStackPanel.h"
 #include "models/TunerModel.h"
 #include "models/TransmitModel.h"
@@ -508,18 +507,6 @@ static constexpr const char* kPaTempUnitSettingKey = "PaTempDisplayUnit";
 // isCwMomentaryActionId moved to MainWindow_Controllers.cpp (#3351 Phase 2a).
 
 // Shortcut-state helpers (textInputCaptured/shortcutGuard/...) lives in MainWindow_Shortcuts.cpp (#3351 Phase 1c).
-
-// Under the automation bridge there is no operator to answer a client-slot
-// contention dialog, so blocking on one hangs the headless instance (#4401).
-// aether::resolveClientSlotAction() returns Decline for that case; this just
-// records why we bailed so parallel-run failures are diagnosable.
-static void logAutomationSlotDecline(const QString& radioLabel)
-{
-    qCInfo(lcGui).noquote()
-        << "Automation: declining slot-contended connect to" << radioLabel
-        << "— no operator to resolve the client-slot dialog (#4401)";
-}
-
 bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
                                                QList<quint32>* disconnectHandles)
 {
@@ -527,23 +514,9 @@ bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
         disconnectHandles->clear();
 
     const auto clients = buildDisconnectClients(info);
-    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
 
-    switch (aether::resolveClientSlotAction(
-                info.multiFlexEnabled, clients.size(), maxSlices,
-                qEnvironmentVariableIsSet("AETHER_AUTOMATION"))) {
-    case aether::ClientSlotAction::Connect:
-        return true;
-    case aether::ClientSlotAction::Decline:
-        logAutomationSlotDecline(info.model);
-        return false;
-    case aether::ClientSlotAction::Prompt:
-        break;
-    }
-
-    // Contended and interactive: prompt. When multiFLEX is disabled any connected
-    // client blocks us — show the Connected Stations dialog so the user can
-    // disconnect them first; otherwise the model's slots are simply full.
+    // When multiFLEX is disabled, any connected client blocks us — show the
+    // Connected Stations dialog so the user can disconnect them first.
     if (!info.multiFlexEnabled && !clients.isEmpty()) {
         ConnectedStationsDialog::RadioMeta meta;
         meta.model    = info.model;
@@ -572,6 +545,10 @@ bool MainWindow::confirmClientSlotAvailability(const RadioInfo& info,
         return true;
     }
 
+    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
+    if (clients.isEmpty() || clients.size() < maxSlices)
+        return true;
+
     ClientDisconnectDialog dialog(clients, maxSlices, this);
     if (dialog.exec() != QDialog::Accepted)
         return false;
@@ -588,27 +565,12 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
         disconnectHandles->clear();
 
     const auto clients = buildDisconnectClients(info);
-    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
 
     // licensedClients == 1 means the radio's multiFLEX license allows only one
     // simultaneous client — effectively mf_enable=0 from the SmartLink perspective.
     // WanRadioInfo defaults to 1 when licensed_clients is absent from the SmartLink
     // response (older firmware, partial parse), so this gate is fail-safe: it blocks
-    // rather than allows.
-    switch (aether::resolveClientSlotAction(
-                info.licensedClients > 1, clients.size(), maxSlices,
-                qEnvironmentVariableIsSet("AETHER_AUTOMATION"))) {
-    case aether::ClientSlotAction::Connect:
-        return true;
-    case aether::ClientSlotAction::Decline:
-        logAutomationSlotDecline(info.model);
-        return false;
-    case aether::ClientSlotAction::Prompt:
-        break;
-    }
-
-    // Contended and interactive: prompt. Log when we hit the licensedClients=1
-    // default so field reports are diagnosable.
+    // rather than allows.  Log when we hit the default so field reports are diagnosable.
     if (info.licensedClients <= 1 && !clients.isEmpty()) {
         if (info.licensedClients == 1)
             qCWarning(lcGui) << "MainWindow: WAN licensedClients=1 (may be default) — "
@@ -639,6 +601,10 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
             *disconnectHandles = {handle};
         return true;
     }
+
+    const int maxSlices = RadioModel::maxSlicesForModel(info.model);
+    if (clients.isEmpty() || clients.size() < maxSlices)
+        return true;
 
     ClientDisconnectDialog dialog(clients, maxSlices, this);
     if (dialog.exec() != QDialog::Accepted)
@@ -755,6 +721,14 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
     // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
     // connection, so we can pass our port to the SmartLink server.
     // The server tells the radio our public IP:port for UDP streaming.
+    // SmartLink is a Flex service, so in practice this path only runs with a
+    // PanadapterStream present -- but it dereferenced it bare, and "in practice"
+    // is what the HL2 bring-up kept disproving. Decline instead of crashing.
+    if (!m_radioModel.panStream()) {
+        qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
+                   << "— backend does not use VITA-49 transport";
+        return;
+    }
     quint16 udpPort = m_radioModel.panStream()->localPort();
     if (udpPort == 0) {
         // Not yet bound — start WAN early to get a port
@@ -1076,6 +1050,21 @@ MainWindow::MainWindow(QWidget* parent)
         AppSettings::instance().value("AudioBufferMs", "100").toInt());
     m_audio->moveToThread(m_audioThread);
     m_audioThread->start();
+    const auto updateAetherDspPolicy = [this](bool) {
+        updateAetherDspModePolicy();
+    };
+    connect(m_audio, &AudioEngine::nr2EnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nr4EnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::mnrEnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::dfnrEnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::rn2EnabledChanged,
+            this, updateAetherDspPolicy);
+    connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
+            this, updateAetherDspPolicy);
     // Start the CW-sidetone record pump on the audio thread (#2539): queued so
     // its QTimer is created + started on m_audio's thread after the move.
     QMetaObject::invokeMethod(m_audio, [ae = m_audio]() { ae->startCwRecordPump(); },
@@ -1355,17 +1344,18 @@ MainWindow::MainWindow(QWidget* parent)
     // Display overlay connections are now per-pan in wirePanadapter().
 
     // ── Panadapter stream → audio engine ──────────────────────────────────
-    // All VITA-49 traffic arrives on the single client udpport socket owned
-    // by PanadapterStream. It strips the header from IF-Data packets and emits
-    // audioDataReady(); we feed that directly to the QAudioSink.
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            m_audio, &AudioEngine::feedAudioData);
-    // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
-    // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the
-    // identical AudioEngine path. Harmless for real backends: FlexBackend never
-    // emits audioFrameReady (its audio flows through PanadapterStream above), so
-    // this connection simply stays idle unless a SimBackend is active.
-    // Wire the backend-owned seam signals (audio + spectrum). Done in a helper so
+    // All VITA-49 traffic arrives on the single client udpport socket owned by
+    // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
+    // Every RX-audio sink for that signal — the QAudioSink feed, the QSO-recorder
+    // RX tap, and the CW/RTTY decoder feeds — is wired in one helper so a Flex-
+    // backend swap can rebind an identical set (the stream is destroyed/rebuilt
+    // on a family change; audioDataReady carries Flex RX audio itself).
+    wirePanStreamRxAudioSinks();
+    // Separately, wire the backend-OWNED seam signals (audio + spectrum), which do
+    // not flow through PanadapterStream: the demo/sim backend delivers RX audio and
+    // its panadapter FFT directly over IRadioBackend (no VITA-49), in the same
+    // 24 kHz stereo float32 format, so it feeds the identical AudioEngine path.
+    // Harmless for Flex, which never emits those seam signals. Done in a helper so
     // it can be re-run whenever RadioModel rebuilds the backend — the connect-time
     // Flex↔Sim swap (RFC #4288) destroys the old backend and builds a new one, and
     // these connections must follow to the new instance or the demo comes up with
@@ -1388,13 +1378,12 @@ MainWindow::MainWindow(QWidget* parent)
     wireKiwiSdr();
 
     // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
-    // RX (float32) comes from the panadapter stream; TX (int16 post-limiter
-    // monitor) from AudioEngine::txFinalMonitorPcmReady — the source that
-    // carries SSB/phone TX. Without the TX tap, Client-Side recordings were
-    // full-length silence during transmit (#3556). The recorder MOX-gates the
-    // two so the file is a single time-interleaved RX/TX stream.
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            m_qsoRecorder, &QsoRecorder::feedRxAudio);
+    // RX (float32) comes from the panadapter stream (wired in
+    // wirePanStreamRxAudioSinks() above); TX (int16 post-limiter monitor) from
+    // AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone
+    // TX. Without the TX tap, Client-Side recordings were full-length silence
+    // during transmit (#3556). The recorder MOX-gates the two so the file is a
+    // single time-interleaved RX/TX stream.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
@@ -1410,18 +1399,11 @@ MainWindow::MainWindow(QWidget* parent)
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
-    // Audio feed is global (same audio for all pans).
-    // Text/stats output is routed to the pan owning the active slice
-    // via routeCwDecoderOutput(), which re-wires on active slice change (#864).
-    //
-    // RX feed is gated on CwDecodeSettings::rxEnabled() (#2417).  Cheap
-    // per-packet check so the toggle can flip live from the dialog
-    // without disconnecting/reconnecting signal wiring.
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            &m_cwDecoder, [this](const QByteArray& pcm) {
-                if (CwDecodeSettings::rxEnabled())
-                    m_cwDecoder.feedAudio(pcm);
-            });
+    // Audio feed is global (same audio for all pans) and lives in
+    // wirePanStreamRxAudioSinks() above (RX feed gated on
+    // CwDecodeSettings::rxEnabled(), #2417). Text/stats output is routed to the
+    // pan owning the active slice via routeCwDecoderOutput(), which re-wires on
+    // active slice change (#864).
 
     // TX-side CW decoder feed (#2417): AudioEngine taps the sidetone
     // generator's mono signal, downsamples 48→24 kHz, and emits the
@@ -1445,12 +1427,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
-    // ── RTTY decoder: feed audio ────────────────────────────────────────
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            &m_rttyDecoder, [this](const QByteArray& pcm) {
-                if (m_rttyDecoder.isRunning())
-                    m_rttyDecoder.feedAudio(pcm);
-            });
+    // RTTY decoder audio feed is wired in wirePanStreamRxAudioSinks() above,
+    // gated on the decoder being running.
 
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
     connect(m_appletPanel->rxApplet(), &RxApplet::afGainChanged, this, [this](int v) {
@@ -2060,11 +2038,12 @@ MainWindow::MainWindow(QWidget* parent)
         m_connPanel->addDemoRadio();
     }
 
-    // A process-scoped override (AETHER_AUTOMATION_NO_AUTOCONNECT) keeps an
-    // automation/CI launch idle without flipping the persistent setting (#4401).
-    const bool autoConnectToLastRadio = aether::savedRadioAutoConnectAllowed(
-        qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT"),
-        AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True");
+    // Saved-radio autoconnect is controlled solely by AutoConnectToLastRadio for
+    // both interactive and automation launches (#4421 restored this after #4401's
+    // squash pulled in a later reconciliation; the AETHER_AUTOMATION_NO_AUTOCONNECT
+    // override and its helper were removed application-wide).
+    const bool autoConnectToLastRadio =
+        AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True";
     const QString startupLastSerial =
         AppSettings::instance().value("LastConnectedRadioSerial").toString();
     if (!startupLastSerial.isEmpty() && autoConnectToLastRadio) {
@@ -2078,9 +2057,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_connPanel, &ConnectionPanel::routedRadioFound,
             this, [this](const RadioInfo& info) {
         if (m_userDisconnected || m_radioModel.isConnected()) return;
-        if (!aether::savedRadioAutoConnectAllowed(
-                qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_AUTOCONNECT"),
-                AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True"))
+        if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
             return;
         const QString lastSerial = AppSettings::instance()
             .value("LastConnectedRadioSerial").toString();
@@ -3278,12 +3255,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // DAX IQ channel is radio-authoritative — no client-side persistence needed.
     // The radio echoes daxiq_channel in pan status on reconnect.
 
-    // Save client-side DSP state before destructor disables them
-    Nr2SettingsModel::instance().setEnabled(m_audio->nr2Enabled());
-    s.setValue("ClientRn2Enabled", m_audio->rn2Enabled() ? "True" : "False");
-    s.setValue("ClientNr4Enabled", m_audio->nr4Enabled() ? "True" : "False");
-    s.setValue("ClientDfnrEnabled", m_audio->dfnrEnabled() ? "True" : "False");
-    s.setValue("ClientMnrEnabled", m_audio->mnrEnabled() ? "True" : "False");
+    // Persist an automatically-disabled method as enabled so quitting while an
+    // audible CW/digital slice is present does not erase the user's selection.
+    // A manual button override clears the remembered method, so actual visible
+    // state remains authoritative in that case.
+    const QString persistedAetherDspMethod =
+        m_aetherDspModePolicy.methodForPersistence(activeAetherDspMethod());
+    Nr2SettingsModel::instance().setEnabled(
+        persistedAetherDspMethod == QStringLiteral("NR2"));
+    s.setValue("ClientRn2Enabled",
+               persistedAetherDspMethod == QStringLiteral("RN2") ? "True" : "False");
+    s.setValue("ClientNr4Enabled",
+               persistedAetherDspMethod == QStringLiteral("NR4") ? "True" : "False");
+    s.setValue("ClientDfnrEnabled",
+               persistedAetherDspMethod == QStringLiteral("DFNR") ? "True" : "False");
+    s.setValue("ClientMnrEnabled",
+               persistedAetherDspMethod == QStringLiteral("MNR") ? "True" : "False");
     // BNR not persisted — requires manual enable each session
 
     s.save();
@@ -4634,19 +4621,31 @@ void MainWindow::buildUI()
     gpsStack->setObjectName(QStringLiteral("gpsStatusButton"));
     gpsStack->setAutoDefault(false);
     gpsStack->setDefault(false);
+    gpsStack->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     gpsStack->setCursor(Qt::PointingHandCursor);
     gpsStack->setFocusPolicy(Qt::TabFocus);
     gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
     gpsStack->setAccessibleName(QStringLiteral("GPS and station location"));
     gpsStack->setAccessibleDescription(
         QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
+    // Flat, label-style resting state so the two rows sit on the same baselines
+    // as the neighbouring plain-QWidget telemetry stacks, with hover / pressed /
+    // focus feedback so the click target stays discoverable.
+    //
+    // The focus ring uses `outline` rather than `border`: Qt honours QSS
+    // `outline` only on `:focus` (it is wired to the focus-rect paint path), so
+    // hover must use `border` instead — an `outline` there silently never
+    // paints. Neither property perturbs this widget's layout: QStyleSheetStyle
+    // does not fold the button's frame into the contents rect its child layout
+    // sees, so the two rows keep the sibling stacks' y positions and full label
+    // width in every state. Do not add `padding` here — that one does consume
+    // layout space and would offset the rows against the borderless siblings.
     ThemeManager::instance().applyStyleSheet(gpsStack, QStringLiteral(
-        "QPushButton { background: transparent; border: 1px solid transparent; "
-        "border-radius: 4px; padding: 1px 5px; }"
+        "QPushButton { background: transparent; border: none; padding: 0; }"
         "QPushButton:hover { background: {{color.background.1}}; "
-        "border-color: {{color.border.strong}}; }"
-        "QPushButton:focus { border-color: {{color.border.accent}}; }"
-        "QPushButton:pressed { background: {{color.background.2}}; }"));
+        "border: 1px solid {{color.border.strong}}; }"
+        "QPushButton:pressed { background: {{color.background.2}}; }"
+        "QPushButton:focus { outline: 1px solid {{color.border.accent}}; }"));
     connect(gpsStack, &QPushButton::clicked,
             this, &MainWindow::showGpsLocationDialog);
     reserveTelemetryStack(gpsStack, {

@@ -1,4 +1,5 @@
 #include "core/TciProtocol.h"
+#include "core/TciRoutingState.h"
 
 #include <QCoreApplication>
 #include <QString>
@@ -6,6 +7,257 @@
 #include <cstdio>
 
 using namespace AetherSDR;
+
+namespace
+{
+
+bool check(bool condition, const char* message)
+{
+    if (condition) {
+        return true;
+    }
+    std::fprintf(stderr, "%s\n", message);
+    return false;
+}
+
+bool testRoutingPolicy()
+{
+    using Action = TciRoutingState::RouteAction;
+    using Owner = TciRoutingState::TxRouteOwner;
+
+    TciRoutingState routing;
+    QVector<TciSliceEndpoint> oneSlice { { 4, true } };
+    auto decision = routing.resolveVfoB(4, oneSlice);
+    if (!check(decision.action == Action::Create,
+            "single-slice VFO B must request a distinct TX slice")) {
+        return false;
+    }
+
+    QVector<TciSliceEndpoint> satellite { { 4, false }, { 7, true } };
+    decision = routing.resolveVfoB(4, satellite);
+    if (!check(decision.action == Action::UseExisting && decision.txSliceId == 7
+                && decision.owner == Owner::External,
+            "external satellite TX slice must be preserved")) {
+        return false;
+    }
+    if (!check(routing.resolvePttSlice(4, satellite) == 7,
+            "PTT must resolve to the externally selected TX slice")) {
+        return false;
+    }
+    if (!check(!routing.setSplitRequested(false)
+                && routing.owner() == Owner::External
+                && routing.txSliceId() == 7,
+            "steady split false must not reclaim an external TX route")) {
+        return false;
+    }
+
+    routing.reset();
+    QVector<TciSliceEndpoint> independentReceiver { { 4, true }, { 7, false } };
+    decision = routing.resolveVfoB(4, independentReceiver);
+    if (!check(decision.action == Action::Create && decision.txSliceId < 0
+                && decision.owner == Owner::TciCreated,
+            "VFO B must not commandeer an independent second receiver")) {
+        return false;
+    }
+    if (!check(!routing.setSplitRequested(false)
+                && !routing.ownsRoute()
+                && routing.txSliceId() < 0,
+            "steady split false must leave the independent receiver untouched")) {
+        return false;
+    }
+
+    if (!check(routing.setSplitRequested(true), "split false-to-true must be an edge")) {
+        return false;
+    }
+    if (!check(!routing.setSplitRequested(true), "duplicate split true must be idempotent")) {
+        return false;
+    }
+    if (!check(routing.setSplitRequested(false) && !routing.ownsRoute(),
+            "split disable without a route must remain ownership-free")) {
+        return false;
+    }
+
+    routing.bindCreatedRoute(4, 7);
+    routing.removeSlice(4);
+    if (!check(routing.txSliceId() < 0 && !routing.splitRequested(),
+            "removing the stable RX slice must invalidate the route")) {
+        return false;
+    }
+    return true;
+}
+
+bool testWsjtxRoutingContracts()
+{
+    using Action = TciRoutingState::RouteAction;
+    using Owner = TciRoutingState::TxRouteOwner;
+
+    // WSJT-X programs VFO B after explicitly reporting split false. That
+    // steady false is compatibility state, not permission to erase VFO B.
+    TciRoutingState singleRoute;
+    TciProtocol singleProtocol(nullptr, &singleRoute);
+    singleProtocol.handleCommand(QStringLiteral("split_enable:0,false"));
+    const auto singleSplit = singleProtocol.takeSplitRequest();
+    if (!check(singleSplit && !singleSplit->enabled
+                && !singleRoute.setSplitRequested(singleSplit->enabled),
+            "WSJT-X single-slice steady split false must be a no-op")) {
+        return false;
+    }
+    singleProtocol.handleCommand(QStringLiteral("vfo:0,1,14076000"));
+    const auto singleVfo = singleProtocol.takeVfoRequest();
+    QVector<TciSliceEndpoint> singleTopology { { 4, true } };
+    const auto singleDecision = singleRoute.resolveVfoB(4, singleTopology);
+    if (!check(singleVfo && singleVfo->channel == 1
+                && singleVfo->frequencyHz == 14076000
+                && singleDecision.action == Action::Create,
+            "WSJT-X single-slice VFO B must create a distinct TX route")) {
+        return false;
+    }
+    singleRoute.bindCreatedRoute(4, 9);
+    QVector<TciSliceEndpoint> createdTopology { { 4, false }, { 9, true } };
+    if (!check(singleRoute.owner() == Owner::TciCreated
+                && singleRoute.resolvePttSlice(4, createdTopology) == 9,
+            "WSJT-X single-slice TRX must key the created VFO B slice")) {
+        return false;
+    }
+    singleProtocol.handleCommand(QStringLiteral("trx:0,true,tci"));
+    const auto singleTrx = singleProtocol.takeTrxRequest();
+    if (!check(singleTrx && singleTrx->transmitting,
+            "WSJT-X single-slice TRX request must survive route setup")) {
+        return false;
+    }
+
+    // A second non-TX slice may be an operator's independent receiver. WSJT-X
+    // must leave it untouched and create a separately owned VFO B route.
+    TciRoutingState multiRoute;
+    TciProtocol multiProtocol(nullptr, &multiRoute);
+    multiProtocol.handleCommand(QStringLiteral("split_enable:0,false"));
+    const auto multiSplit = multiProtocol.takeSplitRequest();
+    QVector<TciSliceEndpoint> occupiedTopology { { 4, true }, { 7, false } };
+    const auto occupiedDecision = multiRoute.resolveVfoB(4, occupiedTopology);
+    if (!check(multiSplit && !multiRoute.setSplitRequested(multiSplit->enabled)
+                && occupiedDecision.action == Action::Create,
+            "WSJT-X multi-slice VFO B must preserve an independent receiver")) {
+        return false;
+    }
+    multiProtocol.handleCommand(QStringLiteral("vfo:0,1,14076000"));
+    const auto multiVfo = multiProtocol.takeVfoRequest();
+    multiRoute.bindCreatedRoute(4, 9);
+    QVector<TciSliceEndpoint> createdMultiTopology {
+        { 4, false }, { 7, false }, { 9, true }
+    };
+    if (!check(multiVfo && multiVfo->channel == 1
+                && multiRoute.owner() == Owner::TciCreated
+                && multiRoute.resolvePttSlice(4, createdMultiTopology) == 9,
+            "WSJT-X multi-slice TRX must key the new route, not the other receiver")) {
+        return false;
+    }
+
+    // Satellite controllers own the selected TX slice. TCI may tune and key
+    // it, but a steady false split report must never move TX back to RX.
+    TciRoutingState externalRoute;
+    QVector<TciSliceEndpoint> satelliteTopology { { 4, false }, { 7, true } };
+    const auto externalDecision = externalRoute.resolveVfoB(4, satelliteTopology);
+    if (!check(externalDecision.action == Action::UseExisting
+                && externalDecision.owner == Owner::External
+                && !externalRoute.setSplitRequested(false)
+                && externalRoute.resolvePttSlice(4, satelliteTopology) == 7,
+            "WSJT-X external multi-slice route must preserve satellite TX ownership")) {
+        return false;
+    }
+
+    return true;
+}
+
+bool testDeferredCommands()
+{
+    TciRoutingState routing;
+    TciProtocol protocol(nullptr, &routing);
+
+    if (!check(protocol.handleCommand(QStringLiteral("vfo:0,1,14074000")).isEmpty(),
+            "VFO SET must not be acknowledged by the parser")) {
+        return false;
+    }
+    const auto vfo = protocol.takeVfoRequest();
+    if (!check(vfo && vfo->trx == 0 && vfo->channel == 1 && vfo->frequencyHz == 14074000,
+            "VFO B SET must preserve trx/channel/frequency")) {
+        return false;
+    }
+    if (!check(!protocol.takeVfoRequest(), "VFO request must be consumed exactly once")) {
+        return false;
+    }
+    protocol.handleCommand(QStringLiteral("vfo:0,2,14074000"));
+    if (!check(!protocol.takeVfoRequest(),
+            "VFO SET must reject channels outside the advertised pair")) {
+        return false;
+    }
+
+    protocol.handleCommand(QStringLiteral("split_enable:0,true"));
+    const auto split = protocol.takeSplitRequest();
+    if (!check(split && split->trx == 0 && split->enabled,
+            "split SET must be deferred with explicit requested state")) {
+        return false;
+    }
+
+    protocol.handleCommand(QStringLiteral("trx:0,true,tci"));
+    const auto trx = protocol.takeTrxRequest();
+    if (!check(trx && trx->trx == 0 && trx->transmitting && trx->source == QStringLiteral("tci"),
+            "TRX SET must preserve source and await radio confirmation")) {
+        return false;
+    }
+
+    if (!check(protocol.handleCommand(QStringLiteral("tx_enable:0,true")).isEmpty()
+                && protocol.pendingNotification().isEmpty(),
+            "incoming TX_ENABLE must not mutate server state")) {
+        return false;
+    }
+    return true;
+}
+
+bool testDriveWireContract()
+{
+    TciProtocol protocol(nullptr);
+    struct PowerCommand {
+        const char* name;
+    };
+    const PowerCommand commands[] = {
+        { "drive" },
+        { "tune_drive" },
+    };
+
+    for (const PowerCommand& command : commands) {
+        const QString name = QString::fromLatin1(command.name);
+
+        const QString legacyRead = protocol.handleCommand(name);
+        if (!check(legacyRead == QStringLiteral("%1:0,0;").arg(name),
+                "legacy power read must emit trx,power")) {
+            return false;
+        }
+
+        const QString specRead = protocol.handleCommand(
+            QStringLiteral("%1:1").arg(name));
+        if (!check(specRead == QStringLiteral("%1:1,0;").arg(name)
+                    && protocol.pendingNotification().isEmpty(),
+                "one-argument power command must be a non-mutating TRX read")) {
+            return false;
+        }
+
+        if (!check(protocol.handleCommand(QStringLiteral("%1:1,73").arg(name)).isEmpty()
+                    && protocol.pendingNotification()
+                        == QStringLiteral("%1:1,73;").arg(name),
+                "two-argument power SET must notify with exact trx,power shape")) {
+            return false;
+        }
+
+        protocol.handleCommand(QStringLiteral("%1:1,101").arg(name));
+        if (!check(protocol.pendingNotification().isEmpty(),
+                "out-of-range power SET must be rejected")) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -32,10 +284,12 @@ int main(int argc, char** argv)
     const int readyIndex = greeting.indexOf(QStringLiteral("ready"));
     const int iqRateIndex = greeting.indexOf(QStringLiteral("iq_samplerate:48000"));
     const int startIndex = greeting.indexOf(QStringLiteral("start"));
-    if (readyIndex < 0 || iqRateIndex < 0 || startIndex < 0
+    const int channelsIndex = greeting.indexOf(QStringLiteral("channels_count:2"));
+    if (readyIndex < 0 || iqRateIndex < 0 || startIndex < 0 || channelsIndex < 0
         || iqRateIndex >= readyIndex || readyIndex >= startIndex) {
         std::fprintf(stderr,
-                     "TCI greeting must order iq_samplerate before ready before start\n");
+            "TCI greeting must advertise two channels and order "
+            "iq_samplerate before ready before start\n");
         return 1;
     }
 
@@ -45,6 +299,104 @@ int main(int argc, char** argv)
             std::fprintf(stderr,
                          "TCI greeting must not emit client-owned stream command: %s\n",
                          command.toUtf8().constData());
+            return 1;
+        }
+    }
+
+    if (!testRoutingPolicy() || !testWsjtxRoutingContracts()
+        || !testDeferredCommands() || !testDriveWireContract()) {
+        return 1;
+    }
+
+    // ── active_slice (#4160) — AetherSDR extension, read-only ──────────
+    // Focus is unknown until TciServer observes an activeChanged(true), and
+    // there is no model here to scan: report nothing rather than guess trx 0,
+    // which is exactly the wrong answer the issue is about.
+    if (!protocol.handleCommand(QStringLiteral("active_slice")).isEmpty()) {
+        std::fprintf(stderr,
+                     "active_slice GET must stay silent while focus is unknown\n");
+        return 1;
+    }
+
+    // trx is positional and the operator never sees it; the display letter is
+    // what the GUI shows, so both are reported.
+    protocol.setActiveSlice(1, QStringLiteral("C"));
+    const QString activeGet =
+        protocol.handleCommand(QStringLiteral("active_slice"));
+    if (activeGet != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr,
+                     "active_slice GET should report trx and letter; got %s\n",
+                     activeGet.toUtf8().constData());
+        return 1;
+    }
+
+    // A radio-supplied letter carrying TCI delimiters would corrupt framing
+    // for every client on the socket. The RAW string is passed in on purpose:
+    // sanitizing is the setter's job, so the invariant does not depend on each
+    // caller remembering to pre-clean.
+    protocol.setActiveSlice(1, QStringLiteral("A;drive:0,100"));
+    const QString sanitized =
+        protocol.handleCommand(QStringLiteral("active_slice"));
+    if (sanitized.count(QLatin1Char(';')) != 1
+        || sanitized.count(QLatin1Char(',')) != 1) {
+        std::fprintf(stderr,
+                     "active_slice letter must not inject delimiters; got %s\n",
+                     sanitized.toUtf8().constData());
+        return 1;
+    }
+    protocol.setActiveSlice(1, QStringLiteral("C"));
+
+    // 0-1 args = GET, matching the split handleCommand() documents for every
+    // other command. active_slice has no per-TRX form, but `active_slice:0;` is
+    // the shape a client written against `rx_volume:0;` will send, so it is
+    // answered rather than silently dropped.
+    if (protocol.handleCommand(QStringLiteral("active_slice:0"))
+        != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr,
+                     "active_slice GET with a redundant trx arg must still report\n");
+        return 1;
+    }
+
+    // SET (2+ args) is ignored — focus is GUI-owned. A client must not be able
+    // to steal it, and must not desync every other client by appearing to.
+    if (!protocol.handleCommand(QStringLiteral("active_slice:0,1")).isEmpty()) {
+        std::fprintf(stderr, "active_slice SET must not reply\n");
+        return 1;
+    }
+    if (!protocol.pendingNotification().isEmpty()) {
+        std::fprintf(stderr, "active_slice SET must not notify other clients\n");
+        return 1;
+    }
+    if (protocol.handleCommand(QStringLiteral("active_slice"))
+        != QStringLiteral("active_slice:1,C;")) {
+        std::fprintf(stderr, "active_slice SET must not change reported focus\n");
+        return 1;
+    }
+
+    // Focus can become unknown again: removing the focused slice renumbers
+    // trx and leaves nothing focused until the radio picks a new slice, so
+    // TciServer pushes -1. Report nothing rather than a stale trx.
+    protocol.setActiveSlice(-1, QString());
+    if (!protocol.handleCommand(QStringLiteral("active_slice")).isEmpty()) {
+        std::fprintf(stderr,
+                     "active_slice GET must stay silent once focus is cleared\n");
+        return 1;
+    }
+    // Removing an earlier slice renumbers trx while the letter stays put —
+    // exactly why the letter is reported alongside it.
+    protocol.setActiveSlice(0, QStringLiteral("C"));
+    if (protocol.handleCommand(QStringLiteral("active_slice"))
+        != QStringLiteral("active_slice:0,C;")) {
+        std::fprintf(stderr, "active_slice GET must track renumbered focus\n");
+        return 1;
+    }
+
+    // The greeting carries focus only alongside the rest of the per-slice
+    // state dump, so a model-less protocol must not synthesize one.
+    for (const QString& command : greeting) {
+        if (command.startsWith(QStringLiteral("active_slice"))) {
+            std::fprintf(stderr,
+                         "modelless TCI greeting must not emit active_slice\n");
             return 1;
         }
     }

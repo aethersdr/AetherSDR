@@ -1,4 +1,5 @@
 #include "gui/DssRenderer.h"
+#include "gui/DssDcEdgeMath.h"
 
 #include <QVector>
 
@@ -91,6 +92,67 @@ int testRetainedHistoryOffset()
     renderer.rebuildVisibleFromHistory(3, 14.0, 1.0, -200.0f);
     if (std::abs(strongestBin(renderer) - 220) > 2) {
         return fail("offset 3 should scroll DSS back with the waterfall");
+    }
+
+    return 0;
+}
+
+int testInputScaleResetPreservesHistory()
+{
+    DssRenderer renderer;
+    renderer.setHistoryCapacityRows(12);
+    appendStableHistoryPeak(renderer, 180);
+    renderer.rebuildVisibleFromHistory(0, 14.0, 1.0, -200.0f);
+
+    const int visibleRowsBefore = renderer.rowCount();
+    const int historyRowsBefore = renderer.historyRowCount();
+    const int peakBefore = strongestBin(renderer);
+    renderer.resetInputSmoothing();
+
+    if (renderer.rowCount() != visibleRowsBefore
+        || renderer.historyRowCount() != historyRowsBefore
+        || strongestBin(renderer) != peakBefore) {
+        return fail("input scale reset must preserve decoded DSS history");
+    }
+
+    return 0;
+}
+
+int testInputScaleResetBreaksTemporalBlend()
+{
+    DssRenderer renderer;
+
+    // Settle a strong peak into the live temporal filter so the retained newest
+    // row carries it.
+    const int bin = DssRenderer::kCols / 2;
+    QVector<float> peak(DssRenderer::kCols, -120.0f);
+    peak[bin] = 0.0f;
+    for (int i = 0; i < 6; ++i) {
+        renderer.pushRow(peak);
+    }
+    const float settledPeak = renderer.rowDataRing(renderer.headRing())[bin];
+    if (settledPeak < -90.0f) {
+        return fail("peak did not settle into the live row");
+    }
+
+    // A y_pixels scale change resets input smoothing but preserves history. The
+    // first row pushed afterward must NOT blend against the retained (old-scale)
+    // peak row — a flat floor row should collapse to the floor, not stay lifted
+    // by the temporal IIR term.
+    renderer.resetInputSmoothing();
+    QVector<float> flat(DssRenderer::kCols, -120.0f);
+    renderer.pushRow(flat);
+    const float afterReset = renderer.rowDataRing(renderer.headRing())[bin];
+    if (afterReset > -110.0f) {
+        return fail("input scale reset must forget the temporal blend against "
+                    "the old-scale row");
+    }
+
+    // The break is one-shot: a second flat row is identical (baseline sanity).
+    renderer.pushRow(flat);
+    const float secondRow = renderer.rowDataRing(renderer.headRing())[bin];
+    if (secondRow > -110.0f) {
+        return fail("post-reset rows should track the new-scale input");
     }
 
     return 0;
@@ -218,6 +280,42 @@ int testRowPlateauStats()
     return 0;
 }
 
+int testDcEdgeSpikeFlattening()
+{
+    QVector<float> captured(2255, -68.0f);
+    captured[0] = -48.0f;
+    captured[1] = -48.0f;
+    captured[2] = -56.0f;
+    captured[3] = -66.0f;
+
+    if (!AetherSDR::DssDcEdgeMath::viewStartsAtDc(0.4315127865,
+                                                  0.8630255730)) {
+        return fail("an exact zero-Hz low edge must enable DSS DC repair");
+    }
+    if (AetherSDR::DssDcEdgeMath::viewStartsAtDc(0.4485127865,
+                                                 0.8630255730)) {
+        return fail("a 17 kHz positive low edge must not enable DSS DC repair");
+    }
+
+    const QVector<float> repaired =
+        AetherSDR::DssDcEdgeMath::flattenLeadingSpike(captured);
+    for (int i = 0; i < 3; ++i) {
+        if (std::abs(repaired[i] + 68.0f) > 0.01f) {
+            return fail("captured leading DC spike bins must use the local baseline");
+        }
+    }
+    if (std::abs(repaired[3] - captured[3]) > 0.01f) {
+        return fail("DC repair must stop at the first non-outlier bin");
+    }
+
+    QVector<float> normal(2255, -68.0f);
+    normal[0] = -63.0f;
+    if (AetherSDR::DssDcEdgeMath::flattenLeadingSpike(normal) != normal) {
+        return fail("normal leading FFT variation must remain unchanged");
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -226,6 +324,12 @@ int main()
         return rc;
     }
     if (int rc = testRetainedHistoryOffset(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetPreservesHistory(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetBreaksTemporalBlend(); rc != 0) {
         return rc;
     }
     if (int rc = testRetainedHistoryCapacity(); rc != 0) {
@@ -244,6 +348,9 @@ int main()
         return rc;
     }
     if (int rc = testRowPlateauStats(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testDcEdgeSpikeFlattening(); rc != 0) {
         return rc;
     }
 

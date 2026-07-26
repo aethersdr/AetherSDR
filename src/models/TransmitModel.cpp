@@ -68,8 +68,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool filterCutoffChanged = false;
 
     // ── Core transmit ──
-    changed |= assign(d.rfPower, m_rfPower);
-    changed |= assign(d.tunePower, m_tunePower);
+    // rf_power / tune_power emit inline (like max_power_level below): the
+    // radio restores per-band power on QSY, and TCI clients need that edge
+    // distinctly, not folded into the catch-all stateChanged() (#4161).
+    if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
+    if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
     changed |= assign(d.mox, m_mox);
     changed |= assign(d.transmitFreq, m_transmitFreq);
@@ -238,6 +241,7 @@ void TransmitModel::setRfPower(int power)
     power = qBound(0, power, 100);
     if (m_rfPower != power) {
         m_rfPower = power;
+        emit rfPowerChanged(power);
         emit stateChanged();
     }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
@@ -248,6 +252,7 @@ void TransmitModel::setTunePower(int power)
     power = qBound(0, power, 100);
     if (m_tunePower != power) {
         m_tunePower = power;
+        emit tunePowerChanged(power);
         emit stateChanged();
     }
     emit commandReady(QString("transmit set tunepower=%1").arg(power));
@@ -268,10 +273,9 @@ void TransmitModel::startTune(PttSource source)
         return;
 
     // Tag the initiating source so the status-bar operator TX timer can exclude
-    // a TCI/DAX-initiated tune (the radio reports both as source=SW). An
-    // operator tune (source=Tune) is neither TCI nor DAX, so it still shows the
-    // timer. Without this, an external-app tune inherits the stale Mox tag and
-    // wrongly runs the "operator-only" timer. (#4131 review)
+    // local TUNE carriers as well as TCI/DAX-initiated tune (the radio reports
+    // every software path as source=SW). Without this, tune inherits the stale
+    // Mox tag and wrongly runs the operator-only timer. (#4131 review)
     m_activePttSource = source;
 
     emit commandReady("transmit tune 1");
@@ -282,7 +286,7 @@ void TransmitModel::startTwoToneTune(PttSource source)
     if (!runPttPreflight(source, false))
         return;
 
-    m_activePttSource = source;   // exclude TCI/DAX-initiated tune (see startTune, #4131)
+    m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
     setTuneMode("two_tone");
     emit commandReady("transmit tune 1");
 }
