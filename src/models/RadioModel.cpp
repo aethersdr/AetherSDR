@@ -474,12 +474,18 @@ void RadioModel::setupBackend(const QString& family)
             m_connection  = sim->connection();   // non-owning; SimBackend owns it
             m_panStream   = sim->panStream();    // non-owning; SimBackend owns it
             m_flexBackend = nullptr;             // no Flex alias in demo mode
-            connect(m_panStream, &PanadapterStream::spectrumReady,
-                    this, &RadioModel::panFeedSpectrumReady);
-            connect(m_panStream, &PanadapterStream::waterfallRowReady,
-                    this, &RadioModel::panFeedWaterfallRowReady);
-            connect(m_panStream, &PanadapterStream::waterfallAutoBlackLevel,
-                    this, &RadioModel::panFeedWaterfallAutoBlackLevel);
+            // ⚠ Deliberately DO NOT wire the PanadapterStream render signals here.
+            // The demo has TWO spectrum producers: this stream's legacy shim tick
+            // (PanadapterStream::tickSyntheticDemo -> spectrumReady) and the seam
+            // (SimBackend::onAudioTick -> IRadioBackend::spectrumFrameReady, wired
+            // for every backend just below). Wiring both pushed two independent
+            // generators, on two different timers, into the same panFeed* render
+            // feed — the display received interleaved frames from each, which is
+            // what made the noise floor jump about (and was audible, since the
+            // audio comes from the same NoiseMixer scene). The seam is the correct
+            // producer post-re-home, so the stream's copy stays disconnected.
+            // The stream is still vended above because ~46 RadioModel call sites
+            // dereference m_panStream; it just no longer feeds the renderer.
         }
     }
 

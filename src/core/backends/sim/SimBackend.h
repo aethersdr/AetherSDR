@@ -145,12 +145,6 @@ private:
     // sub-frame remainder in m_audioDebtNs so the long-run rate is exactly 24 kHz.
     QElapsedTimer m_audioClock;      // wall clock between ticks (nanoseconds)
     qint64        m_audioDebtNs{0};  // un-emitted elapsed time carried forward
-    // TEMP DIAG — pointers into onAudioTick's function-static content stats so
-    // the per-frame loop can accumulate them. Remove with the diagnostic.
-    double* m_diagPeak{nullptr};
-    double* m_diagSumRms{nullptr};
-    int*    m_diagZero{nullptr};
-    int*    m_diagClip{nullptr};
     bool       m_keyed{false};       // muted while keyed (Principle VI — never sounds live on TX)
     quint64    m_audioFrames{0};     // frame counter (throttles the spectrum row)
 

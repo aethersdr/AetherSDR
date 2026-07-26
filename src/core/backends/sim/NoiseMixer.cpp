@@ -50,6 +50,18 @@ double NoiseMixer::nextUniform()
     return static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
 }
 
+// Same SplitMix64, but on the DISPLAY stream so drawing a spectrum row cannot
+// advance the audio generators' sequence (see the header for why that mattered).
+double NoiseMixer::nextDisplayUniform()
+{
+    m_displayRng += 0x9E3779B97F4A7C15ULL;
+    std::uint64_t z = m_displayRng;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z = z ^ (z >> 31);
+    return static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
+}
+
 double NoiseMixer::nextGauss()
 {
     if (m_haveSpare) { m_haveSpare = false; return m_spare; }
@@ -356,7 +368,7 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
     // — grassy, downward-tailed. Noise BECOMES THE FLOOR: its grass bottoms out on
     // floorDbm and rises up (louder = taller), not a band floating above it.
     auto noiseBinDb = [&]() {
-        double u = nextUniform();
+        double u = nextDisplayUniform();
         if (u <= 0.0) u = 1e-9;
         return 10.0 * std::log10(-std::log(u));
     };
@@ -382,21 +394,21 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
             for (int b = 0; b < n; ++b) bump(b, grass(lvl));
             break;
         case Channel::Qrn:
-            if (nextUniform() < std::min(0.9, (s.rate > 0 ? s.rate : 12.0) / 20.0)) {
+            if (nextDisplayUniform() < std::min(0.9, (s.rate > 0 ? s.rate : 12.0) / 20.0)) {
                 const double top = floorDbm + 90.0 + lvl + 6.0;
-                for (int b = 0; b < n; ++b) bump(b, top + (nextUniform() * 8.0 - 6.0));
+                for (int b = 0; b < n; ++b) bump(b, top + (nextDisplayUniform() * 8.0 - 6.0));
             }
             break;
         case Channel::Crashes:
-            if (nextUniform() < 0.15) {
+            if (nextDisplayUniform() < 0.15) {
                 const double top = floorDbm + 90.0 + lvl;
-                for (int b = 0; b < n; ++b) bump(b, top + (nextUniform() * 10.0 - 8.0));
+                for (int b = 0; b < n; ++b) bump(b, top + (nextDisplayUniform() * 10.0 - 8.0));
             }
             break;
         case Channel::Woodpecker:
-            if (nextUniform() < 0.5) {
+            if (nextDisplayUniform() < 0.5) {
                 const double top = floorDbm + 90.0 + lvl;
-                for (int b = 0; b < n; ++b) bump(b, top + (nextUniform() * 8.0 - 5.0));
+                for (int b = 0; b < n; ++b) bump(b, top + (nextDisplayUniform() * 8.0 - 5.0));
             }
             break;
         case Channel::Birdie: {
@@ -425,7 +437,7 @@ QVector<float> NoiseMixer::spectrum(int n, double floorDbm, double spanHz, int c
             const double top = floorDbm + 90.0 + lvl;
             for (int b = binOf(300); b < binOf(2700) && b < n; ++b) {
                 if (b < 0) continue;
-                bump(b, top - 8.0 + nextUniform() * 6.0);
+                bump(b, top - 8.0 + nextDisplayUniform() * 6.0);
             }
             bump(binOf(600), top);      // formant-ish peaks
             bump(binOf(1800), top - 4.0);

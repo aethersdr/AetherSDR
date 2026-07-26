@@ -129,7 +129,17 @@ private:
     void genWoodpecker(const ChannelState&, float* out);
 
     double nextGauss();                 // Box-Muller, own RNG
-    double nextUniform();               // [0,1)
+    double nextUniform();               // [0,1) — AUDIO stream; see nextDisplayUniform
+    // Separate RNG stream for spectrum()'s per-bin grass.
+    //
+    // spectrum() is called from inside the audio-generation loop (SimBackend emits
+    // a display row every 9th audio frame) and draws once per bin — 1024 draws.
+    // Sharing m_rng with the audio generators therefore yanked their random
+    // sequence forward mid-stream ~21 times a second, putting a step discontinuity
+    // into the pink/gaussian noise at a perfectly regular interval: an audible
+    // periodic scratchy buzz. The display's grass has no reason to share the
+    // audio's entropy, so it gets its own stream and cannot perturb it.
+    double nextDisplayUniform();        // [0,1) — DISPLAY stream
     QVector<float> applyNotch(const QVector<float>& buf, double fHz, double q);
 
     std::map<Channel, ChannelState> m_ch;
@@ -149,6 +159,9 @@ private:
 
     // RNG (own stream; Box-Muller spare)
     std::uint64_t m_rng = 0x5EEDULL;
+    // Display-only RNG stream (see nextDisplayUniform). Different seed so the
+    // grass does not visibly mirror the audio noise.
+    std::uint64_t m_displayRng = 0xD15D1A11ULL;
     bool   m_haveSpare = false;
     double m_spare = 0.0;
 
