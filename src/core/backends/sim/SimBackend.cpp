@@ -468,10 +468,14 @@ void SimBackend::injectHighSwr(double ratio)
     // Meter values ride the data plane as raw quint16 (fixed-point ×256 on Flex).
     // MeterModel::updateValues(ids, vals) applies them; hand it our meter id with
     // the scaled reading so the HealthApplet sees a live high-SWR value.
-    const auto scaled = static_cast<qint16>(qBound(0.0, ratio * 256.0, 32767.0));
-    emit meterUpdate(QStringLiteral("SWR"), ratio);   // typed path (if consumed)
+    // ⚠ The meter id MUST be "SOURCE:NAME". RadioModel's meterUpdate handler
+    // splits on the colon and returns early when there is none, so the bare
+    // "SWR" this used to emit was silently dropped: `sim swr 3.5` returned
+    // ok:true while nothing ever reached MeterModel or the HealthApplet — a
+    // no-op that read as a working verb. Source and name here must match the
+    // MeterDef above (source "TX", name "SWR").
+    emit meterUpdate(def.source + QLatin1Char(':') + def.name, ratio);
     m_lastSwr = ratio;
-    Q_UNUSED(scaled);
 }
 
 void SimBackend::injectDropSlice()
@@ -517,7 +521,10 @@ void SimBackend::clearFaults()
     // not by clear — clear only reverses the *sustained* faults.)
     m_scopeStalled = false;
     if (m_lastSwr > 1.0) {
-        emit meterUpdate(QStringLiteral("SWR"), 1.1);   // nominal
+        // "SOURCE:NAME" — same requirement as injectHighSwr(); a bare "SWR" is
+        // dropped by RadioModel's handler, so the meter would have stayed pinned
+        // at the fault value even after a clear.
+        emit meterUpdate(QStringLiteral("TX:SWR"), 1.1);   // nominal
         m_lastSwr = 1.1;
     }
 }

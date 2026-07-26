@@ -857,13 +857,22 @@ void RadioModel::setupBackend(const QString& family)
 
     }  // if (m_connection)
 
-    // aetherd Gap B (Step 2b): a non-Flex backend has no RadioConnection, so it
-    // drives the connection lifecycle through the neutral IRadioBackend signals
-    // instead of m_connection's. Purely additive and guarded to the m_connection-
-    // null case → the Flex path (m_connection non-null) skips this entirely and is
-    // byte-for-byte unchanged. FlexBackend never emits these, so there is no
-    // double-drive even were the guard absent.
-    if (!m_connection) {
+    // aetherd Gap B (Step 2b): a backend that does not drive the lifecycle
+    // through a Flex RadioConnection drives it through the neutral
+    // IRadioBackend signals instead.
+    //
+    // The guard was originally "!m_connection", on the reasoning that a non-Flex
+    // backend has no RadioConnection. SimBackend broke that assumption: as an
+    // RFC #4288 Route A hybrid it OWNS and vends a synthetic RadioConnection, so
+    // m_connection is non-null and these were never wired for the demo. The
+    // effect was that SimBackend::disconnectRadio() (the `sim disconnect` fault)
+    // emitted IRadioBackend::disconnected into nothing — the model stayed
+    // "connected" with dead audio, and `sim clear` could not recover it.
+    //
+    // Condition is now "not the Flex path" rather than "no connection".
+    // FlexBackend never emits these signals, so wiring them would be harmless
+    // anyway; keeping the Flex path excluded preserves it byte-for-byte.
+    if (!m_flexBackend) {
         connect(m_backend.get(), &IRadioBackend::connected,
                 this, &RadioModel::onConnected);
         connect(m_backend.get(), &IRadioBackend::disconnected,
@@ -1320,9 +1329,16 @@ QString RadioModel::digitalVoiceWaveformHealthDetail() const
 
 bool RadioModel::isConnected() const
 {
-    // aetherd Gap B: a non-Flex backend (HL2) owns no RadioConnection — its
-    // connection state lives behind the IRadioBackend seam.
-    if (!m_connection)
+    // aetherd Gap B: a backend that is not the Flex path owns its connection
+    // state behind the IRadioBackend seam.
+    //
+    // The test was "!m_connection", using "owns no RadioConnection" as a proxy
+    // for "is not Flex". SimBackend (RFC #4288 Route A) breaks that: it vends a
+    // SYNTHETIC RadioConnection, so m_connection is non-null and this returned
+    // that object's state instead of the backend's. The synthetic connection
+    // stays up independently, so `sim disconnect` left the model reporting
+    // connected=true forever with dead audio.
+    if (!m_flexBackend)
         return m_backend && m_backend->isConnected();
     return m_connection->isConnected() || (m_wanConn && m_wanConn->isConnected());
 }
