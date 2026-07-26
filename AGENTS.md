@@ -181,7 +181,7 @@ setup.
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.7.2** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **26.7.4** (set in both `CMakeLists.txt` and `README.md`).
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -250,12 +250,28 @@ The accepted RFC at
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
-`IRadioBackend` (`src/core/backends/`) with its first implementor
-`FlexBackend` (`src/core/backends/flex/`) exist. `FlexBackend` is a
-skeleton so far: RadioModel owns it and it observes the connection
-lifecycle, but the SmartSDR wire stack moves behind it incrementally
-(2.2b–2.4). The versioned protocol (step 3+) has not landed — UI code
-still consumes models directly, and that remains correct.
+`IRadioBackend` (`src/core/backends/`) now has **three** implementors,
+selected at connect time by a `family` string through `makeBackend()`:
+
+| Family | Backend | Notes |
+|---|---|---|
+| `flex` | `FlexBackend` (`src/core/backends/flex/`) | SmartSDR wire stack; the Panadapter / Slice / Meter / Transmit / Amp / Tuner status+command paths decode behind it (2.2b–2.4) |
+| `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
+| `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
+
+The versioned protocol (step 3+) has not landed — UI code still consumes
+models directly, and that remains correct.
+
+**Backends that demodulate in-process double-feed the sink if you let
+them.** `IRadioBackend::audioFrameReady` has two possible routes to
+`AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
+relay, and a direct connect in `wireBackendSeam()`. `FlexBackend` is
+structurally immune because it never emits `audioFrameReady` at all (audio
+rides `PanadapterStream`/VITA-49), so the "no double-feed" reasoning that
+holds for Flex stops holding for any in-process backend. Gate the relay on
+`backendOwnsRxAudio()`. `Qt::UniqueConnection` does **not** protect you here
+— they are two different signals arriving at the same slot, so nothing looks
+duplicate to Qt. The same shape exists on the spectrum side.
 
 **Build targets (post-RFC step 1):**
 

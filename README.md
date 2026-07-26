@@ -1,6 +1,6 @@
 # AetherSDR
 
-**A cross-platform, open-source client for FlexRadio Systems transceivers**
+**A cross-platform, open-source client for FlexRadio Systems transceivers — and, as of v26.7.4, the Hermes-Lite 2**
 
 [![CI](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -8,9 +8,9 @@
 [![Qt6](https://img.shields.io/badge/Qt-6-green.svg)](https://www.qt.io/)
 [![Signed Commits](https://img.shields.io/badge/commits-GPG%20signed-brightgreen?logo=gnuprivacyguard)](https://github.com/aethersdr/AetherSDR/commits/main)
 
-AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
+AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience. A vendor-neutral radio backend seam now carries a second family as well: the **Hermes-Lite 2** runs through the same interface, receive and transmit.
 
-**Current version: 26.7.3** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.7.4** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -36,6 +36,8 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
 - **SmartLink remote + TCI v2.0 server** — Auth0/TLS WAN operation, and CAT + audio + IQ + CW + spots over a single TCI WebSocket
 - **Broad hardware control** — rigctld + virtual-serial CAT, MIDI mapping, the FlexControl knob, serial PTT/CW keying, and Multi-Flex operation alongside SmartSDR/Maestro
+- **Hermes-Lite 2 support** — a second radio family on the vendor-neutral `IRadioBackend` seam: receive, transmit, TCI signaling for WSJT-X, an operator-controllable panadapter span with a 6 Mb low-bandwidth mode, and per-radio nicknames
+- **Built-in demo mode** — a synthetic backend that generates its own RX audio and matching panadapter, with a fault-injection harness, so you can explore the full UI with no radio attached (it cannot transmit)
 
 ---
 
@@ -69,6 +71,15 @@ power amplifier and TGXL (Tuner Genius XL) antenna tuner.
 
 Active test target is FLEX-8600 firmware 4.2.18 (SmartSDR protocol v1.4.0.0);
 earlier 4.x firmware works; v3.x is unsupported.
+
+**Non-Flex hardware:** the **Hermes-Lite 2** is supported as of v26.7.4 —
+receive, transmit, and TCI signaling for WSJT-X — running on the vendor-neutral
+`IRadioBackend` seam rather than the SmartSDR wire protocol. HL2 ships raw IQ,
+so the client performs the tune / decimate / demodulate work a FlexRadio does
+on-radio.
+
+No hardware at all? **Demo mode** runs the full UI against a synthetic backend
+that generates its own audio and spectrum.
 
 ## Tested Controller Devices
 
@@ -245,9 +256,11 @@ sudo cmake --install build
 Currently in flight:
 
 - **aetherd** — a vendor-neutral `IRadioBackend` seam so radio-family logic
-  lives behind a stable interface (the groundwork for non-Flex radios).
-- **Hermes-Lite 2** — a first non-Flex, raw-IQ backend on that seam
-  (design spike in [`prototypes/hl2/`](prototypes/hl2/)).
+  lives behind a stable interface. Three backends ride it today (Flex, HL2,
+  and the demo simulator); the remaining step is the versioned protocol that
+  splits a headless engine from thin UI clients.
+- **Hermes-Lite 2 breadth** — the backend shipped in v26.7.4; remaining work is
+  wider mode coverage and panadapter parity with the Flex path.
 - **AppSettings nested-JSON refactor**, **TX DSP chain visual rebuild**, and
   the **Flathub submission**.
 
