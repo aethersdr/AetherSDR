@@ -371,6 +371,19 @@ void SimBackend::emitInitialState()
     emit panCenterBandwidthChanged(QStringLiteral("0x40000000"),
                                    m_sliceFreqMhz, kDemoPanBandwidthMhz);
 
+    // …and the waterfall row interval, for exactly the same reason. The synthetic
+    // connect declares `line_duration=48` on a proper `display waterfall` status
+    // line, but RadioModel decodes that through m_flexBackend->
+    // decodeWaterfallLineDuration(), which is null in demo mode — so the value was
+    // parsed off the wire and dropped. PanadapterModel::waterfallLineDuration()
+    // stayed 0 and the neutral row pacer fell back to its 100 ms default, which is
+    // why the runtime reported 100 rather than the declared 48 (measured: 9.71
+    // rows/sec = 103 ms, against the 20.8/sec the demo actually produces).
+    // panWaterfallLineDurationChanged is the universal seam signal RadioModel
+    // wires for every backend, so emitting it here closes the gap.
+    emit panWaterfallLineDurationChanged(QStringLiteral("0x40000000"),
+                                         kWaterfallLineDurationMs);
+
     // One active slice on a sensible default, so the UI has something live to
     // show the moment demo mode connects. Same rationale as the pan above: the
     // wire "slice 0 RF_frequency=14.100" is delivered but decodeSliceStatus is
