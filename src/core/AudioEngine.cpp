@@ -8301,7 +8301,12 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
                                          bool forceRadioDaxRoute)
 {
-    if (m_txStreamId == 0 || inPcm.isEmpty()) return;
+    if (inPcm.isEmpty()) return;
+    // A host-modulating backend (HL2) has no Flex TX stream id and never will —
+    // its modulator runs here, fed from the final-monitor tap below. Gating this
+    // path on the stream id dropped every TCI/DAX frame on such a radio, so
+    // WSJT-X keyed the rig and transmitted silence. See setHostModulation().
+    if (!m_hostModulation && m_txStreamId == 0) return;
 
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
@@ -8349,6 +8354,37 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     if (daxAudioWillTransmit) {
         emitTxPostChainScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE);
         emitScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE, true);
+    }
+
+    // ── Host-modulated backend (HL2): no VITA-49 plane ──────────────────
+    // Both routes below packetize for a Flex radio that modulates on its own
+    // side. A host-modulating backend has no TX stream and no radio-side
+    // modulator; its transmit audio arrives through the SAME final-monitor tap
+    // the microphone uses, which MainWindow routes to
+    // RadioModel::submitTxAudio() (and to the QSO recorder).
+    //
+    // Still a DSP bypass, for the reason stated above: this path carries
+    // pre-shaped digital tones from TCI/DAX, so no compressor, EQ, Quindar or
+    // brickwall limiter runs on it — only the TCI gain/overflow stage the
+    // caller already applied.
+    //
+    // No TX-state gate here. m_radioTransmitting is decoded from Flex interlock
+    // status, which a host-modulating backend never sends, so testing it would
+    // discard every frame. Both consumers of the signal gate themselves:
+    // Hl2Backend::submitTxAudio drops audio unless keyed, and QsoRecorder gates
+    // on MOX.
+    if (m_hostModulation) {
+        const auto* src = reinterpret_cast<const float*>(float32pcm.constData());
+        const int samples = static_cast<int>(float32pcm.size() / sizeof(float));
+        QByteArray out(samples * static_cast<int>(sizeof(qint16)), Qt::Uninitialized);
+        auto* dst = reinterpret_cast<qint16*>(out.data());
+        for (int i = 0; i < samples; ++i) {
+            const float v = std::isfinite(src[i]) ? src[i] : 0.0f;
+            dst[i] = static_cast<qint16>(
+                std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
+        }
+        emit txFinalMonitorPcmReady(out);
+        return;
     }
 
     const bool useRadioDaxRoute = forceRadioDaxRoute || m_daxTxUseRadioRoute;

@@ -14,6 +14,7 @@
 #include <QLoggingCategory>
 
 #include <cstdint>
+#include <utility>
 
 Q_LOGGING_CATEGORY(lcHl2Tx, "aether.hl2.tx")
 
@@ -38,8 +39,15 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     if (u == QLatin1String("USB"))  return WdspChannel::Mode::Usb;
     if (u == QLatin1String("DSB"))  return WdspChannel::Mode::Dsb;
     if (u == QLatin1String("CWL"))  return WdspChannel::Mode::Cwl;
-    if (u == QLatin1String("CWU"))  return WdspChannel::Mode::Cwu;
-    if (u == QLatin1String("FM"))   return WdspChannel::Mode::Fm;
+    // "CW" is the upper-sideband CW mode name the rest of the app uses (it is
+    // what TciProtocol::tciToSmartSDR produces for TCI's `cw`, and what a Flex
+    // reports); "CWU" is the explicit spelling. Only CWU was listed, so plain CW
+    // fell through to the USB fallback below and was demodulated as SSB -- the
+    // mode indicator read CW while the passband and detector were not.
+    if (u == QLatin1String("CWU") || u == QLatin1String("CW"))
+        return WdspChannel::Mode::Cwu;
+    if (u == QLatin1String("FM") || u == QLatin1String("NFM"))
+        return WdspChannel::Mode::Fm;
     if (u == QLatin1String("AM"))   return WdspChannel::Mode::Am;
     if (u == QLatin1String("DIGU")) return WdspChannel::Mode::Digu;
     if (u == QLatin1String("DIGL")) return WdspChannel::Mode::Digl;
@@ -47,6 +55,39 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     if (u == QLatin1String("DRM"))  return WdspChannel::Mode::Drm;
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return WdspChannel::Mode::Wbfm;
     return WdspChannel::Mode::Usb;
+}
+
+// Default RX passband per mode, in Hz relative to the carrier. Sign carries the
+// sideband, matching SliceModel's convention (USB-family positive, LSB-family
+// negative, carrier-straddling modes symmetric) -- a table with the wrong sign
+// here would be silently "corrected" by SliceModel::normalizeFilterPolarity and
+// the mistake would never surface.
+//
+// The digital entries are deliberately the widest of the set. DIGU is the mode
+// WSJT-X selects, and it must pass the whole 3 kHz audio window the decoder
+// expects; a snug SSB passband would clip the top of the FT8 sub-band and drop
+// exactly the signals at the edges.
+std::pair<int, int> defaultPassbandForMode(const QString& mode) noexcept
+{
+    const QString u = mode.toUpper();
+    if (u == QLatin1String("USB"))  return {100, 2900};
+    if (u == QLatin1String("LSB"))  return {-2900, -100};
+    if (u == QLatin1String("DIGU")) return {150, 3000};
+    if (u == QLatin1String("DIGL")) return {-3000, -150};
+    // CW: 500 Hz around the conventional 600 Hz pitch. The pitch itself is a
+    // client-side setting the backend is not told about, so this is the
+    // default-pitch case; an operator running another pitch retunes the filter
+    // and that edit survives until the next mode change.
+    if (u == QLatin1String("CWU") || u == QLatin1String("CW")) return {350, 850};
+    if (u == QLatin1String("CWL"))  return {-850, -350};
+    // Carrier-straddling modes: symmetric about the carrier, which the envelope
+    // and synchronous detectors both need.
+    if (u == QLatin1String("AM") || u == QLatin1String("SAM")) return {-4000, 4000};
+    if (u == QLatin1String("DSB")) return {-3000, 3000};
+    if (u == QLatin1String("FM") || u == QLatin1String("NFM")) return {-8000, 8000};
+    if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return {-40000, 40000};
+    if (u == QLatin1String("DRM")) return {-5000, 5000};
+    return {150, 3000};   // matches modeFromString's USB fallback
 }
 
 // Phase-1 data-plane payload: a raw little-endian float32 array. RadioModel's
@@ -373,7 +414,23 @@ void Hl2Backend::setSliceFrequency(int /*sliceId*/, double hz)
 
 void Hl2Backend::setSliceMode(int /*sliceId*/, const QString& mode)
 {
+    const QString previous = m_mode;
     m_mode = mode;
+    // The passband belongs to the mode. A radio that owns its own DSP echoes a
+    // mode-appropriate filter back on every mode change and heals this for
+    // free; we own the DSP, so nothing heals it and the previous mode's
+    // passband simply stays. Selecting DIGU out of CW left a ~200 Hz filter on
+    // the mode WSJT-X uses, which decodes nothing -- and the operator sees a
+    // mode that changed, so the filter is the last thing they suspect.
+    //
+    // Applied on CHANGE only, so an operator's own filter edit survives until
+    // they change mode again. That is what every HL2 client does (oracle
+    // addendum 2 §B3: "All clients tie default filter width to mode, with user
+    // overrides").
+    if (!previous.isEmpty() && previous.compare(mode, Qt::CaseInsensitive) != 0) {
+        const auto [lo, hi] = defaultPassbandForMode(mode);
+        setSliceFilter(kSliceId, lo, hi);   // pushes the DSP and emits slice state
+    }
     if (m_dsp)
         QMetaObject::invokeMethod(m_dsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(mode)));

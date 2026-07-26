@@ -1609,6 +1609,25 @@ void MainWindow::wireCatPorts()
     // the shared helper the post-swap rebind also calls (#4448).
     wirePanStreamTciSinks();
 
+    // RX audio for a backend that demodulates in-process (HL2). That backend has
+    // no PanadapterStream, so wirePanStreamTciSinks() above binds nothing and TCI
+    // clients heard silence — WSJT-X connected, tracked frequency and mode, and
+    // never decoded a single signal.
+    //
+    // The payload is already what onDaxAudioReady expects: float32 interleaved
+    // stereo at 24 kHz (Hl2RxDsp::Config::audioSampleRateHz). Channel 1 is not an
+    // arbitrary pick — with no slice claiming a DAX channel, onDaxAudioReady's
+    // fallback maps channel N to trx N-1, so 1 → trx 0, the single receiver such
+    // a radio advertises in trx_count.
+    //
+    // Bound to m_radioModel, not the backend, so it survives a family swap; Flex
+    // never emits backendAudioFrameReady, so there is no double-feed.
+    connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
+            this, [this](const QByteArray& pcm) {
+        if (tciServer())
+            tciServer()->onDaxAudioReady(1, pcm);
+    });
+
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
     // the stream overrode the user's explicit PC Audio toggle. Users who need

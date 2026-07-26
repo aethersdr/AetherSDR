@@ -611,8 +611,14 @@ void RadioModel::setupBackend(const QString& family)
     // twice.
     connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
             [this](bool on) {
-        if (m_backend && m_family != QLatin1String("flex"))
+        if (m_backend && m_family != QLatin1String("flex")) {
             m_backend->setKeying(on);
+            // The MOX button and the PTT coordinator key here, NOT through
+            // setTransmit(), so the raw-TX edge has to be published on this path
+            // too — otherwise a TCI client watching an operator-initiated
+            // transmit sees nothing. See publishBackendTransmitEdge().
+            publishBackendTransmitEdge(on);
+        }
     });
     connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
             [this](bool on) {
@@ -2521,6 +2527,33 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     // matches "display pan set ", not "xmit".
     if (m_backend)
         m_backend->setKeying(tx);
+
+    publishBackendTransmitEdge(tx);
+}
+
+// Publish the raw TX edge for a backend that has no interlock status plane.
+//
+// m_radioTransmitting is otherwise decoded exclusively from Flex `interlock`
+// status, so on such a backend it stays false forever. That is not a cosmetic
+// gap: TciServer waits on radioTransmittingChanged to CONFIRM a TCI key and
+// gives up 1250 ms later — WSJT-X's transmission was being unkeyed a second and
+// a quarter in, every time.
+//
+// Our own command is the authoritative edge here precisely because there is no
+// status plane to be authoritative instead: no other client shares this radio,
+// and the backend's own transmit gate has already been consulted before either
+// caller reaches this point. If a backend later reports hardware PTT or an
+// interlock of its own, it should drive this through
+// IRadioBackend::transmitChanged and this fallback should yield to it.
+//
+// Flex is excluded: there the edge is decoded from interlock status, and a
+// second source would race it.
+void RadioModel::publishBackendTransmitEdge(bool tx)
+{
+    if (!m_backend || m_flexBackend || m_radioTransmitting == tx)
+        return;
+    m_radioTransmitting = tx;
+    emit radioTransmittingChanged(tx);
 }
 
 void RadioModel::updateOperatorTransmit()

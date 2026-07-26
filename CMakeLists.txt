@@ -4022,6 +4022,20 @@ target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
 
+# TCI signaling on a backend with neither a Flex command plane nor a DAX data
+# plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of
+# the file compiles wherever HAVE_WEBSOCKETS is set for aethercore.
+add_executable(hl2_tci_signaling_test tests/hl2_tci_signaling_test.cpp)
+target_include_directories(hl2_tci_signaling_test PRIVATE src tests)
+target_link_libraries(hl2_tci_signaling_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test
+)
+if(Qt6WebSockets_FOUND)
+    target_link_libraries(hl2_tci_signaling_test PRIVATE Qt6::WebSockets)
+endif()
+set_target_properties(hl2_tci_signaling_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_tci_signaling_test COMMAND hl2_tci_signaling_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)

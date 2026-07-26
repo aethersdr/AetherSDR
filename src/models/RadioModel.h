@@ -761,6 +761,13 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "kiwi", ...).
     QString family() const { return m_family; }
+    // True when the radio speaks the SmartSDR text-command plane — the only
+    // family where sendCmd() reaches anything and a command has a response to
+    // await. Every other backend takes typed intents through the IRadioBackend
+    // seam and settles synchronously in the model, so a caller that awaits a
+    // sendCmd() callback there waits forever. Callers that must work on both
+    // planes branch on this rather than on the family name.
+    bool usesFlexCommandPlane() const { return m_family == QLatin1String("flex"); }
     // Forward processed transmit audio to a host-modulating backend. No-op when
     // the backend modulates on the radio side.
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz);
@@ -1154,6 +1161,9 @@ private:
     // Recompute the operator-transmit predicate and emit operatorTransmitChanged
     // on a rising/falling edge. Cheap; safe to call from every TX-state path.
     void updateOperatorTransmit();
+    // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
+    // Flex, where the edge is decoded from `interlock` status instead.
+    void publishBackendTransmitEdge(bool tx);
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
