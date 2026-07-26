@@ -51,6 +51,7 @@ void AsrAudioTap::setEnabled(bool on)
 void AsrAudioTap::onRxAudio(const QString& source,
                             const QString& sourceId,
                             const QByteArray& stereoFloat32Pcm,
+                            int channels,
                             int sampleRate)
 {
     if (!m_enabled || m_asr == nullptr) {
@@ -60,7 +61,7 @@ void AsrAudioTap::onRxAudio(const QString& source,
                           m_clock.isValid() ? m_clock.elapsed() : 0)) {
         return;
     }
-    const QVector<float> mono = AsrTapPolicy::toMono(stereoFloat32Pcm);
+    const QVector<float> mono = AsrTapPolicy::toMono(stereoFloat32Pcm, channels);
     if (mono.isEmpty()) {
         return;
     }

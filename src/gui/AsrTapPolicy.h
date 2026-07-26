@@ -86,20 +86,26 @@ public:
     // a single NaN reaching the resampler poisons every sample after it, so
     // dropping that clamp when moving off the engine-side tap would trade a
     // known bug for a worse one.
-    static QVector<float> toMono(const QByteArray& stereoFloat32)
+    static QVector<float> toMono(const QByteArray& float32, int channels)
     {
-        const int floatSamples =
-            static_cast<int>(stereoFloat32.size() / static_cast<int>(sizeof(float)));
-        if (floatSamples <= 0) {
+        if (channels <= 0) {
             return {};
         }
-        const bool stereo = (floatSamples % 2) == 0;
-        const int monoSamples = stereo ? floatSamples / 2 : floatSamples;
+        const qsizetype floatSamples =
+            float32.size() / static_cast<qsizetype>(sizeof(float));
+        if (floatSamples <= 0 || floatSamples % channels != 0) {
+            return {};
+        }
+        const qsizetype monoSamples = floatSamples / channels;
 
-        QVector<float> mono(monoSamples);
-        const auto* src = reinterpret_cast<const float*>(stereoFloat32.constData());
-        for (int i = 0; i < monoSamples; ++i) {
-            const float v = stereo ? (src[2 * i] + src[2 * i + 1]) * 0.5f : src[i];
+        QVector<float> mono(static_cast<qsizetype>(monoSamples));
+        const auto* src = reinterpret_cast<const float*>(float32.constData());
+        for (qsizetype i = 0; i < monoSamples; ++i) {
+            float v = 0.0f;
+            for (int channel = 0; channel < channels; ++channel) {
+                v += src[i * channels + channel];
+            }
+            v /= static_cast<float>(channels);
             mono[i] = std::clamp(std::isfinite(v) ? v : 0.0f, -1.0f, 1.0f);
         }
         return mono;

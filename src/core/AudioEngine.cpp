@@ -4234,7 +4234,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             source == RxDspSource::KiwiSdr ? QStringLiteral("kiwi")
                                            : QStringLiteral("flex"),
             externalSource ? externalSource->id : QString(),
-            *output, scopeSampleRate);
+            *output, 2, scopeSampleRate);
         outputBuffer.append(*output);
         emitScopeFromFloat32Stereo(*output, scopeSampleRate, false);
         emitRxPostChainScopeFromFloat32Stereo(*output, scopeSampleRate);

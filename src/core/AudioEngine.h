@@ -627,6 +627,7 @@ signals:
     void receivePresentationPostDspAudioReady(const QString& source,
                                               const QString& sourceId,
                                               const QByteArray& pcmStereoFloat,
+                                              int channels,
                                               int sampleRate);
     void receivePresentationOutputAudioReady(const QString& source,
                                              const QString& sourceId,

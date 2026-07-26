@@ -59,6 +59,7 @@ private:
     void onRxAudio(const QString& source,
                    const QString& sourceId,
                    const QByteArray& stereoFloat32Pcm,
+                   int channels,
                    int sampleRate);
 
     AudioEngine* m_audio = nullptr;

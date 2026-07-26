@@ -129,7 +129,7 @@ static void testMonoCollapse()
     // over before the tap moved. Asymmetric channels prove it is an average and
     // not a channel pick.
     const QByteArray in = stereoBlock({{1.0f, 0.0f}, {-0.5f, -0.5f}, {0.25f, 0.75f}});
-    const QVector<float> mono = AsrTapPolicy::toMono(in);
+    const QVector<float> mono = AsrTapPolicy::toMono(in, 2);
 
     check(mono.size() == 3, "one mono sample per stereo frame");
     if (mono.size() != 3) return;
@@ -146,7 +146,7 @@ static void testMonoCollapseGuardsAgainstNonFiniteAndClipping()
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float inf = std::numeric_limits<float>::infinity();
     const QByteArray in = stereoBlock({{nan, 0.0f}, {inf, inf}, {5.0f, 5.0f}, {-9.0f, -9.0f}});
-    const QVector<float> mono = AsrTapPolicy::toMono(in);
+    const QVector<float> mono = AsrTapPolicy::toMono(in, 2);
 
     check(mono.size() == 4, "non-finite input still yields one sample per frame");
     if (mono.size() != 4) return;
@@ -158,11 +158,22 @@ static void testMonoCollapseGuardsAgainstNonFiniteAndClipping()
 
 static void testMonoCollapseEdgeCases()
 {
-    check(AsrTapPolicy::toMono(QByteArray()).isEmpty(),
+    check(AsrTapPolicy::toMono(QByteArray(), 2).isEmpty(),
           "an empty block produces no samples");
     // Shorter than one float: must not read past the end.
-    check(AsrTapPolicy::toMono(QByteArray(3, '\0')).isEmpty(),
+    check(AsrTapPolicy::toMono(QByteArray(3, '\0'), 2).isEmpty(),
           "a sub-sample block produces no samples");
+
+    QByteArray mono(4 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(mono.data());
+    samples[0] = 0.1f;
+    samples[1] = 0.2f;
+    samples[2] = 0.3f;
+    samples[3] = 0.4f;
+    check(AsrTapPolicy::toMono(mono, 1).size() == 4,
+          "an even-length mono block remains mono when channels are explicit");
+    check(AsrTapPolicy::toMono(mono, 0).isEmpty(),
+          "an invalid channel count is rejected");
 }
 
 // The property the whole change exists to protect: EVERY sample handed to the
@@ -185,7 +196,7 @@ static void testNoSamplesAreDropped()
     int delivered = 0;
     for (int n = 0; n < 10; ++n) {
         if (p.accepts(QStringLiteral("flex"), QString(), 0)) {
-            delivered += AsrTapPolicy::toMono(packet).size();
+            delivered += AsrTapPolicy::toMono(packet, 2).size();
         }
     }
     check(delivered == 10 * kFramesPerPacket,
