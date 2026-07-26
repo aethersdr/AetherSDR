@@ -5704,7 +5704,24 @@ void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
         ? QStringLiteral("Disconnected")
         : trimmedDetail;
     message.timeoutMs = 0;
-    message.dismissible = true;
+    // Owner-managed status: syncKiwiSdrPanadapterUiState re-asserts this card
+    // on every state/slice/waterfall event, so a user *dismissal* either lies
+    // (the card resurrects seconds later, even mid-fade) or — in a quiet
+    // Waiting state that never re-syncs — permanently hides the only
+    // disconnected-pan indicator while the pan looks healthy: the widget has
+    // reverted to the local Flex FFT and TX is still inhibited, with nothing
+    // on screen saying why. So it stays non-dismissible;
+    // setKiwiSdrConnectionOverlay(false) remains the sole owner of its
+    // lifecycle. (#3999 review)
+    //
+    // It is *collapsible* instead, which is what #4387 actually needs: the
+    // operator can shrink it to a one-line pill so it stops covering the
+    // spectrum, while an indicator stays on screen. The overlay keys that
+    // choice by message id, so the re-assertions above preserve it, and
+    // removeMessage() clears it — a later reconnect-then-drop is a new
+    // occurrence and gets a full card again. (#4387)
+    message.dismissible = false;
+    message.collapsible = true;
     upsertOverlayMessage(std::move(message));
 }
 

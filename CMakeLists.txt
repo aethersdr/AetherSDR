@@ -2667,6 +2667,24 @@ target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
 
+# Panadapter overlay collapse semantics for owner-managed status cards (#4387):
+# a collapse must shrink the card, survive owner re-assertion, and never make
+# the indicator disappear while its condition still holds.
+qt_add_resources(PAN_OVERLAY_TEST_RESOURCES resources/resources.qrc)
+add_executable(panadapter_message_overlay_test
+    tests/panadapter_message_overlay_test.cpp
+    src/gui/PanadapterMessageOverlay.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${PAN_OVERLAY_TEST_RESOURCES}
+)
+target_include_directories(panadapter_message_overlay_test PRIVATE src)
+target_link_libraries(panadapter_message_overlay_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
 # cases.
