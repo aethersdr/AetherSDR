@@ -32,7 +32,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build pkg-config \
-            glslc libvulkan-dev spirv-headers \
+            libvulkan-dev spirv-headers \
             libgl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
             libxcb-render-util0 libxcb-xinerama0 libxcb-randr0 libxcb-xfixes0 \
@@ -42,6 +42,40 @@ jobs:
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
             libfftw3-dev libhidapi-dev portaudio19-dev
+
+      # glslc — the SPIR-V shader compiler that whisper's Vulkan backend needs
+      # at BUILD time (CMake resolves it via find_package(Vulkan COMPONENTS
+      # glslc), and REQUIRE_ASR_GPU=ON makes a miss fatal on x86_64).
+      #
+      # It is packaged as `glslc` on Ubuntu 24.04+ but NOT on 22.04, where it
+      # simply does not exist — installing it unconditionally is what broke the
+      # x86_64 leg of the v26.7.4 tag with "E: Unable to locate package glslc".
+      # The x86_64 AppImage stays on jammy deliberately (it keeps the AppImage's
+      # glibc floor low enough for older distros), so bumping the runner is not
+      # the fix. Pull glslc from LunarG's Vulkan SDK repo instead — the same
+      # vendor scripts/setup/setup-vulkan-sdk.ps1 already uses on Windows.
+      # `shaderc` is the ~6 MB package that ships /usr/bin/glslc; `vulkan-sdk`
+      # would drag in the entire SDK for one binary.
+      #
+      # This workflow only runs on tag pushes, so a break here is invisible
+      # until release day — hence the explicit `glslc --version` assertion on
+      # both legs.
+      - name: Install glslc (Ubuntu 24.04+)
+        if: matrix.runner != 'ubuntu-22.04'
+        run: |
+          sudo apt-get install -y glslc
+          glslc --version
+
+      - name: Install glslc from LunarG (Ubuntu 22.04)
+        if: matrix.runner == 'ubuntu-22.04'
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
+            https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update
+          sudo apt-get install -y shaderc
+          glslc --version
 
       - name: Install system Qt (ARM only)
         if: matrix.use_aqt == false
