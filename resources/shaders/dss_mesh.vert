@@ -113,10 +113,13 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
-    // Hide only unpopulated startup slots. Do not progressively fade the rear
-    // rows: the perspective already supplies depth haze, and the extra six-row
-    // fade introduced a visibly blurry band at the back of a full history.
-    float sourceAge = sourceV * rows;
-    float historyAvailability = clamp(validRows - sourceAge, 0.0, 1.0);
+    // Hide only unpopulated startup slots. Advance the availability edge by
+    // remainingRows so the newest rear slot fades in continuously over the row
+    // interval instead of popping opaque on arrival (matching the height path's
+    // sub-row advance in sampleHistoryDbm). The rear six-row fade is
+    // deliberately gone: the perspective already supplies depth haze, and that
+    // fade left a visibly blurry band at the back of a full history.
+    float sampleAge = sourceV * rows + remainingRows;
+    float historyAvailability = clamp(validRows - sampleAge, 0.0, 1.0);
     vBoundaryFade = historyAvailability;
 }

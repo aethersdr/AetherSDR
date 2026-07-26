@@ -2644,11 +2644,19 @@ void SpectrumWidget::prepareForFftScaleChange()
     m_noiseFloorCandidateFrames = 0;
 }
 
+void SpectrumWidget::beginFftPixelScaleSettle()
+{
+    // Monotonic: never shorten a settle window already armed (e.g. by an
+    // earlier request in a rapid drag, or by the echo re-arm below).
+    m_flexDssFftScaleSettlingUntilMs = std::max(
+        m_flexDssFftScaleSettlingUntilMs,
+        QDateTime::currentMSecsSinceEpoch() + kDssFftPixelScaleSettleMs);
+}
+
 void SpectrumWidget::prepareForFftPixelScaleChange()
 {
     prepareForFftScaleChange();
-    m_flexDssFftScaleSettlingUntilMs =
-        QDateTime::currentMSecsSinceEpoch() + kDssFftPixelScaleSettleMs;
+    beginFftPixelScaleSettle();
 
     // A y_pixels transition changes how future raw FFT pixel values decode to
     // dBm. Already-decoded rows remain valid physical dBm samples, so preserve

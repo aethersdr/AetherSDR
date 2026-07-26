@@ -2449,6 +2449,19 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
         QString("display pan set %1 xpixels=%2 ypixels=%3")
             .arg(panId).arg(xpix).arg(ypix));
 
+    // Arm the DSS settle gate now, before the radio echo switches the local
+    // decoder. The stream keeps decoding with the old y_pixels until the echo,
+    // so rows arriving in the request→echo window can be decoded against a stale
+    // scale; since retained 3D history is now preserved across a resize (rather
+    // than cleared on echo), those mis-scaled rows would otherwise survive in
+    // scrollback. Dropping them here costs only a few valid rows and matches the
+    // pre-preservation intent that pre-echo rows must not persist. Only for a
+    // genuine transition off an established scale — a width-only resize or first
+    // dimension push (fftYPixels()==0) has no prior history to protect.
+    if (pan->fftYPixels() > 0 && pan->fftYPixels() != ypix) {
+        sw->beginFftPixelScaleSettle();
+    }
+
     if (profileLoadRadioStateWritesHeld()) {
         m_profileLoadPendingFftYpixels.insert(panId, ypix);
         m_profileLoadPanDimensionsSettlingUntilMs.insert(

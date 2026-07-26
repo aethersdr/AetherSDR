@@ -229,6 +229,13 @@ public:
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
     void prepareForFftPixelScaleChange();
+    // Arm the DSS FFT-pixel-scale settle gate without switching the decoder or
+    // resetting smoothing. Called when a y_pixels change is *requested* (before
+    // the radio echo switches the local decoder) so rows decoded against the
+    // stale scale during the request→echo latency window are dropped from 3D
+    // history instead of surviving as mis-scaled rows. prepareForFftPixelScaleChange()
+    // re-arms it (and resets smoothing) once the decoder actually switches.
+    void beginFftPixelScaleSettle();
     void suspendNoiseFloorAutoAdjustUntil(qint64 untilMs);
     void resumeNoiseFloorAutoAdjust();
     void reacquireNoiseFloorLock();
