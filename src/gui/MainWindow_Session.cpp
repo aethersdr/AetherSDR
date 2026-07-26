@@ -458,6 +458,17 @@ void MainWindow::wireRadioModel()
         if (connected && hostModulates) {
             if (!m_audio->isTxStreaming())
                 audioStartTx(m_radioModel.radioAddress(), 4991);
+            // RX must be started imperatively, exactly like TX. Locking the
+            // button calls setPcAudioEnabled(), which is signal-blocked, so no
+            // pcAudioToggled() fires and the toggle handler never opens the
+            // sink. The two setting-gated start paths (onConnected /
+            // profile-load) are skipped when a stale PcAudioEnabled=False is
+            // persisted, and the locked button can no longer be clicked to
+            // recover -- leaving the sink Stopped with the button showing ON.
+            // Persist the setting too, so those paths agree on the next launch.
+            AppSettings::instance().setValue("PcAudioEnabled", "True");
+            AppSettings::instance().save();
+            audioStartRx();
         } else if (!connected && hostModulates) {
             audioStopTx();
         }
