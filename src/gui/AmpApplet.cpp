@@ -1,5 +1,6 @@
 #include "AmpApplet.h"
 #include "HGauge.h"
+#include "GuardedSlider.h"
 #include "core/AppSettings.h"
 
 #include <QAccessible>
@@ -206,7 +207,11 @@ AmpApplet::AmpApplet(QWidget* parent)
         "QComboBox::drop-down { border: none; }"
         "QComboBox QAbstractItemView { background: {{color.background.2}}; color: {{color.text.primary}}; "
         "selection-background-color: {{color.background.1}}; }";
-    m_fanCombo = new QComboBox;
+    // GuardedComboBox (not plain QComboBox): this is a hardware control, so
+    // an accidental mouse-wheel scroll while just hovering over it must not
+    // silently change fan mode and send a command to the amp — it only
+    // responds to wheel input when its dropdown is actually open (#3905).
+    m_fanCombo = new GuardedComboBox;
     m_fanCombo->setObjectName(QStringLiteral("ampFanModeCombo"));
     for (const QString& mode : {QStringLiteral("STANDARD"), QStringLiteral("CONTEST"), QStringLiteral("BROADCAST")})
         m_fanCombo->addItem(fanModeLabel(mode), mode);
@@ -377,11 +382,15 @@ void AmpApplet::setMainsVoltage(int volts)
 
 void AmpApplet::setFanMode(const QString& mode)
 {
-    m_fanMode = mode.toUpper();
-    int idx = m_fanCombo->findData(m_fanMode);
+    const QString upper = mode.toUpper();
+    int idx = m_fanCombo->findData(upper);
     if (idx < 0) {
-        qWarning() << "AmpApplet: unknown fanmode" << m_fanMode;
+        // Leave m_fanMode and the combo's selection as they were — updating
+        // one but not the other would desync what's displayed from what
+        // AmpApplet thinks the mode is.
+        qWarning() << "AmpApplet: unknown fanmode" << upper;
     } else {
+        m_fanMode = upper;
         // Reflecting an incoming PGXL status — block signals so this
         // doesn't fire currentIndexChanged and echo a redundant
         // "setup fanmode=" command back to the amp (#3905).
