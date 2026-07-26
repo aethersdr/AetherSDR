@@ -58,6 +58,7 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QImage>            // FlagShadow::m_shadowImage (was transitive only)
 #include <QtMath>            // qCeil in FlagShadow::paintEvent
 #include <algorithm>
 #include <cmath>
