@@ -38,7 +38,16 @@ struct RadioCapabilities {
     bool canTransmit = false;
     double txPowerMaxWatts = 0.0;  // 0 when RX-only
 
+    // TX audio is modulated on THIS host rather than inside the radio. True for
+    // direct-sampling backends (HL2) where the PC runs the modulator and streams
+    // baseband to the radio; false for a Flex, which modulates on-radio from its
+    // own mic/line jacks. Drives the mic-source list and the PC-audio lock — so
+    // it must be a capability, not a family-name special case: an RX-only
+    // non-Flex backend must NOT open the mic on connect. (#4449 review)
+    bool hostModulates = false;
+
     // Peripherals / features every family may or may not have
+    bool canReboot = false;        // supports a client-triggered radio reboot
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)

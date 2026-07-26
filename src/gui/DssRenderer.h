@@ -94,6 +94,9 @@ public:
 
     void invalidate() { m_dirty = true; }
     bool hasData() const { return m_count > 0; }
+    // Forget temporal filter inputs without discarding already-decoded dBm
+    // rows. Used when the upstream raw-pixel scale changes.
+    void resetInputSmoothing();
     void clear();
 
     // ── Data-model accessors for the GPU mesh path ──────────────────────────
@@ -134,6 +137,15 @@ private:
     std::array<float, kCols> m_rawPrev1{};
     std::array<float, kCols> m_rawPrev2{};
     int m_rawHistCount = 0;
+
+    // One-shot flags: after resetInputSmoothing() the next pushed row must not
+    // blend against the retained row that preceded the reset (it was decoded
+    // under the old raw-pixel scale). Cleared once each path consumes it. See
+    // resetInputSmoothing() — the median-of-3 raw history is not enough on its
+    // own; the temporal IIR term against the previous smoothed row also carries
+    // pre-reset data.
+    bool m_skipLiveTemporalBlendOnce = false;
+    bool m_skipHistoryTemporalBlendOnce = false;
 
     // Retained scrollback store. This is intentionally separate from the
     // 96-row visible surface above: waterfall history can be much deeper, and

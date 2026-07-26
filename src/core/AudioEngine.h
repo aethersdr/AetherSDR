@@ -119,6 +119,16 @@ public:
 
     // TX (microphone) – capture audio and send VITA-49 packets to radio
     Q_INVOKABLE bool startTxStream(const QHostAddress& radioAddress, quint16 radioPort);
+
+    // Host-modulating backend (HL2): run the TX audio chain even though no Flex
+    // stream id will ever be assigned.
+    //
+    // onTxAudioReady() gates on a stream id because for Flex that id IS the
+    // destination — no id means nowhere to send. A backend that modulates
+    // locally has a destination regardless, and the gate silently disabled the
+    // test tone as well, since the tone is injected inside that callback.
+    Q_INVOKABLE void setHostModulation(bool on) { m_hostModulation = on; }
+    bool hostModulation() const { return m_hostModulation; }
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
@@ -849,6 +859,10 @@ private:
     quint16       m_txPort{0};
     quint32       m_txStreamId{0};         // DAX TX stream
     quint32       m_remoteTxStreamId{0};  // remote_audio_tx (voice/VOX)
+    // Host-modulating backend (HL2): no Flex stream id will ever be assigned,
+    // so the TX gate keys off this instead. setHostModulation() is the single
+    // write path.
+    bool          m_hostModulation{false};
     quint8        m_txPacketCount{0};    // 4-bit, mod 16
     QByteArray    m_txAccumulator;       // accumulate PCM until 128 stereo pairs
     QByteArray    m_voxAccumulator;     // accumulate PCM for VOX/met_in_rx stream

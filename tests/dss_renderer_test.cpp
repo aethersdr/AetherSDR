@@ -97,6 +97,67 @@ int testRetainedHistoryOffset()
     return 0;
 }
 
+int testInputScaleResetPreservesHistory()
+{
+    DssRenderer renderer;
+    renderer.setHistoryCapacityRows(12);
+    appendStableHistoryPeak(renderer, 180);
+    renderer.rebuildVisibleFromHistory(0, 14.0, 1.0, -200.0f);
+
+    const int visibleRowsBefore = renderer.rowCount();
+    const int historyRowsBefore = renderer.historyRowCount();
+    const int peakBefore = strongestBin(renderer);
+    renderer.resetInputSmoothing();
+
+    if (renderer.rowCount() != visibleRowsBefore
+        || renderer.historyRowCount() != historyRowsBefore
+        || strongestBin(renderer) != peakBefore) {
+        return fail("input scale reset must preserve decoded DSS history");
+    }
+
+    return 0;
+}
+
+int testInputScaleResetBreaksTemporalBlend()
+{
+    DssRenderer renderer;
+
+    // Settle a strong peak into the live temporal filter so the retained newest
+    // row carries it.
+    const int bin = DssRenderer::kCols / 2;
+    QVector<float> peak(DssRenderer::kCols, -120.0f);
+    peak[bin] = 0.0f;
+    for (int i = 0; i < 6; ++i) {
+        renderer.pushRow(peak);
+    }
+    const float settledPeak = renderer.rowDataRing(renderer.headRing())[bin];
+    if (settledPeak < -90.0f) {
+        return fail("peak did not settle into the live row");
+    }
+
+    // A y_pixels scale change resets input smoothing but preserves history. The
+    // first row pushed afterward must NOT blend against the retained (old-scale)
+    // peak row — a flat floor row should collapse to the floor, not stay lifted
+    // by the temporal IIR term.
+    renderer.resetInputSmoothing();
+    QVector<float> flat(DssRenderer::kCols, -120.0f);
+    renderer.pushRow(flat);
+    const float afterReset = renderer.rowDataRing(renderer.headRing())[bin];
+    if (afterReset > -110.0f) {
+        return fail("input scale reset must forget the temporal blend against "
+                    "the old-scale row");
+    }
+
+    // The break is one-shot: a second flat row is identical (baseline sanity).
+    renderer.pushRow(flat);
+    const float secondRow = renderer.rowDataRing(renderer.headRing())[bin];
+    if (secondRow > -110.0f) {
+        return fail("post-reset rows should track the new-scale input");
+    }
+
+    return 0;
+}
+
 int testRetainedHistoryCapacity()
 {
     DssRenderer renderer;
@@ -263,6 +324,12 @@ int main()
         return rc;
     }
     if (int rc = testRetainedHistoryOffset(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetPreservesHistory(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetBreaksTemporalBlend(); rc != 0) {
         return rc;
     }
     if (int rc = testRetainedHistoryCapacity(); rc != 0) {

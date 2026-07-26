@@ -7725,7 +7725,9 @@ void AudioEngine::onTxAudioReady()
     if (!m_micBuffer || !m_audioSource) return;
     if (m_audioSource->state() == QAudio::StoppedState) return;
     if (!m_micBuffer->isOpen()) return;
-    if (m_txStreamId == 0 && m_remoteTxStreamId == 0) return;
+    // A host-modulating backend has no Flex stream id and never will; the
+    // audio's destination is the local modulator. See setHostModulation().
+    if (!m_hostModulation && m_txStreamId == 0 && m_remoteTxStreamId == 0) return;
     qint64 avail = m_micBuffer->pos();
     if (avail <= 0) return;
     QByteArray data = m_micBuffer->data();
@@ -7733,7 +7735,8 @@ void AudioEngine::onTxAudioReady()
     m_micBuffer->seek(0);
     if (data.isEmpty()) return;
 #else
-    if (!m_micDevice || (m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
+    if (!m_micDevice
+        || (!m_hostModulation && m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
     QByteArray data = m_micDevice->readAll();
     if (data.isEmpty()) return;
     m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)

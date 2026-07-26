@@ -221,6 +221,30 @@ int testDssStartupHistoryAvailability()
         || !nearlyEqual(dssHistoryAvailability(0.0f, 0.0f), 0.0)) {
         return fail("3D FFT startup history should fade in continuously");
     }
+    const std::optional<float> movingAge =
+        dssRetainedSampleAge(94.0f, 0.5f, 96.0f, 96.0f);
+    const std::optional<float> oldestAge =
+        dssRetainedSampleAge(95.0f, 1.0f, 96.0f, 96.0f);
+    if (!movingAge || !nearlyEqual(*movingAge, 94.5)
+        || !oldestAge || !nearlyEqual(*oldestAge, 95.0)
+        || dssRetainedSampleAge(96.0f, 0.0f, 96.0f, 96.0f).has_value()) {
+        return fail("3D FFT rear row should remain stable until eviction");
+    }
+    // Fidelity to the shader's two clamps outside 1 <= validRows <= rows:
+    // validRows > rows caps to rows (oldest age = rows - 1, not validRows - 1);
+    // 0 < validRows < 1 floors the oldest age at 0 rather than going negative.
+    // validRows = 200 > rows caps the oldest age to rows - 1 = 95, so a
+    // sourceAge+remainingRows of 100 clamps to 95 (an uncapped mirror would
+    // return 100 against validRows - 1 = 199).
+    const std::optional<float> cappedAge =
+        dssRetainedSampleAge(90.0f, 10.0f, 200.0f, 96.0f);
+    // 0 < validRows < 1 floors the oldest age at 0 rather than going negative.
+    const std::optional<float> flooredAge =
+        dssRetainedSampleAge(0.0f, 0.0f, 0.5f, 96.0f);
+    if (!cappedAge || !nearlyEqual(*cappedAge, 95.0)
+        || !flooredAge || !nearlyEqual(*flooredAge, 0.0)) {
+        return fail("3D FFT retained sample age must match shader clamps");
+    }
     return 0;
 }
 

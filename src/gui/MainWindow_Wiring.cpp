@@ -658,6 +658,49 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
     return changed;
 }
 
+// Re-push the pan's authoritative geometry into its spectrum view.
+//
+// SpectrumWidget suppresses inbound geometry while a local gesture owns the
+// view (drag, VFO drag, a settling zoom). That is correct — an echo arriving
+// mid-drag is stale. It was also SAFE only because Flex re-echoes pan status
+// continuously, so the next status replaced whatever was dropped within
+// milliseconds.
+//
+// A backend that emits geometry only when it CHANGES has no next status. The
+// HL2 publishes its pan centre from the RX NCO, once, on tune: if that lands
+// during a gesture hold it is gone for good, and the view stays parked at the
+// old centre while the slice, the pan model and every waterfall row have moved
+// on — measured at a permanent 6.3 kHz offset after a single drag-tune.
+//
+// So the widget reports that it suppressed something, and we re-push the model
+// value HERE rather than let it replay the value it saw. The model is the
+// authority for both families: for Flex it only advances once a command
+// actually reached the wire (#4142), and for a DSP-owning backend it mirrors
+// hardware state. Reading it now cannot resurrect a stale echo.
+void MainWindow::resyncPanGeometryToView(const QString& panId)
+{
+    if (m_shuttingDown || !m_panStack)
+        return;
+    auto* pan = m_radioModel.panadapter(panId);
+    auto* sw = m_panStack->spectrum(panId);
+    if (!pan || !sw)
+        return;
+    const double centerMhz = pan->centerMhz();
+    const double bandwidthMhz = pan->bandwidthMhz();
+    if (centerMhz <= 0.0 || bandwidthMhz <= 0.0)
+        return;
+    if (qFuzzyCompare(sw->centerMhz(), centerMhz)
+        && qFuzzyCompare(sw->bandwidthMhz(), bandwidthMhz)) {
+        return;   // already in agreement — nothing was actually lost
+    }
+    qCDebug(lcProtocol).noquote()
+        << "MainWindow: re-syncing suppressed pan geometry to view"
+        << QStringLiteral("pan=%1").arg(panId)
+        << QStringLiteral("view=%1").arg(sw->centerMhz(), 0, 'f', 6)
+        << QStringLiteral("model=%1").arg(centerMhz, 0, 'f', 6);
+    sw->setFrequencyRangeImmediate(centerMhz, bandwidthMhz);
+}
+
 void MainWindow::snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,
                                                 bool sendCommand)
 {
@@ -2349,7 +2392,7 @@ void MainWindow::reacquireNoiseFloorLocksAfterProfileLoad()
 
         SpectrumWidget* sw = applet->spectrumWidget();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->setDbmRange(
                     pan->panStreamId(), pan->minDbm(), pan->maxDbm());
             }
@@ -2449,6 +2492,19 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
         QString("display pan set %1 xpixels=%2 ypixels=%3")
             .arg(panId).arg(xpix).arg(ypix));
 
+    // Arm the DSS settle gate now, before the radio echo switches the local
+    // decoder. The stream keeps decoding with the old y_pixels until the echo,
+    // so rows arriving in the request→echo window can be decoded against a stale
+    // scale; since retained 3D history is now preserved across a resize (rather
+    // than cleared on echo), those mis-scaled rows would otherwise survive in
+    // scrollback. Dropping them here costs only a few valid rows and matches the
+    // pre-preservation intent that pre-echo rows must not persist. Only for a
+    // genuine transition off an established scale — a width-only resize or first
+    // dimension push (fftYPixels()==0) has no prior history to protect.
+    if (pan->fftYPixels() > 0 && pan->fftYPixels() != ypix) {
+        sw->beginFftPixelScaleSettle();
+    }
+
     if (profileLoadRadioStateWritesHeld()) {
         m_profileLoadPendingFftYpixels.insert(panId, ypix);
         m_profileLoadPanDimensionsSettlingUntilMs.insert(
@@ -2471,7 +2527,19 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
                 || panYpixelsFor(swGuard.data()) != ypix) {
                 return;
             }
-            m_radioModel.panStream()->setYPixels(streamId, ypix);
+            // A radio status echo updates both the model and stream decoder.
+            // Do not run the delayed fallback afterward: besides being
+            // redundant, it would restart the DSS scale-settle window for a
+            // width-only resize whose y_pixels never changed.
+            if (currentPan->fftYPixels() == ypix) {
+                return;
+            }
+            // Telling the radio the new scale is Flex-only — a non-Flex backend
+            // (HL2) owns no PanadapterStream (#4448) — but the local widget
+            // rescale below must still happen.
+            if (m_radioModel.panStream()) {
+                m_radioModel.panStream()->setYPixels(streamId, ypix);
+            }
             swGuard->prepareForFftPixelScaleChange();
         };
 
@@ -2808,7 +2876,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto pendingDbm = std::make_shared<DbmRangeTransition::Handshake>();
     auto setStreamDbmRange = [this, applet](float minDbm, float maxDbm, bool waitForEcho = false) {
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
             }
         }
@@ -2817,7 +2885,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                                       (const DbmRangeTransition::Range& range) {
         sw->cancelPendingDbmRangeChange();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
             }
         }
@@ -2844,7 +2912,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // every subsequent FFT bin until another status happened to arrive.
         sw->cancelPendingDbmRangeChange();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
             }
         }
@@ -3232,7 +3300,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
         if (profileLoadPanDisplaySettling(applet->panId()) && autoFloorChange) {
             if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-                if (pan->panStreamId()) {
+                if (pan->panStreamId() && m_radioModel.panStream()) {
                     setStreamDbmRange(pan->minDbm(), pan->maxDbm());
                 }
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());

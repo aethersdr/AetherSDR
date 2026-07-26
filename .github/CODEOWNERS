@@ -15,16 +15,16 @@
 #         CONTRIBUTING, CODE_OF_CONDUCT, LICENSE, ROADMAP), security
 #         controls (SECURITY*, signing keys, CODEOWNERS itself, CodeQL
 #         config, and the security-sensitive workflows — release
-#         signing/publish + the CodeQL scan invocation), legal/compliance
-#         (THIRD_PARTY_LICENSES), and bot/agent instruction (AGENTS.md,
-#         CLAUDE.md, GEMINI.md, .claude/commands/).
+#         signing/publish + the CodeQL scan invocation), and bot/agent
+#         instruction (AGENTS.md, CLAUDE.md, GEMINI.md, .claude/commands/).
 # Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat).
 #         Project infrastructure: CI/CD configuration — the ROUTINE
 #         workflow definitions (.github/workflows/ except the sensitive
 #         ones carved to Tier 1), dependabot, docker, issue templates —
 #         plus documentation (docs/, *.md catchall, including
 #         README/CHANGELOG/SUPPORT which fall through here from the *.md
-#         glob), tests, and build configuration (CMakeLists.txt).
+#         glob), tests, build configuration (CMakeLists.txt), and
+#         legal/compliance tracking (THIRD_PARTY_LICENSES).
 #         Narrower owner set than Tier 3 because infrastructure changes
 #         need deeper repo context than routine source review.
 # Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust, @chibondking).
@@ -82,6 +82,7 @@ docs/                        @aethersdr/infrastructure
 
 # Build configuration
 CMakeLists.txt               @aethersdr/infrastructure
+THIRD_PARTY_LICENSES         @aethersdr/infrastructure
 
 # ── Tier 1: governance, security, bot policy — maintainer-only ────────────
 # Project governance & direction
@@ -98,7 +99,6 @@ ROADMAP.md                   @aethersdr/maintainers
 # Security & compliance
 SECURITY.md                  @aethersdr/maintainers
 SECURITY-AUDIT.md            @aethersdr/maintainers
-THIRD_PARTY_LICENSES         @aethersdr/maintainers
 .github/CODEOWNERS           @aethersdr/maintainers
 .github/codeql/              @aethersdr/maintainers
 docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers

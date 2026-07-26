@@ -77,6 +77,19 @@ public:
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
+    // Receive AGC. mode is the neutral vocabulary the slice model uses —
+    // "off" / "slow" / "med" / "fast"; thresholdDb is the operator's 0..100
+    // AGC-threshold value. A backend whose hardware owns the AGC translates
+    // both to its wire protocol; one that owns an engine-side DSP chain
+    // configures that chain. Sent as a pair because a backend configuring a DSP
+    // AGC generally needs both to make either meaningful.
+    virtual void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) = 0;
+    // Move the panadapter's centre — the receiver's WINDOW, not the slice.
+    // A backend whose hardware streams a fixed window retunes it; one that
+    // owns a DDC moves the NCO. Without this the UI can pan the view locally
+    // while the data keeps arriving from the old window, and the waterfall
+    // (which carries its own frequency extent) drifts off the display.
+    virtual void setPanCenter(const QString& panId, double hz) = 0;
 
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the
@@ -84,6 +97,35 @@ public:
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
+
+    // Tune carrier on/off.
+    //
+    // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
+    // to do here. A backend that generates its own carrier implements it.
+    virtual void setTune(bool on) { Q_UNUSED(on); }
+
+    // Transmit power as a percentage, 0..100.
+    //
+    // Flex takes this as a text command from TransmitModel, so FlexBackend has
+    // nothing to do here. A backend that owns its own drive register (HL2)
+    // implements it.
+    virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
+    //
+    // For backends that modulate on the host (HL2). A Flex radio does its own
+    // modulation from mic or DAX, so FlexBackend ignores this — hence a default
+    // no-op rather than a pure virtual.
+    //
+    // The audio is already shaped: AudioEngine has applied the test tone,
+    // compressor and EQ before this point. That is deliberate — the TONE button,
+    // the microphone and any future source all reach the air through ONE path,
+    // so what the operator monitors is what gets transmitted.
+    virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+    {
+        Q_UNUSED(int16Stereo);
+        Q_UNUSED(sampleRateHz);
+    }
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients

@@ -125,6 +125,11 @@ public slots:
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
                              quint32 timecode, qint64 emittedNs);
+    // A DAX channel's radio-side stream went away — drop its channel→TRX routing
+    // cache entry so a re-registration re-resolves cleanly (#3669/#3766). Bound
+    // to PanadapterStream::daxStreamUnregistered via the MainWindow stream-sink
+    // helper so it survives a backend/family swap (#4448 F6).
+    void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
     void clientCountChanged(int count);

@@ -718,6 +718,14 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
     // Pre-bind UDP socket for VITA-49 reception BEFORE requesting
     // connection, so we can pass our port to the SmartLink server.
     // The server tells the radio our public IP:port for UDP streaming.
+    // SmartLink is a Flex service, so in practice this path only runs with a
+    // PanadapterStream present -- but it dereferenced it bare, and "in practice"
+    // is what the HL2 bring-up kept disproving. Decline instead of crashing.
+    if (!m_radioModel.panStream()) {
+        qWarning() << "MainWindow: WAN connect requested with no PanadapterStream"
+                   << "— backend does not use VITA-49 transport";
+        return;
+    }
     quint16 udpPort = m_radioModel.panStream()->localPort();
     if (udpPort == 0) {
         // Not yet bound — start WAN early to get a port
@@ -1333,11 +1341,13 @@ MainWindow::MainWindow(QWidget* parent)
     // Display overlay connections are now per-pan in wirePanadapter().
 
     // ── Panadapter stream → audio engine ──────────────────────────────────
-    // All VITA-49 traffic arrives on the single client udpport socket owned
-    // by PanadapterStream. It strips the header from IF-Data packets and emits
-    // audioDataReady(); we feed that directly to the QAudioSink.
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            m_audio, &AudioEngine::feedAudioData);
+    // All VITA-49 traffic arrives on the single client udpport socket owned by
+    // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
+    // Every RX-audio sink for that signal — the QAudioSink feed, the QSO-recorder
+    // RX tap, and the CW/RTTY decoder feeds — is wired in one helper so a Flex-
+    // backend swap can rebind an identical set (the stream is destroyed/rebuilt
+    // on a family change; audioDataReady carries Flex RX audio itself).
+    wirePanStreamRxAudioSinks();
     connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
             this, [this](const QString& source, const QString& sourceId,
                          const QByteArray& pcm, int sampleRate) {
@@ -1352,15 +1362,23 @@ MainWindow::MainWindow(QWidget* parent)
     wireKiwiSdr();
 
     // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
-    // RX (float32) comes from the panadapter stream; TX (int16 post-limiter
-    // monitor) from AudioEngine::txFinalMonitorPcmReady — the source that
-    // carries SSB/phone TX. Without the TX tap, Client-Side recordings were
-    // full-length silence during transmit (#3556). The recorder MOX-gates the
-    // two so the file is a single time-interleaved RX/TX stream.
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            m_qsoRecorder, &QsoRecorder::feedRxAudio);
+    // RX (float32) comes from the panadapter stream (wired in
+    // wirePanStreamRxAudioSinks() above); TX (int16 post-limiter monitor) from
+    // AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone
+    // TX. Without the TX tap, Client-Side recordings were full-length silence
+    // during transmit (#3556). The recorder MOX-gates the two so the file is a
+    // single time-interleaved RX/TX stream.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
+    // Host-modulated backends (HL2) take their transmit audio from the SAME tap
+    // the recorder uses: fully processed, after the test tone, compressor and
+    // EQ. One path means the TONE button, the microphone and the recording all
+    // agree with what actually goes on the air. A Flex radio modulates on the
+    // radio side and ignores this.
+    connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
+            this, [this](const QByteArray& pcm) {
+        m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE);
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and
@@ -1374,18 +1392,11 @@ MainWindow::MainWindow(QWidget* parent)
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
-    // Audio feed is global (same audio for all pans).
-    // Text/stats output is routed to the pan owning the active slice
-    // via routeCwDecoderOutput(), which re-wires on active slice change (#864).
-    //
-    // RX feed is gated on CwDecodeSettings::rxEnabled() (#2417).  Cheap
-    // per-packet check so the toggle can flip live from the dialog
-    // without disconnecting/reconnecting signal wiring.
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            &m_cwDecoder, [this](const QByteArray& pcm) {
-                if (CwDecodeSettings::rxEnabled())
-                    m_cwDecoder.feedAudio(pcm);
-            });
+    // Audio feed is global (same audio for all pans) and lives in
+    // wirePanStreamRxAudioSinks() above (RX feed gated on
+    // CwDecodeSettings::rxEnabled(), #2417). Text/stats output is routed to the
+    // pan owning the active slice via routeCwDecoderOutput(), which re-wires on
+    // active slice change (#864).
 
     // TX-side CW decoder feed (#2417): AudioEngine taps the sidetone
     // generator's mono signal, downsamples 48→24 kHz, and emits the
@@ -1409,12 +1420,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
-    // ── RTTY decoder: feed audio ────────────────────────────────────────
-    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-            &m_rttyDecoder, [this](const QByteArray& pcm) {
-                if (m_rttyDecoder.isRunning())
-                    m_rttyDecoder.feedAudio(pcm);
-            });
+    // RTTY decoder audio feed is wired in wirePanStreamRxAudioSinks() above,
+    // gated on the decoder being running.
 
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
     connect(m_appletPanel->rxApplet(), &RxApplet::afGainChanged, this, [this](int v) {
@@ -4513,19 +4520,31 @@ void MainWindow::buildUI()
     gpsStack->setObjectName(QStringLiteral("gpsStatusButton"));
     gpsStack->setAutoDefault(false);
     gpsStack->setDefault(false);
+    gpsStack->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     gpsStack->setCursor(Qt::PointingHandCursor);
     gpsStack->setFocusPolicy(Qt::TabFocus);
     gpsStack->setToolTip(QStringLiteral("Open GPS & Station Location"));
     gpsStack->setAccessibleName(QStringLiteral("GPS and station location"));
     gpsStack->setAccessibleDescription(
         QStringLiteral("Open the live GPS, map, satellite reception, and time dashboard"));
+    // Flat, label-style resting state so the two rows sit on the same baselines
+    // as the neighbouring plain-QWidget telemetry stacks, with hover / pressed /
+    // focus feedback so the click target stays discoverable.
+    //
+    // The focus ring uses `outline` rather than `border`: Qt honours QSS
+    // `outline` only on `:focus` (it is wired to the focus-rect paint path), so
+    // hover must use `border` instead — an `outline` there silently never
+    // paints. Neither property perturbs this widget's layout: QStyleSheetStyle
+    // does not fold the button's frame into the contents rect its child layout
+    // sees, so the two rows keep the sibling stacks' y positions and full label
+    // width in every state. Do not add `padding` here — that one does consume
+    // layout space and would offset the rows against the borderless siblings.
     ThemeManager::instance().applyStyleSheet(gpsStack, QStringLiteral(
-        "QPushButton { background: transparent; border: 1px solid transparent; "
-        "border-radius: 4px; padding: 1px 5px; }"
+        "QPushButton { background: transparent; border: none; padding: 0; }"
         "QPushButton:hover { background: {{color.background.1}}; "
-        "border-color: {{color.border.strong}}; }"
-        "QPushButton:focus { border-color: {{color.border.accent}}; }"
-        "QPushButton:pressed { background: {{color.background.2}}; }"));
+        "border: 1px solid {{color.border.strong}}; }"
+        "QPushButton:pressed { background: {{color.background.2}}; }"
+        "QPushButton:focus { outline: 1px solid {{color.border.accent}}; }"));
     connect(gpsStack, &QPushButton::clicked,
             this, &MainWindow::showGpsLocationDialog);
     reserveTelemetryStack(gpsStack, {

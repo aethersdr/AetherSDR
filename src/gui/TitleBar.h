@@ -30,6 +30,11 @@ public:
     void setMenuBar(QMenuBar* mb);
 
     void setPcAudioEnabled(bool on);
+    // Lock PC audio on. A host-modulating backend (HL2) plays and captures all
+    // of its audio locally, so turning PC audio off leaves the operator deaf and
+    // mute with no indication why — there is no radio-side audio path to fall
+    // back to, unlike a Flex.
+    void setPcAudioLocked(bool locked);
     void setPcAudioDevices(const QString& inputDevice, const QString& outputDevice);
     void setLineoutMuted(bool muted);
     void setMasterVolume(int pct);

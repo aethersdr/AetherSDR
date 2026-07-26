@@ -189,12 +189,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // + PanadapterStream refcounting, #3305). The #3476 "profile load
         // destroyed the stream, never came back" recreate is automatic there.
         // TCI only keeps its channel→trx routing cache truthful (#3669/#3766).
-        if (m_model->panStream()) {
-            connect(m_model->panStream(), &PanadapterStream::daxStreamUnregistered,
-                    this, [this](int ch, quint32) {
-                m_channelTrx.remove(ch);
-            });
-        }
+        // The PanadapterStream::daxStreamUnregistered → onDaxStreamUnregistered
+        // subscription is made by MainWindow's stream-sink helper (not here) so it
+        // is re-established after a backend/family swap destroys the stream (#4448).
 
         // Re-trigger DAX setup when the radio (re)connects or a slice
         // is added AFTER a TCI client has already requested audio.  Without
@@ -3038,6 +3035,13 @@ void TciServer::broadcastStatus()
 }
 
 // ── IQ data from DAX IQ stream → TCI binary frames (type=0) ───────────
+
+void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
+{
+    // The DAX channel's radio-side stream went away; drop its stale channel→TRX
+    // routing-cache entry so a re-registration re-resolves cleanly (#3669/#3766).
+    m_channelTrx.remove(channel);
+}
 
 void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
 {
