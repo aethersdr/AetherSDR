@@ -203,3 +203,20 @@ private:
     float   m_cacheZCurve       = 0.0f;
     quint64 m_cachePaletteToken = ~0ull;
 };
+
+// Painter's-algorithm occlusion for the CPU depth-shadow overlay drawn on top
+// of this surface.
+//
+// `yFrontToBack` holds the projected screen y of one frequency column at each
+// depth step, nearest row first. rebuild() fills every row's curtain down to
+// the plot floor, so a nearer row hides everything below its ridge: a point is
+// occluded once it sits lower (larger y) than the topmost ridge in front of
+// it. The shadow is painted as a flat overlay after the surface, so segments
+// that fail this test would otherwise be stroked across the face of the nearer
+// curtain and read as floating in front of the surface.
+//
+// Returns one flag per segment (size = N-1, empty for N < 2): true when either
+// endpoint still clears that silhouette, so partial overlaps are kept rather
+// than over-culled. The half-pixel slack keeps a ridge that merely grazes the
+// silhouette from flickering in and out between frames.
+QVector<bool> dssDepthVisibleSegments(const QVector<qreal>& yFrontToBack);

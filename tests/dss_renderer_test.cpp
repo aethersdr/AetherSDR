@@ -158,6 +158,50 @@ int testInputScaleResetBreaksTemporalBlend()
     return 0;
 }
 
+int testDepthShadowOcclusion()
+{
+    // y grows downward; rebuild() fills each curtain to the floor, so a nearer
+    // (earlier) row hides anything below its ridge.
+
+    // A surface receding upward: every row clears the one in front of it, so
+    // nothing is occluded.
+    if (dssDepthVisibleSegments({100.0, 90.0, 80.0, 70.0})
+        != QVector<bool>{true, true, true}) {
+        return fail("a strictly rising ridge must never be culled");
+    }
+
+    // The far rows sit below the front row's ridge: their segments are behind
+    // the front curtain and must not be stroked over it.
+    const QVector<bool> behind =
+        dssDepthVisibleSegments({50.0, 120.0, 130.0, 140.0});
+    if (behind.size() != 3 || !behind.at(0) || behind.at(1) || behind.at(2)) {
+        return fail("segments behind a nearer ridge must be culled");
+    }
+
+    // A far peak that pokes back above the silhouette becomes visible again.
+    const QVector<bool> reemerges =
+        dssDepthVisibleSegments({50.0, 120.0, 40.0, 130.0});
+    if (reemerges.size() != 3 || !reemerges.at(0) || !reemerges.at(1)
+        || !reemerges.at(2)) {
+        return fail("a far ridge rising above the silhouette must reappear");
+    }
+
+    // Degenerate inputs yield no segments rather than indexing off the end.
+    if (!dssDepthVisibleSegments({}).isEmpty()
+        || !dssDepthVisibleSegments({10.0}).isEmpty()) {
+        return fail("fewer than two depths must yield no segments");
+    }
+
+    // Half-pixel slack: a ridge grazing the silhouette stays visible instead
+    // of flickering between frames.
+    if (dssDepthVisibleSegments({100.0, 100.2, 100.3})
+        != QVector<bool>{true, true}) {
+        return fail("a grazing ridge must not flicker out");
+    }
+
+    return 0;
+}
+
 int testRetainedHistoryCapacity()
 {
     DssRenderer renderer;
@@ -425,6 +469,9 @@ int main()
         return rc;
     }
     if (int rc = testInputScaleResetBreaksTemporalBlend(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testDepthShadowOcclusion(); rc != 0) {
         return rc;
     }
     if (int rc = testRetainedHistoryCapacity(); rc != 0) {

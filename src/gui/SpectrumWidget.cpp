@@ -14924,14 +14924,16 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
     const int cols = m_dss.cols();
     const int validRows = m_dss.rowCount();
     const int headRing = m_dss.headRing();
-    const float distanceRows =
-        std::max(m_waterfallScrollDistanceRows, 1.0f);
-    const float scrollProgressRows = m_waterfallScrollClock.isValid()
-        ? waterfallScrollProgressRows()
-        : m_waterfallScrollDistanceRows;
-    const float remainingRows = std::clamp(
-        distanceRows - scrollProgressRows, 0.0f, distanceRows);
 
+    // This geometry is only ever drawn over the CACHED surface image, which
+    // DssRenderer::rebuild() renders from each row's discrete data with no
+    // sub-row scroll offset (see its rowAt(age) loop). Sampling with the mesh
+    // shader's `remainingRows` offset instead would blend toward a row the
+    // cached surface never shows: while the scroll clock runs that offset
+    // sweeps distanceRows -> 0 every row interval, so the shadow ridge would
+    // track a row up to one row older and re-converge each FFT row, visibly
+    // bobbing off the ridge even though the surface underneath is static
+    // between rows. Snap to the same discrete row the surface drew.
     const auto sampleSurfaceDbm = [&](float displayUnit, float depth) {
         const float sourceUnit =
             0.5f + frequencyOffset
@@ -14944,21 +14946,17 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
             static_cast<int>(std::lround(
                 std::clamp(sourceUnit, 0.0f, 1.0f) * (cols - 1))),
             0, cols - 1);
-        const float sampleAge =
-            std::clamp(depth, 0.0f, 1.0f) * rows + remainingRows;
-        const int age0 = std::max(
-            0, static_cast<int>(std::floor(sampleAge)));
-        const int age1 = age0 + 1;
-        const float ageBlend = sampleAge - std::floor(sampleAge);
-        const auto dbmAtAge = [&](int age) {
-            if (age < 0 || age >= validRows) {
-                return floorDbm;
-            }
-            const int ring = (headRing + age) % rows;
-            const float value = m_dss.rowDataRing(ring)[column];
-            return std::isfinite(value) ? value : floorDbm;
-        };
-        return std::lerp(dbmAtAge(age0), dbmAtAge(age1), ageBlend);
+        // lround, not floor: depth is age/rows, so depth*rows lands a hair
+        // under the intended integer age in float and floor() would pick the
+        // row in front of it.
+        const int age = static_cast<int>(std::lround(
+            std::clamp(depth, 0.0f, 1.0f) * rows));
+        if (age < 0 || age >= validRows) {
+            return floorDbm;
+        }
+        const int ring = (headRing + age) % rows;
+        const float value = m_dss.rowDataRing(ring)[column];
+        return std::isfinite(value) ? value : floorDbm;
     };
 
     // Carry the shadow to the final DSS row and fade it fully transparent
@@ -15058,14 +15056,44 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
                 return points;
             };
 
-            QVector<QPointF> previous =
-                crossSection(depths.constFirst());
+            // Occlusion. DssRenderer::rebuild draws rows back-to-front with
+            // every curtain filled down to the plot floor, so a nearer row
+            // hides everything below its ridge. This shadow is a flat overlay
+            // painted after that surface, so without culling, far segments get
+            // stroked across the face of nearer curtains and the shadow reads
+            // as floating in front of the surface — the opposite of the decal
+            // the mesh path produces. Culling at build time fixes both
+            // consumers of this geometry (QPainter and the RHI vertex path).
+            QVector<QVector<QPointF>> crossSections;
+            crossSections.reserve(depths.size());
+            for (float depth : depths) {
+                crossSections.append(crossSection(depth));
+            }
+            // Per-column visibility down the depth axis, then a quad survives
+            // if either of the two columns it spans is still visible there —
+            // i.e. if any of its four corners clears the nearer rows.
+            QVector<QVector<bool>> columnVisible;
+            columnVisible.reserve(kBandFrequencySegments + 1);
+            for (int column = 0; column <= kBandFrequencySegments; ++column) {
+                QVector<qreal> ys;
+                ys.reserve(crossSections.size());
+                for (const QVector<QPointF>& section : crossSections) {
+                    ys.append(section.at(column).y());
+                }
+                columnVisible.append(dssDepthVisibleSegments(ys));
+            }
+
             for (int i = 1; i < depths.size(); ++i) {
                 const float frontDepth = depths.at(i - 1);
                 const float backDepth = depths.at(i);
-                QVector<QPointF> next = crossSection(backDepth);
+                const QVector<QPointF>& previous = crossSections.at(i - 1);
+                const QVector<QPointF>& next = crossSections.at(i);
                 for (int column = 0;
                      column < kBandFrequencySegments; ++column) {
+                    if (!columnVisible.at(column).at(i - 1)
+                        && !columnVisible.at(column + 1).at(i - 1)) {
+                        continue;
+                    }
                     geometry.bands.append({
                         QPolygonF{
                             previous.at(column),
@@ -15077,7 +15105,6 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
                         fadedColor(fillBase, fillAlpha, backDepth),
                     });
                 }
-                previous = std::move(next);
             }
         }
 
@@ -15099,9 +15126,23 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
                 geometry.hasFirstProjection = true;
             }
 
+            // Same occlusion rule as the band above: a marker segment behind
+            // the silhouette of the rows in front of it is hidden by their
+            // curtains and must not be stroked over them.
+            QVector<qreal> markerYs;
+            markerYs.reserve(points.size());
+            for (const QPointF& point : points) {
+                markerYs.append(point.y());
+            }
+            const QVector<bool> segmentVisible =
+                dssDepthVisibleSegments(markerYs);
+
             const QColor shadowBase = shadowColor(source, 255);
             const int shadowAlpha = so.isActive ? 185 : 72;
             for (int i = 1; i < points.size(); ++i) {
+                if (!segmentVisible.at(i - 1)) {
+                    continue;
+                }
                 geometry.lines.append({
                     QLineF(points.at(i - 1), points.at(i)),
                     fadedColor(
@@ -15114,6 +15155,9 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
             const QColor cueBase = projectionCueColor(source);
             const int cueAlpha = so.isActive ? 92 : 28;
             for (int i = 1; i < points.size(); ++i) {
+                if (!segmentVisible.at(i - 1)) {
+                    continue;
+                }
                 geometry.lines.append({
                     QLineF(points.at(i - 1), points.at(i)),
                     fadedColor(cueBase, cueAlpha, depths.at(i - 1)),
@@ -15164,7 +15208,13 @@ void SpectrumWidget::drawDssDepthGeometry(
     QPainter& painter, const DssDepthGeometry& geometry) const
 {
     painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    // AA OFF for the band tiles. The band is a grid of abutting translucent
+    // polygons, and an antialiased shared edge is blended twice — once by each
+    // neighbour — leaving a visible seam lattice across the whole shadow.
+    // DssRenderer::rebuild disables AA on its tiled trapezoids for exactly this
+    // reason; the marker lines below re-enable it for a crisp stroke.
+    painter.setRenderHint(QPainter::Antialiasing, false);
 
     for (const DssDepthBand& band : geometry.bands) {
         painter.setPen(Qt::NoPen);
@@ -15178,6 +15228,7 @@ void SpectrumWidget::drawDssDepthGeometry(
         painter.setBrush(gradient);
         painter.drawPolygon(band.polygon);
     }
+    painter.setRenderHint(QPainter::Antialiasing, true);
     for (const DssDepthLine& line : geometry.lines) {
         QLinearGradient gradient(line.line.p1(), line.line.p2());
         gradient.setColorAt(0.0, line.frontColor);
