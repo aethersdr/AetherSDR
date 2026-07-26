@@ -4366,6 +4366,33 @@ add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PC-audio lock contract for host-modulating backends (HL2) — needs
+# QApplication + Widgets.
+add_executable(hl2_pc_audio_lock_test
+    tests/hl2_pc_audio_lock_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
+    # so the resizer + frameless title bar come along; ThemeManager pulls its
+    # logging deps, same as container_widget_test.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(hl2_pc_audio_lock_test PRIVATE src)
+target_link_libraries(hl2_pc_audio_lock_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(hl2_pc_audio_lock_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
+set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp

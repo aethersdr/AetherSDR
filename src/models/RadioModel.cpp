@@ -2456,11 +2456,15 @@ RadioCapabilities RadioModel::backendCapabilities() const
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 {
     if (tx) {
-        // F2 (#4448): refuse keying on a backend that cannot transmit (HL2 is
-        // RX-only). This must come BEFORE any optimistic state mutation or
-        // command, so an RX-only radio can never be driven into a fake TX state
-        // (TX indicator, audio gate, waveform) by a PTT/MOX/DAX/TCI edge. Unkey
-        // (tx=false) is always allowed — it only ever clears state.
+        // F2 (#4448): refuse keying on a backend that cannot transmit. The
+        // guard is a capability test, not a family test — HL2 is TX-capable
+        // now (see the transmit gate in Hl2Backend), and what still trips this
+        // is any backend reporting canTransmit=false: an RX-only receiver, or
+        // an HL2 whose transmit gate is closed. This must come BEFORE any
+        // optimistic state mutation or command, so such a radio can never be
+        // driven into a fake TX state (TX indicator, audio gate, waveform) by a
+        // PTT/MOX/DAX/TCI edge. Unkey (tx=false) is always allowed — it only
+        // ever clears state.
         if (!backendCapabilities().canTransmit) {
             emitInterlockNotification(
                 tr("This radio is receive-only and cannot transmit."),
