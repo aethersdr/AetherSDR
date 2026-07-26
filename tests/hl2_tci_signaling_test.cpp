@@ -69,12 +69,21 @@ static RadioInfo flexInfo()
 
 // Grants access to the private predicate that gates every DAX arrangement in
 // TciServer. Declared as a friend in TciServer.h.
+//
+// Guarded because TciServer.h is `#pragma once` followed immediately by
+// `#ifdef HAVE_WEBSOCKETS`, so it expands to NOTHING in a build configured
+// without Qt6WebSockets — naming TciServer out here failed to compile such a
+// build entirely. Everything else in this file (the transmit edge, the command
+// plane, host-modulated TX audio, the per-mode passband) is WebSocket-free and
+// deliberately still runs there.
+#ifdef HAVE_WEBSOCKETS
 class Hl2TciSignalingTest {
 public:
     static bool hostModulating(TciServer& server) {
         return server.hostModulatingBackend();
     }
 };
+#endif
 
 // ── The raw-TX edge TciServer waits on ────────────────────────────────────
 static void testTransmitEdgeIsPublished()
@@ -125,6 +134,33 @@ static void testMoxPathPublishesTheSameEdge()
           "HL2 MOX-off publishes radioTransmittingChanged(false)");
 }
 
+// TUNE is the third keying path, and the one a fix applied to the other two
+// silently misses. Hl2Backend::setTune() calls setKeying(), so a tune carrier
+// IS a transmission — and TciServer's "already transmitting" guard reads
+// isRadioTransmitting(), so leaving this edge unpublished let a TCI client key
+// on top of a live tune carrier and drop the key out from under it on unkey.
+static void testTunePathPublishesTheSameEdge()
+{
+    RadioModel model;
+    model.connectToRadio(hl2Info());
+
+    QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
+
+    // PttSource::Dax for the same reason the key test uses it: it is the one
+    // source localPttInterlockMessage() lets through with no TX slice assigned,
+    // and TCI/DAX-initiated tune is a real path (see TransmitModel::startTune).
+    model.transmitModel().startTune(TransmitModel::PttSource::Dax);
+    check(edges.size() == 1 && edges.first().first().toBool(),
+          "HL2 TUNE-on publishes radioTransmittingChanged(true)");
+    check(model.isRadioTransmitting(),
+          "a tune carrier counts as the radio transmitting");
+
+    model.transmitModel().stopTune();
+    check(edges.size() == 2 && !edges.at(1).first().toBool(),
+          "HL2 TUNE-off publishes radioTransmittingChanged(false)");
+    check(!model.isRadioTransmitting(), "tune release clears the TX state");
+}
+
 // On Flex the edge is decoded from `interlock` status. A second publisher here
 // would race the authoritative one and could report TX before the radio agreed.
 static void testFlexEdgeStaysInterlockOwned()
@@ -135,6 +171,7 @@ static void testFlexEdgeStaysInterlockOwned()
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
     model.setTransmit(true, TransmitModel::PttSource::Dax);
     model.transmitModel().setMox(true);
+    model.transmitModel().startTune(TransmitModel::PttSource::Dax);
     check(edges.isEmpty(),
           "Flex publishes no raw-TX edge from a command; interlock owns it");
 }
@@ -298,6 +335,7 @@ int main(int argc, char** argv)
 
     AetherSDR::testTransmitEdgeIsPublished();
     AetherSDR::testMoxPathPublishesTheSameEdge();
+    AetherSDR::testTunePathPublishesTheSameEdge();
     AetherSDR::testFlexEdgeStaysInterlockOwned();
     AetherSDR::testCommandPlanePredicate();
 #ifdef HAVE_WEBSOCKETS
