@@ -228,6 +228,17 @@ public:
 
 namespace AetherSDR {
 
+static bool isFmRfMode(const QString& mode)
+{
+    return mode == "FM" || mode == "NFM" || mode == "DFM"
+        || mode == "DSTR";
+}
+
+static bool hasFmToneControls(const QString& mode)
+{
+    return mode == "FM" || mode == "NFM" || mode == "DFM";
+}
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 // Background is painted manually in paintEvent for true alpha transparency.
@@ -2084,7 +2095,8 @@ void VfoWidget::buildTabContent()
             dspVb->addWidget(m_digContainer);
         }
 
-        // FM OPT controls (hidden unless FM/NFM mode)
+        // FM-family OPT controls. DSTR uses the DFM RF chain and therefore
+        // shares the duplex-offset controls, but it does not use CTCSS.
         {
             static const QString kDirBtn =
                 "QPushButton { background: #1a2a3a; border: 1px solid #304050; border-radius: 2px;"
@@ -2098,14 +2110,19 @@ void VfoWidget::buildTabContent()
                 "QPushButton:hover { border: 1px solid #0090e0; }";
 
             m_fmContainer = new QWidget;
+            m_fmContainer->setObjectName("vfoFmDuplexContainer");
             auto* fvb = new QVBoxLayout(m_fmContainer);
             fvb->setContentsMargins(0, 0, 0, 0);
             fvb->setSpacing(2);
 
             // Tone mode + tone value on one row
-            auto* toneRow = new QHBoxLayout;
+            m_fmToneContainer = new QWidget;
+            m_fmToneContainer->setObjectName("vfoFmToneContainer");
+            auto* toneRow = new QHBoxLayout(m_fmToneContainer);
+            toneRow->setContentsMargins(0, 0, 0, 0);
             toneRow->setSpacing(2);
             m_fmToneModeCmb = new GuardedComboBox;
+            m_fmToneModeCmb->setAccessibleName("FM tone mode");
             m_fmToneModeCmb->addItem("Off", QString("off"));
             m_fmToneModeCmb->addItem("CTCSS TX", QString("ctcss_tx"));
             AetherSDR::applyComboStyle(m_fmToneModeCmb);
@@ -2113,6 +2130,7 @@ void VfoWidget::buildTabContent()
 
             // Tone value — simplified list of common CTCSS tones
             m_fmToneValueCmb = new GuardedComboBox;
+            m_fmToneValueCmb->setAccessibleName("FM tone frequency");
             const double tones[] = {67.0,71.9,74.4,77.0,79.7,82.5,85.4,88.5,91.5,94.8,
                 97.4,100.0,103.5,107.2,110.9,114.8,118.8,123.0,127.3,131.8,
                 136.5,141.3,146.2,151.4,156.7,162.2,167.9,173.8,179.9,186.2,
@@ -2123,7 +2141,7 @@ void VfoWidget::buildTabContent()
             AetherSDR::applyComboStyle(m_fmToneValueCmb);
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
-            fvb->addLayout(toneRow);
+            fvb->addWidget(m_fmToneContainer);
 
             connect(m_fmToneModeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                     this, [this](int idx) {
@@ -2145,6 +2163,7 @@ void VfoWidget::buildTabContent()
             offLbl->setStyleSheet(kLabelStyle);
             offRow->addWidget(offLbl);
             m_fmOffsetSpin = new QDoubleSpinBox;
+            m_fmOffsetSpin->setAccessibleName("Repeater offset");
             m_fmOffsetSpin->setRange(0.0, 100.0);
             m_fmOffsetSpin->setDecimals(3);
             m_fmOffsetSpin->setSingleStep(0.1);
@@ -2183,12 +2202,14 @@ void VfoWidget::buildTabContent()
             };
 
             m_fmOffsetDown = new QPushButton(QString::fromUtf8("\xe2\x88\x92"));
+            m_fmOffsetDown->setAccessibleName("Repeater offset down");
             m_fmOffsetDown->setCheckable(true);
             m_fmOffsetDown->setStyleSheet(kDirBtn);
             connect(m_fmOffsetDown, &QPushButton::clicked, this, [applyDir] { applyDir("down"); });
             dirRow->addWidget(m_fmOffsetDown);
 
             m_fmSimplexBtn = new QPushButton("Simplex");
+            m_fmSimplexBtn->setAccessibleName("Repeater simplex");
             m_fmSimplexBtn->setCheckable(true);
             m_fmSimplexBtn->setChecked(true);
             m_fmSimplexBtn->setStyleSheet(kDirBtn);
@@ -2196,12 +2217,14 @@ void VfoWidget::buildTabContent()
             dirRow->addWidget(m_fmSimplexBtn);
 
             m_fmOffsetUp = new QPushButton("+");
+            m_fmOffsetUp->setAccessibleName("Repeater offset up");
             m_fmOffsetUp->setCheckable(true);
             m_fmOffsetUp->setStyleSheet(kDirBtn);
             connect(m_fmOffsetUp, &QPushButton::clicked, this, [applyDir] { applyDir("up"); });
             dirRow->addWidget(m_fmOffsetUp);
 
             m_fmRevBtn = new QPushButton("REV");
+            m_fmRevBtn->setAccessibleName("Reverse repeater offset");
             m_fmRevBtn->setCheckable(true);
             m_fmRevBtn->setStyleSheet(kRevBtn);
             connect(m_fmRevBtn, &QPushButton::toggled, this, [this](bool on) {
@@ -2952,7 +2975,8 @@ void VfoWidget::setSmartSdrPlus(bool has)
 }
 
 // Single source of truth for the extended firmware DSP filters' visibility
-// (NRS/RNN/NRF, 8000-series). Hidden on FM-family modes (FM/NFM/DFM); RNN is
+// (NRS/RNN/NRF, 8000-series). Hidden on FM-family RF modes
+// (FM/NFM/DFM/DSTR); RNN is
 // additionally hidden on CW/CWL. Called from setSlice(), syncFromSlice(), and
 // setHasExtendedDsp() so those three paths can no longer drift (they had
 // disagreed on DFM). Caller must hold a valid m_slice and drive its own
@@ -2960,7 +2984,7 @@ void VfoWidget::setSmartSdrPlus(bool has)
 void VfoWidget::updateExtendedDspVisibility()
 {
     const QString mode = m_slice->mode();
-    const bool isFm = (mode == "FM" || mode == "NFM" || mode == "DFM");
+    const bool isFm = isFmRfMode(mode);
     const bool isCw = (mode == "CW" || mode == "CWL");
     m_nrsBtn->setVisible(!isFm && m_hasExtendedDsp);
     m_rnnBtn->setVisible(!isCw && !isFm && m_hasExtendedDsp);
@@ -4037,7 +4061,8 @@ void VfoWidget::setSlice(SliceModel* slice)
         bool isRtty = (mode == "RTTY");
         bool isCw   = (mode == "CW" || mode == "CWL");
         bool isDig  = (mode == "DIGL" || mode == "DIGU" || mode == "NT");
-        bool isFm   = (mode == "FM" || mode == "NFM" || mode == "DFM");
+        bool isFm   = isFmRfMode(mode);
+        bool hasToneControls = hasFmToneControls(mode);
         bool isFdv  = mode.startsWith("FDV");  // FDVU, FDVM, etc.
         // Swap DSP tab label to OPT for FM modes
         m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
@@ -4045,6 +4070,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_apfContainer->setVisible(isCw);
         m_digContainer->setVisible(isDig && !isFdv && mode != "NT");
         m_fmContainer->setVisible(isFm);
+        m_fmToneContainer->setVisible(hasToneControls);
         if (isDig) {
             int off = (mode == "DIGL") ? m_slice->diglOffset() : m_slice->diguOffset();
             m_digOffsetLabel->setText(QString::number(off));
@@ -4628,8 +4654,8 @@ void VfoWidget::syncFromSlice()
     m_rttyContainer->setVisible(isRtty);
     bool isCw = (m_slice->mode() == "CW" || m_slice->mode() == "CWL");
     bool isDig = (m_slice->mode() == "DIGL" || m_slice->mode() == "DIGU" || m_slice->mode() == "NT");
-    bool isFm = (m_slice->mode() == "FM" || m_slice->mode() == "NFM"
-                 || m_slice->mode() == "DFM");
+    bool isFm = isFmRfMode(m_slice->mode());
+    bool hasToneControls = hasFmToneControls(m_slice->mode());
     m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
     m_apfBtn->setVisible(isCw);
     m_anfBtn->setVisible(!isRtty && !isCw && !isDig && !isFm);
@@ -4644,6 +4670,7 @@ void VfoWidget::syncFromSlice()
     m_apfContainer->setVisible(isCw);
     m_digContainer->setVisible(isDig && m_slice->mode() != "NT");
     m_fmContainer->setVisible(isFm);
+    m_fmToneContainer->setVisible(hasToneControls);
     // CW: radio locks squelch on at fixed level; Digital: not meaningful
     m_sqlBtn->setEnabled(!isDig && !isCw);
     m_sqlSlider->setEnabled(!isDig && !isCw);
