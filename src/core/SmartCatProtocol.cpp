@@ -306,7 +306,11 @@ QString SmartCatProtocol::cmdFA(const QString& arg)
     bool ok;
     double hz = arg.toDouble(&ok);
     if (!ok) return "?;";
-    a->setFrequency(hz / 1e6);
+    // Cross-band-aware: tuneSliceForCat() applies the recenter policy so a band
+    // change makes the panadapter follow (in-span keeps autopan=0; out-of-span
+    // recenters) instead of leaving it behind until a manual GUI action. CatPort
+    // runs on the GUI thread, so this is a direct, synchronous call.
+    if (m_model) m_model->tuneSliceForCat(a, hz / 1e6);
     return {};
 }
 
@@ -324,7 +328,12 @@ QString SmartCatProtocol::cmdFB(const QString& arg)
     bool ok;
     double hz = arg.toDouble(&ok);
     if (!ok) return "?;";
-    b->setFrequency(hz / 1e6);
+    // Cross-band-aware (see cmdFA): the recenter policy makes the panadapter
+    // follow a band change; in-span keeps autopan=0. An out-of-span split TX
+    // (VFO B on a different band than RX) therefore recenters the pan onto the
+    // TX freq — a deliberate change from the old autopan=0 split behavior, made
+    // to match TCI, which recenters on any VFO tune regardless of channel.
+    if (m_model) m_model->tuneSliceForCat(b, hz / 1e6);
     return {};
 }
 
@@ -1405,7 +1414,11 @@ QString SmartCatProtocol::cmdUP(const QString& arg)
         if (ok && n > 0) steps = n;
     }
     double stepMhz = static_cast<double>(a->stepHz()) / 1e6;
-    a->setFrequency(a->frequency() + stepMhz * steps);
+    // Cross-band-aware (see cmdFA): a multi-step move can leave the pan span, so
+    // route through the recenter policy rather than a bare autopan=0 setFrequency.
+    // Stepping up only ever increases the target, so it stays positive by
+    // construction — the radio rejects an implausibly high freq on its own.
+    if (m_model) m_model->tuneSliceForCat(a, a->frequency() + stepMhz * steps);
     return {};
 }
 
@@ -1424,7 +1437,10 @@ QString SmartCatProtocol::cmdDN(const QString& arg)
         if (ok && n > 0) steps = n;
     }
     double stepMhz = static_cast<double>(a->stepHz()) / 1e6;
-    a->setFrequency(a->frequency() - stepMhz * steps);
+    // Cross-band-aware (see cmdFA). A large multi-step DN can underflow the
+    // target past 0; tuneSliceForCat rejects a non-positive frequency at the
+    // boundary, so no clamp is needed here.
+    if (m_model) m_model->tuneSliceForCat(a, a->frequency() - stepMhz * steps);
     return {};
 }
 
