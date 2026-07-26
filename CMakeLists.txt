@@ -531,6 +531,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/dsp/WdspChannel.cpp
@@ -2721,9 +2722,15 @@ add_test(NAME theme_manager_test COMMAND theme_manager_test)
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
     src/core/AppSettings.cpp
+    # Real Hl2Discovery, so the nickname-key scenario exercises the shipping key
+    # format instead of a copy of it (Qt6::Network/AUTOMOC are for its QObject
+    # + QUdpSocket; the test only calls its static helpers).
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
 )
+set_target_properties(app_settings_safety_test PROPERTIES AUTOMOC ON)
 target_include_directories(app_settings_safety_test PRIVATE src)
-target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core)
+target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core Qt6::Network)
 foreach(APP_SETTINGS_SCENARIO
         save-before-load
         load-then-save
@@ -2733,7 +2740,8 @@ foreach(APP_SETTINGS_SCENARIO
         missing-live-temp
         missing-live-backup
         missing-live-corrupt
-        failed-load)
+        failed-load
+        nickname-key-roundtrip)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
@@ -4008,6 +4016,21 @@ if(Qt6WebSockets_FOUND)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
+add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)
+target_include_directories(hl2_txdsp_test PRIVATE src)
+target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
+
+add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
+target_include_directories(hl2_tx_loopback_test PRIVATE src)
+target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+
+add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
+target_include_directories(hl2_tx_gate_test PRIVATE src)
+target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
@@ -4392,6 +4415,33 @@ target_link_libraries(container_widget_test PRIVATE
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# PC-audio lock contract for host-modulating backends (HL2) — needs
+# QApplication + Widgets.
+add_executable(hl2_pc_audio_lock_test
+    tests/hl2_pc_audio_lock_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
+    # so the resizer + frameless title bar come along; ThemeManager pulls its
+    # logging deps, same as container_widget_test.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(hl2_pc_audio_lock_test PRIVATE src)
+target_link_libraries(hl2_pc_audio_lock_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(hl2_pc_audio_lock_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
+set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(amp_applet_test

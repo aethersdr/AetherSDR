@@ -608,6 +608,77 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::meterRemoved, this,
             [this](int index) { m_meterModel.removeMeter(index); });
 
+    // RF power to a backend that owns a drive register. Flex takes it as a text
+    // command from TransmitModel and ignores this.
+    connect(&m_transmitModel, &TransmitModel::rfPowerChanged, this,
+            [this](int percent) {
+        if (m_backend)
+            m_backend->setTxPower(percent);
+    });
+    // Tell the transmit model whether the HOST modulates. It drives the
+    // mic-source list: a backend that modulates here has no physical input jacks
+    // to choose between, so "PC" is the only truthful answer.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) {
+        // Capability-driven, not family()!="flex": only a backend that both
+        // host-modulates and may transmit collapses the mic source to PC. (#4449)
+        const RadioCapabilities caps = backendCapabilities();
+        m_transmitModel.setHostModulation(connected
+                                          && caps.hostModulates && caps.canTransmit);
+    });
+
+    // Keying and tune from the GUI.
+    //
+    // These paths never reached a non-Flex backend: the MOX button goes through
+    // TransmitModel::setMox, which emits the Flex text command "xmit 1" and
+    // nothing else, and TUNE emits "transmit tune 1" the same way. Only the
+    // automation bridge's key verb went through setTransmit() and therefore
+    // through the seam — which is exactly why keying worked under test and did
+    // nothing when the operator pressed MOX.
+    //
+    // Gated to non-Flex families ON PURPOSE: for Flex the text command above
+    // already keys the radio, and routing this as well would send "xmit 1"
+    // twice.
+    connect(&m_transmitModel, &TransmitModel::moxCommandIssued, this,
+            [this](bool on) {
+        if (m_backend && m_family != QLatin1String("flex"))
+            m_backend->setKeying(on);
+    });
+    connect(&m_transmitModel, &TransmitModel::tuneCommandIssued, this,
+            [this](bool on) {
+        if (m_backend && m_family != QLatin1String("flex"))
+            m_backend->setTune(on);
+    });
+
+    // Push the CURRENT power on connect, not only on change. rfPowerChanged
+    // fires on edges, so a session that never touches the control left the
+    // radio at whatever its own default was — on the HL2 that is drive 0, which
+    // also leaves the PA disabled, so a perfectly correct keyed transmission
+    // produced no RF at all. Measured: forward-power counts stuck at zero.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) {
+        if (connected && m_backend)
+            m_backend->setTxPower(m_transmitModel.rfPower());
+    });
+
+    // Meter VALUES from a backend that decodes its own telemetry.
+    //
+    // Flex streams meter values on the VITA-49 data plane, so this signal had no
+    // consumer at all and every non-Flex meter reading was computed and then
+    // dropped on the floor — the HL2 S-meter was correct for a while before
+    // anyone noticed it never reached the UI.
+    //
+    // meterId is "SOURCE:NAME" (e.g. "TX:FWDPWR"), matching MeterDef's own
+    // source/name pair rather than inventing a second naming scheme.
+    connect(m_backend.get(), &IRadioBackend::meterUpdate, this,
+            [this](const QString& meterId, double value) {
+        const int colon = meterId.indexOf(QLatin1Char(':'));
+        if (colon <= 0)
+            return;
+        m_meterModel.updateValueByName(meterId.left(colon), meterId.mid(colon + 1),
+                                       static_cast<float>(value));
+    });
+
     // aetherd RFC 2.3: SliceModel touchpoint. The backend decodes Flex slice
     // status into a typed SliceDelta; RadioModel routes it to the addressed slice.
     // This is an AutoConnection: because FlexBackend shares RadioModel's thread it
@@ -2441,11 +2512,15 @@ RadioCapabilities RadioModel::backendCapabilities() const
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
 {
     if (tx) {
-        // F2 (#4448): refuse keying on a backend that cannot transmit (HL2 is
-        // RX-only). This must come BEFORE any optimistic state mutation or
-        // command, so an RX-only radio can never be driven into a fake TX state
-        // (TX indicator, audio gate, waveform) by a PTT/MOX/DAX/TCI edge. Unkey
-        // (tx=false) is always allowed — it only ever clears state.
+        // F2 (#4448): refuse keying on a backend that cannot transmit. The
+        // guard is a capability test, not a family test — HL2 is TX-capable
+        // now (see the transmit gate in Hl2Backend), and what still trips this
+        // is any backend reporting canTransmit=false: an RX-only receiver, or
+        // an HL2 whose transmit gate is closed. This must come BEFORE any
+        // optimistic state mutation or command, so such a radio can never be
+        // driven into a fake TX state (TX indicator, audio gate, waveform) by a
+        // PTT/MOX/DAX/TCI edge. Unkey (tx=false) is always allowed — it only
+        // ever clears state.
         if (!backendCapabilities().canTransmit) {
             emitInterlockNotification(
                 tr("This radio is receive-only and cannot transmit."),
@@ -2490,7 +2565,16 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
         // stream so D-STAR is emitted only when that selected slice is DSTR.
         syncDigitalVoiceTxSelection(true);
     }
-    sendCmd(QString("xmit %1").arg(tx ? 1 : 0));
+    // Key through the SEAM, not with a raw Flex command. This used to be
+    // sendCmd("xmit N"), which meant IRadioBackend::setKeying had no callers at
+    // all and no non-Flex backend could ever be keyed -- the verb existed and
+    // was wired to nothing.
+    //
+    // Behaviour for Flex is unchanged: FlexBackend::setKeying sends the exact
+    // same "xmit N" through the same sink, and the only extra gate on that path
+    // matches "display pan set ", not "xmit".
+    if (m_backend)
+        m_backend->setKeying(tx);
 }
 
 void RadioModel::updateOperatorTransmit()
@@ -5428,6 +5512,12 @@ void RadioModel::onMessageReceived(const ParsedMessage& msg)
 //   "panadapter 0"    → panadapter (spectrum)
 //   "meter 1"         → meter reading (handled by onMessageReceived)
 //   "removed=True"    → object was removed
+
+void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+{
+    if (m_backend)
+        m_backend->submitTxAudio(int16Stereo, sampleRateHz);
+}
 
 bool RadioModel::sendCommand(const QString& cmd)
 {

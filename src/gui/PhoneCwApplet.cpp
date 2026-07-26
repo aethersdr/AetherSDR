@@ -707,6 +707,25 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
         m_updatingFromModel = false;
     });
 
+    // Host-modulating backend: PC is the only possible source, so show it and
+    // take the choice away rather than offering jacks that do not exist.
+    connect(m_model, &TransmitModel::hostModulationChanged, this, [this](bool on) {
+        if (!m_micSourceCombo) return;
+        m_updatingFromModel = true;
+        const QSignalBlocker blocker(m_micSourceCombo);
+        if (on) {
+            m_micSourceCombo->clear();
+            m_micSourceCombo->addItem(QStringLiteral("PC"));
+            m_micSourceCombo->setCurrentIndex(0);
+        }
+        m_micSourceCombo->setEnabled(!on);
+        m_micSourceCombo->setToolTip(
+            on ? tr("This radio is modulated by AetherSDR, so the PC microphone "
+                    "is the only input. The other sources are FlexRadio jacks.")
+               : QString());
+        m_updatingFromModel = false;
+    });
+
     connect(m_model, &TransmitModel::micInputListChanged, this, [this]() {
         m_updatingFromModel = true;
         const QSignalBlocker blocker(m_micSourceCombo);

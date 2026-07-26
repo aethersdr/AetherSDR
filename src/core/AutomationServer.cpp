@@ -5440,6 +5440,7 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
     if (action == QLatin1String("off") || action == QLatin1String("stop")) {
         tx.stopTune();
         m_txKeyedSinceMs = 0;
+        m_txBridgeInitiated = false;   // hand policing back: a later operator key is not ours
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")}};
     }
     if (action == QLatin1String("twotone")) {
@@ -5448,6 +5449,7 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         tx.startTwoToneTune();
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
+        m_txBridgeInitiated = true;   // the watchdog polices scripts, not people
         qCInfo(lcAutomation) << "txtest two-tone started (ALLOW_TX)";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("twotone")}};
     }
@@ -5474,6 +5476,7 @@ QJsonObject AutomationServer::doAtu(const QString& action)
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         tx.atuStart();
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();
+        m_txBridgeInitiated = true;
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("atu"), QStringLiteral("start")}};
     }
     return err(QStringLiteral("unknown atu action: ") + action + QStringLiteral(" (bypass|start)"));
@@ -5494,6 +5497,7 @@ void AutomationServer::forceUnkey(const char* reason)
     // effect until the buffer drained — defeating the all-stop guarantee. (#3646)
     m_radioModel->cwxModel().clearBuffer();
     m_txKeyedSinceMs = 0;
+    m_txBridgeInitiated = false;
     qCWarning(lcAutomation).noquote() << "TX force-unkey:" << reason;
 }
 
@@ -5509,8 +5513,28 @@ void AutomationServer::onTxWatchdog()
     const bool keyed = tx.isTransmitting() || tx.isTuning() || tx.isMox();
     if (!keyed) {
         m_txKeyedSinceMs = 0;
+        m_txBridgeInitiated = false;
         return;
     }
+
+    // ONLY police transmissions THIS BRIDGE STARTED.
+    //
+    // This watchdog exists as a backstop against a runaway script — something
+    // that keys and then crashes, loops, or loses its connection. It is not a
+    // transmit time limit for the operator, and it has no business being one:
+    // a net, a long over or a leisurely tune are all normal, and 20 seconds is
+    // nowhere near long enough for any of them.
+    //
+    // It previously armed on ANY keying, because it polls the transmit model
+    // rather than tracking who keyed. With the bridge enabled — which is a
+    // persisted setting, so it is on for ordinary sessions — the operator's own
+    // MOX and TUNE were force-unkeyed at exactly 20 seconds, mid-sentence, with
+    // nothing in the UI to explain it.
+    if (!m_txBridgeInitiated) {
+        m_txKeyedSinceMs = 0;
+        return;
+    }
+
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_txKeyedSinceMs == 0)
         m_txKeyedSinceMs = now;
@@ -6150,6 +6174,7 @@ QJsonObject AutomationServer::doKey(const QString& name, const QString& arg)
                        + QStringLiteral("' keys the transmitter — set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         m_radioModel->setTransmit(true);               // == space-bar PTT press (Mox)
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
+        m_txBridgeInitiated = true;   // the watchdog polices scripts, not people
         qCInfo(lcAutomation).noquote() << "key" << what << "ON (ALLOW_TX)";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
                            {QStringLiteral("state"), QStringLiteral("on")}};
@@ -6157,6 +6182,7 @@ QJsonObject AutomationServer::doKey(const QString& name, const QString& arg)
     auto keyOff = [&](const QString& what) -> QJsonObject {
         m_radioModel->setTransmit(false);              // == space-bar PTT release
         m_txKeyedSinceMs = 0;
+        m_txBridgeInitiated = false;   // hand policing back: a later operator key is not ours
         qCInfo(lcAutomation).noquote() << "key" << what << "OFF";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
                            {QStringLiteral("state"), QStringLiteral("off")}};
@@ -6205,6 +6231,7 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
     if (a == QLatin1String("stop") || a == QLatin1String("abort") || a == QLatin1String("clear")) {
         cwx.clearBuffer();
         m_txKeyedSinceMs = 0;
+        m_txBridgeInitiated = false;   // hand policing back: a later operator key is not ours
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("stop")}};
     }
     if (a == QLatin1String("send")) {
@@ -6215,6 +6242,7 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
             return err(QStringLiteral("blocked: cwx send keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
         m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog
+        m_txBridgeInitiated = true;   // cwx keys the transmitter — the watchdog must police it
         cwx.send(text);
         qCInfo(lcAutomation).noquote() << "cwx send" << text.length() << "chars (ALLOW_TX)";
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("send")},

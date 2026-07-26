@@ -3,7 +3,8 @@
 // swap: connectToRadio() rebuilds the backend synchronously before any network
 // I/O, so an unroutable address reaches the post-swap state without hardware.
 //
-//   F2  RX-only backends refuse keying (capability + enforcement).
+//   TX  HL2 is TX-capable in a GUI session (transmit landed after #4448); the
+//       enforcement gate itself (m_txAllowed) is covered by hl2_tx_gate_test.
 //   F3  reboot is a per-family capability (Flex yes, HL2 no).
 //   round-trip  Flex -> HL2 -> Flex leaves the model in a clean, Flex-capable
 //               state (no crash, capabilities track the live backend).
@@ -54,24 +55,33 @@ int main(int argc, char** argv)
           "Flex default advertises canTransmit");
     check(model.backendCapabilities().canReboot,
           "Flex default advertises canReboot");
+    check(!model.backendCapabilities().hostModulates,
+          "#4449: Flex modulates on-radio, not on the host");
 
-    // ---- Switch to HL2 (RX-only) ----
+    // ---- Switch to HL2 (TX-capable in a GUI session) ----
+    // HL2 transmit landed after #4448: a normal (non-automation) session
+    // advertises canTransmit=true, matching Flex. Headless automation stays
+    // gated behind AETHER_AUTOMATION_ALLOW_TX inside the backend (m_txAllowed).
     model.connectToRadio(hl2Info());
-    check(!model.backendCapabilities().canTransmit,
-          "F2: HL2 advertises canTransmit=false");
+    check(model.backendCapabilities().canTransmit,
+          "HL2 advertises canTransmit (transmit landed post-#4448)");
     check(!model.backendCapabilities().canReboot,
           "F3: HL2 advertises canReboot=false");
+    check(model.backendCapabilities().hostModulates,
+          "#4449: HL2 host-modulates (PC runs the modulator, no on-radio jacks)");
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
 
-    // F2: keying an RX-only backend must be refused before any TX state is set.
+    // Keying a backend with no live link must not spuriously enter TX,
+    // regardless of capability — connectToRadio() reached the post-swap state
+    // against an unroutable address, so there is nothing to key.
     check(!model.transmitModel().isTransmitting(), "not transmitting before key");
     model.setTransmit(true, TransmitModel::PttSource::Mox);
     check(!model.transmitModel().isTransmitting(),
-          "F2: setTransmit(true) on an RX-only backend does not enter TX");
+          "setTransmit(true) with no live HL2 link does not enter TX");
     model.setTransmit(true, TransmitModel::PttSource::Tune);
     check(!model.transmitModel().isTransmitting(),
-          "F2: TUNE carrier on an RX-only backend does not enter TX");
+          "TUNE carrier with no live HL2 link does not enter TX");
 
     // F3: reboot on an RX-only backend is a no-op, not a crash. (Not connected,
     // so it returns early regardless; the point is it must not dereference the

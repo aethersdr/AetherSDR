@@ -1,5 +1,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
+#include <cmath>
+
 namespace AetherSDR::hl2 {
 
 namespace {
@@ -78,6 +80,144 @@ Cc ccPipelineReset() noexcept
     // DATA[7:4] = 0x8 -> C4 = 0x80. Everything else stays zero, which is "no
     // action" for the other command nibbles in this register.
     return {kC0Sync, 0x00, 0x00, 0x00, 0x80};
+}
+
+Cc ccTxFreq(std::uint32_t hz) noexcept
+{
+    return {kC0TxFreq,
+            static_cast<std::uint8_t>((hz >> 24) & 0xFF),
+            static_cast<std::uint8_t>((hz >> 16) & 0xFF),
+            static_cast<std::uint8_t>((hz >> 8) & 0xFF),
+            static_cast<std::uint8_t>(hz & 0xFF)};
+}
+
+Cc ccTxDrive(int level, bool paEnable) noexcept
+{
+    if (level < 0) level = 0;
+    if (level > kTxDriveMax) level = kTxDriveMax;
+    // C1 = DATA[31:24] drive level. C2 = DATA[23:16]; bit 3 of it is DATA[19],
+    // the onboard PA enable. ATU tune, Alex filters and VNA stay zero — those
+    // are separate decisions and none of them belong in a drive-level write.
+    const auto c2 = static_cast<std::uint8_t>(paEnable ? 0x08 : 0x00);
+    return {kC0TxDrive, static_cast<std::uint8_t>(level), c2, 0x00, 0x00};
+}
+
+void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
+                  std::span<const std::complex<float>> iq) noexcept
+{
+    const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+    std::size_t consumed = 0;
+    for (const std::size_t fs : frameStarts) {
+        std::uint8_t* payload = pkt.data() + fs + 8;     // after SYNC(3) + C&C(5)
+        for (std::size_t k = 0; k + kRxSampleBytes <= kFramePayload; k += kRxSampleBytes) {
+            // payload[k+0..3] is the Hermes headphone-audio slot. On the first
+            // sample of each frame it is EADDR (extended address, base 0x3f),
+            // NOT audio. We never write it, so it stays zero from ep2Packet's
+            // zero fill -- which is exactly what "not using the extended
+            // address space" must look like on the wire.
+            std::int16_t i = 0;
+            std::int16_t q = 0;
+            if (consumed < iq.size()) {
+                const auto clamp = [](float v) -> std::int16_t {
+                    // Symmetric clamp: 32767, not 32768. Letting a full-scale
+                    // sample wrap to the negative rail is a click at best.
+                    if (v >  1.0f) v =  1.0f;
+                    if (v < -1.0f) v = -1.0f;
+                    return static_cast<std::int16_t>(v * 32767.0f);
+                };
+                i = clamp(iq[consumed].real());
+                q = clamp(iq[consumed].imag());
+                ++consumed;
+            }
+            const auto ui = static_cast<std::uint16_t>(i);
+            const auto uq = static_cast<std::uint16_t>(q);
+            payload[k + 4] = static_cast<std::uint8_t>((ui >> 8) & 0xFF);   // I high
+            payload[k + 5] = static_cast<std::uint8_t>(ui & 0xFF);          // I low
+            payload[k + 6] = static_cast<std::uint8_t>((uq >> 8) & 0xFF);   // Q high
+            payload[k + 7] = static_cast<std::uint8_t>(uq & 0xFF);          // Q low
+        }
+    }
+}
+
+std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept
+{
+    if (frame[0] != kSync || frame[1] != kSync || frame[2] != kSync)
+        return std::nullopt;
+    const std::uint8_t c0 = frame[3];
+    Ep6Response r;
+    r.ack = (c0 & 0x80) != 0;
+    if (r.ack) {
+        r.raddr = (c0 >> 1) & 0x3F;      // full 6 bits when answering a RQST
+    } else {
+        r.raddr = (c0 >> 3) & 0x0F;      // classic free-running cycle
+        r.dot   = (c0 & 0x04) != 0;      // CW key tip; C0[1] Dash is always 0 here
+    }
+    r.ptt  = (c0 & 0x01) != 0;
+    r.data = readBe32(frame + 4);
+    return r;
+}
+
+void Hl2Telemetry::apply(const Ep6Response& r) noexcept
+{
+    ptt = r.ptt;
+    switch (r.raddr) {
+    case 0x00:
+        firmwareVersion = static_cast<int>(r.data & 0xFF);
+        adcOverload     = (r.data & (1u << 24)) != 0;
+        // ACTIVE LOW on the wire: the bit is SET when transmit is permitted.
+        // Decoded here so nothing above this layer has to remember the inversion.
+        txInhibited     = (r.data & (1u << 25)) == 0;
+        // TX IQ FIFO depth. hpsdrsim writes a 15-bit count as C2[6:0]:C3[7:0],
+        // i.e. DATA[22:8], and that is what this decodes because it is what we
+        // can actually verify.
+        //
+        // THE ORACLE DISAGREES: §6 lists [14:8] as "FIFO count MSBs" and [15:14]
+        // as an under/overflow code, which overlaps bit 14 and cannot both be
+        // right. The gateware RTL is the authority and this has NOT been checked
+        // against it. Do not build FIFO-servoed TX pacing on this field until it
+        // has been — a pacing loop driven by a misread depth is exactly the kind
+        // of unverified assumption that wedged a radio once already.
+        txFifoCount     = static_cast<int>((r.data >> 8) & 0x7FFF);
+        txFifoUnderflow = ((r.data >> 14) & 0x3) == 0x2;
+        txFifoOverflow  = ((r.data >> 14) & 0x3) == 0x3;
+        break;
+    case 0x01:
+        temperatureRaw  = static_cast<int>((r.data >> 16) & 0xFFFF);
+        forwardPowerRaw = static_cast<int>(r.data & 0xFFFF);
+        break;
+    case 0x02:
+        reversePowerRaw = static_cast<int>((r.data >> 16) & 0xFFFF);
+        biasCurrentRaw  = static_cast<int>(r.data & 0xFFFF);
+        break;
+    default:
+        break;                            // 0x03/0x04 carry nothing we consume
+    }
+}
+
+std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
+{
+    // No carrier, no SWR. Returning 1.0 here would render as a perfect match
+    // when the truth is that the question is meaningless.
+    if (forwardRaw <= 0)
+        return std::nullopt;
+    // The counts are VOLTAGE-proportional, so rho is a plain ratio and there is
+    // no square root. Establishing that mattered: the power form would have
+    // reported roughly the square root of the true reflection coefficient, i.e.
+    // a flattering SWR that hides a real mismatch.
+    //
+    // Evidence: hpsdrsim derives its reading as j proportional to
+    // sqrt(txlevel), and txlevel is a sum of i^2+q^2 — a power — so the reported
+    // count is proportional to voltage. pihpsdr's own meter.c is inconsistent
+    // (one branch uses the voltage form (Vf+Vr)/(Vf-Vr), another a sqrt form
+    // whose arguments are the wrong way round and would return a NEGATIVE SWR),
+    // so it is not usable as the tie-breaker.
+    const double fwd = static_cast<double>(forwardRaw);
+    double rev = static_cast<double>(reverseRaw < 0 ? 0 : reverseRaw);
+    // Reverse above forward is physically impossible; it means noise on a tiny
+    // reading. Clamp rather than emit a negative or infinite SWR.
+    if (rev >= fwd)
+        rev = fwd * 0.999;
+    return (fwd + rev) / (fwd - rev);
 }
 
 std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept

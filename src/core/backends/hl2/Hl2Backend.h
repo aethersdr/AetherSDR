@@ -8,23 +8,27 @@
 #include <QThread>
 
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 namespace AetherSDR::hl2 {
 
 class MetisClient;
 class Hl2RxDsp;
+class Hl2TxDsp;
 
 // IRadioBackend implementation for the Hermes-Lite 2 (HPSDR Protocol 1, raw IQ).
 // Owns a MetisClient (UDP wire) and an Hl2RxDsp (demod + panadapter) and maps the
 // neutral seam verbs/signals onto them. This is the first backend that owns an
 // engine-side DSP chain (RFC §5.5) rather than decoding a cooked stream.
 //
-// RX-only: capabilities().canTransmit is false, so the engine TX guard (RFC §6)
-// denies keying; setKeying() is a no-op and nothing here can key the radio.
+// THIS BACKEND CAN KEY THE RADIO. capabilities().canTransmit reports transmit
+// AVAILABILITY rather than a constant false: an interactive run may transmit,
+// and an automation run defers to the bridge's own TX gate. MetisClient refuses
+// independently at the wire, so neither gate is trusted as the only one.
 //
-// Phase 1b runs the wire + DSP on this object's thread (iqBlockReady ->
-// processIqBlock is a direct call); relocating the DSP onto its own thread is a
-// later refinement once the data plane is wired through RadioModel.
+// The wire and both DSP chains run on a dedicated I/O thread. That is not only
+// about keeping WDSP off the UI: this backend paces EP2, and the gateware
+// watchdog halts the stream if EP2 stops arriving.
 class Hl2Backend : public IRadioBackend {
     Q_OBJECT
 
@@ -44,6 +48,14 @@ public:
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz) override;
     void setKeying(bool key) override;
+    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
+    void setTxPower(int percent) override;
+    void setTune(bool on) override;
+    void setTxFrequency(double hz);
+    void setTxDriveLevel(int level);
+    // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
+    // Opt-in only — never enabled by a default.
+    void setTxTestTone(double offsetHz, double amplitude);
 
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg) override;
@@ -51,9 +63,14 @@ public:
 private:
     void emitSliceState();   // sliceChanged(delta) from current freq/mode/filter
     void emitPanState();     // panCenterBandwidthChanged from freq + sample rate
+    void pushInitialState();
+    void defineMeters();
+    void publishTelemetry(const Hl2Telemetry& t);
+    static double temperatureCelsius(int raw);
 
     MetisClient* m_metis = nullptr;
     Hl2RxDsp* m_dsp = nullptr;
+    Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
 
     // Authoritative RX state (HL2 has no status wire echoing it back).
@@ -77,6 +94,23 @@ private:
     // header for why the EP2 pacer in particular must not share a thread with
     // the UI. Owned by this object; joined in the destructor.
     QThread* m_ioThread = nullptr;
+
+    // Process-wide transmit availability, decided once at construction:
+    // interactive runs may transmit; automation runs defer to the bridge's
+    // AETHER_AUTOMATION_ALLOW_TX gate. Mirrored into MetisClient, which refuses
+    // independently at the wire.
+    bool m_txAllowed = false;
+    Hl2Telemetry m_telemetry;
+    bool m_adcOverload = false;
+    bool m_keyed = false;
+    bool m_tuning = false;
+    bool m_toneFromTune = false;
+    // Tune-carrier amplitude, full scale into the modulator. Actual radiated
+    // power is governed by the TX drive register, which is where an operator
+    // sets it; scaling here as well would make the power control non-linear for
+    // no reason.
+    static constexpr double kTuneCarrierAmplitude = 1.0;
+    int m_lastFwdRaw = -1;
     // Authoritative AGC state, mirroring the DSP defaults in Hl2RxDsp::Config so
     // the first sliceChanged reports what WDSP was actually opened with.
     QString m_agcMode = QStringLiteral("med");
