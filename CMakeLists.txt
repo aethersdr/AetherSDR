@@ -3510,6 +3510,14 @@ if (ENABLE_ASR)
     target_link_libraries(asr_remote_backend_test PRIVATE Qt6::Core Qt6::Network)
     add_test(NAME asr_remote_backend_test COMMAND asr_remote_backend_test)
 
+    # Copy Assist audio tap: which RX source it follows, and the stereo→mono
+    # collapse including the non-finite guard. The policy is header-only, so
+    # this needs no AudioEngine — which cannot be built headless anyway (#4486).
+    add_executable(asr_tap_policy_test tests/asr_tap_policy_test.cpp)
+    target_include_directories(asr_tap_policy_test PRIVATE src)
+    target_link_libraries(asr_tap_policy_test PRIVATE Qt6::Core)
+    add_test(NAME asr_tap_policy_test COMMAND asr_tap_policy_test)
+
     # Copy Assist panel: offscreen UI test of confidence color-coding + controls.
     add_executable(copy_assist_panel_test
         tests/copy_assist_panel_test.cpp

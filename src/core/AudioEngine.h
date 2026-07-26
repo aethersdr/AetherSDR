@@ -641,10 +641,26 @@ signals:
     // because those paths intentionally skip the voice chain.
     void txPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     // Mirror of txPostChainScopeReady for the RX side: high-rate emit
-    // (~125 Hz, no sample loss across audio callbacks) so the channel
-    // strip's "Aetherial Waveform — RX" panel sees a wall-clock-accurate
-    // scope.  The shared scopeSamplesReady throttles at 25 ms which made
-    // the strip's RX scroll lag wall clock at short time-window settings.
+    // (~125 Hz) so the channel strip's "Aetherial Waveform — RX" panel sees a
+    // wall-clock-accurate scope.  The shared scopeSamplesReady throttles at
+    // 25 ms which made the strip's RX scroll lag wall clock at short
+    // time-window settings.
+    //
+    // LOSSY — FOR DISPLAY ONLY.  This is throttled at 8 ms and the throttle
+    // DISCARDS the whole block, it does not merely skip a repaint.  Blocks
+    // shorter than 8 ms are therefore dropped outright: with NR2 enabled the
+    // RX drain hands over whole radio packets (5.33 ms on a Flex LAN stream)
+    // microseconds apart, and only the first of each drain tick survives —
+    // about half the audio.  An earlier version of this comment claimed "no
+    // sample loss across audio callbacks", which holds only while blocks are
+    // at least 8 ms long; Copy Assist was wired here on the strength of it and
+    // was fed a stream with a gap at every phoneme (#4486).
+    //
+    // Anything that must see EVERY sample — recognisers, decoders, recorders —
+    // belongs on receivePresentationPostDspAudioReady, which is unthrottled and
+    // additionally tags its source.  Also note this signal is emitted for every
+    // RX source with no tag, so a station running a Kiwi alongside the Flex
+    // sees the two interleaved here.
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void tncRxAudioReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
