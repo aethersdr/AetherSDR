@@ -3780,10 +3780,29 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     memcpy(bins.data(), frame.constData(),
            static_cast<std::size_t>(binCount) * sizeof(float));
 
-    // No PanadapterModel exists for an HL2 session yet, so the UI's spectrum
-    // handler takes its empty-panadapters fallback and draws into the active
-    // pane — enough for first-light. Step 3 gives HL2 a real pan + unique id.
-    const quint32 streamId = kNeutralPanStreamIdBase + static_cast<quint32>(panId);
+    // Stream id: prefer the REAL pan's id when this session has a
+    // PanadapterModel, and only fall back to the neutral synthetic base when it
+    // does not.
+    //
+    // HL2 has no PanadapterModel yet, so the UI's spectrum handler takes its
+    // empty-panadapters fallback and draws into the active pane — enough for
+    // first-light, and the neutral id is right for it. Step 3 gives HL2 a real
+    // pan + unique id.
+    //
+    // The demo (RFC #4288 Route A) DOES own a pan — it claims 0x40000000 from
+    // its synthetic wire status — so emitting the neutral 0xE1000000 here meant
+    // the id never matched any pan, every frame hit the "unmatched" branch, and
+    // MainWindow logged `dropped unmatched FFT stream` ~20x/second for the whole
+    // session. The panadapter still painted only because wireBackendSeam() draws
+    // it directly, which ALSO bypassed the neutral consumers (the adaptive RX
+    // filter and the S-history markers), so those received nothing at all.
+    quint32 streamId = kNeutralPanStreamIdBase + static_cast<quint32>(panId);
+    // m_panadapters is keyed by the panId STRING, so resolve through the same
+    // helper the other backend-signal handlers use (addressed pan, else active).
+    if (auto* pan = resolvePan(neutralPanIdString(panId))) {
+        if (const quint32 realId = pan->panStreamId())
+            streamId = realId;
+    }
     const qint64 nowNs = PerfTelemetry::nowNs();
     emit panFeedSpectrumReady(streamId, bins, nowNs);
 
@@ -3792,7 +3811,15 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // the waterfall row; it needs real band edges to scale against.
     if (m_backendPanBandwidthMhz > 0.0) {
         const double half = m_backendPanBandwidthMhz / 2.0;
-        emit panFeedWaterfallRowReady(kNeutralWfStreamIdBase + static_cast<quint32>(panId),
+        // Same real-vs-neutral id resolution as the spectrum above: a session
+        // that owns a pan must use ITS waterfall id or every row is dropped as
+        // unmatched.
+        quint32 wfId = kNeutralWfStreamIdBase + static_cast<quint32>(panId);
+        if (auto* pan = resolvePan(neutralPanIdString(panId))) {
+            if (const quint32 realWfId = pan->wfStreamId())
+                wfId = realWfId;
+        }
+        emit panFeedWaterfallRowReady(wfId,
                                       bins,
                                       m_backendPanCenterMhz - half,
                                       m_backendPanCenterMhz + half,

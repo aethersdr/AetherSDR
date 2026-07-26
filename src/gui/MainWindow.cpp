@@ -5769,36 +5769,16 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
         }, Qt::QueuedConnection);
     }
 
-    // Spectrum seam (RFC #4288 Route A): activate the previously-dormant
-    // IRadioBackend::spectrumFrameReady. A SimBackend emits the panadapter FFT
-    // through the seam (float dBm bins packed as a QByteArray) instead of decoding
-    // VITA-49 UDP; render it exactly as the PanadapterStream path does
-    // (updateSpectrum on the matching pan). Idle for FlexBackend, which never
-    // emits it — its FFT flows through PanadapterStream::spectrumReady.
-    connect(backend, &IRadioBackend::spectrumFrameReady, this,
-            [this](int /*panId*/, const QByteArray& frame) {
-        if (m_shuttingDown || !m_panStack)
-            return;
-        const int n = static_cast<int>(frame.size() / sizeof(float));
-        if (n <= 0)
-            return;
-        QVector<float> bins(n);
-        memcpy(bins.data(), frame.constData(), n * sizeof(float));
-        // v1 demo has a single panadapter, so render to it (or the active
-        // spectrum before a pan is claimed on first connect). Multi-pan
-        // panId→pan matching is a later step, once the demo grows a rack.
-        if (auto* pan = m_radioModel.panadapters().value(0, nullptr)) {
-            if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                sw->updateSpectrum(bins);
-                finishPanadapterConnectionAnimation();
-                return;
-            }
-        }
-        if (auto* sw = spectrum()) {
-            sw->updateSpectrum(bins);
-            finishPanadapterConnectionAnimation();
-        }
-    });
+    // Spectrum seam (RFC #4288 Route A): NOT rendered here.
+    //
+    // IRadioBackend::spectrumFrameReady is consumed by
+    // RadioModel::onBackendSpectrumFrame, which re-emits it on the NEUTRAL
+    // panFeed path (panFeedSpectrumReady / panFeedWaterfallRowReady) that
+    // wireDiscovery() already renders for every backend. An earlier revision
+    // also drew it directly here with sw->updateSpectrum(); that bypassed
+    // panFeed's other consumers — the adaptive RX filter and the S-history
+    // markers received nothing — and drew each frame twice once the relay's
+    // stream id was fixed to match the demo's real pan. One producer, one path.
 }
 
 void MainWindow::finishPanadapterConnectionAnimation()
