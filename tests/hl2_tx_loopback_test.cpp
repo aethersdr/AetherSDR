@@ -56,6 +56,11 @@ static bool simPresent(const QString& host)
     return s.waitForReadyRead(1500);
 }
 
+// The IQ sample rate this test runs the receiver at, and therefore the span the
+// spectrum frames cover. Declared once because every expected-bin computation
+// derives from it.
+constexpr int kIqRateHz = 48000;
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -87,6 +92,16 @@ int main(int argc, char** argv)
 
     RadioConnectRequest req;
     req.host = simHost;
+    // PIN the IQ rate rather than inheriting the backend's default. Every bin
+    // arithmetic below scales with it, and this test used to hardcode 48000 while
+    // silently depending on the default happening to be 48 kHz — so raising that
+    // default to the widest span the hardware offers moved every expected bin and
+    // three assertions failed for a reason that had nothing to do with transmit.
+    //
+    // 48 kHz specifically: it gives the finest bin spacing of the four rates, so
+    // the sideband and floor margins this test measures stay as tight as they
+    // were. kIqRateHz is the ONE place the rate appears.
+    req.params[QStringLiteral("sampleRateHz")] = kIqRateHz;
     backend.connectRadio(req);
     spin(2500);
     check(backend.isConnected(), "connected to the simulator");
@@ -124,7 +139,7 @@ int main(int argc, char** argv)
         // tone lands that many bins above it.
         const int n = static_cast<int>(keyed.size());
         const int centre = n / 2;
-        const double binHz = 48000.0 / n;
+        const double binHz = static_cast<double>(kIqRateHz) / n;
         // NEGATIVE offset: hpsdrsim feeds the TX IQ back in WIRE order, and the
         // wire is the conjugate of the standard analytic convention (see
         // Hl2TxDsp). On the air this same IQ becomes +5 kHz; here we are looking
@@ -194,7 +209,7 @@ int main(int argc, char** argv)
         if (voice.size() == baseline.size() && !voice.empty()) {
             const int n = static_cast<int>(voice.size());
             const int centre = n / 2;
-            const double binHz = 48000.0 / n;
+            const double binHz = static_cast<double>(kIqRateHz) / n;
             // Same wire-order reasoning as above: USB audio leaves the
             // modulator BELOW centre in wire order and is transmitted above the
             // carrier. Asserting the textbook sign here is precisely what let a

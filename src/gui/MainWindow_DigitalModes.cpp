@@ -1326,7 +1326,8 @@ void MainWindow::reflectWfmButtons(bool on, int sliceId)
 void MainWindow::showPskReporterMapDialog()
 {
     if (!m_pskReporterMapDialog) {
-        auto* dlg = new PskReporterMapDialog(&m_radioModel, m_propForecast, this);
+        auto* dlg = new PskReporterMapDialog(
+            m_audio, &m_radioModel, m_propForecast, this);
         dlg->setFramelessMode(
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_pskReporterMapDialog = dlg;

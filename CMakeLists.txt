@@ -534,6 +534,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
+    src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
@@ -569,6 +570,7 @@ set(CORE_SOURCES
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp
+    src/core/WsprBeacon.cpp
     src/core/ClientQuindarTone.cpp
     src/core/QuindarLocalSink.cpp
     src/core/CwSidetoneGenerator.cpp
@@ -780,6 +782,7 @@ set(GUI_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/WaterfallHistoryBuffer.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
@@ -2640,6 +2643,19 @@ target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
 
+# The RX DSP must demodulate at every IQ rate the operator can select by zooming.
+add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
+target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
+
+# The panadapter frame rate must follow the operator's slider, not the span
+# (#4470). Wall-clock paced, so it lives in its own target.
+add_executable(hl2_spectrum_rate_test tests/hl2_spectrum_rate_test.cpp)
+target_include_directories(hl2_spectrum_rate_test PRIVATE src)
+target_link_libraries(hl2_spectrum_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_spectrum_rate_test COMMAND hl2_spectrum_rate_test)
+
 add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
 target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -2716,6 +2732,24 @@ target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
 
+# Panadapter overlay collapse semantics for owner-managed status cards (#4387):
+# a collapse must shrink the card, survive owner re-assertion, and never make
+# the indicator disappear while its condition still holds.
+qt_add_resources(PAN_OVERLAY_TEST_RESOURCES resources/resources.qrc)
+add_executable(panadapter_message_overlay_test
+    tests/panadapter_message_overlay_test.cpp
+    src/gui/PanadapterMessageOverlay.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${PAN_OVERLAY_TEST_RESOURCES}
+)
+target_include_directories(panadapter_message_overlay_test PRIVATE src)
+target_link_libraries(panadapter_message_overlay_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
 # cases.
@@ -2741,6 +2775,7 @@ foreach(APP_SETTINGS_SCENARIO
         missing-live-backup
         missing-live-corrupt
         failed-load
+        display-slice-depth-default
         nickname-key-roundtrip)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
@@ -4117,6 +4152,20 @@ target_link_libraries(aetherclock_engine_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherclock_engine_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherclock_engine_test COMMAND aetherclock_engine_test)
 
+add_executable(wspr_beacon_test tests/wspr_beacon_test.cpp)
+target_include_directories(wspr_beacon_test PRIVATE src)
+target_link_libraries(wspr_beacon_test PRIVATE aethercore Qt6::Core)
+add_test(NAME wspr_beacon_test COMMAND wspr_beacon_test)
+
+add_executable(automation_tx_watchdog_test
+    tests/automation_tx_watchdog_test.cpp
+)
+target_include_directories(automation_tx_watchdog_test PRIVATE src)
+target_link_libraries(automation_tx_watchdog_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+add_test(NAME automation_tx_watchdog_test COMMAND automation_tx_watchdog_test)
+
 add_executable(aetherclock_model_test tests/aetherclock_model_test.cpp)
 target_include_directories(aetherclock_model_test PRIVATE src)
 target_link_libraries(aetherclock_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4339,6 +4388,21 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+
+add_executable(spectrum_overlay_wheel_guard_test
+    tests/spectrum_overlay_wheel_guard_test.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/DragValuePopup.cpp   # GuardedSlider.h (ControlsLock coverage)
+)
+target_include_directories(spectrum_overlay_wheel_guard_test PRIVATE src)
+target_link_libraries(spectrum_overlay_wheel_guard_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(spectrum_overlay_wheel_guard_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_wheel_guard_test
+         COMMAND spectrum_overlay_wheel_guard_test)
+set_tests_properties(spectrum_overlay_wheel_guard_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp

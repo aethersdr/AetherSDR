@@ -56,6 +56,18 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
     return frames;
 }
 
+void Hl2Spectrum::accumulate(std::span<const std::complex<float>> iq)
+{
+    m_acc.insert(m_acc.end(), iq.begin(), iq.end());
+    // Hold at most fftSize - 1: see the header for why exactly-full would wedge
+    // process()'s boundary check.
+    const std::size_t keep = static_cast<std::size_t>(m_fftSize) - 1;
+    if (m_acc.size() > keep) {
+        m_acc.erase(m_acc.begin(),
+                    m_acc.end() - static_cast<std::ptrdiff_t>(keep));
+    }
+}
+
 void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
 {
     // Remove the frame's DC offset (the ADC offset lives on I in direct

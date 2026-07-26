@@ -14,6 +14,8 @@
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QLineF>
+#include <QPolygonF>
 #include <QVariant>
 #include <QTimer>
 #include <QLabel>
@@ -103,6 +105,7 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_PROPERTY(double centerMhz READ centerMhz)
     Q_PROPERTY(double bandwidthMhz READ bandwidthMhz)
     Q_PROPERTY(int centerLockSliceId READ centerLockSliceId)
+    Q_PROPERTY(bool threeDSliceDepth READ threeDSliceDepth WRITE setThreeDSliceDepth)
     // Frequency extent of the most recently applied waterfall row. Each row
     // carries its own [low,high] and is resampled into the current view, so a
     // row whose extent disagrees with the pan renders at the wrong frequency —
@@ -417,6 +420,8 @@ public:
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
     void setExtendedPassband(bool on);
     bool extendedPassband() const { return m_extendedPassband; }
+    void setThreeDSliceDepth(bool on);
+    bool threeDSliceDepth() const { return m_threeDSliceDepth; }
     void setFloating(bool on) { m_isFloating = on; }
     void setBackgroundImage(const QString& path);
     QString backgroundImagePath() const { return m_bgImagePath; }
@@ -798,6 +803,27 @@ private:
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
     void drawSliceMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    struct DssDepthBand {
+        QPolygonF polygon;
+        QColor frontColor;
+        QColor backColor;
+    };
+    struct DssDepthLine {
+        QLineF line;
+        QColor frontColor;
+        QColor backColor;
+        qreal width{1.0};
+    };
+    struct DssDepthGeometry {
+        QVector<DssDepthBand> bands;
+        QVector<DssDepthLine> lines;
+        QLineF firstProjection;
+        bool hasFirstProjection{false};
+    };
+    DssDepthGeometry buildDssDepthGeometry(const QRect& specRect,
+                                           float floorDbm) const;
+    void drawDssDepthGeometry(QPainter& painter,
+                              const DssDepthGeometry& geometry) const;
     // Draw each flag's SmartMTR extremes value labels on top of the slice markers.
     void drawSmartMtrValueLabels(QPainter& p);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
@@ -821,9 +847,7 @@ private:
     void setVfoCursorOverride(Qt::CursorShape shape);
     void clearVfoCursorOverride();
     void applyActiveVfoZOrder();
-#ifdef AETHER_GPU_SPECTRUM
     void repositionVfoFlags(const QRect& specRect);  // #3617 — shared flag positioner
-#endif
     void setSpectrumCursor(Qt::CursorShape shape);
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
@@ -1548,6 +1572,7 @@ private:
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
     bool    m_extendedPassband{false};
+    bool    m_threeDSliceDepth{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};
     QTimer* m_tuneGuideTimer{nullptr};
@@ -1786,8 +1811,10 @@ private:
     QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge line segments, static
     QRhiBuffer* m_dssMeshUbo{nullptr};       // dynamic uniforms
     // std140 UBO float count — must match dss_mesh.{vert,frag}'s U block AND the
-    // ubo[] writer in renderGpuFrame(). Five vec4 scalar groups plus bgFill.
-    static constexpr int kDssMeshUboFloats = 24;
+    // ubo writer in renderGpuFrame(): five scalar vec4 groups + bgFill, eight
+    // slice band descriptors, eight slice styles, and shadow metadata.
+    static constexpr int kDssMeshUboFloats = 92;
+    static constexpr int kDssMeshShadowSlices = 8;
     QRhiTexture* m_dssHeightTex{nullptr};    // R16F ring heightmap (cols x rows)
     QRhiTexture* m_dssPaletteTex{nullptr};   // 256x1 RGBA8 floor->peak LUT
     QRhiSampler* m_dssHeightSampler{nullptr};
@@ -1801,6 +1828,20 @@ private:
 
     void initDssMeshPipeline();
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch, float floorDbm, float rangeDb);
+
+    // Distance-faded slice/passband shadows painted across the completed DSS
+    // surface. Tiny dynamic geometry rendered below the ordinary marker layer.
+    static constexpr int kDssDepthMaxVertices = 16384;
+    static constexpr int kDssDepthVertexFloats = 7;  // pos2 + color4 + edge
+    QRhiGraphicsPipeline* m_dssDepthPipeline{nullptr};
+    QRhiShaderResourceBindings* m_dssDepthSrb{nullptr};
+    QRhiBuffer* m_dssDepthVbo{nullptr};
+    QVector<float> m_dssDepthVertices;
+    int m_dssDepthVertexCount{0};
+    void initDssDepthPipeline();
+    void updateDssDepthVertices(QRhiResourceUpdateBatch* batch,
+                                const DssDepthGeometry& geometry,
+                                const QSize& logicalSize);
 
     bool initWaterfallPipeline();
     void releaseWaterfallFramePipelineResources();

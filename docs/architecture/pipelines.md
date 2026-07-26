@@ -101,6 +101,12 @@ TX AUDIO ROUTING SUMMARY:                  ◄── AUDIO THREAD
                               ▼
                          Radio UDP 4991
 
+The PSK Reporter WSPR beacon is a one-shot, operator-armed digital source. A
+precise timer on the AudioEngine worker thread generates sample-accurate 4-FSK
+independently of microphone callbacks and sends it through a client-owned
+`dax_tx` stream in DIGU. Its dedicated non-voice PTT source suppresses Quindar,
+and the generator holds silence through the unkey edge.
+
 TCP COMMAND PIPELINE (bidirectional):
   GUI widget ──→ SliceModel.setXxx() ──→ emit commandReady("slice ...")  [MAIN]
                  TransmitModel          ──→ emit commandReady("xmit ...")

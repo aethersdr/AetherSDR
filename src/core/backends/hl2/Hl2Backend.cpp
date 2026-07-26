@@ -1,6 +1,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 
 #include <cmath>
+#include <limits>
 
 #include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
@@ -8,6 +9,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include "core/AutomationBridgeSettings.h"
+#include "core/backends/hl2/Hl2Settings.h"
 
 #include <QByteArray>
 #include <QHostAddress>
@@ -29,6 +31,82 @@ SampleRate sampleRateEnum(int hz) noexcept
     case 384000: return SampleRate::R384k;
     default:     return SampleRate::R48k;
     }
+}
+
+// The IQ rates the HL2's DDC can be told to run, ascending. ONE list, because
+// this is simultaneously the capability advertisement, the panadapter's zoom
+// limits, and the set a zoom request snaps to — and on this radio those are the
+// same fact. The pan span IS the sample rate (Hl2Backend::emitPanState), so a
+// second list would be a way for the advertised span and the deliverable span to
+// drift apart, which is exactly the failure being fixed here.
+constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
+
+// Snap a requested span (Hz) to the rate that best matches it.
+//
+// Nearest in the LOG domain, not the linear one: the rates are octave-spaced, so
+// linear-nearest is biased toward the wider neighbour everywhere (a request for
+// 100 kHz is 4 kHz from 96k and 92 kHz from 192k linearly, but almost exactly
+// halfway between them by ratio). Zoom is a multiplicative gesture — each wheel
+// step scales the span — so the operator's sense of "closer" is the ratio, and
+// matching that is what makes a zoom step land on the neighbouring rate rather
+// than skipping one.
+// The widest rate this session will offer.
+//
+// "Use low bandwidth mode" is an explicit statement that the link cannot carry
+// much, and on this radio the span IS the data rate: 384 kHz is 25.2 Mbps of
+// sustained UDP at 3048 packets/second. Offering it on a link the operator has
+// already told us is constrained would produce a connection that drops rather
+// than a display that is wide, so the ceiling comes down to 96 kHz (6.3 Mbps).
+//
+// Applied to the ADVERTISED limits as well as to requests, so the zoom control
+// stops at the real ceiling instead of letting the operator drag into a span
+// that will be silently refused.
+int maxIqSampleRateHz() noexcept
+{
+    constexpr int kLowBandwidthCeilingHz = 96000;
+    if (!Hl2Settings::lowBandwidth())
+        return kIqSampleRatesHz[std::size(kIqSampleRatesHz) - 1];
+    return kLowBandwidthCeilingHz;
+}
+
+int nearestIqSampleRateHz(double requestedHz) noexcept
+{
+    // Below the narrowest rate there is nothing to interpolate toward, and log()
+    // of a non-positive request is undefined.
+    if (!(requestedHz > 0.0))
+        return kIqSampleRatesHz[0];
+
+    const int ceiling = maxIqSampleRateHz();
+    int best = kIqSampleRatesHz[0];
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (const int rate : kIqSampleRatesHz) {
+        if (rate > ceiling)
+            break;                     // ascending list; nothing wider is offered
+        const double distance =
+            std::abs(std::log(requestedHz / static_cast<double>(rate)));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = rate;
+        }
+    }
+    return best;
+}
+
+// Neutral AGC vocabulary -> WDSP RXA AGC mode. WDSP also has "long" (1), which
+// the slice model's four-way control never produces, so it is unreachable here
+// rather than silently aliased onto something else.
+//
+// A free function because two callers need it: the operator's AGC change, and the
+// rebuild a sample-rate change forces (a reconfigured channel opens on WDSP's own
+// defaults, so the current mode has to be reapplied or the operator's AGC would
+// silently revert every time they zoomed).
+int wdspAgcMode(const QString& mode) noexcept
+{
+    const QString m = mode.trimmed().toLower();
+    if (m == QLatin1String("off"))   return 0;
+    if (m == QLatin1String("slow"))  return 2;
+    if (m == QLatin1String("fast"))  return 4;
+    return 3;                                  // medium: WDSP's own default
 }
 
 WdspChannel::Mode modeFromString(const QString& mode) noexcept
@@ -218,7 +296,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.model = QStringLiteral("Hermes-Lite 2");
     c.maxSlices = 1;
     c.maxPanadapters = 1;
-    c.sampleRatesHz = {48000, 96000, 192000, 384000};
+    for (const int rate : kIqSampleRatesHz)
+        c.sampleRatesHz.append(rate);
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
@@ -238,6 +317,16 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
         return;
     }
+
+    // The span the operator last chose, snapped to a rate we can actually run
+    // and to the current low-bandwidth ceiling. Applied BEFORE the explicit
+    // param below so an automation/test caller can still pin a rate outright.
+    //
+    // Restoring this is what lets the default stay at the cheap 48 kHz: the
+    // operator picks a wide span once and keeps it, instead of re-zooming every
+    // launch, and nobody who never asked for it pays 25 Mbps.
+    if (const double remembered = Hl2Settings::spanMhz(); remembered > 0.0)
+        m_sampleRateHz = nearestIqSampleRateHz(remembered * 1.0e6);
 
     // Optional overrides from the namespaced params.
     if (request.params.contains(QStringLiteral("sampleRateHz")))
@@ -397,15 +486,8 @@ void Hl2Backend::setSliceFilter(int /*sliceId*/, int lowHz, int highHz)
 
 void Hl2Backend::setSliceAgc(int /*sliceId*/, const QString& mode, int thresholdDb)
 {
-    // Neutral vocabulary -> WDSP RXA AGC mode. WDSP also has "long" (1), which
-    // the slice model's four-way control never produces, so it is unreachable
-    // here rather than silently aliased onto something else.
     const QString m = mode.trimmed().toLower();
-    int wdspAgc = 3;                                   // medium: WDSP's own default
-    if (m == QLatin1String("off"))        wdspAgc = 0;
-    else if (m == QLatin1String("slow"))  wdspAgc = 2;
-    else if (m == QLatin1String("med"))   wdspAgc = 3;
-    else if (m == QLatin1String("fast"))  wdspAgc = 4;
+    const int wdspAgc = wdspAgcMode(m);
 
     // The slice's AGC threshold is a 0..100 operator value (SliceModel bounds it
     // there); the WDSP ceiling is dB of MAXIMUM GAIN. The original 1:1 map was
@@ -448,6 +530,142 @@ void Hl2Backend::setPanCenter(const QString& /*panId*/, double hz)
         QMetaObject::invokeMethod(m_dsp, "setShift", Qt::QueuedConnection,
             Q_ARG(double, m_rxFreqHz - m_ncoHz));
     emitPanState();
+}
+
+void Hl2Backend::setPanBandwidth(const QString& /*panId*/, double hz)
+{
+    if (hz <= 0.0)
+        return;
+
+    // Coalesce a zoom sweep. See kBandwidthThrottleMs: each span change is a
+    // blocking WDSP rebuild on the thread that paces EP2, and a drag delivers
+    // ~30 of them a second. Leading edge applies now so a discrete step is not
+    // delayed; the rest are collapsed into one.
+    if (!m_bandwidthThrottle) {
+        m_bandwidthThrottle = new QTimer(this);
+        m_bandwidthThrottle->setSingleShot(true);
+        m_bandwidthThrottle->setInterval(kBandwidthThrottleMs);
+        connect(m_bandwidthThrottle, &QTimer::timeout, this, [this] {
+            if (m_pendingBandwidthHz <= 0.0)
+                return;              // cooldown expired with nothing waiting
+            const double pending = m_pendingBandwidthHz;
+            m_pendingBandwidthHz = 0.0;
+            applyPanBandwidth(pending);
+            // Re-arm: a sweep still in progress must keep coalescing.
+            m_bandwidthThrottle->start();
+        });
+    }
+
+    if (m_bandwidthThrottle->isActive()) {
+        m_pendingBandwidthHz = hz;   // superseded by any later request
+        return;
+    }
+
+    applyPanBandwidth(hz);
+    m_bandwidthThrottle->start();
+}
+
+void Hl2Backend::applyPanBandwidth(double hz)
+{
+    // Widening the window means running the DDC at a higher rate. There is no
+    // continuous zoom here: the gateware offers four rates, so the request is
+    // snapped to the nearest and the caller is told what it actually got via
+    // emitPanState() at the end.
+    const int rate = nearestIqSampleRateHz(hz);
+    if (rate == m_sampleRateHz) {
+        // Still re-publish. A zoom the hardware cannot honour must not leave the
+        // display sitting on the operator's requested span — the model deferred
+        // to us precisely so the view follows the radio, and re-emitting the
+        // unchanged span is how the widget snaps back to what is real.
+        //
+        // The model's setter is change-gated, so RadioModel force-republishes for
+        // a raw-spectrum backend on exactly this path; without that the emit here
+        // is swallowed and the widget stays wider than the data. (#4470)
+        emitPanState();
+        return;
+    }
+
+    const int previousRate = m_sampleRateHz;
+    m_sampleRateHz = rate;
+
+    // The DDC rate lives in the config register (C0=0x00), latched into the next
+    // C&C round. Deliberately NOT followed by a filter-pipeline reset: sending
+    // 0x39 on every geometry change is what wedged a board hard enough to need a
+    // power cycle (see MetisClient::requestPipelineReset). The decimation filters
+    // settle on their own within a few blocks.
+    if (m_metis)
+        QMetaObject::invokeMethod(m_metis, "setSampleRate", Qt::QueuedConnection,
+            Q_ARG(AetherSDR::hl2::SampleRate, sampleRateEnum(rate)));
+
+    // Rebuild the receive chain at the new input rate. WDSP's channel is opened
+    // with a fixed input rate, so a rate change is a reconfigure, not a setter —
+    // Hl2RxDsp::Config carries the operator's live mode/filter/AGC/shift so the
+    // rebuild comes back up where they left it rather than on construction
+    // defaults.
+    //
+    // Blocking, and in this order: the DSP must already expect the new rate
+    // before EP6 starts delivering at it. Reconfiguring afterwards would feed
+    // 384 kHz IQ into a chain still decimating for 48 kHz, which is not an error
+    // anything reports — it is simply the wrong audio and a mis-scaled spectrum.
+    if (m_dsp) {
+        Hl2RxDsp::Config dc;
+        dc.inputSampleRateHz = m_sampleRateHz;
+        dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+        dc.mode = modeFromString(m_mode);
+        dc.filterLowHz = m_filterLowHz;
+        dc.filterHighHz = m_filterHighHz;
+        // Carried through the rebuild rather than reapplied afterwards. A
+        // reconfigured channel opens on Config's defaults, so an operator who had
+        // moved their AGC would have had it silently snap back to medium/39 dB
+        // every time they zoomed.
+        dc.agcMode = wdspAgcMode(m_agcMode);
+        dc.maximumAgcGainDb = m_agcThresholdDb * kAgcCeilingDbPerUnit;
+        std::string err;
+        bool ok = false;
+        QMetaObject::invokeMethod(m_dsp, [this, &dc, &err, &ok] {
+            ok = m_dsp->configure(dc, &err);
+        }, Qt::BlockingQueuedConnection);
+        if (!ok) {
+            // Failing back to the old rate keeps the wire and the DSP agreeing.
+            // The alternative — leaving the register commanded to a rate the DSP
+            // cannot process — is silent: audio would be wrong with nothing in
+            // the UI to say why.
+            qWarning() << "Hl2Backend: could not reconfigure RX DSP for"
+                       << m_sampleRateHz << "Hz —"
+                       << QString::fromStdString(err)
+                       << "— staying at" << previousRate << "Hz";
+            m_sampleRateHz = previousRate;
+            if (m_metis)
+                QMetaObject::invokeMethod(m_metis, "setSampleRate",
+                    Qt::QueuedConnection,
+                    Q_ARG(AetherSDR::hl2::SampleRate,
+                          sampleRateEnum(previousRate)));
+            emitPanState();
+            return;
+        }
+    }
+
+    // Remember it. The span is the operator's deliberate choice about how much
+    // network and CPU this radio may consume, so it survives the session rather
+    // than snapping back to the conservative default on the next launch.
+    // Written only after the reconfigure SUCCEEDED — persisting a rate the DSP
+    // just refused would make the failure permanent across restarts.
+    Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
+
+    // A narrower window may no longer contain the slice: the usable passband
+    // shrank, and a slice left outside it would sit in the roll-off (or off the
+    // display entirely) with nothing to say why it went quiet. Re-running the
+    // tune re-centres the NCO only if it has to, and re-emits both states.
+    setSliceFrequency(kSliceId, m_rxFreqHz);
+}
+
+void Hl2Backend::setPanFrameRate(const QString& /*panId*/, int fps)
+{
+    // Straight through to the DSP, which skips the FFT itself when a frame is
+    // not due. Queued: the cap is read on the DSP thread.
+    if (m_dsp)
+        QMetaObject::invokeMethod(m_dsp, "setSpectrumRateFps", Qt::QueuedConnection,
+            Q_ARG(int, fps));
 }
 
 void Hl2Backend::setKeying(bool key)
@@ -669,6 +887,18 @@ void Hl2Backend::pushInitialState()
             Q_ARG(WdspChannel::Mode, modeFromString(m_mode)));
         QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
     }
+    // How far this pan may be zoomed, which on this radio is simply the range of
+    // DDC rates it can run. Pushed here for the same reason everything else in
+    // this function is: nothing above the seam can derive it. The GUI's fallback
+    // clamp is a FlexLib model table, and "Hermes-Lite 2" falls through it to
+    // 5.4 MHz — fourteen times more than the widest window this receiver has, so
+    // the operator could zoom out into spectrum that was never sampled and the
+    // uncovered part rendered as black bars.
+    emit panBandwidthLimitsChanged(
+        QString::fromLatin1(kPanId),
+        static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
+        static_cast<double>(maxIqSampleRateHz()) / 1.0e6);
+
     // Keying state is ours, not the radio's: a reconnect must never come up
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;

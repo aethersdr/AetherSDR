@@ -156,6 +156,7 @@ public:
         Tune         = 3,   // local TUNE/two-tone carrier
         Dax          = 4,   // external digital-audio PTT path
         Atu          = 5,   // internal automatic-tuner carrier
+        Wspr         = 6,   // local generated WSPR audio
     };
 
     // Source of the most recently *initiated* key-up. Set by the keying entry
@@ -243,6 +244,7 @@ public:
     void setDexpLevel(int level);
     void setTxFilterLow(int hz);
     void setTxFilterHigh(int hz);
+    void setTxFilter(int lowHz, int highHz);
 
     // ── CW commands ─────────────────────────────────────────────────────────
     void setCwSpeed(int wpm);

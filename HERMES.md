@@ -661,17 +661,20 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 4 | Pipeline reset `0x39[7:4]=0x8` after an NCO move | A2 §B2 | Decimation state smears a transient across band-scale jumps — which `a1cbe154` made routine | XS |
 | 5 | Normalize by `2^23-1`, not `2^23` | A1 §A2 | dBFS parity with piHPSDR. Numerically trivial, but parity is the point | XS |
 | 6 | `RXASetNC` / `RXASetMP` after `OpenChannel` | A3 §7 | Selectivity vs latency; matters to CW operators. We silently take defaults | XS |
+| 6a | Rate-limit the ADC-overload warning | §15.7 | Edge-gated, but the value chatters: **~133 warnings/second** on MW, which flushes the log ring and hides everything else | XS |
 
 ### Tier 2 — correctness gaps
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
 | 7 | Read receiver count from discovery `0x13` | O §1 | We hardcode `maxSlices=1`. Standard gateware is 4; skimmer variants 9–12 with no TX | S |
-| 8 | Move HL2 wire + DSP off the GUI thread | O §2 | Watchdog stops the stream when the host stalls; we run both on the GUI thread | M |
+| ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
 | 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
 | 10 | RADE null-deref at `MainWindow_DigitalModes.cpp:461` | ours, gap 9 | Same shape as the DAX crash; will kill HL2 the moment RADE starts | XS |
 | 11 | `AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured on the HL2 path | ours, gap 10 | Test instances grab a live radio | S |
 | 12 | One dB-reference object per slice (LNA + calibration + AGC threshold) | A2 §A3 | Every LNA change shifts the absolute reference; the trace jumps and users read it as a real event | S |
+| 12a | Seam verb for RF/LNA gain | §15.7 | `lnaGainDb` is connect-time only. An operator on a strong band cannot back it off without reconnecting, and audio clips hard (peak 5.5 against full scale 1.0) with no recovery | S |
+| 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
 
 ### Tier 3 — absent subsystems, in dependency order
 
@@ -898,3 +901,306 @@ have exposed the bug was the one that always looked fine.
 - **PA temperature formula** is the HL2 wiki's, unverified against a reference.
   29.5 °C idle → 34 °C under load is plausible, not calibrated.
 - **`0x0e` T/R gain switch** and PureSignal's feedback path.
+
+## 15. Panadapter span and display rate
+
+Two defects with one root: **the panadapter's span and its frame rate were both
+consequences of the IQ sample rate, and nothing above the seam could change
+either.**
+
+### 15.1 The operator could only ever see 48 kHz
+
+`Hl2Backend::emitPanState` publishes the span as the IQ sample rate, which is
+correct — on this radio the DDC rate *is* the span. But:
+
+- `m_sampleRateHz` defaulted to **48000**, the NARROWEST of the four rates.
+- There was no way to change it. `IRadioBackend` had `setPanCenter` but no
+  `setPanBandwidth`, so a zoom request never reached the backend at all.
+- `RadioModel::dispatchPanCenterBandwidth` wrote the requested span straight
+  into `PanadapterModel` for a non-Flex backend and returned success.
+
+So the view widened while the receiver kept sending its old, narrower window.
+The VITA-49 tiles are honest about their own extent, so the region the data
+never covered rendered **black** — the same lie #4142 fixed for pan *center*,
+reintroduced on the bandwidth field. Zoom-out was clamped by
+`RadioModel::maxPanBandwidthMhz()`, a FlexLib platform table that falls through
+to **5.4 MHz** for any model string it doesn't recognise, so "Hermes-Lite 2"
+could be zoomed **14x past its own data**.
+
+Fixed by making the whole loop honest:
+
+| Direction | Mechanism |
+|---|---|
+| Down | `IRadioBackend::setPanBandwidth` — HL2 snaps to the nearest real rate and reconfigures the DDC + WDSP chain |
+| Up | `panCenterBandwidthChanged` reports the span the radio ACTUALLY took |
+| Limits | `panBandwidthLimitsChanged` reports 48–384 kHz, so the zoom clamp stops where the data stops |
+| Default | the narrowest rate, then whatever span the operator last chose (§15.2) |
+
+The snap is **nearest by RATIO, not linear distance**. The rates are
+octave-spaced and zoom is multiplicative, so linear-nearest biases every request
+toward the wider neighbour: between 96 and 192 kHz the geometric mean is
+135.8 kHz but the arithmetic mean is 144 kHz, and a 140 kHz request belongs to
+192 kHz by ratio and to 96 kHz by distance. `hl2_backend_test` pins exactly that
+case — every other row in its table agrees under both rules, so without it the
+`log()` could be deleted and the suite would stay green.
+
+**Do NOT send a filter-pipeline reset (`0x39`) on a rate change.** See
+`MetisClient::requestPipelineReset` — doing that on every geometry change wedged
+a board hard enough to need a power cycle. The decimation filters settle on
+their own.
+
+### 15.2 The span is a COST, so it is opted into and remembered
+
+On this radio the span is not a free display choice — it IS the DDC rate, so it
+sets the wire load and the DSP load together:
+
+| Span | EP6 pkt/s | Sustained UDP | App CPU (measured, M-series) |
+|---|---|---|---|
+| 48 kHz | 381 | 3.1 Mbps | ~52% of one core |
+| 96 kHz | 762 | 6.3 Mbps | — |
+| 192 kHz | 1524 | 12.6 Mbps | — |
+| 384 kHz | 3048 | 25.2 Mbps | ~62% of one core |
+
+That rules out defaulting to the widest: 25 Mbps of sustained UDP at 3048
+packets/second would be imposed on every operator at connect, including on wifi
+and on hosts that cannot carry it. But defaulting to the narrowest with no
+memory is the original bug — a 48 kHz window on every launch.
+
+So the span **persists**, in the owned `Hl2` settings object (Principle V,
+`{"spanMhz":0.384}`). First run is the cheap default; an operator who wants the
+wide view chooses it once and keeps it.
+
+`Hl2Settings::lowBandwidth()` reads the connection panel's existing "Use low
+bandwidth mode" checkbox — READ ONLY, since that flat key is owned by the
+connection UI — and caps the widest offered span at **96 kHz**. The cap applies
+to the ADVERTISED limits as well as to requests, or the zoom control would let
+the operator drag into a span the backend then silently refuses: the display
+claiming a width the data never had, which is the same lie as the black bars.
+
+### 15.2.1 The frame rate tracked the zoom, not the sliders
+
+A backend that streams cooked spectra emits one frame per FFT block, so its
+frame rate is the **sample rate divided by the FFT size**:
+
+```
+ 48 kHz / 1024 =  47 fps      384 kHz / 1024 = 375 fps
+```
+
+Measured on the live radio: **375 fps** at full zoom out. The Display->FFT FPS
+and Display->Waterfall Rate sliders governed neither — they emitted `display pan
+set … fps=` and `display panafall set … line_duration=`, Flex wire text
+addressed to a command interpreter this radio does not have.
+
+For the waterfall this was **correctness, not just load**: the widget scales its
+time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
+calibration made the visible history up to **37x shorter than it claimed**.
+
+**The cap lives at the SOURCE** (`Hl2RxDsp::setSpectrumRateFps`, reached through
+`IRadioBackend::setPanFrameRate`), where a frame that is not due costs nothing.
+An earlier cut of this coalesced frames downstream in `RadioModel` instead,
+averaging in the power domain to keep the noise floor stable across zoom. It
+worked, but it was the wrong place: it computed every one of the 375 FFTs and
+then spent 1024 `pow()` per frame per feed combining them — roughly *doubling*
+the spectrum-path cost at exactly the span where cost matters most.
+
+| Spectrum path at 384 kHz | Calculated cost |
+|---|---|
+| FFT alone | 22.5 ms/s |
+| + downstream coalescing | 45.0 ms/s |
+| **source-side cap (shipped)** | **1.5 ms/s** |
+
+Skipping ~93% of the FFTs outright is ~30x cheaper, and it dissolves the reason
+the power-domain averaging existed: nothing is combined, so every emitted frame
+is a real, unmodified FFT and no level can shift with zoom.
+
+Two details that are load-bearing:
+
+- **The accumulator keeps filling on a skipped interval**
+  (`Hl2Spectrum::accumulate`) — it is the transform that is skipped, not the
+  feed. Dropping it instead (the first implementation) looked equivalent and was
+  not: a due frame then has to refill from empty, and that refill is
+  `fftSize / 126` EP6 blocks — 23.6 ms at 48 kHz against 3.0 ms at 384 kHz.
+  Added to the interval, a 25 fps request landed near **16 fps at 48 kHz** and
+  23 fps at 384 kHz, so the rate still tracked the span, which is the coupling
+  this shaper exists to remove. Feeding the window bounds that cost to a single
+  block (2.6 ms / 0.3 ms) and the frame stays contiguous either way, because no
+  sample is ever discarded. `hl2_spectrum_rate_test` measures the spread.
+- **The waterfall keeps a second gate** in `RadioModel`, because
+  `line_duration` is a separate and slower control. A plain drop, not a
+  coalesce — frames are already scarce by the time they arrive.
+
+The accepted trade: at 384 kHz and 25 fps the FFT sees a 2.7 ms window every
+40 ms, so a signal landing entirely between two displayed frames is not seen.
+That is standard for a display-rate panadapter, and it is the reason the
+averaging was considered at all.
+
+**The cap rounds DOWN, on purpose.** A frame is only emitted on a completed
+1024-sample boundary, and the next deadline is taken from the emit rather than
+advanced by the interval, so the achieved rate is the first frame boundary at or
+after the target period. At 384 kHz frames complete every 2.67 ms, so a 40 ms
+target (25 fps) lands on 42.7 ms — **23.4 fps**, which is exactly what the radio
+measured. The alternative (advancing the deadline by the interval, letting it
+catch up) hits the target average but can burst after a stall. Undershooting a
+display rate by 6% is invisible; a burst is the thing this cap exists to
+prevent, so the rounding stays.
+
+Measured on the real HL2 at 580 kHz AM, `line_duration` 100 ms:
+
+| Span | Pan | Waterfall |
+|---|---|---|
+| 384 kHz | 23.4 fps | 10.1 rows/s |
+| 48 kHz | ~25 fps | 10.0 rows/s |
+
+An 8x spread across the zoom range, gone.
+
+Those two rows were measured on hardware against the intended design, and are
+what exposed the first implementation as wrong: it could not produce the 48 kHz
+row. Emptying the accumulator between frames put that corner near 16 fps, and
+the table's own numbers are what made the discrepancy visible rather than
+plausible. `hl2_spectrum_rate_test` now pins it offline, wall-clock paced, at
+every rate the gateware offers — 23-24 fps for a 25 fps request with a ~4%
+spread across the zoom range, against ~35% before the fix.
+
+### 15.3 hpsdrsim cannot reproduce this
+
+**The simulator does not honour a sample-rate change.** Commanded to 384 kHz it
+keeps delivering ~40 frames/second, so the 375 fps condition is invisible there —
+inferring the input period from the two observed output rates is what showed it.
+Anything that needs a real HL2 rate change has to be measured on hardware.
+
+How it was found is worth keeping: the two shaped output rates were solved
+backwards for the input period. A 33 ms target producing 20 fps and a 100 ms
+target producing 9 fps are only consistent with frames arriving every ~25 ms —
+40 fps, not the 375 the sample rate implied. The simulator was reporting a
+384 kHz span while delivering a 48 kHz stream.
+
+### 15.4 Killing the client wedges the radio
+
+**Cost more time during this work than any code defect, so it goes first.**
+
+The HL2 is single-client, and the gateware watchdog halts its stream when EP2
+stops arriving. A client that exits WITHOUT sending a Metis stop leaves the
+board streaming at a dead endpoint; it then halts and **stops answering
+discovery**, and only a power cycle brings it back. `MetisProtocol.h` documents
+the mechanism; what was not written down is how easily it is triggered from the
+outside.
+
+`SIGTERM` to the application is enough. During this work the radio was wedged
+three separate times that way, and each time it looked like a software failure:
+
+| What it looked like | What it was |
+|---|---|
+| "connect times out at 384 kHz" | the board was already wedged from the previous kill |
+| "no audio on any mode" | the stream had halted; nothing was arriving |
+| "the radio is unreachable" | `ping` answered, Metis discovery did not |
+
+The distinction that settles it in one command — a board that pings but does not
+answer a discovery probe is wedged, not busy and not misconfigured:
+
+```
+EF FE 02 + 60 zero bytes  ->  udp/1024
+   reply byte[2] == 0x02   idle, free to connect
+   reply byte[2] == 0x03   streaming to some client
+   no reply at all         WEDGED — power cycle required
+```
+
+**Always disconnect through the normal path before terminating**, including in
+automation. Verified both ways here: a bridge `disconnect` then exit leaves the
+board reporting `0x02` idle, while a bare `SIGTERM` leaves it silent.
+
+The trap for a diagnostician is that the wedge is *caused by the previous test
+and observed during the next one*, so it reads as a regression in whatever
+changed in between. **A measurement taken on hardware you just mistreated is not
+evidence.**
+
+### 15.5 The silent-audio hunt, and two wrong diagnoses
+
+Receive audio stopped on a development build. The eventual cause was neither of
+the first two answers, and both were wrong in instructive ways.
+
+**It was not the DSP.** The suspicion was that raising the default span to
+384 kHz had broken WDSP, which now decimates 8:1 instead of 1:1. Disproved by
+running the production config at every rate offline — identical audio, **0.0 dB
+spread across all four** (`hl2_rxdsp_rate_test`, written for this). Later
+confirmed on the radio: **−0.06 dB** between the 384 kHz and 48 kHz spans.
+
+**It was not EP2 pacer starvation.** The next theory was that at 384 kHz the
+8× EP6 ingest, FFT and WDSP work on the shared I/O thread was starving the EP2
+pacer, tripping the gateware watchdog. It is a plausible mechanism and it is
+worth keeping in mind — but the only evidence for it was a connect timeout on a
+board that had just been wedged by a `SIGTERM` (§15.4). **The evidence was
+manufactured by the diagnostician.** The radio has since run 384 kHz stably for
+long stretches.
+
+**What it actually was:** two unrelated faults stacked.
+
+1. A bug fixed in #4466 — `setPcAudioLocked(true)` checks the PC Audio button
+   under a `QSignalBlocker`, so `toggled()` never fires, the RX sink never
+   opens, and `PcAudioEnabled` is never written back to True. Both RX-start
+   paths are gated on that persisted setting, so a stale False skips them, and
+   the button is disabled so nobody can click it to recover. The branch under
+   test predated that fix.
+2. A physically disconnected antenna, which produced quiet-but-present audio
+   after the first fault was resolved.
+
+Three lessons worth more than the fix:
+
+- **"No audio" is not one symptom.** A dead sink (`Stopped`, `device_open=false`,
+  zero bytes) and a live sink carrying a weak signal look identical to the
+  operator and are completely different faults. `get_state model=audio` and a
+  sample capture separate them in seconds; the second fault was only visible
+  once the first was gone.
+- **Check the RF before the code.** A noise floor of **−116 dBm across both MW
+  and HF**, where the same radio had been in ADC overload an hour earlier, is an
+  antenna problem. `floors` answers this without a screenshot.
+- **State a hypothesis's evidence, not just the hypothesis.** The pacer theory
+  sounded strong and had exactly one supporting observation, which was
+  contaminated. Naming the evidence would have shown that immediately.
+
+### 15.6 The coverage that let it through
+
+Every one of these defects was invisible to a green suite, and each for the same
+reason: **the test shared an assumption with the code.**
+
+- `hl2_rxdsp_test` only ever ran **48 kHz in / 48 kHz audio out**, while
+  production runs 24 kHz audio and, since the span became controllable, any of
+  four input rates. A rate at which the demodulator went silent would have
+  passed. `hl2_rxdsp_rate_test` now sweeps the whole grid and asserts on audio
+  level, not just on the channel opening.
+- `hl2_tx_loopback_test` **hardcoded `binHz = 48000/n`** while silently
+  depending on the backend's default being 48 kHz. Raising that default moved
+  every expected bin and failed three assertions for a reason that had nothing
+  to do with transmit. It now pins its rate explicitly.
+- The panadapter FFT keeps working at any rate because it never touches
+  `WdspChannel`, so **a healthy display is not evidence of a healthy receiver.**
+  That is what made the audio fault look like a display-side change.
+- The span-snap table in `hl2_backend_test` would pass under either
+  ratio-nearest or linear-nearest for every row except the one deliberately
+  placed between the geometric and arithmetic means. Without that row the
+  `log()` could be deleted and the suite would stay green.
+
+The general form, which §14.6 already records for the sideband inversion: **a
+test that inherits a default cannot detect that the default is wrong.** Pin the
+value the assertion depends on, even when it looks like a constant.
+
+### 15.7 Noticed, not fixed
+
+- **ADC overload chatter.** On the MW broadcast band with the default +20 dB LNA
+  the overload flag dithers, and the warning in `publishTelemetry` — although
+  edge-gated — fires **~133 times/second**, flushing the log ring. The gate is on
+  the value changing, but the value genuinely chatters. It also buries every
+  other log line, which is how it obstructed the diagnosis in §15.5.
+- **The HL2 LNA gain is only settable at connect time** (`lnaGainDb` param).
+  There is no seam verb for RF gain, so an operator on a strong band cannot back
+  it off without reconnecting. This is why the overload above could not simply be
+  turned down.
+- **Audio clips hard on strong signals.** On MW with that same +20 dB LNA,
+  demodulated audio measured **RMS 1.09 and peaks of 5.5 against a full scale of
+  1.0**. Identical at both span extremes, so it is not rate-related — it is the
+  front end being slammed, the same root cause as the two entries above.
+- **No automation verbs for span or display rate.** Testing this needed
+  `pan span <mhz>`, `pan rate <fps> <wf_ms>` and a `perf` verb returning
+  `panFps`/`wfFps` as JSON. Without them the span had to be driven by repeated
+  `pan_zoom_in`, the FPS slider reached through a menu, and the frame rates
+  scraped from the log file — which the overload chatter above nearly made
+  impossible.

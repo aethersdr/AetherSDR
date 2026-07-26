@@ -91,6 +91,50 @@ public:
     // (which carries its own frequency extent) drifts off the display.
     virtual void setPanCenter(const QString& panId, double hz) = 0;
 
+    // Change the panadapter's SPAN — how much spectrum the window covers.
+    //
+    // The sibling of setPanCenter, and it exists for the same reason. A backend
+    // that owns its own DDC decides its span by choosing a decimation rate, and
+    // nothing above this seam can do that for it. Without this verb the zoom
+    // intent had nowhere to go: RadioModel wrote the requested span into
+    // PanadapterModel and returned success, so the view widened while the
+    // receiver kept delivering the old, narrower window. The VITA-49 tiles are
+    // honest about their own extent, so the region the data never covered
+    // rendered BLACK — the same lie #4142 fixed for pan center, reintroduced on
+    // the bandwidth field for every non-Flex backend.
+    //
+    // Fire-and-forget like every DOWN verb. hz is a REQUEST: a backend whose
+    // hardware offers a fixed set of rates snaps to the nearest one it can
+    // actually run, and the span that resulted comes back via
+    // panCenterBandwidthChanged. Callers must not assume the requested value was
+    // taken — that assumption is what this verb exists to remove.
+    //
+    // Default no-op: a Flex radio owns its pan geometry and is driven by
+    // "display pan set … bandwidth=" wire text, so FlexBackend has nothing to do
+    // here.
+    virtual void setPanBandwidth(const QString& panId, double hz)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(hz);
+    }
+
+    // How often the operator wants panadapter frames, in frames per second.
+    //
+    // For a backend that streams cooked spectra there is no radio-side display
+    // engine to ask, so the Display->FFT FPS slider has nowhere to go — the
+    // Flex wire text it used to emit reached nothing — and the frame rate
+    // defaults to the IQ sample rate over the FFT size, which tracks the
+    // operator's ZOOM instead of their slider. Such a backend caps its own
+    // production here, at the source, where the FFT can be skipped rather than
+    // computed and thrown away.
+    //
+    // Default no-op: a Flex radio's own display engine paces its frames.
+    virtual void setPanFrameRate(const QString& panId, int fps)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(fps);
+    }
+
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the
     // backend only translates an already-authorized intent to its mechanism
@@ -228,6 +272,24 @@ signals:
     // wire did not report. (aetherd RFC 2.3 — second converted universal pan
     // field, following the center/bandwidth template.)
     void panRangeChanged(const QString& panId, double minDbm, double maxDbm);
+
+    // The span limits this pan can actually be zoomed between (universal — every
+    // family has a widest and narrowest window). Reported by the backend because
+    // only the backend knows: for one that owns a DDC the limits are its
+    // available decimation rates, which no model-name table can predict.
+    //
+    // This is what keeps the zoom clamp honest. Before it, the GUI clamped every
+    // radio against a FlexLib model table that falls through to 5.4 MHz for any
+    // model string it doesn't recognise — so an HL2 delivering 384 kHz could be
+    // zoomed 14x wider than its own data, and the uncovered spectrum rendered as
+    // black bars either side of the trace. A backend that reports its real limits
+    // gets a zoom that stops where the data stops.
+    //
+    // Both bounds in MHz. A backend that doesn't know (or whose hardware has no
+    // meaningful limit) simply never emits this, and the GUI keeps its previous
+    // model-derived clamp — so this is additive for Flex.
+    void panBandwidthLimitsChanged(const QString& panId,
+                                   double minMhz, double maxMhz);
 
     // Panadapter RF gain (universal — every family has an RX gain control; the
     // range/step are family-specific and reported via RadioCapabilities). The

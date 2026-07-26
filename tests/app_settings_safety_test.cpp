@@ -1,6 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"
+#include "gui/DisplaySettings.h"
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -321,6 +322,24 @@ void testFailedLoadCannotSave()
            "failed loads cannot create a replacement temporary file");
 }
 
+void testThreeDSliceDepthDefaultAndOptIn()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    expect(!DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow defaults OFF when the Display field is absent, so "
+           "an upgrade never changes an existing user's display");
+
+    DisplaySettings::setThreeDSliceDepth(true);
+    expect(DisplaySettings::threeDSliceDepth(),
+           "a persisted True keeps the user's 3D Slice Shadow opt-in");
+
+    DisplaySettings::setThreeDSliceDepth(false);
+    expect(!DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow can be disabled again after opting in");
+}
+
 } // namespace
 
 // A nickname is stored under a key derived from the radio's MAC. AppSettings
@@ -399,6 +418,8 @@ int main(int argc, char** argv)
         testMissingLiveCorruptRecoveryFailsClosed();
     } else if (scenario == QStringLiteral("failed-load")) {
         testFailedLoadCannotSave();
+    } else if (scenario == QStringLiteral("display-slice-depth-default")) {
+        testThreeDSliceDepthDefaultAndOptIn();
     } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
         testNicknameKeySurvivesDisk();
     } else {

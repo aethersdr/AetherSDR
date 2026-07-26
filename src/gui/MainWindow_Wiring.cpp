@@ -2840,6 +2840,17 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }));
     m_panDisplayStatusConnections.insert(panId, connections);
 
+    // When the ENGINE shapes the frame rate, the seeding runs the other way:
+    // the radio reports no display state, so the pan model has nothing to give
+    // the widget and it is the widget's current slider values that the shaper
+    // needs. Done before the reads below so those still see a populated model.
+    // Without it the stream is shaped to the built-in defaults until the
+    // operator happens to touch a slider.
+    if (m_radioModel.shapesDisplayRatesLocally()) {
+        m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
+                                            sw->wfLineDuration());
+    }
+
     // Reclaimed pans already hold their latest status and do not necessarily
     // emit a new report after reconnect. Seed the view immediately.
     if (pan->average() >= 0) {
@@ -3088,9 +3099,33 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
 
-    // Set panadapter bandwidth zoom limits based on radio model
-    sw->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
-                           m_radioModel.maxPanBandwidthMhz());
+    // Panadapter zoom limits. A backend that knows its real span range reports
+    // it (per-pan, addressed); the FlexLib model table is the fallback for one
+    // that doesn't — which is every Flex radio, so that path is unchanged.
+    //
+    // The fallback is not harmless when it's wrong: it falls through to 5.4 MHz
+    // for any model string it doesn't recognise, so an HL2 delivering 384 kHz
+    // could be zoomed fourteen times past its own data and the spectrum that was
+    // never sampled rendered as black bars.
+    applyPanBandwidthLimitsToWidget(
+        applet->panId(), sw,
+        m_radioModel.panMinBandwidthMhz(applet->panId()),
+        m_radioModel.panMaxBandwidthMhz(applet->panId()));
+    connect(&m_radioModel, &RadioModel::panBandwidthLimitsChanged,
+            sw, [this, applet, sw](const QString& panId, double minMhz, double maxMhz) {
+        // Applets exist before any backend connects, so a connect-time report has
+        // to re-clamp the widgets already on screen.
+        if (panId != applet->panId()) {
+            return;
+        }
+        // Don't undo the KiwiSDR widening. When this pan is displaying a Kiwi, the
+        // data on screen is the Kiwi's, so syncKiwiSdrPanadapterUiState() widens
+        // the ceiling to whichever of the two reaches further. Applying the local
+        // backend's report raw would cap a displayed Kiwi at the HL2's 384 kHz on
+        // connect — the local radio's limit clamping a zoom the Kiwi can fill.
+        // (#4470)
+        applyPanBandwidthLimitsToWidget(panId, sw, minMhz, maxMhz);
+    });
 
     // Set panId on the overlay menu so +RX routes to the correct pan
     menu->setPanId(applet->panId());
@@ -3642,8 +3677,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFps(v);  // always update restore target for when throttle lifts
         if (m_adaptiveThrottleActive)
             return;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 fps=%2").arg(applet->panId()).arg(v));
+        // Through the model, not a raw sendCommand: on a backend that streams
+        // raw spectra this is the engine's own shaping target, and the Flex wire
+        // text it used to send reached nothing there — the slider moved the
+        // widget's render cap while frames kept arriving at the IQ sample rate.
+        m_radioModel.requestPanDisplayRates(applet->panId(), v, /*wfMs=*/0);
     });
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
@@ -3733,10 +3771,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfLineDuration(clampedMs);
-        auto* pan = m_radioModel.panadapter(applet->panId());
-        if (pan && !pan->waterfallId().isEmpty())
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 line_duration=%2").arg(pan->waterfallId()).arg(clampedMs));
+        // Same reason as the FPS slider above: on a raw-spectrum backend this is
+        // the engine's waterfall shaping target, not a radio setting.
+        m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedMs);
     };
     connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
             this, applyWaterfallLineDuration);
@@ -3915,20 +3952,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so they become the new restore targets when the throttle lifts.
         m_radioModel.sendCommand(
             QString("display pan set %1 average=0").arg(applet->panId()));
-        if (!m_adaptiveThrottleActive)
-            m_radioModel.sendCommand(
-                QString("display pan set %1 fps=25").arg(applet->panId()));
         m_radioModel.sendCommand(
             QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+        // fps + line_duration go through the dispatcher rather than as Flex wire
+        // text: on a backend that shapes its own display rate the reset updated
+        // the widget only, leaving the backend cap and the pan's stored line
+        // duration on the OLD values — so "reset display defaults" visibly did
+        // not reset the rate. (#4470)
+        if (!m_adaptiveThrottleActive)
+            m_radioModel.requestPanDisplayRates(applet->panId(), 25, 100);
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty()) {
             m_radioModel.sendCommand(
                 QString("display panafall set %1 color_gain=50").arg(pan->waterfallId()));
             m_radioModel.sendCommand(
                 QString("display panafall set %1 black_level=15").arg(pan->waterfallId()));
-            if (!m_adaptiveThrottleActive)
-                m_radioModel.sendCommand(
-                    QString("display panafall set %1 line_duration=100").arg(pan->waterfallId()));
         }
 
         // Persist all defaults to AppSettings

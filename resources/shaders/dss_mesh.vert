@@ -32,6 +32,9 @@ layout(std140, binding = 0) uniform U {
     float padding18;
     float padding19;
     vec4  bgFill;             // plot background colour (for haze)
+    vec4  shadowBands[8];     // low u, high u, centre u, band alpha
+    vec4  shadowStyles[8];    // cue rgb, centre-line alpha
+    vec4  shadowMeta;         // descriptor count, enabled, plot width px, pad
 };
 
 layout(binding = 1) uniform sampler2D heightTex;  // R16F, dBm, ring-buffered rows
@@ -40,6 +43,7 @@ layout(location = 0) out float vLut;    // palette lookup coord (floor->peak gra
 layout(location = 1) out float vDepth;  // row depth 0..1 for haze/fade
 layout(location = 2) out float vEdge;   // edge tag passthrough
 layout(location = 3) out float vBoundaryFade;
+layout(location = 4) out float vFrequency;
 
 float sampleHistoryDbm(float texU, float historyV, float rows,
                        float remainingRows)
@@ -113,13 +117,26 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
-    // Hide only unpopulated startup slots. Advance the availability edge by
-    // remainingRows so the newest rear slot fades in continuously over the row
-    // interval instead of popping opaque on arrival (matching the height path's
-    // sub-row advance in sampleHistoryDbm). The rear six-row fade is
-    // deliberately gone: the perspective already supplies depth haze, and that
-    // fade left a visibly blurry band at the back of a full history.
-    float sampleAge = sourceV * rows + remainingRows;
-    float historyAvailability = clamp(validRows - sampleAge, 0.0, 1.0);
+    vFrequency = u;
+    // Rear visibility follows the fixed grid age, not the interpolated sample
+    // age — but only once the history is FULL.
+    //
+    // At steady state validRows is pinned at rows, so validRows - sourceAge is
+    // permanently 1 for the oldest slot: indistinguishable from a slot that has
+    // only just been populated. Subtracting the scroll advance there ramps that
+    // permanent row 0 -> 1 across every row interval and snaps it back on each
+    // arrival, which is the rear pulse (worst at slow presentation cadences,
+    // and it also disagreed with sampleHistoryDbm()'s un-advanced early-out).
+    //
+    // While history is still filling, a slot genuinely IS newly populated on
+    // each arrival, and for that one interval sampleHistoryDbm() clamps it to
+    // oldestRetainedAge — the same texture row its neighbour is already
+    // drawing. Subtracting the advance is what fades that duplicate curtain in
+    // instead of popping it opaque. So keep the term until validRows stops
+    // growing, after which nothing is ever newly populated again.
+    float sourceAge = sourceV * rows;
+    float fillFade = validRows < rows ? remainingRows : 0.0;
+    float historyAvailability = clamp(
+        validRows - sourceAge - fillFade, 0.0, 1.0);
     vBoundaryFade = historyAvailability;
 }

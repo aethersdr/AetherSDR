@@ -213,6 +213,7 @@ public:
     static constexpr int ShortcutFireUnknownId       = 1;
     static constexpr int ShortcutFireNoDirectHandler = 2;  // event-filter action (ptt_hold, CW keys)
     static constexpr int ShortcutFireTxBlocked       = 3;  // keysTx action, allowTx false
+    static constexpr int ShortcutFireTxOk            = 4;  // keysTx handler ran
     // Fire a registered ShortcutManager action by id — the exact path a MIDI
     // controller mapping takes (see fireShortcut in MainWindow_Controllers.cpp).
     // Used by the automation bridge (#3646) to reach MIDI/shortcut-only actions
@@ -250,7 +251,7 @@ public:
     // immediately.
     void setAutomationBridgeToken(const QString& token);
     // Persist the TX-via-MCP opt-in and push it live (Radio Setup → Network).
-    // Enabling arms the force-unkey watchdog; disabling force-unkeys the radio.
+    // Enabling grants permission; accepted TX actions arm the watchdog lease.
     void setAutomationTxAllowed(bool allowed);
     // Persist the observe-only opt-in and push it live (Radio Setup → Network).
     // When set, the bridge refuses every mutating verb (#4188 area 6).
@@ -512,6 +513,13 @@ private:
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
     bool kiwiSdrPanDisplaysKiwi(const QString& panId) const;
+    // Apply a pan's span limits to its widget, widened to cover a KiwiSDR when
+    // this pan is displaying one. Every path that reports limits to a widget must
+    // go through here, or a local-backend report clamps a Kiwi zoom. (#4470)
+    void applyPanBandwidthLimitsToWidget(const QString& panId,
+                                        SpectrumWidget* spectrum,
+                                        double minMhz,
+                                        double maxMhz) const;
     void setKiwiSdrPanDisplaySource(const QString& panId, bool kiwi);
     void clearKiwiSdrPanDisplaySourceOverride(const QString& panId);
     void clearKiwiSdrPanDisplaySourceOverrides();

@@ -261,6 +261,30 @@ public:
         // 6300, 6400, 6600, 8400, Aurora: single SCU
         return 5.4;
     }
+    // The span limits to clamp a zoom against for ONE pan.
+    //
+    // Prefers what the backend reported for that pan over the model-string table
+    // below. The table is a FlexLib platform lookup, so it is right for a Flex
+    // radio and a guess for anything else: it falls through to 5.4 MHz for any
+    // model string it doesn't recognise, which let an HL2 delivering 384 kHz be
+    // zoomed fourteen times past its own data. A backend that knows its real
+    // rates says so, and then this returns the truth instead of the guess.
+    //
+    // Every zoom path — wheel, drag, keyboard, MIDI — must clamp through here, or
+    // the one that doesn't becomes the one that reopens the black bars.
+    double panMinBandwidthMhz(const QString& panId) const {
+        const PanadapterModel* pan = panadapter(panId);
+        if (pan && pan->bandwidthLimitsKnown())
+            return pan->minBandwidthMhz();
+        return minPanBandwidthMhz();
+    }
+    double panMaxBandwidthMhz(const QString& panId) const {
+        const PanadapterModel* pan = panadapter(panId);
+        if (pan && pan->bandwidthLimitsKnown())
+            return pan->maxBandwidthMhz();
+        return maxPanBandwidthMhz();
+    }
+
     double minPanBandwidthMhz() const {
         if (m_model.contains("6700") || m_model.contains("8600"))
             return 0.001230;
@@ -325,6 +349,13 @@ public:
     void resetPanState();
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    bool prepareWsprTransmit();
+    void releaseWsprTransmit();
+    void restoreWsprTransmitDax();
+    bool hasWsprTxStream() const
+    {
+        return m_daxTxStreamId != 0 && m_daxTxActive;
+    }
     QJsonObject troubleshootingSnapshot() const;
 
     // Memory channel cache
@@ -533,6 +564,18 @@ public:
                           double centerMhz,
                           double bandwidthMhz = -1.0);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
+    // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
+    //
+    // On a Flex these are radio settings and this sends the wire text, exactly
+    // as the call sites used to inline. On a backend that streams raw spectra
+    // there is no radio to ask — the engine shapes the stream itself — so the
+    // values are applied to the pan model, which is what the shaper reads.
+    // Without this the sliders moved nothing on an HL2: the wire text was
+    // addressed to a command interpreter that does not exist on that radio.
+    //
+    // Returns true when the intent was applied or dispatched.
+    bool requestPanDisplayRates(const QString& panId, int fps,
+                                int wfLineDurationMs);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
     // Effective pan geometry: the deferred pending value if one is queued,
@@ -621,6 +664,12 @@ signals:
     void panadapterInfoChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the radio reports the panadapter's dBm display range.
     void panadapterLevelChanged(float minDbm, float maxDbm);
+    // Emitted when the backend reports the span limits this pan can be zoomed
+    // between (MHz). Per-pan and addressed, because the limits belong to the
+    // receiver behind the pan rather than to the radio as a whole — a backend
+    // that never reports leaves the GUI on its model-derived clamp.
+    void panBandwidthLimitsChanged(const QString& panId,
+                                   double minMhz, double maxMhz);
     // Emitted when the radio reports FFT pixel height for a panadapter.
     void panadapterFftScaleChanged(const QString& panId, int yPixels);
     void panadapterAdded(PanadapterModel* pan);
@@ -763,6 +812,15 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "kiwi", ...).
     QString family() const { return m_family; }
+
+    // True when the ENGINE owns display rate shaping rather than the radio —
+    // i.e. a backend that streams raw spectra and has no radio-side display
+    // engine to ask. The single predicate behind requestPanDisplayRates' branch
+    // and the seeding in MainWindow, so the two cannot drift into disagreeing
+    // about who is in charge of the frame rate.
+    bool shapesDisplayRatesLocally() const {
+        return m_backend != nullptr && m_flexBackend == nullptr;
+    }
     // Forward processed transmit audio to a host-modulating backend. No-op when
     // the backend modulates on the radio side.
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz);
@@ -969,6 +1027,28 @@ private:
     double  m_backendPanCenterMhz{0.0};
     double  m_backendPanBandwidthMhz{0.0};
     quint32 m_backendWfTimecode{0};
+
+    // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
+    //
+    // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
+    // frames arrive here already at the operator's FFT FPS. The waterfall runs
+    // SLOWER than that — line_duration is its own control and typically 100 ms
+    // against 25-40 fps — so it needs one more gate, and only in that
+    // direction.
+    //
+    // A plain drop, not a coalesce. Frames are already scarce by the time they
+    // reach here, and combining them would mean a magnitude/log round trip per
+    // bin per frame for no gain the operator can see.
+    //
+    // It is also correctness, not just load: the widget scales its time axis
+    // from line_duration, so a row must actually represent line_duration of
+    // time. Unpaced, rows arrived at the full frame rate and the visible
+    // history was several times shorter than the axis claimed.
+    QHash<int, qint64> m_backendWfLastRowNs;
+    // Covers only the window before MainWindow seeds the pan model from the
+    // operator's sliders. 100 ms matches SpectrumWidget's own m_wfLineDuration
+    // default, so the time axis is right from the very first row.
+    static constexpr int kBackendDefaultWfLineDurationMs = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
     TunerModel       m_tunerModel;
@@ -1248,6 +1328,11 @@ private:
     QMap<quint32, DaxStreamDebugState> m_daxStreamDebug;
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
+    bool        m_wsprTxOwnershipRequested{false};
+    bool        m_wsprTxYieldAfterUse{false};
+    bool        m_wsprTxReleaseWhenReady{false};
+    bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed
+    bool        m_wsprTxRestoreDax{false};    // beacon changed it and owes a restore
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;
