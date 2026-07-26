@@ -230,6 +230,15 @@ int testDssStartupHistoryAvailability()
         || dssRetainedSampleAge(96.0f, 0.0f, 96.0f, 96.0f).has_value()) {
         return fail("3D FFT rear row should remain stable until eviction");
     }
+    for (const float remainingRows : {0.0f, 0.5f, 1.0f}) {
+        const std::optional<float> interpolatedAge =
+            dssRetainedSampleAge(95.0f, remainingRows, 96.0f, 96.0f);
+        if (!interpolatedAge || !nearlyEqual(*interpolatedAge, 95.0)
+            || !nearlyEqual(dssHistoryAvailability(95.0f, 96.0f), 1.0)) {
+            return fail(
+                "3D FFT rear visibility must not reset with scroll latency");
+        }
+    }
     // Fidelity to the shader's two clamps outside 1 <= validRows <= rows:
     // validRows > rows caps to rows (oldest age = rows - 1, not validRows - 1);
     // 0 < validRows < 1 floors the oldest age at 0 rather than going negative.

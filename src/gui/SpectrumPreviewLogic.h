@@ -175,13 +175,15 @@ inline bool dssFftScaleSettleActive(std::int64_t nowMs,
     return settleUntilMs > 0 && nowMs < settleUntilMs;
 }
 
-inline float dssHistoryAvailability(float sampleAge, float validRows)
+// The DSS boundary is phase-stable: availability is based on a fixed grid-row
+// age and must not include the scroll animation's remaining-row offset.
+inline float dssHistoryAvailability(float sourceAge, float validRows)
 {
-    if (!std::isfinite(sampleAge) || !std::isfinite(validRows)
+    if (!std::isfinite(sourceAge) || !std::isfinite(validRows)
         || validRows <= 0.0f) {
         return 0.0f;
     }
-    return std::clamp(validRows - sampleAge, 0.0f, 1.0f);
+    return std::clamp(validRows - sourceAge, 0.0f, 1.0f);
 }
 
 // Mirror of dss_mesh.vert sampleHistoryDbm()'s retained sample-age clamp, for

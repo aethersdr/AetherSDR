@@ -113,13 +113,12 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
-    // Hide only unpopulated startup slots. Advance the availability edge by
-    // remainingRows so the newest rear slot fades in continuously over the row
-    // interval instead of popping opaque on arrival (matching the height path's
-    // sub-row advance in sampleHistoryDbm). The rear six-row fade is
-    // deliberately gone: the perspective already supplies depth haze, and that
-    // fade left a visibly blurry band at the back of a full history.
-    float sampleAge = sourceV * rows + remainingRows;
-    float historyAvailability = clamp(validRows - sampleAge, 0.0, 1.0);
+    // Visibility follows the fixed grid age, not the interpolated sample age.
+    // Including remainingRows here makes the last row's opacity jump 1 -> 0
+    // whenever a delayed radio row restarts the scroll clock, so the apparent
+    // rear boundary moves forward and then back. Keep only unpopulated startup
+    // slots hidden; sampleHistoryDbm() still performs the smooth data advance.
+    float sourceAge = sourceV * rows;
+    float historyAvailability = clamp(validRows - sourceAge, 0.0, 1.0);
     vBoundaryFade = historyAvailability;
 }
