@@ -113,12 +113,25 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
-    // Visibility follows the fixed grid age, not the interpolated sample age.
-    // Including remainingRows here makes the last row's opacity jump 1 -> 0
-    // whenever a delayed radio row restarts the scroll clock, so the apparent
-    // rear boundary moves forward and then back. Keep only unpopulated startup
-    // slots hidden; sampleHistoryDbm() still performs the smooth data advance.
+    // Rear visibility follows the fixed grid age, not the interpolated sample
+    // age — but only once the history is FULL.
+    //
+    // At steady state validRows is pinned at rows, so validRows - sourceAge is
+    // permanently 1 for the oldest slot: indistinguishable from a slot that has
+    // only just been populated. Subtracting the scroll advance there ramps that
+    // permanent row 0 -> 1 across every row interval and snaps it back on each
+    // arrival, which is the rear pulse (worst at slow presentation cadences,
+    // and it also disagreed with sampleHistoryDbm()'s un-advanced early-out).
+    //
+    // While history is still filling, a slot genuinely IS newly populated on
+    // each arrival, and for that one interval sampleHistoryDbm() clamps it to
+    // oldestRetainedAge — the same texture row its neighbour is already
+    // drawing. Subtracting the advance is what fades that duplicate curtain in
+    // instead of popping it opaque. So keep the term until validRows stops
+    // growing, after which nothing is ever newly populated again.
     float sourceAge = sourceV * rows;
-    float historyAvailability = clamp(validRows - sourceAge, 0.0, 1.0);
+    float fillFade = validRows < rows ? remainingRows : 0.0;
+    float historyAvailability = clamp(
+        validRows - sourceAge - fillFade, 0.0, 1.0);
     vBoundaryFade = historyAvailability;
 }
