@@ -15,7 +15,9 @@ namespace AetherSDR::hl2 {
 // into demodulated audio (WdspChannel), a panadapter spectrum (Hl2Spectrum), and
 // an S-meter. Buffers the odd 126-sample EP6 blocks into WdspChannel's fixed
 // processing block. Below the seam; the eventual Hl2Backend owns one and runs it
-// on its own thread. RX-only (WdspChannel is a receive channel; nothing keys).
+// on the backend's I/O thread. This stage is receive-only — Hl2TxDsp is its
+// transmit counterpart — and it MUTES on transmit, clocking its audio channel
+// with silence so the pipeline cannot fill with our own signal.
 class Hl2RxDsp : public QObject {
     Q_OBJECT
 
@@ -69,6 +71,18 @@ public:
     // slice inside the passband without moving the DDC. Kept in m_config so a
     // later reconfigure() rebuilds the channel with the operator's offset.
     Q_INVOKABLE void setShift(double shiftHz);
+    // Mute the DEMODULATOR while transmitting.
+    //
+    // Suppressing audio further downstream is not enough: this pipeline keeps
+    // demodulating our own transmission, WDSP's filters and buffers fill with
+    // it, and the moment the mute lifts that backlog drains to the speakers —
+    // heard as the tail end of a transmission playing back after unkey.
+    //
+    // Muted, the SPECTRUM still runs on real IQ so the panadapter keeps
+    // updating, but the audio channel is clocked with SILENCE. The pipeline
+    // therefore stays running at constant latency and contains nothing but
+    // silence when transmit ends.
+    Q_INVOKABLE void setAudioMuted(bool muted);
     [[nodiscard]] bool isConfigured() const noexcept { return m_channel != nullptr; }
 
 public slots:
@@ -87,6 +101,7 @@ private:
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
     Config m_config;
 
+    bool m_audioMuted = false;
     std::vector<std::complex<float>> m_iqBuffer;   // IQ awaiting a full DSP block
     std::vector<float> m_i, m_q;                    // deinterleaved input scratch
     std::vector<float> m_left, m_right;             // WdspChannel output scratch

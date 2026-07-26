@@ -20,7 +20,6 @@ class QWebSocket;
 #include <vector>
 
 #include "IConnectionAutomation.h"  // complete type: inline setter calls asQObject()
-#include "AutomationTxWatchdog.h"
 #include "MemoryTelemetry.h"
 
 class QLocalServer;
@@ -405,9 +404,9 @@ private:
     // drag <target> <dx> <dy> | mouse <target> <dx> <dy>: synthesize a
     // press → move → release gesture so resize grips and slider handles are
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
-    // Non-const: a drag can land on a TX-keying control, so these arm the
-    // automation TX lease (armTxWatchdog()). doWheel stays const — it drives
-    // no keying path.
+    // Non-const: a drag can land on a TX-keying control, so these claim the
+    // transmission for the watchdog (markTxBridgeInitiated()). doWheel stays
+    // const — it drives no keying path.
     QJsonObject doDrag(const QString& target, const QString& value);
     QJsonObject doDragAt(const QString& target, const QString& value);
     QJsonObject doWheel(const QString& target, const QString& value) const;
@@ -566,9 +565,15 @@ private:
     QJsonObject doAtu(const QString& action);
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
-    void armTxWatchdog();
-    void cancelTxWatchdogLease();
-    bool txWatchdogOwnsCurrentTransmit();
+    // Claim the in-progress transmission for the bridge, so onTxWatchdog()
+    // polices it. Call AFTER issuing a TX-capable action. Refuses to claim a
+    // transmission that predates the request — see m_txKeyedAtRequestStart.
+    void markTxBridgeInitiated();
+    void clearTxBridgeInitiated();
+    // Whether the radio is keyed AND this bridge is what keyed it. Gates the
+    // force-unkey on bridge stop / TX-permission revoke so neither one ends an
+    // operator, DAX, TCI, or beacon transmission that the bridge never started.
+    bool txBridgeOwnsCurrentTransmit() const;
 
     // Slice lifecycle/config actions, disconnected-only fixtures, and VFO tuning.
     // RX/config only; none of these key the transmitter.
@@ -728,21 +733,18 @@ private:
     // TX safety rails. The timer runs while automation TX is allowed, but the
     // state machine arms only for an accepted automation-originated TX action.
     QTimer* m_txWatchdog{nullptr};
-    AutomationTxWatchdog m_txWatchdogState;
+    qint64  m_txKeyedSinceMs{0};   // when continuous key-down started (0 = idle)
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
-    // How long an armed-but-not-yet-keyed lease waits for the key-up it caused.
-    // Sized only to cover a deferred invoke/click (QTimer::singleShot(0)) plus
-    // one 500 ms watchdog poll. It must NOT span an operator-scale delay: a
-    // lease that outlives the action would claim — and force-unkey at
-    // m_txMaxKeyMs — whatever transmission happens to start next, which is the
-    // operator/DAX/TCI misattribution this state machine exists to prevent.
-    // Long-fuse features that merely *arm* from a bridge click (the WSPR
-    // beacon waits for the next even UTC minute, then keys for 111.6 s) are
-    // deliberately outside the lease: the bridge did not key them.
-    static constexpr int kTxPendingLeaseMs{2000};
+    // True while the transmission in progress was started BY THIS BRIDGE. The
+    // watchdog above is a runaway-script backstop, not an operator time limit,
+    // so it enforces only when this is set — otherwise it force-unkeys a human
+    // holding MOX mid-sentence.
+    bool    m_txBridgeInitiated{false};
     // Transmitter state sampled at the top of handleLine(), before any verb
-    // handler runs. armTxWatchdog() needs it because it is called after its
-    // action has already been issued and optimistically updated TransmitModel.
+    // handler runs. markTxBridgeInitiated() needs it: it is called after its
+    // action has been issued, and the key verbs update TransmitModel
+    // optimistically, so by then "keyed" cannot tell "this action keyed it"
+    // apart from "it was already up".
     bool    m_txKeyedAtRequestStart{false};
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()

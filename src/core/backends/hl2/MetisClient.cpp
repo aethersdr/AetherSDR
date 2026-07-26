@@ -6,7 +6,10 @@
 #include <QUdpSocket>
 #include <QtGlobal>
 
+#include <QDebug>
+
 #include <algorithm>
+#include <cmath>
 #include <span>
 
 #ifdef Q_OS_WIN
@@ -57,6 +60,11 @@ void enableBroadcast(QUdpSocket& s) noexcept
 }  // namespace
 
 MetisClient::MetisClient(QObject* parent) : QObject(parent) {
+    // Telemetry crosses from the I/O thread to the GUI thread as a queued
+    // signal argument; without registration Qt drops the emission with only a
+    // warning, and the meters would simply never move.
+    qRegisterMetaType<AetherSDR::hl2::Hl2Telemetry>("AetherSDR::hl2::Hl2Telemetry");
+
     // Paces EP2 from a wall clock (see kEp2PacerTickMs) so C&C keeps flowing
     // even if the EP6 receive path stalls.
     m_ep2Timer = new QTimer(this);
@@ -305,6 +313,116 @@ void MetisClient::requestPipelineReset()
     // on hardware, not just discrete tunes.
 }
 
+void MetisClient::setMox(bool keyed)
+{
+    if (keyed && !m_txAllowed) {
+        // Fail SAFE and stay refused. Not an error return: a caller that could
+        // retry past a refusal is exactly what this gate exists to prevent.
+        m_mox = false;
+        return;
+    }
+    m_mox = keyed;
+}
+
+void MetisClient::setTxFrequencyHz(std::uint32_t hz)
+{
+    m_ccTxFreq = ccTxFreq(hz);
+    m_oneShot.push_back(m_ccTxFreq);
+}
+
+void MetisClient::setTxDriveLevel(int level)
+{
+    // The PA follows the drive level: a non-zero drive means the operator wants
+    // output, and on this board that requires the onboard amplifier. Drive 0
+    // leaves it disabled, so the safe default state stays safe.
+    //
+    // Hard safety: a closed transmit gate forces drive 0 / PA off on the wire,
+    // whatever level a caller requests. This is the last authority before the
+    // C&C bytes are sent, so even a mis-gated caller cannot bias the PA on in a
+    // transmit-blocked session. (#4449 review — complements the Hl2Backend guard)
+    if (!m_txAllowed)
+        level = 0;
+    m_ccTxDrive = ccTxDrive(level, level > 0);
+    m_oneShot.push_back(m_ccTxDrive);
+}
+
+void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
+{
+    for (const auto& s : iq)
+        m_txIq.push_back(s);
+    // Drop the OLDEST on overflow: stale transmit audio is worse than a gap.
+    while (m_txIq.size() > kTxQueueMax)
+        m_txIq.pop_front();
+}
+
+void MetisClient::setTxTestTone(double offsetHz, double amplitude)
+{
+    m_toneHz = offsetHz;
+    m_toneAmp = amplitude < 0.0 ? 0.0 : (amplitude > 1.0 ? 1.0 : amplitude);
+    if (m_toneAmp == 0.0)
+        m_tonePhase = 0.0;
+}
+
+void MetisClient::flushTxIq()
+{
+    m_txIq.clear();
+}
+
+std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
+{
+    static const Cc kCcAdc = ccAdcAssign();
+    Cc b;
+    if (!m_oneShot.empty()) {
+        b = m_oneShot.front();
+        m_oneShot.pop_front();
+    } else {
+        const Cc* alt[3] = {&m_ccFreq, &m_ccGain, &kCcAdc};
+        b = *alt[m_roundRobin % 3];
+        ++m_roundRobin;
+    }
+    // MOX rides in C0 bit 0 of EVERY frame, so BOTH sub-frames carry it -- the
+    // radio keys off whichever bank is in flight. m_mox can only be true if the
+    // gate allowed it (see setMox), so this is the single place keying reaches
+    // the wire and it cannot be set behind the gate's back.
+    const bool keyed = m_mox && m_txAllowed;
+    auto pkt = ep2Packet(m_txSeq++, withMox(m_ccConfig, keyed), withMox(b, keyed));
+
+    // Only put samples on the wire while actually keyed. Unkeyed frames carry
+    // transmit silence, which is what ep2Packet's zero fill already gives us --
+    // and which also keeps EADDR zero (see ep2WriteTxIq).
+    if (keyed && m_toneAmp > 0.0) {
+        // EP2 is clocked at a fixed 48 kHz regardless of the RX sample rate.
+        std::vector<std::complex<float>> block(kTxSamplesPerPacket);
+        const double dphi = 2.0 * 3.14159265358979323846 * m_toneHz / kEp2AudioRateHz;
+        for (int n = 0; n < kTxSamplesPerPacket; ++n) {
+            // Negative sine: the HPSDR wire has the opposite handedness to the
+            // standard analytic convention, so this is the conjugate — the same
+            // correction Hl2TxDsp applies. ONE convention for both transmit
+            // paths, or a tone at a non-zero offset would land on the opposite
+            // side of the carrier from voice. (At the zero offset TUNE uses,
+            // handedness has no effect either way.)
+            block[static_cast<std::size_t>(n)] = {
+                static_cast<float>(m_toneAmp * std::cos(m_tonePhase)),
+                static_cast<float>(-m_toneAmp * std::sin(m_tonePhase))};
+            m_tonePhase += dphi;
+        }
+        // Keep the accumulator bounded without introducing a phase step.
+        while (m_tonePhase > 2.0 * 3.14159265358979323846)
+            m_tonePhase -= 2.0 * 3.14159265358979323846;
+        ep2WriteTxIq(pkt, block);
+    } else if (keyed && !m_txIq.empty()) {
+        std::vector<std::complex<float>> block;
+        const std::size_t n = std::min<std::size_t>(kTxSamplesPerPacket, m_txIq.size());
+        block.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            block.push_back(m_txIq.front());
+            m_txIq.pop_front();
+        }
+        ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
+    }
+    return pkt;
+}
+
 void MetisClient::sendControlPacket()
 {
     if (!m_socket)
@@ -317,17 +435,7 @@ void MetisClient::sendControlPacket()
     // device leaves every receiver unassigned (and therefore emits all-zero IQ)
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
-    static const Cc kCcAdc = ccAdcAssign();
-    Cc b;
-    if (!m_oneShot.empty()) {
-        b = m_oneShot.front();
-        m_oneShot.pop_front();
-    } else {
-        const Cc* alt[3] = {&m_ccFreq, &m_ccGain, &kCcAdc};
-        b = *alt[m_roundRobin % 3];
-        ++m_roundRobin;
-    }
-    sendTo(*m_socket, ep2Packet(m_txSeq++, m_ccConfig, b), m_host, m_port);
+    sendTo(*m_socket, buildNextControlPacket(), m_host, m_port);
 }
 
 void MetisClient::onReadyRead()
@@ -358,6 +466,31 @@ void MetisClient::onReadyRead()
         }
         m_expectedRxSeq = *seq + 1;
         m_haveRxSeq = true;
+
+        // Telemetry rides in the C&C bytes of each EP6 frame. The radio
+        // free-runs through the classic response addresses, so this arrives
+        // continuously without us ever issuing a RQST -- which is the cadence
+        // the oracle asks for anyway (§5: saturating with requests starves the
+        // classic responses that carry exactly this).
+        const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+        bool telemetryChanged = false;
+        for (const std::size_t fs : frameStarts) {
+            if (bytes.size() < fs + 8)
+                break;
+            if (const auto resp = parseEp6Response(bytes.data() + fs)) {
+                m_telemetry.apply(*resp);
+                telemetryChanged = true;
+            }
+        }
+        // Coalesce to ~10 Hz: telemetry free-runs continuously, so a frame
+        // skipped by the throttle is superseded within the interval and the
+        // meters never miss a settled value. (#4449 review)
+        if (telemetryChanged
+            && (!m_telemetryEmitClock.isValid()
+                || m_telemetryEmitClock.elapsed() >= kTelemetryMinIntervalMs)) {
+            m_telemetryEmitClock.restart();
+            emit telemetryUpdated(m_telemetry);
+        }
 
         m_block.clear();
         if (ep6Samples(bytes, m_block) > 0)

@@ -3,7 +3,8 @@
 // swap: connectToRadio() rebuilds the backend synchronously before any network
 // I/O, so an unroutable address reaches the post-swap state without hardware.
 //
-//   F2  RX-only backends refuse keying (capability + enforcement).
+//   TX  HL2 is TX-capable in a GUI session (transmit landed after #4448); the
+//       enforcement gate itself (m_txAllowed) is covered by hl2_tx_gate_test.
 //   F3  reboot is a per-family capability (Flex yes, HL2 no).
 //   round-trip  Flex -> HL2 -> Flex leaves the model in a clean, Flex-capable
 //               state (no crash, capabilities track the live backend).
@@ -54,24 +55,33 @@ int main(int argc, char** argv)
           "Flex default advertises canTransmit");
     check(model.backendCapabilities().canReboot,
           "Flex default advertises canReboot");
+    check(!model.backendCapabilities().hostModulates,
+          "#4449: Flex modulates on-radio, not on the host");
 
-    // ---- Switch to HL2 (RX-only) ----
+    // ---- Switch to HL2 (TX-capable in a GUI session) ----
+    // HL2 transmit landed after #4448: a normal (non-automation) session
+    // advertises canTransmit=true, matching Flex. Headless automation stays
+    // gated behind AETHER_AUTOMATION_ALLOW_TX inside the backend (m_txAllowed).
     model.connectToRadio(hl2Info());
-    check(!model.backendCapabilities().canTransmit,
-          "F2: HL2 advertises canTransmit=false");
+    check(model.backendCapabilities().canTransmit,
+          "HL2 advertises canTransmit (transmit landed post-#4448)");
     check(!model.backendCapabilities().canReboot,
           "F3: HL2 advertises canReboot=false");
+    check(model.backendCapabilities().hostModulates,
+          "#4449: HL2 host-modulates (PC runs the modulator, no on-radio jacks)");
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
 
-    // F2: keying an RX-only backend must be refused before any TX state is set.
+    // Keying a backend with no live link must not spuriously enter TX,
+    // regardless of capability — connectToRadio() reached the post-swap state
+    // against an unroutable address, so there is nothing to key.
     check(!model.transmitModel().isTransmitting(), "not transmitting before key");
     model.setTransmit(true, TransmitModel::PttSource::Mox);
     check(!model.transmitModel().isTransmitting(),
-          "F2: setTransmit(true) on an RX-only backend does not enter TX");
+          "setTransmit(true) with no live HL2 link does not enter TX");
     model.setTransmit(true, TransmitModel::PttSource::Tune);
     check(!model.transmitModel().isTransmitting(),
-          "F2: TUNE carrier on an RX-only backend does not enter TX");
+          "TUNE carrier with no live HL2 link does not enter TX");
 
     // F3: reboot on an RX-only backend is a no-op, not a crash. (Not connected,
     // so it returns early regardless; the point is it must not dereference the
@@ -79,18 +89,24 @@ int main(int argc, char** argv)
     model.rebootRadio();
     check(true, "F3: rebootRadio() on HL2 did not crash");
 
-    // F2 (WSPR beacon, #4435): the beacon borrows station state — `transmit
-    // dax`, the TX filter, DAX TX stream ownership — before it ever keys, so it
-    // must refuse on an RX-only family up front rather than fail somewhere
-    // downstream with that state already taken. Before the capability gate this
-    // only failed implicitly, because the Flex `stream create` it issues finds
-    // no command sink on a non-Flex backend.
+    // WSPR beacon (#4435): the beacon rides a Flex `dax_tx` stream, which no
+    // other family provides — HL2 host-modulates and has no DAX. It borrows
+    // station state (`transmit dax`, the TX filter, DAX TX stream ownership)
+    // before it ever keys, so a refusal must leave none of that latched.
+    // `transmit dax` in particular is the one that bites: its own comment notes
+    // a stuck dax=1 "would silently kill the next mic voice TX on every platform
+    // where updateDaxTxMode() is compiled out".
+    //
+    // Note this is NOT the capabilities().canTransmit gate doing the work — HL2
+    // advertises canTransmit since transmit landed, so the gate passes here and
+    // the refusal comes from the absent DAX TX stream. The gate remains the
+    // fail-closed guard for any family that reports canTransmit=false.
     check(!model.prepareWsprTransmit(),
-          "F2: prepareWsprTransmit() is refused on an RX-only backend");
+          "WSPR: prepareWsprTransmit() is refused on a family with no DAX TX");
     check(!model.hasWsprTxStream(),
-          "F2: a refused WSPR prepare claims no TX audio stream");
+          "WSPR: a refused prepare claims no TX audio stream");
     check(!model.transmitModel().daxOn(),
-          "F2: a refused WSPR prepare does not latch `transmit dax`");
+          "WSPR: a refused prepare does not leave `transmit dax` latched");
 
     // ---- Round-trip back to Flex ----
     model.connectToRadio(flexInfo());

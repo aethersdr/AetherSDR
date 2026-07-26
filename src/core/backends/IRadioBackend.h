@@ -98,6 +98,35 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
+    // Tune carrier on/off.
+    //
+    // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
+    // to do here. A backend that generates its own carrier implements it.
+    virtual void setTune(bool on) { Q_UNUSED(on); }
+
+    // Transmit power as a percentage, 0..100.
+    //
+    // Flex takes this as a text command from TransmitModel, so FlexBackend has
+    // nothing to do here. A backend that owns its own drive register (HL2)
+    // implements it.
+    virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
+    //
+    // For backends that modulate on the host (HL2). A Flex radio does its own
+    // modulation from mic or DAX, so FlexBackend ignores this — hence a default
+    // no-op rather than a pure virtual.
+    //
+    // The audio is already shaped: AudioEngine has applied the test tone,
+    // compressor and EQ before this point. That is deliberate — the TONE button,
+    // the microphone and any future source all reach the air through ONE path,
+    // so what the operator monitors is what gets transmitted.
+    virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+    {
+        Q_UNUSED(int16Stereo);
+        Q_UNUSED(sampleRateHz);
+    }
+
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
     // discover available namespaces via capabilities().extensionNamespaces.

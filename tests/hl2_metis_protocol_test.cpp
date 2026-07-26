@@ -215,6 +215,144 @@ int main()
               "every other command nibble left at no-action");
     }
 
+    // ---- TX encoders ----
+    {
+        const Cc f = ccTxFreq(14'200'000);
+        check(f[0] == kC0TxFreq, "TX freq targets addr 0x01 (C0 = 0x02)");
+        check(f[1] == 0x00 && f[2] == 0xD8 && f[3] == 0xAC && f[4] == 0xC0,
+              "TX freq is 32-bit big-endian Hz (14.2 MHz = 0x00D8ACC0)");
+        check((f[0] & kC0MoxBit) == 0, "TX freq bank is not keyed by itself");
+
+        const Cc d = ccTxDrive(200);
+        check(d[0] == kC0TxDrive, "TX drive targets addr 0x09 (C0 = 0x12)");
+        check(d[1] == 200, "drive level lands in C1 (DATA[31:24])");
+        check(d[2] == 0 && d[3] == 0 && d[4] == 0,
+              "PA stays OFF unless explicitly asked for");
+        const Cc dpa = ccTxDrive(200, true);
+        check(dpa[2] == 0x08, "PA enable is DATA[19] = C2 bit 3");
+        check(dpa[3] == 0 && dpa[4] == 0,
+              "enabling the PA does not set ATU tune or Alex bits");
+        check(ccTxDrive(-5)[1] == 0 && ccTxDrive(9999)[1] == kTxDriveMax,
+              "drive level clamps to 0..255");
+    }
+
+    // ---- MOX is a property of the FRAME, not a register ----
+    {
+        const Cc keyed = withMox(ccRx1Freq(7'000'000), true);
+        check((keyed[0] & kC0MoxBit) != 0, "withMox sets C0 bit 0");
+        check((keyed[0] & ~kC0MoxBit) == kC0Rx1Freq,
+              "withMox leaves the register address intact");
+        check((withMox(keyed, false)[0] & kC0MoxBit) == 0, "withMox clears again");
+        // Any bank can carry MOX -- the radio reads it from whatever is in flight.
+        check((withMox(ccConfig(SampleRate::R48k, 1), true)[0] & kC0MoxBit) != 0,
+              "the config bank can carry MOX too");
+    }
+
+    // ---- TX IQ payload, and the EADDR trap ----
+    {
+        auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k, 1), ccRx1Freq(7'000'000));
+        std::vector<std::complex<float>> iq;
+        iq.emplace_back(1.0f, -1.0f);            // full scale both rails
+        iq.emplace_back(0.0f, 0.5f);
+        ep2WriteTxIq(pkt, iq);
+
+        const std::uint8_t* pay = pkt.data() + 8 + 8;    // frame 0, after SYNC + C&C
+        // Sample 0: I = +32767, Q = -32767.
+        check(pay[4] == 0x7F && pay[5] == 0xFF, "full-scale I clamps to +32767, big-endian");
+        check(pay[6] == 0x80 && pay[7] == 0x01,
+              "full-scale -1.0 clamps to -32767, NOT -32768 (no wrap to the far rail)");
+
+        // THE TRAP: the first 32-bit word of each frame's payload is EADDR, the
+        // extended-address register -- not headphone audio. A memcpy'd Hermes TX
+        // layout writes garbage there. It must stay zero.
+        check(pay[0] == 0 && pay[1] == 0 && pay[2] == 0 && pay[3] == 0,
+              "EADDR (first 32-bit word after C&C) left zero");
+        const std::uint8_t* pay1 = pkt.data() + 8 + kFrameSize + 8;
+        check(pay1[0] == 0 && pay1[1] == 0 && pay1[2] == 0 && pay1[3] == 0,
+              "second frame's EADDR left zero as well");
+
+        // Sample 1 lands in the next 8-byte slot; the rest is transmit silence.
+        check(pay[12] == 0x00 && pay[13] == 0x00, "sample 1 I = 0");
+        check(pay[14] == 0x3F && pay[15] == 0xFF, "sample 1 Q = 0.5 -> 16383");
+        check(pay[20] == 0 && pay[21] == 0 && pay[22] == 0 && pay[23] == 0,
+              "unsupplied samples are transmit silence");
+    }
+
+    // ---- EP6 C&C response decoding (telemetry) ----
+    {
+        auto frame = [](std::uint8_t c0, std::uint32_t data) {
+            std::array<std::uint8_t, 8> f{};
+            f[0] = f[1] = f[2] = 0x7F;
+            f[3] = c0;
+            f[4] = static_cast<std::uint8_t>((data >> 24) & 0xFF);
+            f[5] = static_cast<std::uint8_t>((data >> 16) & 0xFF);
+            f[6] = static_cast<std::uint8_t>((data >> 8) & 0xFF);
+            f[7] = static_cast<std::uint8_t>(data & 0xFF);
+            return f;
+        };
+
+        // Classic cycle: C0 = 0, 8, 16 -> RADDR 0, 1, 2 (hpsdrsim's own sequence).
+        auto r0 = parseEp6Response(frame(0x00, 0).data());
+        check(r0.has_value() && !r0->ack && r0->raddr == 0, "C0=0x00 -> RADDR 0, ACK clear");
+        auto r1 = parseEp6Response(frame(0x08, 0).data());
+        check(r1.has_value() && r1->raddr == 1, "C0=0x08 -> RADDR 1");
+        auto r2 = parseEp6Response(frame(0x10, 0).data());
+        check(r2.has_value() && r2->raddr == 2, "C0=0x10 -> RADDR 2");
+
+        // ACK changes how C0 is read: 6 address bits instead of 4.
+        auto ra = parseEp6Response(frame(0x80 | (0x2A << 1), 0).data());
+        check(ra.has_value() && ra->ack && ra->raddr == 0x2A,
+              "ACK=1 -> RADDR is C0[6:1], all six bits");
+
+        // PTT and Dot ride in C0 regardless.
+        auto rp = parseEp6Response(frame(0x08 | 0x01, 0).data());
+        check(rp.has_value() && rp->ptt, "PTT decoded from C0[0]");
+        auto rd = parseEp6Response(frame(0x08 | 0x04, 0).data());
+        check(rd.has_value() && rd->dot, "Dot decoded from C0[2]");
+
+        check(!parseEp6Response(std::array<std::uint8_t,8>{}.data()).has_value(),
+              "unsynced frame rejected");
+
+        Hl2Telemetry t;
+        check(!t.forwardPowerRaw.has_value(), "telemetry starts unknown, not zero");
+
+        // RADDR 0: firmware 0x15, ADC overload set, TX PERMITTED (bit 25 high).
+        t.apply(*parseEp6Response(frame(0x00, (1u<<25) | (1u<<24) | 0x15).data()));
+        check(t.firmwareVersion.value_or(-1) == 0x15, "firmware version from DATA[7:0]");
+        check(t.adcOverload.value_or(false), "ADC overload from bit 24");
+        check(t.txInhibited.value_or(true) == false,
+              "bit 25 SET means transmit permitted (active low, inverted here)");
+        t.apply(*parseEp6Response(frame(0x00, 0).data()));
+        check(t.txInhibited.value_or(false) == true, "bit 25 clear means INHIBITED");
+
+        // RADDR 1: temperature high half, forward power low half.
+        t.apply(*parseEp6Response(frame(0x08, (1234u << 16) | 5678u).data()));
+        check(t.temperatureRaw.value_or(-1) == 1234, "temperature from DATA[31:16]");
+        check(t.forwardPowerRaw.value_or(-1) == 5678, "forward power from DATA[15:0]");
+
+        // RADDR 2: reverse power and bias.
+        t.apply(*parseEp6Response(frame(0x10, (100u << 16) | 42u).data()));
+        check(t.reversePowerRaw.value_or(-1) == 100, "reverse power from DATA[31:16]");
+        check(t.biasCurrentRaw.value_or(-1) == 42, "bias current from DATA[15:0]");
+    }
+
+    // ---- SWR ----
+    {
+        check(!swrFromRaw(0, 0).has_value(),
+              "no forward power -> SWR is unknown, NOT 1.0");
+        const auto flat = swrFromRaw(1000, 0);
+        check(flat.has_value() && std::fabs(*flat - 1.0) < 1e-9,
+              "no reflection -> 1.0:1");
+        // Voltage form: rho = 1/3 -> SWR 2.0. The power form would have given
+        // 1.0/(1-sqrt(1/3)) ~= 2.37 here, i.e. a different and wrong number.
+        const auto two = swrFromRaw(3000, 1000);
+        check(two.has_value() && std::fabs(*two - 2.0) < 1e-9,
+              "rho = 1/3 -> 2.0:1 (voltage form, no square root)");
+        const auto bad = swrFromRaw(100, 500);
+        check(bad.has_value() && *bad > 100.0,
+              "reverse above forward clamps to a very high SWR, not negative");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_metis_protocol_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

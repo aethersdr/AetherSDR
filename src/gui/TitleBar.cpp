@@ -803,6 +803,19 @@ void TitleBar::setMenuBar(QMenuBar* mb)
     m_hbox->insertWidget(0, mb);
 }
 
+void TitleBar::setPcAudioLocked(bool locked)
+{
+    if (!m_pcBtn)
+        return;
+    if (locked)
+        setPcAudioEnabled(true);      // locked ON, never locked off
+    m_pcBtn->setEnabled(!locked);
+    m_pcBtn->setToolTip(
+        locked ? tr("PC audio is required: this radio's audio is produced and "
+                    "captured on this computer, so it cannot be turned off.")
+               : QString());
+}
+
 void TitleBar::setPcAudioEnabled(bool on)
 {
     QSignalBlocker b(m_pcBtn);

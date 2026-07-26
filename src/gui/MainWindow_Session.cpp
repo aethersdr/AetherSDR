@@ -428,6 +428,52 @@ void MainWindow::wireRadioModel()
             this, [this](bool connected) {
         dissolveAllSliceLinks(connected ? "radio connected" : "radio disconnected");
     });
+    // Local microphone capture for a backend that MODULATES ON THE HOST.
+    //
+    // Capture is otherwise started only from the Flex DAX signals
+    // (txAudioStreamReady / remoteTxStreamReady, gated on mic_selection=PC),
+    // none of which a Hermes-Lite 2 ever emits. The consequence was subtle: no
+    // capture meant no txFinalMonitorPcmReady, and since the TONE generator is
+    // injected INSIDE that callback, neither the microphone NOR the test tone
+    // produced anything — the radio keyed and transmitted silence, with the
+    // radio's own forward-power counts reading 0 to prove it.
+    //
+    // startTxStream also opens the Flex-side network sender, but that stays
+    // inert here: the Opus encoder and the VITA-49 send are gated on a stream id
+    // this backend never sets, so what actually runs is capture plus the client
+    // TX DSP chain, which is exactly what submitTxAudio needs.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        // Capability, not a family-name test: a backend host-modulates only if
+        // it says so AND is actually allowed to transmit. An RX-only (or
+        // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const bool hostModulates = caps.hostModulates && caps.canTransmit;
+        m_audio->setHostModulation(hostModulates && connected);
+        // PC audio is not optional on a host-modulating backend: all audio, both
+        // directions, lives on this computer. Turning it off would leave the
+        // operator deaf and mute with nothing to explain it.
+        if (m_titleBar)
+            m_titleBar->setPcAudioLocked(connected && hostModulates);
+        if (connected && hostModulates) {
+            if (!m_audio->isTxStreaming())
+                audioStartTx(m_radioModel.radioAddress(), 4991);
+            // RX must be started imperatively, exactly like TX. Locking the
+            // button calls setPcAudioEnabled(), which is signal-blocked, so no
+            // pcAudioToggled() fires and the toggle handler never opens the
+            // sink. The two setting-gated start paths (onConnected /
+            // profile-load) are skipped when a stale PcAudioEnabled=False is
+            // persisted, and the locked button can no longer be clicked to
+            // recover -- leaving the sink Stopped with the button showing ON.
+            // Persist the setting too, so those paths agree on the next launch.
+            AppSettings::instance().setValue("PcAudioEnabled", "True");
+            AppSettings::instance().save();
+            audioStartRx();
+        } else if (!connected && hostModulates) {
+            audioStopTx();
+        }
+    });
+
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
