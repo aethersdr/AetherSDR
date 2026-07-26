@@ -3596,15 +3596,23 @@ void SpectrumWidget::setThreeDSliceDepth(bool on)
     DisplaySettings::setThreeDSliceDepth(on);
     markOverlayDirty("threeDSliceDepth");
 
-    // This is a global display treatment: every open pan should agree.
-    if (QWidget* top = window()) {
-        const auto siblings = top->findChildren<SpectrumWidget*>();
-        for (SpectrumWidget* sw : siblings) {
-            if (sw == this || sw->m_threeDSliceDepth == on) {
-                continue;
-            }
-            sw->m_threeDSliceDepth = on;
-            sw->markOverlayDirty("threeDSliceDepthSibling");
+    // This is a global display treatment: every open pan should agree,
+    // including panadapters popped out into their own top-level window, which
+    // are NOT descendants of this widget's window(). Walk every top-level
+    // window so a floating pan updates live rather than waiting for the next
+    // loadSettings() to pick up the persisted value.
+    const auto applyToSibling = [this, on](SpectrumWidget* sw) {
+        if (!sw || sw == this || sw->m_threeDSliceDepth == on) {
+            return;
+        }
+        sw->m_threeDSliceDepth = on;
+        sw->markOverlayDirty("threeDSliceDepthSibling");
+    };
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+        applyToSibling(qobject_cast<SpectrumWidget*>(top));
+        const auto pans = top->findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* sw : pans) {
+            applyToSibling(sw);
         }
     }
 }
