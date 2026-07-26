@@ -68,11 +68,13 @@ void testSilentWhenDisabled()
 
 void testAdditive()
 {
+    // Square in double, not float: `v * v` in float precision would round (and
+    // in principle overflow) before the widening add into the accumulator.
     NoiseMixer a; a.setEnabled(Channel::White, true); a.setLevelDb(Channel::White, -20.0);
-    double ra = 0; for (float v : collect(a, 8)) ra += v * v;
+    double ra = 0; for (float v : collect(a, 8)) ra += static_cast<double>(v) * v;
     NoiseMixer b; b.setEnabled(Channel::White, true); b.setLevelDb(Channel::White, -20.0);
     b.setEnabled(Channel::Pink, true); b.setLevelDb(Channel::Pink, -20.0);
-    double rb = 0; for (float v : collect(b, 8)) rb += v * v;
+    double rb = 0; for (float v : collect(b, 8)) rb += static_cast<double>(v) * v;
     report("adding a channel raises total power", rb > ra);
 }
 
