@@ -222,6 +222,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
+    c.hostModulates = true;             // PC runs the modulator; no on-radio mic jacks
     c.txPowerMaxWatts = 0.0;            // uncalibrated; see the oracle on power counts
     c.hasTuner = false;
     c.hasAmplifier = false;
@@ -596,6 +597,15 @@ void Hl2Backend::setTune(bool on)
 
 void Hl2Backend::setTxPower(int percent)
 {
+    // Drive is gated exactly like keying. setTxDriveLevel writes the PA-enable
+    // bit (0x09[19]) every frame, so an ungated call — e.g. the push-current-
+    // power-on-connect path with a default rfPower of 100 — would bias the PA on
+    // uncommanded in a transmit-BLOCKED session, defeating connectRadio()'s
+    // deliberate drive=0 safety seed. Assert drive off instead. (#4449 review)
+    if (!m_txAllowed) {
+        setTxDriveLevel(0);
+        return;
+    }
     // The operator's 0..100 maps onto the HL2's 0..255 drive field. The gateware
     // only decodes the top nibble, so the effective resolution is coarser than
     // this suggests — the mapping is linear in the register, NOT calibrated to

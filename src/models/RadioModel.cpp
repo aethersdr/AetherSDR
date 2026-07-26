@@ -590,8 +590,11 @@ void RadioModel::setupBackend(const QString& family)
     // to choose between, so "PC" is the only truthful answer.
     connect(this, &RadioModel::connectionStateChanged, this,
             [this](bool connected) {
+        // Capability-driven, not family()!="flex": only a backend that both
+        // host-modulates and may transmit collapses the mic source to PC. (#4449)
+        const RadioCapabilities caps = backendCapabilities();
         m_transmitModel.setHostModulation(connected
-                                          && m_family != QLatin1String("flex"));
+                                          && caps.hostModulates && caps.canTransmit);
     });
 
     // Keying and tune from the GUI.

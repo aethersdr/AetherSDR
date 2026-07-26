@@ -240,6 +240,11 @@ private:
     bool m_linkUp = false;
     std::vector<std::complex<float>> m_block;   // reused per-packet decode buffer
     Hl2Telemetry m_telemetry;                   // accumulated across RADDR cycles
+    // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
+    // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
+    // publishTelemetry() does not flood the GUI thread. (#4449 review)
+    QElapsedTimer m_telemetryEmitClock;
+    static constexpr qint64 kTelemetryMinIntervalMs = 100;
 };
 
 }  // namespace AetherSDR::hl2

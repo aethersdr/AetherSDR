@@ -63,14 +63,30 @@ int main(int argc, char** argv)
 
     // Queuing TX frequency and drive must not key anything either -- those are
     // setup, and setup happening before the operator keys is the normal order.
+    // #4449: a non-zero drive requested while the gate is CLOSED must also NOT
+    // assert the PA-enable bit (C2 DATA[19] = 0x08) on the wire -- MetisClient
+    // forces drive 0 / PA off, so connecting can never bias the PA on in a
+    // transmit-blocked session.
     client.setTxFrequencyHz(14'200'000);
     client.setTxDriveLevel(200);
-    for (int i = 0; i < 8; ++i) {
-        if (anyFrameKeyed(client.buildNextControlPacket())) {
+    bool sawDriveBank = false, paEnabledWhileClosed = false;
+    for (int i = 0; i < 8; ++i) {   // same packet count as before, to keep the round-robin phase stable
+        const auto pkt = client.buildNextControlPacket();
+        if (anyFrameKeyed(pkt)) {
             check(false, "TX frequency/drive setup keyed a frame with the gate closed");
             break;
         }
+        const std::size_t frameStarts[2] = {8, 8 + kFrameSize};
+        for (const std::size_t fs : frameStarts) {
+            if ((pkt[fs + 3] & ~kC0MoxBit) == kC0TxDrive) {
+                sawDriveBank = true;
+                if ((pkt[fs + 5] & 0x08) != 0) paEnabledWhileClosed = true;   // C2 PA-enable
+            }
+        }
     }
+    check(sawDriveBank, "the drive C&C bank reaches the wire after setTxDriveLevel");
+    check(!paEnabledWhileClosed,
+          "#4449: PA-enable stays clear when drive is set with the gate CLOSED");
 
     // ---- gate open ----
     client.enableTransmit(true);

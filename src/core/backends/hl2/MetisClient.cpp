@@ -335,6 +335,13 @@ void MetisClient::setTxDriveLevel(int level)
     // The PA follows the drive level: a non-zero drive means the operator wants
     // output, and on this board that requires the onboard amplifier. Drive 0
     // leaves it disabled, so the safe default state stays safe.
+    //
+    // Hard safety: a closed transmit gate forces drive 0 / PA off on the wire,
+    // whatever level a caller requests. This is the last authority before the
+    // C&C bytes are sent, so even a mis-gated caller cannot bias the PA on in a
+    // transmit-blocked session. (#4449 review — complements the Hl2Backend guard)
+    if (!m_txAllowed)
+        level = 0;
     m_ccTxDrive = ccTxDrive(level, level > 0);
     m_oneShot.push_back(m_ccTxDrive);
 }
@@ -475,8 +482,15 @@ void MetisClient::onReadyRead()
                 telemetryChanged = true;
             }
         }
-        if (telemetryChanged)
+        // Coalesce to ~10 Hz: telemetry free-runs continuously, so a frame
+        // skipped by the throttle is superseded within the interval and the
+        // meters never miss a settled value. (#4449 review)
+        if (telemetryChanged
+            && (!m_telemetryEmitClock.isValid()
+                || m_telemetryEmitClock.elapsed() >= kTelemetryMinIntervalMs)) {
+            m_telemetryEmitClock.restart();
             emit telemetryUpdated(m_telemetry);
+        }
 
         m_block.clear();
         if (ep6Samples(bytes, m_block) > 0)

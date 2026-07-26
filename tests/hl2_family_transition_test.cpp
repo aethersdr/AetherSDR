@@ -55,6 +55,8 @@ int main(int argc, char** argv)
           "Flex default advertises canTransmit");
     check(model.backendCapabilities().canReboot,
           "Flex default advertises canReboot");
+    check(!model.backendCapabilities().hostModulates,
+          "#4449: Flex modulates on-radio, not on the host");
 
     // ---- Switch to HL2 (TX-capable in a GUI session) ----
     // HL2 transmit landed after #4448: a normal (non-automation) session
@@ -65,6 +67,8 @@ int main(int argc, char** argv)
           "HL2 advertises canTransmit (transmit landed post-#4448)");
     check(!model.backendCapabilities().canReboot,
           "F3: HL2 advertises canReboot=false");
+    check(model.backendCapabilities().hostModulates,
+          "#4449: HL2 host-modulates (PC runs the modulator, no on-radio jacks)");
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
 

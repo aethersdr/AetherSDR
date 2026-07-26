@@ -444,8 +444,11 @@ void MainWindow::wireRadioModel()
     // TX DSP chain, which is exactly what submitTxAudio needs.
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        const bool hostModulates =
-            m_radioModel.family() != QLatin1String("flex");
+        // Capability, not a family-name test: a backend host-modulates only if
+        // it says so AND is actually allowed to transmit. An RX-only (or
+        // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const bool hostModulates = caps.hostModulates && caps.canTransmit;
         m_audio->setHostModulation(hostModulates && connected);
         // PC audio is not optional on a host-modulating backend: all audio, both
         // directions, lives on this computer. Turning it off would leave the
