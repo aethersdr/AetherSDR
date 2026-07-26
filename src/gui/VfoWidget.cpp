@@ -58,6 +58,7 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QtMath>            // qCeil in FlagShadow::paintEvent
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -337,8 +338,13 @@ private:
         }
 
         const int pixelCount = pixelSize.width() * pixelSize.height();
-        std::vector<quint8> alpha(static_cast<size_t>(pixelCount));
-        std::vector<quint8> scratch(static_cast<size_t>(pixelCount));
+        // Reused across rebuilds: resize() keeps prior capacity, so a resize
+        // (tab open/close, collapse toggle) doesn't malloc/free tens of KB each
+        // time. Every element is overwritten below before it is read.
+        m_alpha.resize(static_cast<size_t>(pixelCount));
+        m_scratch.resize(static_cast<size_t>(pixelCount));
+        std::vector<quint8>& alpha = m_alpha;
+        std::vector<quint8>& scratch = m_scratch;
         for (int y = 0; y < pixelSize.height(); ++y) {
             const QRgb* row = reinterpret_cast<const QRgb*>(mask.constScanLine(y));
             for (int x = 0; x < pixelSize.width(); ++x) {
@@ -375,6 +381,8 @@ private:
     static constexpr int kShadowAlpha = 150;
 
     QImage m_shadowImage;
+    std::vector<quint8> m_alpha;    // reused blur scratch (see rebuildShadow)
+    std::vector<quint8> m_scratch;
 };
 
 namespace AetherSDR {
@@ -713,11 +721,11 @@ void VfoWidget::mouseReleaseEvent(QMouseEvent* ev)
 
 VfoWidget::~VfoWidget()
 {
+    // The shadow and the close/lock buttons are children of our parent
+    // (SpectrumWidget), not us. During widget tree teardown, Qt may destroy
+    // them before us (they're siblings, not children). QPointer auto-nulls when
+    // the target is deleted, preventing double-free.
     delete m_shadowWidget.data();
-    // Close/lock buttons are children of our parent (SpectrumWidget),
-    // not us. During widget tree teardown, Qt may destroy them before us
-    // (they're siblings, not children). QPointer auto-nulls when the
-    // target is deleted, preventing double-free.
     delete m_closeSliceBtn.data();
     delete m_lockVfoBtn.data();
     delete m_recordBtn.data();
