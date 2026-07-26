@@ -524,6 +524,13 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
+    src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
+    src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
+    src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
+    src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
@@ -2602,6 +2609,44 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
+add_executable(hl2_metis_protocol_test
+    tests/hl2_metis_protocol_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_metis_protocol_test PRIVATE src)
+add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
+
+# HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
+add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
+target_include_directories(hl2_metis_client_test PRIVATE src)
+target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+
+# HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
+add_executable(hl2_spectrum_test
+    tests/hl2_spectrum_test.cpp
+    src/core/backends/hl2/Hl2Spectrum.cpp)
+target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(hl2_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
+
+# HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
+add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
+target_include_directories(hl2_rxdsp_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
+
+add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
+target_include_directories(hl2_shift_test PRIVATE src)
+target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
+
+# HL2 backend — IRadioBackend seam contract against a capped fake HL2.
+add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
+target_include_directories(hl2_backend_test PRIVATE src)
+target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -3921,6 +3966,35 @@ if(Qt6WebSockets_FOUND)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
+add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)
+target_include_directories(hl2_txdsp_test PRIVATE src)
+target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
+
+add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
+target_include_directories(hl2_tx_loopback_test PRIVATE src)
+target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+
+add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
+target_include_directories(hl2_tx_gate_test PRIVATE src)
+target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
+
+add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
+target_include_directories(hl2_dbref_test PRIVATE src)
+add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
+
+add_executable(radiomodel_dax_null_test tests/radiomodel_dax_null_test.cpp)
+target_include_directories(radiomodel_dax_null_test PRIVATE src)
+target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
+
+add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
+target_include_directories(hl2_family_transition_test PRIVATE src)
+target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4291,6 +4365,33 @@ target_link_libraries(container_widget_test PRIVATE
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# PC-audio lock contract for host-modulating backends (HL2) — needs
+# QApplication + Widgets.
+add_executable(hl2_pc_audio_lock_test
+    tests/hl2_pc_audio_lock_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
+    # so the resizer + frameless title bar come along; ThemeManager pulls its
+    # logging deps, same as container_widget_test.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(hl2_pc_audio_lock_test PRIVATE src)
+target_link_libraries(hl2_pc_audio_lock_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(hl2_pc_audio_lock_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
+set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(amp_applet_test

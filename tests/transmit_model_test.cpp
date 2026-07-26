@@ -150,5 +150,47 @@ int main(int argc, char** argv)
     ok &= expect(commands == QStringList({"profile mic load \"Studio Mic\""}),
                  "Mic profile load uses profile mic load");
 
+    // #4161 / #4310: rf_power and tune_power need a dedicated signal so TCI
+    // can announce them. A coarse stateChanged() listener cannot tell a power
+    // move apart from any other TX field, and the radio restores per-band
+    // power on QSY — the case that left control-surface dials stale.
+    QList<int> rfPowers;
+    QList<int> tunePowers;
+    QObject::connect(&tx, &TransmitModel::rfPowerChanged,
+                     [&rfPowers](int w) { rfPowers.append(w); });
+    QObject::connect(&tx, &TransmitModel::tunePowerChanged,
+                     [&tunePowers](int w) { tunePowers.append(w); });
+
+    // Radio-originated: the band-switch path. This is the #4310 regression.
+    tx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 30; }));
+    ok &= expect(rfPowers == QList<int>({30}),
+                 "radio-reported rf_power emits rfPowerChanged");
+
+    tx.applyChanges(td([](TransmitDelta& d) { d.tunePower = 15; }));
+    ok &= expect(tunePowers == QList<int>({15}),
+                 "radio-reported tune_power emits tunePowerChanged");
+
+    // An unchanged value must not re-announce, or every status refresh would
+    // re-broadcast to every connected TCI client.
+    tx.applyChanges(td([](TransmitDelta& d) { d.rfPower = 30; }));
+    ok &= expect(rfPowers == QList<int>({30}),
+                 "unchanged rf_power does not re-emit");
+
+    // Locally-originated: GUI slider or a TCI client's SET.
+    rfPowers.clear();
+    tunePowers.clear();
+    tx.setRfPower(75);
+    ok &= expect(rfPowers == QList<int>({75}),
+                 "setRfPower emits rfPowerChanged");
+
+    tx.setTunePower(20);
+    ok &= expect(tunePowers == QList<int>({20}),
+                 "setTunePower emits tunePowerChanged");
+
+    rfPowers.clear();
+    tx.setRfPower(75);
+    ok &= expect(rfPowers.isEmpty(),
+                 "setRfPower to the same value does not re-emit");
+
     return ok ? 0 : 1;
 }

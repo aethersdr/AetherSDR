@@ -51,6 +51,19 @@ public:
     // ids[i] is the meter index, vals[i] is the raw int16 value.
     void updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals);
 
+    // Set one meter from an ALREADY-CONVERTED value, addressed by source+name.
+    //
+    // For backends that decode their own telemetry (HL2) rather than streaming
+    // Flex's raw meter packets. It converts back to the raw fixed-point form and
+    // goes through updateValues() on purpose: every derived quantity — forward
+    // power smoothing, SWR, TX-meter freshness timestamps, the change signals —
+    // lives in that path, and a second entry point that recomputed any of it
+    // would drift from the first.
+    //
+    // Returns false if no such meter is defined.
+    bool updateValueByName(const QString& source, const QString& name,
+                           float converted, int sourceIndex = -1);
+
     // Lookup a meter definition by index.
     const MeterDef* meterDef(int index) const;
 

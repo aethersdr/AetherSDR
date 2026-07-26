@@ -147,6 +147,7 @@ RadioCapabilities FlexBackend::capabilities() const
     // convert (they are not part of this skeleton).
     caps.canTransmit = true;
     caps.hasTuner = true;
+    caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and
@@ -191,6 +192,26 @@ void FlexBackend::setSliceMode(int sliceId, const QString& mode)
 void FlexBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 {
     sendSlice(QStringLiteral("filt %1 %2 %3").arg(sliceId).arg(lowHz).arg(highHz));
+}
+
+void FlexBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
+{
+    // Flex owns its AGC in firmware, so both halves are plain slice-set writes.
+    // In the current wiring this is reached only through the seam; the GUI path
+    // still emits the same commands via SliceModel's Flex command sink, exactly
+    // as setSliceFilter() mirrors SliceModel::setFilterWidth's "filt" write.
+    if (!mode.trimmed().isEmpty())
+        sendSlice(QStringLiteral("slice set %1 agc_mode=%2").arg(sliceId).arg(mode));
+    sendSlice(QStringLiteral("slice set %1 agc_threshold=%2").arg(sliceId).arg(thresholdDb));
+}
+
+void FlexBackend::setPanCenter(const QString& panId, double hz)
+{
+    // Flex owns the pan; this is the same write RadioModel already makes on the
+    // Flex path, expressed through the seam so a non-Flex backend can implement
+    // the same intent its own way.
+    sendSlice(QStringLiteral("display pan set %1 center=%2")
+                  .arg(panId).arg(hz / 1.0e6, 0, 'f', 6));
 }
 
 void FlexBackend::sendSliceWaveformCommand(int sliceId, const QString& command)
