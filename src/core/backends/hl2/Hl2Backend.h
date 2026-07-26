@@ -117,6 +117,10 @@ private:
     QTimer* m_bandwidthThrottle = nullptr;
     double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
     QString m_mode = QStringLiteral("USB");
+    // Overwritten from defaultPassbandForMode(m_mode) at connect. Do not treat
+    // these initial values as a mode's passband — they match no mode, and when
+    // pushInitialState() sent them verbatim a fresh USB connect got DIGU's
+    // filter with the mode indicator reading USB.
     int m_filterLowHz = 150;
     int m_filterHighHz = 3000;
     int m_lnaGainDb = 20;

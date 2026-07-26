@@ -269,10 +269,18 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // RadioModel::onConnected() stages every existing model as "previous
         // session" leftovers, so anything emitted earlier is wiped before the UI
         // ever sees it (slice panel stuck empty / 0.000000).
+        // ORDER MATTERS: assert the radio's state BEFORE publishing it.
+        //
+        // pushInitialState() derives the passband from the mode and updates the
+        // members that emitSliceState() then publishes. Run the other way round
+        // — as this was — and the slice is told the stale members, so a fresh
+        // USB connect showed DIGU's 150..3000 while the backend itself had since
+        // corrected to 100..2900. The radio was right and the UI was wrong, which
+        // is the harder direction to notice.
+        pushInitialState();
         emitSliceState();
         emitPanState();
         defineMeters();
-        pushInitialState();
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
@@ -1007,6 +1015,20 @@ void Hl2Backend::pushInitialState()
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(m_mode)));
+        // Derive the passband from the MODE, not from the members.
+        //
+        // The member defaults (150..3000) correspond to no mode at all — they
+        // happen to equal the unmapped-mode fallback — so a fresh connect in the
+        // default USB left the radio with DIGU's passband while the mode
+        // indicator read USB. Same category as the mode-change stickiness in
+        // HERMES.md 15.7: mode and passband must agree, and CONNECT is a place
+        // they can disagree just as easily as a mode change.
+        //
+        // Found by radiocert's mode-map stage: 150..3000 for USB at connect,
+        // 100..2900 for the same mode once any other mode had intervened.
+        const auto pb = defaultPassbandForMode(m_mode);
+        m_filterLowHz = pb.first;
+        m_filterHighHz = pb.second;
         QMetaObject::invokeMethod(m_dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(m_filterLowHz)),
             Q_ARG(double, static_cast<double>(m_filterHighHz)));
