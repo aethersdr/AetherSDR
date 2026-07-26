@@ -3,6 +3,7 @@
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/TciServer.h"
+#include "core/backends/SliceDelta.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -448,6 +449,181 @@ public:
         seeded.setActiveSlice(server.m_activeTrx, server.m_activeLetter);
         return seeded.handleCommand(QStringLiteral("active_slice")).isEmpty();
     }
+
+    // ── #4493 VFO tune completion contract ──────────────────────────────────
+
+    // Shared rig: one wired slice plus a capture of every outbound vfo: line.
+    // sendCmdPublic() is deliberately never reached — RadioModel::m_connection
+    // is null on an unconnected model and sendCmd() does not guard it — so
+    // these exercise the completion contract directly.
+    struct TuneRig {
+        RadioModel model;
+        TciServer server { &model };
+        QWebSocket sock;
+        QStringList vfos;
+
+        bool setUp()
+        {
+            TciServer::ClientState cs;
+            cs.socket = &sock;
+            server.m_clients.append(cs);
+            QObject::connect(&server, &TciServer::tciMessage,
+                [this](const QString& dir, const QString& msg) {
+                    if (dir == QLatin1String("tx")
+                        && msg.startsWith(QLatin1String("vfo:")))
+                        vfos << msg.trimmed();
+                });
+            QString error;
+            if (!model.automationApplySliceFixture(0, QStringLiteral("A"),
+                                                   &error)) {
+                std::fprintf(stderr, "tune fixture failed: %s\n",
+                             error.toUtf8().constData());
+                return false;
+            }
+            server.wireSlice(0, model.slices().value(0));
+            return model.slices().value(0) != nullptr;
+        }
+
+        SliceModel* slice() { return model.slices().value(0); }
+        long long modelHz()
+        {
+            return TciProtocol::mhzToHz(slice()->frequency());
+        }
+    };
+
+    // An accepted tune confirms the REQUESTED coordinate and moves the model
+    // with it. The pre-#4493 read-back barrier echoed the pre-tune value here,
+    // so a client could never accumulate a relative change.
+    static bool acceptedTuneEchoesRequestedFrequency()
+    {
+        TuneRig rig;
+        if (!rig.setUp()) return false;
+        const int sliceId = rig.slice()->sliceId();
+
+        const long long preTune = rig.modelHz();
+        rig.server.handleTuneReply(
+            0, 0, sliceId,
+            TciServer::TuneAttempt{ .requestedHz = 14076000,
+                                    .preTuneHz = preTune },
+            0, QString());
+
+        if (rig.modelHz() != 14076000) {
+            std::fprintf(stderr,
+                         "accepted tune: model did not adopt, got %lld\n",
+                         rig.modelHz());
+            return false;
+        }
+        if (!rig.vfos.contains(QStringLiteral("vfo:0,0,14076000;"))) {
+            std::fprintf(stderr, "accepted tune: no confirmation, saw [%s]\n",
+                         rig.vfos.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+        // The channel-0 relay already covers this coordinate; confirming it a
+        // second time would double every dial step on the wire.
+        const int dupes = rig.vfos.count(QStringLiteral("vfo:0,0,14076000;"));
+        if (dupes != 1) {
+            std::fprintf(stderr,
+                         "accepted tune: expected 1 confirmation, got %d\n",
+                         dupes);
+            return false;
+        }
+        return true;
+    }
+
+    // When a rejection does supply a coordinate, it wins over the request. No
+    // observed rejection actually does (see below); this covers the shape
+    // #4493's triage asked for.
+    static bool rejectedTuneEchoesReplyBody()
+    {
+        TuneRig rig;
+        if (!rig.setUp()) return false;
+        const int sliceId = rig.slice()->sliceId();
+
+        const long long preTune = rig.modelHz();
+        rig.vfos.clear();
+
+        // Radio refuses the requested 14.076 and reports where it actually is.
+        rig.server.handleTuneReply(
+            0, 0, sliceId,
+            TciServer::TuneAttempt{ .requestedHz = 14076000,
+                                    .preTuneHz = preTune },
+            0x50000015, QStringLiteral("14.074000"));
+
+        if (rig.modelHz() != 14074000) {
+            std::fprintf(stderr,
+                         "rejected tune: model not corrected, got %lld\n",
+                         rig.modelHz());
+            return false;
+        }
+        if (!rig.vfos.contains(QStringLiteral("vfo:0,0,14074000;"))) {
+            std::fprintf(stderr,
+                         "rejected tune: reply-body value not broadcast, saw [%s]\n",
+                         rig.vfos.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+
+        return true;
+    }
+
+    // A rejection carrying no coordinate must report the PRE-tune frequency.
+    // This is what real rejections look like: across every captured session
+    // every non-zero reply body is prose or empty. Both observed shapes are
+    // covered — a FLEX-6600 refusing a tune on a locked slice answers
+    //   50000068|Unable to tune a locked slice -- unlock first
+    // and most error codes answer with an empty body.
+    static bool rejectedTuneWithUnusableBodyRestoresPreTune()
+    {
+        TuneRig rig;
+        if (!rig.setUp()) return false;
+        const int sliceId = rig.slice()->sliceId();
+        const long long preTune = rig.modelHz();
+
+        rig.vfos.clear();
+
+        // Verbatim from the radio (FLEX-6600, v4.x).
+        rig.server.handleTuneReply(
+            0, 0, sliceId,
+            TciServer::TuneAttempt{ .requestedHz = preTune + 2000,
+                                    .preTuneHz = preTune },
+            0x50000068,
+            QStringLiteral("Unable to tune a locked slice -- unlock first"));
+
+        if (rig.modelHz() != preTune) {
+            std::fprintf(stderr,
+                         "radio rejection: model moved (%lld -> %lld)\n",
+                         preTune, rig.modelHz());
+            return false;
+        }
+
+        // An empty body — the most common error shape on the wire — takes the
+        // same branch.
+        rig.vfos.clear();
+        rig.server.handleTuneReply(
+            0, 0, sliceId,
+            TciServer::TuneAttempt{ .requestedHz = preTune + 2000,
+                                    .preTuneHz = preTune },
+            0x50000061, QString());
+
+        if (rig.modelHz() != preTune) {
+            std::fprintf(stderr,
+                         "unusable rejection body: model kept the refused value "
+                         "(pre-tune %lld, now %lld)\n",
+                         preTune, rig.modelHz());
+            return false;
+        }
+        // And it must still say something — silence costs WSJT-X's
+        // do_frequency() its 2 s timeout.
+        const QString expected = QStringLiteral("vfo:0,0,%1;").arg(preTune);
+        if (!rig.vfos.contains(expected)) {
+            std::fprintf(stderr,
+                         "unusable rejection body: expected %s, saw [%s]\n",
+                         expected.toUtf8().constData(),
+                         rig.vfos.join(QLatin1Char(' ')).toUtf8().constData());
+            return false;
+        }
+        return true;
+    }
+
 };
 
 } // namespace AetherSDR
@@ -480,6 +656,12 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::activeSliceSeedsFromCurrentState();
     const bool activeSliceRemoval
         = AetherSDR::TciServerReviewTest::activeSliceFollowsSliceRemoval();
+    const bool tuneEchoesRequested
+        = AetherSDR::TciServerReviewTest::acceptedTuneEchoesRequestedFrequency();
+    const bool tuneRejectionCorrects
+        = AetherSDR::TciServerReviewTest::rejectedTuneEchoesReplyBody();
+    const bool unusableBodyReverts
+        = AetherSDR::TciServerReviewTest::rejectedTuneWithUnusableBodyRestoresPreTune();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -503,10 +685,18 @@ int main(int argc, char** argv)
                 activeSliceSeed ? "PASS" : "FAIL");
     std::printf("%s  active_slice renumbers/clears on slice removal (#4160)\n",
                 activeSliceRemoval ? "PASS" : "FAIL");
+    std::printf("%s  accepted tune echoes the requested frequency (#4493)\n",
+                tuneEchoesRequested ? "PASS" : "FAIL");
+    std::printf("%s  rejected tune corrects from the reply body (#4493)\n",
+                tuneRejectionCorrects ? "PASS" : "FAIL");
+    std::printf("%s  unusable rejection body reverts to pre-tune (#4493)\n",
+                unusableBodyReverts ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval
+        && tuneEchoesRequested && tuneRejectionCorrects
+        && unusableBodyReverts
         ? 0 : 1;
 }

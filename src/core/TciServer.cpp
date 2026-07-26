@@ -6,6 +6,7 @@
 #include "AppSettings.h"
 #include "Resampler.h"
 #include "LogManager.h"
+#include "core/backends/SliceDelta.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -1173,12 +1174,19 @@ void TciServer::tuneSliceAndConfirm(
         return;
     }
 
-    const QString confirmation
-        = QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(frequencyHz);
-    if (TciProtocol::mhzToHz(slice->frequency()) == frequencyHz) {
+    // Model state trails the radio by one in-flight reply: the command is on the
+    // wire before this is written (~18 ms measured). A request that matches the
+    // model inside that window is treated as a no-op and never sent, so a
+    // direction reversal faster than the reply can confirm a coordinate the
+    // radio has already left. Narrow against the 25 ms control-surface debounce,
+    // and not worth serialising tunes for, but it is the reason this compares
+    // model state rather than anything closer to the wire.
+    const long long currentHz = TciProtocol::mhzToHz(slice->frequency());
+
+    if (currentHz == frequencyHz) {
         // A no-op produces no Flex status. Confirm the already-authoritative
         // model value so WSJT-X cannot time out during startup convergence.
-        broadcast(confirmation);
+        publishSliceFrequency(trx, channel, sliceId, frequencyHz);
         return;
     }
 
@@ -1192,31 +1200,124 @@ void TciServer::tuneSliceAndConfirm(
         ? QStringLiteral("slice tune %1 %2 autopan=0").arg(sliceId).arg(mhz, 0, 'f', 6)
         : QStringLiteral("slice tune %1 %2").arg(sliceId).arg(mhz, 0, 'f', 6);
 
+    // The command reply is the completion barrier, as it was before — but the
+    // reply is where the model is WRITTEN, not where it is read back.
+    //
+    // The old barrier re-read settled->frequency() on success. The raw command
+    // never touches SliceModel, and the radio sends no slice status for a tune
+    // this client issued (confirmed across every captured session, local and
+    // SmartLink: not one `slice tune` was followed by an RF_frequency update),
+    // so the read-back could only ever observe the PRE-tune value. Every
+    // confirmation echoed the frequency the slice was already on, a client
+    // accumulating a spin had its local value reset by each echo and could never
+    // walk the VFO, and AetherSDR's own readout went stale after any TCI tune.
+    //
+    // Each in-flight tune carries the coordinate the slice held when IT was
+    // sent, so a rejection mid-spin reverts to where that spin began rather than
+    // to the last accepted step. Only reachable on a radio that refuses a tune
+    // partway through a spin.
+    //
+    // The sender is deliberately not held as a QPointer. A tune that the radio
+    // accepted has to reach the model whether or not the client that asked is
+    // still connected; the old guard skipped the whole callback and left both
+    // the model and every observer stale.
+    const TuneAttempt attempt {
+        .requestedHz = frequencyHz,
+        .preTuneHz   = currentHz,
+    };
+
     QPointer<TciServer> self(this);
-    QPointer<QWebSocket> socket(client);
     m_model->sendCmdPublic(
-        command, [self, socket, trx, channel, sliceId](int code, const QString& body) {
-            if (!self || !socket) {
+        command,
+        [self, trx, channel, sliceId, attempt](int code, const QString& body) {
+            if (!self) {
                 return;
             }
-            if (code != 0) {
-                qCWarning(lcCat) << "TCI: VFO tune rejected"
-                                 << "slice=" << sliceId << "code=" << Qt::hex << code
-                                 << "body=" << body;
-                return;
-            }
-            // Flex status precedes this response. The reply is the completion
-            // barrier; publish the accepted coordinate to sender and observers.
-            SliceModel* settled = self->m_model ? self->m_model->slice(sliceId) : nullptr;
-            if (!settled) {
-                return;
-            }
-            const long long acceptedHz = TciProtocol::mhzToHz(settled->frequency());
-            if (acceptedHz > 0) {
-                self->broadcast(
-                    QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
-            }
+            self->handleTuneReply(trx, channel, sliceId, attempt, code, body);
         });
+}
+
+// Write a frequency into the model and report it to every client. Used for
+// every outcome — accepted, refused, and the no-op fast path — so the model and
+// the wire can never disagree about what this server believes.
+//
+// applyChanges() with only `frequency` engaged is the status-application path:
+// it updates m_frequency and emits frequencyChanged WITHOUT re-issuing
+// `slice tune`. Calling SliceModel::setFrequency() here instead would send the
+// command a second time and loop it back at the radio.
+void TciServer::publishSliceFrequency(
+    int trx, int channel, int sliceId, long long hz)
+{
+    if (!m_model || hz <= 0) {
+        return;
+    }
+    SliceModel* slice = m_model->slice(sliceId);
+    if (!slice) {
+        return;
+    }
+
+    const bool moved = TciProtocol::mhzToHz(slice->frequency()) != hz;
+    if (moved) {
+        SliceDelta delta;
+        delta.frequency = static_cast<double>(hz) / 1.0e6;
+        slice->applyChanges(delta);
+    }
+
+    // frequencyChanged reaches clients through wireSlice()'s
+    // broadcastSliceFrequencies(), but that only ever emits channel 0 for the
+    // slice's own trx (plus the split mirror). An arbitrary <trx>,<channel>
+    // pair — WSJT-X's VFO-B path — has to be confirmed explicitly.
+    //
+    // Suppress the duplicate only when the relay actually ran: applyChanges()
+    // emits nothing when the coordinate is unchanged, so suppressing on the
+    // coordinate alone would answer a re-confirmation with silence.
+    const bool relayCovered = moved
+        && channel == 0
+        && TciProtocol::tciTrxForSlice(m_model, slice) == trx;
+    if (!relayCovered) {
+        broadcast(QStringLiteral("vfo:%1,%2,%3;")
+                      .arg(trx).arg(channel).arg(hz));
+    }
+}
+
+// Completion contract for a `slice tune` we issued.
+//
+// A success code is the radio accepting the request, and the reply carries no
+// coordinate: an accepted tune answers `R<seq>|0|` with an empty body. So the
+// requested value is the only value there is to adopt, and success is where it
+// becomes the model's and where clients are told.
+//
+// On failure the pre-tune frequency — the slice's coordinate from before the
+// request — is the last value known to be true. Re-reading the model here
+// instead would be safe today but relies on nothing having written it in the
+// meantime, which is exactly the assumption the old read-back barrier got wrong.
+void TciServer::handleTuneReply(
+    int trx, int channel, int sliceId, const TuneAttempt& attempt,
+    int code, const QString& body)
+{
+    if (code == 0) {
+        publishSliceFrequency(trx, channel, sliceId, attempt.requestedHz);
+        return;
+    }
+
+    qCWarning(lcCat) << "TCI: VFO tune not applied"
+                     << "slice=" << sliceId << "code=" << Qt::hex << code
+                     << "body=" << body;
+
+    // Prefer a coordinate from the reply body, per #4493's triage. Nothing
+    // observed actually supplies one: across every captured session every
+    // non-zero reply body is prose or empty — a locked slice answers
+    // `50000068|Unable to tune a locked slice -- unlock first`. So this parse is
+    // unexercised and the fallback below is what runs on a real rejection.
+    // Answering at all is the part that matters: on silence WSJT-X's
+    // do_frequency() waits out its 2 s timeout.
+    bool ok = false;
+    const double actualMhz = body.trimmed().toDouble(&ok);
+    long long actualHz = ok ? TciProtocol::mhzToHz(actualMhz) : 0;
+    if (actualHz <= 0) {
+        actualHz = attempt.preTuneHz;
+    }
+    publishSliceFrequency(trx, channel, sliceId, actualHz);
 }
 
 void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation)

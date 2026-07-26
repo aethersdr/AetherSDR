@@ -183,6 +183,17 @@ private:
     void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request);
     void tuneSliceAndConfirm(
         QWebSocket* client, int trx, int channel, int sliceId, long long frequencyHz);
+    // The two coordinates a tune reply needs. Bundled because they are the same
+    // type and mean opposite things: transposed, a rejection would confirm the
+    // frequency the radio just refused. Construct with designated initialisers.
+    struct TuneAttempt {
+        long long requestedHz { 0 };   // what we asked the radio for
+        long long preTuneHz { 0 };     // where the slice was before we asked
+    };
+
+    void publishSliceFrequency(int trx, int channel, int sliceId, long long hz);
+    void handleTuneReply(int trx, int channel, int sliceId,
+        const TuneAttempt& attempt, int code, const QString& body);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
     void createTxSliceForVfoB(QWebSocket* client,
         const TciProtocol::VfoRequest& request,
