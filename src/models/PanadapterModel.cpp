@@ -115,6 +115,26 @@ bool PanadapterModel::setRange(double minDbm, double maxDbm)
     return changed;
 }
 
+bool PanadapterModel::setBandwidthLimits(double minMhz, double maxMhz)
+{
+    // Both bounds must be positive and ordered to be a limit at all. A partial
+    // or inverted report is REJECTED rather than half-applied: the consumer
+    // clamps the operator's zoom against this pair, and a min above its max
+    // would pin the span to one value with no way out. Unlike setRange's
+    // per-bound NaN sentinel, span limits only make sense together.
+    if (!(minMhz > 0.0) || !(maxMhz > 0.0) || minMhz > maxMhz) {
+        return false;
+    }
+    if (qFuzzyCompare(minMhz, m_minBandwidthMhz)
+        && qFuzzyCompare(maxMhz, m_maxBandwidthMhz)) {
+        return false;
+    }
+    m_minBandwidthMhz = minMhz;
+    m_maxBandwidthMhz = maxMhz;
+    emit bandwidthLimitsChanged(m_minBandwidthMhz, m_maxBandwidthMhz);
+    return true;
+}
+
 void PanadapterModel::applyWnbExtension(const QVariantMap& fields)
 {
     bool dirty = false;
@@ -172,6 +192,22 @@ void PanadapterModel::setWaterfallLineDuration(int ms)
         emit waterfallLineDurationChanged(m_waterfallLineDuration);
     }
     emit waterfallLineDurationReported(ms);
+}
+
+void PanadapterModel::setDisplayRates(int fps, int wfLineDurationMs)
+{
+    // fps reuses the same reported/changed pair the Flex status path emits, so
+    // the widget's existing wiring picks it up with no special case.
+    if (fps > 0) {
+        if (fps != m_fps) {
+            m_fps = fps;
+            emit fpsChanged(m_fps);
+        }
+        emit fpsReported(fps);
+    }
+    if (wfLineDurationMs > 0) {
+        setWaterfallLineDuration(wfLineDurationMs);
+    }
 }
 
 void PanadapterModel::applyStateExtension(const QVariantMap& fields)

@@ -1330,8 +1330,8 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
 
     if (profileId.isEmpty()) {
         m_kiwiSdrFlexDisplayPans.remove(panId);
-        spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
-                                     m_radioModel.maxPanBandwidthMhz());
+        spectrum->setBandwidthLimits(m_radioModel.panMinBandwidthMhz(panId),
+                                     m_radioModel.panMaxBandwidthMhz(panId));
         const QString overlayProfileId = kiwiSdrOverlayProfileForPan(panId);
         if (!overlayProfileId.isEmpty()) {
             spectrum->setKiwiSdrConnectionOverlay(
@@ -1352,8 +1352,8 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     }
 
     if (!displayKiwi) {
-        spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
-                                     m_radioModel.maxPanBandwidthMhz());
+        spectrum->setBandwidthLimits(m_radioModel.panMinBandwidthMhz(panId),
+                                     m_radioModel.panMaxBandwidthMhz(panId));
         spectrum->setKiwiSdrConnectionOverlay(false);
         setKiwiSdrWaterfallActive(m_radioModel, panId, spectrum, false);
         spectrum->setKiwiSdrWaterfallAvailable(
@@ -1364,9 +1364,14 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         return;
     }
 
+    // Displaying a KiwiSDR: its own 30 MHz waterfall is the wider source, so the
+    // limit is whichever of the two reaches further. Deliberately NOT the pan's
+    // reported limits alone — the data on screen is the Kiwi's, not this
+    // receiver's, so clamping to the local radio's span would cap a zoom the Kiwi
+    // can actually fill.
     spectrum->setBandwidthLimits(
-        m_radioModel.minPanBandwidthMhz(),
-        std::max(m_radioModel.maxPanBandwidthMhz(),
+        m_radioModel.panMinBandwidthMhz(panId),
+        std::max(m_radioModel.panMaxBandwidthMhz(panId),
                  kKiwiSdrWaterfallFullBandwidthMhz));
 
     const KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(profileId);

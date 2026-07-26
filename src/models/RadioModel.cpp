@@ -518,6 +518,22 @@ void RadioModel::setupBackend(const QString& family)
         emit panadapterLevelChanged(pan->minDbm(), pan->maxDbm());
     });
 
+    // The pan's real span limits, reported by the backend (the X-axis
+    // counterpart to panRangeChanged). Re-emitted for the GUI because the zoom
+    // clamp lives in SpectrumWidget, which has no PanadapterModel of its own —
+    // and the applets are built before a backend connects, so a connect-time
+    // report has to reach the widgets already on screen.
+    connect(m_backend.get(), &IRadioBackend::panBandwidthLimitsChanged, this,
+            [this](const QString& panId, double minMhz, double maxMhz) {
+        auto* pan = resolvePan(panId);
+        if (!pan) return;
+        if (pan->setBandwidthLimits(minMhz, maxMhz)) {
+            emit panBandwidthLimitsChanged(pan->panId(),
+                                           pan->minBandwidthMhz(),
+                                           pan->maxBandwidthMhz());
+        }
+    });
+
     // aetherd RFC 2.3: rfgain + antenna — universal pan fields (promoted per the
     // 2026-07-05 classification). The backend decodes them; RadioModel drives the
     // addressed pan. The antenna-list handler ALSO drives RadioModel's own
@@ -3324,6 +3340,40 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
         panId, std::numeric_limits<double>::quiet_NaN(), bandwidthMhz);
 }
 
+bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
+                                        int wfLineDurationMs)
+{
+    if (panId.isEmpty())
+        return false;
+
+    PanadapterModel* pan = panadapter(panId);
+
+    // A backend that streams raw spectra shapes them in onBackendSpectrumFrame,
+    // and the pan model is where that shaper reads its target. Applying locally
+    // is correct rather than optimistic here: with no radio-side display engine,
+    // the client IS the authority for these two values, so there is no echo to
+    // wait for and nothing that could later contradict it.
+    if (shapesDisplayRatesLocally()) {
+        if (!pan)
+            return false;
+        pan->setDisplayRates(fps, wfLineDurationMs);
+        return true;
+    }
+
+    bool sent = false;
+    if (fps > 0) {
+        sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps))
+               || sent;
+    }
+    if (wfLineDurationMs > 0 && pan && !pan->waterfallId().isEmpty()) {
+        sent = sendCommand(QString("display panafall set %1 line_duration=%2")
+                               .arg(pan->waterfallId())
+                               .arg(wfLineDurationMs))
+               || sent;
+    }
+    return sent;
+}
+
 bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
 {
     if (panId.isEmpty() || bandKey.isEmpty()) {
@@ -3430,9 +3480,20 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     if (!m_flexBackend && m_backend) {
         if (hasCenter)
             m_backend->setPanCenter(panId, centerMhz * 1.0e6);
+        // Bandwidth goes through the seam for the same reason center does. This
+        // used to fall straight into the model write below, which is why zooming
+        // an HL2 produced black bars: the span the operator asked for became the
+        // view's span while the receiver kept sending its old, narrower window,
+        // and the honest VITA-49 tiles left the difference unpainted.
+        if (hasBandwidth)
+            m_backend->setPanBandwidth(panId, bandwidthMhz * 1.0e6);
         if (pan) {
+            // Center only. The backend snaps a span REQUEST to a rate it can
+            // actually run, so the resulting bandwidth is not ours to predict —
+            // it arrives on panCenterBandwidthChanged, which is also what makes
+            // the view widen only once the data behind it did.
             pan->setCenterBandwidth(hasCenter ? centerMhz : pan->centerMhz(),
-                                    hasBandwidth ? bandwidthMhz : -1.0);
+                                    -1.0);
         }
         return true;
     }
@@ -3736,20 +3797,43 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // pane — enough for first-light. Step 3 gives HL2 a real pan + unique id.
     const quint32 streamId = kNeutralPanStreamIdBase + static_cast<quint32>(panId);
     const qint64 nowNs = PerfTelemetry::nowNs();
-    emit panFeedSpectrumReady(streamId, bins, nowNs);
 
-    // Drive the waterfall from the same frame. The backend supplies no separate
+    // Both feeds are RATE SHAPED here rather than passed straight through. This
+    // is the only place a raw-spectrum backend's frames become render work, and
+    // the pan model carrying both target rates is in reach — see
+    // BackendFrameRateShaper for why the frame rate would otherwise be the IQ
+    // sample rate and why the coalescing averages in the power domain.
+    const PanadapterModel* pan = panadapter(neutralPanIdString(panId));
+    const int fps = (pan && pan->fps() > 0) ? pan->fps() : kBackendDefaultFps;
+    const int wfMs = (pan && pan->waterfallLineDuration() > 0)
+                         ? pan->waterfallLineDuration()
+                         : kBackendDefaultWfLineDurationMs;
+
+    QVector<float> shaped;
+    if (m_backendPanShapers[panId].feed(bins, nowNs, fps > 0 ? 1000 / fps : 0,
+                                        shaped)) {
+        emit panFeedSpectrumReady(streamId, shaped, nowNs);
+    }
+
+    // Drive the waterfall from the same frames. The backend supplies no separate
     // waterfall plane (Flex gets one from the radio), so the panadapter row IS
     // the waterfall row; it needs real band edges to scale against.
+    //
+    // Shaped SEPARATELY against line_duration, not derived from the pan feed:
+    // that is what makes a row actually represent line_duration of time, which
+    // is the calibration the widget's time axis already assumes.
     if (m_backendPanBandwidthMhz > 0.0) {
-        const double half = m_backendPanBandwidthMhz / 2.0;
-        emit panFeedWaterfallRowReady(kNeutralWfStreamIdBase + static_cast<quint32>(panId),
-                                      bins,
-                                      m_backendPanCenterMhz - half,
-                                      m_backendPanCenterMhz + half,
-                                      m_backendWfTimecode++, nowNs);
+        QVector<float> wfShaped;
+        if (m_backendWfShapers[panId].feed(bins, nowNs, wfMs, wfShaped)) {
+            const double half = m_backendPanBandwidthMhz / 2.0;
+            emit panFeedWaterfallRowReady(
+                kNeutralWfStreamIdBase + static_cast<quint32>(panId), wfShaped,
+                m_backendPanCenterMhz - half, m_backendPanCenterMhz + half,
+                m_backendWfTimecode++, nowNs);
+        }
     }
 }
+
 
 void RadioModel::onConnected()
 {

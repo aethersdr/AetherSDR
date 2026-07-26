@@ -2636,6 +2636,12 @@ target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
 
+# The RX DSP must demodulate at every IQ rate the operator can select by zooming.
+add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
+target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
+
 add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
 target_include_directories(hl2_shift_test PRIVATE src)
 target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -3942,6 +3948,13 @@ target_include_directories(aetherd_pan_decode_test PRIVATE src)
 target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
+
+# Display-rate shaping for backends that stream raw spectra (HL2): the frame
+# rate must follow the operator's sliders, not the IQ sample rate.
+add_executable(pan_display_rate_shaper_test tests/pan_display_rate_shaper_test.cpp)
+target_include_directories(pan_display_rate_shaper_test PRIVATE src)
+target_link_libraries(pan_display_rate_shaper_test PRIVATE Qt6::Core)
+add_test(NAME pan_display_rate_shaper_test COMMAND pan_display_rate_shaper_test)
 
 if(Qt6WebSockets_FOUND)
     add_executable(tci_protocol_test tests/tci_protocol_test.cpp)

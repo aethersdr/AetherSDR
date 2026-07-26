@@ -47,6 +47,7 @@ public:
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz) override;
+    void setPanBandwidth(const QString& panId, double hz) override;
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
@@ -82,7 +83,12 @@ private:
     // shift and the NCO moved only when the target would leave the window.
     double m_rxFreqHz = 10'000'000.0;   // slice
     double m_ncoHz    = 10'000'000.0;   // DDC / pan centre
-    int m_sampleRateHz = 48000;
+    // The DDC rate, which IS the panadapter span (emitPanState). Defaults to the
+    // WIDEST the hardware offers, not the narrowest: the span is the operator's
+    // whole view of the band, and 48 kHz gave them a 48 kHz window they had no
+    // way to widen — the zoom intent never reached this backend at all, so the
+    // default was in practice the only span the radio ever ran.
+    int m_sampleRateHz = 384000;
     QString m_mode = QStringLiteral("USB");
     int m_filterLowHz = 150;
     int m_filterHighHz = 3000;

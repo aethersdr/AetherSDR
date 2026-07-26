@@ -119,6 +119,11 @@ int main(int argc, char** argv)
     QSignalSpy connectedSpy(&backend, &IRadioBackend::connected);
     QSignalSpy disconnectedSpy(&backend, &IRadioBackend::disconnected);
     QSignalSpy errSpy(&backend, &IRadioBackend::extensionError);
+    // Pan geometry, captured from before connect: the span and the span LIMITS
+    // are both pushed from the linkUp handler, so a spy created later would miss
+    // the report the GUI depends on to clamp its zoom.
+    QSignalSpy spanSpy(&backend, &IRadioBackend::panCenterBandwidthChanged);
+    QSignalSpy limitsSpy(&backend, &IRadioBackend::panBandwidthLimitsChanged);
     int specCount = 0, sliceCount = 0;
     qsizetype lastSpecBytes = 0;
     QObject::connect(&backend, &IRadioBackend::spectrumFrameReady, &backend,
@@ -173,6 +178,96 @@ int main(int argc, char** argv)
     spin(2600);   // > kSilenceTimeoutMs since the last EP6
     check(disconnectedSpy.count() == 1, "EP6 silence trips the watchdog -> disconnected()");
     check(!backend.isConnected(), "isConnected() false after the silence watchdog");
+
+    // ---- panadapter span: the widest window by default, and honest limits ----
+    //
+    // The span an HL2 delivers IS its IQ sample rate, so these two facts are the
+    // whole of the zoom contract. Before this the backend defaulted to 48 kHz and
+    // reported no limits at all, so the GUI clamped against a FlexLib model table
+    // that falls through to 5.4 MHz for an unrecognised model — the operator got a
+    // 48 kHz window they could zoom fourteen times wider than the data, and the
+    // spectrum that was never sampled rendered as black bars.
+    check(!spanSpy.isEmpty(), "pan geometry published on connect");
+    if (!spanSpy.isEmpty()) {
+        // Asserted on the FIRST report, which is the one that decides what the
+        // operator sees when the radio comes up.
+        const double firstSpanMhz = spanSpy.first().at(2).toDouble();
+        check(qFuzzyCompare(firstSpanMhz, 0.384),
+              "connect comes up on the WIDEST span the hardware offers (384 kHz)");
+    }
+    check(limitsSpy.count() >= 1, "span limits reported on connect");
+    if (!limitsSpy.isEmpty()) {
+        check(qFuzzyCompare(limitsSpy.first().at(1).toDouble(), 0.048)
+                  && qFuzzyCompare(limitsSpy.first().at(2).toDouble(), 0.384),
+              "reported limits are the real rate range, 48 kHz .. 384 kHz");
+    }
+
+    // ---- a span request snaps to a rate the DDC can actually run ----
+    //
+    // There is no continuous zoom on this radio: four rates, and a request lands
+    // on the nearest by RATIO (zoom is multiplicative, and the rates are
+    // octave-spaced, so linear-nearest would bias every request toward the wider
+    // neighbour). The backend reports back what it TOOK, never what was asked —
+    // that echo is what stops the view widening past the data.
+    struct SpanCase {
+        double requestMhz;
+        double expectMhz;
+        const char* what;
+    };
+    const SpanCase cases[] = {
+        {0.384, 0.384, "the widest request stays at 384 kHz"},
+        {0.192, 0.192, "an exact rate is taken exactly"},
+        {0.100, 0.096, "100 kHz snaps DOWN to 96 kHz, not up to 192 kHz"},
+        // THE case that pins ratio-nearest rather than linear-nearest, and the
+        // only one in this table that can tell them apart. Between 96 and 192 kHz
+        // the geometric mean is 135.8 kHz and the arithmetic mean is 144 kHz, so
+        // 140 kHz falls on opposite sides of the two rules: by ratio it belongs to
+        // 192 kHz, by linear distance to 96 kHz. Every other row here agrees under
+        // both rules, so without this one the log() could be deleted and the suite
+        // would stay green.
+        {0.140, 0.192, "140 kHz snaps UP to 192 kHz — nearest by RATIO, not by "
+                       "linear distance"},
+        {0.048, 0.048, "the narrowest request reaches 48 kHz"},
+        // The old Flex-table fallback. It must not widen the receiver past what it
+        // has: the request is honoured only as far as 384 kHz.
+        {5.400, 0.384, "a 5.4 MHz request clamps to the widest real rate"},
+        {0.000001, 0.048, "an absurdly narrow request floors at 48 kHz"},
+    };
+    for (const auto& c : cases) {
+        spanSpy.clear();
+        backend.setPanBandwidth(QStringLiteral("hl2"), c.requestMhz * 1.0e6);
+        spin(60);
+        // Every request re-publishes, including one that changes nothing —
+        // otherwise a zoom the hardware cannot honour would leave the display
+        // sitting on the operator's requested span with no correction coming.
+        check(!spanSpy.isEmpty(), c.what);
+        if (spanSpy.isEmpty())
+            continue;
+        const double gotMhz = spanSpy.last().at(2).toDouble();
+        check(qFuzzyCompare(gotMhz, c.expectMhz), c.what);
+        if (!qFuzzyCompare(gotMhz, c.expectMhz)) {
+            std::fprintf(stderr, "  requested %.6f MHz, expected %.6f, got %.6f\n",
+                         c.requestMhz, c.expectMhz, gotMhz);
+        }
+    }
+
+    // A rate change must not drag the tuned signal with it. The slice was left at
+    // 14.100 MHz above; widening and narrowing the window around it has to leave
+    // it exactly there.
+    backend.setSliceFrequency(0, 14'100'000.0);
+    backend.setPanBandwidth(QStringLiteral("hl2"), 384000.0);
+    spin(60);
+    backend.setPanBandwidth(QStringLiteral("hl2"), 48000.0);
+    spin(60);
+    QSignalSpy sliceSpy(&backend, &IRadioBackend::sliceChanged);
+    backend.setPanBandwidth(QStringLiteral("hl2"), 192000.0);
+    spin(60);
+    check(!sliceSpy.isEmpty(), "a span change re-publishes the slice");
+    if (!sliceSpy.isEmpty()) {
+        const SliceDelta d = sliceSpy.last().at(1).value<SliceDelta>();
+        check(d.frequency && qFuzzyCompare(*d.frequency, 14.1),
+              "the slice stays on frequency across span changes");
+    }
 
     // ---- disconnect ----
     backend.disconnectRadio();

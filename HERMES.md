@@ -898,3 +898,116 @@ have exposed the bug was the one that always looked fine.
 - **PA temperature formula** is the HL2 wiki's, unverified against a reference.
   29.5 °C idle → 34 °C under load is plausible, not calibrated.
 - **`0x0e` T/R gain switch** and PureSignal's feedback path.
+
+## 15. Panadapter span and display rate
+
+Two defects with one root: **the panadapter's span and its frame rate were both
+consequences of the IQ sample rate, and nothing above the seam could change
+either.**
+
+### 15.1 The operator could only ever see 48 kHz
+
+`Hl2Backend::emitPanState` publishes the span as the IQ sample rate, which is
+correct — on this radio the DDC rate *is* the span. But:
+
+- `m_sampleRateHz` defaulted to **48000**, the NARROWEST of the four rates.
+- There was no way to change it. `IRadioBackend` had `setPanCenter` but no
+  `setPanBandwidth`, so a zoom request never reached the backend at all.
+- `RadioModel::dispatchPanCenterBandwidth` wrote the requested span straight
+  into `PanadapterModel` for a non-Flex backend and returned success.
+
+So the view widened while the receiver kept sending its old, narrower window.
+The VITA-49 tiles are honest about their own extent, so the region the data
+never covered rendered **black** — the same lie #4142 fixed for pan *center*,
+reintroduced on the bandwidth field. Zoom-out was clamped by
+`RadioModel::maxPanBandwidthMhz()`, a FlexLib platform table that falls through
+to **5.4 MHz** for any model string it doesn't recognise, so "Hermes-Lite 2"
+could be zoomed **14x past its own data**.
+
+Fixed by making the whole loop honest:
+
+| Direction | Mechanism |
+|---|---|
+| Down | `IRadioBackend::setPanBandwidth` — HL2 snaps to the nearest real rate and reconfigures the DDC + WDSP chain |
+| Up | `panCenterBandwidthChanged` reports the span the radio ACTUALLY took |
+| Limits | `panBandwidthLimitsChanged` reports 48–384 kHz, so the zoom clamp stops where the data stops |
+| Default | the WIDEST rate, not the narrowest |
+
+The snap is **nearest by RATIO, not linear distance**. The rates are
+octave-spaced and zoom is multiplicative, so linear-nearest biases every request
+toward the wider neighbour: between 96 and 192 kHz the geometric mean is
+135.8 kHz but the arithmetic mean is 144 kHz, and a 140 kHz request belongs to
+192 kHz by ratio and to 96 kHz by distance. `hl2_backend_test` pins exactly that
+case — every other row in its table agrees under both rules, so without it the
+`log()` could be deleted and the suite would stay green.
+
+**Do NOT send a filter-pipeline reset (`0x39`) on a rate change.** See
+`MetisClient::requestPipelineReset` — doing that on every geometry change wedged
+a board hard enough to need a power cycle. The decimation filters settle on
+their own.
+
+### 15.2 The frame rate tracked the zoom, not the sliders
+
+A backend that streams cooked spectra emits one frame per FFT block, so its
+frame rate is the **sample rate divided by the FFT size**:
+
+```
+ 48 kHz / 1024 =  47 fps      384 kHz / 1024 = 375 fps
+```
+
+Widening the default span therefore multiplied the render load eightfold.
+Measured on the live radio: **375 fps** at full zoom out. The Display→FFT FPS and
+Display→Waterfall Rate sliders governed neither — they emitted `display pan set
+… fps=` and `display panafall set … line_duration=`, Flex wire text addressed to
+a command interpreter this radio does not have.
+
+For the waterfall this was **correctness, not just load**: the widget scales its
+time axis from `line_duration`, so rows arriving at 375/s against a 100 ms
+calibration made the visible history up to **37x shorter than it claimed**.
+
+`PanDisplayRateShaper` coalesces both feeds, independently, against their own
+slider. Two choices in it are load-bearing:
+
+- **Averaging in the POWER domain.** Max-hold would LIFT the noise floor at wide
+  spans (the max of N noise samples grows with N) and dB-domain averaging would
+  DEPRESS it (Jensen). The trace is calibrated to dBm, so a level that moved with
+  zoom would be the display lying about signal strength. Dropping frames outright
+  was rejected for the same reason it loses brief signals: at 384 kHz a 30 fps
+  display would discard ~92% of the spectrum.
+- **Advancing the deadline BY the interval, not resetting it to now.** Resetting
+  quantizes the output onto the input grid — "first frame at or after the
+  deadline" always rounds up by up to one input period, and a 33 ms target fed at
+  25 ms intervals emits every 50 ms: **20 fps, not 30.** Caught by measurement on
+  the live radio, not by reading the code.
+
+Measured on the real HL2 at 580 kHz AM, FFT FPS slider at 40, `line_duration`
+100 ms:
+
+| Span | Pan | Waterfall |
+|---|---|---|
+| 384 kHz (zoomed out) | 39.5 fps | 10.0 rows/s |
+| 48 kHz (zoomed in) | 36.5 fps | 10.0 rows/s |
+
+An 8x spread across the zoom range collapsed to ~8%. The residual is inherent:
+at 48 kHz the source only produces 46.9 fps, so a 40 fps target cannot be hit
+exactly on frame boundaries.
+
+### 15.3 hpsdrsim cannot reproduce this
+
+**The simulator does not honour a sample-rate change.** Commanded to 384 kHz it
+keeps delivering ~40 frames/second, so the 375 fps condition is invisible there —
+inferring the input period from the two observed output rates is what showed it.
+`pan_display_rate_shaper_test` therefore drives a **synthetic clock** rather than
+a radio, which reproduces 375 fps exactly and deterministically. Anything that
+needs a real HL2 rate change has to be measured on hardware.
+
+### 15.4 Noticed, not fixed
+
+- **ADC overload chatter.** On the MW broadcast band with the default +20 dB LNA
+  the overload flag dithers, and the warning in `publishTelemetry` — although
+  edge-gated — fires **~133 times/second**, flushing the log ring. The gate is on
+  the value changing, but the value genuinely chatters.
+- **The HL2 LNA gain is only settable at connect time** (`lnaGainDb` param).
+  There is no seam verb for RF gain, so an operator on a strong band cannot back
+  it off without reconnecting. This is why the overload above could not simply be
+  turned down.
