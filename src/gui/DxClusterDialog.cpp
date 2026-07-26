@@ -2873,7 +2873,17 @@ void DxClusterDialog::setTotalSpots(int count)
 
 void DxClusterDialog::flushSpotBatch()
 {
-    if (m_spotListFrozen || m_spotBatch.isEmpty()) return;
+    if (m_spotListFrozen) {
+        // Still accumulating while frozen, but don't let a long freeze
+        // against a busy feed grow the buffer unbounded — cap it to the
+        // same limit the model enforces after a flush, keeping the
+        // newest entries (review note on #4145).
+        const int cap = m_spotModel->maxSpots();
+        if (m_spotBatch.size() > cap)
+            m_spotBatch.remove(0, m_spotBatch.size() - cap);
+        return;
+    }
+    if (m_spotBatch.isEmpty()) return;
 
     auto isAtBottom = [](QAbstractScrollArea* w) {
         auto* sb = w->verticalScrollBar();

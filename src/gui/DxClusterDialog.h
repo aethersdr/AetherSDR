@@ -49,6 +49,7 @@ public:
     void addSpots(const QVector<DxSpot>& spots);
     void clear();
     void setMaxSpots(int max) { m_maxSpots = max; }
+    int maxSpots() const { return m_maxSpots; }
     const DxSpot* spotAt(int row) const;
 
 private:
