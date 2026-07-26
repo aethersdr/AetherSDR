@@ -221,8 +221,9 @@ TX via MCP"** in Radio Setup → Network. That checkbox raises a one-time
 confirmation spelling out that automated software will be able to
 transmit and that you, the operator, remain responsible for all
 emissions; once confirmed the choice persists. Toggling it drives the
-same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
-disabling force-unkeys immediately).
+same `m_txAllowed` gate live. Enabling grants permission but does not claim
+unrelated operator, DAX, or TCI transmissions; the force-unkey watchdog arms
+when the bridge actually accepts a TX-capable action.
 
 For proof-build process owners, `AETHER_AUTOMATION_NO_TX=1` pins this gate off
 even when the operator preference was previously enabled. The Radio Setup
@@ -2394,10 +2395,17 @@ Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
 
 These verbs **key the live transmitter** and are refused unless the app was
 launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`).
-A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops any
-continuous key that runs too long, and the bridge force-unkeys on stop. **Verify
-the TX antenna is your dummy load before keying** (`get slice tx txAntenna`, or
-set it with `slice txant ANT2`). Unkey/stop sub-actions are always allowed.
+A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops an
+automation-originated continuous key that runs too long, and the bridge
+force-unkeys its own active TX lease on stop. Merely enabling TX permission
+does not apply this timeout to operator, DAX, or TCI transmissions. The lease
+covers the key-up an accepted action causes directly (allowing ~2 s for a
+deferred click); a bridge action that only *arms* a long-fuse feature — the
+WSPR beacon waits for the next even UTC minute, then keys for 111.6 s — is not
+claimed, so that transmission runs to completion under the feature's own
+timers rather than being cut at `TX_MAX_MS`. **Verify the
+TX antenna is your dummy load before keying** (`get slice tx txAntenna`, or set
+it with `slice txant ANT2`). Unkey/stop sub-actions are always allowed.
 
 ### `key`
 PTT / MOX keying via `RadioModel::setTransmit` — the exact path the space-bar PTT

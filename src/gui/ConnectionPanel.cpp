@@ -1,5 +1,6 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
+#include "core/backends/hl2/Hl2Discovery.h"   // shared nickname settings helper
 #include "core/NetworkPathResolver.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
@@ -8,6 +9,8 @@
 
 #include <QAbstractItemView>
 #include <QFormLayout>
+#include <QInputDialog>
+#include <QMenu>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -354,6 +357,16 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_radioList->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_radioList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     localGroupLayout->addWidget(m_radioList);
+
+    // Right-click a discovered radio to set a custom nickname without connecting
+    // first. Only radios without an on-radio name store (non-Flex: HL2, sim, …)
+    // are stored client-side; Flex's own "radio name" is set from Radio Setup
+    // while connected, so we don't offer it here for Flex to avoid two sources of
+    // truth. The nickname is persisted keyed by serial and picked up on the next
+    // discovery sweep.
+    m_radioList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_radioList, &QListWidget::customContextMenuRequested, this,
+            [this](const QPoint& pos) { showRadioContextMenu(pos); });
     localListLayout->addWidget(localGroup, 1);
 
     auto* localActionRow = new QHBoxLayout;
@@ -1058,6 +1071,67 @@ void ConnectionPanel::setCurrentMode(ConnectionMode mode)
 void ConnectionPanel::onConnectionModeClicked(int id)
 {
     setCurrentMode(static_cast<ConnectionMode>(id));
+}
+
+void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
+{
+    QListWidgetItem* item = m_radioList->itemAt(pos);
+    if (!item)
+        return;
+    const int row = m_radioList->row(item);
+    if (row < 0 || row >= m_radios.size())
+        return;
+    const RadioInfo radio = m_radios[row];
+
+    // Flex stores its name on the radio itself (set from Radio Setup while
+    // connected); offering a client-side override here would create two sources
+    // of truth. So the client-side nickname is only for families without an
+    // on-radio store (HL2, sim, any future non-Flex backend).
+    if (hl2::Hl2Discovery::nicknameLivesOnRadio(radio))
+        return;
+
+    QMenu menu(this);
+    QAction* setNick = menu.addAction(tr("Set Nickname…"));
+    const QString savedKey = hl2::Hl2Discovery::nicknameSettingsKey(radio.serial);
+    const bool hasCustom =
+        !AppSettings::instance().value(savedKey).toString().trimmed().isEmpty();
+    QAction* clearNick = hasCustom ? menu.addAction(tr("Clear Nickname")) : nullptr;
+
+    QAction* chosen = menu.exec(m_radioList->mapToGlobal(pos));
+    if (!chosen)
+        return;
+
+    bool changed = false;
+    if (chosen == setNick) {
+        bool ok = false;
+        const QString current =
+            AppSettings::instance().value(savedKey).toString();
+        const QString name = QInputDialog::getText(
+            this, tr("Set Nickname"),
+            tr("Nickname for %1:").arg(radio.model),
+            QLineEdit::Normal, current, &ok);
+        if (ok) {
+            AppSettings::instance().setValue(savedKey, name.trimmed());
+            changed = true;
+        }
+    } else if (clearNick && chosen == clearNick) {
+        AppSettings::instance().remove(savedKey);
+        changed = true;
+    }
+
+    // Commit to disk now rather than riding on the shutdown save — a naming the
+    // operator just confirmed shouldn't be lost to a crash or a kill, and the
+    // rest of this panel (onLocalConnectClicked) saves eagerly for the same reason.
+    if (changed)
+        AppSettings::instance().save();
+
+    // Reflect the change immediately: re-label this row from the saved setting
+    // rather than waiting for the next discovery sweep.
+    RadioInfo updated = radio;
+    updated.nickname =
+        hl2::Hl2Discovery::effectiveNickname(radio.serial, radio.model);
+    m_radios[row] = updated;
+    item->setText(formatLocalRadioLabel(updated));
 }
 
 void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)

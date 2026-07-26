@@ -89,6 +89,25 @@ int main(int argc, char** argv)
     model.rebootRadio();
     check(true, "F3: rebootRadio() on HL2 did not crash");
 
+    // WSPR beacon (#4435): the beacon rides a Flex `dax_tx` stream, which no
+    // other family provides — HL2 host-modulates and has no DAX. It borrows
+    // station state (`transmit dax`, the TX filter, DAX TX stream ownership)
+    // before it ever keys, so a refusal must leave none of that latched.
+    // `transmit dax` in particular is the one that bites: its own comment notes
+    // a stuck dax=1 "would silently kill the next mic voice TX on every platform
+    // where updateDaxTxMode() is compiled out".
+    //
+    // Note this is NOT the capabilities().canTransmit gate doing the work — HL2
+    // advertises canTransmit since transmit landed, so the gate passes here and
+    // the refusal comes from the absent DAX TX stream. The gate remains the
+    // fail-closed guard for any family that reports canTransmit=false.
+    check(!model.prepareWsprTransmit(),
+          "WSPR: prepareWsprTransmit() is refused on a family with no DAX TX");
+    check(!model.hasWsprTxStream(),
+          "WSPR: a refused prepare claims no TX audio stream");
+    check(!model.transmitModel().daxOn(),
+          "WSPR: a refused prepare does not leave `transmit dax` latched");
+
     // ---- Round-trip back to Flex ----
     model.connectToRadio(flexInfo());
     check(model.backendCapabilities().canTransmit,

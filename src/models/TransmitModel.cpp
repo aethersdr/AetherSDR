@@ -600,6 +600,14 @@ void TransmitModel::setTxFilterHigh(int hz)
                       .arg(m_txFilterLow).arg(hz));
 }
 
+void TransmitModel::setTxFilter(int lowHz, int highHz)
+{
+    lowHz = qBound(0, lowHz, 9950);
+    highHz = qBound(lowHz + 50, highHz, 10000);
+    emit commandReady(QString("transmit set filter_low=%1 filter_high=%2")
+                      .arg(lowHz).arg(highHz));
+}
+
 // ── CW commands ─────────────────────────────────────────────────────────────
 
 void TransmitModel::setCwSpeed(int wpm)
@@ -835,7 +843,8 @@ void TransmitModel::requestPttOn(PttSource source)
         }
     }
 
-    if (tone && tone->isEnabled() && isPhoneModeForQuindar()) {
+    if (source != PttSource::Wspr
+        && tone && tone->isEnabled() && isPhoneModeForQuindar()) {
         tone->startIntro();
         // Flash the QUIN chip for the intro duration; the audio thread
         // auto-transitions Engaging → Live when its frame counter

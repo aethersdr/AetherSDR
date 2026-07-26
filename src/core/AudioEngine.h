@@ -53,6 +53,7 @@ class ClientReverb;
 class ClientFinalLimiter;
 class ClientTxTestTone;
 class ClientQuindarTone;
+class WsprBeacon;
 class QuindarLocalSink;
 class CwSidetoneGenerator;
 #ifdef __APPLE__
@@ -325,6 +326,13 @@ public:
     // overrides mic input with a sine before the user's DSP chain
     // runs — useful for setup / calibration.
     ClientTxTestTone* clientTxTestTone() { return m_clientTxTestTone.get(); }
+
+    // Sample-accurate WSPR source. It replaces the post-voice-chain signal
+    // on its own paced DAX/VITA-49 path, so speech processing and microphone
+    // callback rates cannot distort or shorten the four-tone frame.
+    WsprBeacon* wsprBeacon() { return m_wsprBeacon.get(); }
+    Q_INVOKABLE void startWsprPump();
+    Q_INVOKABLE void stopWsprPump();
 
     // Quindar tone generator (#2262).  Sits AFTER the user DSP chain
     // and PC mic gain but BEFORE the final brickwall limiter, so the
@@ -824,6 +832,10 @@ private:
     qint64 txCaptureBufferCapacityBytes() const;
     qint64 txCaptureNowMs() const;
     bool tciAudioFresh() const;
+    void pumpWsprBeacon();
+    void feedDaxTxAudioInternal(const QByteArray& float32pcm,
+                                bool markExternalSource,
+                                bool forceRadioDaxRoute);
     void observeTxCaptureState(QAudio::State state);
     void recordTxCaptureLocalTxAttempt();
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
@@ -1040,6 +1052,7 @@ private:
     std::unique_ptr<ClientReverb> m_clientReverbTx;
     std::unique_ptr<ClientFinalLimiter> m_clientFinalLimiterTx;
     std::unique_ptr<ClientTxTestTone>   m_clientTxTestTone;
+    std::unique_ptr<WsprBeacon>         m_wsprBeacon;
     std::unique_ptr<ClientQuindarTone>  m_clientQuindarTone;
     // Audio-thread-loaded pointer for the post-final-limiter monitor
     // (final-output recording).  Same lock-free atomic pointer pattern
@@ -1135,6 +1148,17 @@ private:
     // webcam mic that produces continuous ambient packets.
     QElapsedTimer m_tciAudioTimer;
     static constexpr qint64 kTciAudioActiveWindowMs = 200;
+    QTimer* m_wsprPumpTimer{nullptr};
+    QElapsedTimer m_wsprPumpClock;
+    qint64 m_wsprPumpedFrames{0};
+    QByteArray m_wsprInt16Scratch;
+    QByteArray m_wsprFloatScratch;
+    // DAX TX mode borrowed for the duration of a WSPR frame so the mic path
+    // cannot produce a second packet stream against the same m_txPacketCount.
+    // m_wsprSavedDaxTxMode makes start/stop idempotent — stopWsprPump() has
+    // several early-return callers.
+    bool m_wsprPreviousDaxTxMode{false};
+    bool m_wsprSavedDaxTxMode{false};
 
     // Stale session watchdog: detects when audio data is being written but
     // processedUSecs() hasn't advanced, indicating the WASAPI session is

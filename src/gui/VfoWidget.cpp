@@ -58,9 +58,12 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QImage>            // FlagShadow::m_shadowImage (was transitive only)
+#include <QtMath>            // qCeil in FlagShadow::paintEvent
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <vector>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
 
@@ -224,6 +227,163 @@ public:
         return (w && w->hasHeightForWidth()) ? w->heightForWidth(width)
                                              : QStackedWidget::heightForWidth(width);
     }
+};
+
+// Lightweight sibling surface for the VFO flag's elevation shadow. Keeping the
+// shadow separate from VfoWidget means live meter repaints do not re-blur the
+// entire flag at animation rate.
+class FlagShadow : public QWidget {
+public:
+    explicit FlagShadow(QWidget* parent)
+        : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("VfoFlagShadow"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAutoFillBackground(false);
+    }
+
+    void setFlagGeometry(const QRect& flagGeometry)
+    {
+        setGeometry(flagGeometry.adjusted(
+            -kHorizontalMargin, -kTopMargin,
+            kHorizontalMargin, kBottomMargin));
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        const qreal dpr = devicePixelRatioF();
+        const QSize pixelSize(
+            qMax(1, qCeil(width() * dpr)),
+            qMax(1, qCeil(height() * dpr)));
+        if (m_shadowImage.size() != pixelSize
+            || !qFuzzyCompare(m_shadowImage.devicePixelRatio(), dpr)) {
+            rebuildShadow(pixelSize, dpr);
+        }
+
+        QPainter p(this);
+        p.drawImage(QPoint(0, 0), m_shadowImage);
+    }
+
+private:
+    static void boxBlurPass(const std::vector<quint8>& source,
+                            std::vector<quint8>& target,
+                            int width,
+                            int height,
+                            int radius,
+                            bool horizontal)
+    {
+        const int window = 2 * radius + 1;
+        if (horizontal) {
+            for (int y = 0; y < height; ++y) {
+                int sum = 0;
+                for (int x = 0; x <= radius && x < width; ++x) {
+                    sum += source[static_cast<size_t>(y * width + x)];
+                }
+                for (int x = 0; x < width; ++x) {
+                    target[static_cast<size_t>(y * width + x)] =
+                        static_cast<quint8>(sum / window);
+                    const int removeX = x - radius;
+                    const int addX = x + radius + 1;
+                    if (removeX >= 0) {
+                        sum -= source[static_cast<size_t>(y * width + removeX)];
+                    }
+                    if (addX < width) {
+                        sum += source[static_cast<size_t>(y * width + addX)];
+                    }
+                }
+            }
+            return;
+        }
+
+        for (int x = 0; x < width; ++x) {
+            int sum = 0;
+            for (int y = 0; y <= radius && y < height; ++y) {
+                sum += source[static_cast<size_t>(y * width + x)];
+            }
+            for (int y = 0; y < height; ++y) {
+                target[static_cast<size_t>(y * width + x)] =
+                    static_cast<quint8>(sum / window);
+                const int removeY = y - radius;
+                const int addY = y + radius + 1;
+                if (removeY >= 0) {
+                    sum -= source[static_cast<size_t>(removeY * width + x)];
+                }
+                if (addY < height) {
+                    sum += source[static_cast<size_t>(addY * width + x)];
+                }
+            }
+        }
+    }
+
+    void rebuildShadow(const QSize& pixelSize, qreal dpr)
+    {
+        QImage mask(pixelSize, QImage::Format_ARGB32_Premultiplied);
+        mask.fill(Qt::transparent);
+        {
+            QPainter p(&mask);
+            p.scale(dpr, dpr);
+            p.setRenderHint(QPainter::Antialiasing, true);
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0, 0, 0, kShadowAlpha));
+            const QRectF flagRect(
+                kHorizontalMargin,
+                kTopMargin,
+                width() - 2 * kHorizontalMargin,
+                height() - kTopMargin - kBottomMargin);
+            p.drawRoundedRect(
+                flagRect.translated(0.0, kOffsetY).adjusted(1.0, 1.0, -1.0, -1.0),
+                4.0,
+                4.0);
+        }
+
+        const int pixelCount = pixelSize.width() * pixelSize.height();
+        // Reused across rebuilds: resize() keeps prior capacity, so a resize
+        // (tab open/close, collapse toggle) doesn't malloc/free tens of KB each
+        // time. Every element is overwritten below before it is read.
+        m_alpha.resize(static_cast<size_t>(pixelCount));
+        m_scratch.resize(static_cast<size_t>(pixelCount));
+        std::vector<quint8>& alpha = m_alpha;
+        std::vector<quint8>& scratch = m_scratch;
+        for (int y = 0; y < pixelSize.height(); ++y) {
+            const QRgb* row = reinterpret_cast<const QRgb*>(mask.constScanLine(y));
+            for (int x = 0; x < pixelSize.width(); ++x) {
+                alpha[static_cast<size_t>(y * pixelSize.width() + x)] =
+                    static_cast<quint8>(qAlpha(row[x]));
+            }
+        }
+
+        const int radius = qMax(1, qRound(kBoxBlurRadius * dpr));
+        for (int pass = 0; pass < 3; ++pass) {
+            boxBlurPass(
+                alpha, scratch, pixelSize.width(), pixelSize.height(), radius, true);
+            boxBlurPass(
+                scratch, alpha, pixelSize.width(), pixelSize.height(), radius, false);
+        }
+
+        m_shadowImage = QImage(pixelSize, QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < pixelSize.height(); ++y) {
+            QRgb* row = reinterpret_cast<QRgb*>(m_shadowImage.scanLine(y));
+            for (int x = 0; x < pixelSize.width(); ++x) {
+                const quint8 a =
+                    alpha[static_cast<size_t>(y * pixelSize.width() + x)];
+                row[x] = qRgba(0, 0, 0, a);
+            }
+        }
+        m_shadowImage.setDevicePixelRatio(dpr);
+    }
+
+    static constexpr int kHorizontalMargin = 28;
+    static constexpr int kTopMargin = 24;
+    static constexpr int kBottomMargin = 38;
+    static constexpr qreal kBoxBlurRadius = 8.0;
+    static constexpr qreal kOffsetY = 10.0;
+    static constexpr int kShadowAlpha = 150;
+
+    QImage m_shadowImage;
+    std::vector<quint8> m_alpha;    // reused blur scratch (see rebuildShadow)
+    std::vector<quint8> m_scratch;
 };
 
 namespace AetherSDR {
@@ -562,10 +722,11 @@ void VfoWidget::mouseReleaseEvent(QMouseEvent* ev)
 
 VfoWidget::~VfoWidget()
 {
-    // Close/lock buttons are children of our parent (SpectrumWidget),
-    // not us. During widget tree teardown, Qt may destroy them before us
-    // (they're siblings, not children). QPointer auto-nulls when the
-    // target is deleted, preventing double-free.
+    // The shadow and the close/lock buttons are children of our parent
+    // (SpectrumWidget), not us. During widget tree teardown, Qt may destroy
+    // them before us (they're siblings, not children). QPointer auto-nulls when
+    // the target is deleted, preventing double-free.
+    delete m_shadowWidget.data();
     delete m_closeSliceBtn.data();
     delete m_lockVfoBtn.data();
     delete m_recordBtn.data();
@@ -3104,6 +3265,7 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
     m_lastOnLeft = onLeft;
 
     move(newPos);
+    syncShadowGeometry();
 
     // The value labels (drawn by the spectrum's above-flags layer) are anchored to
     // this flag — repaint them as it pans. Only when labels are actually shown.
@@ -3154,6 +3316,46 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
         }
         m_collapsedFreqLabel->move(freqX, freqY);
     }
+}
+
+void VfoWidget::syncShadowGeometry()
+{
+    QWidget* flagParent = parentWidget();
+    if (!flagParent) {
+        return;
+    }
+
+    auto* shadow = static_cast<FlagShadow*>(m_shadowWidget.data());
+    if (!shadow) {
+        shadow = new FlagShadow(flagParent);
+        m_shadowWidget = shadow;
+    } else if (shadow->parentWidget() != flagParent) {
+        shadow->setParent(flagParent);
+    }
+
+    shadow->setFlagGeometry(geometry());
+    shadow->stackUnder(this);
+    shadow->setVisible(isVisible());
+}
+
+void VfoWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    syncShadowGeometry();
+}
+
+void VfoWidget::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    syncShadowGeometry();
+}
+
+void VfoWidget::hideEvent(QHideEvent* event)
+{
+    if (m_shadowWidget) {
+        m_shadowWidget->hide();
+    }
+    QWidget::hideEvent(event);
 }
 
 // ── S-Meter bar (custom paint) ────────────────────────────────────────────────
@@ -5961,7 +6163,7 @@ void VfoWidget::reparentFlagSatellites(QWidget* newParent)
     const std::initializer_list<QWidget*> satellites = {
         m_closeSliceBtn.data(), m_lockVfoBtn.data(),
         m_recordBtn.data(), m_playBtn.data(),
-        m_collapsedFreqLabel.data(),
+        m_collapsedFreqLabel.data(), m_shadowWidget.data(),
     };
     for (QWidget* sat : satellites) {
         if (!sat || sat->parentWidget() == newParent) {
@@ -5975,6 +6177,7 @@ void VfoWidget::reparentFlagSatellites(QWidget* newParent)
         sat->setVisible(wasVisible);
         sat->raise();
     }
+    syncShadowGeometry();
 }
 
 } // namespace AetherSDR
