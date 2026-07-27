@@ -448,6 +448,144 @@ public:
         seeded.setActiveSlice(server.m_activeTrx, server.m_activeLetter);
         return seeded.handleCommand(QStringLiteral("active_slice")).isEmpty();
     }
+
+    // ── vfo: SET must confirm the frequency it actually reached (#4500/#4493) ──
+    //
+    // A raw `slice tune` written at the connection bypasses SliceModel, and the
+    // radio answers it with no RF_frequency status, so the model was never
+    // updated and the confirmation echoed the PRE-TUNE frequency forever.
+    // WSJT-X's do_frequency() waits on that echo: it concluded the radio had not
+    // moved and failed every band change, while the radio was in fact on the new
+    // band — which is how transmissions ended up out of band.
+    //
+    // Asserted on the wire (broadcast() emits tciMessage even with no clients
+    // attached) rather than only on the model, because the echo is what clients
+    // actually consume.
+    static bool vfoSetConfirmsTheAcceptedFrequency()
+    {
+        RadioModel model;
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error)) {
+            std::printf("      fixture precondition failed: %s\n", qPrintable(error));
+            return false;
+        }
+        SliceModel* slice = model.slice(0);
+        if (!slice)
+            return false;
+
+        TciServer server(&model);
+        QWebSocket client;
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx"))
+                sent << msg.trimmed();
+        });
+
+        // Nine successive relative tunes — the Stream Deck encoder case from
+        // #4493. Each confirmation must carry the frequency just reached, or a
+        // client accumulating "current + delta" recomputes every step from the
+        // same stale origin and the radio oscillates instead of walking.
+        long long hz = TciProtocol::mhzToHz(slice->frequency());
+        if (hz <= 0)
+            return false;
+        for (int step = 0; step < 9; ++step) {
+            const long long want = hz - 1000;
+            sent.clear();
+            server.tuneSliceAndConfirm(&client, 0, 0, 0, want);
+
+            if (TciProtocol::mhzToHz(slice->frequency()) != want) {
+                std::printf("      step %d: model did not take the tune "
+                            "(wanted %lld, model holds %lld)\n",
+                            step, want, TciProtocol::mhzToHz(slice->frequency()));
+                return false;
+            }
+            if (!sent.contains(QStringLiteral("vfo:0,0,%1;").arg(want))) {
+                std::printf("      step %d: no confirmation for %lld; sent: %s\n",
+                            step, want, qPrintable(sent.join(QStringLiteral(" "))));
+                return false;
+            }
+            // The pre-tune value must not also go out, or a client cannot tell
+            // which of the two echoes is current.
+            if (sent.contains(QStringLiteral("vfo:0,0,%1;").arg(hz))) {
+                std::printf("      step %d: stale %lld echoed alongside %lld\n",
+                            step, hz, want);
+                return false;
+            }
+            hz = want;
+        }
+        return true;
+    }
+
+    // A tune the model refuses must be confirmed with what the model HOLDS, not
+    // with what the client asked for — otherwise the client's mirror walks away
+    // from the radio, which is the same divergence by a different route.
+    static bool vfoSetConfirmsTruthWhenRefused()
+    {
+        RadioModel model;
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error))
+            return false;
+        SliceModel* slice = model.slice(0);
+        if (!slice)
+            return false;
+
+        TciServer server(&model);
+        QWebSocket client;
+
+        const long long parked = TciProtocol::mhzToHz(slice->frequency());
+        slice->setLocked(true);
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx"))
+                sent << msg.trimmed();
+        });
+
+        server.tuneSliceAndConfirm(&client, 0, 0, 0, parked - 5000);
+
+        if (TciProtocol::mhzToHz(slice->frequency()) != parked) {
+            std::printf("      a locked slice moved\n");
+            return false;
+        }
+        // Confirmed at all (never leave a client waiting out its timeout), and
+        // confirmed with the truth.
+        return sent.contains(QStringLiteral("vfo:0,0,%1;").arg(parked))
+            && !sent.contains(QStringLiteral("vfo:0,0,%1;").arg(parked - 5000));
+    }
+
+    // A repeat of the frequency the slice is already on still has to answer.
+    // This used to short-circuit ahead of the tune and confirm from the model
+    // without commanding the radio — harmless alone, but combined with the stale
+    // model above it silently dropped real tunes once the two had diverged. With
+    // the model authoritative again the short-circuit is gone; what must survive
+    // is that a no-op is still acknowledged rather than met with silence.
+    static bool vfoSetAcknowledgesANoOp()
+    {
+        RadioModel model;
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error))
+            return false;
+        SliceModel* slice = model.slice(0);
+        if (!slice)
+            return false;
+
+        TciServer server(&model);
+        QWebSocket client;
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& dir, const QString& msg) {
+            if (dir == QLatin1String("tx"))
+                sent << msg.trimmed();
+        });
+
+        const long long parked = TciProtocol::mhzToHz(slice->frequency());
+        server.tuneSliceAndConfirm(&client, 0, 0, 0, parked);
+        return sent.contains(QStringLiteral("vfo:0,0,%1;").arg(parked));
+    }
 };
 
 } // namespace AetherSDR
@@ -474,6 +612,12 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::flagRelaySeedsAndDeDups();
     const bool flagSeedSettled
         = AetherSDR::TciServerReviewTest::flagSeedReadsSettledNotTransient();
+    const bool vfoConfirmsAccepted
+        = AetherSDR::TciServerReviewTest::vfoSetConfirmsTheAcceptedFrequency();
+    const bool vfoConfirmsRefusal
+        = AetherSDR::TciServerReviewTest::vfoSetConfirmsTruthWhenRefused();
+    const bool vfoAcksNoOp
+        = AetherSDR::TciServerReviewTest::vfoSetAcknowledgesANoOp();
     const bool txTrxResets
         = AetherSDR::TciServerReviewTest::lastTxTrxResetsOnClose();
     const bool activeSliceSeed
@@ -503,10 +647,17 @@ int main(int argc, char** argv)
                 activeSliceSeed ? "PASS" : "FAIL");
     std::printf("%s  active_slice renumbers/clears on slice removal (#4160)\n",
                 activeSliceRemoval ? "PASS" : "FAIL");
+    std::printf("%s  vfo: SET confirms the frequency reached (#4500/#4493)\n",
+                vfoConfirmsAccepted ? "PASS" : "FAIL");
+    std::printf("%s  vfo: SET confirms the truth when the tune is refused\n",
+                vfoConfirmsRefusal ? "PASS" : "FAIL");
+    std::printf("%s  vfo: SET still acknowledges a no-op\n",
+                vfoAcksNoOp ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval
+        && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         ? 0 : 1;
 }

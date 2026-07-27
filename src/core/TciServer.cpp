@@ -1173,15 +1173,6 @@ void TciServer::tuneSliceAndConfirm(
         return;
     }
 
-    const QString confirmation
-        = QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(frequencyHz);
-    if (TciProtocol::mhzToHz(slice->frequency()) == frequencyHz) {
-        // A no-op produces no Flex status. Confirm the already-authoritative
-        // model value so WSJT-X cannot time out during startup convergence.
-        broadcast(confirmation);
-        return;
-    }
-
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
     bool inSpan = false;
     if (PanadapterModel* pan = m_model->panadapter(slice->panId())) {
@@ -1189,56 +1180,54 @@ void TciServer::tuneSliceAndConfirm(
         inSpan = halfBandwidth > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBandwidth;
     }
 
-    // Seam backend (HL2): there is no text-command plane, so the sendCmdPublic
-    // below would be swallowed and its completion callback would never run —
-    // WSJT-X's band-hop was dropped AND its 2 s vfo-echo timeout expired, which
-    // it reports as a rig-control failure. Drive the model instead; it routes
-    // the intent through IRadioBackend::setSliceFrequency and, having no radio
-    // status to wait for, is authoritative the moment it returns. Recentering
-    // follows the same in-span rule as the Flex command choice below.
-    if (!m_model->usesFlexCommandPlane()) {
-        if (inSpan)
-            slice->setFrequency(mhz);
-        else
-            slice->tuneAndRecenter(mhz);
-        // A locked slice refuses the tune. Confirm what the model actually
-        // holds, never the request, so a client's mirror cannot drift.
-        const long long acceptedHz = TciProtocol::mhzToHz(slice->frequency());
-        if (acceptedHz > 0) {
-            broadcast(QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
-        }
-        return;
+    // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).
+    //
+    // This was briefly a raw `slice tune` written at the connection, with the
+    // radio's command reply used as a barrier to read the settled frequency back
+    // out of SliceModel. Both halves of that were wrong on a Flex:
+    //
+    //   - the raw command bypasses SliceModel, so nothing updates m_frequency;
+    //   - the radio does not answer `slice tune` with an RF_frequency status
+    //     either (measured: 89 tunes, 0 frequency statuses in one session).
+    //
+    // So the read-back could only ever observe the PRE-TUNE value, and every
+    // confirmation echoed the frequency the slice had already left. WSJT-X's
+    // do_frequency() waits on that echo, concluded the radio had not moved, and
+    // reported rig-control failure on every band change — while the radio was in
+    // fact sitting on the new band, which is how transmissions went out of band.
+    //
+    // The setter is the command path, not an addition to it: setFrequency()
+    // sends the byte-identical "slice tune <id> <mhz> autopan=0" this used to
+    // open-code, and additionally updates the model, honours a locked slice, and
+    // emits frequencyChanged. There is no second command and no double-tune.
+    //
+    // The model is the authority here BECAUSE the radio declines to be: with no
+    // status to wait for, an optimistic update is the only thing that can make a
+    // TCI client's mirror converge. (That the radio never confirms a tune is an
+    // older gap than the regression above and wants its own fix; until then this
+    // is what masks it, which is exactly why removing it broke so much.)
+    if (inSpan)
+        slice->setFrequency(mhz);
+    else
+        slice->tuneAndRecenter(mhz);
+
+    // Confirm what the model ACCEPTED, never what the client asked for.
+    //
+    // A locked slice refuses the tune outright and a no-op leaves the frequency
+    // where it was; in both cases the honest answer is the value the model
+    // holds, or a client's mirror drifts away from the radio.
+    //
+    // Sent unconditionally even though a successful tune also reaches clients
+    // via frequencyChanged → broadcastSliceFrequencies(). That duplicates the
+    // channel-0 vfo: frame, which is idempotent and harmless — whereas the
+    // alternative failure, a client left with NO confirmation, hangs WSJT-X for
+    // its full rig-control timeout. Channel 1 is not covered by that automatic
+    // path at all unless the routing state happens to be bound, so suppressing
+    // this would make split confirmations depend on unrelated state.
+    const long long acceptedHz = TciProtocol::mhzToHz(slice->frequency());
+    if (acceptedHz > 0) {
+        broadcast(QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
     }
-
-    const QString command = inSpan
-        ? QStringLiteral("slice tune %1 %2 autopan=0").arg(sliceId).arg(mhz, 0, 'f', 6)
-        : QStringLiteral("slice tune %1 %2").arg(sliceId).arg(mhz, 0, 'f', 6);
-
-    QPointer<TciServer> self(this);
-    QPointer<QWebSocket> socket(client);
-    m_model->sendCmdPublic(
-        command, [self, socket, trx, channel, sliceId](int code, const QString& body) {
-            if (!self || !socket) {
-                return;
-            }
-            if (code != 0) {
-                qCWarning(lcCat) << "TCI: VFO tune rejected"
-                                 << "slice=" << sliceId << "code=" << Qt::hex << code
-                                 << "body=" << body;
-                return;
-            }
-            // Flex status precedes this response. The reply is the completion
-            // barrier; publish the accepted coordinate to sender and observers.
-            SliceModel* settled = self->m_model ? self->m_model->slice(sliceId) : nullptr;
-            if (!settled) {
-                return;
-            }
-            const long long acceptedHz = TciProtocol::mhzToHz(settled->frequency());
-            if (acceptedHz > 0) {
-                self->broadcast(
-                    QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
-            }
-        });
 }
 
 void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation)
