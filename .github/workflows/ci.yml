@@ -105,11 +105,12 @@ jobs:
             libasound2-dev \
             zlib1g-dev \
             libmosquitto-dev \
-            libliquid-dev
+            libliquid-dev \
+            libwhisper-dev
 
       - name: Configure
         run: |
-          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DENABLE_RADE=OFF
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF
 
       - name: Build
         run: |

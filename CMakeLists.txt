@@ -26,6 +26,7 @@ option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
 option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
+option(USE_SYSTEM_LIBWHISPER   "Use system libwhisper"   OFF)
 
 # Build features options
 
@@ -1185,142 +1186,149 @@ target_link_libraries(AetherSDR PRIVATE aethercore)
 # and builds are deterministic across platforms (incl. no -march=native, which
 # would break portable/Pi/CI binaries). GPU backends land in a later phase.
 if (ENABLE_ASR)
-    set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-    set(GGML_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
-    set(GGML_BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
-    set(GGML_NATIVE            OFF CACHE BOOL "" FORCE)  # portable binaries (Pi/CI/release)
-    set(GGML_CPU               ON  CACHE BOOL "" FORCE)
-
-    # GPU acceleration for ASR: the native GPU backend per platform — Metal on
-    # Apple (macOS has no native Vulkan), Vulkan elsewhere (cross-platform
-    # NVIDIA/AMD/Intel on Linux/Windows). Both are the only GPU backends vendored,
-    # and both are gated so machines/CI without the toolchain build CPU-only,
-    # exactly as before. At runtime ggml falls back to CPU when no GPU device is
-    # found, so a GPU-enabled binary still runs on GPU-less hosts.
-    set(_asr_vulkan OFF)
-    set(_asr_metal  OFF)
-    if (APPLE)
-        # Metal uses the Metal framework + the `metal` shader compiler from full
-        # Xcode (present on macOS CI); no external SDK to install.
-        option(ENABLE_ASR_METAL "Enable Metal GPU acceleration for ASR (macOS)" ON)
-        if (ENABLE_ASR_METAL)
-            set(_asr_metal ON)
-            message(STATUS "ASR: Metal GPU backend enabled (Apple)")
+    if(USE_SYSTEM_LIBWHISPER)
+        find_package(PkgConfig REQUIRED)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(whisper REQUIRED IMPORTED_TARGET whisper)
         endif()
     else()
-        option(ENABLE_ASR_VULKAN "Enable Vulkan GPU acceleration for ASR (auto-detected)" ON)
-        if (ENABLE_ASR_VULKAN)
-            # Prebuilt Windows path: skips the glslc + SPIRV-Headers requirement
-            # because the shaders are already compiled INTO the shipped
-            # ggml-vulkan.lib. Only the runtime Vulkan loader import lib is
-            # needed to link the final exe.
-            if (WIN32 AND MSVC AND ASR_USE_PREBUILT_WHISPER_GPU)
-                find_package(Vulkan QUIET)
-                if (Vulkan_FOUND)
-                    set(_asr_vulkan ON)
-                    set(_asr_use_prebuilt ON)
-                    message(STATUS "ASR: Vulkan GPU backend enabled via prebuilt whisper-gpu pack")
+        set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+        set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+        set(GGML_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+        set(GGML_BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
+        set(GGML_NATIVE            OFF CACHE BOOL "" FORCE)  # portable binaries (Pi/CI/release)
+        set(GGML_CPU               ON  CACHE BOOL "" FORCE)
+
+        # GPU acceleration for ASR: the native GPU backend per platform — Metal on
+        # Apple (macOS has no native Vulkan), Vulkan elsewhere (cross-platform
+        # NVIDIA/AMD/Intel on Linux/Windows). Both are the only GPU backends vendored,
+        # and both are gated so machines/CI without the toolchain build CPU-only,
+        # exactly as before. At runtime ggml falls back to CPU when no GPU device is
+        # found, so a GPU-enabled binary still runs on GPU-less hosts.
+        set(_asr_vulkan OFF)
+        set(_asr_metal  OFF)
+        if (APPLE)
+            # Metal uses the Metal framework + the `metal` shader compiler from full
+            # Xcode (present on macOS CI); no external SDK to install.
+            option(ENABLE_ASR_METAL "Enable Metal GPU acceleration for ASR (macOS)" ON)
+            if (ENABLE_ASR_METAL)
+                set(_asr_metal ON)
+                message(STATUS "ASR: Metal GPU backend enabled (Apple)")
+            endif()
+        else()
+            option(ENABLE_ASR_VULKAN "Enable Vulkan GPU acceleration for ASR (auto-detected)" ON)
+            if (ENABLE_ASR_VULKAN)
+                # Prebuilt Windows path: skips the glslc + SPIRV-Headers requirement
+                # because the shaders are already compiled INTO the shipped
+                # ggml-vulkan.lib. Only the runtime Vulkan loader import lib is
+                # needed to link the final exe.
+                if (WIN32 AND MSVC AND ASR_USE_PREBUILT_WHISPER_GPU)
+                    find_package(Vulkan QUIET)
+                    if (Vulkan_FOUND)
+                        set(_asr_vulkan ON)
+                        set(_asr_use_prebuilt ON)
+                        message(STATUS "ASR: Vulkan GPU backend enabled via prebuilt whisper-gpu pack")
+                    else()
+                        message(STATUS "ASR: ASR_USE_PREBUILT_WHISPER_GPU requested but Vulkan loader not found — CPU-only")
+                    endif()
                 else()
-                    message(STATUS "ASR: ASR_USE_PREBUILT_WHISPER_GPU requested but Vulkan loader not found — CPU-only")
-                endif()
-            else()
-                find_package(Vulkan QUIET COMPONENTS glslc)
-                find_package(SPIRV-Headers QUIET CONFIG)
-                if (Vulkan_FOUND AND Vulkan_glslc_FOUND AND SPIRV-Headers_FOUND)
-                    set(_asr_vulkan ON)
-                    message(STATUS "ASR: Vulkan GPU backend enabled (glslc: ${Vulkan_GLSLC_EXECUTABLE})")
-                else()
-                    message(STATUS "ASR: Vulkan toolchain not found — CPU-only "
-                        "(Vulkan=${Vulkan_FOUND} glslc=${Vulkan_glslc_FOUND} SPIRV-Headers=${SPIRV-Headers_FOUND})")
+                    find_package(Vulkan QUIET COMPONENTS glslc)
+                    find_package(SPIRV-Headers QUIET CONFIG)
+                    if (Vulkan_FOUND AND Vulkan_glslc_FOUND AND SPIRV-Headers_FOUND)
+                        set(_asr_vulkan ON)
+                        message(STATUS "ASR: Vulkan GPU backend enabled (glslc: ${Vulkan_GLSLC_EXECUTABLE})")
+                    else()
+                        message(STATUS "ASR: Vulkan toolchain not found — CPU-only "
+                            "(Vulkan=${Vulkan_FOUND} glslc=${Vulkan_glslc_FOUND} SPIRV-Headers=${SPIRV-Headers_FOUND})")
+                    endif()
                 endif()
             endif()
         endif()
-    endif()
-    # Release guard: fail loudly rather than silently shipping a CPU-only build.
-    if (REQUIRE_ASR_GPU AND NOT _asr_vulkan AND NOT _asr_metal)
-        message(FATAL_ERROR "REQUIRE_ASR_GPU is set but no ASR GPU backend was enabled. "
-            "Install the Vulkan SDK (glslc + Vulkan headers + SPIRV-Headers) on Linux/Windows, "
-            "or full Xcode on macOS, then reconfigure.")
-    endif()
-    set(GGML_VULKAN ${_asr_vulkan} CACHE BOOL "" FORCE)
-    set(GGML_METAL  ${_asr_metal}  CACHE BOOL "" FORCE)
-    # Embed the compiled Metal shader source into the binary instead of relying on
-    # a runtime file lookup (bundle Resources / cwd) for ggml-metal.metal — the
-    # unembedded path fails whenever the app isn't launched from inside its own
-    # bundle, silently disabling Metal and then crashing later via a confusing
-    # ggml_abort() deep in the backend scheduler rather than a clear GPU-init
-    # error. Fix diagnosed + verified by K5PTB on large-v3-turbo + Metal. Only
-    # needs the assembler + sed/echo (already in play). (RFC #4333)
-    set(GGML_METAL_EMBED_LIBRARY ${_asr_metal} CACHE BOOL "" FORCE)
+        # Release guard: fail loudly rather than silently shipping a CPU-only build.
+        if (REQUIRE_ASR_GPU AND NOT _asr_vulkan AND NOT _asr_metal)
+            message(FATAL_ERROR "REQUIRE_ASR_GPU is set but no ASR GPU backend was enabled. "
+                "Install the Vulkan SDK (glslc + Vulkan headers + SPIRV-Headers) on Linux/Windows, "
+                "or full Xcode on macOS, then reconfigure.")
+        endif()
+        set(GGML_VULKAN ${_asr_vulkan} CACHE BOOL "" FORCE)
+        set(GGML_METAL  ${_asr_metal}  CACHE BOOL "" FORCE)
+        # Embed the compiled Metal shader source into the binary instead of relying on
+        # a runtime file lookup (bundle Resources / cwd) for ggml-metal.metal — the
+        # unembedded path fails whenever the app isn't launched from inside its own
+        # bundle, silently disabling Metal and then crashing later via a confusing
+        # ggml_abort() deep in the backend scheduler rather than a clear GPU-init
+        # error. Fix diagnosed + verified by K5PTB on large-v3-turbo + Metal. Only
+        # needs the assembler + sed/echo (already in play). (RFC #4333)
+        set(GGML_METAL_EMBED_LIBRARY ${_asr_metal} CACHE BOOL "" FORCE)
 
-    # Every other non-CPU backend OFF (their source dirs are not vendored):
-    foreach(_ggml_backend
-            ACCELERATE BLAS CUDA HIP MUSA WEBGPU SYCL OPENCL
-            OPENVINO RPC CANN ZDNN ZENDNN HEXAGON)
-        set(GGML_${_ggml_backend} OFF CACHE BOOL "" FORCE)
-    endforeach()
-    if (_asr_use_prebuilt)
-        # Consume the prebuilt static libs from the whisper-gpu release asset.
-        # See scripts/build/build-whisper-vulkan-windows.ps1 for the producer.
-        # Public headers still come from the vendored source tree (in git); only
-        # the compiled .libs come off GitHub. Everything else — dep graph,
-        # target names — matches what add_subdirectory would have produced, so
-        # the rest of this file is unchanged.
-        include(FetchContent)
-        set(_whisper_gpu_ver "1.9.1")
-        set(_whisper_gpu_sha "7671384731bc286e8eacaab36d2d69e5ffad5a6458fb47fff8e8dec361f68ca7")
-        FetchContent_Declare(whisper_gpu_prebuilt
-            URL      "https://github.com/aethersdr/AetherSDR/releases/download/whisper-gpu-${_whisper_gpu_ver}/whisper-gpu-${_whisper_gpu_ver}-windows-x86_64.zip"
-            URL_HASH SHA256=${_whisper_gpu_sha}
-        )
-        FetchContent_MakeAvailable(whisper_gpu_prebuilt)
-        set(_wg_libs "${whisper_gpu_prebuilt_SOURCE_DIR}/libs")
-        set(_wc_root "${CMAKE_SOURCE_DIR}/third_party/whisper.cpp")
-
-        find_package(Threads REQUIRED)
-        foreach(_tgt IN ITEMS ggml-base ggml ggml-cpu ggml-vulkan whisper)
-            add_library(${_tgt} STATIC IMPORTED)
-            set_target_properties(${_tgt} PROPERTIES
-                IMPORTED_LOCATION "${_wg_libs}/${_tgt}.lib"
-            )
+        # Every other non-CPU backend OFF (their source dirs are not vendored):
+        foreach(_ggml_backend
+                ACCELERATE BLAS CUDA HIP MUSA WEBGPU SYCL OPENCL
+                OPENVINO RPC CANN ZDNN ZENDNN HEXAGON)
+            set(GGML_${_ggml_backend} OFF CACHE BOOL "" FORCE)
         endforeach()
-        # Header search paths — mirror what the source targets propagate.
-        set_target_properties(ggml-base   PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(ggml        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(ggml-cpu    PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(whisper     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/include;${_wc_root}/ggml/include")
-        # Link graph — matches whisper.cpp/ggml's own target_link_libraries so
-        # the final exe pulls in every transitive .lib and the Vulkan loader.
-        set_target_properties(ggml-base   PROPERTIES INTERFACE_LINK_LIBRARIES "Threads::Threads")
-        set_target_properties(ggml-cpu    PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base")
-        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
-        set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
-        set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
-        message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
-    else()
-        # Build whisper/ggml as static objects, not .so's.
-        set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
-        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-        add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
-        set(BUILD_SHARED_LIBS ${_aether_saved_shared_libs} CACHE BOOL "" FORCE)
+        if (_asr_use_prebuilt)
+            # Consume the prebuilt static libs from the whisper-gpu release asset.
+            # See scripts/build/build-whisper-vulkan-windows.ps1 for the producer.
+            # Public headers still come from the vendored source tree (in git); only
+            # the compiled .libs come off GitHub. Everything else — dep graph,
+            # target names — matches what add_subdirectory would have produced, so
+            # the rest of this file is unchanged.
+            include(FetchContent)
+            set(_whisper_gpu_ver "1.9.1")
+            set(_whisper_gpu_sha "7671384731bc286e8eacaab36d2d69e5ffad5a6458fb47fff8e8dec361f68ca7")
+            FetchContent_Declare(whisper_gpu_prebuilt
+                URL      "https://github.com/aethersdr/AetherSDR/releases/download/whisper-gpu-${_whisper_gpu_ver}/whisper-gpu-${_whisper_gpu_ver}-windows-x86_64.zip"
+                URL_HASH SHA256=${_whisper_gpu_sha}
+            )
+            FetchContent_MakeAvailable(whisper_gpu_prebuilt)
+            set(_wg_libs "${whisper_gpu_prebuilt_SOURCE_DIR}/libs")
+            set(_wc_root "${CMAKE_SOURCE_DIR}/third_party/whisper.cpp")
 
-        if (MSVC)
-            # MSVC's optimizer is pathologically slow on ggml's SIMD/quant kernels
-            # (ggml-cpu/ops.cpp, ggml.c, ggml-quants.c, repack.cpp) — a cold Release
-            # build of the vendored engine ran Windows CI from ~28 min to 3h+. These
-            # kernels are explicitly vectorized (intrinsics) and memory-bandwidth-
-            # bound, so /O1 keeps runtime fast enough while cutting MSVC compile time
-            # dramatically. Scoped to the vendored ASR targets only; the rest of
-            # AetherSDR keeps its normal optimization. (/O1 intentionally overrides
-            # the config's /O2 — the D9025 override notice is expected.)
-            foreach(_asr_msvc_target ggml-base ggml ggml-cpu ggml-vulkan whisper)
-                if (TARGET ${_asr_msvc_target})
-                    target_compile_options(${_asr_msvc_target} PRIVATE /O1)
-                endif()
+            find_package(Threads REQUIRED)
+            foreach(_tgt IN ITEMS ggml-base ggml ggml-cpu ggml-vulkan whisper)
+                add_library(${_tgt} STATIC IMPORTED)
+                set_target_properties(${_tgt} PROPERTIES
+                    IMPORTED_LOCATION "${_wg_libs}/${_tgt}.lib"
+                )
             endforeach()
+            # Header search paths — mirror what the source targets propagate.
+            set_target_properties(ggml-base   PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(ggml        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(ggml-cpu    PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(ggml-vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(whisper     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/include;${_wc_root}/ggml/include")
+            # Link graph — matches whisper.cpp/ggml's own target_link_libraries so
+            # the final exe pulls in every transitive .lib and the Vulkan loader.
+            set_target_properties(ggml-base   PROPERTIES INTERFACE_LINK_LIBRARIES "Threads::Threads")
+            set_target_properties(ggml-cpu    PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base")
+            set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
+            set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
+            set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
+            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+        else()
+            # Build whisper/ggml as static objects, not .so's.
+            set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
+            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
+            set(BUILD_SHARED_LIBS ${_aether_saved_shared_libs} CACHE BOOL "" FORCE)
+
+            if (MSVC)
+                # MSVC's optimizer is pathologically slow on ggml's SIMD/quant kernels
+                # (ggml-cpu/ops.cpp, ggml.c, ggml-quants.c, repack.cpp) — a cold Release
+                # build of the vendored engine ran Windows CI from ~28 min to 3h+. These
+                # kernels are explicitly vectorized (intrinsics) and memory-bandwidth-
+                # bound, so /O1 keeps runtime fast enough while cutting MSVC compile time
+                # dramatically. Scoped to the vendored ASR targets only; the rest of
+                # AetherSDR keeps its normal optimization. (/O1 intentionally overrides
+                # the config's /O2 — the D9025 override notice is expected.)
+                foreach(_asr_msvc_target ggml-base ggml ggml-cpu ggml-vulkan whisper)
+                    if (TARGET ${_asr_msvc_target})
+                        target_compile_options(${_asr_msvc_target} PRIVATE /O1)
+                    endif()
+                endforeach()
+            endif()
         endif()
     endif()
 
@@ -1347,8 +1355,13 @@ if (ENABLE_ASR)
         src/core/Resampler.cpp   # standalone r8brain wrapper (24k->16k on the ASR worker)
     )
     target_include_directories(aetherasr PUBLIC src PRIVATE ${CMAKE_SOURCE_DIR}/third_party/r8brain)
-    target_link_libraries(aetherasr PUBLIC Qt6::Core Qt6::Network PRIVATE Qt6::Concurrent whisper)
+    target_link_libraries(aetherasr PUBLIC Qt6::Core Qt6::Network PRIVATE Qt6::Concurrent)
     target_compile_definitions(aetherasr PUBLIC AETHER_ASR_ENABLED=1)
+    if(USE_SYSTEM_LIBWHISPER)
+        target_link_libraries(aetherasr PRIVATE PkgConfig::whisper)
+    else()
+        target_link_libraries(aetherasr PRIVATE whisper)
+    endif()
     if (_asr_vulkan OR _asr_metal)
         target_compile_definitions(aetherasr PRIVATE AETHER_ASR_GPU=1)
     endif()
@@ -3403,7 +3416,11 @@ add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 # compiles and links via two model-free entry points. No model, no audio.
 if (ENABLE_ASR)
     add_executable(asr_whisper_smoke_test tests/asr_whisper_smoke_test.cpp)
-    target_link_libraries(asr_whisper_smoke_test PRIVATE whisper)
+    if(USE_SYSTEM_LIBWHISPER)
+        target_link_libraries(asr_whisper_smoke_test PRIVATE PkgConfig::whisper)
+    else()
+        target_link_libraries(asr_whisper_smoke_test PRIVATE whisper)
+    endif()
     add_test(NAME asr_whisper_smoke_test COMMAND asr_whisper_smoke_test)
 
     # Model manager: offline download/verify/failover test (file:// sources).
@@ -3498,7 +3515,12 @@ if (ENABLE_ASR)
         src/asr/WhisperAsrBackend.cpp
     )
     target_include_directories(asr_whisper_backend_test PRIVATE src)
-    target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core whisper)
+    target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core)
+    if(USE_SYSTEM_LIBWHISPER)
+        target_link_libraries(asr_whisper_backend_test PRIVATE PkgConfig::whisper)
+    else()
+        target_link_libraries(asr_whisper_backend_test PRIVATE whisper)
+    endif()
     add_test(NAME asr_whisper_backend_test COMMAND asr_whisper_backend_test)
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
