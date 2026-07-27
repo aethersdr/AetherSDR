@@ -70,6 +70,15 @@ public:
     void tune() { sendKey(Spe::Key::Tune); }
     void switchOff() { sendKey(Spe::Key::SwitchOff); }
 
+    // Power the amplifier ON — a hardware pulse on the serial connector's
+    // control lines, not a protocol command, so it works while the amp is
+    // silent. Network mode drives the proxy's DTR/RTS via RFC 2217 (needs
+    // ser2net in telnet mode); serial mode drives the local lines directly.
+    // The pulse sequence and timing are carried verbatim from the
+    // field-proven reference application (see Spe::Rfc2217 and design note
+    // §4). No-op while a pulse is already in progress.
+    void powerOn();
+
     const Spe::Status& lastStatus() const { return m_lastStatus; }
 
     // Model ID from the last Status reply ("13K"/"15K"/"20K"), empty until
@@ -107,6 +116,8 @@ private:
     void sendRaw(const QByteArray& packet);
     void armReconnect();
     void pollTick();
+    void powerOnStep();
+    void setControlLines(bool dtr, bool rts);  // transport-appropriate DTR/RTS
 
     QIODevice*    m_device{nullptr};
     QTcpSocket    m_socket;
@@ -136,6 +147,10 @@ private:
     static constexpr int kPollIntervalMs = 100;
 
     QString m_currentModelId;
+
+    // Power-ON pulse state machine (see powerOn()). -1 = idle.
+    QTimer m_powerOnTimer;
+    int    m_powerOnStep{-1};
 
     // Responding/silent tracking: a poll counts as unanswered if no Status
     // frame arrived since the previous tick. A few misses are tolerated

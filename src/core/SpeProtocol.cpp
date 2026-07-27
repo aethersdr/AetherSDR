@@ -257,6 +257,41 @@ QString powerLevelName(QChar code)
     }
 }
 
+namespace Rfc2217 {
+
+namespace {
+constexpr quint8 kIac = 0xFF;
+constexpr quint8 kWill = 0xFB;
+constexpr quint8 kSb = 0xFA;
+constexpr quint8 kSe = 0xF0;
+constexpr quint8 kComPortOption = 0x2C;
+constexpr quint8 kSetControl = 0x05;
+}  // namespace
+
+QByteArray buildWillComPortOption()
+{
+    QByteArray b;
+    b.append(static_cast<char>(kIac));
+    b.append(static_cast<char>(kWill));
+    b.append(static_cast<char>(kComPortOption));
+    return b;
+}
+
+QByteArray buildSetControl(quint8 ctrl)
+{
+    QByteArray b;
+    b.append(static_cast<char>(kIac));
+    b.append(static_cast<char>(kSb));
+    b.append(static_cast<char>(kComPortOption));
+    b.append(static_cast<char>(kSetControl));
+    b.append(static_cast<char>(ctrl));
+    b.append(static_cast<char>(kIac));
+    b.append(static_cast<char>(kSe));
+    return b;
+}
+
+}  // namespace Rfc2217
+
 const ModelSpec& modelSpec(const QString& id)
 {
     const auto& table = modelTable();

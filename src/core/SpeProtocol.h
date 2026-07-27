@@ -169,6 +169,31 @@ QString alarmText(QChar code);
 
 QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
 
+// ── Remote power-ON (RFC 2217 Telnet COM-port control) ───────────────────
+
+// The Expert powers ON via a pulse on a hardware line of its serial
+// connector — not a protocol command. Over a ser2net telnet-mode proxy that
+// pulse is expressible with RFC 2217 SET-CONTROL messages driving the
+// proxy's DTR/RTS lines. The exact sequence below (500 ms after announcing
+// WILL COM-PORT-OPTION: DTR on, 100 ms, DTR off + RTS on, 1000 ms, DTR on +
+// RTS off) is carried verbatim from the field-proven reference application
+// for the 1.5K-FA — see the design note §4. SpeConnection owns the timing;
+// these helpers just build the byte sequences (kept here so they are
+// unit-testable against RFC 2217's literal framing).
+namespace Rfc2217 {
+
+constexpr quint8 kDtrOn  = 0x08;
+constexpr quint8 kDtrOff = 0x09;
+constexpr quint8 kRtsOn  = 0x0B;
+constexpr quint8 kRtsOff = 0x0C;
+
+// IAC WILL COM-PORT-OPTION — asks the proxy to interpret RFC 2217 frames.
+QByteArray buildWillComPortOption();
+// IAC SB COM-PORT-OPTION SET-CONTROL <ctrl> IAC SE
+QByteArray buildSetControl(quint8 ctrl);
+
+}  // namespace Rfc2217
+
 // ── Per-model display scaling ────────────────────────────────────────────
 
 // The Status ID field identifies the model directly on every response, so —

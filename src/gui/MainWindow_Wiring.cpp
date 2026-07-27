@@ -5551,6 +5551,9 @@ void MainWindow::wireMeters()
     // Applet buttons -> front-panel keystrokes.
     {
         auto* spe = m_appletPanel->speApplet();
+        // ON is a hardware pulse on the serial control lines, not a
+        // keystroke — works while the amp is off/silent (design note §4).
+        connect(spe, &SpeApplet::powerOnClicked, this, [this]() { m_speConn.powerOn(); });
         connect(spe, &SpeApplet::operateClicked, this, [this]() { m_speConn.toggleOperate(); });
         connect(spe, &SpeApplet::powerLevelClicked, this, [this]() { m_speConn.cyclePowerLevel(); });
         connect(spe, &SpeApplet::tuneClicked, this, [this]() { m_speConn.tune(); });

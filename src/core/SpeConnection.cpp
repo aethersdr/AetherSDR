@@ -33,6 +33,9 @@ SpeConnection::SpeConnection(QObject* parent)
 
     m_pollTimer.setInterval(kPollIntervalMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &SpeConnection::pollTick);
+
+    m_powerOnTimer.setSingleShot(true);
+    connect(&m_powerOnTimer, &QTimer::timeout, this, &SpeConnection::powerOnStep);
 }
 
 QString SpeConnection::description() const
@@ -135,6 +138,8 @@ void SpeConnection::disconnect()
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
+    m_powerOnTimer.stop();
+    m_powerOnStep = -1;
     m_connected = false;
     teardownDevice();
     m_parser.reset();
@@ -180,6 +185,8 @@ void SpeConnection::onTransportDown()
     const bool wasConnected = m_connected;
     m_connected = false;
     m_pollTimer.stop();
+    m_powerOnTimer.stop();
+    m_powerOnStep = -1;
     m_parser.reset();
     if (wasConnected) {
         qCDebug(lcTuner) << "SpeConnection: disconnected";
@@ -272,6 +279,65 @@ void SpeConnection::onFrameReceived(const Spe::Frame& f)
 void SpeConnection::sendKey(Spe::Key key)
 {
     sendRaw(Spe::buildKeyCommand(key));
+}
+
+void SpeConnection::setControlLines(bool dtr, bool rts)
+{
+    if (m_mode == Mode::Network) {
+        // The proxy's serial lines, driven remotely via RFC 2217.
+        sendRaw(Spe::Rfc2217::buildSetControl(
+            dtr ? Spe::Rfc2217::kDtrOn : Spe::Rfc2217::kDtrOff));
+        sendRaw(Spe::Rfc2217::buildSetControl(
+            rts ? Spe::Rfc2217::kRtsOn : Spe::Rfc2217::kRtsOff));
+#ifdef HAVE_SERIALPORT
+    } else if (m_mode == Mode::Serial && m_serialPort && m_serialPort->isOpen()) {
+        m_serialPort->setDataTerminalReady(dtr);
+        m_serialPort->setRequestToSend(rts);
+#endif
+    }
+}
+
+void SpeConnection::powerOn()
+{
+    if (!m_connected || m_powerOnStep >= 0) { return; }
+    qCInfo(lcTuner) << "SpeConnection: sending power-ON pulse via" << sourceLabel();
+    m_powerOnStep = 0;
+    if (m_mode == Mode::Network) {
+        // Ask the proxy to interpret RFC 2217 frames, then give it a moment
+        // — the reference application's own working pacing.
+        sendRaw(Spe::Rfc2217::buildWillComPortOption());
+        m_powerOnTimer.start(500);
+    } else {
+        powerOnStep();  // local serial lines need no negotiation
+    }
+}
+
+void SpeConnection::powerOnStep()
+{
+    // Pulse sequence carried verbatim from the reference application:
+    // DTR on (100 ms), then DTR off + RTS on (1000 ms — the actual power
+    // pulse), then DTR on + RTS off to idle.
+    switch (m_powerOnStep) {
+        case 0:
+            setControlLines(true, false);
+            m_powerOnStep = 1;
+            m_powerOnTimer.start(100);
+            break;
+        case 1:
+            setControlLines(false, true);
+            m_powerOnStep = 2;
+            m_powerOnTimer.start(1000);
+            break;
+        case 2:
+            setControlLines(true, false);
+            m_powerOnStep = -1;
+            qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the amp"
+                               " should begin answering status polls shortly.";
+            break;
+        default:
+            m_powerOnStep = -1;
+            break;
+    }
 }
 
 void SpeConnection::sendRaw(const QByteArray& packet)

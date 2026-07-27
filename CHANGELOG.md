@@ -14,7 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   peripheral accessory following the ACOM precedent: dedicated `SPE` applet
   (power / antenna-SWR / ATU-SWR gauges, V/I/temperature readouts,
   warning+alarm banner, front-panel keystroke buttons: OPER/STBY, power
-  level, TUNE, OFF, INPUT, ANT, and the drive-power ▲/▼ arrow keys) driven
+  level, TUNE, OFF, INPUT, ANT, the drive-power ▲/▼ arrow keys, and a
+  hardware power-**ON** pulse — RFC 2217 DTR/RTS over ser2net telnet, or
+  the local serial lines on a COM connection) driven
   by a serial or ser2net (raw or telnet) connection with a 100 ms status
   poll. Model is identified from the amplifier's own status ID, and the
   power gauge rescales with the selected LOW/MID/HIGH level, matching the

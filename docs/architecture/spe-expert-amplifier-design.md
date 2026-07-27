@@ -64,8 +64,9 @@ SpeConnection (src/core/SpeConnection.h/.cpp)
   §1) or QTcpSocket (ser2net, raw or telnet mode) — chosen at connect time.
   Owns the 100 ms status poll loop (the SPE never pushes; it only answers),
   poll-silence detection (respondingChanged — with ser2net the TCP link
-  outlives the amp being switched off), auto-reconnect, and model
-  identification from the Status ID field.
+  outlives the amp being switched off), auto-reconnect, model
+  identification from the Status ID field, and the power-ON pulse state
+  machine (RFC 2217 over telnet, or local DTR/RTS on serial — §4).
   signals: connected/disconnected/connectionFailed, statusUpdated,
            modelChanged(id), respondingChanged(bool)
 
@@ -78,8 +79,9 @@ SpeApplet (src/gui/SpeApplet.h/.cpp)
   its own display is configured for, without saying which (spec §5).
   3-cell info grid (temp/V/I, band/antenna/input·level), status pill
   (OPR·TX / OPR·RX / STANDBY), fault banner (alarms + warnings), and two
-  keystroke button rows: OPER-STBY toggle / power level (the button's label
-  IS the current LOW/MID/HIGH) / TUNE / OFF, and INPUT / ANT / ▼ / ▲ —
+  keystroke button rows: ON (hardware pulse, §4) / OPER-STBY toggle / power
+  level (the button's label IS the current LOW/MID/HIGH) / TUNE / OFF, and
+  INPUT / ANT / ▼ / ▲ —
   the arrows being the Expert's front-panel arrow keys, which adjust the
   drive power the amp requests from the radio over CAT. The power gauge
   rescales with the selected level (§5), matching the amp's own display.
@@ -148,7 +150,7 @@ transcribed in `SpeProtocol.cpp`).
 | BAND± | No | The amp follows the radio's band via CAT/RF sensing on its own; a manual band override from a radio-control app invites disagreement between the two. Deferred, not rejected. |
 | Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
 | SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
-| Remote power-ON | Not yet | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network this IS expressible as a serial BREAK when ser2net runs the port in **telnet** mode with `telnet-brk-on-sync` (the reference application does exactly this), and locally as a serial break/DTR pulse. Deferred to a follow-up; meanwhile the Peripherals row's tooltip documents the required ser2net telnet config so users set the proxy up right the first time, and `SpeConnection` holds DTR/RTS low in serial mode to avoid tripping that power line accidentally. |
+| Remote power-ON (ON button) | Yes | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network `SpeConnection::powerOn()` drives the proxy's DTR/RTS lines via **RFC 2217** COM-port-control (needs ser2net in telnet mode — the Peripherals row's tooltip carries the reference `ser2net.yaml`); on a local COM port it drives the lines directly. The pulse sequence (DTR on 100 ms, DTR off + RTS on 1000 ms, DTR on + RTS off) is carried verbatim from the field-proven reference application. The ON button is the one control that stays enabled while the amp is silent — that is its entire purpose — and `SpeConnection` holds DTR/RTS low otherwise so the power line is never tripped accidentally. |
 | Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
 
 ---

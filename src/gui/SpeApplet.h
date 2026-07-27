@@ -77,6 +77,7 @@ public:
     void setResponding(bool responding);
 
 signals:
+    void powerOnClicked();     // hardware power-ON pulse (works while the amp is silent)
     void operateClicked();     // OPERATE key — toggles STANDBY <-> OPERATE
     void powerLevelClicked();  // POWER key — cycles LOW/MID/HIGH
     void tuneClicked();        // TUNE key
@@ -113,6 +114,7 @@ private:
 
     QLabel* m_faultLabel{nullptr};
 
+    QPushButton* m_onBtn{nullptr};
     QPushButton* m_operateBtn{nullptr};
     QPushButton* m_pwrLevelBtn{nullptr};
     QPushButton* m_tuneBtn{nullptr};

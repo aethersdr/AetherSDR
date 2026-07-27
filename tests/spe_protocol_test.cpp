@@ -242,6 +242,17 @@ int main()
     report("an unknown level letter falls back to the full HIGH scale",
            levelNominalW(s15, u'?') == 1500.0f);
 
+    // ── RFC 2217 power-ON framing (design note §4) — literal byte
+    //    sequences per RFC 2217's COM-PORT-OPTION subnegotiation.
+    report("WILL COM-PORT-OPTION is IAC WILL 0x2C",
+           Rfc2217::buildWillComPortOption() == QByteArray::fromHex("fffb2c"));
+    report("SET-CONTROL RTS-on frames as IAC SB 2C 05 0B IAC SE",
+           Rfc2217::buildSetControl(Rfc2217::kRtsOn)
+               == QByteArray::fromHex("fffa2c050bfff0"));
+    report("SET-CONTROL DTR-off frames as IAC SB 2C 05 09 IAC SE",
+           Rfc2217::buildSetControl(Rfc2217::kDtrOff)
+               == QByteArray::fromHex("fffa2c0509fff0"));
+
     std::printf("\n%d SPE protocol test(s) failed.\n", g_failed);
     return g_failed == 0 ? 0 : 1;
 }

@@ -208,7 +208,17 @@ SpeApplet::SpeApplet(QWidget* parent)
 
     auto* btnRow1 = new QHBoxLayout;
     btnRow1->setSpacing(6);
-    // "OPER"/"STBY" rather than the full words — the row has 4 buttons and
+    // ON is a hardware pulse, not a keystroke — deliberately styled apart
+    // and kept enabled while the amp is silent (that is its whole purpose;
+    // see updateCommandsEnabled).
+    m_onBtn = new QPushButton("ON", this);
+    m_onBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    theme.applyStyleSheet(m_onBtn, activeBtnStyle("#0f2a1c", "#2a6a45"));
+    m_onBtn->setToolTip(tr("Power the amplifier ON — pulses the serial control"
+                           " lines (over the network this needs ser2net in"
+                           " telnet mode; see the Radio Setup row's tooltip)."));
+    connect(m_onBtn, &QPushButton::clicked, this, &SpeApplet::powerOnClicked);
+    // "OPER"/"STBY" rather than the full words — the row has 5 buttons and
     // the long labels clip at the applet's default width (hardware-tested).
     m_operateBtn = makeKeyBtn("OPER");
     m_operateBtn->setToolTip(tr("Toggle STANDBY / OPERATE (front-panel OPERATE key)"));
@@ -222,11 +232,12 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_tuneBtn->setToolTip(tr("Start ATU tuning (front-panel TUNE key)"));
     connect(m_tuneBtn, &QPushButton::clicked, this, &SpeApplet::tuneClicked);
     m_offBtn = makeKeyBtn("OFF");
-    m_offBtn->setToolTip(tr("Switch the amplifier off. Powering back on remotely"
-                            " needs the hardware power-on line — not possible from"
-                            " this panel."));
+    m_offBtn->setToolTip(tr("Switch the amplifier off. Use ON to power it back"
+                            " up (over the network this needs ser2net in telnet"
+                            " mode)."));
     connect(m_offBtn, &QPushButton::clicked, this, &SpeApplet::offClicked);
     btnRow1->addStretch();
+    btnRow1->addWidget(m_onBtn);
     btnRow1->addWidget(m_operateBtn);
     btnRow1->addWidget(m_pwrLevelBtn);
     btnRow1->addWidget(m_tuneBtn);
@@ -428,6 +439,9 @@ void SpeApplet::updateCommandsEnabled()
     for (auto* btn : {m_operateBtn, m_pwrLevelBtn, m_tuneBtn, m_offBtn,
                       m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn})
         btn->setEnabled(enabled);
+    // ON stays available whenever the transport is up — a silent amp is
+    // exactly when it's needed.
+    m_onBtn->setEnabled(m_connected);
 }
 
 void SpeApplet::setConnected(bool connected)
