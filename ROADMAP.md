@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.7.4
+## Current cycle: post-v26.7.4.1
 
 ### In flight
 
@@ -109,6 +109,11 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **TCI rig control hotfix** — a `vfo:` SET confirmed the *pre-tune* frequency,
+  so WSJT-X concluded the radio had never moved and failed every band change,
+  and relative tuning from a control surface oscillated instead of walking.
+  Transmissions could go out of band. Same-day hotfix on top of v26.7.4
+  (v26.7.4.1).
 - **Hermes-Lite 2 — experimental** — receive, transmit, and TCI signaling for
   WSJT-X on the aetherd `IRadioBackend` seam, with an operator-controllable
   panadapter span (6 Mb low-bandwidth mode) and per-radio nicknames keyed by
