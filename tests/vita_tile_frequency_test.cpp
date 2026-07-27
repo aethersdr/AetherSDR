@@ -1,9 +1,9 @@
 // Unit tests for VITA-49 waterfall-tile frequency decoding.
 //
 // Regression coverage for the 1 GHz ceiling that blacked out the transverter
-// waterfall above 1 GHz (#3449, #1843, #1928, #2835). The decoder must pick the
-// correct encoding (VitaFrequency vs plain Hz) from the raw integer magnitude
-// with no upper frequency limit.
+// waterfall above 1 GHz (#3449, #1843, #1928, #2835), plus the near-DC
+// magnitude ambiguity that blacked out rows whose tile overhung below zero
+// (#4412). Waterfall tile frequencies are always VITA fixed point.
 
 #include "core/VitaTileFrequency.h"
 
@@ -35,17 +35,10 @@ qint64 vitaRaw(double mhz)
     return static_cast<qint64>(std::llround(mhz * 1e6 * 1048576.0));
 }
 
-// Plain-Hz raw value for a frequency in MHz.
-qint64 hzRaw(double mhz)
-{
-    return static_cast<qint64>(std::llround(mhz * 1e6));
-}
-
 } // namespace
 
 int main()
 {
-    // ── VitaFrequency encoding ───────────────────────────────────────────────
     // HF tile (well below 1 GHz) must decode correctly.
     {
         const auto f = decodeTileFrequencyMhz(vitaRaw(14.0), vitaRaw(0.001));
@@ -79,25 +72,27 @@ int main()
                    2400.0, 1e-2);
     }
 
-    // 2200 m (135 kHz) — lowest band; VitaFrequency raw still lands above the
-    // disambiguation threshold, so it must decode as VitaFrequency.
+    // 2200 m (135 kHz) must decode without a lower-frequency heuristic.
     {
         const auto f = decodeTileFrequencyMhz(vitaRaw(0.1357), vitaRaw(0.00001));
         expectNear("vita 2200m low", f.lowMhz, 0.1357, 1e-4);
     }
 
-    // ── Plain-Hz encoding ────────────────────────────────────────────────────
-    // Radios/firmware that send plain Hz must still decode correctly across the
-    // same range (the old code claimed to support this but had latent gaps).
+    // Radio tiles extend beyond the visible pan. At a zero-Hz display edge, the
+    // first tile can therefore start slightly negative. This capture comes from
+    // the #4412 FLEX-6700 reproduction: -30,112 Hz with 375 Hz bins.
     {
-        expectNear("hz 14 MHz", decodeTileFrequencyMhz(hzRaw(14.0), hzRaw(0.001)).lowMhz,
-                   14.0, 1e-6);
-        expectNear("hz 1296 MHz", decodeTileFrequencyMhz(hzRaw(1296.0), 0).lowMhz,
-                   1296.0, 1e-6);
-        expectNear("hz 2400 MHz", decodeTileFrequencyMhz(hzRaw(2400.0), 0).lowMhz,
-                   2400.0, 1e-6);
-        const auto bw = decodeTileFrequencyMhz(hzRaw(2400.0), hzRaw(0.005));
-        expectNear("hz binBw shares encoding", bw.binBwMhz, 0.005, 1e-9);
+        const auto f = decodeTileFrequencyMhz(-31574720512LL, 393216000LL);
+        expectNear("vita negative DC overhang", f.lowMhz, -0.030112, 1e-9);
+        expectNear("vita near-DC binBw", f.binBwMhz, 0.000375, 1e-12);
+    }
+
+    // The wide-span capture reached even closer to DC: -3.2 kHz with 6 kHz
+    // bins. Both values are far below the removed magnitude threshold.
+    {
+        const auto f = decodeTileFrequencyMhz(-3355443200LL, 6291456000LL);
+        expectNear("vita -3.2 kHz overhang", f.lowMhz, -0.0032, 1e-12);
+        expectNear("vita 6 kHz binBw", f.binBwMhz, 0.006, 1e-12);
     }
 
     if (g_failures == 0) {

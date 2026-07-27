@@ -42,8 +42,15 @@ gateware 7.4):
 - Sample-rate control (48/96/192/384 kHz) via the config C&C register.
 - **RX1 NCO tuning** (`C0=0x04`, 32-bit Hz BE) — WWV 10 MHz lands exactly at
   baseband DC.
-- The non-obvious must-set: **`CONFIG_MERCURY`** (config C1 bit 6) selects the
-  ADC as the DDC source; without it the stream is flat ADC-floor noise.
+- ~~The non-obvious must-set: **`CONFIG_MERCURY`** (config C1 bit 6) selects the
+  ADC as the DDC source; without it the stream is flat ADC-floor noise.~~
+  **Corrected 2026-07-24:** this diagnosis was wrong. The HL2 gateware does not
+  decode C1 bit 6 (`cmd_data[30]`) at all, so the bit cannot have been what fixed
+  the flat-noise symptom. The actual cause is C&C **ordering**: a stream started
+  before any Command & Control frame has landed emits ADC-idle samples. The cure
+  is to prime with C&C frames *before* `metis-start` (see `MetisClient::
+  sendPrimingBurst`). We still send the bit — it is meaningful on genuine
+  openHPSDR Hermes/Mercury hardware and harmless here — but it is not load-bearing.
 - LNA gain (`C0=0x14`, `C4 = 0x40 | (dB+12)`), −12…+48 dB.
 - End-to-end FFT panadapter resolving WWV ~50 dB over the noise floor.
 
@@ -238,8 +245,10 @@ GPL/open sources. Allowed inputs used:
 - **openHPSDR Protocol 1** (TAPR, GPL-2.0) — Metis discovery handshake, EP2/EP6
   1032-byte frame layout, the C0 `(addr<<1)|MOX` register-address encoding.
 - **Hermes-Lite 2 wiki / gateware** (KF7O + contributors) — board id `0x06`,
-  supported sample rates, register `0x0a` extended-range LNA gain, the
-  `CONFIG_MERCURY` ADC-source-select bit.
+  supported sample rates, register `0x0a` LNA gain (C4 bit 6 selects the
+  direct-value mapping; the gateware's own reset default is `7'b1000000`), the
+  RUNSTOP watchdog bit, and — by inspection of the RTL — confirmation that the
+  `CONFIG_MERCURY` and duplex config bits are *not* decoded on this hardware.
 - **pihpsdr `src/old_protocol.c`** (DL1YCF, GPL-3.0) — consulted as a *behavioral
   reference* for the minimal round-robin C&C init sequence a receiver needs.
 - **Live black-box observation** of the AetherSDR-owned HL2 (register effects on

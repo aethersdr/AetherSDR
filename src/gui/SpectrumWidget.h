@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -13,6 +14,8 @@
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QLineF>
+#include <QPolygonF>
 #include <QVariant>
 #include <QTimer>
 #include <QLabel>
@@ -102,6 +105,15 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_PROPERTY(double centerMhz READ centerMhz)
     Q_PROPERTY(double bandwidthMhz READ bandwidthMhz)
     Q_PROPERTY(int centerLockSliceId READ centerLockSliceId)
+    Q_PROPERTY(bool threeDSliceDepth READ threeDSliceDepth WRITE setThreeDSliceDepth)
+    // Frequency extent of the most recently applied waterfall row. Each row
+    // carries its own [low,high] and is resampled into the current view, so a
+    // row whose extent disagrees with the pan renders at the wrong frequency —
+    // the "waterfall drifts off the panadapter" class of bug. Exposing it makes
+    // pan/waterfall alignment machine-checkable instead of eyeball-only.
+    // NaN until the first row arrives.
+    Q_PROPERTY(double wfRowLowMhz READ wfRowLowMhz)
+    Q_PROPERTY(double wfRowHighMhz READ wfRowHighMhz)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -211,6 +223,7 @@ public:
     void setKiwiSdrWaterfallProfile(const QString& profileId);
     void clearKiwiSdrWaterfallRows();
     void clearKiwiSdrWaterfallRowsForProfile(const QString& profileId);
+    void setKiwiSdrWaterfallRate(int rate);
     void setKiwiSdrWaterfallDisplayRange(float minDbm, float maxDbm,
                                          bool autoRange);
     void updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
@@ -227,6 +240,14 @@ public:
     void setNoiseFloorPosition(int pos);
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
+    void prepareForFftPixelScaleChange();
+    // Arm the DSS FFT-pixel-scale settle gate without switching the decoder or
+    // resetting smoothing. Called when a y_pixels change is *requested* (before
+    // the radio echo switches the local decoder) so rows decoded against the
+    // stale scale during the request→echo latency window are dropped from 3D
+    // history instead of surviving as mis-scaled rows. prepareForFftPixelScaleChange()
+    // re-arms it (and resets smoothing) once the decoder actually switches.
+    void beginFftPixelScaleSettle();
     void suspendNoiseFloorAutoAdjustUntil(qint64 untilMs);
     void resumeNoiseFloorAutoAdjust();
     void reacquireNoiseFloorLock();
@@ -399,6 +420,8 @@ public:
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
     void setExtendedPassband(bool on);
     bool extendedPassband() const { return m_extendedPassband; }
+    void setThreeDSliceDepth(bool on);
+    bool threeDSliceDepth() const { return m_threeDSliceDepth; }
     void setFloating(bool on) { m_isFloating = on; }
     void setBackgroundImage(const QString& path);
     QString backgroundImagePath() const { return m_bgImagePath; }
@@ -548,6 +571,8 @@ public:
     void setSliceOverlayAdaptiveActive(int sliceId, bool active);
     void setCenterLockSliceId(int sliceId);
     int centerLockSliceId() const { return m_centerLockSliceId; }
+    double wfRowLowMhz() const { return m_lastWfRowLowMhz; }
+    double wfRowHighMhz() const { return m_lastWfRowHighMhz; }
     // Slice Link (cross-panadapter VFO link). MainWindow pushes every current
     // pair plus the roster of linkable slices — links may span pans, so the
     // context menu needs peers this pan's own overlays can't see.
@@ -703,6 +728,12 @@ signals:
     // Emitted when zoom/range interaction pauses or ends. Remote waterfall
     // providers use this to avoid resetting their stream on every zoom step.
     void frequencyRangeSettled(double centerMhz, double bandwidthMhz);
+
+    // Emitted when a gesture that was suppressing inbound pan geometry has
+    // released and a value was suppressed while it ran. The owner should
+    // re-push the authoritative pan centre/bandwidth; the widget deliberately
+    // does not replay the suppressed value (it may be a stale echo).
+    void panGeometryResyncNeeded();
     // Emitted when the user drags a filter edge to resize the passband.
     void filterChangeRequested(int lowHz, int highHz);
     // Emitted when the user adjusts the dBm scale (drag or arrows).
@@ -772,6 +803,27 @@ private:
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
     void drawSliceMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    struct DssDepthBand {
+        QPolygonF polygon;
+        QColor frontColor;
+        QColor backColor;
+    };
+    struct DssDepthLine {
+        QLineF line;
+        QColor frontColor;
+        QColor backColor;
+        qreal width{1.0};
+    };
+    struct DssDepthGeometry {
+        QVector<DssDepthBand> bands;
+        QVector<DssDepthLine> lines;
+        QLineF firstProjection;
+        bool hasFirstProjection{false};
+    };
+    DssDepthGeometry buildDssDepthGeometry(const QRect& specRect,
+                                           float floorDbm) const;
+    void drawDssDepthGeometry(QPainter& painter,
+                              const DssDepthGeometry& geometry) const;
     // Draw each flag's SmartMTR extremes value labels on top of the slice markers.
     void drawSmartMtrValueLabels(QPainter& p);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
@@ -795,9 +847,7 @@ private:
     void setVfoCursorOverride(Qt::CursorShape shape);
     void clearVfoCursorOverride();
     void applyActiveVfoZOrder();
-#ifdef AETHER_GPU_SPECTRUM
     void repositionVfoFlags(const QRect& specRect);  // #3617 — shared flag positioner
-#endif
     void setSpectrumCursor(Qt::CursorShape shape);
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
@@ -836,6 +886,14 @@ private:
     void rebuildDssViewportFromHistory();
     void rebuildDssViewportFromHistoryForFrame(double centerMhz, double bandwidthMhz);
     void setWaterfallLive(bool live);
+    void startWaterfallScrollAnimation(float distanceRows = 1.0f);
+    void stopWaterfallScrollAnimation();
+    float waterfallScrollProgressRows() const;
+    float waterfallPresentationMsPerRow() const;
+    float waterfallTimeScaleMsPerRow() const;
+    void observeKiwiSdrWaterfallCadence(qint64 rowTimestampMs);
+    void resetKiwiSdrWaterfallCadence();
+    bool flexDssFftScaleSettling() const;
     void handleWaterfallFrequencyFrameChange(double oldCenterMhz,
                                              double oldBandwidthMhz,
                                              double newCenterMhz,
@@ -929,9 +987,13 @@ private:
 #ifdef AETHER_GPU_SPECTRUM
     void prepareWaterfallFrameUpload();
 #endif
+    // startScrollAnimation: begin the one-row scroll interpolation. Multi-row
+    // callers (updateWaterfallRow) pass false and issue a single start() for the
+    // whole tile instead of restarting the clock once per appended row.
     void appendVisibleRow(const QRgb* rowData,
                           double frameCenterMhz = -1.0,
-                          double frameBandwidthMhz = -1.0);
+                          double frameBandwidthMhz = -1.0,
+                          bool startScrollAnimation = true);
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
@@ -982,6 +1044,8 @@ private:
     void beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
                                  float newMinDbm, float newMaxDbm);
     void clearDbmReleaseRebase();
+    void armDssZoomFloorSyncAfterSettle();
+    void syncDssRangeFromFreshZoomFrame(const QVector<float>& bins);
     // Reset the baseline tracker — called on any input change (zoom,
     // band switch, manual dBm drag) so the next frame re-acquires
     // rather than smooths from a stale value.
@@ -1040,11 +1104,11 @@ private:
     QRgb waterfallLevelToRgb(float level) const;
     static quint8 encodeWaterfallLevel(float level);
     std::array<QRgb, 256> waterfallHistoryColorLut() const;
-    // 3DSS surface colour for a normalised strength s in [0,1] (0 = noise floor,
-    // 1 = ref). The full colormap gradient, gamma-shaped by the "3D Gain"
-    // control. Shared by the GPU LUT bake and the CPU fallback so both paths
-    // colour identically (deliberately NOT dbmToRgb(), whose waterfall
-    // black-level window clipped the lower range to black).
+    // 3DSS surface colour for a normalised strength s in [0,1] across the stable
+    // colour aperture. The full colormap gradient is gamma-shaped by "3D Gain".
+    // Shared by the GPU LUT and CPU fallback so both paths colour identically
+    // (deliberately NOT dbmToRgb(), whose waterfall black-level window clipped
+    // the lower range to black).
     QRgb dssStrengthToRgb(float s) const;
 
     // 3DSS — rebuild/return the cached perspective surface for the given pixel
@@ -1060,9 +1124,10 @@ private:
     // Token folding the dbmToRgb() palette inputs so the 3DSS cache rebuilds
     // when the colour mapping (scheme/gain/floor) changes.
     quint64 dssPaletteToken() const;
-    // Unified noise-floor anchor (dBm, quantised) for the 3D surface.
+    // Source-selected floor anchor (dBm, quantised) for the 3D surface.
     float dssFloorDbm();
     float peekDssFloorDbm() const;
+    float kiwiDssPresentationFloorDbm(float fallbackFloorDbm) const;
     // dB span shown above the 3D floor anchor — follows the normal dBm scale,
     // with an upper cap so an excessively wide Flex window cannot flatten it.
     float dssSpanDb() const;
@@ -1086,6 +1151,12 @@ private:
     WaterfallStreamState m_nativeWaterfallState;
     WaterfallStreamState m_kiwiWaterfallState;
     QHash<QString, WaterfallStreamState> m_kiwiProfileWaterfallStates;
+    QHash<QString, ObservedWaterfallCadence> m_kiwiWaterfallCadenceByProfile;
+    QHash<QString, int> m_kiwiWaterfallRateByProfile;
+    // Presentation anchors outlive stream-row resets/rebinds. Motion cadence
+    // may reacquire independently; only an explicit rate change relatches time.
+    QHash<QString, StablePresentationAnchor> m_kiwiTimeScaleAnchorsByProfile;
+    QHash<QString, StablePresentationAnchor> m_kiwiDssFloorAnchorsByProfile;
     // True while the current waterfall state is the operator-visible source.
     // Hidden Flex/Kiwi updates temporarily swap their state into the current
     // fields; instrumentation and retention policy need to distinguish that
@@ -1114,6 +1185,9 @@ private:
     // Multi-slice overlays (replaces single m_vfoFreqMhz / m_filterLowHz / etc.)
     QVector<SliceOverlay> m_sliceOverlays;
     int m_centerLockSliceId{-1};
+    // Extent of the last waterfall row applied (see the Q_PROPERTY note).
+    double m_lastWfRowLowMhz{std::numeric_limits<double>::quiet_NaN()};
+    double m_lastWfRowHighMhz{std::numeric_limits<double>::quiet_NaN()};
     QVector<SliceLinkPair> m_sliceLinkPairs;
     QVector<SliceLinkCandidate> m_sliceLinkCandidates;
 
@@ -1251,6 +1325,15 @@ private:
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
     float m_dssFloorAnchorDbm{-1000.0f};
     bool  m_dssFloorAnchorValid{false};
+    DssZoomFloorSyncGate m_dssZoomFloorSync;
+    // Earliest time an armed zoom sync may accept a frame. The radio needs
+    // ~100-300 ms to switch bandwidth; frames before this still carry the
+    // pre-zoom encoding.
+    qint64 m_dssZoomFloorSyncNotBeforeMs{0};
+    // The radio can briefly deliver FFT packets encoded with the old y_pixels
+    // after acknowledging a new height. Keep those rows out of retained 3D
+    // history; the live 2D trace and waterfall continue normally.
+    qint64 m_flexDssFftScaleSettlingUntilMs{0};
     // Consumed by BOTH the GPU mesh and the CPU fallback surface, so these stay
     // outside the AETHER_GPU_SPECTRUM block below — the CPU paint path needs them
     // even when GPU spectrum rendering is disabled (older Qt / -DAETHER_GPU_SPECTRUM=OFF).
@@ -1271,6 +1354,12 @@ private:
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;
     int    m_wfWriteRow{0};  // ring buffer: next row to write (newest at top)
+    // A received row appears immediately, then the viewport advances it by one
+    // row over the observed row interval. This changes display position only;
+    // the retained radio rows remain discrete and authoritative.
+    QTimer* m_waterfallScrollTimer{nullptr};
+    QElapsedTimer m_waterfallScrollClock;
+    float m_waterfallScrollDistanceRows{1.0f};
     // Per-visible-row frequency frame, indexed by the physical waterfall ring
     // row. The GPU uses this to place each row in the current viewport without
     // flattening the entire live texture into one pan/zoom frame.
@@ -1340,6 +1429,7 @@ private:
     double m_frequencyRangePendingCenterMhz{0.0};
     QTimer* m_frequencyRangeSettleTimer{nullptr};
     QTimer* m_frequencyRangeCommandTimer{nullptr};
+    QTimer* m_dssZoomFloorSyncTimer{nullptr};
     QElapsedTimer m_frequencyRangeCommandClock;
     FrequencyRangeCommandThrottle m_frequencyRangeCommandThrottle;
     quint64 m_frequencyRangeCommandCount{0};
@@ -1409,6 +1499,19 @@ private:
     int  m_vfoDragLastX{0};                 // last cursor X during VFO drag (px)
     int  m_vfoDragEdgeHoldTicks{0};         // ticks held in edge zone (ramp)
     qint64 m_vfoDragPanEchoHoldUntilMs{0};  // ignore stale center echoes briefly after drag
+
+    // Authoritative pan geometry that arrived while a local gesture owned the
+    // view. Flex re-echoes pan status continuously, so DROPPING one was
+    // harmless — another arrives within milliseconds. A backend that emits
+    // geometry only when it CHANGES (edge-triggered, e.g. the HL2's NCO) has no
+    // second chance: the drop is permanent and the view stays stuck at the old
+    // center while the model, the slice and the waterfall have all moved. Hold
+    // the value instead and re-apply once the gesture releases — the inbound
+    // half of #4142's "defer, never drop".
+    bool    m_deferredRangeValid{false};
+    QTimer* m_deferredRangeTimer{nullptr};
+    void    deferIncomingRange(double centerMhz, double bandwidthMhz);
+    void    applyDeferredRangeIfIdle();
     bool m_vfoDragEdgePanDisabled{false};   // AETHER_NO_DRAG_EDGEPAN=1 escape hatch
     // Velocity knobs, env-tunable so the feel can be swept WITHOUT rebuilding:
     //   AETHER_DRAG_EDGEPAN_VMAX     — top speed, % of span width per second
@@ -1477,6 +1580,7 @@ private:
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
     bool    m_extendedPassband{false};
+    bool    m_threeDSliceDepth{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};
     QTimer* m_tuneGuideTimer{nullptr};
@@ -1715,9 +1819,10 @@ private:
     QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge line segments, static
     QRhiBuffer* m_dssMeshUbo{nullptr};       // dynamic uniforms
     // std140 UBO float count — must match dss_mesh.{vert,frag}'s U block AND the
-    // ubo[] writer in renderGpuFrame(). 8 surface scalars + texCols + the three
-    // frequency-preview scalars + vec4 bgFill.
-    static constexpr int kDssMeshUboFloats = 16;
+    // ubo writer in renderGpuFrame(): five scalar vec4 groups + bgFill, eight
+    // slice band descriptors, eight slice styles, and shadow metadata.
+    static constexpr int kDssMeshUboFloats = 92;
+    static constexpr int kDssMeshShadowSlices = 8;
     QRhiTexture* m_dssHeightTex{nullptr};    // R16F ring heightmap (cols x rows)
     QRhiTexture* m_dssPaletteTex{nullptr};   // 256x1 RGBA8 floor->peak LUT
     QRhiSampler* m_dssHeightSampler{nullptr};
@@ -1731,6 +1836,20 @@ private:
 
     void initDssMeshPipeline();
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch, float floorDbm, float rangeDb);
+
+    // Distance-faded slice/passband shadows painted across the completed DSS
+    // surface. Tiny dynamic geometry rendered below the ordinary marker layer.
+    static constexpr int kDssDepthMaxVertices = 16384;
+    static constexpr int kDssDepthVertexFloats = 7;  // pos2 + color4 + edge
+    QRhiGraphicsPipeline* m_dssDepthPipeline{nullptr};
+    QRhiShaderResourceBindings* m_dssDepthSrb{nullptr};
+    QRhiBuffer* m_dssDepthVbo{nullptr};
+    QVector<float> m_dssDepthVertices;
+    int m_dssDepthVertexCount{0};
+    void initDssDepthPipeline();
+    void updateDssDepthVertices(QRhiResourceUpdateBatch* batch,
+                                const DssDepthGeometry& geometry,
+                                const QSize& logicalSize);
 
     bool initWaterfallPipeline();
     void releaseWaterfallFramePipelineResources();

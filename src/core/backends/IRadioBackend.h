@@ -77,6 +77,63 @@ public:
     virtual void setSliceFrequency(int sliceId, double hz) = 0;
     virtual void setSliceMode(int sliceId, const QString& mode) = 0;
     virtual void setSliceFilter(int sliceId, int lowHz, int highHz) = 0;
+    // Receive AGC. mode is the neutral vocabulary the slice model uses —
+    // "off" / "slow" / "med" / "fast"; thresholdDb is the operator's 0..100
+    // AGC-threshold value. A backend whose hardware owns the AGC translates
+    // both to its wire protocol; one that owns an engine-side DSP chain
+    // configures that chain. Sent as a pair because a backend configuring a DSP
+    // AGC generally needs both to make either meaningful.
+    virtual void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) = 0;
+    // Move the panadapter's centre — the receiver's WINDOW, not the slice.
+    // A backend whose hardware streams a fixed window retunes it; one that
+    // owns a DDC moves the NCO. Without this the UI can pan the view locally
+    // while the data keeps arriving from the old window, and the waterfall
+    // (which carries its own frequency extent) drifts off the display.
+    virtual void setPanCenter(const QString& panId, double hz) = 0;
+
+    // Change the panadapter's SPAN — how much spectrum the window covers.
+    //
+    // The sibling of setPanCenter, and it exists for the same reason. A backend
+    // that owns its own DDC decides its span by choosing a decimation rate, and
+    // nothing above this seam can do that for it. Without this verb the zoom
+    // intent had nowhere to go: RadioModel wrote the requested span into
+    // PanadapterModel and returned success, so the view widened while the
+    // receiver kept delivering the old, narrower window. The VITA-49 tiles are
+    // honest about their own extent, so the region the data never covered
+    // rendered BLACK — the same lie #4142 fixed for pan center, reintroduced on
+    // the bandwidth field for every non-Flex backend.
+    //
+    // Fire-and-forget like every DOWN verb. hz is a REQUEST: a backend whose
+    // hardware offers a fixed set of rates snaps to the nearest one it can
+    // actually run, and the span that resulted comes back via
+    // panCenterBandwidthChanged. Callers must not assume the requested value was
+    // taken — that assumption is what this verb exists to remove.
+    //
+    // Default no-op: a Flex radio owns its pan geometry and is driven by
+    // "display pan set … bandwidth=" wire text, so FlexBackend has nothing to do
+    // here.
+    virtual void setPanBandwidth(const QString& panId, double hz)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(hz);
+    }
+
+    // How often the operator wants panadapter frames, in frames per second.
+    //
+    // For a backend that streams cooked spectra there is no radio-side display
+    // engine to ask, so the Display->FFT FPS slider has nowhere to go — the
+    // Flex wire text it used to emit reached nothing — and the frame rate
+    // defaults to the IQ sample rate over the FFT size, which tracks the
+    // operator's ZOOM instead of their slider. Such a backend caps its own
+    // production here, at the source, where the FFT can be skipped rather than
+    // computed and thrown away.
+    //
+    // Default no-op: a Flex radio's own display engine paces its frames.
+    virtual void setPanFrameRate(const QString& panId, int fps)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(fps);
+    }
 
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the
@@ -84,6 +141,35 @@ public:
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
+
+    // Tune carrier on/off.
+    //
+    // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
+    // to do here. A backend that generates its own carrier implements it.
+    virtual void setTune(bool on) { Q_UNUSED(on); }
+
+    // Transmit power as a percentage, 0..100.
+    //
+    // Flex takes this as a text command from TransmitModel, so FlexBackend has
+    // nothing to do here. A backend that owns its own drive register (HL2)
+    // implements it.
+    virtual void setTxPower(int percent) { Q_UNUSED(percent); }
+
+    // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
+    //
+    // For backends that modulate on the host (HL2). A Flex radio does its own
+    // modulation from mic or DAX, so FlexBackend ignores this — hence a default
+    // no-op rather than a pure virtual.
+    //
+    // The audio is already shaped: AudioEngine has applied the test tone,
+    // compressor and EQ before this point. That is deliberate — the TONE button,
+    // the microphone and any future source all reach the air through ONE path,
+    // so what the operator monitors is what gets transmitted.
+    virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz)
+    {
+        Q_UNUSED(int16Stereo);
+        Q_UNUSED(sampleRateHz);
+    }
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
@@ -186,6 +272,24 @@ signals:
     // wire did not report. (aetherd RFC 2.3 — second converted universal pan
     // field, following the center/bandwidth template.)
     void panRangeChanged(const QString& panId, double minDbm, double maxDbm);
+
+    // The span limits this pan can actually be zoomed between (universal — every
+    // family has a widest and narrowest window). Reported by the backend because
+    // only the backend knows: for one that owns a DDC the limits are its
+    // available decimation rates, which no model-name table can predict.
+    //
+    // This is what keeps the zoom clamp honest. Before it, the GUI clamped every
+    // radio against a FlexLib model table that falls through to 5.4 MHz for any
+    // model string it doesn't recognise — so an HL2 delivering 384 kHz could be
+    // zoomed 14x wider than its own data, and the uncovered spectrum rendered as
+    // black bars either side of the trace. A backend that reports its real limits
+    // gets a zoom that stops where the data stops.
+    //
+    // Both bounds in MHz. A backend that doesn't know (or whose hardware has no
+    // meaningful limit) simply never emits this, and the GUI keeps its previous
+    // model-derived clamp — so this is additive for Flex.
+    void panBandwidthLimitsChanged(const QString& panId,
+                                   double minMhz, double maxMhz);
 
     // Panadapter RF gain (universal — every family has an RX gain control; the
     // range/step are family-specific and reported via RadioCapabilities). The

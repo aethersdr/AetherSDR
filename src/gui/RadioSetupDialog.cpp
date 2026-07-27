@@ -7,6 +7,7 @@
 #include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
 #include "core/AutomationBridgeSettings.h"
+#include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -992,9 +993,14 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // disables/re-enables the button without the user having to reopen the
         // dialog. rebootRadio() also early-returns on disconnected, but the
         // disabled state makes the affordance discoverable rather than silent.
-        rebootBtn->setEnabled(m_model->isConnected());
-        connect(m_model, &RadioModel::connectionStateChanged,
-                rebootBtn, &QPushButton::setEnabled);
+        // F3 (#4448): also gate on the backend supporting a client reboot — HL2
+        // is RX-only with no reboot command, and offering it would send a
+        // meaningless command and trigger a forced disconnect.
+        rebootBtn->setEnabled(m_model->isConnected() && m_model->backendCapabilities().canReboot);
+        connect(m_model, &RadioModel::connectionStateChanged, rebootBtn,
+                [this, rebootBtn](bool connected) {
+            rebootBtn->setEnabled(connected && m_model->backendCapabilities().canReboot);
+        });
         connect(rebootBtn, &QPushButton::clicked, this, [this] {
             const bool wan = m_model->isWan();
             const QString body = wan
@@ -1056,8 +1062,23 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_modelLabel),
                         0, 0);
 
-        m_nicknameEdit = new QLineEdit(m_model->nickname().isEmpty()
-            ? m_model->name() : m_model->nickname());
+        // Initial nickname text. For a non-Flex radio the name lives in
+        // AppSettings (keyed by serial/MAC), not on the radio, so read it back
+        // from there — otherwise the field would show the model default even
+        // after the operator set a custom name. Flex keeps its existing
+        // model-sourced behaviour. This must gate on exactly the same
+        // "is it Flex?" test as the editingFinished handler below: gating the
+        // read on family=="hl2" while the write covers every non-Flex family
+        // would persist a name for e.g. kiwi that the field then never shows.
+        QString initialNickname = m_model->nickname().isEmpty()
+            ? m_model->name() : m_model->nickname();
+        {
+            const RadioInfo info = m_model->lastRadioInfo();
+            if (!hl2::Hl2Discovery::nicknameLivesOnRadio(info))
+                initialNickname = hl2::Hl2Discovery::effectiveNickname(
+                    info.serial, info.model.isEmpty() ? m_model->name() : info.model);
+        }
+        m_nicknameEdit = new QLineEdit(initialNickname);
         m_nicknameEdit->setStyleSheet(kEditStyle);
         grid->addWidget(makeInfoField(QStringLiteral("Nickname:"), m_nicknameEdit,
                                       kInfoRightLabelWidth),
@@ -1069,7 +1090,22 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         1, 0);
 
         connect(m_nicknameEdit, &QLineEdit::editingFinished, this, [this] {
-            m_model->sendCommand("radio name " + m_nicknameEdit->text());
+            const RadioInfo info = m_model->lastRadioInfo();
+            // Only FlexRadio has an on-radio name store ("radio name" command).
+            // Every other family (HL2, the sim demo, any future non-Flex backend)
+            // has no wire to store a name, so the "radio name" command is a silent
+            // no-op there. For those, persist the operator's nickname client-side,
+            // keyed by the radio's stable serial, so discovery shows it in the
+            // picker on the next sweep and RadioSetup reads it back on reopen.
+            if (hl2::Hl2Discovery::nicknameLivesOnRadio(info)) {
+                m_model->sendCommand("radio name " + m_nicknameEdit->text());
+            } else {
+                AppSettings::instance().setValue(
+                    hl2::Hl2Discovery::nicknameSettingsKey(info.serial),
+                    m_nicknameEdit->text().trimmed());
+                // Commit now; don't rely on the shutdown save to carry it.
+                AppSettings::instance().save();
+            }
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
             m_model->sendCommand("radio callsign " + m_callsignEdit->text());
@@ -1586,7 +1622,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             txCheck->setToolTip(
                 "Let an MCP client key the transmitter (MOX/PTT/TUNE/ATU/CWX).\n"
                 "OFF by default — the bridge blocks all transmit-keying otherwise.\n"
-                "A force-unkey watchdog stays armed whenever this is on. You are\n"
+                "Bridge-originated TX is limited by a force-unkey watchdog. You are\n"
                 "responsible for anything transmitted. See docs/automation-bridge.md.");
             AetherSDR::ThemeManager::instance().applyStyleSheet(txCheck,
                 "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"
@@ -1612,8 +1648,8 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                         "transmit-keying controls — MOX/PTT, TUNE, the ATU, and CWX "
                         "send — on your radio. Automated software will be able to put "
                         "a signal on the air.\n\n"
-                        "A force-unkey watchdog stays armed while this is enabled, but "
-                        "it is a backstop, not a guarantee. You, the operator, are "
+                        "A force-unkey watchdog limits bridge-originated TX, but it is "
+                        "a backstop, not a guarantee. You, the operator, are "
                         "ultimately responsible for all transmissions from your station "
                         "— including their content, timing, frequency, power, and "
                         "compliance with your license and local regulations.\n\n"

@@ -49,6 +49,7 @@ struct TciClientInfo {
 class TciServer : public QObject {
     Q_OBJECT
     friend class TciServerReviewTest;
+    friend class Hl2TciSignalingTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -125,6 +126,11 @@ public slots:
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
                              quint32 timecode, qint64 emittedNs);
+    // A DAX channel's radio-side stream went away — drop its channel→TRX routing
+    // cache entry so a re-registration re-resolves cleanly (#3669/#3766). Bound
+    // to PanadapterStream::daxStreamUnregistered via the MainWindow stream-sink
+    // helper so it survives a backend/family swap (#4448 F6).
+    void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
     void clientCountChanged(int count);
@@ -155,6 +161,11 @@ private slots:
     void broadcastStatus();
 
 private:
+    // Rate-limited drive:/tune_drive: relay (#4161). queue* is the signal
+    // entry point; broadcast* does the de-duped send.
+    void queuePowerBroadcast();
+    void broadcastPower();
+
     void sendInitBurst(QWebSocket* client);
     // Diagnostic: log + send a text reply to one client (per-command echoes
     // bypass the central dispatch log, so route them here for visibility).
@@ -162,6 +173,7 @@ private:
     void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
                               int trx, int channel);
     void broadcastSliceFrequencies(SliceModel* slice);
+    void publishActiveTrx();
     SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
@@ -182,6 +194,9 @@ private:
         const TciProtocol::VfoRequest& request,
         const QString& reason,
         bool rejectSplit);
+    // True when the connected backend runs the modulator/demodulator in this
+    // process (HL2) instead of inside the radio — hence has no DAX data plane.
+    bool hostModulatingBackend() const;
     void prepareTxAudio();
     void startTxChrono(QWebSocket* client, int trx);
     void stopTxChrono();
@@ -244,6 +259,12 @@ private:
     QWebSocketServer* m_server{nullptr};
     QList<ClientState> m_clients;
     QSet<int>         m_tciDaxSlices;   // slice IDs where we auto-assigned DAX (#1331)
+    int               m_activeTrx{-1};  // TRX holding GUI focus; -1 = not yet observed (#4160)
+    // The focused slice by identity. trx is positional and shifts when an
+    // earlier slice is removed, so the pointer is what survives renumbering;
+    // QPointer clears if the slice is destroyed (#4160).
+    QPointer<SliceModel> m_activeSlice;
+    QString           m_activeLetter;   // focused slice's display letter (#4160)
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
@@ -280,6 +301,19 @@ private:
     QString m_lastRouteError;
     QTimer*           m_meterTimer{nullptr};  // 200ms status broadcast
     QTimer*           m_daxReleaseTimer{nullptr}; // debounced DAX RX teardown
+    // Rate limiter for drive:/tune_drive: (#4161). A power-slider drag steps
+    // the value ~40 times a second and each step is a separate radio command,
+    // so relaying every one floods remote clients. Leading edge is sent
+    // immediately (a client's own SET still echoes promptly); further changes
+    // inside the window collapse to one trailing send of the latest value.
+    QTimer*           m_powerRateTimer{nullptr};
+    bool              m_drivePending{false};      // rfPowerChanged since last flush
+    bool              m_tuneDrivePending{false};  // tunePowerChanged since last flush
+    int               m_lastDriveSent{-1};
+    int               m_lastTuneDriveSent{-1};
+    // Last resolved TX-slice trx, used to label drive:/tune_drive: when a
+    // band-change slice recreation momentarily leaves no slice marked TX.
+    int               m_lastTxTrx{0};
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
     QPointer<QWebSocket> m_tciPttClient;

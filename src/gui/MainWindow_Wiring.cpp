@@ -659,6 +659,49 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
     return changed;
 }
 
+// Re-push the pan's authoritative geometry into its spectrum view.
+//
+// SpectrumWidget suppresses inbound geometry while a local gesture owns the
+// view (drag, VFO drag, a settling zoom). That is correct — an echo arriving
+// mid-drag is stale. It was also SAFE only because Flex re-echoes pan status
+// continuously, so the next status replaced whatever was dropped within
+// milliseconds.
+//
+// A backend that emits geometry only when it CHANGES has no next status. The
+// HL2 publishes its pan centre from the RX NCO, once, on tune: if that lands
+// during a gesture hold it is gone for good, and the view stays parked at the
+// old centre while the slice, the pan model and every waterfall row have moved
+// on — measured at a permanent 6.3 kHz offset after a single drag-tune.
+//
+// So the widget reports that it suppressed something, and we re-push the model
+// value HERE rather than let it replay the value it saw. The model is the
+// authority for both families: for Flex it only advances once a command
+// actually reached the wire (#4142), and for a DSP-owning backend it mirrors
+// hardware state. Reading it now cannot resurrect a stale echo.
+void MainWindow::resyncPanGeometryToView(const QString& panId)
+{
+    if (m_shuttingDown || !m_panStack)
+        return;
+    auto* pan = m_radioModel.panadapter(panId);
+    auto* sw = m_panStack->spectrum(panId);
+    if (!pan || !sw)
+        return;
+    const double centerMhz = pan->centerMhz();
+    const double bandwidthMhz = pan->bandwidthMhz();
+    if (centerMhz <= 0.0 || bandwidthMhz <= 0.0)
+        return;
+    if (qFuzzyCompare(sw->centerMhz(), centerMhz)
+        && qFuzzyCompare(sw->bandwidthMhz(), bandwidthMhz)) {
+        return;   // already in agreement — nothing was actually lost
+    }
+    qCDebug(lcProtocol).noquote()
+        << "MainWindow: re-syncing suppressed pan geometry to view"
+        << QStringLiteral("pan=%1").arg(panId)
+        << QStringLiteral("view=%1").arg(sw->centerMhz(), 0, 'f', 6)
+        << QStringLiteral("model=%1").arg(centerMhz, 0, 'f', 6);
+    sw->setFrequencyRangeImmediate(centerMhz, bandwidthMhz);
+}
+
 void MainWindow::snapCenterLocksForTuningSlice(SliceModel* slice, double mhz,
                                                 bool sendCommand)
 {
@@ -1291,6 +1334,11 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
 {
     if (!w || !m_audio) return;
 
+    connect(w, &AetherDspWidget::dspMethodUserToggled,
+            this, [this](const QString&, bool) {
+        m_aetherDspModePolicy.noteUserOverride();
+    });
+
     // NR2
     connect(w, &AetherDspWidget::nr2GainMaxChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
@@ -1913,23 +1961,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
             refreshCwDecodeState();
             refreshRttyDecodeState();
 
-            // Disable client-side DSP in digital and CW modes — NR2/RN2/BNR
-            // corrupt digital data (#534) and suppress CW tones (#784)
-            bool disableDsp = (mode == "DIGU" || mode == "DIGL" || mode == "RTTY"
-                            || mode == "CW"   || mode == "CWL"  || mode == "NT");
-            if (disableDsp) {
-                if (m_audio->nr2Enabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr2Enabled(false); });
-                if (m_audio->rn2Enabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setRn2Enabled(false); });
-                if (m_audio->nr4Enabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr4Enabled(false); });
-                if (m_audio->dfnrEnabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });
-                if (m_audio->nvAfxEnabled())  // AFX is a speech denoiser too
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNvAfxEnabled(false); });
-            }
         }
+        // The radio supplies one already-mixed RX stream, so the most
+        // restrictive audible slice controls the global client DSP state.
+        updateAetherDspModePolicy();
 
         // CWX/DVK availability and their F1-F12 shortcuts follow the TX slice,
         // so re-evaluate only when the TX slice changes mode (#4173).
@@ -2077,6 +2112,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     updateSplitState();
 
     refreshSliceLinkUi();
+    updateAetherDspModePolicy();
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -2271,6 +2307,7 @@ void MainWindow::onSliceRemoved(int id)
     // Removing one half of a split pair (e.g. external controller deletes the TX
     // slice) must re-derive the panadapter split-pair from the model. (#3726)
     updateSplitState();
+    updateAetherDspModePolicy();
 }
 
 void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
@@ -2356,7 +2393,7 @@ void MainWindow::reacquireNoiseFloorLocksAfterProfileLoad()
 
         SpectrumWidget* sw = applet->spectrumWidget();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->setDbmRange(
                     pan->panStreamId(), pan->minDbm(), pan->maxDbm());
             }
@@ -2456,6 +2493,19 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
         QString("display pan set %1 xpixels=%2 ypixels=%3")
             .arg(panId).arg(xpix).arg(ypix));
 
+    // Arm the DSS settle gate now, before the radio echo switches the local
+    // decoder. The stream keeps decoding with the old y_pixels until the echo,
+    // so rows arriving in the request→echo window can be decoded against a stale
+    // scale; since retained 3D history is now preserved across a resize (rather
+    // than cleared on echo), those mis-scaled rows would otherwise survive in
+    // scrollback. Dropping them here costs only a few valid rows and matches the
+    // pre-preservation intent that pre-echo rows must not persist. Only for a
+    // genuine transition off an established scale — a width-only resize or first
+    // dimension push (fftYPixels()==0) has no prior history to protect.
+    if (pan->fftYPixels() > 0 && pan->fftYPixels() != ypix) {
+        sw->beginFftPixelScaleSettle();
+    }
+
     if (profileLoadRadioStateWritesHeld()) {
         m_profileLoadPendingFftYpixels.insert(panId, ypix);
         m_profileLoadPanDimensionsSettlingUntilMs.insert(
@@ -2478,8 +2528,20 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
                 || panYpixelsFor(swGuard.data()) != ypix) {
                 return;
             }
-            m_radioModel.panStream()->setYPixels(streamId, ypix);
-            swGuard->prepareForFftScaleChange();
+            // A radio status echo updates both the model and stream decoder.
+            // Do not run the delayed fallback afterward: besides being
+            // redundant, it would restart the DSS scale-settle window for a
+            // width-only resize whose y_pixels never changed.
+            if (currentPan->fftYPixels() == ypix) {
+                return;
+            }
+            // Telling the radio the new scale is Flex-only — a non-Flex backend
+            // (HL2) owns no PanadapterStream (#4448) — but the local widget
+            // rescale below must still happen.
+            if (m_radioModel.panStream()) {
+                m_radioModel.panStream()->setYPixels(streamId, ypix);
+            }
+            swGuard->prepareForFftPixelScaleChange();
         };
 
         if (updateLocalDecoderImmediately) {
@@ -2779,6 +2841,17 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         }));
     m_panDisplayStatusConnections.insert(panId, connections);
 
+    // When the ENGINE shapes the frame rate, the seeding runs the other way:
+    // the radio reports no display state, so the pan model has nothing to give
+    // the widget and it is the widget's current slider values that the shaper
+    // needs. Done before the reads below so those still see a populated model.
+    // Without it the stream is shaped to the built-in defaults until the
+    // operator happens to touch a slider.
+    if (m_radioModel.shapesDisplayRatesLocally()) {
+        m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
+                                            sw->wfLineDuration());
+    }
+
     // Reclaimed pans already hold their latest status and do not necessarily
     // emit a new report after reconnect. Seed the view immediately.
     if (pan->average() >= 0) {
@@ -2815,7 +2888,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto pendingDbm = std::make_shared<DbmRangeTransition::Handshake>();
     auto setStreamDbmRange = [this, applet](float minDbm, float maxDbm, bool waitForEcho = false) {
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
             }
         }
@@ -2824,7 +2897,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                                       (const DbmRangeTransition::Range& range) {
         sw->cancelPendingDbmRangeChange();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
             }
         }
@@ -2851,7 +2924,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // every subsequent FFT bin until another status happened to arrive.
         sw->cancelPendingDbmRangeChange();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-            if (pan->panStreamId()) {
+            if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
             }
         }
@@ -3029,9 +3102,33 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
 
-    // Set panadapter bandwidth zoom limits based on radio model
-    sw->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
-                           m_radioModel.maxPanBandwidthMhz());
+    // Panadapter zoom limits. A backend that knows its real span range reports
+    // it (per-pan, addressed); the FlexLib model table is the fallback for one
+    // that doesn't — which is every Flex radio, so that path is unchanged.
+    //
+    // The fallback is not harmless when it's wrong: it falls through to 5.4 MHz
+    // for any model string it doesn't recognise, so an HL2 delivering 384 kHz
+    // could be zoomed fourteen times past its own data and the spectrum that was
+    // never sampled rendered as black bars.
+    applyPanBandwidthLimitsToWidget(
+        applet->panId(), sw,
+        m_radioModel.panMinBandwidthMhz(applet->panId()),
+        m_radioModel.panMaxBandwidthMhz(applet->panId()));
+    connect(&m_radioModel, &RadioModel::panBandwidthLimitsChanged,
+            sw, [this, applet, sw](const QString& panId, double minMhz, double maxMhz) {
+        // Applets exist before any backend connects, so a connect-time report has
+        // to re-clamp the widgets already on screen.
+        if (panId != applet->panId()) {
+            return;
+        }
+        // Don't undo the KiwiSDR widening. When this pan is displaying a Kiwi, the
+        // data on screen is the Kiwi's, so syncKiwiSdrPanadapterUiState() widens
+        // the ceiling to whichever of the two reaches further. Applying the local
+        // backend's report raw would cap a displayed Kiwi at the HL2's 384 kHz on
+        // connect — the local radio's limit clamping a zoom the Kiwi can fill.
+        // (#4470)
+        applyPanBandwidthLimitsToWidget(panId, sw, minMhz, maxMhz);
+    });
 
     // Set panId on the overlay menu so +RX routes to the correct pan
     menu->setPanId(applet->panId());
@@ -3241,7 +3338,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
         if (profileLoadPanDisplaySettling(applet->panId()) && autoFloorChange) {
             if (auto* pan = m_radioModel.panadapter(applet->panId())) {
-                if (pan->panStreamId()) {
+                if (pan->panStreamId() && m_radioModel.panStream()) {
                     setStreamDbmRange(pan->minDbm(), pan->maxDbm());
                 }
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
@@ -3583,8 +3680,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFps(v);  // always update restore target for when throttle lifts
         if (m_adaptiveThrottleActive)
             return;
-        m_radioModel.sendCommand(
-            QString("display pan set %1 fps=%2").arg(applet->panId()).arg(v));
+        // Through the model, not a raw sendCommand: on a backend that streams
+        // raw spectra this is the engine's own shaping target, and the Flex wire
+        // text it used to send reached nothing there — the slider moved the
+        // widget's render cap while frames kept arriving at the IQ sample rate.
+        m_radioModel.requestPanDisplayRates(applet->panId(), v, /*wfMs=*/0);
     });
     connect(menu, &SpectrumOverlayMenu::fftWeightedAverageChanged,
             this, [this, applet, sw](bool on) {
@@ -3674,10 +3774,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfLineDuration(clampedMs);
-        auto* pan = m_radioModel.panadapter(applet->panId());
-        if (pan && !pan->waterfallId().isEmpty())
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 line_duration=%2").arg(pan->waterfallId()).arg(clampedMs));
+        // Same reason as the FPS slider above: on a raw-spectrum backend this is
+        // the engine's waterfall shaping target, not a radio setting.
+        m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedMs);
     };
     connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
             this, applyWaterfallLineDuration);
@@ -3856,20 +3955,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so they become the new restore targets when the throttle lifts.
         m_radioModel.sendCommand(
             QString("display pan set %1 average=0").arg(applet->panId()));
-        if (!m_adaptiveThrottleActive)
-            m_radioModel.sendCommand(
-                QString("display pan set %1 fps=25").arg(applet->panId()));
         m_radioModel.sendCommand(
             QString("display pan set %1 weighted_average=0").arg(applet->panId()));
+        // fps + line_duration go through the dispatcher rather than as Flex wire
+        // text: on a backend that shapes its own display rate the reset updated
+        // the widget only, leaving the backend cap and the pan's stored line
+        // duration on the OLD values — so "reset display defaults" visibly did
+        // not reset the rate. (#4470)
+        if (!m_adaptiveThrottleActive)
+            m_radioModel.requestPanDisplayRates(applet->panId(), 25, 100);
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty()) {
             m_radioModel.sendCommand(
                 QString("display panafall set %1 color_gain=50").arg(pan->waterfallId()));
             m_radioModel.sendCommand(
                 QString("display panafall set %1 black_level=15").arg(pan->waterfallId()));
-            if (!m_adaptiveThrottleActive)
-                m_radioModel.sendCommand(
-                    QString("display panafall set %1 line_duration=100").arg(pan->waterfallId()));
         }
 
         // Persist all defaults to AppSettings
@@ -4742,10 +4842,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
+        updateAetherDspModePolicy();
     });
     connect(s, &SliceModel::audioMuteChanged, this, [this, s](bool) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
         syncFlexRxPanToAudioEngine();
+        updateAetherDspModePolicy();
     });
     connect(s, &SliceModel::audioPanChanged, this, [this, s](int) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);

@@ -69,7 +69,7 @@ signals:
     void automationBridgeTokenRotated(const QString& token);
     // Fired when the user changes the "Allow TX via MCP" toggle (after the
     // one-time confirmation dialog). MainWindow persists it and pushes it to
-    // the running bridge — enabling arms the force-unkey watchdog.
+    // the running bridge; accepted TX actions arm the force-unkey watchdog.
     void automationBridgeTxAllowedChanged(bool allowed);
     // Fired when the user toggles "Observe only" in the Network tab. MainWindow
     // persists it and pushes it to the running bridge, which then refuses every

@@ -39,6 +39,7 @@
 #include "TitleBar.h"
 #include "ClientChainApplet.h"
 #include "MainWindowHelpers.h"
+#include "core/AetherDspModePolicy.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
@@ -52,6 +53,93 @@
 #include <algorithm>
 
 namespace AetherSDR {
+
+QString MainWindow::activeAetherDspMethod() const
+{
+    if (!m_audio) {
+        return {};
+    }
+    if (m_audio->nr2Enabled()) {
+        return QStringLiteral("NR2");
+    }
+    if (m_audio->nr4Enabled()) {
+        return QStringLiteral("NR4");
+    }
+    if (m_audio->mnrEnabled()) {
+        return QStringLiteral("MNR");
+    }
+    if (m_audio->dfnrEnabled()) {
+        return QStringLiteral("DFNR");
+    }
+    if (m_audio->rn2Enabled()) {
+        return QStringLiteral("RN2");
+    }
+    if (m_audio->nvAfxEnabled()) {
+        return QStringLiteral("BNR");
+    }
+    return {};
+}
+
+void MainWindow::setAetherDspMethodEnabled(const QString& method, bool enabled)
+{
+    if (!m_audio || method.isEmpty()) {
+        return;
+    }
+    if (method == QStringLiteral("NR2") && enabled) {
+        enableNr2WithWisdom();
+        return;
+    }
+
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, method, enabled]() {
+        if (method == QStringLiteral("NR2")) {
+            audio->setNr2Enabled(enabled);
+        } else if (method == QStringLiteral("NR4")) {
+            audio->setNr4Enabled(enabled);
+        } else if (method == QStringLiteral("MNR")) {
+            audio->setMnrEnabled(enabled);
+        } else if (method == QStringLiteral("DFNR")) {
+            audio->setDfnrEnabled(enabled);
+        } else if (method == QStringLiteral("RN2")) {
+            audio->setRn2Enabled(enabled);
+        } else if (method == QStringLiteral("BNR")) {
+            audio->setNvAfxEnabled(enabled);
+        }
+    });
+}
+
+void MainWindow::updateAetherDspModePolicy()
+{
+    if (!m_audio) {
+        return;
+    }
+
+    QList<AetherDspSliceAudioState> sliceStates;
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice) {
+            continue;
+        }
+        sliceStates.append({
+            slice->mode(),
+            slice->audioMute(),
+            slice->audioGain(),
+        });
+    }
+
+    const bool restricted = aetherDspMixRequiresDisable(sliceStates);
+    const AetherDspModePolicy::Action action =
+        m_aetherDspModePolicy.update(restricted, activeAetherDspMethod());
+    if (action.kind == AetherDspModePolicy::ActionKind::Disable) {
+        qCInfo(lcAudio).noquote()
+            << "AetherDSP: disabling" << action.method
+            << "because an audible slice uses CW or a digital mode";
+        setAetherDspMethodEnabled(action.method, false);
+    } else if (action.kind == AetherDspModePolicy::ActionKind::Enable) {
+        qCInfo(lcAudio).noquote()
+            << "AetherDSP: restoring" << action.method
+            << "after all audible slices returned to compatible modes";
+        setAetherDspMethodEnabled(action.method, true);
+    }
+}
 
 void MainWindow::wirePooDooTiles()
 {

@@ -73,7 +73,7 @@ void PanadapterModel::setRfGainInfo(int low, int high, int step)
     emit rfGainInfoChanged(low, high, step);
 }
 
-void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
+bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
 {
     bool changed = false;
     if (centerMhz >= 0.0) {
@@ -94,6 +94,23 @@ void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
     if (changed) {
         emit infoChanged(m_centerMhz, m_bandwidthMhz);
     }
+    return changed;
+}
+
+// Re-announce the current centre/span even though neither changed.
+//
+// The setter above is change-gated, which is right for status echoes but wrong
+// for a backend REFUSING a request: the view applies a zoom optimistically, so
+// when the hardware snaps that request back to the span it already had, an
+// unchanged model value is precisely the case where the widget is left showing a
+// width the data never had. The backend has to be able to say "no, it is still
+// this" and have the view follow. (#4470)
+void PanadapterModel::republishCenterBandwidth()
+{
+    if (!m_centerKnown) {
+        return;
+    }
+    emit infoChanged(m_centerMhz, m_bandwidthMhz);
 }
 
 bool PanadapterModel::setRange(double minDbm, double maxDbm)
@@ -113,6 +130,26 @@ bool PanadapterModel::setRange(double minDbm, double maxDbm)
         emit levelChanged(m_minDbm, m_maxDbm);
     }
     return changed;
+}
+
+bool PanadapterModel::setBandwidthLimits(double minMhz, double maxMhz)
+{
+    // Both bounds must be positive and ordered to be a limit at all. A partial
+    // or inverted report is REJECTED rather than half-applied: the consumer
+    // clamps the operator's zoom against this pair, and a min above its max
+    // would pin the span to one value with no way out. Unlike setRange's
+    // per-bound NaN sentinel, span limits only make sense together.
+    if (!(minMhz > 0.0) || !(maxMhz > 0.0) || minMhz > maxMhz) {
+        return false;
+    }
+    if (qFuzzyCompare(minMhz, m_minBandwidthMhz)
+        && qFuzzyCompare(maxMhz, m_maxBandwidthMhz)) {
+        return false;
+    }
+    m_minBandwidthMhz = minMhz;
+    m_maxBandwidthMhz = maxMhz;
+    emit bandwidthLimitsChanged(m_minBandwidthMhz, m_maxBandwidthMhz);
+    return true;
 }
 
 void PanadapterModel::applyWnbExtension(const QVariantMap& fields)
@@ -172,6 +209,22 @@ void PanadapterModel::setWaterfallLineDuration(int ms)
         emit waterfallLineDurationChanged(m_waterfallLineDuration);
     }
     emit waterfallLineDurationReported(ms);
+}
+
+void PanadapterModel::setDisplayRates(int fps, int wfLineDurationMs)
+{
+    // fps reuses the same reported/changed pair the Flex status path emits, so
+    // the widget's existing wiring picks it up with no special case.
+    if (fps > 0) {
+        if (fps != m_fps) {
+            m_fps = fps;
+            emit fpsChanged(m_fps);
+        }
+        emit fpsReported(fps);
+    }
+    if (wfLineDurationMs > 0) {
+        setWaterfallLineDuration(wfLineDurationMs);
+    }
 }
 
 void PanadapterModel::applyStateExtension(const QVariantMap& fields)

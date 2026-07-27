@@ -1123,6 +1123,25 @@ QString MainWindow::kiwiSdrProfileForPan(const QString& panId) const
     return m_kiwiSdrManager->assignedProfileForSlice(displaySlice->sliceId());
 }
 
+void MainWindow::applyPanBandwidthLimitsToWidget(const QString& panId,
+                                                 SpectrumWidget* spectrum,
+                                                 double minMhz,
+                                                 double maxMhz) const
+{
+    if (!spectrum) {
+        return;
+    }
+    // When this pan is showing a Kiwi, the data on screen is the Kiwi's, not this
+    // receiver's, so the ceiling is whichever of the two reaches further.
+    // Clamping to the local radio's span would cap a zoom the Kiwi can fill —
+    // and with a raw-spectrum backend reporting real limits (HL2: 384 kHz) that
+    // is no longer a hypothetical.
+    const double ceiling = kiwiSdrPanDisplaysKiwi(panId)
+        ? std::max(maxMhz, kKiwiSdrWaterfallFullBandwidthMhz)
+        : maxMhz;
+    spectrum->setBandwidthLimits(minMhz, ceiling);
+}
+
 bool MainWindow::kiwiSdrPanDisplaysKiwi(const QString& panId) const
 {
     const QString trimmedPanId = panId.trimmed();
@@ -1320,11 +1339,12 @@ void MainWindow::reconcileFlexPanGeometryAfterKiwiDisplay(
     if (widgetBwMhz <= 0.0) {
         return;
     }
-    // The kiwi display allows spans beyond the Flex pan's limits; clamp back
-    // to what the radio can actually take, and keep the low edge >= 0 Hz.
+    // The kiwi display allows spans beyond the pan's limits; clamp back to
+    // what THIS pan can actually take (per-pan: an HL2 backend reports real
+    // limits far below the model-table guess — #4470), low edge >= 0 Hz.
     const double bwMhz = std::clamp(widgetBwMhz,
-                                    m_radioModel.minPanBandwidthMhz(),
-                                    m_radioModel.maxPanBandwidthMhz());
+                                    m_radioModel.panMinBandwidthMhz(panId),
+                                    m_radioModel.panMaxBandwidthMhz(panId));
     const double centerMhz = std::max(spectrum->centerMhz(), bwMhz / 2.0);
     // Effective (pending-else-model) compare so a deferred reconcile already
     // in flight is not re-issued on every UI sync (#4142).
@@ -1415,8 +1435,9 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
 
     if (profileId.isEmpty()) {
         m_kiwiSdrFlexDisplayPans.remove(panId);
-        spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
-                                     m_radioModel.maxPanBandwidthMhz());
+        applyPanBandwidthLimitsToWidget(panId, spectrum,
+                                        m_radioModel.panMinBandwidthMhz(panId),
+                                        m_radioModel.panMaxBandwidthMhz(panId));
         if (wasKiwiDisplay) {
             reconcileFlexPanGeometryAfterKiwiDisplay(panId, spectrum);
         }
@@ -1440,8 +1461,9 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     }
 
     if (!displayKiwi) {
-        spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
-                                     m_radioModel.maxPanBandwidthMhz());
+        applyPanBandwidthLimitsToWidget(panId, spectrum,
+                                        m_radioModel.panMinBandwidthMhz(panId),
+                                        m_radioModel.panMaxBandwidthMhz(panId));
         if (wasKiwiDisplay) {
             reconcileFlexPanGeometryAfterKiwiDisplay(panId, spectrum);
         }
@@ -1455,10 +1477,14 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         return;
     }
 
-    spectrum->setBandwidthLimits(
-        m_radioModel.minPanBandwidthMhz(),
-        std::max(m_radioModel.maxPanBandwidthMhz(),
-                 kKiwiSdrWaterfallFullBandwidthMhz));
+    // Displaying a KiwiSDR: its own 30 MHz waterfall is the wider source, so the
+    // limit is whichever of the two reaches further. Deliberately NOT the pan's
+    // reported limits alone — the data on screen is the Kiwi's, not this
+    // receiver's, so clamping to the local radio's span would cap a zoom the Kiwi
+    // can actually fill.
+    applyPanBandwidthLimitsToWidget(panId, spectrum,
+                                    m_radioModel.panMinBandwidthMhz(panId),
+                                    m_radioModel.panMaxBandwidthMhz(panId));
 
     const KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(profileId);
     const KiwiSdrClient::State state = m_kiwiSdrManager->state(profileId);
@@ -1469,6 +1495,7 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         && kiwiWaterfallChannelAvailable;
     spectrum->setKiwiSdrWaterfallAvailable(kiwiWaterfallChannelAvailable);
     spectrum->setKiwiSdrWaterfallProfile(profileId);
+    spectrum->setKiwiSdrWaterfallRate(profile.waterfallRate);
     spectrum->setKiwiSdrWaterfallActive(kiwiWaterfallActive);
     const KiwiSdrWaterfallDisplayRange displayRange =
         m_kiwiSdrManager->waterfallDisplayRange(profileId);

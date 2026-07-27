@@ -75,5 +75,85 @@ int main()
                  && result.encoding == MidiRelativeCcEncoding::TwosComplement,
                  "unit pulse still selects two's-complement after ambiguity");
 
+    // Stale-lock self-heal: the controller's knob mode changed mid-session, so the
+    // locked encoding decodes the other wheel family's bytes to implausible steps.
+    encoding = MidiRelativeCcEncoding::Center64;
+    result = decodeMidiRelativeCc(1, encoding);
+    encoding = result.encoding;
+    ok &= expect(result.delta == 1,
+                 "two's-complement pulse under stale center-64 lock heals to one step");
+    ok &= expect(encoding == MidiRelativeCcEncoding::TwosComplement,
+                 "healed lock re-pins to two's-complement");
+    result = decodeMidiRelativeCc(126, encoding);
+    ok &= expect(result.delta == -2,
+                 "healed two's-complement decode preserves counter-clockwise value");
+
+    encoding = MidiRelativeCcEncoding::TwosComplement;
+    result = decodeMidiRelativeCc(65, encoding);
+    encoding = result.encoding;
+    ok &= expect(result.delta == 1,
+                 "center-64 detent under stale two's-complement lock heals to one step");
+    ok &= expect(encoding == MidiRelativeCcEncoding::Center64,
+                 "healed lock re-pins to center-64");
+    result = decodeMidiRelativeCc(63, encoding);
+    ok &= expect(result.delta == -1,
+                 "healed center-64 decode is symmetric counter-clockwise");
+
+    // No false heal on real spins: full-speed center-64 batches reach +/-50
+    // (CTR2-MIDI manual p35); the lock must survive them.
+    encoding = MidiRelativeCcEncoding::Center64;
+    result = decodeMidiRelativeCc(114, encoding);
+    ok &= expect(result.delta == 50, "spec-max clockwise spin decodes under the lock");
+    ok &= expect(result.encoding == MidiRelativeCcEncoding::Center64,
+                 "spec-max clockwise spin does not flip the lock");
+    result = decodeMidiRelativeCc(14, encoding);
+    ok &= expect(result.delta == -50,
+                 "spec-max counter-clockwise spin decodes under the lock");
+    result = decodeMidiRelativeCc(9, encoding);
+    ok &= expect(result.delta == -55, "delta below the threshold never re-classifies");
+
+    // At or beyond the threshold the heal re-classifies from the same byte; an
+    // ambiguous byte defers (like any first sample) until a unit detent settles it.
+    result = decodeMidiRelativeCc(120, encoding);
+    ok &= expect(result.delta == 0
+                     && result.encoding == MidiRelativeCcEncoding::Undetermined,
+                 "threshold heal on an ambiguous byte defers re-detection");
+    result = decodeMidiRelativeCc(127, result.encoding);
+    ok &= expect(result.delta == -1
+                     && result.encoding == MidiRelativeCcEncoding::TwosComplement,
+                 "unit detent after a deferred heal settles the encoding");
+
+    // The heal inherits the deferral for non-unit direction tokens too: a stale
+    // center-64 lock fed WheelB counter-clockwise (126 -> +62) unlocks rather
+    // than guessing an encoding from an ambiguous byte.
+    encoding = MidiRelativeCcEncoding::Center64;
+    result = decodeMidiRelativeCc(126, encoding);
+    ok &= expect(result.delta == 0
+                     && result.encoding == MidiRelativeCcEncoding::Undetermined,
+                 "stale-lock heal on a non-unit byte unlocks without guessing");
+
+    // Documented coverage limit of the one-message heal (see
+    // kMidiRelativeCcImplausibleStep). A step |d| from the switched wheel decodes
+    // under the stale lock to magnitude 64 - |d|, so only |d| <= 8 crosses the
+    // threshold. Speed Tuning bursts (+/-12 Normal, +/-24 Fast on the reference
+    // unit) land below it and are bit-identical to a legitimate spin of the
+    // locked encoding, so they decode under the stale lock and it survives.
+    // Pinned so anyone retuning the threshold sees the trade-off: catching these
+    // would false-heal legitimate spec-max (+/-50) spins.
+    encoding = MidiRelativeCcEncoding::Center64;
+    result = decodeMidiRelativeCc(12, encoding); // two's-complement +12 after a switch
+    ok &= expect(result.delta == -52
+                     && result.encoding == MidiRelativeCcEncoding::Center64,
+                 "Speed-Tuning-sized step from the switched wheel misses the heal");
+    result = decodeMidiRelativeCc(24, encoding); // two's-complement +24 after a switch
+    ok &= expect(result.delta == -40
+                     && result.encoding == MidiRelativeCcEncoding::Center64,
+                 "fast-spin step from the switched wheel also misses the heal");
+    // Recovery path: the next unit detent still heals, whatever came before it.
+    result = decodeMidiRelativeCc(1, encoding);
+    ok &= expect(result.delta == 1
+                     && result.encoding == MidiRelativeCcEncoding::TwosComplement,
+                 "a unit detent heals even after missed Speed Tuning bursts");
+
     return ok ? 0 : 1;
 }

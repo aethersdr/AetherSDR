@@ -1,4 +1,6 @@
 #include "MeterModel.h"
+
+#include <algorithm>
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QDateTime>
@@ -229,6 +231,36 @@ float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const
     if (def.unit == "degF" || def.unit == "degC")
         return static_cast<float>(raw) / 64.0f;
     return static_cast<float>(raw);
+}
+
+bool MeterModel::updateValueByName(const QString& source, const QString& name,
+                                   float converted, int sourceIndex)
+{
+    const int idx = findMeter(source, name, sourceIndex);
+    if (idx < 0)
+        return false;
+    const MeterDef* def = meterDef(idx);
+    if (!def)
+        return false;
+
+    // Inverse of convertRaw(). Kept adjacent to it so the two cannot drift.
+    float scale = 1.0f;
+    if (def->unit == "dBm" || def->unit == "dB" || def->unit == "dBFS" || def->unit == "SWR")
+        scale = 128.0f;
+    else if (def->unit == "Volts" || def->unit == "Amps")
+        scale = 256.0f;
+    else if (def->unit == "degF" || def->unit == "degC")
+        scale = 64.0f;
+
+    const float scaled = converted * scale;
+    // Saturate rather than wrap: a wrapped qint16 turns a large positive
+    // reading into a large NEGATIVE one, which on a power meter reads as
+    // "no output" at exactly the moment there is the most of it.
+    const qint16 raw = static_cast<qint16>(
+        std::clamp(scaled, -32768.0f, 32767.0f));
+
+    updateValues(QVector<quint16>{static_cast<quint16>(idx)}, QVector<qint16>{raw});
+    return true;
 }
 
 void MeterModel::clear()

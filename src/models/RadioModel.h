@@ -5,6 +5,7 @@
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
+#include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -78,6 +79,31 @@ public:
     // Access the underlying connection and panadapter stream
     RadioConnection*  connection()  { return m_connection; }
     PanadapterStream* panStream()   { return m_panStream; }
+    // The radio-facing backend seam (aetherd RFC §5.5). Non-owning; used to wire
+    // seam-native signals (e.g. a SimBackend's audioFrameReady) that don't flow
+    // through PanadapterStream. Null before the first connect.
+    IRadioBackend*    backend()     { return m_backend.get(); }
+
+    // DAX channel holds, null-safe.
+    //
+    // A PanadapterStream is the Flex VITA-49 transport; a backend that carries
+    // its own IQ (HL2, KiwiSDR) has none, and panStream() is then null. Every
+    // caller of these three used to dereference it bare, so activating RADE or
+    // the DAX bridge on such a backend was a segfault rather than a decline --
+    // the same crash already fixed once at the startDax() entry, reachable by
+    // four more paths behind it.
+    //
+    // Routing the family through here makes "no stream means no channels to
+    // hold" a property of the seam instead of something every call site has to
+    // remember, which is the point: the next backend should not be able to
+    // reintroduce this by adding a call.
+    //
+    // Returns false when there is no stream, so callers can report honestly
+    // rather than believing they hold a channel they do not.
+    bool acquireDaxChannel(int channel, PanadapterStream::DaxConsumer who);
+    void releaseDaxChannel(int channel, PanadapterStream::DaxConsumer who);
+    void releaseAllDaxChannels(PanadapterStream::DaxConsumer who);
+
     // Sub-models owned by RadioModel (main thread). (#502)
     MeterModel&       meterModel()       { return m_meterModel; }
     TunerModel&       tunerModel()       { return m_tunerModel; }
@@ -177,6 +203,13 @@ public:
         return capabilitiesFor(m_model);
     }
 
+    // The live BACKEND's capabilities (RadioCapabilities: canTransmit, canReboot,
+    // sample rates, …). Distinct from capabilities() above, which is the
+    // FlexLib-derived model table. Use this for anything the backend/seam owns —
+    // e.g. TX capability and reboot support, which differ by radio family (#4448).
+    // Non-inline: IRadioBackend is only forward-declared here.
+    RadioCapabilities backendCapabilities() const;
+
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
     // for real Flex radios — the band UI then falls back to the model
@@ -228,6 +261,30 @@ public:
         // 6300, 6400, 6600, 8400, Aurora: single SCU
         return 5.4;
     }
+    // The span limits to clamp a zoom against for ONE pan.
+    //
+    // Prefers what the backend reported for that pan over the model-string table
+    // below. The table is a FlexLib platform lookup, so it is right for a Flex
+    // radio and a guess for anything else: it falls through to 5.4 MHz for any
+    // model string it doesn't recognise, which let an HL2 delivering 384 kHz be
+    // zoomed fourteen times past its own data. A backend that knows its real
+    // rates says so, and then this returns the truth instead of the guess.
+    //
+    // Every zoom path — wheel, drag, keyboard, MIDI — must clamp through here, or
+    // the one that doesn't becomes the one that reopens the black bars.
+    double panMinBandwidthMhz(const QString& panId) const {
+        const PanadapterModel* pan = panadapter(panId);
+        if (pan && pan->bandwidthLimitsKnown())
+            return pan->minBandwidthMhz();
+        return minPanBandwidthMhz();
+    }
+    double panMaxBandwidthMhz(const QString& panId) const {
+        const PanadapterModel* pan = panadapter(panId);
+        if (pan && pan->bandwidthLimitsKnown())
+            return pan->maxBandwidthMhz();
+        return maxPanBandwidthMhz();
+    }
+
     double minPanBandwidthMhz() const {
         if (m_model.contains("6700") || m_model.contains("8600"))
             return 0.001230;
@@ -288,9 +345,17 @@ public:
     QStringList globalProfiles() const { return m_globalProfiles; }
     QString activeGlobalProfile() const { return m_activeGlobalProfile; }
     void loadGlobalProfile(const QString& name);
+    void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
     void resetPanState();
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
+    bool prepareWsprTransmit();
+    void releaseWsprTransmit();
+    void restoreWsprTransmitDax();
+    bool hasWsprTxStream() const
+    {
+        return m_daxTxStreamId != 0 && m_daxTxActive;
+    }
     QJsonObject troubleshootingSnapshot() const;
 
     // Memory channel cache
@@ -499,6 +564,18 @@ public:
                           double centerMhz,
                           double bandwidthMhz = -1.0);
     bool requestPanBandwidth(const QString& panId, double bandwidthMhz);
+    // The operator's Display→FFT FPS / Display→Waterfall Rate intent.
+    //
+    // On a Flex these are radio settings and this sends the wire text, exactly
+    // as the call sites used to inline. On a backend that streams raw spectra
+    // there is no radio to ask — the engine shapes the stream itself — so the
+    // values are applied to the pan model, which is what the shaper reads.
+    // Without this the sliders moved nothing on an HL2: the wire text was
+    // addressed to a command interpreter that does not exist on that radio.
+    //
+    // Returns true when the intent was applied or dispatched.
+    bool requestPanDisplayRates(const QString& panId, int fps,
+                                int wfLineDurationMs);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
     // Effective pan geometry: the deferred pending value if one is queued,
@@ -540,6 +617,9 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    // Emitted whenever the backend instance is (re)built — including the
+    // connect-time swap between FlexBackend and SimBackend (RFC #4288). The old
+    // m_backend is already destroyed and m_backend now points at the new one.
     // Emitted whenever the local CW key transitions on/off — funnel for
     // serial CTS/DSR, MIDI Gate, TCI key, CWX, and HID encoder sources.
     // Wired to AudioEngine's CwSidetoneGenerator for low-latency local
@@ -558,10 +638,38 @@ signals:
                                  const QString& presentedHex);
     // Emitted when another GUI client forces this client to disconnect.
     void forcedDisconnectRequested();
+    // aetherd Gap B (HL2 Phase 1c, Step 1): the backend-neutral panadapter render
+    // feed. Signatures mirror PanadapterStream.h:212-218 exactly, so the UI binds
+    // its panadapter/waterfall rendering to these instead of the Flex-only
+    // PanadapterStream and the wiring is family-agnostic. A Flex session forwards
+    // its PanadapterStream into these 1:1 (signal-to-signal, no transformation);
+    // an HL2 session (Step 2) synthesises them from IRadioBackend::spectrumFrameReady.
+    // Per-RadioModel → per-session, which is exactly what the two-panadapter end
+    // state needs.
+    void panFeedSpectrumReady(quint32 streamId, const QVector<float>& binsDbm,
+                              qint64 emittedNs);
+    void panFeedWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
+                                  double lowFreqMhz, double highFreqMhz,
+                                  quint32 timecode, qint64 emittedNs);
+    void panFeedWaterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
+    // Demodulated RX audio from a backend that produces it in-process (HL2).
+    // 24 kHz stereo float32 — the format AudioEngine::feedAudioData expects.
+    // Flex never emits this; its audio arrives on the PanadapterStream path.
+    void backendAudioFrameReady(const QByteArray& pcm);
+    // The backend was replaced because the operator picked a radio of another
+    // family. Consumers holding backend-owned objects (PanadapterStream) must
+    // re-establish anything that binds to them directly.
+    void backendRebuilt();
     // Emitted when a panadapter's center frequency or bandwidth changes.
     void panadapterInfoChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the radio reports the panadapter's dBm display range.
     void panadapterLevelChanged(float minDbm, float maxDbm);
+    // Emitted when the backend reports the span limits this pan can be zoomed
+    // between (MHz). Per-pan and addressed, because the limits belong to the
+    // receiver behind the pan rather than to the radio as a whole — a backend
+    // that never reports leaves the GUI on its model-derived clamp.
+    void panBandwidthLimitsChanged(const QString& panId,
+                                   double minMhz, double maxMhz);
     // Emitted when the radio reports FFT pixel height for a panadapter.
     void panadapterFftScaleChanged(const QString& panId, int yPixels);
     void panadapterAdded(PanadapterModel* pan);
@@ -637,11 +745,11 @@ signals:
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
     // Operator-driven RF transmit: true while THIS seat is keyed by the local
-    // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX,
-    // tune) and false otherwise. Deliberately excludes TCI-hardware and DAX
-    // transmits (external-app keying paths, not the operator on the mic) and CW
-    // (break-in/QSK per-element keying would thrash a wall-clock timer). Drives
-    // the status-bar TX timer.
+    // operator in a phone/data mode (MOX, local/hardware PTT, footswitch, VOX)
+    // and false otherwise. Deliberately excludes TUNE/two-tone/ATU carriers,
+    // TCI-hardware/DAX transmits (external-app keying paths, not the operator
+    // on the mic), and CW (break-in/QSK per-element keying would thrash a
+    // wall-clock timer). Drives the status-bar TX timer.
     void operatorTransmitChanged(bool active);
     // Short operator-facing interlock warnings for the panadapter overlay.
     // `key` is the stable, translation-invariant dedup key (e.g. "radio:...",
@@ -702,6 +810,27 @@ public:
     // advance local state to match a command MUST gate that on this return,
     // or the client will claim state the radio never took.
     bool sendCommand(const QString& cmd);
+    // Backend family currently in use ("flex", "hl2", "kiwi", ...).
+    QString family() const { return m_family; }
+    // True when the radio speaks the SmartSDR text-command plane — the only
+    // family where sendCmd() reaches anything and a command has a response to
+    // await. Every other backend takes typed intents through the IRadioBackend
+    // seam and settles synchronously in the model, so a caller that awaits a
+    // sendCmd() callback there waits forever. Callers that must work on both
+    // planes branch on this rather than on the family name.
+    bool usesFlexCommandPlane() const { return m_family == QLatin1String("flex"); }
+
+    // True when the ENGINE owns display rate shaping rather than the radio —
+    // i.e. a backend that streams raw spectra and has no radio-side display
+    // engine to ask. The single predicate behind requestPanDisplayRates' branch
+    // and the seeding in MainWindow, so the two cannot drift into disagreeing
+    // about who is in charge of the frame rate.
+    bool shapesDisplayRatesLocally() const {
+        return m_backend != nullptr && m_flexBackend == nullptr;
+    }
+    // Forward processed transmit audio to a host-modulating backend. No-op when
+    // the backend modulates on the radio side.
+    void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz);
 
     // Request local PTT for our station. Sends "client set local_ptt=1" and applies
     // an optimistic update in case the radio doesn't echo the state change.
@@ -734,6 +863,11 @@ private slots:
     void onDisconnected();
     void onConnectionError(const QString& msg);
     void onVersionReceived(const QString& version);
+    // aetherd Gap B (Step 2): adapt a backend that delivers spectra via the
+    // normalized IRadioBackend data-plane signal (e.g. HL2) into the neutral
+    // panFeed. Decodes the float32 frame and re-emits panFeedSpectrumReady. Flex
+    // never triggers this (it feeds panFeed via the PanadapterStream passthrough).
+    void onBackendSpectrumFrame(int panId, const QByteArray& frame);
 
 private:
     void handleRadioStatus(const QMap<QString, QString>& kvs);
@@ -846,12 +980,41 @@ private:
     void ensureDefaultSlicePreferringRestoredPan();
     void stageSessionModelsForReconnect();
     void pruneStaleSessionModels(quint64 generation);
+    // Destroy every live AND staged slice/pan model unconditionally. Called on a
+    // radio-family switch, which is a hard radio change: no model from the old
+    // family may survive to be reclaimed as one of the new family (their slice
+    // indices and stream ids collide, and their command/TX/DV wiring differs, so
+    // a reclaimed cross-family slice is a partially-wired, broken slice). The
+    // serial-based reclaim guard cannot cover this — HL2 carries no chassis
+    // serial — so the switch drops the models outright. (#4448)
+    void dropAllSessionModelsForFamilySwitch();
+
+    // aetherd Gap A (HL2 Phase 1c): the minimal backend-selection seam. Returns
+    // the IRadioBackend for `family` ("flex" default, "hl2" for Hermes-Lite 2).
+    // Replaces the hard-wired make_unique<FlexBackend>; a fuller step-3 registry
+    // supersedes it later. Flex-specific construction wiring (command sinks,
+    // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
+    // in the ctor, so a non-Flex backend simply skips it.
+    static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
+
+    // aetherd Gap B: build/destroy the backend for a radio family. The backend
+    // follows the radio the operator picks in the connection manager, so these
+    // run again on a family change — not just at construction.
+    void setupBackend(const QString& family);
+    void teardownBackend();
 
     // aetherd RFC step 2 (§5.5): the radio-facing seam. Held via std::unique_ptr
     // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
     // PanadapterStream and their worker threads; RadioModel keeps the two
     // NON-OWNING pointers below, obtained from the backend at construction.
+    // Radio family the live backend implements ("flex", "hl2"). Set by
+    // setupBackend(); compared against the picked radio's RadioInfo::family to
+    // decide whether a connect needs a different backend.
+    QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    // RFC #4288 Route A: when true, m_backend is a wire-less SimBackend (the demo
+    // simulator) instead of a FlexBackend. Selected per-connection from the target
+    // — see connectToRadio(). Also generalizes to future non-Flex backends (HL2).
     // Transitional (aetherd RFC 2.3): RadioModel drives the backend's Flex
     // status decode from its status choke points while touchpoints convert
     // one at a time. Non-owning alias of m_backend; goes away once the backend
@@ -864,6 +1027,35 @@ private:
     std::atomic<quint32> m_seqCounter{1};
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
     PanadapterStream* m_panStream{nullptr};    // non-owning — owned by m_backend
+    // aetherd Gap B (Step 2c): geometry + row counter for backends that deliver
+    // spectra through IRadioBackend (HL2). Kept on RadioModel because such a
+    // backend has no PanadapterModel yet, and the neutral waterfall rows still
+    // need frequency edges.
+    double  m_backendPanCenterMhz{0.0};
+    double  m_backendPanBandwidthMhz{0.0};
+    quint32 m_backendWfTimecode{0};
+
+    // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
+    //
+    // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
+    // frames arrive here already at the operator's FFT FPS. The waterfall runs
+    // SLOWER than that — line_duration is its own control and typically 100 ms
+    // against 25-40 fps — so it needs one more gate, and only in that
+    // direction.
+    //
+    // A plain drop, not a coalesce. Frames are already scarce by the time they
+    // reach here, and combining them would mean a magnitude/log round trip per
+    // bin per frame for no gain the operator can see.
+    //
+    // It is also correctness, not just load: the widget scales its time axis
+    // from line_duration, so a row must actually represent line_duration of
+    // time. Unpaced, rows arrived at the full frame rate and the visible
+    // history was several times shorter than the axis claimed.
+    QHash<int, qint64> m_backendWfLastRowNs;
+    // Covers only the window before MainWindow seeds the pan model from the
+    // operator's sliders. 100 ms matches SpectrumWidget's own m_wfLineDuration
+    // default, so the time axis is right from the very first row.
+    static constexpr int kBackendDefaultWfLineDurationMs = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
     TunerModel       m_tunerModel;
@@ -947,7 +1139,7 @@ private:
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
-    bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not TCI/DAX)
+    bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not tune/ATU/TCI/DAX)
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
     qint64      m_interlockNotificationArmedUntilMs{0};
@@ -1054,6 +1246,14 @@ private:
     // Recompute the operator-transmit predicate and emit operatorTransmitChanged
     // on a rising/falling edge. Cheap; safe to call from every TX-state path.
     void updateOperatorTransmit();
+    // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
+    // Flex, where the edge is decoded from `interlock` status instead.
+    void publishBackendTransmitEdge(bool tx);
+    // Key-on guard for the MOX/TUNE seam paths, which do not run through
+    // setTransmit() and therefore missed its canTransmit test. Returns true when
+    // keying may proceed; on refusal it rolls back the optimistic transmit state
+    // and notifies, so no raw-TX edge is ever published for a refused key.
+    bool refuseKeyOnTransmitIncapableBackend();
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
@@ -1143,6 +1343,11 @@ private:
     QMap<quint32, DaxStreamDebugState> m_daxStreamDebug;
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
+    bool        m_wsprTxOwnershipRequested{false};
+    bool        m_wsprTxYieldAfterUse{false};
+    bool        m_wsprTxReleaseWhenReady{false};
+    bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed
+    bool        m_wsprTxRestoreDax{false};    // beacon changed it and owes a restore
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;

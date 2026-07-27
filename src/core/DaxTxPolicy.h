@@ -10,6 +10,7 @@ enum class DaxTxRequestReason {
     TciTxAudio,
     RadeModemTx,
     AetherModemAx25Tx,
+    WsprBeacon,
     ExternalDaxRouteOnly,
     GenericAudioRecreate
 };
@@ -47,6 +48,7 @@ inline QString daxTxRequestReasonName(DaxTxRequestReason reason)
     case DaxTxRequestReason::TciTxAudio:          return QStringLiteral("tci_tx_audio");
     case DaxTxRequestReason::RadeModemTx:         return QStringLiteral("rade_modem_tx");
     case DaxTxRequestReason::AetherModemAx25Tx:   return QStringLiteral("aethermodem_ax25_tx");
+    case DaxTxRequestReason::WsprBeacon:           return QStringLiteral("wspr_beacon");
     case DaxTxRequestReason::ExternalDaxRouteOnly:return QStringLiteral("external_dax_route_only");
     case DaxTxRequestReason::GenericAudioRecreate:return QStringLiteral("generic_audio_recreate");
     }
@@ -154,6 +156,12 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
         // RADE/TCI, it does not claim a Windows audio device, so it needs its
         // own dax_tx stream even on platforms where external DAX owns devices.
         return {true, QStringLiteral("aethermodem_sends_vita49_directly")};
+
+    case DaxTxRequestReason::WsprBeacon:
+        // The built-in beacon generates its waveform and VITA-49 payload
+        // directly. It does not claim an OS DAX audio device, so it needs its
+        // own client-owned dax_tx stream on every platform.
+        return {true, QStringLiteral("wspr_sends_vita49_directly")};
 
     case DaxTxRequestReason::ExternalDaxRouteOnly:
         if (context.mode == DaxTxMode::ExternalDax2) {

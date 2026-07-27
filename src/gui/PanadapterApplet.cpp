@@ -11,6 +11,7 @@
 #include "SpectrumWidget.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
+#include "gui/CopyAssistSettings.h"
 #include "core/SettingsHelpers.h"
 
 #include <QVBoxLayout>
@@ -592,7 +593,7 @@ CopyAssistPanel* PanadapterApplet::copyAssistPanel()
     }
 
     m_copyAssistHeight = std::clamp(
-        AppSettings::instance().value("AsrPanelHeight", "160").toString().toInt(), 60, 600);
+        CopyAssistSettings::value("AsrPanelHeight", "160").toString().toInt(), 60, 600);
 
     // Dock container styled like the CW decode panel — a top border separating
     // it from the waterfall, fixed height, resizable via a top grip.
@@ -826,9 +827,9 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
             return true;
         } else if (ev->type() == QEvent::MouseButtonRelease && m_copyAssistResizing) {
             m_copyAssistResizing = false;
-            AppSettings::instance().setValue("AsrPanelHeight",
-                                             QString::number(m_copyAssistHeight));
-            AppSettings::instance().save();
+            // setValue() self-persists — no extra AppSettings::save() needed.
+            CopyAssistSettings::setValue("AsrPanelHeight",
+                                         QString::number(m_copyAssistHeight));
             return true;
         }
     }

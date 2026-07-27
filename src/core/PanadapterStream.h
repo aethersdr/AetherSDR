@@ -66,7 +66,7 @@ public:
 
     QHostAddress localAddress() const { return m_localAddress; }
     quint16 localPort() const { return m_localPort; }
-    bool    hasReceivedPackets() const { return m_hasReceivedPacket; }
+    bool    hasReceivedPackets() const { return m_hasReceivedPacket.load(); }
     bool    isRunning() const;
 
     // Update the dBm range used to scale incoming FFT bins for a specific stream.
@@ -192,6 +192,7 @@ public:
     // the network worker thread (the socket lives there). Persistence is the
     // caller's responsibility (NetworkSettings, on the GUI thread). (#3810)
     Q_INVOKABLE void setReceiveBufferSizeBytes(int bytes);
+
     // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
     // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
     int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }
@@ -362,6 +363,7 @@ private:
     QElapsedTimer             m_orphanClock;   // monotonic source for lastSeenMs
     QUdpSocket*     m_socket{nullptr};
     quint16         m_localPort{0};
+
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)
     QMap<quint32, QPair<float,float>> m_pendingDbmRanges;  // streamId → pending echoed range
     QMap<quint32, int> m_yPixels;  // streamId → ypixels for FFT bin scaling
@@ -445,7 +447,10 @@ private:
     QHostAddress m_radioAddress;
     quint16      m_radioPort{0};
     QHostAddress m_localAddress;
-    bool         m_hasReceivedPacket{false};
+    // Written on the network thread (first datagram), read from the GUI thread via
+    // hasReceivedPackets() (the connect health watchdog). Atomic for the same
+    // reason RadioConnection::m_syntheticDemo is.
+    std::atomic<bool> m_hasReceivedPacket{false};
 
     // WAN UDP registration and keepalive
     QTimer*  m_wanRegisterTimer{nullptr};   // 50ms: "client udp_register" until first packet

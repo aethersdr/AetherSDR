@@ -221,8 +221,9 @@ TX via MCP"** in Radio Setup → Network. That checkbox raises a one-time
 confirmation spelling out that automated software will be able to
 transmit and that you, the operator, remain responsible for all
 emissions; once confirmed the choice persists. Toggling it drives the
-same `m_txAllowed` gate live (enabling arms the force-unkey watchdog;
-disabling force-unkeys immediately).
+same `m_txAllowed` gate live. Enabling grants permission but does not claim
+unrelated operator, DAX, or TCI transmissions; the force-unkey watchdog arms
+when the bridge actually accepts a TX-capable action.
 
 For proof-build process owners, `AETHER_AUTOMATION_NO_TX=1` pins this gate off
 even when the operator preference was previously enabled. The Radio Setup
@@ -342,7 +343,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`targettune <mhz>`](#targettune) | Absolute tune through the commanded-target and band-stack path. |
 | | [`memory activate <index> [panId]`](#memory) | Recall a radio memory through the normal UI policy. |
-| | [`slice <action>`](#slice) | add/remove/select/tx/mode/diversity/centerlock/txant/rxant/rxsource. |
+| | [`slice <action>`](#slice) | add/remove/select/tx/mode/filter/agc/diversity/centerlock/txant/rxant/rxsource. |
 | **GPS fixtures** | [`gps fixture <6000\|8000>`](#gps) | Disconnected-only GPS status fixture using each production wire format. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
@@ -1123,6 +1124,8 @@ re-poll `get slices`.
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
 | `mode` | `<name>` e.g. `DSTR` | set the active slice mode through `SliceModel`; validated against the radio-advertised mode list |
+| `filter` | `<lowHz> <highHz>` e.g. `-3000 -150` | set the active slice passband through `SliceModel::setFilterWidth`, the operator-intent setter — so the edges reach `IRadioBackend::setSliceFilter` and not just the model. Necessary because a mode change mirrors the passband *inside* the model without emitting that intent, which can leave a backend that owns its own DSP chain running the pre-mirror passband while `get_state` reports the mirrored one. Assert the passband before measuring anything through the audio path. Returns both the requested edges and the post-normalization `filterLow`/`filterHigh` the model actually holds. Use `-4000 4000` for a carrier-straddling AM passband |
+| `agc` | `<off\|slow\|med\|fast> [threshold 0..100]` | set the active slice's receive AGC through `SliceModel`'s operator setters, so it emits `agcCommandIssued` and reaches `IRadioBackend::setSliceAgc`. Applies the threshold before the mode so a combined request arrives at the backend as one coherent pair. On a backend that owns its DSP chain (HL2) this maps to the WDSP RXA AGC mode and the AGC ceiling in dB; on Flex it is the firmware's own AGC. Use `off` with a low threshold to get a linear path for measurement |
 | `diversity` | `<sliceId> <on\|off>` | enable or disable diversity through the slice model; re-poll `get slices` for parent/child state |
 | `centerlock` | `<sliceId> <on\|off>` | enable or disable Center Lock for that exact slice through the same per-pan path as the context menu; an explicit id permits testing either diversity member |
 | `link` | `<sliceIdA> <sliceIdB> <on\|off>` | engage or dissolve one cross-panadapter Slice Link pair through the same MainWindow handler as the context menu; multiple independent pairs are supported, but each owned non-diversity slice may belong to only one pair — assert each pair via the reciprocal `linkedTo` snapshot fields |
@@ -1978,11 +1981,11 @@ proves the co-hold path.
 Read the status-bar transmit timer's state. The timer sits just left of the
 **PC Audio** button and runs **only** for operator-driven phone/data transmits
 — MOX, local/hardware PTT, footswitch, VOX — and deliberately **not** for
-TCI-hardware or DAX transmits (external-app keying paths) **nor CW** (break-in/
-QSK toggles the interlock per element, which would thrash a wall-clock timer).
-All three exclusions are gated in `RadioModel::operatorTransmitChanged`. It is
-hidden when idle; on unkey it holds the final elapsed reading for 15 s, then
-fades out.
+TUNE/two-tone carriers, internal ATU tuning, TCI-hardware or DAX transmits
+(external-app keying paths), **nor CW** (break-in/QSK toggles the interlock per
+element, which would thrash a wall-clock timer). These exclusions are gated in
+`RadioModel::operatorTransmitChanged`. It is hidden when idle; on unkey it
+holds the final elapsed reading for 15 s, then fades out.
 
 ```json
 → {"cmd":"get","model":"txtimer"}
@@ -1997,8 +2000,8 @@ flight), `elapsedMs` / `text` (live while running, frozen at unkey), `opacity`
 it: `get txtimer running` → `{"value":true}`. Assertion shapes: after a 1 W
 dummy-load MOX key, `running=true` + `elapsedMs` climbing; after unkey,
 `running=false`, `holding=true`, `text` frozen; ~15 s later `fading=true` then
-`visible=false`. A DAX, TCI, or CW transmit must leave `visible=false`
-throughout.
+`visible=false`. A TUNE, two-tone, ATU, DAX, TCI, or CW transmit must leave
+`visible=false` throughout.
 
 ### `tci`
 In-process TCI **client** simulator. Connects to this app's own TCI server
@@ -2392,10 +2395,17 @@ Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
 
 These verbs **key the live transmitter** and are refused unless the app was
 launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`).
-A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops any
-continuous key that runs too long, and the bridge force-unkeys on stop. **Verify
-the TX antenna is your dummy load before keying** (`get slice tx txAntenna`, or
-set it with `slice txant ANT2`). Unkey/stop sub-actions are always allowed.
+A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops an
+automation-originated continuous key that runs too long, and the bridge
+force-unkeys its own active TX lease on stop. Merely enabling TX permission
+does not apply this timeout to operator, DAX, or TCI transmissions. The lease
+covers the key-up an accepted action causes directly (allowing ~2 s for a
+deferred click); a bridge action that only *arms* a long-fuse feature — the
+WSPR beacon waits for the next even UTC minute, then keys for 111.6 s — is not
+claimed, so that transmission runs to completion under the feature's own
+timers rather than being cut at `TX_MAX_MS`. **Verify the
+TX antenna is your dummy load before keying** (`get slice tx txAntenna`, or set
+it with `slice txant ANT2`). Unkey/stop sub-actions are always allowed.
 
 ### `key`
 PTT / MOX keying via `RadioModel::setTransmit` — the exact path the space-bar PTT
@@ -2618,7 +2628,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 53 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 55 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2632,6 +2642,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
+| `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event |
 | `dragAt` | — | dragAt <target> <x> <y> <dx> <dy> [control\|meta\|shift\|alt,...] |
 | `gesture` | — | gesture <begin\|move\|end\|cancel\|status> — phaseful pointer gesture |
 | `showMenu` | `openMenu` | showMenu <target> — pop a button's drop-down menu |
@@ -2652,6 +2663,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
+| `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
 | `pan` | — | pan <create\|add\|remove\|close\|center> [value] |
