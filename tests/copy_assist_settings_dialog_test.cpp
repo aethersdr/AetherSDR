@@ -130,18 +130,23 @@ int main(int argc, char** argv)
                "setTierLabel renames the entry, keeps its id");
     }
 
-    // ---- Compute-device selector: hidden by default, shows + emits --------
+    // ---- Compute-device selector: pending state, discovery, selection -----
     {
         auto* gpuCombo = dlg.findChild<QComboBox*>(QStringLiteral("CopyAssistGpuCombo"));
-        expect(gpuCombo != nullptr && !gpuCombo->isVisibleTo(&dlg),
-               "GPU combo hidden until a device exists");
+        expect(gpuCombo != nullptr && gpuCombo->isVisibleTo(&dlg)
+                   && !gpuCombo->isEnabled()
+                   && gpuCombo->currentText() == QStringLiteral("Detecting…"),
+               "GPU combo shows a disabled discovery placeholder");
 
+        dlg.clearGpuDevices();
         dlg.addGpuDevice(0, QStringLiteral("GPU0"));
         dlg.addGpuDevice(-1, QStringLiteral("CPU"));
         dlg.setGpuSelectorVisible(true);
+        dlg.setGpuSelectorEnabled(true);
 
         QSignalSpy gpuSpy(&dlg, &CopyAssistSettingsDialog::gpuChanged);
         dlg.setCurrentGpu(-1);
+        expect(gpuCombo->isEnabled(), "GPU combo enables when discovery completes");
         expect(dlg.currentGpu() == -1, "setCurrentGpu selects the CPU sentinel");
         expect(!gpuSpy.isEmpty() && gpuSpy.last().at(0).toInt() == -1,
                "gpuChanged carries the device index");
