@@ -33,10 +33,13 @@ const QMap<QString, ModelSpec>& modelTable()
     // documents A/B for the 1.3K-FA (and the 1.5K-FA reports them in the
     // same field); the 2K-FA always reads "x". Combiner/lower-heatsink
     // temperatures are only real on the 2K-FA (spec §5's field table).
+    // LOW/MID nominals: 1.5K-FA's 500/1000 are hardware-validated (the
+    // field-proven control application rescaled its bar to exactly those on
+    // level changes); 1.3K-FA and 2K-FA LOW/MID are derived, not measured.
     static const QMap<QString, ModelSpec> table = {
-        {"13K", ModelSpec{"13K", "1.3K-FA", 1300.0f, 1400.0f, 1250.0f, true,  false}},
-        {"15K", ModelSpec{"15K", "1.5K-FA", 1500.0f, 1600.0f, 1450.0f, true,  false}},
-        {"20K", ModelSpec{"20K", "2K-FA",   2000.0f, 2100.0f, 1950.0f, false, true}},
+        {"13K", ModelSpec{"13K", "1.3K-FA", 1300.0f, 1400.0f, 1250.0f,  500.0f, 1000.0f, true,  false}},
+        {"15K", ModelSpec{"15K", "1.5K-FA", 1500.0f, 1600.0f, 1450.0f,  500.0f, 1000.0f, true,  false}},
+        {"20K", ModelSpec{"20K", "2K-FA",   2000.0f, 2100.0f, 1950.0f, 1000.0f, 1500.0f, false, true}},
     };
     return table;
 }
@@ -268,6 +271,15 @@ const ModelSpec& modelSpec(const QString& id)
 QStringList modelIds()
 {
     return modelTable().keys();
+}
+
+float levelNominalW(const ModelSpec& spec, QChar level)
+{
+    switch (level.unicode()) {
+        case u'L': return spec.lowNominalW;
+        case u'M': return spec.midNominalW;
+        default:   return spec.nominalPowerW;  // H, or unknown — full scale
+    }
 }
 
 }  // namespace Spe

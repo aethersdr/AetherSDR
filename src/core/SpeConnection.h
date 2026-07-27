@@ -48,10 +48,14 @@ public:
     // user-configurable.
     void connectSerial(const QString& portName);
 #endif
-    // Network mode assumes a RAW TCP proxy (e.g. ser2net `connection type:
-    // raw`). A telnet-mode proxy would IAC-escape byte 0xFF; nothing in this
-    // ASCII-heavy protocol emits 0xFF routinely, but the 0xAA sync run and
-    // binary checksums still make raw mode the only supported configuration.
+    // Network mode expects a ser2net-style TCP proxy in either raw or
+    // telnet mode — both verified against real 1.5K-FA hardware (the
+    // validation station runs telnet mode). Telnet negotiation bytes and
+    // IAC-escaping are shrugged off by the parser's sync-run resync; the
+    // rare status frame whose checksum byte happens to be 0xFF is dropped
+    // and simply re-polled 100 ms later. Telnet mode is in fact what a
+    // future remote power-ON feature needs (serial BREAK via
+    // telnet-brk-on-sync) — see the design note §4.
     void connectNetwork(const QString& host, quint16 port);
     void disconnect();
 
@@ -123,11 +127,13 @@ private:
     bool m_deliberateDisconnect{false};
 
     QTimer m_reconnectTimer;
-    // Status poll loop — the spec allows "several times every second"; the
-    // interval mirrors the field-proven control application this module was
-    // validated against.
+    // Status poll loop — the spec allows "several times every second". 10/s
+    // matches the applets' own 10 Hz readout refresh (kMeterReadoutUpdateMs),
+    // so polling faster would only burn link bandwidth on frames the GUI
+    // never renders; the field-proven reference application polled at 300 ms
+    // and its bar visibly stair-stepped, which this rate fixes.
     QTimer m_pollTimer;
-    static constexpr int kPollIntervalMs = 300;
+    static constexpr int kPollIntervalMs = 100;
 
     QString m_currentModelId;
 

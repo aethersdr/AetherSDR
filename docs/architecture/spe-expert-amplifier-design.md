@@ -34,9 +34,11 @@ the keystroke command set, and the Status string's field/warning/alarm
 tables. The real-hardware cross-check is the contributing author's own
 working control application for a 1.5K-FA over ser2net (see
 `THIRD_PARTY_LICENSES` for the provenance record), which contributed three
-facts the spec omits: commands need a trailing CR LF in practice, ~300 ms is
-a comfortable poll cadence, and the 1450/1500/1600 W display thresholds for
-the 1.5K-FA.
+facts the spec omits: commands need a trailing CR LF in practice, the
+per-power-level bar thresholds for the 1.5K-FA (LOW 450/500/600, MID
+950/1000/1100, HIGH 1450/1500/1600 — i.e. nominal−50 / nominal /
+nominal+100 per level), and that a ser2net proxy in telnet mode works fine
+on real hardware (the validation station runs one; see §3).
 
 ---
 
@@ -59,8 +61,8 @@ SpeProtocol (src/core/SpeProtocol.h/.cpp)
 
 SpeConnection (src/core/SpeConnection.h/.cpp)
   holds a QIODevice* — QSerialPort (115200 8N1; the amp auto-adapts, spec
-  §1) or QTcpSocket (ser2net raw mode) — chosen at connect time.
-  Owns the 300 ms status poll loop (the SPE never pushes; it only answers),
+  §1) or QTcpSocket (ser2net, raw or telnet mode) — chosen at connect time.
+  Owns the 100 ms status poll loop (the SPE never pushes; it only answers),
   poll-silence detection (respondingChanged — with ser2net the TCP link
   outlives the amp being switched off), auto-reconnect, and model
   identification from the Status ID field.
@@ -76,8 +78,11 @@ SpeApplet (src/gui/SpeApplet.h/.cpp)
   its own display is configured for, without saying which (spec §5).
   3-cell info grid (temp/V/I, band/antenna/input·level), status pill
   (OPR·TX / OPR·RX / STANDBY), fault banner (alarms + warnings), and two
-  keystroke button rows: OPERATE-STANDBY toggle / PWR LVL / TUNE / OFF and
-  INPUT / ANT / BAND− / BAND+.
+  keystroke button rows: OPER-STBY toggle / power level (the button's label
+  IS the current LOW/MID/HIGH) / TUNE / OFF, and INPUT / ANT / ▼ / ▲ —
+  the arrows being the Expert's front-panel arrow keys, which adjust the
+  drive power the amp requests from the radio over CAT. The power gauge
+  rescales with the selected level (§5), matching the amp's own display.
 
 AppletPanel (extended)
   registers SpeApplet as its own dockable panel (speApplet(),
@@ -108,9 +113,17 @@ is required in practice — commands without it were intermittently ignored by
 real 1.5K-FA hardware over a ser2net link. Two bytes outside the framed
 packet are harmless to a sync-run-keyed parser, so they are always sent.
 
-Network mode assumes a **raw** TCP proxy (ser2net `connection type: raw`),
-same as the ACOM: a telnet-mode proxy IAC-escapes 0xFF and corrupts binary
-checksums.
+Poll cadence is 100 ms — the spec allows "several times every second", the
+GUI refreshes readouts at 10 Hz anyway, and the reference application's
+300 ms poll made the power bar visibly stair-step.
+
+Network mode expects a ser2net proxy in **raw or telnet** mode — unlike the
+ACOM (raw-only), both are supported and telnet is verified on real
+hardware: the validation station's ser2net runs `accepter: telnet`. The
+parser's sync-run resync shrugs off telnet negotiation, and the rare status
+frame whose checksum byte is 0xFF (which telnet IAC-escapes) is dropped and
+re-polled 100 ms later — harmless in a polled protocol. Telnet mode is also
+what a future remote power-ON needs (§4).
 
 Status fields decoded (spec §5): amplifier ID (`13K`/`15K`/`20K`),
 STANDBY/OPERATE, RX/TX, memory bank (A/B, 1.3K/1.5K only), input port 1/2,
@@ -130,10 +143,12 @@ transcribed in `SpeProtocol.cpp`).
 | Status poll + decode (0x90) | Yes | Read-only, no risk. |
 | OPERATE toggle, POWER-level cycle, SWITCH OFF | Yes | The functional slice for normal operation; each is one keystroke with the amp's own protections behind it. |
 | TUNE | Yes | Explicit, user-initiated click — transmit-on-intent (Principle VI) is satisfied by it being a deliberate button, exactly like the amp's own front-panel key. The amp itself refuses to tune without drive ("Tuning with no power" warning). |
-| BAND±, ANTENNA, INPUT | Yes | One-keystroke conveniences the status display fully reflects on the next poll. |
+| ANTENNA, INPUT | Yes | One-keystroke conveniences the status display fully reflects on the next poll. |
+| ◄/► arrow keys (▼/▲ buttons) | Yes | On the Expert these adjust the requested drive power from the radio over CAT — an operating-time control, not menu navigation. |
+| BAND± | No | The amp follows the radio's band via CAT/RF sensing on its own; a manual band override from a radio-control app invites disagreement between the two. Deferred, not rejected. |
 | Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
-| Arrows / SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
-| Remote power-ON | No | Not a protocol command at all — the Expert powers on via a hardware line on the serial connector (DTR/RTS side-effects), which a raw ser2net proxy cannot express portably. `SpeConnection` deliberately holds DTR/RTS low in serial mode for exactly this reason. Documented limitation; the OFF button's tooltip says so. |
+| SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
+| Remote power-ON | Not yet | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network this IS expressible as a serial BREAK when ser2net runs the port in **telnet** mode with `telnet-brk-on-sync` (the reference application does exactly this), and locally as a serial break/DTR pulse. Deferred to a follow-up; meanwhile the Peripherals row's tooltip documents the required ser2net telnet config so users set the proxy up right the first time, and `SpeConnection` holds DTR/RTS low in serial mode to avoid tripping that power line accidentally. |
 | Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
 
 ---
@@ -162,6 +177,12 @@ to SPE's published rated output — derived, not measured; owners of those
 models are invited to correct them. An unknown ID (an older or future model)
 falls back to the 1.5K-FA entry and logs the raw ID at info level so it can
 be reported.
+
+The power gauge additionally rescales with the **selected power level**:
+red starts at that level's nominal, yellow at nominal−50 W, ceiling at
+nominal+100 W (LOW 500, MID 1000, HIGH = model nominal for the 1.3K/1.5K;
+LOW 1000, MID 1500 derived for the 2K-FA). The 1.5K-FA level thresholds are
+hardware-validated; the rest follow the same shape.
 
 SWR gauges are fixed 1.0–3.0 regardless of model — a ratio needs no
 per-model scaling (same convention as AcomApplet).

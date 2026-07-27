@@ -5517,6 +5517,13 @@ void MainWindow::wireMeters()
         auto* spe = m_appletPanel->speApplet();
         const auto& spec = AetherSDR::Spe::modelSpec(s.id);
 
+        // The power gauge rescales with the selected LOW/MID/HIGH level,
+        // exactly like the amplifier's own bar display — thresholds are the
+        // hardware-validated nominal−50 / nominal / nominal+100 shape.
+        // setPowerRange no-ops when the level hasn't changed.
+        const float nom = AetherSDR::Spe::levelNominalW(spec, s.powerLevel);
+        spe->setPowerRange(nom, nom - 50.0f, nom + 100.0f);
+
         spe->setForwardPower(s.outputPowerW);
         spe->setSwrAnt(s.swrAnt);
         spe->setSwrAtu(s.swrAtu);
@@ -5554,11 +5561,13 @@ void MainWindow::wireMeters()
         connect(spe, &SpeApplet::antennaClicked, this, [this]() {
             m_speConn.sendKey(AetherSDR::Spe::Key::Antenna);
         });
-        connect(spe, &SpeApplet::bandDownClicked, this, [this]() {
-            m_speConn.sendKey(AetherSDR::Spe::Key::BandDown);
+        // ▲/▼ are the Expert's front-panel arrow keys — they adjust the
+        // drive power the amp requests from the radio over CAT.
+        connect(spe, &SpeApplet::driveDownClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LeftArrow);
         });
-        connect(spe, &SpeApplet::bandUpClicked, this, [this]() {
-            m_speConn.sendKey(AetherSDR::Spe::Key::BandUp);
+        connect(spe, &SpeApplet::driveUpClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::RightArrow);
         });
     }
 

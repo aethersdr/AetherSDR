@@ -177,9 +177,11 @@ QString powerLevelName(QChar code);  // L/M/H -> LOW/MID/HIGH
 struct ModelSpec {
     QString id;            // Status ID value this spec matches
     QString displayName;   // "1.5K-FA"
-    float   nominalPowerW{0};  // rated output — gauge amber threshold
-    float   maxPowerW{0};      // gauge ceiling
-    float   warnPowerW{0};     // gauge yellow zone start
+    float   nominalPowerW{0};  // rated output at HIGH — gauge red threshold
+    float   maxPowerW{0};      // gauge ceiling at HIGH
+    float   warnPowerW{0};     // gauge yellow zone start at HIGH
+    float   lowNominalW{0};    // rated output at the LOW power level
+    float   midNominalW{0};    // rated output at the MID power level
     bool    hasMemoryBanks{false};  // A/B bank field is meaningful
     bool    hasCombiner{false};     // lower/combiner temperatures are real
 };
@@ -191,6 +193,14 @@ struct ModelSpec {
 // the 1.5K-FA entry.
 const ModelSpec& modelSpec(const QString& id);
 QStringList modelIds();
+
+// Rated output for the currently selected power level (Status::powerLevel).
+// H (or an unknown letter) is the model's full nominalPowerW. The gauge
+// thresholds derive from this with the hardware-validated 1.5K-FA shape:
+// yellow from nominal−50 W, red from nominal, ceiling at nominal+100 W —
+// so the bar rescales as the operator cycles LOW/MID/HIGH, exactly like
+// the amplifier's own display does.
+float levelNominalW(const ModelSpec& spec, QChar level);
 
 }  // namespace Spe
 }  // namespace AetherSDR

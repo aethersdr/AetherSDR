@@ -235,6 +235,12 @@ int main()
     report("an unknown ID falls back to the hardware-validated 1.5K-FA entry",
            modelSpec("99K").displayName == "1.5K-FA");
     report("modelIds() lists all three documented models", modelIds().size() == 3);
+    report("per-level nominals: 1.5K-FA LOW/MID/HIGH = 500/1000/1500 "
+           "(hardware-validated — the reference app's bar rescaled to these)",
+           levelNominalW(s15, u'L') == 500.0f && levelNominalW(s15, u'M') == 1000.0f
+               && levelNominalW(s15, u'H') == 1500.0f);
+    report("an unknown level letter falls back to the full HIGH scale",
+           levelNominalW(s15, u'?') == 1500.0f);
 
     std::printf("\n%d SPE protocol test(s) failed.\n", g_failed);
     return g_failed == 0 ? 0 : 1;

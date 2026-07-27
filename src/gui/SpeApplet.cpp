@@ -207,11 +207,15 @@ SpeApplet::SpeApplet(QWidget* parent)
 
     auto* btnRow1 = new QHBoxLayout;
     btnRow1->setSpacing(6);
-    m_operateBtn = makeKeyBtn("OPERATE");
+    // "OPER"/"STBY" rather than the full words — the row has 4 buttons and
+    // the long labels clip at the applet's default width (hardware-tested).
+    m_operateBtn = makeKeyBtn("OPER");
     m_operateBtn->setToolTip(tr("Toggle STANDBY / OPERATE (front-panel OPERATE key)"));
     connect(m_operateBtn, &QPushButton::clicked, this, &SpeApplet::operateClicked);
-    m_pwrLevelBtn = makeKeyBtn("PWR LVL");
-    m_pwrLevelBtn->setToolTip(tr("Cycle output power level LOW / MID / HIGH"));
+    // Label shows the CURRENT level (LOW/MID/HIGH) once known — clicking
+    // cycles to the next one, mirroring the amplifier's own POWER key.
+    m_pwrLevelBtn = makeKeyBtn("PWR");
+    m_pwrLevelBtn->setToolTip(tr("Output power level — click to cycle LOW / MID / HIGH"));
     connect(m_pwrLevelBtn, &QPushButton::clicked, this, &SpeApplet::powerLevelClicked);
     m_tuneBtn = makeKeyBtn("TUNE");
     m_tuneBtn->setToolTip(tr("Start ATU tuning (front-panel TUNE key)"));
@@ -236,15 +240,22 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_antBtn = makeKeyBtn("ANT");
     m_antBtn->setToolTip(tr("Cycle the TX antenna for the current band"));
     connect(m_antBtn, &QPushButton::clicked, this, &SpeApplet::antennaClicked);
-    m_bandDownBtn = makeKeyBtn("BAND −");
-    connect(m_bandDownBtn, &QPushButton::clicked, this, &SpeApplet::bandDownClicked);
-    m_bandUpBtn = makeKeyBtn("BAND +");
-    connect(m_bandUpBtn, &QPushButton::clicked, this, &SpeApplet::bandUpClicked);
+    // The Expert's arrow keys adjust the drive power the amplifier requests
+    // from the radio over CAT — no band keys here; the amp follows the
+    // radio's band on its own.
+    m_driveDownBtn = makeKeyBtn("▼");
+    m_driveDownBtn->setToolTip(tr("Lower the drive power the amplifier requests"
+                                  " from the radio (front-panel arrow key)"));
+    connect(m_driveDownBtn, &QPushButton::clicked, this, &SpeApplet::driveDownClicked);
+    m_driveUpBtn = makeKeyBtn("▲");
+    m_driveUpBtn->setToolTip(tr("Raise the drive power the amplifier requests"
+                                " from the radio (front-panel arrow key)"));
+    connect(m_driveUpBtn, &QPushButton::clicked, this, &SpeApplet::driveUpClicked);
     btnRow2->addStretch();
     btnRow2->addWidget(m_inputBtn);
     btnRow2->addWidget(m_antBtn);
-    btnRow2->addWidget(m_bandDownBtn);
-    btnRow2->addWidget(m_bandUpBtn);
+    btnRow2->addWidget(m_driveDownBtn);
+    btnRow2->addWidget(m_driveUpBtn);
     vbox->addLayout(btnRow2);
 
     // Label text throttle — matches AmpApplet/AcomApplet's 10 Hz readout
@@ -266,6 +277,12 @@ SpeApplet::SpeApplet(QWidget* parent)
 
 void SpeApplet::setPowerRange(float nominalW, float warnW, float maxW)
 {
+    // Called on every status frame with the level-derived scale — no-op on
+    // repeats so only an actual LOW/MID/HIGH (or model) change repaints.
+    if (nominalW == m_rangeNominal && maxW == m_rangeMax)
+        return;
+    m_rangeNominal = nominalW;
+    m_rangeMax = maxW;
     m_pwrGauge->setRange(0.0f, maxW, nominalW, evenTicks(maxW), warnW);
 }
 
@@ -350,6 +367,8 @@ void SpeApplet::setPowerLevel(const QString& levelName)
 {
     m_levelName = levelName;
     m_inputDirty = true;
+    // The button doubles as the level indicator (reference-app behavior).
+    m_pwrLevelBtn->setText(levelName.isEmpty() ? QStringLiteral("PWR") : levelName);
 }
 
 void SpeApplet::setMode(bool operate, bool transmitting)
@@ -370,7 +389,8 @@ void SpeApplet::applyModePill()
 
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operateActive = (state == PillState::OperateRx || state == PillState::OperateTx);
-    m_operateBtn->setText(operateActive ? QStringLiteral("STANDBY") : QStringLiteral("OPERATE"));
+    // Short labels — OPERATE/STANDBY clip at default applet width.
+    m_operateBtn->setText(operateActive ? QStringLiteral("STBY") : QStringLiteral("OPER"));
     theme.applyStyleSheet(m_operateBtn,
         operateActive ? activeBtnStyle("#006030", "#008040") : neutralBtnStyle());
 }
@@ -405,7 +425,7 @@ void SpeApplet::updateCommandsEnabled()
     // buttons that silently do nothing.
     const bool enabled = m_connected && m_responding;
     for (auto* btn : {m_operateBtn, m_pwrLevelBtn, m_tuneBtn, m_offBtn,
-                      m_inputBtn, m_antBtn, m_bandDownBtn, m_bandUpBtn})
+                      m_inputBtn, m_antBtn, m_driveDownBtn, m_driveUpBtn})
         btn->setEnabled(enabled);
 }
 
@@ -423,6 +443,7 @@ void SpeApplet::setConnected(bool connected)
         m_bandDirty = m_antDirty = m_inputDirty = false;
         m_inputPort = 0;
         m_levelName.clear();
+        m_pwrLevelBtn->setText(QStringLiteral("PWR"));
         m_supplyVolts = 0.0f;
         m_supplyAmps = 0.0f;
         m_diagDirty = false;

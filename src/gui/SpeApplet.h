@@ -27,11 +27,15 @@ class HGauge;
 // nominal/max scale to size an axis against.
 //
 // Buttons mirror the amplifier's own front panel keys (every remote command
-// IS a keystroke in this protocol): OPR/STBY toggle, power-level cycle,
-// TUNE, OFF, plus INPUT / ANT / BAND− / BAND+. Menu-navigation keys
-// (arrows/SET/DISPLAY) and manual L/C tuning are deliberately not exposed —
-// SPE reserves complex operations for their own KTerm application, and
-// blind menu navigation without the amp's display is a foot-gun.
+// IS a keystroke in this protocol): OPER/STBY toggle, power-level cycle
+// (the button label shows the CURRENT level, LOW/MID/HIGH), TUNE, OFF,
+// INPUT, ANT, and the ▲/▼ arrow keys — which on the Expert adjust the
+// drive power the amplifier requests from the radio over CAT. Band keys
+// are not exposed: the amp follows the radio's band via CAT/RF sensing.
+// SET/DISPLAY menu navigation and manual L/C tuning are deliberately not
+// exposed — SPE reserves complex operations for their own KTerm
+// application, and blind menu navigation without the amp's display is a
+// foot-gun.
 class SpeApplet : public QWidget {
     Q_OBJECT
 
@@ -59,7 +63,9 @@ public:
     void setBand(const QString& band);
     void setAntenna(int antenna, QChar atuState);
     void setInputPort(int input);
-    void setPowerLevel(const QString& levelName);  // "LOW"/"MID"/"HIGH"
+    // "LOW"/"MID"/"HIGH" — shown in the info grid AND as the power-level
+    // button's own label, mirroring the reference application.
+    void setPowerLevel(const QString& levelName);
     void setMode(bool operate, bool transmitting); // drives pill + OPR/STBY button
     void setFaultText(const QString& text);        // empty clears/hides the banner
     void setSource(const QString& text);           // "SERIAL" or "NETWORK"
@@ -77,8 +83,8 @@ signals:
     void offClicked();         // SWITCH OFF key
     void inputClicked();       // INPUT key — toggles input 1/2
     void antennaClicked();     // ANTENNA key
-    void bandDownClicked();    // BAND− key
-    void bandUpClicked();      // BAND+ key
+    void driveUpClicked();     // ▲ (RIGHT-arrow key) — raise requested drive power
+    void driveDownClicked();   // ▼ (LEFT-arrow key) — lower requested drive power
 
 private:
     void updateValueLabels();  // 10 Hz throttled label text refresh
@@ -113,12 +119,18 @@ private:
     QPushButton* m_offBtn{nullptr};
     QPushButton* m_inputBtn{nullptr};
     QPushButton* m_antBtn{nullptr};
-    QPushButton* m_bandDownBtn{nullptr};
-    QPushButton* m_bandUpBtn{nullptr};
+    QPushButton* m_driveDownBtn{nullptr};
+    QPushButton* m_driveUpBtn{nullptr};
 
     QTimer m_labelTimer;
     QTimer* m_peakTimer{nullptr};
     float m_peakFwd{0.0f};
+
+    // Last applied power-gauge scale — setPowerRange() no-ops on repeats so
+    // the wiring can re-derive the level-dependent scale on every status
+    // frame (10/s) without triggering a repaint per frame.
+    float m_rangeNominal{-1.0f};
+    float m_rangeMax{-1.0f};
 
     float m_fwdWatts{0.0f};
     float m_swrAntVal{1.0f};

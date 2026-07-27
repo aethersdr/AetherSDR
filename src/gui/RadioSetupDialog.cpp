@@ -6941,6 +6941,26 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 #endif
         modeCombo->addItem("Network", "Network");
         devLay->addWidget(modeCombo);
+        // Network mode = ser2net proxy. Raw and telnet modes both work for
+        // monitoring/control, but powering the amplifier ON over the network
+        // needs the port in telnet mode (serial BREAK via telnet-brk-on-sync)
+        // — surface the reference config where the user is already looking.
+        const QString speSer2netTip = QStringLiteral(
+            "Network mode connects through a ser2net serial-to-TCP proxy.\n"
+            "Monitoring and control work with the port in raw or telnet mode.\n"
+            "To power the amplifier ON over the network, ser2net must run the\n"
+            "port in telnet mode with BRK-on-sync, e.g. in ser2net.yaml:\n"
+            "\n"
+            "connection: &spe\n"
+            "    accepter: telnet,64002\n"
+            "    enable: on\n"
+            "    options:\n"
+            "      kickolduser: true\n"
+            "      telnet-brk-on-sync: true\n"
+            "    connector: serialdev,\n"
+            "              /dev/ttyUSB0");
+        devWidget->setToolTip(speSer2netTip);
+        modeCombo->setToolTip(speSer2netTip);
         grid->addWidget(devWidget, row, 0);
 
         auto* addrStack = new QStackedWidget;
@@ -6973,8 +6993,9 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         auto* netLay = new QHBoxLayout(netPage);
         netLay->setContentsMargins(0, 0, 0, 0);
         auto* netIpEdit = new QLineEdit;
-        netIpEdit->setPlaceholderText("ser2net host, raw mode — e.g. 192.168.1.52");
+        netIpEdit->setPlaceholderText("ser2net host — e.g. 192.168.1.52");
         netIpEdit->setStyleSheet(kEditStyle);
+        netIpEdit->setToolTip(speSer2netTip);
         netIpEdit->setText(PeripheralSettings::deviceString("SpeExpert", "ManualIp"));
         netLay->addWidget(netIpEdit);
         const int netPageIdx = addrStack->addWidget(netPage);
