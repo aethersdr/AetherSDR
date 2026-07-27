@@ -106,6 +106,22 @@ function shown(key, value) {
     return known.has(key) ? value : "—";
 }
 
+// The display guard above has a command-path twin. An action that computes an
+// ABSOLUTE value from a relative gesture — step the frequency, cycle the power,
+// nudge the volume — needs a baseline, and before the radio has reported there
+// is none. Stepping from the struct's initial value means inventing one and
+// sending it: from a cold start, Tune Down resolves to 30 kHz and Tune Power to
+// 50 W. Refusing the gesture until the radio has spoken is the only answer
+// consistent with Principle II; the value arrives within the init burst, so the
+// refusal is never observable in normal use.
+//
+// Absolute actions — a band button, a mode, PTT — need no baseline and are not
+// gated. Nor is anything the operator can still see the result of: the label
+// shows "—" for exactly as long as the gesture is refused.
+function needs(key) {
+    return known.has(key);
+}
+
 function targetTrx() {
     switch (TARGET_MODES[targetModeIndex].id) {
         case "tx":     return radio.txTrx;
@@ -219,7 +235,12 @@ function parseTci(msg) {
         const flagField = SLICE_FLAGS[cmd];
         if (flagField) {
             const trx = p.length >= 2 ? trxOf(p[0]) : null;
-            if (trx !== null) slice(trx)[flagField] = p[1] === "true";
+            if (trx !== null) {
+                slice(trx)[flagField] = p[1] === "true";
+                // Keyed on the field rather than the verb, so `mute` and
+                // `rx_mute` — the same datum under two names — mark it once.
+                known.add(`${flagField}:${trx}`);
+            }
             continue;
         }
 
@@ -440,12 +461,21 @@ function refreshKeypads(force = false) {
 // seconds so ours wins regardless of ordering. Forced, because the host may
 // have overwritten the key with its manifest label since our last send while
 // our cached value still matches.
+// Coalesced for the same reason as nudgeRedrawAll: refreshKeypads() already
+// walks every key, so one pending set of timers per layout event does the whole
+// deck. Calling it once per appearing key made a profile load quadratic in the
+// forced repaints — ~2.9k setTitle for 50 keys, against ~200 coalesced.
+let soonTimers = null;
+
 function refreshKeypadsSoon() {
     const force = () => refreshKeypads(true);
     force();
-    setTimeout(force, 250);
-    setTimeout(force, 1000);
-    setTimeout(force, 2500);
+    if (soonTimers) return;
+    soonTimers = [
+        setTimeout(force, 250),
+        setTimeout(force, 1000),
+        setTimeout(() => { soonTimers = null; force(); }, 2500),
+    ];
 }
 
 // A key added mid-session renders its manifest label — on the device as well
@@ -463,15 +493,26 @@ function refreshKeypadsSoon() {
 // left it correct while knocking every other key back to its manifest label.
 // Titles are re-sent first so the render has the right text to composite, and
 // the pair is repeated once in case the host's own render lands in between.
+// Coalesced to one round per layout event, not one per key. `push()` already
+// walks every registered keypad, so calling this once per appearing key made a
+// profile load quadratic — N keys produced N x 2 x N setImage messages, ~14.5k
+// host messages for a 50-key layout. A single pending handle (the same shape
+// requestState() uses for its GET round) collapses that to two pushes however
+// many keys arrive.
+let nudgeTimers = null;
+
 function nudgeRedrawAll() {
+    if (nudgeTimers) return;
     const push = () => {
         refreshKeypads(true);
         for (const context of keypads.keys()) {
             sdSend({ event: "setImage", context, payload: { target: 0 } });
         }
     };
-    setTimeout(push, 120);
-    setTimeout(push, 600);
+    nudgeTimers = [
+        setTimeout(push, 120),
+        setTimeout(() => { nudgeTimers = null; push(); }, 600),
+    ];
 }
 
 // Tied to layout events only — never a periodic timer. The title itself is
@@ -498,7 +539,12 @@ const DIAL_SEND_DEBOUNCE_MS = 25;
 // of the drag hold that fixed it.
 const DIAL_ECHO_GUARD_MS = 400;
 
-function createDial({ uuid, initialState, nextValue, onPress, getValue, setValue, sendCommand, formatTitle, formatValue }) {
+// `ready` is the dial's half of the command guard: a rotate is a relative
+// gesture, so nextValue() needs a baseline the radio supplied. Without it the
+// first detent resolves against the struct's initial value — 0 Hz clamps to the
+// 30 kHz floor and sends the radio there. Refused until the value is known; the
+// dial reads "—" for exactly that long.
+function createDial({ uuid, initialState, nextValue, onPress, getValue, setValue, sendCommand, formatTitle, formatValue, ready }) {
     const instances = new Map(); // context -> per-instance mutable state (e.g. stepIndex)
     let sendTimer = null;
     let guardUntil = 0;
@@ -527,6 +573,7 @@ function createDial({ uuid, initialState, nextValue, onPress, getValue, setValue
         dialRotate(context, ticks) {
             const state = instances.get(context);
             if (!state) return;
+            if (ready && !ready()) return;
             guardUntil = Date.now() + DIAL_ECHO_GUARD_MS;
             setValue(nextValue(getValue(), ticks, state));
             sendFeedback(context);
@@ -590,6 +637,7 @@ const vfoDial = createDial({
     getValue: () => targetSlice().frequency,
     setValue: (v) => { targetSlice().frequency = v; },
     sendCommand: (hz) => tciSend(`vfo:${targetTrx()},0,${hz};`),
+    ready: () => needs(`vfo:${targetTrx()}`),
     formatTitle: (state) => `Step: ${formatStepHz(VFO_STEPS[state.stepIndex])}`,
     formatValue: (hz) => shown("vfo:" + targetTrx(), formatFreqMHz(hz)),
 });
@@ -604,6 +652,7 @@ const rfPowerDial = createDial({
     getValue: () => radio.rfPower,
     setValue: (v) => { radio.rfPower = v; },
     sendCommand: (w) => tciSend(`drive:${radio.txTrx},${w};`),
+    ready: () => needs("drive"),
     formatTitle: (state) => `Step: ${RF_POWER_STEPS[state.stepIndex]} W`,
     formatValue: (w) => shown("drive", `${w} W`),
 });
@@ -620,6 +669,7 @@ const tunePowerDial = createDial({
     getValue: () => radio.tunePower,
     setValue: (v) => { radio.tunePower = v; },
     sendCommand: (w) => tciSend(`tune_drive:${radio.txTrx},${w};`),
+    ready: () => needs("tune_drive"),
     formatTitle: (state) => `Step: ${RF_POWER_STEPS[state.stepIndex]} W`,
     formatValue: (w) => shown("tune_drive", `${w} W`),
 });
@@ -640,13 +690,16 @@ const volumeDial = createDial({
     // does arrive via the #4430 flag relay, but a press must still feel
     // instant, so the local flag leads and the broadcast confirms it.
     onPress: () => {
-        const s = targetSlice();
+        const trx = targetTrx();
+        if (!needs(`muted:${trx}`)) return;
+        const s = slice(trx);
         s.muted = !s.muted;
-        tciSend(`mute:${targetTrx()},${s.muted};`);
+        tciSend(`mute:${trx},${s.muted};`);
     },
     getValue: () => radio.volume,
     setValue: (v) => { radio.volume = v; },
     sendCommand: (v) => tciSend(volumeSetCommand(v)),
+    ready: () => needs("volume"),
     formatTitle: () => "Push: Mute Slice",
     formatValue: (v) => shown("volume", `${v}%`),
 });
@@ -672,12 +725,16 @@ const actionHandlers = {
     "com.aethersdr.radio.tune-toggle": { keyDown: () => { radio.tuning = !radio.tuning; tciSend(`tune:${radio.txTrx},${radio.tuning};`); refreshKeypads(); } },
     // drive/tune_drive are radio-global (one PA) and AetherSDR backs them with
     // TransmitModel, so they address the TX slice rather than the target.
-    "com.aethersdr.radio.rf-power":    { keyDown: () => { radio.rfPower = nextInCycle(POWER_LEVELS, radio.rfPower); tciSend(`drive:${radio.txTrx},${radio.rfPower};`); rfPowerDial.updateAll(); refreshKeypads(); } },
-    "com.aethersdr.radio.tune-power":  { keyDown: () => { radio.tunePower = nextInCycle(TUNE_LEVELS, radio.tunePower); tciSend(`tune_drive:${radio.txTrx},${radio.tunePower};`); tunePowerDial.updateAll(); refreshKeypads(); } },
+    // Cycling steps from the current level, so both need the radio's value
+    // first. `cmdDrive`/`cmdTuneDrive` SET is not gated on a connected radio
+    // server-side — it writes TransmitModel whenever the model exists — so the
+    // plugin is the only thing standing in front of a fabricated power level.
+    "com.aethersdr.radio.rf-power":    { keyDown: () => { if (!needs("drive")) return; radio.rfPower = nextInCycle(POWER_LEVELS, radio.rfPower); tciSend(`drive:${radio.txTrx},${radio.rfPower};`); rfPowerDial.updateAll(); refreshKeypads(); } },
+    "com.aethersdr.radio.tune-power":  { keyDown: () => { if (!needs("tune_drive")) return; radio.tunePower = nextInCycle(TUNE_LEVELS, radio.tunePower); tciSend(`tune_drive:${radio.txTrx},${radio.tunePower};`); tunePowerDial.updateAll(); refreshKeypads(); } },
     // Audio — master fader is radio-global, slice volume/mute are per-slice.
-    "com.aethersdr.radio.mute-toggle":  { keyDown: () => { const s = targetSlice(); s.muted = !s.muted; tciSend(`mute:${targetTrx()},${s.muted};`); } },
-    "com.aethersdr.radio.volume-up":    { keyDown: () => tciSend(volumeSetCommand(VOLUME_LEVELS[Math.min(closestIndex(VOLUME_LEVELS, radio.volume) + 1, VOLUME_LEVELS.length - 1)])) },
-    "com.aethersdr.radio.volume-down":  { keyDown: () => tciSend(volumeSetCommand(VOLUME_LEVELS[Math.max(closestIndex(VOLUME_LEVELS, radio.volume) - 1, 0)])) },
+    "com.aethersdr.radio.mute-toggle":  { keyDown: () => { const trx = targetTrx(); if (!needs(`muted:${trx}`)) return; const s = slice(trx); s.muted = !s.muted; tciSend(`mute:${trx},${s.muted};`); } },
+    "com.aethersdr.radio.volume-up":    { keyDown: () => { if (!needs("volume")) return; tciSend(volumeSetCommand(VOLUME_LEVELS[Math.min(closestIndex(VOLUME_LEVELS, radio.volume) + 1, VOLUME_LEVELS.length - 1)])); } },
+    "com.aethersdr.radio.volume-down":  { keyDown: () => { if (!needs("volume")) return; tciSend(volumeSetCommand(VOLUME_LEVELS[Math.max(closestIndex(VOLUME_LEVELS, radio.volume) - 1, 0)])); } },
     // There is no global-mute verb in TCI — `mute` and `rx_mute` both write
     // SliceModel::audioMute for one slice. Silencing everything therefore
     // means driving the master fader to the spec's silence floor and
@@ -689,24 +746,29 @@ const actionHandlers = {
                 radio.volumeBeforeMute = radio.volume;
                 tciSend(volumeSetCommand(0));
             } else {
-                tciSend(volumeSetCommand(radio.volumeBeforeMute || 50));
+                // No `|| 50` fallback: 0 is a legitimate level, and the field
+                // is seeded at 50 and only ever assigned from radio.volume, so
+                // a falsy-coalesce could not protect against undefined — it
+                // could only turn a genuine silence into a jump to half volume
+                // on a key labelled UNMUTE.
+                tciSend(volumeSetCommand(radio.volumeBeforeMute));
             }
             refreshKeypads();
         },
     },
-    "com.aethersdr.radio.slice-volume-up":   { keyDown: () => { const s = targetSlice(); s.rxVolume = clamp(s.rxVolume + RX_VOLUME_STEP, 0, 100); tciSend(`rx_volume:${targetTrx()},${s.rxVolume};`); refreshKeypads(); } },
-    "com.aethersdr.radio.slice-volume-down": { keyDown: () => { const s = targetSlice(); s.rxVolume = clamp(s.rxVolume - RX_VOLUME_STEP, 0, 100); tciSend(`rx_volume:${targetTrx()},${s.rxVolume};`); refreshKeypads(); } },
+    "com.aethersdr.radio.slice-volume-up":   { keyDown: () => { const trx = targetTrx(); if (!needs(`rx_volume:${trx}`)) return; const s = slice(trx); s.rxVolume = clamp(s.rxVolume + RX_VOLUME_STEP, 0, 100); tciSend(`rx_volume:${trx},${s.rxVolume};`); refreshKeypads(); } },
+    "com.aethersdr.radio.slice-volume-down": { keyDown: () => { const trx = targetTrx(); if (!needs(`rx_volume:${trx}`)) return; const s = slice(trx); s.rxVolume = clamp(s.rxVolume - RX_VOLUME_STEP, 0, 100); tciSend(`rx_volume:${trx},${s.rxVolume};`); refreshKeypads(); } },
     // DSP — all per-slice.
-    "com.aethersdr.radio.nb-toggle":  { keyDown: () => { const s = targetSlice(); s.nbOn = !s.nbOn; tciSend(`rx_nb_enable:${targetTrx()},${s.nbOn};`); } },
-    "com.aethersdr.radio.nr-toggle":  { keyDown: () => { const s = targetSlice(); s.nrOn = !s.nrOn; tciSend(`rx_nr_enable:${targetTrx()},${s.nrOn};`); } },
-    "com.aethersdr.radio.anf-toggle": { keyDown: () => { const s = targetSlice(); s.anfOn = !s.anfOn; tciSend(`rx_anf_enable:${targetTrx()},${s.anfOn};`); } },
-    "com.aethersdr.radio.apf-toggle": { keyDown: () => { const s = targetSlice(); s.apfOn = !s.apfOn; tciSend(`rx_apf_enable:${targetTrx()},${s.apfOn};`); } },
-    "com.aethersdr.radio.sql-toggle": { keyDown: () => { const s = targetSlice(); s.sqlOn = !s.sqlOn; tciSend(`sql_enable:${targetTrx()},${s.sqlOn};`); } },
+    "com.aethersdr.radio.nb-toggle":  { keyDown: () => { const trx = targetTrx(); if (!needs(`nbOn:${trx}`)) return; const s = slice(trx); s.nbOn = !s.nbOn; tciSend(`rx_nb_enable:${trx},${s.nbOn};`); } },
+    "com.aethersdr.radio.nr-toggle":  { keyDown: () => { const trx = targetTrx(); if (!needs(`nrOn:${trx}`)) return; const s = slice(trx); s.nrOn = !s.nrOn; tciSend(`rx_nr_enable:${trx},${s.nrOn};`); } },
+    "com.aethersdr.radio.anf-toggle": { keyDown: () => { const trx = targetTrx(); if (!needs(`anfOn:${trx}`)) return; const s = slice(trx); s.anfOn = !s.anfOn; tciSend(`rx_anf_enable:${trx},${s.anfOn};`); } },
+    "com.aethersdr.radio.apf-toggle": { keyDown: () => { const trx = targetTrx(); if (!needs(`apfOn:${trx}`)) return; const s = slice(trx); s.apfOn = !s.apfOn; tciSend(`rx_apf_enable:${trx},${s.apfOn};`); } },
+    "com.aethersdr.radio.sql-toggle": { keyDown: () => { const trx = targetTrx(); if (!needs(`sqlOn:${trx}`)) return; const s = slice(trx); s.sqlOn = !s.sqlOn; tciSend(`sql_enable:${trx},${s.sqlOn};`); } },
     // Slice
-    "com.aethersdr.radio.split-toggle": { keyDown: () => { const s = targetSlice(); tciSend(`split_enable:${targetTrx()},${!s.split};`); } },
-    "com.aethersdr.radio.lock-toggle":  { keyDown: () => { const s = targetSlice(); tciSend(`lock:${targetTrx()},${!s.locked};`); } },
-    "com.aethersdr.radio.rit-toggle":   { keyDown: () => { const s = targetSlice(); tciSend(`rit_enable:${targetTrx()},${!s.ritOn};`); } },
-    "com.aethersdr.radio.xit-toggle":   { keyDown: () => { const s = targetSlice(); tciSend(`xit_enable:${targetTrx()},${!s.xitOn};`); } },
+    "com.aethersdr.radio.split-toggle": { keyDown: () => { const trx = targetTrx(); if (!needs(`split:${trx}`)) return; tciSend(`split_enable:${trx},${!slice(trx).split};`); } },
+    "com.aethersdr.radio.lock-toggle":  { keyDown: () => { const trx = targetTrx(); if (!needs(`locked:${trx}`)) return; tciSend(`lock:${trx},${!slice(trx).locked};`); } },
+    "com.aethersdr.radio.rit-toggle":   { keyDown: () => { const trx = targetTrx(); if (!needs(`ritOn:${trx}`)) return; tciSend(`rit_enable:${trx},${!slice(trx).ritOn};`); } },
+    "com.aethersdr.radio.xit-toggle":   { keyDown: () => { const trx = targetTrx(); if (!needs(`xitOn:${trx}`)) return; tciSend(`xit_enable:${trx},${!slice(trx).xitOn};`); } },
     // Target selector
     "com.aethersdr.radio.slice-target": {
         keyDown: () => {
@@ -719,11 +781,11 @@ const actionHandlers = {
         },
     },
     "com.aethersdr.radio.tci-status": { keyDown: () => refreshKeypads() },
-    // Frequency
-    "com.aethersdr.radio.tune-up":   { keyDown: () => { const s = targetSlice(); s.frequency += TUNE_STEP_HZ; tciSend(`vfo:${targetTrx()},0,${s.frequency};`); } },
-    "com.aethersdr.radio.tune-down": { keyDown: () => { const s = targetSlice(); s.frequency = Math.max(VFO_FREQ_MIN, s.frequency - TUNE_STEP_HZ); tciSend(`vfo:${targetTrx()},0,${s.frequency};`); } },
-    "com.aethersdr.radio.band-up":   { keyDown: () => tuneToBand(Math.min(bandIndexForStep() + 1, BAND_ORDER.length - 1)) },
-    "com.aethersdr.radio.band-down": { keyDown: () => tuneToBand(Math.max(bandIndexForStep() - 1, 0)) },
+    // Frequency. Stepping needs a baseline; a direct band button does not.
+    "com.aethersdr.radio.tune-up":   { keyDown: () => { const trx = targetTrx(); if (!needs(`vfo:${trx}`)) return; const s = slice(trx); s.frequency += TUNE_STEP_HZ; tciSend(`vfo:${trx},0,${s.frequency};`); } },
+    "com.aethersdr.radio.tune-down": { keyDown: () => { const trx = targetTrx(); if (!needs(`vfo:${trx}`)) return; const s = slice(trx); s.frequency = Math.max(VFO_FREQ_MIN, s.frequency - TUNE_STEP_HZ); tciSend(`vfo:${trx},0,${s.frequency};`); } },
+    "com.aethersdr.radio.band-up":   { keyDown: () => { if (!needs(`vfo:${targetTrx()}`)) return; tuneToBand(Math.min(bandIndexForStep() + 1, BAND_ORDER.length - 1)); } },
+    "com.aethersdr.radio.band-down": { keyDown: () => { if (!needs(`vfo:${targetTrx()}`)) return; tuneToBand(Math.max(bandIndexForStep() - 1, 0)); } },
     // DVK
     "com.aethersdr.radio.dvk-play":   { keyDown: () => tciSend(`rx_play:${targetTrx()},true;`) },
     "com.aethersdr.radio.dvk-record": { keyDown: () => tciSend(`rx_record:${targetTrx()},true;`) },
@@ -790,7 +852,8 @@ sdWs.on("message", (data) => {
         console.log(`learned ${msg.action.split(".").pop()} via ${msg.event}`);
         refreshKeypadsSoon();
         requestState();
-        nudgeRedrawAll();
+        // No nudge here: the willAppear branch below covers the layout event,
+        // and nudging from both meant two calls for the same message.
     }
 
     if (msg.event === "keyDown") {

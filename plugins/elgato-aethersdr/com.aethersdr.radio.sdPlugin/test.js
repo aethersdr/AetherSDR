@@ -37,7 +37,7 @@ const RADIO = { drive: 37, tuneDrive: 7, volumeDb: -6, rxVolume: 42, vfoHz: 1407
  * Boots the plugin against fake sockets, runs `body`, then tears everything
  * down. `body` receives helpers plus the recorded traffic in both directions.
  */
-async function withPlugin(body) {
+async function withPlugin(body, { silent = false } = {}) {
     const sd = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     const tci = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     await Promise.all([once(sd, "listening"), once(tci, "listening")]);
@@ -55,16 +55,20 @@ async function withPlugin(body) {
         ws.on("message", (d) => {
             const text = d.toString().trim();
             sent.push(text);
+            if (silent) return;          // accept the socket, answer nothing
             for (const record of text.split(";").filter(Boolean)) {
                 answerGet(ws, record);
             }
         });
         // Init burst, one command per frame as TciServer::sendInitBurst does.
+        if (silent) return;
         for (const c of [
             "trx_count:1;", "tx_enable:0,true;",
             `vfo:0,0,${RADIO.vfoHz};`, `drive:0,${RADIO.drive};`,
             `tune_drive:0,${RADIO.tuneDrive};`, `volume:${RADIO.volumeDb};`,
-            `rx_volume:0,${RADIO.rxVolume};`, "active_slice:0,A;", "ready;", "start;",
+            `rx_volume:0,${RADIO.rxVolume};`, "active_slice:0,A;",
+            ...FLAG_VERBS.map((v) => `${v}:0,false;`),
+            "ready;", "start;",
         ]) ws.send(c);
     });
 
@@ -125,6 +129,35 @@ async function withPlugin(body) {
     assert.deepEqual(stderr, [], "plugin wrote to stderr");
 }
 
+/**
+ * Actions whose value is computed from a baseline the radio has to supply —
+ * relative steps and cycles. These are the ones that must refuse until the
+ * radio has reported. Absolute actions (band buttons, modes, PTT) are excluded
+ * deliberately: they need no baseline and stay live from the first frame.
+ */
+const RELATIVE_DIALS = ["vfo-tune", "rf-power-dial", "tune-power-dial", "volume-dial"];
+
+const RELATIVE_ACTIONS = [
+    "tune-up", "tune-down", "band-up", "band-down",
+    "rf-power", "tune-power", "volume-up", "volume-down",
+    "slice-volume-up", "slice-volume-down",
+    "nb-toggle", "nr-toggle", "anf-toggle", "apf-toggle", "sql-toggle",
+    "mute-toggle", "split-toggle", "lock-toggle", "rit-toggle", "xit-toggle",
+];
+
+/** Boots the plugin against a TCI server that accepts the socket and is mute. */
+async function withSilentRadio(body) {
+    return withPlugin(body, { silent: true });
+}
+
+// Per-slice boolean flags the real init burst seeds for every slice, and which
+// wireFlag() re-broadcasts on change. The fake radio has to report these or the
+// command guard will (correctly) refuse the toggles that read them.
+const FLAG_VERBS = [
+    "rx_nb_enable", "rx_nr_enable", "rx_anf_enable", "rx_apf_enable",
+    "sql_enable", "split_enable", "lock", "rit_enable", "xit_enable", "mute",
+];
+
 /** Mirrors the GET/SET split in TciProtocol::handleCommand: 0-1 args = GET. */
 function answerGet(ws, record) {
     const colon = record.indexOf(":");
@@ -142,6 +175,7 @@ function answerGet(ws, record) {
     else if (verb === "tune_drive") ws.send(`tune_drive:${trx},${RADIO.tuneDrive};`);
     else if (verb === "rx_volume") ws.send(`rx_volume:${trx},${RADIO.rxVolume};`);
     else if (verb === "vfo") ws.send(`vfo:${trx},0,${RADIO.vfoHz};`);
+    else if (FLAG_VERBS.includes(verb)) ws.send(`${verb}:${trx},false;`);
 }
 
 /** Every TCI command the plugin sent whose verb matches. */
@@ -249,10 +283,10 @@ test("slice-scoped actions follow the selected target", async () => {
         const seen = {};
         for (const expected of [1, 2, 0]) {         // TRX0 -> TX -> ACTIVE -> TRX0
             p.press("slice-target");
-            await p.settle(120);
+            await p.settle(400);   // requestState()'s GET round for the new slice
             const before = p.sent.length;
             p.press("nb-toggle");
-            await p.settle(120);
+            await p.settle(150);
             seen[expected] = cmds(p.sent.slice(before), "rx_nb_enable")[0];
         }
         assert.match(seen[1], /^rx_nb_enable:1,/, "TX mode did not address the TX slice");
@@ -321,6 +355,52 @@ test("keys show the radio's value, not a built-in default", async () => {
             "RF power key does not show the radio's power");
         assert.match(p.titles.get("tune-power"), new RegExp(`${RADIO.tuneDrive} W`),
             "tune power key does not show the radio's tune power");
+    });
+});
+
+test("a press before the radio has reported commands nothing", async () => {
+    // The display guard (`—`) and the command guard are separate: a key can
+    // correctly show nothing while still stepping the radio from the struct's
+    // initial value. Before this was gated, a cold-start Tune Down resolved to
+    // 30 kHz and Tune Power to 50 W — the latter reaching TransmitModel even
+    // with no radio connected, since cmdTuneDrive's SET path is not gated on
+    // isConnected(). Driven against a server that accepts the socket and
+    // answers nothing, which is the state every startup passes through.
+    await withSilentRadio(async (p) => {
+        for (const a of [...RELATIVE_ACTIONS, ...RELATIVE_DIALS]) p.appear(a);
+        await p.settle(400);
+
+        const before = p.sent.length;
+        for (const a of RELATIVE_ACTIONS) { p.press(a); await p.settle(25); }
+        p.rotate("vfo-tune", 1);
+        p.rotate("rf-power-dial", 1);
+        p.rotate("tune-power-dial", 1);
+        p.rotate("volume-dial", 1);
+        await p.settle(300);
+
+        // requestState()'s GETs are reads and are expected; anything with a
+        // value argument is this plugin inventing one.
+        const writes = p.sent.slice(before).join(" ").split(";")
+            .map((s) => s.trim()).filter(Boolean)
+            .filter((c) => c.includes(",") || /^volume:-?\d/.test(c));
+        assert.deepEqual(writes, [],
+            "commanded the radio from a fabricated baseline before it had reported");
+    });
+});
+
+test("once the radio reports, the same presses do command", async () => {
+    // The guard must gate on knowledge, not disable the actions.
+    await withPlugin(async (p) => {
+        for (const a of RELATIVE_ACTIONS) p.appear(a);
+        await p.settle(500);
+        const before = p.sent.length;
+        for (const a of RELATIVE_ACTIONS) { p.press(a); await p.settle(25); }
+        await p.settle(200);
+        const writes = p.sent.slice(before).join(" ").split(";")
+            .map((s) => s.trim()).filter(Boolean)
+            .filter((c) => c.includes(",") || /^volume:-?\d/.test(c));
+        assert.ok(writes.length >= RELATIVE_ACTIONS.length - 1,
+            `expected the gated actions to command once state is known, saw: ${writes.join(" ")}`);
     });
 });
 

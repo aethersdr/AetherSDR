@@ -14,9 +14,15 @@ jobs:
   # at all — a syntax error in plugin.js would have shipped in a release zip.
   test-elgato:
     runs-on: ubuntu-latest
+    # Least privilege: this job executes repo-controlled JavaScript (test.js
+    # spawns plugin.js as a child process) on a pull_request trigger, and needs
+    # nothing beyond reading the checkout. The workflow-level `contents: write`
+    # exists for the release-upload job below.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
         with:
           node-version: '20'
       - name: Test Elgato plugin
