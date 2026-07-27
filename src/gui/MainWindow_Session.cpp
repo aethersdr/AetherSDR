@@ -1207,10 +1207,35 @@ void MainWindow::wirePanLifecycle()
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
             int wnbLevel = s.value(sw->settingsKey("DisplayWnbLevel"), "50").toInt();
-            int rfGain = s.value(sw->settingsKey("DisplayRfGain"), "0").toInt();
+            // RF gain: push ONLY a value the operator actually saved.
+            //
+            // With no saved value there is nothing to restore, and the radio's
+            // own gain is the right answer — so leave it alone and mirror it
+            // into the widgets instead.
+            //
+            // Writing a default here is what made this subtle. On a Flex,
+            // rfgain 0 is the neutral middle of a -8..+32 range, so pushing a
+            // hardcoded 0 was invisible. On a backend that owns its gain in a
+            // register it is not: the HL2 comes up at 20 dB of AD9866 LNA gain,
+            // and a never-saved "0" pushed it 20 dB down — a receiver that is
+            // simply deaf, with nothing in the UI saying anything was applied.
+            //
+            // Seeding the default from the pan model instead does NOT fix it.
+            // This restore runs off panadapterInfoChanged, which can land
+            // before the backend has published its gain, so the model still
+            // reads its own 0 and the same 0 goes back to the hardware.
+            // Measured: Radio Health showed "LNA gain 0 dB" on a fresh HL2
+            // profile. The only correct rule is not to write at all.
+            const QString rfGainKey = rfGainSettingsKey(sw);
+            const bool haveSavedRfGain = s.contains(rfGainKey);
+            PanadapterModel* activePan = m_radioModel.activePanadapter();
+            const int rfGain = haveSavedRfGain
+                ? s.value(rfGainKey).toInt()
+                : (activePan ? activePan->rfGain() : 0);
             m_radioModel.setPanWnb(wnbOn);
             m_radioModel.setPanWnbLevel(wnbLevel);
-            m_radioModel.setPanRfGain(rfGain);
+            if (haveSavedRfGain)
+                m_radioModel.setPanRfGain(rfGain);
             sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
@@ -1255,6 +1280,7 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioModel(&m_radioModel);
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 menu->setDeclaredBands(m_radioModel.declaredBands());
+                applyTuningRangeToOverlayMenu(menu);
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 // Re-push authoritative geometry when a gesture that was

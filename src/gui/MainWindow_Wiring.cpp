@@ -3134,6 +3134,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
     menu->setDeclaredBands(m_radioModel.declaredBands());
+    applyTuningRangeToOverlayMenu(menu);
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
     connect(&m_radioModel, &RadioModel::antListChanged,
@@ -4423,6 +4424,67 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // current slice/pan state untouched. Guessing is worse than failing
         // visibly because a wrong tune destroys the very band-stack state this
         // path exists to preserve.
+        // ── Radios with no band stack of their own ────────────────────────
+        //
+        // Everything below this branch is Flex band-stack machinery: it resolves
+        // a protocol band key and sends "display pan set … band=", and the radio
+        // restores frequency, mode, filters and antenna from state IT owns. A
+        // Hermes-Lite 2 owns none of that — it has no VFO to read back and no
+        // stack to restore — so that command reached nothing and the band
+        // buttons did precisely nothing on this family.
+        //
+        // Here the APP is authoritative, so the freqMhz/mode the button carries
+        // are used directly. That is the exact opposite of the rule stated above
+        // for Flex, and deliberately so: those arguments are "static UI
+        // defaults" only when something better exists, and on this family
+        // nothing does. Tuning to band centre in the band's usual mode is what
+        // every radio without a stack does.
+        if (!m_radioModel.usesFlexCommandPlane()) {
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            const double hz = freqMhz * 1.0e6;
+            // Refuse rather than tune somewhere the receiver cannot hear. Only
+            // when the backend actually reported a range — a backend that
+            // reports none keeps the previous unconditional behaviour.
+            if (caps.tuningMaxHz > caps.tuningMinHz
+                && (hz < caps.tuningMinHz || hz > caps.tuningMaxHz)) {
+                const QString reason =
+                    tr("%1 is outside this radio's tuning range (%2–%3 MHz)")
+                        .arg(bandName)
+                        .arg(caps.tuningMinHz / 1.0e6, 0, 'f', 3)
+                        .arg(caps.tuningMaxHz / 1.0e6, 0, 'f', 3);
+                qCWarning(lcProtocol).noquote() << "MainWindow: " << reason;
+                statusBar()->showMessage(reason, 5000);
+                return;
+            }
+
+            SliceModel* s = activeSlice();
+            if (!s) {
+                statusBar()->showMessage(tr("No active slice to tune"), 4000);
+                return;
+            }
+            clearSwrSweepForBandChange(s->sliceId(), applet->panId(), bandName);
+            m_bandSettings.setCurrentBand(bandName);
+            // MODE FIRST, then frequency. The backend adopts a mode-appropriate
+            // passband on a mode CHANGE (Hl2Backend::setSliceMode), and the
+            // frequency move is what re-selects the companion filter board — so
+            // this order leaves both the passband and the band filter settled
+            // for the band being arrived at, not the one being left.
+            if (!mode.isEmpty())
+                s->setMode(mode);
+            s->setFrequency(freqMhz);
+            // Centre the window on the new band. Without this the panadapter
+            // keeps the old band's NCO until the tune happens to fall outside
+            // the usable passband, so a band change could leave the trace
+            // centred a whole band away from the slice that just moved.
+            m_radioModel.requestPanCenter(applet->panId(), freqMhz);
+            qCDebug(lcProtocol).noquote().nospace()
+                << "MainWindow: band switch (no radio band stack) band=" << bandName
+                << " pan=" << applet->panId()
+                << " freq_mhz=" << QString::number(freqMhz, 'f', 6)
+                << " mode=" << mode;
+            return;
+        }
+
         const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
         QString stackKey = stackKeyHint;
         QString unsupportedBandReason;
@@ -4546,11 +4608,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::rfGainChanged,
             this, [this, sw, applet](int gain) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 rfgain=%2").arg(applet->panId()).arg(gain));
+        // Through the model, not raw wire text. RadioModel::setPanRfGain routes
+        // a non-Flex backend's gain through the seam (the HL2 keeps it in an
+        // AD9866 register, not in a "display pan set" command), and emitting the
+        // Flex string here bypassed that entirely — the slider moved, the value
+        // persisted, and nothing reached the radio.
+        m_radioModel.setPanRfGainFor(applet->panId(), gain);
         sw->setRfGain(gain);
         auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayRfGain"), QString::number(gain));
+        s.setValue(rfGainSettingsKey(sw), QString::number(gain));
         s.save();
     });
     connect(menu, &SpectrumOverlayMenu::loopAToggled,

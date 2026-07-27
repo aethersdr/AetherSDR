@@ -182,6 +182,17 @@ public:
     // the operator to select an input that silently transmits nothing.
     void setHostModulation(bool on);
     [[nodiscard]] bool hostModulation() const { return m_hostModulation; }
+
+    // Whether the connected radio has an antenna tuner at all
+    // (RadioCapabilities::hasTuner), pushed down by RadioModel on connect for
+    // the same reason hostModulation is: the capability lives on the backend and
+    // the widgets that need it only see this model.
+    //
+    // Defaults TRUE so nothing changes for a Flex, and so a widget that reads it
+    // before any backend has reported stays in the pre-existing state rather
+    // than briefly greying out a control that does exist.
+    void setHasTuner(bool present);
+    [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -274,6 +285,7 @@ signals:
     void moxCommandIssued(bool on);
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
+    void hasTunerChanged(bool present);
     void tuneChanged(bool tuning);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
@@ -338,6 +350,7 @@ private:
     // Transmit state
     int    m_rfPower{100};
     bool   m_hostModulation{false};
+    bool   m_hasTuner{true};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};

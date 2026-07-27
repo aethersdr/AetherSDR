@@ -42,13 +42,49 @@ int sampleRateHz(SampleRate rate) noexcept
     return 48000;
 }
 
-Cc ccConfig(SampleRate rate, int numRx) noexcept
+std::uint8_t ocFilterByteForHz(double hz) noexcept
+{
+    const double mhz = hz / 1.0e6;
+    // Ordered low to high; the first range that contains the frequency wins.
+    // Boundaries sit in the gaps BETWEEN amateur bands, so every band lands
+    // wholly inside one range — hl2_band_filter_test asserts that against
+    // Quisk's table rather than trusting the arithmetic here.
+    if (mhz < 1.6)   return kOcNone;                        // LW/MW: HPF would gut it
+    if (mhz < 2.5)   return kOcLpf160;                      // 160 m — HPF out (spurs)
+    if (mhz < 4.5)   return kOcHpfAmBc | kOcLpf80;          // 80 m
+    if (mhz < 8.5)   return kOcHpfAmBc | kOcLpf60_40;       // 60 m, 40 m
+    if (mhz < 16.5)  return kOcHpfAmBc | kOcLpf30_20;       // 30 m, 20 m
+    if (mhz < 22.5)  return kOcHpfAmBc | kOcLpf17_15;       // 17 m, 15 m
+    if (mhz <= 30.0) return kOcHpfAmBc | kOcLpf12_10;       // 12 m, 10 m
+    return kOcNone;                                          // 6 m and up: no filter fitted
+}
+
+const char* ocFilterName(std::uint8_t oc) noexcept
+{
+    switch (static_cast<std::uint8_t>(oc & 0x7F)) {
+    case kOcNone:                       return "none (bypass)";
+    case kOcLpf160:                     return "160m LPF";
+    case kOcHpfAmBc | kOcLpf80:         return "HPF + 80m LPF";
+    case kOcHpfAmBc | kOcLpf60_40:      return "HPF + 60/40m LPF";
+    case kOcHpfAmBc | kOcLpf30_20:      return "HPF + 30/20m LPF";
+    case kOcHpfAmBc | kOcLpf17_15:      return "HPF + 17/15m LPF";
+    case kOcHpfAmBc | kOcLpf12_10:      return "HPF + 12/10m LPF";
+    default:                            return "custom";
+    }
+}
+
+Cc ccConfig(SampleRate rate, int numRx, std::uint8_t ocFilterByte) noexcept
 {
     const auto c1 = static_cast<std::uint8_t>((static_cast<std::uint8_t>(rate) & 0x03) | kConfigMercury);
     if (numRx < 1) numRx = 1;
     if (numRx > 8) numRx = 8;
+    // Open collector outputs are DATA[23:17] == C2[7:1]. The one-bit shift is
+    // the whole reason this cannot be a straight assignment: DATA[16] is not
+    // part of the field, and writing the byte unshifted would put the 160 m
+    // relay's bit there and every real selection one filter too low.
+    const auto c2 = static_cast<std::uint8_t>((ocFilterByte & 0x7F) << 1);
     const auto c4 = static_cast<std::uint8_t>(kConfigDuplex | (((numRx - 1) & 0x07) << 3));
-    return {kC0Config, c1, 0x00, 0x00, c4};
+    return {kC0Config, c1, c2, 0x00, c4};
 }
 
 Cc ccRx1Freq(std::uint32_t hz) noexcept

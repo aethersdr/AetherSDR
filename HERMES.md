@@ -704,7 +704,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 10 | RADE null-deref at `MainWindow_DigitalModes.cpp:461` | ours, gap 9 | Same shape as the DAX crash; will kill HL2 the moment RADE starts | XS |
 | 11 | `AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured on the HL2 path | ours, gap 10 | Test instances grab a live radio | S |
 | 12 | One dB-reference object per slice (LNA + calibration + AGC threshold) | A2 §A3 | Every LNA change shifts the absolute reference; the trace jumps and users read it as a real event | S |
-| 12a | Seam verb for RF/LNA gain | §15.7 | `lnaGainDb` is connect-time only. An operator on a strong band cannot back it off without reconnecting, and audio clips hard (peak 5.5 against full scale 1.0) with no recovery | S |
+| ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
 | 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
 
 ### Tier 3 — absent subsystems, in dependency order
@@ -717,7 +717,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 16 | Pair WDSP `RXA_ADC_PK` with the hardware clip indicator | A3 §7 | Post-DDC slice vs pre-DDC full spectrum. They disagree by design; A3 calls this the most useful diagnostic pairing on the HL2 | S |
 | 17 | TX IQ FIFO depth + servo | O §6, A1 §B3 | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift | M |
 | 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
-| 19 | Filter board (I2C `0x20`), PA bias, config EEPROM | O §8 | Band filtering, and the AM-broadcast HPF matters more here than on radios with better dynamic range | M |
+| ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
 | 20 | Multi-slice: index-space mapping object | A3 §3 | `{ddcIndex, dspChannel, analyzerId, uiNumber}` — never derive arithmetically. Trivial now at one slice, which is when to build it | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
 | 22 | Hardware-managed T/R LNA gain (`0x0e[15]`) | A2 §A2 | Quisk uses it; lower latency than any host round trip; PureSignal needs an unclipped feedback path | S |
@@ -1392,3 +1392,131 @@ reports — so plain CW fell through to the USB fallback and was demodulated as
 SSB. `NFM` was missing for the same reason. **Any mode name that appears in the
 TCI `modulations_list` needs a mapping, or it silently becomes USB.** `RTTY`
 still has this gap.
+
+---
+
+## 17. Band switching, the companion filter board, and RF gain
+
+Three controls that all looked wired and were not. Each failed in the same
+shape: the GUI drove a **Flex command plane** that this radio does not have, so
+the widget moved, the setting persisted, and nothing reached the hardware.
+
+### 17.1 Band buttons — the app is the band stack
+
+The Band sub-panel resolved a Flex band-stack key and sent
+`display pan set <pan> band=<key>`. On a Flex the RADIO owns the stack and
+restores frequency, mode, filters and antenna from it. **The HL2 owns none of
+that** — it has no VFO to read back — so the command reached nothing.
+
+`MainWindow_Wiring.cpp` now branches on `usesFlexCommandPlane()`: for a
+non-Flex backend the app is authoritative and tunes the slice to the band's
+default frequency and mode directly. Note this is the *exact opposite* of the
+rule stated for Flex three lines above it, where using the button's `freqMhz`
+is explicitly called out as wrong (#1876). Both are right — the argument is a
+"static UI default" only when something better exists.
+
+`RadioCapabilities::tuningMinHz/tuningMaxHz` was added so the grid can be
+honest: the HL2 reports 0.1–38.4 MHz (the AD9866's first Nyquist zone), and
+band buttons outside it are disabled with a tooltip rather than tuning the
+receiver somewhere it cannot hear.
+
+### 17.2 The J16 filter byte rides the CONFIG register
+
+**The HL2 has no switchable filters of its own.** It has seven open-collector
+outputs at `0x00[23:17]`, which the *gateware* forwards as one byte to I2C
+address `0x20`. Nothing in this codebase writes I2C — setting the config bits
+IS the whole mechanism (oracle §8).
+
+Two things make this the riskiest change in the area:
+
+1. **It shares a register with the sample rate and the receiver count.** A bit
+   in the wrong place lands in `[25:24]` or `[6:3]`, and the failure is a radio
+   that still streams, still looks correctly framed, and delivers samples at the
+   wrong rate or from an unassigned receiver.
+2. **The field is shifted.** `DATA[16]` is not part of it, so the byte goes in
+   as `C2 = (oc & 0x7F) << 1`. Unshifted, every selection is one relay too low —
+   80 m would engage the 160 m low-pass.
+
+Anything that rebuilds `m_ccConfig` must carry the filter byte through.
+`setSampleRate()` already had this bug once for the receiver count; the comment
+there now covers both.
+
+The one-hot mapping is **Quisk's `Hermes_BandDict` verbatim**, not re-derived:
+the grouping (60+40 share a filter, 17+15 share one) is a property of the N2ADR
+board. Our contribution is the frequency *ranges*, and the unit test checks
+those by asserting every amateur band lands on Quisk's answer.
+
+Two deliberate departures from "always engage the HPF":
+- Below 1.6 MHz nothing is engaged — the AM-blocking HPF would remove exactly
+  what is being listened to.
+- On 160 m the HPF stays out. The HL2's own switching supply couples spurs into
+  the filter board's 160 m and HPF inductors (wiki, `Options.md`).
+
+**Selection is logged at INFO on `aether.hl2`, not debug.** There is no
+readback anywhere in the protocol — the gateware writes to I2C and nothing
+answers — so that log line is the only evidence of what the relays were told to
+do, and a support log captured after the fact has to already contain it.
+
+### 17.3 Verifying something with no readback
+
+`tests/hl2_live_band_filter_probe.cpp` (hardware-only, `EXCLUDE_FROM_ALL`) is
+the answer to "the unit test shares our reading of the register map, so what
+would catch a convention error?"
+
+- **Sample rate as the independent check.** EP6 carries 126 samples per packet,
+  so 48 kHz is 381 packets/second. Measured across all nine filter selections
+  it stayed within 1.002× — a bit leaking into `DATA[25:24]` would have halved
+  or doubled it. Non-zero IQ rules out an unassigned receiver.
+- **Physics as the proof the relay moved.** Park on 0.6 MHz, A/B the AM-blocking
+  HPF, and measure. On this radio the AM band dropped **22–24 dB** when the HPF
+  was engaged. That is not the radio agreeing with our register map; that is the
+  antenna path changing. It also confirms an N2ADR board is fitted — the writes
+  are inert and harmless on a bare HL2.
+- Same method for RF gain: a commanded 10 → 30 dB step moved the raw wire noise
+  floor **19.8 dB**, measured before any of our DSP or dB referencing runs.
+
+### 17.4 RF gain was connect-time only
+
+`lnaGainDb` was applied once in `connectRadio()`. `IRadioBackend::setPanRfGain`
+(default no-op, so Flex is unaffected) now carries the ANT panel's slider to
+`MetisClient::setLnaGainDb` at any time, and `panRfGainInfoChanged` reports the
+AD9866's real geometry — **−12…+48 dB in 1 dB steps**, against the model's
+Flex-shaped default of −8…+32 in 8s, which had made two thirds of the available
+gain unreachable.
+
+`Hl2DbReference` is moved in the same call, so the trace and the S-meter do not
+slide when gain changes — an operator backing off 10 dB on a strong band would
+otherwise watch the noise floor drop 10 dB and read it as the band going quiet.
+
+**The persisted key is now family-scoped** (`DisplayRfGain_hl2`). It was shared,
+which was harmless while the HL2 ignored the value and stopped being harmless
+the moment the slider reached the register: a gain last set on a Flex was
+restored onto the HL2 as an LNA gain the operator never chose for that radio.
+Observed live — a Flex-era `16` was pushed at connect.
+
+### 17.5 Directional power is UNCALIBRATED and says so
+
+Forward/reverse counts go through Quisk's `power_meter_std_calibrations
+['HL2FilterE3']` curve. That is a *reference* curve for an N2ADR rev E3 board,
+**not a calibration of this radio** — the coupler, toroid and detector diode all
+vary between boards (oracle §6). The meters are labelled "(uncalibrated)" in
+their own `MeterDef` descriptions, because the number itself looks exactly like
+a calibrated one. Raw counts continue to be logged; a per-unit calibration
+replaces the table and nothing else.
+
+SWR remains the one directional quantity that is meaningful without
+calibration — it is a ratio from the same converter, so the unknown scale
+cancels.
+
+### 17.6 Meter pacing
+
+WDSP hands us a signal-strength reading per demodulated block — ~47/s at 24 kHz
+output, scaling with the span — and every one crossed to the GUI thread. Two
+separate mechanisms fix that and they are not interchangeable: an EMA smooths
+*every* sample so the published value represents the whole interval, and a
+100 ms gate decides how often one is published. Dropping samples without
+smoothing would alias.
+
+100 ms is the cadence `MetisClient` already paces telemetry at, and the
+attack/decay constants (0.5/0.15) are the ones `MeterModel` uses for Flex
+forward power — reused so meters behave the same across families.

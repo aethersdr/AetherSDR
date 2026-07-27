@@ -584,6 +584,12 @@ void RadioModel::setupBackend(const QString& family)
             [this](const QString& panId, int gain) {
         if (auto* pan = resolvePan(panId)) pan->setRfGain(gain);
     });
+    connect(m_backend.get(), &IRadioBackend::panRfGainInfoChanged, this,
+            [this](const QString& panId, int low, int high, int step) {
+        if (step <= 0)
+            return;                       // a zero step would freeze the slider
+        if (auto* pan = resolvePan(panId)) pan->setRfGainInfo(low, high, step);
+    });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
         if (auto* pan = resolvePan(panId)) pan->setRxAntenna(ant);
@@ -652,6 +658,14 @@ void RadioModel::setupBackend(const QString& family)
         const RadioCapabilities caps = backendCapabilities();
         m_transmitModel.setHostModulation(connected
                                           && caps.hostModulates && caps.canTransmit);
+        // Whether an antenna tuner exists at all. Same shape and the same
+        // reason: the capability is the backend's to report, and the widgets
+        // that need it only see the model.
+        //
+        // Restored to TRUE on disconnect rather than left false — with no radio
+        // connected there is nothing to be honest ABOUT, and leaving the ATU
+        // greyed out after unplugging an HL2 would look like a fault.
+        m_transmitModel.setHasTuner(!connected || caps.hasTuner);
     });
 
     // Keying and tune from the GUI.
@@ -2599,6 +2613,12 @@ RadioCapabilities RadioModel::backendCapabilities() const
     return m_backend ? m_backend->capabilities() : RadioCapabilities{};
 }
 
+IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const
+{
+    return m_backend ? m_backend->healthSnapshot()
+                     : IRadioBackend::HealthSnapshot{};
+}
+
 // Shared key-on guard for the paths that do NOT go through setTransmit().
 //
 // setTransmit() refuses a key on a backend reporting canTransmit=false before
@@ -3875,9 +3895,21 @@ void RadioModel::setPanWnbLevel(int level)
 
 void RadioModel::setPanRfGain(int gain)
 {
-    if (m_activePanId.isEmpty()) return;
-    sendCmd(
-        QString("display pan set %1 rfgain=%2").arg(m_activePanId).arg(gain));
+    setPanRfGainFor(m_activePanId, gain);
+}
+
+void RadioModel::setPanRfGainFor(const QString& panId, int gain)
+{
+    if (panId.isEmpty()) return;
+    // A backend that owns its gain in a hardware register cannot be driven with
+    // Flex wire text — the same reason center/bandwidth route through the seam.
+    // Without this the HL2's RF Gain slider moved, persisted, and changed
+    // nothing: lnaGainDb was applied once at connect and never again.
+    if (!m_flexBackend && m_backend) {
+        m_backend->setPanRfGain(panId, gain);
+        return;
+    }
+    sendCmd(QString("display pan set %1 rfgain=%2").arg(panId).arg(gain));
 }
 
 // ── Display controls — FFT ─────────────────────────────────────────────────

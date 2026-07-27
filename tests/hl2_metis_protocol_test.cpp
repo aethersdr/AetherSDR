@@ -69,6 +69,74 @@ int main()
         check((c[0] & 0x01) == 0, "config C0 is even (MOX=0, cannot key)");
     }
 
+    // ---- J16 open-collector filter byte: DATA[23:17] == C2[7:1] ----
+    //
+    // The SHIFT is the whole point. DATA[16] is not part of the field, so an
+    // unshifted byte would put every selection one relay too low — 80 m would
+    // engage the 160 m filter. Asserted on the encoder, not inferred.
+    {
+        const Cc c = ccConfig(SampleRate::R48k, 1, kOcLpf160);
+        check(c[2] == 0x02, "oc 0x01 (160m) lands in C2 bit 1, not bit 0");
+        check(ccConfig(SampleRate::R48k, 1, kOcHpfAmBc | kOcLpf12_10)[2] == 0xC0,
+              "oc 0x60 (HPF|12/10m) -> C2 0xC0");
+        // Bit 7 is the RX-antenna bit and lives at DATA[13], not in this field.
+        // Passing a full I2C byte must not shift it into DATA[24] (the sample
+        // rate's low bit lives at [24] — this would change the DDC rate).
+        check(ccConfig(SampleRate::R48k, 1, 0xFF)[2] == 0xFE,
+              "oc bit 7 masked off (it is the RX antenna bit, not a filter)");
+        check(ccConfig(SampleRate::R48k, 1, kOcNone)[2] == 0x00,
+              "oc none releases every relay");
+        // The filter byte must not disturb what shares this register.
+        check(c[1] == (0x40 | 0x00) && c[4] == 0x04,
+              "oc byte leaves sample rate and #RX untouched");
+    }
+
+    // ---- band -> filter selection ----
+    //
+    // Every value below is Quisk's Hermes_BandDict for that band
+    // (quisk_conf_defaults.py), which is the reference client's own table for
+    // the N2ADR companion board. Checking against it is what makes the
+    // frequency RANGES in ocFilterByteForHz() verifiable rather than plausible:
+    // the ranges are ours, the answers are not.
+    {
+        struct { double mhz; std::uint8_t oc; const char* what; } cases[] = {
+            {  1.900, 0b0000001, "160m -> 160 LPF, HPF out" },
+            {  3.800, 0b1000010, "80m  -> HPF + 80 LPF" },
+            {  5.357, 0b1000100, "60m  -> HPF + 60/40 LPF" },
+            {  7.200, 0b1000100, "40m  -> HPF + 60/40 LPF" },
+            { 10.125, 0b1001000, "30m  -> HPF + 30/20 LPF" },
+            { 14.225, 0b1001000, "20m  -> HPF + 30/20 LPF" },
+            { 18.130, 0b1010000, "17m  -> HPF + 17/15 LPF" },
+            { 21.300, 0b1010000, "15m  -> HPF + 17/15 LPF" },
+            { 24.950, 0b1100000, "12m  -> HPF + 12/10 LPF" },
+            { 28.400, 0b1100000, "10m  -> HPF + 12/10 LPF" },
+        };
+        for (const auto& c : cases)
+            check(ocFilterByteForHz(c.mhz * 1.0e6) == c.oc, c.what);
+
+        // Band EDGES, not just the button's default frequency: a range boundary
+        // that fell inside a band would filter one end of it correctly and the
+        // other end through the neighbouring low-pass.
+        check(ocFilterByteForHz(1.800e6) == ocFilterByteForHz(2.000e6),
+              "160m band edges share one filter");
+        check(ocFilterByteForHz(3.500e6) == ocFilterByteForHz(4.000e6),
+              "80m band edges share one filter");
+        check(ocFilterByteForHz(7.000e6) == ocFilterByteForHz(7.300e6),
+              "40m band edges share one filter");
+        check(ocFilterByteForHz(14.000e6) == ocFilterByteForHz(14.350e6),
+              "20m band edges share one filter");
+        check(ocFilterByteForHz(28.000e6) == ocFilterByteForHz(29.700e6),
+              "10m band edges share one filter");
+
+        // Outside the board's coverage nothing is engaged — a low-pass chosen
+        // for a band that is not there would only attenuate.
+        check(ocFilterByteForHz(0.600e6) == kOcNone,
+              "AM broadcast: no filter, and specifically not the AM-blocking HPF");
+        check(ocFilterByteForHz(50.150e6) == kOcNone, "6m: no filter fitted");
+        // Never the RX-antenna bit, whatever the frequency.
+        check((ocFilterByteForHz(14.2e6) & 0x80) == 0, "filter byte never sets bit 7");
+    }
+
     // ---- RX1 NCO frequency: 32-bit big-endian ----
     {
         const Cc f = ccRx1Freq(10'000'000);               // 0x00989680

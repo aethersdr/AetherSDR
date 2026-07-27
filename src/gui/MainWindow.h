@@ -107,6 +107,7 @@ class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 class SpectrumWidget;
+class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
 class PanadapterStack;
@@ -343,6 +344,24 @@ private:
                                            bool resetOutput,
                                            bool reinitializePcInput);
     SliceModel* activeSlice() const;
+
+    // Push the connected backend's reported tuning range into one overlay
+    // menu's band panel, so bands the radio cannot reach are disabled rather
+    // than tuning it somewhere it hears nothing. A backend that reports no
+    // range leaves every band enabled (the Flex behaviour).
+    void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+
+    // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
+    //
+    // RF gain is the one "display" setting that is really a hardware register,
+    // and its range is family-specific: a Flex's is -8..+32 in 8 dB steps, the
+    // HL2's AD9866 LNA is -12..+48 in 1 dB steps. Sharing one key meant a value
+    // last set on a Flex was restored onto an HL2 as an LNA gain the operator
+    // never chose for that radio — harmless while the HL2 ignored it, real now
+    // that the slider reaches the register.
+    //
+    // Flex keeps the unsuffixed key so existing settings survive untouched.
+    QString rfGainSettingsKey(SpectrumWidget* sw) const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
     BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,

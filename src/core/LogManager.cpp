@@ -44,6 +44,10 @@ Q_LOGGING_CATEGORY(lcKiwiSdrAudio, "aether.kiwisdr.audio", QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAutomation, "aether.automation",  QtInfoMsg)
 Q_LOGGING_CATEGORY(lcQrz,        "aether.qrz",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcClock,      "aether.clock",       QtWarningMsg)
+// Info by default: the band-filter transitions this carries are low-rate and
+// are the only record of what the companion filter board was told to do, so
+// they have to be in a support log that was captured without foreknowledge.
+Q_LOGGING_CATEGORY(lcHl2,        "aether.hl2",         QtInfoMsg)
 
 LogManager::LogManager()
 {
@@ -80,6 +84,7 @@ LogManager::LogManager()
         {"aether.automation", "Automation Bridge", "Agent-drivable test bridge (#3646): QLocalServer verbs, widget snapshots, captures (AETHER_AUTOMATION only)"},
         {"aether.qrz",        "QRZ Lookup",   "QRZ.com callsign lookups: session, cache, CW callsign spotting, photos"},
         {"aether.clock",      "AetherClock",  "WWV/WWVB time-signal decoder: state transitions, per-second alignment, frame decodes, voter verdicts"},
+        {"aether.hl2",        "Hermes-Lite 2", "HL2 backend: band changes, J16 companion-filter selection, LNA gain, and radio health telemetry"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.

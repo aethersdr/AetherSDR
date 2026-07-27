@@ -32,6 +32,19 @@ struct RadioCapabilities {
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
 
+    // The frequency range the receiver can actually be tuned to, in Hz.
+    //
+    // Both zero means "not reported" — clients then keep whatever range they
+    // previously assumed, so this is additive for a backend that never sets it.
+    //
+    // This exists because the band buttons had no way to be honest. They are a
+    // fixed grid from 2200 m to 2 m, and every one of them was live on every
+    // radio: pressing 6 m on a direct-sampling HF receiver tuned it somewhere
+    // it cannot hear, and the operator got a dead band rather than a control
+    // that told them it was not available.
+    double tuningMinHz = 0.0;
+    double tuningMaxHz = 0.0;
+
     // Transmit — the load-bearing capability for TX safety (RFC §6). A backend
     // that cannot key sets canTransmit=false; the engine guard then denies any
     // keying intent regardless of client requests.

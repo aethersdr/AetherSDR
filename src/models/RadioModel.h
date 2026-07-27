@@ -6,6 +6,7 @@
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
+#include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -209,6 +210,12 @@ public:
     // e.g. TX capability and reboot support, which differ by radio family (#4448).
     // Non-inline: IRadioBackend is only forward-declared here.
     RadioCapabilities backendCapabilities() const;
+
+    // The connected backend's health/status registers, for the Radio Health
+    // dialog. Empty when no backend is connected or the family reports none —
+    // which the dialog renders as "this radio reports no health registers"
+    // rather than as an empty table.
+    IRadioBackend::HealthSnapshot backendHealthSnapshot() const;
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -593,6 +600,10 @@ public:
     void setPanWnb(bool on);
     void setPanWnbLevel(int level);
     void setPanRfGain(int gain);
+    // Same, addressed at a specific pan rather than the active one. The overlay
+    // menu belongs to one panadapter and must drive that one, not whichever
+    // happens to be active when the slider moves.
+    void setPanRfGainFor(const QString& panId, int gain);
 
     // Display controls — FFT (display pan set)
     void setPanAverage(int frames);

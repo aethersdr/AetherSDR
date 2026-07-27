@@ -49,6 +49,7 @@ public:
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
     void setPanCenter(const QString& panId, double hz) override;
     void setPanBandwidth(const QString& panId, double hz) override;
+    void setPanRfGain(const QString& panId, int gainDb) override;
 
 private:
     // The actual span change, after the throttle above has settled.
@@ -69,13 +70,25 @@ public:
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg) override;
 
+    HealthSnapshot healthSnapshot() const override;
+
 private:
+    // Re-select the companion filter board's band filter for the current slice
+    // frequency. Idempotent and change-gated, so it is safe to call from every
+    // path that can move the dial.
+    void applyBandFilter(const char* reason);
+
     void emitSliceState();   // sliceChanged(delta) from current freq/mode/filter
     void emitPanState();     // panCenterBandwidthChanged from freq + sample rate
     void pushInitialState();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
     static double temperatureCelsius(int raw);
+    // Uncalibrated directional-coupler counts -> watts. See the table in the
+    // .cpp for what this curve is and, more importantly, what it is not.
+    static double directionalWatts(int raw);
+    // Watts -> dBm for the meter seam, floored so 0 W does not become -inf.
+    static double wattsToDbm(double watts);
 
     MetisClient* m_metis = nullptr;
     Hl2RxDsp* m_dsp = nullptr;
@@ -120,6 +133,10 @@ private:
     int m_filterLowHz = 150;
     int m_filterHighHz = 3000;
     int m_lnaGainDb = 20;
+    // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
+    // rather than a real selection — kOcNone (0x00) is a legitimate value
+    // meaning "every relay released", so it cannot double as the sentinel.
+    int m_ocFilterByte = 0xFF;
     // Owns the LNA gain <-> dBm coupling so a gain change cannot move the trace.
     Hl2DbReference m_dbRef;
 
@@ -134,6 +151,11 @@ private:
     // independently at the wire.
     bool m_txAllowed = false;
     Hl2Telemetry m_telemetry;
+    // Cumulative EP6 sequence gaps, mirrored onto THIS thread from
+    // MetisClient::dropsUpdated. Deliberately a copy rather than a call into
+    // MetisClient::droppedPackets(): that object lives on the I/O thread, and
+    // healthSnapshot() is read from the GUI thread.
+    quint64 m_drops = 0;
     bool m_adcOverload = false;
     bool m_keyed = false;
     bool m_tuning = false;
@@ -144,6 +166,40 @@ private:
     // no reason.
     static constexpr double kTuneCarrierAmplitude = 1.0;
     int m_lastFwdRaw = -1;
+
+    // ---- Meter pacing / ballistics ----
+    //
+    // WDSP hands us a signal-strength reading once per demodulated block, which
+    // at 24 kHz output is ~47 a second and scales with the span. Every one of
+    // them crossed the thread boundary into MeterModel and repainted the
+    // S-meter, so the needle was being driven far faster than it can be read
+    // and far faster than a Flex drives the same widget.
+    //
+    // Two separate things fix that and they are NOT interchangeable:
+    //   - the RATE gate below decides how often a value is published;
+    //   - the EMA decides what value gets published when it is.
+    // Dropping samples without smoothing would alias — the meter would show
+    // whichever instant happened to land on the tick.
+    //
+    // 100 ms is the cadence MetisClient already publishes radio telemetry at
+    // (kTelemetryMinIntervalMs), so every HL2 meter now updates on one clock.
+    static constexpr qint64 kMeterPublishIntervalMs = 100;
+    // Flex's own meter ballistics, from MeterModel's forward-power smoothing:
+    // fast attack so a peak is not missed, slow decay so the needle settles.
+    // Reused rather than re-invented so an operator moving between a Flex and
+    // an HL2 sees meters that behave the same way.
+    static constexpr double kMeterAttackAlpha = 0.5;
+    static constexpr double kMeterDecayAlpha  = 0.15;
+    QElapsedTimer m_sMeterClock;
+    double m_sMeterDbm = 0.0;
+    bool   m_haveSMeter = false;
+    // PA temperature rides the 10 Hz telemetry, so it needs no rate gate of its
+    // own — but the instrumentation ADC's low bits are noisy enough that the
+    // displayed value flickered by a degree at rest. Same EMA, symmetric:
+    // heating and cooling are both slow and neither deserves a fast attack.
+    static constexpr double kPaTempAlpha = 0.2;
+    double m_paTempC = 0.0;
+    bool   m_havePaTemp = false;
     // Authoritative AGC state, mirroring the DSP defaults in Hl2RxDsp::Config so
     // the first sliceChanged reports what WDSP was actually opened with.
     QString m_agcMode = QStringLiteral("med");
@@ -157,6 +213,15 @@ private:
     static constexpr double kUsablePassbandFraction = 0.8;
     static constexpr int kSliceId = 0;
     static constexpr const char* kPanId = "hl2";
+
+    // AD9866 LNA gain limits, in dB. These are the range ccRxGain() encodes
+    // (C4 = 0x40 | (dB + 12), a 6-bit field), so they are the register's own
+    // limits rather than a policy choice — clamping anywhere else would let a
+    // value be silently truncated on the wire instead of stopping at the end of
+    // the slider's travel.
+    static constexpr int kLnaGainMinDb  = -12;
+    static constexpr int kLnaGainMaxDb  = 48;
+    static constexpr int kLnaGainStepDb = 1;
 };
 
 }  // namespace AetherSDR::hl2

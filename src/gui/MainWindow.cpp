@@ -5292,6 +5292,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 menu->setRadioCapabilities(caps);
                 menu->setDeclaredBands(declaredBands);
                 menu->setXvtrBands(xvtrBands);
+                applyTuningRangeToOverlayMenu(menu);
             }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
@@ -6049,6 +6050,28 @@ void MainWindow::applyMasterVolume(int pct)
 }
 
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
+QString MainWindow::rfGainSettingsKey(SpectrumWidget* sw) const
+{
+    if (!sw)
+        return QStringLiteral("DisplayRfGain");
+    const QString base = sw->settingsKey(QStringLiteral("DisplayRfGain"));
+    const QString family = m_radioModel.backendCapabilities().family;
+    if (family.isEmpty() || family == QLatin1String("flex"))
+        return base;                       // unchanged for Flex and when unknown
+    return base + QLatin1Char('_') + family;
+}
+
+void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
+{
+    if (!menu)
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    // Zero/zero when the backend reports no range, which the menu reads as
+    // "unconstrained" — so a Flex, and a disconnected session, both keep every
+    // band button live exactly as before.
+    menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
+}
+
 SliceModel* MainWindow::activeSlice() const
 {
     SliceModel* cached = nullptr;

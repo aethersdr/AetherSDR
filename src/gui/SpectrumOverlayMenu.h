@@ -98,6 +98,13 @@ public:
     // VHF row will disappear.  Triggers a band-panel rebuild. (#695)
     void setRadioCapabilities(ModelCapabilities caps);
 
+    // The tuning range the connected backend reports (MHz). Band buttons whose
+    // target frequency falls outside it are disabled and say why, so a
+    // direct-sampling HF receiver stops offering 6 m as though it were a band
+    // it could reach. Pass (0, 0) for "not reported" — every button is enabled,
+    // which is the pre-existing behaviour and what a Flex gets.
+    void setTuningRangeMhz(double minMhz, double maxMhz);
+
     // Bands the radio itself declared (optional "bands=" discovery/status
     // key, names from BandDefs).  Non-empty: the band grid is built from
     // this list instead of the HF layout + model capability flags, so a
@@ -251,6 +258,18 @@ private:
     QWidget* m_xvtrPanel{nullptr};
     bool m_xvtrPanelVisible{false};
     QVector<QPushButton*> m_xvtrBandBtns;
+
+    // Every band button in the main band panel paired with the frequency it
+    // tunes to, so the tuning-range gate can be re-applied after any rebuild
+    // without the two builders each having to know about it.
+    //
+    // QPointer, not a raw pointer: the band panel is destroyed with
+    // deleteLater() on every rebuild, so entries can outlive their buttons by a
+    // full event-loop turn if a range update lands in that window.
+    QVector<QPair<QPointer<QPushButton>, double>> m_bandBtnFreqs;
+    double m_tuningMinMhz{0.0};
+    double m_tuningMaxMhz{0.0};
+    void applyTuningRangeToBandButtons();
 
     // Cached state for band-panel rebuilds — setXvtrBands() and
     // setRadioCapabilities() each store their argument and trigger
