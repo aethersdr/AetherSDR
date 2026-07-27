@@ -831,7 +831,10 @@ public:
     // that lets the radio actually move a centered slice. We issue no pan command
     // directly; the client lock logic does, exactly as the GUI path does. Call on
     // the GUI thread (owns SliceModel).
-    void tuneSliceForCat(SliceModel* slice, double mhz);
+    // Returns false (and issues no tune) when the target is rejected — a null
+    // slice or a non-positive / non-finite frequency — so the CAT protocol layer
+    // can report the failure instead of acknowledging a tune that never happened.
+    bool tuneSliceForCat(SliceModel* slice, double mhz);
 
     // Effective pan geometry: the deferred pending value if one is queued,
     // else the live model value, else NaN when the pan is unknown. Caller-side

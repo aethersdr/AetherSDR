@@ -4597,10 +4597,10 @@ bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
     return dispatchPanBand(panId, bandKey);
 }
 
-void RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
+bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
 {
     if (!slice) {
-        return;
+        return false;
     }
     // Boundary validation (Principle VII): this is the single seam every CAT /
     // rigctld retune funnels through, so reject an implausible frequency here
@@ -4608,8 +4608,10 @@ void RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
     // (a client sending FA-5000;, a multi-step DN/UP that underflows, a parse
     // that yielded NaN/inf) would otherwise be pushed optimistically into the
     // model and broadcast via frequencyChanged before the radio rejects it.
+    // Return false so the caller answers the client with an error rather than
+    // acknowledging a tune that was thrown away.
     if (!(mhz > 0.0 && std::isfinite(mhz))) {
-        return;
+        return false;
     }
     // Recenter policy: an in-span retune keeps autopan=0 (no yank — external
     // Doppler software like SatPC32 steps every few seconds); an out-of-span or
@@ -4631,6 +4633,7 @@ void RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
     } else {
         slice->tuneAndRecenter(mhz);
     }
+    return true;
 }
 
 double RadioModel::effectivePanCenterMhz(const QString& panId) const

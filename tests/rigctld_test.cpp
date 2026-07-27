@@ -440,7 +440,10 @@ void section2(RigctlClient& c, Runner& r, qint64 origFreq)
 
     // 2.6  VFO-prefixed get_freq VFOA — same result as bare get_freq (poll the
     //      restore above to settle, then confirm VFOA reads the original freq)
-    const qint64 vfoaFreq = pollFreqField(c, QStringLiteral("\\get_freq VFOA"), gotFreq);
+    // Poll to exact equality — the assert below is ==, so a default 100 Hz poll
+    // tolerance could break while still a few Hz off and then fail (the same trap
+    // fixed at 2.3).
+    const qint64 vfoaFreq = pollFreqField(c, QStringLiteral("\\get_freq VFOA"), gotFreq, 1000, 1);
     r.check(QStringLiteral("2.6  get_freq VFOA returns same Hz as get_freq"),
             vfoaFreq == gotFreq,
             QStringLiteral("%1").arg(vfoaFreq));

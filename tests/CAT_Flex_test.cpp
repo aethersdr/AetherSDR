@@ -610,7 +610,7 @@ void section7(CatClient& c, Runner& r)
     const qint64 startHz = (faStart.startsWith(QLatin1String("ZZFA")) && isDigits(faStart.mid(4), 11))
                            ? faStart.mid(4).toLongLong()
                            : 14'100'000;
-    c.send(QStringLiteral("ZZMD01;"));   // USB, so 7.6's ZZMD05 (FM) is a real change
+    c.send(QStringLiteral("ZZMD01"));   // USB, so 7.6's ZZMD05 (FM) is a real change (send() adds ';')
     QThread::msleep(150);
 
     QString resp = c.query(QStringLiteral("ZZAI"));

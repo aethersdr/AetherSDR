@@ -737,7 +737,7 @@ QString RigctlProtocol::cmdSetFreq(const QString& arg)
 
     bool ok;
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
-    if (parts.isEmpty() || !ok || hz < 0) return rprt(-1);  // RIG_EINVAL
+    if (parts.isEmpty() || !ok || !(hz > 0.0)) return rprt(-1);  // RIG_EINVAL (reject <=0/NaN)
 
     // VFOB/SUB addresses the split TX slice. targetable_vfo lets clients set the
     // TX VFO freq directly without a preceding set_split_vfo (WSJT-X Rig split
@@ -984,13 +984,15 @@ void RigctlProtocol::tryPromoteTxSlice()
             // setTxSlice above and every other model mutation in this class.
             if (m_pendingSplitFreqMHz > 0.0) {
                 const double mhz = m_pendingSplitFreqMHz;
-                // Bare setFrequency (autopan=0) — the split TX slice must NOT
-                // recenter the pan: that would yank the operator's view off the
-                // RX slice they're watching. Unlike a VFO-A tune (which recenters
-                // to follow the operator via tuneSliceForCat), set_split_freq is a
-                // background TX-slice set with no TCI analog. Per #4497 triage.
-                QMetaObject::invokeMethod(s, [s, mhz]{ s->setFrequency(mhz); },
-                                          Qt::QueuedConnection);
+                RadioModel* model = m_model;
+                // Route the split TX slice through tuneSliceForCat, mirroring how
+                // TCI handles split (TciServer::tuneSliceAndConfirm tunes the TX
+                // slice with the same in-span/out-of-span policy): an in-span TX
+                // keeps autopan=0 (no yank), a cross-band TX recenters. TCI is the
+                // reference behavior we match on every command plane.
+                QMetaObject::invokeMethod(s, [s, model, mhz]{
+                    if (model) model->tuneSliceForCat(s, mhz);
+                }, Qt::QueuedConnection);
                 m_pendingSplitFreqMHz = 0.0;
             }
             if (!m_pendingSplitMode.isEmpty()) {
@@ -1205,16 +1207,18 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     dropVfoPrefix(parts);   // "set_split_freq VFOB <hz>" in chk_vfo=1 mode
     bool ok = false;
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
-    if (parts.isEmpty() || !ok) return rprt(-1);
+    if (parts.isEmpty() || !ok || !(hz > 0.0)) return rprt(-1);  // reject <=0/NaN
     const double mhz = hz / 1e6;
     return applySplitParam(
         [this, mhz]{ m_pendingSplitFreqMHz = mhz; },
-        [mhz](SliceModel* tx) {
-            // Bare setFrequency (autopan=0) — do NOT recenter on the split TX
-            // slice; that would yank the operator's pan off the RX slice. See
-            // tryPromoteTxSlice above and the #4497 triage.
-            QMetaObject::invokeMethod(tx, [tx, mhz]{ tx->setFrequency(mhz); },
-                                      Qt::QueuedConnection);
+        [this, mhz](SliceModel* tx) {
+            RadioModel* model = m_model;
+            // Route the split TX slice through tuneSliceForCat, mirroring TCI's
+            // split handling (same in-span/out-of-span policy): in-span keeps
+            // autopan=0, cross-band recenters. See tryPromoteTxSlice above.
+            QMetaObject::invokeMethod(tx, [tx, model, mhz]{
+                if (model) model->tuneSliceForCat(tx, mhz);
+            }, Qt::QueuedConnection);
         });
 }
 
