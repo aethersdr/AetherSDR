@@ -195,8 +195,9 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_faultLabel->hide();
     vbox->addWidget(m_faultLabel);
 
-    // ── Button rows: OPR/STBY · PWR LVL · TUNE · OFF, then the band/antenna/
-    //    input keys. Every button is a literal front-panel keystroke.
+    // ── Button rows: OPER/STBY · power level · TUNE · OFF, then INPUT/ANT
+    //    and the drive-power arrows. Every button is a literal front-panel
+    //    keystroke.
     auto& theme = AetherSDR::ThemeManager::instance();
     auto makeKeyBtn = [this, &theme](const QString& text) {
         auto* btn = new QPushButton(text, this);
