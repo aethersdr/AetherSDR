@@ -207,6 +207,18 @@ void MainWindow::wireDiscovery()
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost,
             m_connPanel, &ConnectionPanel::onRadioLost);
+    // "Auto-reconnect to last radio" used to be wired to the Flex RadioDiscovery
+    // only, so an HL2 owner watched their radio appear in the picker and then had
+    // to click it by hand at every launch. The HL2 sweep feeds the same slot.
+    // An HL2 that answers 0x03 (already streaming to somebody else) is skipped
+    // inside the slot — Protocol 1 is single-client, so there is nothing to join.
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    // A radio first seen In_Use flips to Available when the other client drops;
+    // that arrives as radioUpdated, not radioDiscovered, so listen to both or the
+    // saved radio stays unconnected until it disappears and comes back.
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
@@ -276,30 +288,12 @@ void MainWindow::wireDiscovery()
     // the audio engine and main window are fully up first.
     QTimer::singleShot(0, this, [this] { startKissTncOnStartupIfConfigured(); });
 
-    // Auto-connect: when a radio is discovered, check if it matches the last one
+    // Auto-connect: when a radio is discovered, check if it matches the last one.
+    // Wired to the Flex discovery here; the HL2 sweep is wired to the SAME slot
+    // where Hl2Discovery is set up above, so both families honour the
+    // "Auto-reconnect to last radio" setting.
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
-            this, [this](const RadioInfo& info) {
-        if (m_userDisconnected) return;
-        if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
-            return;
-        const QString lastSerial = AppSettings::instance()
-            .value("LastConnectedRadioSerial").toString();
-        if (!lastSerial.isEmpty() && info.serial == lastSerial
-            && !m_radioModel.isConnected()) {
-            QList<quint32> disconnectHandles;
-            if (!confirmClientSlotAvailability(info, &disconnectHandles)) {
-                m_userDisconnected = true;
-                m_connPanel->setStatusText("Connection canceled");
-                setPanadapterConnectionAnimation(false);
-                return;
-            }
-            m_radioModel.setPendingClientDisconnects(disconnectHandles);
-            qDebug() << "Auto-connecting to" << info.displayName();
-            m_connPanel->setStatusText("Auto-connecting…");
-            setPanadapterConnectionAnimation(true, "Connecting to radio…");
-            m_radioModel.connectToRadio(info);
-        }
-    });
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{
         m_userDisconnected = true;
@@ -424,6 +418,44 @@ void MainWindow::wireDiscovery()
             setPanadapterConnectionAnimation(false);
     });
 
+}
+
+void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
+{
+    if (m_userDisconnected) return;
+    if (m_radioModel.isConnected()) return;
+    if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
+        return;
+    const QString lastSerial = AppSettings::instance()
+        .value("LastConnectedRadioSerial").toString();
+    if (lastSerial.isEmpty() || info.serial != lastSerial)
+        return;
+
+    // Fail closed on a busy non-Flex radio, matching the manual connect gate in
+    // ConnectionPanel (#4448): HPSDR Protocol 1 is single-client, so connecting to
+    // an HL2 that is already streaming wedges both clients. Say so instead of
+    // silently doing nothing — this is the startup path, and the operator is
+    // staring at "Looking for your radio…".
+    if (info.inUse && info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) != 0) {
+        m_connPanel->setStatusText(
+            QStringLiteral("%1 is already in use by another client and can't be shared.")
+                .arg(info.model));
+        setPanadapterConnectionAnimation(false);
+        return;
+    }
+
+    QList<quint32> disconnectHandles;
+    if (!confirmClientSlotAvailability(info, &disconnectHandles)) {
+        m_userDisconnected = true;
+        m_connPanel->setStatusText("Connection canceled");
+        setPanadapterConnectionAnimation(false);
+        return;
+    }
+    m_radioModel.setPendingClientDisconnects(disconnectHandles);
+    qDebug() << "Auto-connecting to" << info.displayName();
+    m_connPanel->setStatusText("Auto-connecting…");
+    setPanadapterConnectionAnimation(true, "Connecting to radio…");
+    m_radioModel.connectToRadio(info);
 }
 
 void MainWindow::wireRadioModel()

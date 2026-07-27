@@ -703,6 +703,13 @@ private:
     void showMultiFlexDialog();
     void handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName);
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
+    // Startup/reconnect autoconnect: called for every discovered radio, from EVERY
+    // discovery source (Flex RadioDiscovery *and* hl2::Hl2Discovery). Connects when
+    // the radio is the saved LastConnectedRadioSerial and the operator has left
+    // "AutoConnectToLastRadio" on. Family-agnostic on purpose — wiring it to one
+    // discovery object only is what left HL2 owners hand-picking their radio at
+    // every launch.
+    void maybeAutoConnectToDiscoveredRadio(const RadioInfo& info);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
