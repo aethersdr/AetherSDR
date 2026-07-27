@@ -621,6 +621,8 @@ set(CORE_SOURCES
     src/core/PgxlConnection.cpp
     src/core/AcomProtocol.cpp
     src/core/AcomConnection.cpp
+    src/core/SpeProtocol.cpp
+    src/core/SpeConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
     src/core/WaveformUploadState.cpp
@@ -824,6 +826,7 @@ set(GUI_SOURCES
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/AcomApplet.cpp
+    src/gui/SpeApplet.cpp
     src/gui/MeterApplet.cpp
     src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
@@ -3338,6 +3341,14 @@ add_executable(acom_protocol_test
 target_include_directories(acom_protocol_test PRIVATE src)
 target_link_libraries(acom_protocol_test PRIVATE Qt6::Core)
 add_test(NAME acom_protocol_test COMMAND acom_protocol_test)
+
+add_executable(spe_protocol_test
+    tests/spe_protocol_test.cpp
+    src/core/SpeProtocol.cpp
+)
+target_include_directories(spe_protocol_test PRIVATE src)
+target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
+add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
 
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp

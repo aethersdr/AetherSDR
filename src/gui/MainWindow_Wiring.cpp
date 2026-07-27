@@ -33,6 +33,7 @@
 #include "RxApplet.h"
 #include "AmpApplet.h"
 #include "AcomApplet.h"
+#include "SpeApplet.h"
 #include "HealthApplet.h"
 #include "MeterApplet.h"
 #include "ProfileSwitcherApplet.h"
@@ -5224,6 +5225,7 @@ void MainWindow::wireMeters()
         m_pgxlConn.setAutoReconnect(ar);
         m_antennaGenius.setAutoReconnect(ar);
         m_acomConn.setAutoReconnect(ar);
+        m_speConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
@@ -5472,6 +5474,117 @@ void MainWindow::wireMeters()
             const QString port = PeripheralSettings::deviceString("Acom", "SerialPort");
             if (!port.isEmpty())
                 m_acomConn.connectSerial(port);
+        }
+#endif
+    }
+
+    // ── SPE Expert amplifier — serial or ser2net, no FlexRadio relay ────────
+    // See docs/architecture/spe-expert-amplifier-design.md. Same structure as
+    // the ACOM block above, and the same ordering rule: all signal wiring
+    // happens before the startup auto-connect trigger at the bottom, because
+    // connectSerial() can call onTransportUp() synchronously.
+    connect(&m_speConn, &SpeConnection::connected, this, [this]() {
+        auto* spe = m_appletPanel->speApplet();
+        // Source label from the live transport, not the persisted
+        // ConnectionMode setting — same divergence rationale as ACOM.
+        spe->setSource(m_speConn.sourceLabel());
+        spe->setConnected(true);
+        m_appletPanel->setSpeVisible(true);
+    });
+    connect(&m_speConn, &SpeConnection::disconnected, this, [this]() {
+        m_appletPanel->speApplet()->setConnected(false);
+        m_appletPanel->setSpeVisible(false);
+    });
+    // Poll-silence tracking: with ser2net the TCP link outlives the amp being
+    // switched off, so respondingChanged — not disconnected — is what greys
+    // the panel out in that topology.
+    connect(&m_speConn, &SpeConnection::respondingChanged, this, [this](bool responding) {
+        m_appletPanel->speApplet()->setResponding(responding);
+    });
+
+    // Gauge range + model-dependent layout follow the Status ID field — the
+    // SPE identifies itself in every status reply, so this fires once on the
+    // first poll reply (no auto-ranging heuristics; contrast the ACOM block).
+    connect(&m_speConn, &SpeConnection::modelChanged, this, [this](const QString& modelId) {
+        const auto& spec = AetherSDR::Spe::modelSpec(modelId);
+        auto* spe = m_appletPanel->speApplet();
+        spe->setPowerRange(spec.nominalPowerW, spec.warnPowerW, spec.maxPowerW);
+        spe->setModelName(spec.displayName);
+    });
+
+    connect(&m_speConn, &SpeConnection::statusUpdated, this,
+            [this](const AetherSDR::Spe::Status& s) {
+        auto* spe = m_appletPanel->speApplet();
+        const auto& spec = AetherSDR::Spe::modelSpec(s.id);
+
+        spe->setForwardPower(s.outputPowerW);
+        spe->setSwrAnt(s.swrAnt);
+        spe->setSwrAtu(s.swrAtu);
+        spe->setSupplyVoltage(s.paVoltageV);
+        spe->setSupplyCurrent(s.paCurrentA);
+        spe->setTemps(s.tempUpper, s.tempLower, s.tempCombiner, spec.hasCombiner);
+        spe->setBand(AetherSDR::Spe::bandName(s.bandIndex));
+        spe->setAntenna(s.txAntenna, s.atuState);
+        spe->setInputPort(s.input);
+        spe->setPowerLevel(AetherSDR::Spe::powerLevelName(s.powerLevel));
+        spe->setMode(s.operate, s.transmitting);
+
+        // One banner for both severity tiers, alarms first.
+        const QString alarm = AetherSDR::Spe::alarmText(s.alarm);
+        const QString warning = AetherSDR::Spe::warningText(s.warning);
+        QString fault;
+        if (!alarm.isEmpty())
+            fault = QStringLiteral("ALARM: %1").arg(alarm);
+        if (!warning.isEmpty())
+            fault += (fault.isEmpty() ? QString() : QStringLiteral("  ·  "))
+                + QStringLiteral("Warning: %1").arg(warning);
+        spe->setFaultText(fault);
+    });
+
+    // Applet buttons -> front-panel keystrokes.
+    {
+        auto* spe = m_appletPanel->speApplet();
+        connect(spe, &SpeApplet::operateClicked, this, [this]() { m_speConn.toggleOperate(); });
+        connect(spe, &SpeApplet::powerLevelClicked, this, [this]() { m_speConn.cyclePowerLevel(); });
+        connect(spe, &SpeApplet::tuneClicked, this, [this]() { m_speConn.tune(); });
+        connect(spe, &SpeApplet::offClicked, this, [this]() { m_speConn.switchOff(); });
+        connect(spe, &SpeApplet::inputClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::Input);
+        });
+        connect(spe, &SpeApplet::antennaClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::Antenna);
+        });
+        connect(spe, &SpeApplet::bandDownClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandDown);
+        });
+        connect(spe, &SpeApplet::bandUpClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandUp);
+        });
+    }
+
+    // Startup auto-connect from saved Peripherals settings — deliberately
+    // last in this block (see the ordering comment above). Like the ACOM,
+    // the SPE has no radio-side presence signal; the saved setting is the
+    // only trigger there will ever be.
+    {
+        const QString mode = PeripheralSettings::deviceString("SpeExpert", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        if (mode == "Network") {
+            const QString ip = PeripheralSettings::deviceString("SpeExpert", "ManualIp");
+            const int port = PeripheralSettings::deviceInt("SpeExpert", "ManualPort", 7000);
+            if (!ip.isEmpty())
+                m_speConn.connectNetwork(ip, static_cast<quint16>(port));
+        }
+#ifdef HAVE_SERIALPORT
+        else {
+            const QString port = PeripheralSettings::deviceString("SpeExpert", "SerialPort");
+            if (!port.isEmpty())
+                m_speConn.connectSerial(port);
         }
 #endif
     }

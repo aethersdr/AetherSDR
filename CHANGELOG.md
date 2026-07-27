@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **SPE Expert amplifier support (1.3K-FA / 1.5K-FA / 2K-FA)** — a new
+  peripheral accessory following the ACOM precedent: dedicated `SPE` applet
+  (power / antenna-SWR / ATU-SWR gauges, V/I/temperature readouts,
+  warning+alarm banner, front-panel keystroke buttons: OPERATE/STANDBY,
+  power level, TUNE, OFF, INPUT, ANT, BAND±) driven by a serial or
+  ser2net-raw-TCP connection with a 300 ms status poll. Model is identified
+  from the amplifier's own status ID; gauge scales follow it automatically.
+  Configured from Radio Setup → Peripherals. See
+  `docs/architecture/spe-expert-amplifier-design.md`.
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

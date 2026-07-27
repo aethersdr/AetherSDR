@@ -33,6 +33,11 @@ context that would otherwise live in tribal knowledge.
   accessory alongside the existing PGXL/TGXL integrations. Implemented as a
   dedicated `AcomConnection`/`AcomApplet` pair, deliberately independent of
   `AmpModel`/`AmpApplet` — see the doc's design-reversal section for why.
+- [`spe-expert-amplifier-design.md`](spe-expert-amplifier-design.md) — design
+  note for SPE Expert amplifier support (1.3K-FA/1.5K-FA/2K-FA, serial or
+  ser2net), the second peripheral amplifier following the ACOM precedent:
+  a dedicated `SpeConnection`/`SpeApplet` pair with a polled ASCII/CSV
+  status protocol.
 
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.

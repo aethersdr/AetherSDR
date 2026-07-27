@@ -1,0 +1,143 @@
+#pragma once
+
+#include <QByteArray>
+#include <QObject>
+#include <QString>
+#include <QTcpSocket>
+#include <QTimer>
+
+#ifdef HAVE_SERIALPORT
+#include <QSerialPort>
+#endif
+
+#include "SpeProtocol.h"
+
+namespace AetherSDR {
+
+// Peripheral transport for an SPE Expert linear amplifier (1.3K-FA/1.5K-FA/
+// 2K-FA) — a standalone USB/RS-232 device with no FlexRadio awareness at
+// all, so this is a peripheral(spe) accessory alongside AcomConnection/
+// PgxlConnection/TgxlConnection, not an IRadioBackend implementor. See
+// docs/architecture/spe-expert-amplifier-design.md for the full design note.
+//
+// The wire protocol is transport-agnostic — the exact same bytes flow
+// whether the peer is a local COM port or a raw-mode ser2net TCP proxy —
+// so a single Spe::FrameParser instance decodes either transport. Only one
+// transport is active at a time, selected by which connect method is called.
+//
+// Unlike the ACOM (which pushes telemetry continuously), the SPE only ever
+// speaks when spoken to: the host polls the Status string with command 0x90.
+// This class owns that poll loop (kPollIntervalMs) and emits statusUpdated
+// for every valid reply.
+class SpeConnection : public QObject {
+    Q_OBJECT
+
+public:
+    explicit SpeConnection(QObject* parent = nullptr);
+
+    bool isConnected() const { return m_connected; }
+    QString description() const;  // "COM4" or "192.168.1.52:64002", for status display
+    // "SERIAL" / "NETWORK" for the applet's compact source label — derived
+    // from the LIVE transport, never the persisted ConnectionMode setting
+    // (same divergence rationale as AcomConnection::sourceLabel()).
+    QString sourceLabel() const;
+
+#ifdef HAVE_SERIALPORT
+    // 115200 8N1, no handshake — the amplifier auto-adapts to lower speeds
+    // (spec §1), so the maximum documented rate is used and not made
+    // user-configurable.
+    void connectSerial(const QString& portName);
+#endif
+    // Network mode assumes a RAW TCP proxy (e.g. ser2net `connection type:
+    // raw`). A telnet-mode proxy would IAC-escape byte 0xFF; nothing in this
+    // ASCII-heavy protocol emits 0xFF routinely, but the 0xAA sync run and
+    // binary checksums still make raw mode the only supported configuration.
+    void connectNetwork(const QString& host, quint16 port);
+    void disconnect();
+
+    void setAutoReconnect(bool on) { m_autoReconnect = on; }
+
+    // Commands (host -> amp). Each is a front-panel keystroke; the amplifier
+    // echoes an ACK or replies with a Status string. No-ops when not
+    // connected.
+    void sendKey(Spe::Key key);
+    void toggleOperate() { sendKey(Spe::Key::Operate); }
+    void cyclePowerLevel() { sendKey(Spe::Key::Power); }
+    void tune() { sendKey(Spe::Key::Tune); }
+    void switchOff() { sendKey(Spe::Key::SwitchOff); }
+
+    const Spe::Status& lastStatus() const { return m_lastStatus; }
+
+    // Model ID from the last Status reply ("13K"/"15K"/"20K"), empty until
+    // the first reply arrives. The SPE reports its identity in every Status
+    // string, so — unlike AcomConnection — there is no auto-ranging or
+    // detection heuristic here at all.
+    QString currentModelId() const { return m_currentModelId; }
+
+signals:
+    void connected();
+    void disconnected();
+    void connectionFailed(const QString& errorString);
+    void statusUpdated(const AetherSDR::Spe::Status& status);
+    // Fires on the first Status reply of a connection and again if the
+    // reported ID ever changes (in practice: never mid-session). The GUI
+    // applies gauge ranges and model-dependent layout from this.
+    void modelChanged(const QString& modelId);
+    // The transport is up but the amplifier has stopped answering polls
+    // (or resumed). With ser2net the TCP link outlives the amplifier being
+    // switched off, so this — not disconnected() — is the "amp went away"
+    // signal for that topology.
+    void respondingChanged(bool responding);
+
+private slots:
+    void onReadyRead();
+
+private:
+    enum class Mode { None, Serial, Network };
+
+    void onTransportUp();
+    void onTransportDown();
+    void onTransportError(const QString& errorString);
+    void onFrameReceived(const Spe::Frame& frame);
+    void teardownDevice();
+    void sendRaw(const QByteArray& packet);
+    void armReconnect();
+    void pollTick();
+
+    QIODevice*    m_device{nullptr};
+    QTcpSocket    m_socket;
+#ifdef HAVE_SERIALPORT
+    QSerialPort*  m_serialPort{nullptr};
+#endif
+
+    Spe::FrameParser m_parser;
+    Spe::Status      m_lastStatus;
+
+    Mode      m_mode{Mode::None};
+    QString   m_lastSerialPort;
+    QString   m_lastHost;
+    quint16   m_lastPort{0};
+
+    bool m_connected{false};
+    bool m_autoReconnect{false};
+    bool m_deliberateDisconnect{false};
+
+    QTimer m_reconnectTimer;
+    // Status poll loop — the spec allows "several times every second"; the
+    // interval mirrors the field-proven control application this module was
+    // validated against.
+    QTimer m_pollTimer;
+    static constexpr int kPollIntervalMs = 300;
+
+    QString m_currentModelId;
+
+    // Responding/silent tracking: a poll counts as unanswered if no Status
+    // frame arrived since the previous tick. A few misses are tolerated
+    // (serial latency, a busy amp) before flagging silence.
+    bool m_statusSeenSinceTick{false};
+    int  m_silentPolls{0};
+    bool m_responding{false};
+    static constexpr int kSilentPollLimit = 10;  // ~3 s at the poll cadence
+};
+
+}  // namespace AetherSDR

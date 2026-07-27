@@ -1,0 +1,215 @@
+# SPE Expert Amplifier Support — Design Note
+
+**Status:** Draft for maintainer review. A **peripheral accessory** in the
+same sense as the ACOM S-series integration
+(`docs/architecture/acom-600s-amplifier-design.md`) and the 4O3A
+PGXL/TGXL/Antenna Genius family — `peripheral(spe)` in
+`docs/architecture/aetherd-touchpoint-tags.json`. The SPE has no FlexRadio
+awareness at all, so this is explicitly NOT a new `IRadioBackend` family.
+
+**Scope:** A dedicated `SpeApplet` driven by `SpeConnection`, a peripheral
+transport (serial or ser2net-style raw TCP, same bytes either way), plus a
+Peripherals settings row. Status/telemetry decode with model identification,
+Operate/Standby toggle, power-level cycle, TUNE, switch-off, and the
+band/antenna/input keys. No menu navigation (arrows/SET/DISPLAY), no manual
+L/C ATU stepping, no CAT-configuration mirror, no remote power-ON — see §4.
+
+---
+
+## 1. Why this is a peripheral, not a backend
+
+Same reasoning as the ACOM design note §1: the SPE Expert is a standalone
+USB/RS-232 device the radio has never heard of. `SpeConnection` lives
+directly under `src/core/`, outside the radio seam, and never touches
+`IRadioBackend`/`invokeExtension`. Per the ACOM note's recorded design
+reversal ("a peripheral with no relationship to an existing device's
+model/view should get its own model and view from the start"), the SPE gets
+a dedicated `SpeConnection`/`SpeApplet` pair from day one — `AmpModel`,
+`AmpApplet`, `AcomConnection`, and `AcomApplet` are all untouched.
+
+**Protocol authority (Principle I):** the manufacturer's own published
+*"Application Programmer's Guide — Expert 1.3K-FA / 1.5K-FA / 2K-FA"*,
+Rev 1.1 (2015-10-15), SPE s.r.l. — the primary source for packet framing,
+the keystroke command set, and the Status string's field/warning/alarm
+tables. The real-hardware cross-check is the contributing author's own
+working control application for a 1.5K-FA over ser2net (see
+`THIRD_PARTY_LICENSES` for the provenance record), which contributed three
+facts the spec omits: commands need a trailing CR LF in practice, ~300 ms is
+a comfortable poll cadence, and the 1450/1500/1600 W display thresholds for
+the 1.5K-FA.
+
+---
+
+## 2. What gets added
+
+```
+SpeProtocol (src/core/SpeProtocol.h/.cpp)
+  pure protocol layer, zero Qt-networking dependency, unit-tested:
+    framing:  host->amp   0x55 0x55 0x55 | CNT | DATA | CHK  (+ CR LF)
+              amp->host   0xAA 0xAA 0xAA | CNT | DATA | CHK...
+              (ACK carries a 1-byte checksum; the 67-char Status string a
+               16-bit one + CR LF — the parser dispatches on CNT)
+    decodes:  Status string (19 CSV fields: ID, standby/operate, RX/TX,
+              bank, input, band, TX ant + ATU state, RX ant, power level,
+              output W, SWR ATU, SWR ANT, V PA, I PA, 3 temps,
+              warning, alarm)
+    builds:   front-panel keystroke commands (0x01..0x11), backlight,
+              status request (0x90)
+    tables:   band names, warning/alarm texts, per-model display scaling
+
+SpeConnection (src/core/SpeConnection.h/.cpp)
+  holds a QIODevice* — QSerialPort (115200 8N1; the amp auto-adapts, spec
+  §1) or QTcpSocket (ser2net raw mode) — chosen at connect time.
+  Owns the 300 ms status poll loop (the SPE never pushes; it only answers),
+  poll-silence detection (respondingChanged — with ser2net the TCP link
+  outlives the amp being switched off), auto-reconnect, and model
+  identification from the Status ID field.
+  signals: connected/disconnected/connectionFailed, statusUpdated,
+           modelChanged(id), respondingChanged(bool)
+
+SpeApplet (src/gui/SpeApplet.h/.cpp)
+  three permanent HGauge rows — Power / SWR(antenna) / SWR(ATU input) —
+  since the Status string reports all three as independently real fields
+  (same reasoning as AcomApplet's three-gauge layout). V/I/temperature are
+  text readouts (no protocol-defined scale to size an axis against). Temps
+  are shown with a bare ° sign: the amp reports degrees in whichever unit
+  its own display is configured for, without saying which (spec §5).
+  3-cell info grid (temp/V/I, band/antenna/input·level), status pill
+  (OPR·TX / OPR·RX / STANDBY), fault banner (alarms + warnings), and two
+  keystroke button rows: OPERATE-STANDBY toggle / PWR LVL / TUNE / OFF and
+  INPUT / ANT / BAND− / BAND+.
+
+AppletPanel (extended)
+  registers SpeApplet as its own dockable panel (speApplet(),
+  setSpeVisible()) — independent of setAmpVisible/setAcomVisible; a station
+  can run a PGXL, an ACOM, and an SPE at once.
+
+RadioSetupDialog::buildPeripheralsTab()  (extended)
+  SPE row: Serial ⇄ Network mode toggle, structurally identical to the ACOM
+  row (settings nested under PeripheralSettings device "SpeExpert").
+```
+
+---
+
+## 3. Protocol summary
+
+Everything is a front-panel keystroke or a poll — there is no richer command
+envelope and no unsolicited telemetry. Serial setup: 8N1, no parity, no
+handshake, up to 115200 (the amp auto-adapts to lower rates).
+
+| Direction | Shape | Contents |
+|---|---|---|
+| host → amp | `55 55 55 CNT DATA CHK` + CR LF | Keystroke codes 0x01–0x11 (INPUT, BAND±, ANTENNA, L±/C±, TUNE, SWITCH OFF, POWER, DISPLAY, OPERATE, CAT, arrows, SET), backlight 0x82/0x83, status request 0x90. CHK = mod-256 sum of DATA (= the byte itself for these 1-byte commands). |
+| amp → host | `AA AA AA 01 cmd CHK` | ACK: echoes the received keystroke. 1-byte checksum. |
+| amp → host | `AA AA AA 43 <67 ASCII chars> CHKlo CHKhi CR LF` | Status string: 19 comma-separated fields behind a leading marker char. 16-bit mod-256/div-256 checksum. |
+
+The trailing CR LF on host commands is not in the spec's packet diagram but
+is required in practice — commands without it were intermittently ignored by
+real 1.5K-FA hardware over a ser2net link. Two bytes outside the framed
+packet are harmless to a sync-run-keyed parser, so they are always sent.
+
+Network mode assumes a **raw** TCP proxy (ser2net `connection type: raw`),
+same as the ACOM: a telnet-mode proxy IAC-escapes 0xFF and corrupts binary
+checksums.
+
+Status fields decoded (spec §5): amplifier ID (`13K`/`15K`/`20K`),
+STANDBY/OPERATE, RX/TX, memory bank (A/B, 1.3K/1.5K only), input port 1/2,
+band index 00 (160 m)–11 (4 m), TX antenna + ATU state
+(tunable/bypassed/enabled), RX-only antenna, power level L/M/H, output
+power (W), SWR before the ATU, SWR at the antenna, PA voltage, PA current,
+heatsink temperatures (upper/lower/combiner — lower and combiner are real
+only on the 2K-FA), one warning letter, one alarm letter (both tables
+transcribed in `SpeProtocol.cpp`).
+
+---
+
+## 4. Command scope for v1
+
+| Tier | Included in v1? | Rationale |
+|---|---|---|
+| Status poll + decode (0x90) | Yes | Read-only, no risk. |
+| OPERATE toggle, POWER-level cycle, SWITCH OFF | Yes | The functional slice for normal operation; each is one keystroke with the amp's own protections behind it. |
+| TUNE | Yes | Explicit, user-initiated click — transmit-on-intent (Principle VI) is satisfied by it being a deliberate button, exactly like the amp's own front-panel key. The amp itself refuses to tune without drive ("Tuning with no power" warning). |
+| BAND±, ANTENNA, INPUT | Yes | One-keystroke conveniences the status display fully reflects on the next poll. |
+| Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
+| Arrows / SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
+| Remote power-ON | No | Not a protocol command at all — the Expert powers on via a hardware line on the serial connector (DTR/RTS side-effects), which a raw ser2net proxy cannot express portably. `SpeConnection` deliberately holds DTR/RTS low in serial mode for exactly this reason. Documented limitation; the OFF button's tooltip says so. |
+| Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
+
+---
+
+## 5. Model handling: the ID field makes it trivial
+
+Unlike the ACOM (whose `0x11` type code is documented for exactly one model,
+forcing that design into auto-ranging heuristics), the SPE reports its
+identity in **every** Status reply: field 1 is `13K`, `15K`, or `20K`. So
+`SpeConnection::modelChanged` fires on the first poll reply and the GUI
+applies the right scale immediately — no dropdown, no heuristics, no tier
+ratchet.
+
+Per-model display constants (`SpeProtocol.cpp::modelTable()`):
+
+| ID | Model | Nominal (W) | Yellow from (W) | Gauge max (W) | Banks | Combiner temps |
+|---|---|---|---|---|---|---|
+| 13K | 1.3K-FA | 1300 | 1250 | 1400 | A/B | no |
+| 15K | 1.5K-FA | 1500 | 1450 | 1600 | A/B | no |
+| 20K | 2K-FA | 2000 | 1950 | 2100 | — | yes |
+
+The 1.5K-FA row is **hardware-validated** (the thresholds are carried from a
+field-proven control application for that exact model). The 1.3K-FA and
+2K-FA rows apply the same shape (yellow at rated−50, ceiling at rated+100)
+to SPE's published rated output — derived, not measured; owners of those
+models are invited to correct them. An unknown ID (an older or future model)
+falls back to the 1.5K-FA entry and logs the raw ID at info level so it can
+be reported.
+
+SWR gauges are fixed 1.0–3.0 regardless of model — a ratio needs no
+per-model scaling (same convention as AcomApplet).
+
+---
+
+## 6. Poll-silence vs. disconnect
+
+The SPE only speaks when spoken to, and with ser2net the TCP transport
+happily stays up while the amplifier is switched off. So `SpeConnection`
+distinguishes:
+
+- **disconnected()** — the transport itself went away (socket drop, serial
+  unplug). Applet hides, auto-reconnect arms.
+- **respondingChanged(false)** — the transport is up but ~10 consecutive
+  polls (~3 s) went unanswered. The applet stays visible but greys its pill
+  to "—" and disables the command buttons (which would otherwise silently
+  do nothing). Polling continues; the first reply flips it back.
+
+---
+
+## 7. Touchpoint tagging
+
+`core/SpeConnection.h` is tagged `peripheral(spe)` in
+`docs/architecture/aetherd-touchpoint-tags.json`, matching the existing
+`peripheral(acom)`/`peripheral(4o3a)` precedent. `src/gui/SpeApplet.h` needs
+no entry — the manifest tracks `core/`/`models/` headers, not `gui/` files.
+
+---
+
+## 8. Testing
+
+- `tests/spe_protocol_test.cpp` (pure, `Qt6::Core` only): host framing
+  verified against the spec's literal OPERATE and Status-request byte
+  sequences; ACK and Status parsing round-trips including the spec's own
+  verbatim 67-character Status example; parser resync past noise, bad
+  checksums, implausible CNT, and split feeds; the full field decode for
+  both an RX/standby and a TX string; warning/alarm/band/model tables.
+- Hardware validation: developed and to be soak-tested against a real
+  1.5K-FA over ser2net raw TCP (the contributing author's station).
+  Serial-mode validation on real hardware is pending — the transport code
+  is shared with the network path and structurally identical to
+  AcomConnection's, but this is stated, not assumed.
+
+## 9. Open questions (for maintainer input)
+
+- 1.3K-FA / 2K-FA gauge thresholds are derived (§5) — need owners to
+  confirm.
+- Whether the ACK for a keystroke should drive optimistic UI updates.
+  v1 deliberately waits for the next status poll (≤300 ms) instead —
+  radio-authoritative live state (Principle II) applied to a peripheral.
