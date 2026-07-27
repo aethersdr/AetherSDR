@@ -682,12 +682,24 @@ void MainWindow::resyncPanGeometryToView(const QString& panId)
 {
     if (m_shuttingDown || !m_panStack)
         return;
+    // Not while the pan displays a KiwiSDR: there the WIDGET is the authority
+    // and the model is frozen at kiwi-assignment geometry by design
+    // (PanRecenterPolicy) — re-pushing it would snap the operator's
+    // widget-local zoom back to the assignment span, the #4424 bug through a
+    // new door. Same reasoning as retryDeferredKiwiLeaveReconcile: the leave-
+    // kiwi reconcile is what re-marries model and view afterwards.
+    if (kiwiSdrPanDisplaysKiwi(panId))
+        return;
     auto* pan = m_radioModel.panadapter(panId);
     auto* sw = m_panStack->spectrum(panId);
     if (!pan || !sw)
         return;
-    const double centerMhz = pan->centerMhz();
-    const double bandwidthMhz = pan->bandwidthMhz();
+    // Effective (pending-else-model) geometry: a deferred write in flight —
+    // e.g. the leave-kiwi reconcile parked behind a profile-load hold (#4142)
+    // — supersedes the model value; re-pushing the superseded span here would
+    // undo it. With nothing pending these read the model unchanged.
+    const double centerMhz = m_radioModel.effectivePanCenterMhz(panId);
+    const double bandwidthMhz = m_radioModel.effectivePanBandwidthMhz(panId);
     if (centerMhz <= 0.0 || bandwidthMhz <= 0.0)
         return;
     if (qFuzzyCompare(sw->centerMhz(), centerMhz)
