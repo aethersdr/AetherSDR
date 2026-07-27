@@ -224,7 +224,10 @@ QString warningText(QChar code)
         case u'R': return QStringLiteral("Power switch held by remote");
         case u'T': return QStringLiteral("Combiner overheating");
         case u'C': return QStringLiteral("Combiner fault");
-        default:   return QStringLiteral("Warning: %1").arg(code);
+        // Unknown code: echo the raw letter — the caller already prefixes
+        // severity ("Warning: ..."), so returning a labeled string here
+        // would double it.
+        default:   return QString(code);
     }
 }
 
@@ -237,7 +240,7 @@ QString alarmText(QChar code)
         case u'D': return QStringLiteral("Input overdriving");
         case u'H': return QStringLiteral("Excess overheating");
         case u'C': return QStringLiteral("Combiner fault");
-        default:   return QStringLiteral("Alarm: %1").arg(code);
+        default:   return QString(code);  // same no-double-prefix rule as warningText
     }
 }
 
