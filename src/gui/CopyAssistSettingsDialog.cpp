@@ -38,7 +38,7 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     m_gpu->setObjectName(QStringLiteral("CopyAssistGpuCombo"));
     m_gpu->setAccessibleName(tr("Copy Assist compute device"));
     m_gpu->setToolTip(tr("Which device runs the model (a GPU, or CPU)"));
-    m_gpu->addItem(tr("Detecting…"));
+    m_gpu->addItem(tr("Detecting…"), kGpuDiscoveryPending);
     connect(m_gpu, &QComboBox::currentIndexChanged, this,
             [this](int) { emit gpuChanged(currentGpu()); });
     m_gpuLabel = new QLabel(tr("Compute:"), this);
@@ -212,7 +212,9 @@ void CopyAssistSettingsDialog::setCurrentGpu(int index)
 
 int CopyAssistSettingsDialog::currentGpu() const
 {
-    return m_gpu->currentData().toInt();
+    bool ok = false;
+    const int index = m_gpu->currentData().toInt(&ok);
+    return ok ? index : kGpuDiscoveryPending;
 }
 
 void CopyAssistSettingsDialog::setGpuSelectorVisible(bool on)

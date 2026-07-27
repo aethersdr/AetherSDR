@@ -137,6 +137,8 @@ int main(int argc, char** argv)
                    && !gpuCombo->isEnabled()
                    && gpuCombo->currentText() == QStringLiteral("Detecting…"),
                "GPU combo shows a disabled discovery placeholder");
+        expect(dlg.currentGpu() == CopyAssistSettingsDialog::kGpuDiscoveryPending,
+               "discovery placeholder has a distinct non-device sentinel");
 
         dlg.clearGpuDevices();
         dlg.addGpuDevice(0, QStringLiteral("GPU0"));
@@ -150,6 +152,11 @@ int main(int argc, char** argv)
         expect(dlg.currentGpu() == -1, "setCurrentGpu selects the CPU sentinel");
         expect(!gpuSpy.isEmpty() && gpuSpy.last().at(0).toInt() == -1,
                "gpuChanged carries the device index");
+
+        dlg.clearGpuDevices();
+        dlg.setGpuSelectorVisible(false);
+        expect(gpuCombo->count() == 0 && !gpuCombo->isVisibleTo(&dlg),
+               "CPU-only resolution clears and hides the discovery placeholder");
     }
 
     // ---- Language selector: round-trip, signal, paired visibility ---------

@@ -24,6 +24,8 @@ namespace AetherSDR {
 class CopyAssistSettingsDialog : public PersistentDialog {
     Q_OBJECT
 public:
+    static constexpr int kGpuDiscoveryPending = -2;
+
     explicit CopyAssistSettingsDialog(QWidget* parent = nullptr);
 
     // Model tier selector (id + human label).

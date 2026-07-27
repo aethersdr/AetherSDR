@@ -10,6 +10,7 @@
 #include "asr/RemoteAsrBackend.h"
 #include "asr/SherpaOnnxBackend.h"
 #include "asr/WhisperAsrBackend.h"
+#include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "gui/AsrAudioTap.h"
 
@@ -30,15 +31,18 @@
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <exception>
 
 namespace {
 
 constexpr const char* kRemoteTierId = "remote";
 constexpr const char* kCustomTierId = "custom";
 constexpr const char* kSherpaTierId = "sherpa";
+constexpr int kGpuDiscoveryTimeoutMs = 30000;
 
 // Map a 1–100 "sensitivity" (higher = more sensitive) to the VAD's RMS energy
 // threshold (lower = more sensitive), spanning a practical HF-voice range.
@@ -221,6 +225,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_settings, &CopyAssistSettingsDialog::tierChanged, this, &CopyAssistController::onTierChanged);
     connect(m_settings, &CopyAssistSettingsDialog::gpuChanged, this, [this](int index) {
+        if (index == CopyAssistSettingsDialog::kGpuDiscoveryPending) {
+            return;
+        }
         m_gpuDevice = index;
         saveInt("AsrGpuDevice", index);
         if (m_backend != AsrBackendKind::Remote) {
@@ -429,43 +436,86 @@ void CopyAssistController::startGpuDiscovery()
     auto* watcher = new QFutureWatcher<std::vector<AsrGpuDevice>>(this);
     connect(watcher, &QFutureWatcher<std::vector<AsrGpuDevice>>::finished,
             this, [this, watcher] {
-                applyGpuDevices(watcher->result());
+                std::vector<AsrGpuDevice> devices;
+                try {
+                    devices = watcher->result();
+                } catch (const std::exception& error) {
+                    qCWarning(lcGui) << "ASR compute-device discovery failed:"
+                                     << error.what();
+                } catch (...) {
+                    qCWarning(lcGui) << "ASR compute-device discovery failed";
+                }
+                if (m_gpuDiscoveryPending) {
+                    applyGpuDevices(devices);
+                }
                 watcher->deleteLater();
             });
     watcher->setFuture(QtConcurrent::run([] { return asrGpuDevices(); }));
+
+    QTimer::singleShot(kGpuDiscoveryTimeoutMs, this, [this] {
+        if (!m_gpuDiscoveryPending) {
+            return;
+        }
+        qCWarning(lcGui) << "ASR compute-device discovery timed out after"
+                         << kGpuDiscoveryTimeoutMs << "ms; using CPU for this session";
+        applyGpuDevices({});
+    });
 }
 
 void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus)
 {
-    if (!gpus.empty()) {
-        // Adding the first combo item changes its current index. Suppress the
-        // dialog's outward gpuChanged/tierChanged signals while this initial,
-        // discovered state is populated so we do not rebuild the idle engine.
+    const int previousDevice = m_gpuDevice;
+    int resolvedDevice = previousDevice;
+    bool persistResolvedDevice = false;
+
+    // Adding or clearing combo items changes its current index. Suppress the
+    // dialog's outward gpuChanged/tierChanged signals while discovery state is
+    // applied so the controller, rather than incidental combo transitions,
+    // decides whether the engine needs rebuilding.
+    {
         const QSignalBlocker blocker(m_settings);
         m_settings->clearGpuDevices();
-        for (const AsrGpuDevice& gpu : gpus) {
-            m_settings->addGpuDevice(gpu.index, gpu.name);
-        }
-        m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
 
-        int saved = m_gpuDevice;
-        if (saved != -1 && (saved < 0 || saved >= static_cast<int>(gpus.size()))) {
-            saved = 0;
-        }
-        m_gpuDevice = saved;
-        m_settings->setCurrentGpu(saved);
-        m_settings->setGpuSelectorVisible(true);
-        m_settings->setGpuSelectorEnabled(true);
+        if (!gpus.empty()) {
+            for (const AsrGpuDevice& gpu : gpus) {
+                m_settings->addGpuDevice(gpu.index, gpu.name);
+            }
+            m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
 
-        // Preserve the existing GPU-host default, but only while the operator
-        // has not made an explicit model choice during the background probe.
-        if (m_useGpuDefaultIfAvailable) {
-            m_tierId = QStringLiteral("large-v3-turbo");
-            m_settings->setCurrentTier(m_tierId);
+            if (resolvedDevice != -1
+                && (resolvedDevice < 0
+                    || resolvedDevice >= static_cast<int>(gpus.size()))) {
+                resolvedDevice = 0;
+                persistResolvedDevice = true;
+            }
+            m_settings->setCurrentGpu(resolvedDevice);
+            m_settings->setGpuSelectorVisible(true);
+            m_settings->setGpuSelectorEnabled(true);
+
+            // Preserve the existing GPU-host default, but only while the
+            // operator has not made an explicit model choice during the probe.
+            if (m_useGpuDefaultIfAvailable) {
+                m_tierId = QStringLiteral("large-v3-turbo");
+                m_settings->setCurrentTier(m_tierId);
+            }
+        } else {
+            // A failed, timed-out, or CPU-only probe must not trigger the same
+            // registry initialization again from Whisper's worker. Force CPU
+            // for this session, but keep the saved GPU preference so a later
+            // launch can retry discovery.
+            resolvedDevice = -1;
+            m_settings->setGpuSelectorEnabled(false);
+            m_settings->setGpuSelectorVisible(false);
         }
-    } else {
-        // Preserve the existing CPU-only presentation once discovery resolves.
-        m_settings->setGpuSelectorVisible(false);
+    }
+
+    m_gpuDevice = resolvedDevice;
+    if (persistResolvedDevice) {
+        saveInt("AsrGpuDevice", resolvedDevice);
+    }
+    if (resolvedDevice != previousDevice && m_backend == AsrBackendKind::Whisper) {
+        m_tap->setEnabled(false);
+        buildEngine();
     }
 
     m_gpuDiscoveryPending = false;
