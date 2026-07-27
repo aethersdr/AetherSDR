@@ -1153,6 +1153,16 @@ EF FE 02 + 60 zero bytes  ->  udp/1024
    no reply at all         WEDGED — power cycle required
 ```
 
+That same exchange, sent **unicast to one host** instead of to the broadcast
+address, is what the connect dialog's **Connect by IP** page does when its
+*Radio type* is set to `Hermes-Lite 2` (`ConnectionPanel::probeHermesLite2`,
+sharing `discoveryRequest()` / `parseDiscoveryReply()` with the broadcast
+sweep). It is the only way to reach a board across a VPN or a routed subnet,
+where the broadcast never leaves the local segment. Note the failure modes are
+NOT distinguishable from the UI: an unreachable address, a wedged board, and a
+board that is not an HL2 all look like "no reply". Fall back to the raw probe
+above before concluding anything.
+
 **Always disconnect through the normal path before terminating**, including in
 automation. Verified both ways here: a bridge `disconnect` then exit leaves the
 board reporting `0x02` idle, while a bare `SIGTERM` leaves it silent.

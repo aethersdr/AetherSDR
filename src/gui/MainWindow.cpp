@@ -4083,8 +4083,11 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    m_connPanel->setMinimumSize(640, 580);
-    m_connPanel->resize(760, 660);
+    // Height floor comes from the panel itself — its "Connect by IP" page grew a
+    // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
+    // page (the Advanced disclosure fell outside the mode stack).
+    m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
+    m_connPanel->resize(760, m_connPanel->minimumHeight() + 20);
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default

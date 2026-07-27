@@ -32,10 +32,19 @@ public:
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
 
+    // Radio families the "Connect by IP" page can dial. The manual page can no
+    // longer guess: a FlexRadio answers TCP/4992 and a Hermes-Lite 2 answers
+    // UDP/1024 (HPSDR Protocol 1), so the operator picks the wire protocol and
+    // we probe exactly that one. Values match RadioInfo::family.
+    static constexpr const char* kFamilyFlex = "flex";
+    static constexpr const char* kFamilyHl2  = "hl2";
+
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;
     bool automationConnectLocalSerial(const QString& serial, QString* error = nullptr) override;
-    bool automationConnectByIp(const QString& hostOrIp, QString* error = nullptr) override;
+    bool automationConnectByIp(const QString& hostOrIp,
+                               const QString& family = QString(),
+                               QString* error = nullptr) override;
     bool automationDisconnect(QString* error = nullptr) override;
     bool automationDialogVisible() const override { return isVisible(); }
     void automationSetDialogVisible(bool visible) override
@@ -114,6 +123,17 @@ private:
     RadioBindSettings currentManualBindSettings(bool* staleSelection = nullptr) const;
     void loadRecentManualIps();
     void rememberManualIp(const QString& ip);
+    // Radio-type selector on the manual page (persisted globally, and per-IP in
+    // the routed profile so picking a recent address restores its family).
+    QString currentManualFamily() const;
+    void setManualFamily(const QString& family);
+    void updateManualFamilyHints();
+    // Directed (unicast) Metis discovery against one host. Returns true when an
+    // HL2 answered and the connect/refusal has been reported; false means no
+    // Hermes-Lite 2 replied and the caller owns the error message.
+    bool probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
+    void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
+    void resetManualConnectButton();
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp);
@@ -157,6 +177,8 @@ private:
     QList<WanRadioInfo> m_wanRadios;
 
     // Manual (VPN / routed) connection
+    QComboBox*   m_manualRadioTypeCombo{nullptr};
+    QLabel*      m_manualHintLabel{nullptr};
     QComboBox*   m_manualIpCombo{nullptr};
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
