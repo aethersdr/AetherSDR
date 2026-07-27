@@ -687,9 +687,9 @@ void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
 
     // A deferred request can supersede an older one for the same pan. Re-arm
     // any still-prepared slice before beginning the new atomic command pair.
-    // The #4158/Center Lock rebind marker (noteBandRecallForPan) is owned by the
-    // band-recall trigger sites, not here — this path only performs the #4209
-    // audio-mute handoff, bracketed around the actual wire dispatch.
+    // The #4158/Center Lock rebind marker (noteBandRecallForPan) is started by
+    // the same actual-dispatch signal. This path only performs the #4209
+    // audio-mute handoff around the wire command.
     finishPreparedKiwiSdrBandRecallForPan(panId);
 
     for (SliceModel* slice : m_radioModel.slices()) {

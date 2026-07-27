@@ -98,6 +98,8 @@ class QSystemTrayIcon;
 
 namespace AetherSDR {
 
+enum class RadioSliceSelectionSource;
+
 class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
@@ -378,6 +380,9 @@ private:
     SpectrumWidget* spectrum() const;
     void setActiveSlice(int sliceId);
     void setActiveSliceInternal(int sliceId, bool revealOffscreen);
+    void selectSliceFromRadioState(
+        SliceModel* slice,
+        RadioSliceSelectionSource source);
     void queueActiveSliceForSpectrumTarget(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);

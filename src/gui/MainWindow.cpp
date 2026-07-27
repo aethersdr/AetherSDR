@@ -5975,10 +5975,10 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
                 emit bandStackRestoreStarting(slicePanId);
                 clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
                 m_bandSettings.setCurrentBand(memoryBand);
-                noteBandRecallForPan(slicePanId);
                 // #4142: during the profile-load hold a bare sendCommand()
                 // band= write is silently destroyed and the recall lands on
-                // the wrong band stack. requestPanBand defers it instead.
+                // the wrong band stack. requestPanBand defers it instead; the
+                // dispatch signal starts the reconstruction guard at replay.
                 m_radioModel.requestPanBand(slicePanId, stackKeyResult.key);
                 QTimer::singleShot(300, this, [this, slicePanId]() {
                     reassertUnmutedSliceAudioForPan(slicePanId);
@@ -6218,11 +6218,11 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     emit bandStackRestoreStarting(slice->panId());
     clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
     m_bandSettings.setCurrentBand(targetBand);
-    noteBandRecallForPan(slice->panId());
     // #4142: the cross-band typed tune is the reported bug's worst variant —
     // the `slice tune` half survives the hold while a bare sendCommand()
     // band= write is silently destroyed, so the slice lands outside the pan.
-    // requestPanBand defers the band-stack swap and replays it band-first.
+    // requestPanBand defers the band-stack swap and replays it band-first; the
+    // dispatch signal starts the reconstruction guard at replay.
     m_radioModel.requestPanBand(slice->panId(), stackKeyResult.key);
     QTimer::singleShot(300, this, [this, panId = slice->panId()]() {
         reassertUnmutedSliceAudioForPan(panId);

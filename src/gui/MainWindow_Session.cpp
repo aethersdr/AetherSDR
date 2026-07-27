@@ -541,6 +541,10 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    // Start the reconstruction window at actual dispatch, not at UI intent:
+    // requestPanBand() can defer behind a profile-load hold.
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, &MainWindow::noteBandRecallForPan);
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
             this, &MainWindow::prepareKiwiSdrBandRecallForPan);
     connect(&m_radioModel, &RadioModel::panBandDispatchFailed,

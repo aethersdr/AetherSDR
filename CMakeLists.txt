@@ -2837,6 +2837,14 @@ target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
 
+# Active-slice policy during FLEX band-stack teardown/rebuild — header-only.
+add_executable(band_recall_slice_selection_policy_test
+    tests/band_recall_slice_selection_policy_test.cpp
+)
+target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
+add_test(NAME band_recall_slice_selection_policy_test
+    COMMAND band_recall_slice_selection_policy_test)
+
 add_executable(declared_bands_test
     tests/declared_bands_test.cpp
     src/models/DeclaredBands.cpp
