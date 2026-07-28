@@ -1254,6 +1254,15 @@ if (ENABLE_ASR)
     # error. Fix diagnosed + verified by K5PTB on large-v3-turbo + Metal. Only
     # needs the assembler + sed/echo (already in play). (RFC #4333)
     set(GGML_METAL_EMBED_LIBRARY ${_asr_metal} CACHE BOOL "" FORCE)
+    # Embed the library as a COMPILED .metallib (built by the offline `xcrun
+    # metal` toolchain), not as .metal source. Embedded source forces a runtime
+    # shader compile (newLibraryWithSource) at the first ggml touch of every
+    # cold-cache launch — seconds on Apple Silicon, and on Intel-GPU Macs
+    # Apple's runtime compiler can live-lock indefinitely, freezing the GUI
+    # (#4535). The compiled embed keeps #4333's no-file-lookup property while
+    # never invoking the runtime compiler. Needs full Xcode (same requirement
+    # REQUIRE_ASR_GPU already states for macOS).
+    set(GGML_METAL_EMBED_LIBRARY_COMPILED ${_asr_metal} CACHE BOOL "" FORCE)
 
     # Every other non-CPU backend OFF (their source dirs are not vendored):
     foreach(_ggml_backend
@@ -3504,6 +3513,18 @@ if (ENABLE_ASR)
     target_include_directories(asr_whisper_backend_test PRIVATE src)
     target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core whisper)
     add_test(NAME asr_whisper_backend_test COMMAND asr_whisper_backend_test)
+
+    # GPU probe must return promptly and honor the Intel-Mac CPU-only gate
+    # (#4535: the probe used to run Apple's runtime shader compiler on the
+    # calling thread, which can live-lock on Intel-GPU Macs).
+    add_executable(asr_gpu_probe_test
+        tests/asr_gpu_probe_test.cpp
+        src/asr/WhisperAsrBackend.cpp
+    )
+    target_include_directories(asr_gpu_probe_test PRIVATE src)
+    target_link_libraries(asr_gpu_probe_test PRIVATE Qt6::Core whisper)
+    add_test(NAME asr_gpu_probe_test COMMAND asr_gpu_probe_test)
+    set_tests_properties(asr_gpu_probe_test PROPERTIES TIMEOUT 180)
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
     add_executable(asr_remote_backend_test

@@ -122,12 +122,34 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         NSString * src = nil;
 
 #if GGML_METAL_EMBED_LIBRARY
-        GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
-
         extern const char ggml_metallib_start[];
         extern const char ggml_metallib_end[];
 
+#if GGML_METAL_EMBED_LIBRARY_COMPILED
+        // the embedded payload is a compiled .metallib — hand the bytes straight
+        // to Metal; the runtime shader compiler is never involved (it recompiles
+        // on every cold-cache launch and can live-lock on Intel-GPU Macs)
+        GGML_LOG_INFO("%s: using embedded precompiled metal library\n", __func__);
+
+        dispatch_data_t data = dispatch_data_create(ggml_metallib_start,
+                                                    ggml_metallib_end - ggml_metallib_start,
+                                                    NULL,
+                                                    DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+
+        library = [device newLibraryWithData:data error:&error];
+
+#if !__has_feature(objc_arc)
+        dispatch_release(data);
+#endif
+        if (!library) {
+            GGML_LOG_ERROR("%s: error: %s\n", __func__, error ? [[error description] UTF8String] : "failed to load embedded metallib");
+            return nil;
+        }
+#else
+        GGML_LOG_INFO("%s: using embedded metal library\n", __func__);
+
         src = [[NSString alloc] initWithBytes:ggml_metallib_start length:(ggml_metallib_end-ggml_metallib_start) encoding:NSUTF8StringEncoding];
+#endif
 #else
 
 #ifdef SWIFT_PACKAGE
@@ -709,6 +731,14 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
                 dev->props.has_tensor = false;
             }
+
+#if GGML_METAL_EMBED_LIBRARY_COMPILED
+            // the embedded precompiled library is built without the tensor API —
+            // keep the props consistent with the kernels that actually exist, and
+            // skip the dummy-kernel probes below (they would invoke the runtime
+            // shader compiler this build exists to avoid)
+            dev->props.has_tensor = false;
+#endif
 
             // note: disable the tensor API by default for old chips because with the current implementation it is not useful
             // - M2 Ultra:   ~5% slower

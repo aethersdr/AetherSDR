@@ -9,6 +9,10 @@
 #include <ggml-backend.h>
 #include <whisper.h>
 
+#ifdef Q_OS_MACOS
+#include <sys/sysctl.h>
+#endif
+
 namespace AetherSDR {
 
 Q_LOGGING_CATEGORY(lcAsrWhisper, "aether.asr.whisper")
@@ -23,6 +27,44 @@ int chooseThreadCount()
         return 4;
     }
     return std::clamp(hw, 1, 4);
+}
+
+// On Macs, ASR offers the GPU only on Apple Silicon. Intel Macs keep every
+// Metal device off the table: their GPUs sit below the family gates the
+// heavy kernels need (has_simdgroup_reduction/mm require Apple7/Metal3, see
+// ggml-metal-device.m), so whisper would fall back to CPU per-op anyway —
+// and never enumerating Metal also keeps the class of Intel-only runtime
+// compiler failures (#4535) unreachable. Checked via hardware sysctl rather
+// than build arch so an x86_64 build under Rosetta still sees the real GPU.
+// AETHER_ASR_FORCE_METAL=1 overrides, for diagnostics.
+bool asrMetalUsableHost()
+{
+#ifdef Q_OS_MACOS
+    if (qEnvironmentVariableIsSet("AETHER_ASR_FORCE_METAL")) {
+        static const bool logged = [] {
+            qCInfo(lcAsrWhisper) << "AETHER_ASR_FORCE_METAL set - offering Metal despite non-Apple-Silicon host";
+            return true;
+        }();
+        Q_UNUSED(logged)
+        return true;
+    }
+    int isArm64 = 0;
+    size_t size = sizeof(isArm64);
+    if (sysctlbyname("hw.optional.arm64", &isArm64, &size, nullptr, 0) != 0) {
+        isArm64 = 0; // key absent = pre-Apple-Silicon macOS
+    }
+    if (isArm64 != 1) {
+        static const bool logged = [] {
+            qCInfo(lcAsrWhisper) << "Intel Mac - ASR is CPU-only (Metal not offered)";
+            return true;
+        }();
+        Q_UNUSED(logged)
+        return false;
+    }
+    return true;
+#else
+    return true;
+#endif
 }
 } // namespace
 
@@ -165,6 +207,10 @@ std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QSt
 
 std::vector<AsrGpuDevice> asrGpuDevices()
 {
+    if (!asrMetalUsableHost()) {
+        return {};
+    }
+
     // Enumerate GPU + integrated-GPU devices in the same order whisper's
     // gpu_device indexes them (see whisper_backend_init_gpu).
     std::vector<AsrGpuDevice> devices;
