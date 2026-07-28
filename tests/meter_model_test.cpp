@@ -276,6 +276,61 @@ void testNativeSwrRemainsRadioProvidedAtLowPower()
                && nearlyEqual(emittedSwr, 1.0859375f));
 }
 
+// #4539: the fast-attack/slow-decay smoothing on FWDPWR is right during a
+// transmission and wrong at the end of one. A radio with no carrier reports
+// 0 dBm = 0.001 W, and an exponential decay converges on that rather than
+// reaching it, so the display kept claiming forward power after unkey.
+void testForwardPowerSnapsToZeroWhenTheCarrierStops()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+
+    // Transmitting: ~36.5 dBm is about 4.5 W, the level measured on the bench.
+    model.updateValues({8}, {rawDb(36.5f)});
+    const bool keyed = model.fwdPower() > 1.0f;
+
+    // Unkey. The radio reports 0 dBm — NOT a small power, no power.
+    model.updateValues({8}, {rawDb(0.0f)});
+
+    report("MeterModel drops forward power to zero on the first no-carrier sample",
+           keyed && nearlyEqual(model.fwdPower(), 0.0f));
+}
+
+// The decay is what made this visible on the bench: without the fix the reading
+// was still 3.45 W 200 ms after unkey and took ~2.9 s to fall away. Feeding
+// several no-carrier samples reproduces exactly that window.
+void testForwardPowerDoesNotLingerAcrossRepeatedNoCarrierSamples()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+
+    model.updateValues({8}, {rawDb(36.5f)});
+    for (int i = 0; i < 5; ++i) {
+        model.updateValues({8}, {rawDb(0.0f)});
+    }
+
+    report("MeterModel reports no forward power while the carrier is absent",
+           nearlyEqual(model.fwdPower(), 0.0f));
+}
+
+// The smoothing must survive for real readings — this is a display filter that
+// exists for a reason (#980), and the fix must not flatten it.
+void testForwardPowerStillSmoothsRealReadings()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+
+    model.updateValues({8}, {rawDb(36.5f)});          // ~4.5 W, first sample
+    const float first = model.fwdPower();
+    model.updateValues({8}, {rawDb(30.0f)});          // ~1.0 W, a real drop
+
+    // Slow-decay smoothing means the displayed value must LAG the new reading,
+    // sitting between the two rather than snapping to the lower one.
+    const float after = model.fwdPower();
+    report("MeterModel still smooths a genuine drop in forward power",
+           first > 4.0f && after < first && after > 1.5f);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -293,6 +348,9 @@ int main(int argc, char** argv)
     testRemovingAdjacentMetersDoesNotClearCompPeak();
     testDirectionalPowerUsesDirectReflectedMeter();
     testNativeSwrRemainsRadioProvidedAtLowPower();
+    testForwardPowerSnapsToZeroWhenTheCarrierStops();
+    testForwardPowerDoesNotLingerAcrossRepeatedNoCarrierSamples();
+    testForwardPowerStillSmoothsRealReadings();
 
     return g_failed == 0 ? 0 : 1;
 }

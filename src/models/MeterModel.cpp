@@ -12,6 +12,17 @@ namespace AetherSDR {
 
 namespace {
 
+// Forward power at or below which the radio is treated as not transmitting, so
+// the display snaps to zero instead of decaying towards it (#4539).
+//
+// A radio with no carrier reports 0 dBm on FWDPWR, and 10^(0/10)/1000 is
+// 0.001 W — small, but NOT zero, which is the whole problem: an
+// exponential-decay filter converges on it rather than reaching it. The
+// threshold is a hair above that floor so the "no carrier" case is caught
+// exactly, while any genuine reading (0 dBm is already 30 dB below a 1 W
+// carrier) stays on the smoothed path.
+constexpr float kNoCarrierWatts = 0.0011f;
+
 constexpr qint64 kCompressionSummaryLogIntervalMs = 500;
 constexpr qint64 kDirectionalMeterFreshnessMs = 500;
 constexpr int kMinTxWaveformSourceIndex = 8;
@@ -528,7 +539,23 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             directionalChanged = true;
             // Smooth: fast attack (α=0.5) to track peaks, slow decay (α=0.15)
             // for stable display without jitter (#980)
-            if (m_fwdPower < 0.01f) {
+            //
+            // The slow decay is right DURING a transmission and wrong at the end
+            // of one. On unkey the radio reports 0 dBm, which is 0.001 W rather
+            // than 0, so the filter creeps towards it at 15 % per sample instead
+            // of arriving: measured on a FLEX-6700, the dBm meter read 0 within
+            // 200 ms while the watts reading was still 3.45 W, and it took
+            // ~2.9 s to fall away. For that whole window the display claims
+            // forward power out of a radio that has stopped transmitting.
+            //
+            // So: keep the smoothing for real readings, but snap to zero once
+            // the meter says there is no carrier. REFPWR immediately below is
+            // not smoothed at all and drops instantly — this brings the two
+            // directional readings back into agreement instead of having one
+            // linger while the other is already at rest.
+            if (watts <= kNoCarrierWatts) {
+                m_fwdPower = 0.0f;
+            } else if (m_fwdPower < 0.01f) {
                 m_fwdPower = watts;  // first sample — no smoothing
             } else {
                 float alpha = (watts > m_fwdPower) ? 0.5f : 0.15f;
