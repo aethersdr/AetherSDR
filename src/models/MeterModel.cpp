@@ -13,7 +13,7 @@ namespace AetherSDR {
 namespace {
 
 // Forward power at or below which the radio is treated as not transmitting, so
-// the display snaps to zero instead of decaying towards it (#4539).
+// the display snaps to zero instead of decaying towards it (#4540).
 //
 // A radio with no carrier reports 0 dBm on FWDPWR, and 10^(0/10)/1000 is
 // 0.001 W — small, but NOT zero, which is the whole problem: an

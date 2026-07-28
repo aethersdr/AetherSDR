@@ -276,7 +276,7 @@ void testNativeSwrRemainsRadioProvidedAtLowPower()
                && nearlyEqual(emittedSwr, 1.0859375f));
 }
 
-// #4539: the fast-attack/slow-decay smoothing on FWDPWR is right during a
+// #4540: the fast-attack/slow-decay smoothing on FWDPWR is right during a
 // transmission and wrong at the end of one. A radio with no carrier reports
 // 0 dBm = 0.001 W, and an exponential decay converges on that rather than
 // reaching it, so the display kept claiming forward power after unkey.
@@ -331,6 +331,30 @@ void testForwardPowerStillSmoothsRealReadings()
            first > 4.0f && after < first && after > 1.5f);
 }
 
+// The threshold has to catch the no-carrier floor WITHOUT swallowing a genuine
+// low-power reading, so pin the boundary from the other side: a value just above
+// kNoCarrierWatts must stay on the smoothed path rather than snapping to zero.
+//
+// 0.7 dBm is ~0.00117 W — a hair above the 0.0011 W threshold, and the closest a
+// real reading can plausibly sit to it. If a future change widens the threshold
+// this is the test that fails.
+void testForwardPowerJustAboveTheThresholdStaysSmoothed()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+
+    model.updateValues({8}, {rawDb(36.5f)});          // ~4.5 W, establish a level
+    const float keyed = model.fwdPower();
+    model.updateValues({8}, {rawDb(0.7f)});           // ~0.00117 W, above the floor
+
+    // Smoothed, so it must LAG rather than snap: still well above zero after one
+    // sample. A snap-to-zero here would mean the threshold had eaten a real
+    // reading.
+    const float after = model.fwdPower();
+    report("MeterModel keeps smoothing a reading just above the no-carrier floor",
+           keyed > 4.0f && after > 0.01f);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -351,6 +375,7 @@ int main(int argc, char** argv)
     testForwardPowerSnapsToZeroWhenTheCarrierStops();
     testForwardPowerDoesNotLingerAcrossRepeatedNoCarrierSamples();
     testForwardPowerStillSmoothsRealReadings();
+    testForwardPowerJustAboveTheThresholdStaysSmoothed();
 
     return g_failed == 0 ? 0 : 1;
 }
