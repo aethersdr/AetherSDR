@@ -59,6 +59,13 @@ public slots:
     void onRadioUpdated(const RadioInfo& radio);
     void onRadioLost(const QString& serial);
 
+    // Demo mode (RFC #4288): inject a synthetic "AetherSDR Demo — Simulator"
+    // entry into the local radio list so a user with no radio can connect to it
+    // and see the app work. Deduped by serial via onRadioDiscovered, so calling
+    // it repeatedly is safe. removeDemoRadio() takes it back out (Help toggle).
+    void addDemoRadio();
+    void removeDemoRadio();
+
     // SmartLink
     void setSmartLinkClient(SmartLinkClient* client);
 
@@ -84,6 +91,9 @@ private slots:
     void onManualAdvancedToggled(bool checked);
 
 private:
+    // Keep the demo entry sorted last so real radios take precedence (RFC #4288).
+    void moveDemoRadioToBottom();
+
     enum ConnectionMode {
         LocalMode = 0,
         SmartLinkMode = 1,
@@ -93,6 +103,9 @@ private:
     void setCurrentMode(ConnectionMode mode);
     void updateLocalPageState();
     void updateSmartLinkUi();
+    // Right-click menu on a discovered radio row: set/clear a client-side
+    // nickname (non-Flex families only). pos is in m_radioList viewport coords.
+    void showRadioContextMenu(const QPoint& pos);
     void updateActionState();
     void updateLowBandwidthVisibility();
     void updateManualAdvancedVisibility();
@@ -156,6 +169,7 @@ private:
     bool         m_manualConnectPending{false};
 
     QCheckBox*   m_autoConnectCheck{nullptr};
+    QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry
 
     QWidget*     m_linkOptionsWidget{nullptr};
     QLabel*      m_lowBwHintLabel{nullptr};

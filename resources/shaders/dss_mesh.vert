@@ -3,10 +3,10 @@
 // 3DSS GPU height-map mesh. Each vertex carries its grid position (u = column,
 // v = row/depth) and an edge tag. The height comes from a ring-buffered dBm
 // texture; geometry is a receding perspective trapezoid built entirely on the
-// GPU, so pan/zoom never rebuild any vertices. The original per-row coloured
-// curtains and their outlines stay on a fixed perspective grid and interpolate
-// between adjacent history rows, avoiding shimmer from translating dense
-// geometry across screen pixels. Outputs NDC directly (matching spectrum.vert).
+// GPU, so pan/zoom never rebuild any vertices. The per-row coloured curtains
+// and their outlines stay on a fixed perspective grid while the retained data
+// advances, avoiding shimmer from translating dense geometry across pixels.
+// Outputs NDC directly (matching spectrum.vert).
 
 layout(location = 0) in vec3 inVert;   // x = u [0,1] col, y = v [0,1) row(0=front), z = edge
 
@@ -32,6 +32,9 @@ layout(std140, binding = 0) uniform U {
     float padding18;
     float padding19;
     vec4  bgFill;             // plot background colour (for haze)
+    vec4  shadowBands[8];     // low u, high u, centre u, band alpha
+    vec4  shadowStyles[8];    // cue rgb, centre-line alpha
+    vec4  shadowMeta;         // descriptor count, enabled, plot width px, pad
 };
 
 layout(binding = 1) uniform sampler2D heightTex;  // R16F, dBm, ring-buffered rows
@@ -40,26 +43,29 @@ layout(location = 0) out float vLut;    // palette lookup coord (floor->peak gra
 layout(location = 1) out float vDepth;  // row depth 0..1 for haze/fade
 layout(location = 2) out float vEdge;   // edge tag passthrough
 layout(location = 3) out float vBoundaryFade;
+layout(location = 4) out float vFrequency;
 
 float sampleHistoryDbm(float texU, float historyV, float rows,
                        float remainingRows)
 {
-    float sampleAge = historyV * rows + remainingRows;
+    float sourceAge = historyV * rows;
     float cappedValidRows = clamp(validRows, 0.0, rows);
+    if (sourceAge >= cappedValidRows) {
+        return floorDbm;
+    }
+
+    // The oldest grid row has no older neighbour to interpolate toward. Clamp
+    // its sample age to the oldest retained texture row so it stays full-height
+    // until eviction instead of collapsing and reappearing at the rear edge.
+    float oldestRetainedAge = max(cappedValidRows - 1.0, 0.0);
+    float sampleAge = min(sourceAge + remainingRows, oldestRetainedAge);
     float age0 = max(floor(sampleAge), 0.0);
-    float age1 = age0 + 1.0;
+    float age1 = min(age0 + 1.0, oldestRetainedAge);
     float ageBlend = fract(sampleAge);
-    float textureAge0 = clamp(age0, 0.0, rows - 1.0);
-    float textureAge1 = clamp(age1, 0.0, rows - 1.0);
     float dbm0 = texture(
-        heightTex, vec2(texU, fract(rowOffset + textureAge0 / rows))).r;
+        heightTex, vec2(texU, fract(rowOffset + age0 / rows))).r;
     float dbm1 = texture(
-        heightTex, vec2(texU, fract(rowOffset + textureAge1 / rows))).r;
-    // A partially filled history has no row beyond its oldest valid sample.
-    // Blend that missing neighbour from the floor instead of clamping it to a
-    // duplicate of the oldest row, which made the startup boundary hop.
-    dbm0 = mix(floorDbm, dbm0, 1.0 - step(cappedValidRows, age0));
-    dbm1 = mix(floorDbm, dbm1, 1.0 - step(cappedValidRows, age1));
+        heightTex, vec2(texU, fract(rowOffset + age1 / rows))).r;
     return mix(dbm0, dbm1, ageBlend);
 }
 
@@ -70,9 +76,11 @@ void main()
     float rows = max(texRows, 1.0);
     float distanceRows = max(scrollDistanceRows, 1.0);
     float edge = inVert.z;     // -1 = outline, 0 = ridge, 1 = curtain floor
-    // Both passes use stable geometry. Motion comes from interpolating retained
-    // row samples, like the phase-stable waterfall reconstruction.
+    // Keep geometry phase-stable. Translating this dense perspective mesh makes
+    // its subpixel line spacing shimmer, especially in the compressed rear.
     float geometryV = sourceV;
+    float remainingRows = clamp(
+        distanceRows - scrollProgressRows, 0.0, distanceRows);
 
     // Sample texel CENTRES on both axes so Nearest filtering can't pick up the
     // neighbouring row/column. rowOffset already carries the row half-texel; the
@@ -83,10 +91,6 @@ void main()
     float texU = (texCols > 1.0)
         ? (sourceU * (texCols - 1.0) + 0.5) / texCols
         : 0.5;
-    float remainingRows = clamp(
-        distanceRows - scrollProgressRows, 0.0, distanceRows);
-    // The head advances immediately when a row arrives. At phase 0, sample the
-    // former row at age+1; over the interval morph toward the new row at age.
     float dbm = outsidePreview
         ? floorDbm
         : sampleHistoryDbm(texU, sourceV, rows, remainingRows);
@@ -113,14 +117,26 @@ void main()
     vLut = edge > 0.5 ? colorStrength * 0.6 : colorStrength;
     vDepth = clamp(geometryV, 0.0, 1.0);
     vEdge  = edge;
-    // During startup, the newly exposed oldest slot fades in continuously over
-    // the row interval. Keep the eviction fade anchored at the physical back
-    // of the full history so it does not move one discrete slot per arrival.
-    float sampleAge = sourceV * rows + remainingRows;
-    float historyAvailability = clamp(validRows - sampleAge, 0.0, 1.0);
-    float backFadeStart = max(0.0, (rows - 6.0) / rows);
-    float backFadeEnd = max(backFadeStart, (rows - 1.0) / rows);
-    float backBoundaryFade =
-        1.0 - smoothstep(backFadeStart, backFadeEnd, geometryV);
-    vBoundaryFade = historyAvailability * backBoundaryFade;
+    vFrequency = u;
+    // Rear visibility follows the fixed grid age, not the interpolated sample
+    // age — but only once the history is FULL.
+    //
+    // At steady state validRows is pinned at rows, so validRows - sourceAge is
+    // permanently 1 for the oldest slot: indistinguishable from a slot that has
+    // only just been populated. Subtracting the scroll advance there ramps that
+    // permanent row 0 -> 1 across every row interval and snaps it back on each
+    // arrival, which is the rear pulse (worst at slow presentation cadences,
+    // and it also disagreed with sampleHistoryDbm()'s un-advanced early-out).
+    //
+    // While history is still filling, a slot genuinely IS newly populated on
+    // each arrival, and for that one interval sampleHistoryDbm() clamps it to
+    // oldestRetainedAge — the same texture row its neighbour is already
+    // drawing. Subtracting the advance is what fades that duplicate curtain in
+    // instead of popping it opaque. So keep the term until validRows stops
+    // growing, after which nothing is ever newly populated again.
+    float sourceAge = sourceV * rows;
+    float fillFade = validRows < rows ? remainingRows : 0.0;
+    float historyAvailability = clamp(
+        validRows - sourceAge - fillFade, 0.0, 1.0);
+    vBoundaryFade = historyAvailability;
 }

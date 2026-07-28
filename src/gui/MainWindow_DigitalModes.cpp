@@ -461,7 +461,7 @@ void MainWindow::activateRADE(int sliceId)
         int daxCh = radeSlice ? radeSlice->daxChannel() : 0;
         if (daxCh >= 1 && daxCh <= 4) {
             m_radeDaxChannel = daxCh;
-            m_radioModel.panStream()->acquireDaxChannel(
+            m_radioModel.acquireDaxChannel(
                 daxCh, PanadapterStream::DaxConsumer::Rade);
         } else {
             qWarning() << "MainWindow: RADE slice" << sliceId
@@ -630,7 +630,7 @@ void MainWindow::deactivateRADE()
             // radio-side stream only when the LAST holder (TCI / DAX bridge /
             // RADE) releases — the ref-counting the old TODO here asked for
             // (#3305).
-            m_radioModel.panStream()->releaseDaxChannel(
+            m_radioModel.releaseDaxChannel(
                 m_radeDaxChannel, PanadapterStream::DaxConsumer::Rade);
             m_radeDaxChannel = 0;
         }
@@ -917,6 +917,17 @@ bool MainWindow::startDax()
 {
     if (m_daxBridge) return true;
 
+    // DAX rides PanadapterStream's VITA-49 audio, which only a Flex backend
+    // owns — RadioModel leaves panStream() null for every other family (see
+    // its makeBackend/Flex-adapter step). Bail before creating the bridge so a
+    // non-Flex session can't reach the acquireDaxChannel() calls below on a
+    // null stream. Without this, connecting to an HL2 with AutoStartDAX=True
+    // segfaults ~3 s later from the auto-start timer in onConnectionStateChanged.
+    if (!m_radioModel.panStream()) {
+        qCDebug(lcDax) << "MainWindow: DAX unavailable — backend has no PanadapterStream";
+        return false;
+    }
+
 #ifdef Q_OS_MAC
     // Only start if the macOS HAL driver bundle is installed.
     if (!macDaxDriverInstalled()) {
@@ -953,7 +964,7 @@ bool MainWindow::startDax()
         int ch = s->daxChannel();
         m_daxSliceLastCh[s->sliceId()] = ch;
         if (ch >= 1 && ch <= 4) {
-            m_radioModel.panStream()->acquireDaxChannel(
+            m_radioModel.acquireDaxChannel(
                 ch, PanadapterStream::DaxConsumer::Bridge);
         }
     }
@@ -994,7 +1005,7 @@ bool MainWindow::startDax()
         for (auto* s : m_radioModel.slices()) {
             if (s && s->daxChannel() == ch) return;  // channel hopped slices
         }
-        m_radioModel.panStream()->releaseDaxChannel(
+        m_radioModel.releaseDaxChannel(
             ch, PanadapterStream::DaxConsumer::Bridge);
     }));
 
@@ -1078,7 +1089,7 @@ void MainWindow::stopDax()
     // or RADE still uses survives a bridge teardown — the #3363/#2886 failure
     // class, now enforced structurally instead of by cross-consumer peeking
     // (#3305).
-    m_radioModel.panStream()->releaseAllDaxChannels(
+    m_radioModel.releaseAllDaxChannels(
         PanadapterStream::DaxConsumer::Bridge);
 
     // Restore original mic selection
@@ -1315,7 +1326,8 @@ void MainWindow::reflectWfmButtons(bool on, int sliceId)
 void MainWindow::showPskReporterMapDialog()
 {
     if (!m_pskReporterMapDialog) {
-        auto* dlg = new PskReporterMapDialog(&m_radioModel, m_propForecast, this);
+        auto* dlg = new PskReporterMapDialog(
+            m_audio, &m_radioModel, m_propForecast, this);
         dlg->setFramelessMode(
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
         m_pskReporterMapDialog = dlg;

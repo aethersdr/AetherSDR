@@ -189,12 +189,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // + PanadapterStream refcounting, #3305). The #3476 "profile load
         // destroyed the stream, never came back" recreate is automatic there.
         // TCI only keeps its channel→trx routing cache truthful (#3669/#3766).
-        if (m_model->panStream()) {
-            connect(m_model->panStream(), &PanadapterStream::daxStreamUnregistered,
-                    this, [this](int ch, quint32) {
-                m_channelTrx.remove(ch);
-            });
-        }
+        // The PanadapterStream::daxStreamUnregistered → onDaxStreamUnregistered
+        // subscription is made by MainWindow's stream-sink helper (not here) so it
+        // is re-established after a backend/family swap destroys the stream (#4448).
 
         // Re-trigger DAX setup when the radio (re)connects or a slice
         // is added AFTER a TCI client has already requested audio.  Without
@@ -1176,50 +1173,61 @@ void TciServer::tuneSliceAndConfirm(
         return;
     }
 
-    const QString confirmation
-        = QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(frequencyHz);
-    if (TciProtocol::mhzToHz(slice->frequency()) == frequencyHz) {
-        // A no-op produces no Flex status. Confirm the already-authoritative
-        // model value so WSJT-X cannot time out during startup convergence.
-        broadcast(confirmation);
-        return;
-    }
-
     const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
     bool inSpan = false;
     if (PanadapterModel* pan = m_model->panadapter(slice->panId())) {
         const double halfBandwidth = pan->bandwidthMhz() / 2.0;
         inSpan = halfBandwidth > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBandwidth;
     }
-    const QString command = inSpan
-        ? QStringLiteral("slice tune %1 %2 autopan=0").arg(sliceId).arg(mhz, 0, 'f', 6)
-        : QStringLiteral("slice tune %1 %2").arg(sliceId).arg(mhz, 0, 'f', 6);
 
-    QPointer<TciServer> self(this);
-    QPointer<QWebSocket> socket(client);
-    m_model->sendCmdPublic(
-        command, [self, socket, trx, channel, sliceId](int code, const QString& body) {
-            if (!self || !socket) {
-                return;
-            }
-            if (code != 0) {
-                qCWarning(lcCat) << "TCI: VFO tune rejected"
-                                 << "slice=" << sliceId << "code=" << Qt::hex << code
-                                 << "body=" << body;
-                return;
-            }
-            // Flex status precedes this response. The reply is the completion
-            // barrier; publish the accepted coordinate to sender and observers.
-            SliceModel* settled = self->m_model ? self->m_model->slice(sliceId) : nullptr;
-            if (!settled) {
-                return;
-            }
-            const long long acceptedHz = TciProtocol::mhzToHz(settled->frequency());
-            if (acceptedHz > 0) {
-                self->broadcast(
-                    QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
-            }
-        });
+    // TUNE THROUGH THE MODEL, ON EVERY COMMAND PLANE (#4500, #4493).
+    //
+    // This was briefly a raw `slice tune` written at the connection, with the
+    // radio's command reply used as a barrier to read the settled frequency back
+    // out of SliceModel. Both halves of that were wrong on a Flex:
+    //
+    //   - the raw command bypasses SliceModel, so nothing updates m_frequency;
+    //   - the radio does not answer `slice tune` with an RF_frequency status
+    //     either (measured: 89 tunes, 0 frequency statuses in one session).
+    //
+    // So the read-back could only ever observe the PRE-TUNE value, and every
+    // confirmation echoed the frequency the slice had already left. WSJT-X's
+    // do_frequency() waits on that echo, concluded the radio had not moved, and
+    // reported rig-control failure on every band change — while the radio was in
+    // fact sitting on the new band, which is how transmissions went out of band.
+    //
+    // The setter is the command path, not an addition to it: setFrequency()
+    // sends the byte-identical "slice tune <id> <mhz> autopan=0" this used to
+    // open-code, and additionally updates the model, honours a locked slice, and
+    // emits frequencyChanged. There is no second command and no double-tune.
+    //
+    // The model is the authority here BECAUSE the radio declines to be: with no
+    // status to wait for, an optimistic update is the only thing that can make a
+    // TCI client's mirror converge. (That the radio never confirms a tune is an
+    // older gap than the regression above and wants its own fix; until then this
+    // is what masks it, which is exactly why removing it broke so much.)
+    if (inSpan)
+        slice->setFrequency(mhz);
+    else
+        slice->tuneAndRecenter(mhz);
+
+    // Confirm what the model ACCEPTED, never what the client asked for.
+    //
+    // A locked slice refuses the tune outright and a no-op leaves the frequency
+    // where it was; in both cases the honest answer is the value the model
+    // holds, or a client's mirror drifts away from the radio.
+    //
+    // Sent unconditionally even though a successful tune also reaches clients
+    // via frequencyChanged → broadcastSliceFrequencies(). That duplicates the
+    // channel-0 vfo: frame, which is idempotent and harmless — whereas the
+    // alternative failure, a client left with NO confirmation, hangs WSJT-X for
+    // its full rig-control timeout. Channel 1 is not covered by that automatic
+    // path at all unless the routing state happens to be bound, so suppressing
+    // this would make split confirmations depend on unrelated state.
+    const long long acceptedHz = TciProtocol::mhzToHz(slice->frequency());
+    if (acceptedHz > 0) {
+        broadcast(QStringLiteral("vfo:%1,%2,%3;").arg(trx).arg(channel).arg(acceptedHz));
+    }
 }
 
 void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation)
@@ -1235,6 +1243,22 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
     }
     if (slice->isTxSlice()) {
         continuation(true);
+        return;
+    }
+
+    // Seam backend (HL2): `slice set N tx=1` is Flex text with no counterpart on
+    // this plane, so the sendCmdPublic below would be swallowed AND this
+    // continuation would never run. Every caller opens a route transition
+    // around it, so a silent drop leaks m_routeTransitionInFlight forever and
+    // wedges TCI keying for the rest of the connection. Answer honestly instead
+    // of hanging: there is no seam verb to promote a slice, and the one slice
+    // such a radio has already returned true above (Hl2Backend publishes
+    // txSlice=true — its single slice IS the transmitter), so this only fires
+    // for a route that genuinely cannot be built.
+    if (!m_model->usesFlexCommandPlane()) {
+        qCWarning(lcCat) << "TCI: TX-slice selection unsupported on this radio"
+                         << "slice=" << sliceId;
+        continuation(false);
         return;
     }
 
@@ -1265,6 +1289,29 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
     if (!client || !m_model || !rxSlice) {
         return;
     }
+
+    // Seam backend (HL2): `slice create` is Flex text this radio does not speak.
+    // The command below would be swallowed and its completion callback would
+    // never run, so the route transition opened just after it could never be
+    // closed -- and handleTrxRequest() defers every subsequent trx:true into
+    // m_pendingTrxRequest while a transition is in flight, so WSJT-X could not
+    // transmit again for the rest of the connection. That is the failure this
+    // guard exists to prevent, and the capacity test below does NOT catch it:
+    // maxSlices() is the model-string-derived Flex estimate (2 by default), not
+    // the backend's own maxSlices, so a single-slice HL2 looks like it has room.
+    //
+    // Refusing is also the honest answer, not merely the safe one: WSJT-X's
+    // "Split = Rig/Fake It" reaches exactly here, and reportVfoBRouteFailure
+    // sends split_enable:...,false; plus the authoritative channel-1 VFO, which
+    // is what makes it fall back to single-VFO operation instead of waiting.
+    if (!m_model->usesFlexCommandPlane()) {
+        reportVfoBRouteFailure(client, request,
+            QStringLiteral("this radio has no second VFO: split needs a TX slice "
+                           "it cannot create"),
+            !routeConfirmation.isEmpty());
+        return;
+    }
+
     if (m_model->slices().size() >= m_model->maxSlices()) {
         reportVfoBRouteFailure(client, request,
             QStringLiteral("cannot create VFO B: radio slice capacity reached"),
@@ -2725,7 +2772,13 @@ void TciServer::prepareTxAudio()
     // re-derives the source rate from each frame's hdr.sampleRate and rebuilds
     // this if a client transmits at a non-48k negotiated rate (#3306).
     m_txResampler = std::make_unique<Resampler>(48000.0, 24000.0, 4096);
-    if (m_model) {
+    // The DAX TX stream is how a Flex radio is told to modulate from the
+    // network instead of its mic jack. A host-modulating backend (HL2) has no
+    // such stream and no such command set: its modulator is AudioEngine's, so
+    // arranging a radio-side route here would send Flex text at a radio that
+    // does not speak it. AudioEngine::feedDaxTxAudio routes to the local
+    // modulator on that backend and never reaches the VITA-49 packetizers.
+    if (m_model && !hostModulatingBackend()) {
         // Always dax=1 for TCI TX. The DaxTxLowLatency flag only controls
         // VITA-49 packet format (PCC 0x03E3 vs 0x0123 in feedDaxTxAudio);
         // both formats require dax=1 so the radio routes the dax_tx stream
@@ -3039,6 +3092,13 @@ void TciServer::broadcastStatus()
 
 // ── IQ data from DAX IQ stream → TCI binary frames (type=0) ───────────
 
+void TciServer::onDaxStreamUnregistered(int channel, quint32 /*streamId*/)
+{
+    // The DAX channel's radio-side stream went away; drop its stale channel→TRX
+    // routing-cache entry so a re-registration re-resolves cleanly (#3669/#3766).
+    m_channelTrx.remove(channel);
+}
+
 void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate)
 {
     // Check if any client wants IQ for this channel
@@ -3140,9 +3200,27 @@ void TciServer::onWaterfallRowReady(quint32 streamId, const QVector<float>& bins
 // doesn't already have one, and release it when the last TCI audio client
 // disconnects.
 
+// True when the connected backend demodulates and modulates in this process
+// (Hermes-Lite 2) rather than inside the radio. Such a backend has no DAX /
+// VITA-49 data plane at all, so every DAX arrangement in this file is not just
+// unnecessary but actively wrong — it would push Flex slice/transmit text at a
+// radio that speaks HPSDR. Capability, not a family-name test.
+bool TciServer::hostModulatingBackend() const
+{
+    return m_model && m_model->backendCapabilities().hostModulates;
+}
+
 void TciServer::ensureDaxForTci()
 {
     if (!m_model || !m_model->isConnected()) return;
+
+    // In-process backend (HL2): there is no DAX plane to arrange. RX audio
+    // reaches onDaxAudioReady() on channel 1 straight from the backend's
+    // demodulator (MainWindow wires backendAudioFrameReady), and the
+    // channel→TRX fallback there maps channel 1 to trx 0 — which is the whole
+    // mapping on a single-slice radio. Assigning slice DAX channels here would
+    // emit Flex `slice set … dax=` commands into a socket that ignores them.
+    if (!m_model->panStream()) return;
 
     QSet<int> channelsNeeded;
 

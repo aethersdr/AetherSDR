@@ -2,6 +2,7 @@
 #include "DspParamPopup.h"
 #include "MemoryBrowsePanel.h"
 #include "SpectrumWidget.h"
+#include "SpectrumOverlayWheelGuard.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "Theme.h"
@@ -335,7 +336,31 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     buildDisplayPanel();
     buildMemoryPanel();
 
-    // Prevent mouse/wheel events from falling through panels to the spectrum
+    m_wheelGuard = new SpectrumOverlayWheelGuard(this);
+    m_wheelGuard->setDisplayScrollArea(m_displayScroll);
+    m_wheelGuard->guardTree(
+        this, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_bandPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_antPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_daxPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    m_wheelGuard->guardTree(
+        m_displayPanel,
+        SpectrumOverlayWheelGuard::BoundaryMode::ScrollDisplay);
+    m_wheelGuard->guardTree(
+        m_memoryPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+
+    // The panel can be opened before the panadapter reaches its restored
+    // height. Re-clamp it whenever that host subsequently resizes so the
+    // QScrollArea retains a real scroll range instead of extending off-screen.
+    if (parentWidget()) {
+        parentWidget()->installEventFilter(this);
+    }
+
+    // Mouse presses on panel backgrounds must not fall through to the
+    // spectrum. Wheel ownership is handled for every descendant above.
     for (auto* panel : {m_bandPanel, m_antPanel, m_daxPanel, m_displayPanel,
                         static_cast<QWidget*>(m_memoryPanel)})
         if (panel) panel->installEventFilter(this);
@@ -2354,27 +2379,35 @@ void SpectrumOverlayMenu::toggleDisplayPanel()
     hideAllSubPanels();
     if (!wasVisible) {
         m_displayPanelVisible = true;
-        int menuBottom = y() + height();
-        // Size from the scroll content's hint — QScrollArea::sizeHint() is
-        // font-metric-capped, not content-sized — then clamp to the parent
-        // height so short windows scroll instead of clipping (#3969).
-        const QSize contentHint = m_displayScroll->widget()->sizeHint();
-        int panelW = contentHint.width() + 2;   // panelLayout 1px margins
-        int panelH = contentHint.height() + 2;
-        const QWidget* host = m_displayPanel->parentWidget();
-        const int maxH = host ? host->height() : panelH;
-        if (panelH > maxH) {
-            panelH = maxH;
-            panelW += m_displayPanel->style()->pixelMetric(
-                QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
-        }
-        m_displayPanel->resize(panelW, panelH);
-        int panelY = menuBottom - panelH;
-        m_displayPanel->move(x() + width(), std::max(0, panelY));
+        layoutDisplayPanel();
         m_displayPanel->raise();
         m_displayPanel->show();
         m_menuBtns[kBtnDisplay]->setStyleSheet(kMenuBtnActive);
     }
+}
+
+void SpectrumOverlayMenu::layoutDisplayPanel()
+{
+    if (!m_displayPanel || !m_displayScroll || !m_displayScroll->widget()) {
+        return;
+    }
+
+    // Size from the scroll content's hint — QScrollArea::sizeHint() is
+    // font-metric-capped, not content-sized — then clamp to the current parent
+    // height so short or subsequently resized windows scroll instead of clip.
+    const QSize contentHint = m_displayScroll->widget()->sizeHint();
+    const QWidget* host = m_displayPanel->parentWidget();
+    const int hostHeight = host ? host->height() : contentHint.height() + 2;
+    const int scrollBarExtent = m_displayPanel->style()->pixelMetric(
+        QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
+    const QSize panelSize = constrainedDisplayPanelSize(
+        contentHint, hostHeight, scrollBarExtent);
+
+    m_displayPanel->resize(panelSize);
+    const int menuBottom = y() + height();
+    const int panelY = constrainedDisplayPanelTop(
+        menuBottom, panelSize.height(), hostHeight);
+    m_displayPanel->move(x() + width(), panelY);
 }
 
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
@@ -2744,29 +2777,36 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     xvGrid->addWidget(hfBtn, slot / XVTR_COLS, slot % XVTR_COLS);
 
     m_xvtrPanel->adjustSize();
+    if (m_wheelGuard) {
+        m_wheelGuard->guardTree(
+            m_bandPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+        m_wheelGuard->guardTree(
+            m_xvtrPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    }
 }
 
 bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
 {
+    if (obj == parentWidget() && event->type() == QEvent::Resize
+        && m_displayPanelVisible) {
+        layoutDisplayPanel();
+    }
+
     if (event->type() == QEvent::MouseButtonDblClick) {
         if (auto* slider = qobject_cast<QSlider*>(obj)) {
             slider->setValue(50);
             return true;
         }
     }
-    // Consume mouse/wheel events on sub-panels so they don't reach the spectrum
+    // Consume panel-background mouse events so they don't reach the spectrum.
+    // SpectrumOverlayWheelGuard owns wheel routing for panels and descendants.
     if (obj == m_bandPanel || obj == m_antPanel
         || obj == m_daxPanel || obj == m_displayPanel || obj == m_memoryPanel) {
-        if (event->type() == QEvent::Wheel
-            || event->type() == QEvent::MouseButtonPress
+        if (event->type() == QEvent::MouseButtonPress
             || event->type() == QEvent::MouseButtonRelease) {
             if (auto* panel = qobject_cast<QWidget*>(obj)) {
                 if (auto* mouseEvent = dynamic_cast<QMouseEvent*>(event);
                     mouseEvent && panel->childAt(mouseEvent->pos())) {
-                    return QWidget::eventFilter(obj, event);
-                }
-                if (auto* wheelEvent = dynamic_cast<QWheelEvent*>(event);
-                    wheelEvent && panel->childAt(wheelEvent->position().toPoint())) {
                     return QWidget::eventFilter(obj, event);
                 }
             }

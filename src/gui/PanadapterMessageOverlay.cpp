@@ -37,6 +37,9 @@ constexpr int kCountdownMinWidth = 34;
 constexpr int kCountdownHeight = 18;
 constexpr int kCountdownPaddingX = 8;
 constexpr int kCountdownGap = 8;
+constexpr int kCollapsedPaddingX = 12;
+constexpr int kCollapsedPaddingY = 5;
+constexpr int kCollapsedMaxTextWidth = 280;
 constexpr qreal kAnimationStep = 0.24;
 constexpr qreal kDoneDistance = 0.5;
 constexpr qreal kDoneOpacity = 0.02;
@@ -67,12 +70,31 @@ bool rectCloseEnough(const QRectF& a, const QRectF& b)
         && std::abs(a.height() - b.height()) < kDoneDistance;
 }
 
+// The corner control. A dismissible card gets an X; a collapsible one gets a
+// minus (collapse) that becomes a plus (expand) once collapsed, so the glyph
+// always states what the click will do rather than implying the card can be
+// made to go away — it cannot while its condition holds. (#4387)
+enum class OverlayButtonGlyph {
+    Close,
+    Collapse,
+    Expand,
+};
+
 class OverlayCloseButton final : public QToolButton {
 public:
     explicit OverlayCloseButton(QWidget* parent = nullptr)
         : QToolButton(parent)
     {
         setAttribute(Qt::WA_Hover);
+    }
+
+    void setGlyph(OverlayButtonGlyph glyph)
+    {
+        if (m_glyph == glyph) {
+            return;
+        }
+        m_glyph = glyph;
+        update();
     }
 
 protected:
@@ -105,17 +127,32 @@ protected:
         p.setPen(QPen(QColor(255, 255, 255, pressed ? 250 : 230), 2.0));
         p.drawEllipse(ring);
 
-        const QColor xColor = pressed
+        const QColor glyphColor = pressed
             ? QColor(1, 9, 16, 245)
             : QColor(255, 255, 255, 248);
-        QPen xPen(xColor, 2.4, Qt::SolidLine, Qt::RoundCap);
-        p.setPen(xPen);
+        QPen glyphPen(glyphColor, 2.4, Qt::SolidLine, Qt::RoundCap);
+        p.setPen(glyphPen);
         const qreal inset = 7.5;
-        p.drawLine(QPointF(inset, inset),
-                   QPointF(width() - inset, height() - inset));
-        p.drawLine(QPointF(width() - inset, inset),
-                   QPointF(inset, height() - inset));
+        switch (m_glyph) {
+        case OverlayButtonGlyph::Close:
+            p.drawLine(QPointF(inset, inset),
+                       QPointF(width() - inset, height() - inset));
+            p.drawLine(QPointF(width() - inset, inset),
+                       QPointF(inset, height() - inset));
+            break;
+        case OverlayButtonGlyph::Expand:
+            p.drawLine(QPointF(width() / 2.0, inset),
+                       QPointF(width() / 2.0, height() - inset));
+            [[fallthrough]];
+        case OverlayButtonGlyph::Collapse:
+            p.drawLine(QPointF(inset, height() / 2.0),
+                       QPointF(width() - inset, height() / 2.0));
+            break;
+        }
     }
+
+private:
+    OverlayButtonGlyph m_glyph{OverlayButtonGlyph::Close};
 };
 
 QString toneName(PanadapterOverlayMessageTone tone)
@@ -302,12 +339,14 @@ bool PanadapterMessageOverlay::removeMessage(const QString& id)
     if (indexOf(key) < 0) {
         return false;
     }
+    m_collapsedIds.remove(key);
     requestRemove(key, RemoveReason::Owner);
     return true;
 }
 
 void PanadapterMessageOverlay::clearMessages()
 {
+    m_collapsedIds.clear();
     for (Item& item : m_items) {
         item.removing = true;
         item.targetOpacity = 0.0;
@@ -343,6 +382,8 @@ QVariantList PanadapterMessageOverlay::messageSnapshot() const
                                                        item.removing,
                                                        now);
         m[QStringLiteral("dismissible")] = item.message.dismissible;
+        m[QStringLiteral("collapsible")] = item.message.collapsible;
+        m[QStringLiteral("collapsed")] = isCollapsed(item.message);
         m[QStringLiteral("tone")] = toneName(item.message.tone);
         m[QStringLiteral("removing")] = item.removing;
         m[QStringLiteral("opacity")] = item.opacity;
@@ -407,6 +448,33 @@ void PanadapterMessageOverlay::paintEvent(QPaintEvent* event)
                           kAccentRailWidth, box.height()));
         p.restore();
 
+        // Collapsed: one line of title, no tone icon, no detail, no countdown.
+        // Dropping the 56px icon column is most of what makes the pill narrow.
+        if (isCollapsed(item.message)) {
+            QFont pillFont = p.font();
+            pillFont.setPointSize(11);
+            pillFont.setBold(true);
+            p.setFont(pillFont);
+            p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
+
+            const qreal textLeft = box.left() + kAccentRailWidth
+                                 + kCollapsedPaddingX;
+            const qreal textRight = box.right() - kCollapsedPaddingX
+                                  - kCloseSize;
+            const QRectF pillTextRect(textLeft,
+                                      box.top(),
+                                      qMax<qreal>(20.0, textRight - textLeft),
+                                      box.height());
+            const QFontMetrics pillFm(pillFont);
+            p.drawText(pillTextRect,
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       pillFm.elidedText(collapsedTextFor(item.message),
+                                         Qt::ElideRight,
+                                         qRound(pillTextRect.width())));
+            p.restore();
+            continue;
+        }
+
         const QRectF iconRect(box.left() + 9.0,
                               box.top() + (box.height() - 42.0) / 2.0,
                               42.0,
@@ -437,10 +505,12 @@ void PanadapterMessageOverlay::paintEvent(QPaintEvent* event)
                                    countH);
         }
 
+        const bool hasCornerButton =
+            item.message.dismissible || item.message.collapsible;
         QRectF textRect = box.adjusted(
             kIconColumnWidth + 8,
             kCardPaddingTop,
-            item.message.dismissible ? -(kCloseSize + kCloseInset + 16) : -16,
+            hasCornerButton ? -(kCloseSize + kCloseInset + 16) : -16,
             -kCardPaddingBottom);
         if (textRect.width() < 40.0) {
             textRect = box.adjusted(kCardPaddingX, 10, -kCardPaddingX, -10);
@@ -544,9 +614,79 @@ QString PanadapterMessageOverlay::normalizedId(const QString& id) const
     return id.trimmed();
 }
 
+bool PanadapterMessageOverlay::isCollapsed(
+    const PanadapterOverlayMessage& message) const
+{
+    return message.collapsible && m_collapsedIds.contains(message.id);
+}
+
+// Collapsed cards show the title, falling back to the detail when a message
+// carries only one of the two.
+QString PanadapterMessageOverlay::collapsedTextFor(
+    const PanadapterOverlayMessage& message) const
+{
+    return message.title.isEmpty() ? message.detail : message.title;
+}
+
+bool PanadapterMessageOverlay::setMessageCollapsed(const QString& id,
+                                                   bool collapsed)
+{
+    const QString key = normalizedId(id);
+    const int idx = indexOf(key);
+    if (idx < 0 || !m_items[idx].message.collapsible) {
+        return false;
+    }
+    if (m_collapsedIds.contains(key) == collapsed) {
+        return true;
+    }
+    if (collapsed) {
+        m_collapsedIds.insert(key);
+    } else {
+        m_collapsedIds.remove(key);
+    }
+    relayout();
+    updateAccessibilityDescription(true);
+    return true;
+}
+
+bool PanadapterMessageOverlay::isMessageCollapsed(const QString& id) const
+{
+    return m_collapsedIds.contains(normalizedId(id));
+}
+
+QSize PanadapterMessageOverlay::collapsedCardSizeFor(
+    const PanadapterOverlayMessage& message) const
+{
+    QFont titleFont = font();
+    titleFont.setPointSize(11);
+    titleFont.setBold(true);
+    const QFontMetrics fm(titleFont);
+
+    // Always reserve the toggle: a collapsed card with no visible control
+    // cannot be expanded again, which would strand the operator.
+    const int toggleReserve = kCloseSize + kCollapsedPaddingX;
+    const int available = qMax(120, width() - 2 * kStackMargin);
+    const int chrome = kAccentRailWidth + kCollapsedPaddingX + toggleReserve
+                     + kCollapsedPaddingX;
+    const int maxTextWidth = qMax(40,
+                                  qMin(kCollapsedMaxTextWidth,
+                                       available - chrome));
+    const int textWidth =
+        qMin(fm.horizontalAdvance(collapsedTextFor(message)), maxTextWidth);
+
+    const int boxW = qMin(chrome + textWidth, available);
+    const int boxH = qMax(fm.height() + 2 * kCollapsedPaddingY,
+                          kCloseSize + 2 * kCollapsedPaddingY);
+    return QSize(boxW, boxH);
+}
+
 QSize PanadapterMessageOverlay::cardSizeFor(
     const PanadapterOverlayMessage& message) const
 {
+    if (isCollapsed(message)) {
+        return collapsedCardSizeFor(message);
+    }
+
     QFont titleFont = font();
     titleFont.setPointSize(14);
     titleFont.setBold(true);
@@ -557,7 +697,11 @@ QSize PanadapterMessageOverlay::cardSizeFor(
     countdownFont.setPointSize(9);
     countdownFont.setBold(true);
 
-    const int closeReserve = message.dismissible ? kCloseSize + kCloseInset : 0;
+    // A collapsible card carries the collapse toggle in the same corner slot,
+    // so it reserves the width too.
+    const int closeReserve = (message.dismissible || message.collapsible)
+        ? kCloseSize + kCloseInset
+        : 0;
     const QString initialCountdown = message.timeoutMs > 0
         ? QStringLiteral("%1s").arg(qMax(1, (message.timeoutMs + 999) / 1000))
         : QString();
@@ -633,14 +777,39 @@ QToolButton* PanadapterMessageOverlay::ensureCloseButton(Item& item)
         item.closeButton->setFocusPolicy(Qt::TabFocus);
         connect(item.closeButton, &QToolButton::clicked, this, [this, button = item.closeButton]() {
             const QString id = button->property("messageId").toString();
+            const int idx = indexOf(normalizedId(id));
+            // Decided at click time, not at connect time: a card's
+            // collapsible flag can change across an owner re-upsert.
+            if (idx >= 0 && m_items[idx].message.collapsible) {
+                setMessageCollapsed(id, !isCollapsed(m_items[idx].message));
+                return;
+            }
             requestRemove(id, RemoveReason::Manual);
         });
     }
 
     item.closeButton->setProperty("messageId", item.message.id);
     item.closeButton->setObjectName(buttonObjectNameForId(item.message.id));
-    const QString name = tr("Close panadapter message: %1")
-        .arg(item.message.title.isEmpty() ? item.message.detail : item.message.title);
+    const QString label = item.message.title.isEmpty()
+        ? item.message.detail
+        : item.message.title;
+    const bool collapsed = isCollapsed(item.message);
+    QString name;
+    if (item.message.collapsible) {
+        name = collapsed
+            ? tr("Expand panadapter message: %1").arg(label)
+            : tr("Collapse panadapter message: %1").arg(label);
+    } else {
+        name = tr("Close panadapter message: %1").arg(label);
+    }
+    // Safe downcast: this function is the only thing that ever assigns
+    // item.closeButton, and it always constructs an OverlayCloseButton.
+    // qobject_cast is unavailable — the class is file-local with no Q_OBJECT.
+    static_cast<OverlayCloseButton*>(item.closeButton)
+        ->setGlyph(!item.message.collapsible
+                       ? OverlayButtonGlyph::Close
+                       : (collapsed ? OverlayButtonGlyph::Expand
+                                    : OverlayButtonGlyph::Collapse));
     item.closeButton->setAccessibleName(name);
     item.closeButton->setToolTip(name);
     return item.closeButton;
@@ -695,7 +864,9 @@ void PanadapterMessageOverlay::relayout()
         const QSize size = cardSizeFor(m_items[i].message);
         liveIndexes.append(i);
         liveSizes.append(size);
-        stackWidth = qMax(stackWidth, size.width());
+        if (!isCollapsed(m_items[i].message)) {
+            stackWidth = qMax(stackWidth, size.width());
+        }
         totalHeight += size.height();
         if (liveIndexes.size() > 1) {
             totalHeight += kCardSpacing;
@@ -711,7 +882,9 @@ void PanadapterMessageOverlay::relayout()
         for (int i = 0; i < liveIndexes.size(); ++i) {
             Item& item = m_items[liveIndexes[i]];
             QSize size = liveSizes[i];
-            size.setWidth(stackWidth);
+            if (!isCollapsed(item.message)) {
+                size.setWidth(qMax(stackWidth, size.width()));
+            }
             const int x = qMax(kStackMargin, (width() - size.width()) / 2);
             item.targetRect = QRectF(x, y, size.width(), size.height());
             item.targetOpacity = 1.0;
@@ -846,8 +1019,17 @@ void PanadapterMessageOverlay::updateCloseButtons()
     // expires). (#3999 review)
     const int minWidthForClose = kIconColumnWidth + kCloseSize + 2 * kCloseInset;
     for (Item& item : m_items) {
-        if (!item.message.dismissible || item.removing || item.opacity <= 0.05
-            || item.currentRect.width() < minWidthForClose) {
+        const bool collapsed = isCollapsed(item.message);
+        // A collapsed pill has no icon column, and hiding its toggle would
+        // strand it collapsed with no way back, so it only needs room for the
+        // control itself.
+        const int minWidth = collapsed
+            ? kCloseSize + 2 * kCollapsedPaddingX
+            : minWidthForClose;
+        const bool wantsButton =
+            item.message.dismissible || item.message.collapsible;
+        if (!wantsButton || item.removing || item.opacity <= 0.05
+            || item.currentRect.width() < minWidth) {
             if (item.closeButton) {
                 item.closeButton->hide();
             }
@@ -855,8 +1037,11 @@ void PanadapterMessageOverlay::updateCloseButtons()
         }
 
         QToolButton* button = ensureCloseButton(item);
-        button->move(qRound(item.currentRect.right()) - kCloseSize - kCloseInset,
-                     qRound(item.currentRect.top()) + kCloseInset);
+        const int inset = collapsed ? kCollapsedPaddingX : kCloseInset;
+        const int y = collapsed
+            ? qRound(item.currentRect.center().y()) - kCloseSize / 2
+            : qRound(item.currentRect.top()) + kCloseInset;
+        button->move(qRound(item.currentRect.right()) - kCloseSize - inset, y);
         button->show();
         button->raise();
     }
@@ -910,7 +1095,14 @@ QString PanadapterMessageOverlay::accessibleSummary() const
             message += part;
         };
         appendSentence(item.message.title);
-        appendSentence(item.message.detail);
+        // A collapsed card hides its detail visually; keep it out of the spoken
+        // summary too so the two agree, but say that it is collapsed so the
+        // detail is discoverable rather than silently missing.
+        if (isCollapsed(item.message)) {
+            appendSentence(tr("Collapsed"));
+        } else {
+            appendSentence(item.message.detail);
+        }
 
         const QString countdown = countdownText(item.expiresAtMs, item.removing, now);
         if (!countdown.isEmpty()) {

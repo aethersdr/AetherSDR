@@ -27,8 +27,10 @@
 #include "ConnectionPanel.h"
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
+#include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwTrace.h"
+#include "gui/CwDecodeSettings.h"   // rxEnabled() gate for the RX-audio CW feed
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
 #include "core/PerfTelemetry.h"
@@ -173,6 +175,39 @@ void MainWindow::wireDiscovery()
     // ── Wire up discovery ──────────────────────────────────────────────────
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             m_connPanel, &ConnectionPanel::onRadioDiscovered);
+
+    // aetherd Gap B (Step 2b-2): Hermes-Lite 2 radios answer HPSDR discovery on
+    // UDP/1024, which the Flex discovery above never sees. Feed them into the
+    // same picker slots, tagged family="hl2" so RadioModel routes the connect
+    // through the IRadioBackend seam instead of the Flex RadioConnection.
+    connect(&m_radioModel, &RadioModel::backendRebuilt,
+            this, &MainWindow::rewirePanStreamAfterBackendSwap);
+
+    // RX audio from a backend that demodulates in-process (HL2). Flex audio
+    // arrives on the PanadapterStream path instead and never reaches here, so
+    // there is no double-feed. Bound to m_radioModel rather than the backend, so
+    // it survives a backend swap without re-wiring.
+    //
+    // ⚠ The demo (SimBackend) ALSO emits IRadioBackend::audioFrameReady, and
+    // wireBackendSeam() already connects that signal straight to the AudioEngine.
+    // Without this gate the demo's frames arrive TWICE — once direct, once relayed
+    // via RadioModel::backendAudioFrameReady — and the engine consumes at double
+    // rate: an audible ~187.5 Hz (24 kHz / 128-sample frame) scratchy buzz.
+    // Qt::UniqueConnection cannot catch it: these are two DIFFERENT signals
+    // arriving at the same slot, so nothing looks duplicate to Qt.
+    connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
+            m_audio, [this](const QByteArray& pcm) {
+        if (backendOwnsRxAudio()) return;   // demo feeds the engine directly
+        m_audio->feedAudioData(pcm);
+    });
+
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    m_hl2Discovery.start();
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
@@ -405,6 +440,52 @@ void MainWindow::wireRadioModel()
             this, [this](bool connected) {
         dissolveAllSliceLinks(connected ? "radio connected" : "radio disconnected");
     });
+    // Local microphone capture for a backend that MODULATES ON THE HOST.
+    //
+    // Capture is otherwise started only from the Flex DAX signals
+    // (txAudioStreamReady / remoteTxStreamReady, gated on mic_selection=PC),
+    // none of which a Hermes-Lite 2 ever emits. The consequence was subtle: no
+    // capture meant no txFinalMonitorPcmReady, and since the TONE generator is
+    // injected INSIDE that callback, neither the microphone NOR the test tone
+    // produced anything — the radio keyed and transmitted silence, with the
+    // radio's own forward-power counts reading 0 to prove it.
+    //
+    // startTxStream also opens the Flex-side network sender, but that stays
+    // inert here: the Opus encoder and the VITA-49 send are gated on a stream id
+    // this backend never sets, so what actually runs is capture plus the client
+    // TX DSP chain, which is exactly what submitTxAudio needs.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        // Capability, not a family-name test: a backend host-modulates only if
+        // it says so AND is actually allowed to transmit. An RX-only (or
+        // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const bool hostModulates = caps.hostModulates && caps.canTransmit;
+        m_audio->setHostModulation(hostModulates && connected);
+        // PC audio is not optional on a host-modulating backend: all audio, both
+        // directions, lives on this computer. Turning it off would leave the
+        // operator deaf and mute with nothing to explain it.
+        if (m_titleBar)
+            m_titleBar->setPcAudioLocked(connected && hostModulates);
+        if (connected && hostModulates) {
+            if (!m_audio->isTxStreaming())
+                audioStartTx(m_radioModel.radioAddress(), 4991);
+            // RX must be started imperatively, exactly like TX. Locking the
+            // button calls setPcAudioEnabled(), which is signal-blocked, so no
+            // pcAudioToggled() fires and the toggle handler never opens the
+            // sink. The two setting-gated start paths (onConnected /
+            // profile-load) are skipped when a stale PcAudioEnabled=False is
+            // persisted, and the locked button can no longer be clicked to
+            // recover -- leaving the sink Stopped with the button showing ON.
+            // Persist the setting too, so those paths agree on the next launch.
+            AppSettings::instance().setValue("PcAudioEnabled", "True");
+            AppSettings::instance().save();
+            audioStartRx();
+        } else if (!connected && hostModulates) {
+            audioStopTx();
+        }
+    });
+
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
@@ -537,9 +618,10 @@ void MainWindow::wireRadioModel()
     // registered VITA-49 socket).  We do NOT start a separate mic TX
     // stream — that would open a QAudioSource and an unregistered UDP
     // socket, wasting resources and corrupting the shared packet counter.
-    // Route TX VITA-49 packets through the registered UDP socket
-    connect(m_audio, &AudioEngine::txPacketReady,
-            m_radioModel.panStream(), &PanadapterStream::sendToRadio);
+    // Route TX VITA-49 packets through the registered UDP socket. Flex-only and
+    // stream-bound, so it goes through the shared helper the post-swap rebind
+    // also calls (aetherd Gap B; #4448).
+    wirePanStreamTxSink();
 
     connect(&m_radioModel, &RadioModel::txAudioStreamReady,
             this, [this](quint32 streamId) {
@@ -940,7 +1022,10 @@ void MainWindow::wirePanLifecycle()
         return profileLoadFrameLooksRenderable(sw, binCount);
     };
 
-    connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
+    // aetherd Gap B (Step 1): bind the render path to the backend-neutral feed, not
+    // the Flex-only PanadapterStream. Signature-identical → handler bodies unchanged;
+    // for a Flex session the feed forwards PanadapterStream 1:1 (byte-for-byte).
+    connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, [this, profileLoadFrameReady](quint32 streamId,
                                                 const QVector<float>& bins,
                                                 qint64 emittedNs) {
@@ -992,14 +1077,14 @@ void MainWindow::wirePanLifecycle()
             QString::number(streamId));
     });
     // ── S History Markers — tap into FFT frames for voice signal detection ──
-    connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
+    connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, &MainWindow::onSpectrumReadyForSHistory);
 
     // ── Adaptive RX filter — drive the fit engine off the same FFT frames (RFC #3878)
-    connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
+    connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, &MainWindow::onSpectrumReadyForAdaptiveFilter);
 
-    connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
+    connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
             this, [this, profileLoadFrameReady](quint32 streamId,
                                                 const QVector<float>& bins,
                                                 double low,
@@ -1085,7 +1170,7 @@ void MainWindow::wirePanLifecycle()
             },
             QString::number(streamId));
     });
-    connect(m_radioModel.panStream(), &PanadapterStream::waterfallAutoBlackLevel,
+    connect(&m_radioModel, &RadioModel::panFeedWaterfallAutoBlackLevel,
             this, [this](quint32 streamId, quint32 autoBlack) {
         if (m_shuttingDown || !m_panStack) {
             return;
@@ -1172,6 +1257,15 @@ void MainWindow::wirePanLifecycle()
                 menu->setDeclaredBands(m_radioModel.declaredBands());
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
+                // Re-push authoritative geometry when a gesture that was
+                // suppressing it releases. Without this a backend that emits
+                // geometry only on change (HL2's NCO) loses the update for good
+                // and the view stays parked at the old centre while the slice,
+                // pan model and waterfall have all moved.
+                connect(sw, &SpectrumWidget::panGeometryResyncNeeded,
+                        this, [this, panId = pan->panId()]() {
+                    resyncPanGeometryToView(panId);
+                });
                 connect(pan, &PanadapterModel::infoChanged,
                         this, [this, panId = pan->panId()](double, double) {
                     if (!profileLoadRadioStateWritesHeld()) {
@@ -1234,6 +1328,10 @@ void MainWindow::wirePanLifecycle()
         }
         connect(pan, &PanadapterModel::infoChanged,
                 applet->spectrumWidget(), &SpectrumWidget::setFrequencyRange);
+        connect(applet->spectrumWidget(), &SpectrumWidget::panGeometryResyncNeeded,
+                this, [this, panId = pan->panId()]() {
+            resyncPanGeometryToView(panId);
+        });
         connect(pan, &PanadapterModel::infoChanged,
                 this, [this, panId = pan->panId()](double, double) {
             if (!profileLoadRadioStateWritesHeld()) {
@@ -1519,15 +1617,28 @@ void MainWindow::wireCatPorts()
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming.
     // TCI audio feeds exclusively from DAX (not audioDataReady) so that
-    // audio_mute doesn't kill TCI audio (#1331).
-    if (m_radioModel.panStream()) {
-        connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-                tciServer(), &TciServer::onDaxAudioReady);
-        connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
-                tciServer(), &TciServer::onIqDataReady);
-        connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
-                tciServer(), &TciServer::onWaterfallRowReady);
-    }
+    // audio_mute doesn't kill TCI audio (#1331). Stream-bound, so it goes through
+    // the shared helper the post-swap rebind also calls (#4448).
+    wirePanStreamTciSinks();
+
+    // RX audio for a backend that demodulates in-process (HL2). That backend has
+    // no PanadapterStream, so wirePanStreamTciSinks() above binds nothing and TCI
+    // clients heard silence — WSJT-X connected, tracked frequency and mode, and
+    // never decoded a single signal.
+    //
+    // The payload is already what onDaxAudioReady expects: float32 interleaved
+    // stereo at 24 kHz (Hl2RxDsp::Config::audioSampleRateHz). Channel 1 is not an
+    // arbitrary pick — with no slice claiming a DAX channel, onDaxAudioReady's
+    // fallback maps channel N to trx N-1, so 1 → trx 0, the single receiver such
+    // a radio advertises in trx_count.
+    //
+    // Bound to m_radioModel, not the backend, so it survives a family swap; Flex
+    // never emits backendAudioFrameReady, so there is no double-feed.
+    connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
+            this, [this](const QByteArray& pcm) {
+        if (tciServer())
+            tciServer()->onDaxAudioReady(1, pcm);
+    });
 
     // TCI client count changes no longer auto-create/remove the audio stream.
     // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
@@ -1535,6 +1646,128 @@ void MainWindow::wireCatPorts()
     // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
 #endif
 
+}
+
+// The RX-audio sinks fed by PanadapterStream::audioDataReady, in one place so
+// buildUI() and rewirePanStreamAfterBackendSwap() bind an identical set. The
+// stream is owned by the Flex backend and is destroyed/rebuilt on a family
+// swap (RadioModel::teardownBackend/setupBackend), which drops these — and Flex
+// RX audio itself rides audioDataReady, so a missed one is silence, not a
+// degraded feature. Keeping the list here (not open-coded in two places) is why
+// a new sink added to buildUI cannot silently go un-rebound after a swap.
+bool MainWindow::backendOwnsRxAudio()
+{
+    // The demo (RFC #4288 Route A) is the one backend that BOTH vends a
+    // PanadapterStream and emits its own seam audio: SimBackend::onAudioTick →
+    // audioFrameReady carries the real demodulated demo audio, while the stream
+    // still carries the old shim's synthetic scene. Wiring both into
+    // feedAudioData() sums two independent streams at the sink — audible as
+    // wobble plus distortion, and recognisably "the waterfall you can hear".
+    // Backends with no PanadapterStream at all (HL2) never reach these sites.
+    return dynamic_cast<SimBackend*>(m_radioModel.backend()) != nullptr;
+}
+
+void MainWindow::wirePanStreamRxAudioSinks()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps)
+        return;   // RX-only/in-process backend (HL2/KiwiSDR): no VITA-49 stream
+
+    // The demo (RFC #4288 Route A) is the one backend that BOTH vends a
+    // PanadapterStream and emits its own seam audio: SimBackend::onAudioTick →
+    // audioFrameReady carries the real demodulated demo audio, while the stream
+    // still carries the old shim's synthetic scene. Wiring both into
+    // feedAudioData() sums two independent streams at the sink — audible as
+    // wobble plus distortion, and recognisably "the waterfall you can hear".
+    // The backend's own audio wins; the stream's other RX taps below stay wired.
+    // Primary RX audio → QAudioSink (skipped when the backend owns its audio).
+    if (!backendOwnsRxAudio()) {
+        connect(ps, &PanadapterStream::audioDataReady,
+                m_audio, &AudioEngine::feedAudioData,
+                Qt::UniqueConnection);
+    }
+
+    // QSO recorder RX tap (float32). TX monitor + MOX gating are wired to
+    // AudioEngine/TransmitModel, which survive the swap, so they stay in buildUI.
+    if (m_qsoRecorder) {
+        connect(ps, &PanadapterStream::audioDataReady,
+                m_qsoRecorder, &QsoRecorder::feedRxAudio);
+    }
+
+    // CW decoder RX feed — gated live on the toggle so it need not rewire (#2417).
+    connect(ps, &PanadapterStream::audioDataReady,
+            &m_cwDecoder, [this](const QByteArray& pcm) {
+                if (CwDecodeSettings::rxEnabled())
+                    m_cwDecoder.feedAudio(pcm);
+            });
+
+    // RTTY decoder RX feed — gated on the decoder being running.
+    connect(ps, &PanadapterStream::audioDataReady,
+            &m_rttyDecoder, [this](const QByteArray& pcm) {
+                if (m_rttyDecoder.isRunning())
+                    m_rttyDecoder.feedAudio(pcm);
+            });
+}
+
+// TX VITA-49 packets → the registered PanadapterStream socket. Flex-only (the
+// socket lives on the stream); a non-Flex/RX-only backend has none. Shared by
+// wireRadioModel() and the post-swap rebind.
+void MainWindow::wirePanStreamTxSink()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps || !m_audio)
+        return;
+    connect(m_audio, &AudioEngine::txPacketReady, ps, &PanadapterStream::sendToRadio);
+}
+
+// TCI audio/IQ/waterfall feeds from PanadapterStream. Shared by the TCI wiring
+// and the post-swap rebind. Self-guards on HAVE_WEBSOCKETS so callers need not.
+void MainWindow::wirePanStreamTciSinks()
+{
+#ifdef HAVE_WEBSOCKETS
+    auto* ps = m_radioModel.panStream();
+    if (!ps || !tciServer())
+        return;
+    connect(ps, &PanadapterStream::daxAudioReady,
+            tciServer(), &TciServer::onDaxAudioReady);
+    connect(ps, &PanadapterStream::iqDataReady,
+            tciServer(), &TciServer::onIqDataReady);
+    connect(ps, &PanadapterStream::waterfallRowReady,
+            tciServer(), &TciServer::onWaterfallRowReady);
+    // F6 (#4448): keeps TCI's channel→TRX routing cache truthful; previously
+    // subscribed inside TciServer, which left it disconnected after a family swap.
+    connect(ps, &PanadapterStream::daxStreamUnregistered,
+            tciServer(), &TciServer::onDaxStreamUnregistered);
+#endif
+}
+
+// DAX-IQ raw-packet feed from PanadapterStream. Shared by wireDaxIq() and the
+// post-swap rebind.
+void MainWindow::wirePanStreamDaxIqSink()
+{
+    auto* ps = m_radioModel.panStream();
+    if (!ps || !(m_appletPanel && m_appletPanel->daxIqApplet()))
+        return;
+    connect(ps, &PanadapterStream::iqDataReady,
+            &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
+}
+
+void MainWindow::rewirePanStreamAfterBackendSwap()
+{
+    // RadioModel replaced the backend because the operator picked a radio of a
+    // different family, and the backend owns the PanadapterStream. Qt already
+    // removed every connection bound to the destroyed stream, so re-make exactly
+    // those — and only those, through the same helpers the buildUI-time sites use,
+    // so a stream-bound sink can never be present at one site and missing here.
+    if (!m_radioModel.panStream())
+        return;   // non-Flex backend: nothing owns these paths
+
+    wirePanStreamRxAudioSinks();
+    wirePanStreamTxSink();
+    wirePanStreamTciSinks();
+    wirePanStreamDaxIqSink();
+
+    qCDebug(lcProtocol) << "MainWindow: re-bound PanadapterStream signals after backend swap";
 }
 
 void MainWindow::wireDaxIq()
@@ -1582,12 +1815,15 @@ void MainWindow::wireDaxIq()
                            << "ip=" << kvs.value("ip");
             m_radioModel.daxIqModel().applyStreamStatus(streamId, kvs);
             int ch = kvs.value("daxiq_channel").toInt();
-            if (streamId && ch >= 1 && ch <= 4)
+            // panStream() is null on a backend that carries its own IQ; there
+            // is no VITA-49 stream to register against.
+            if (streamId && ch >= 1 && ch <= 4 && m_radioModel.panStream())
                 m_radioModel.panStream()->registerIqStream(streamId, ch);
         });
 
-        connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
-                &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
+        // Stream-bound: through the shared helper the post-swap rebind also calls
+        // (#4448). The daxIqModel/applet connects below survive a swap and stay.
+        wirePanStreamDaxIqSink();
         connect(&m_radioModel.daxIqModel(), &DaxIqModel::iqLevelReady,
                 m_appletPanel->daxIqApplet(), &DaxIqApplet::setDaxIqLevel);
         connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqEnableRequested,
@@ -1746,7 +1982,7 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         // TX-automation gate — set AFTER start(), which reads
         // AETHER_AUTOMATION_ALLOW_TX into m_txAllowed and would otherwise
         // clobber a pre-start value. Fold in the persisted operator opt-in so
-        // a GUI enable survives restart; setTxAllowed arms the watchdog.
+        // a GUI enable survives restart; accepted TX actions arm the watchdog.
         const bool txPinnedOff =
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_NO_TX");
         guard->setTxAllowed(

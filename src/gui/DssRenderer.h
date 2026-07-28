@@ -2,11 +2,14 @@
 
 #include <QColor>
 #include <QImage>
+#include <QPointF>
 #include <QSize>
 #include <QVector>
 #include <QtCore/qfloat16.h>
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 
 // ─── Stacked-trace spectrum stream surface ──────────────────────────────────
@@ -41,6 +44,37 @@ public:
     // Colour uses a stable signal aperture independent of the Ref-level height
     // span. Otherwise a high Ref level compresses every real signal into blue.
     static constexpr float kColorSpanDb        = 45.0f;
+
+    // Project a normalized frequency coordinate onto the same perspective
+    // plane used by both DSS renderers. depth=0 is the full-width front edge;
+    // depth=1 is the narrowed back edge. Slice overlays use this helper so
+    // their apparent angle cannot drift from the FFT surface.
+    static QPointF projectPerspective(float frequencyUnit, float depth)
+    {
+        const float d = std::clamp(depth, 0.0f, 1.0f);
+        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        return QPointF(0.5f + (frequencyUnit - 0.5f) * width,
+                       1.0f - d * kDepthSpanFrac);
+    }
+
+    // Project a point onto the visible top of a DSS ridge. This is the CPU
+    // equivalent of dss_mesh.vert's height mapping and is used by overlays
+    // that must stay attached to the surface when the 3D floor moves.
+    static QPointF projectSurface(float frequencyUnit, float depth, float dbm,
+                                  float floorDbm, float rangeDb, float zCurve)
+    {
+        const float d = std::clamp(depth, 0.0f, 1.0f);
+        const float width = 1.0f - d * (1.0f - kBackWidthFrac);
+        const float finiteDbm = std::isfinite(dbm) ? dbm : floorDbm;
+        const float strengthLinear = std::clamp(
+            (finiteDbm - floorDbm) / std::max(rangeDb, 1.0f),
+            0.0f, 1.0f);
+        const float strengthHeight = std::pow(
+            strengthLinear, std::max(zCurve, 0.05f));
+        QPointF point = projectPerspective(frequencyUnit, d);
+        point.ry() -= static_cast<double>(strengthHeight) * kFrontMaxRidgeFrac * width;
+        return point;
+    }
 
     // Maps a dBm value to an RGB colour using the host's panadapter palette.
     using PaletteFn = std::function<QRgb(float dbm)>;
@@ -94,6 +128,9 @@ public:
 
     void invalidate() { m_dirty = true; }
     bool hasData() const { return m_count > 0; }
+    // Forget temporal filter inputs without discarding already-decoded dBm
+    // rows. Used when the upstream raw-pixel scale changes.
+    void resetInputSmoothing();
     void clear();
 
     // ── Data-model accessors for the GPU mesh path ──────────────────────────
@@ -135,6 +172,15 @@ private:
     std::array<float, kCols> m_rawPrev2{};
     int m_rawHistCount = 0;
 
+    // One-shot flags: after resetInputSmoothing() the next pushed row must not
+    // blend against the retained row that preceded the reset (it was decoded
+    // under the old raw-pixel scale). Cleared once each path consumes it. See
+    // resetInputSmoothing() — the median-of-3 raw history is not enough on its
+    // own; the temporal IIR term against the previous smoothed row also carries
+    // pre-reset data.
+    bool m_skipLiveTemporalBlendOnce = false;
+    bool m_skipHistoryTemporalBlendOnce = false;
+
     // Retained scrollback store. This is intentionally separate from the
     // 96-row visible surface above: waterfall history can be much deeper, and
     // the visible 3D mesh is rebuilt from this ring only while viewing history.
@@ -157,3 +203,20 @@ private:
     float   m_cacheZCurve       = 0.0f;
     quint64 m_cachePaletteToken = ~0ull;
 };
+
+// Painter's-algorithm occlusion for the CPU depth-shadow overlay drawn on top
+// of this surface.
+//
+// `yFrontToBack` holds the projected screen y of one frequency column at each
+// depth step, nearest row first. rebuild() fills every row's curtain down to
+// the plot floor, so a nearer row hides everything below its ridge: a point is
+// occluded once it sits lower (larger y) than the topmost ridge in front of
+// it. The shadow is painted as a flat overlay after the surface, so segments
+// that fail this test would otherwise be stroked across the face of the nearer
+// curtain and read as floating in front of the surface.
+//
+// Returns one flag per segment (size = N-1, empty for N < 2): true when either
+// endpoint still clears that silhouette, so partial overlaps are kept rather
+// than over-culled. The half-pixel slack keeps a ridge that merely grazes the
+// silhouette from flickering in and out between frames.
+QVector<bool> dssDepthVisibleSegments(const QVector<qreal>& yFrontToBack);

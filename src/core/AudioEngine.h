@@ -53,6 +53,7 @@ class ClientReverb;
 class ClientFinalLimiter;
 class ClientTxTestTone;
 class ClientQuindarTone;
+class WsprBeacon;
 class QuindarLocalSink;
 class CwSidetoneGenerator;
 #ifdef __APPLE__
@@ -119,6 +120,16 @@ public:
 
     // TX (microphone) – capture audio and send VITA-49 packets to radio
     Q_INVOKABLE bool startTxStream(const QHostAddress& radioAddress, quint16 radioPort);
+
+    // Host-modulating backend (HL2): run the TX audio chain even though no Flex
+    // stream id will ever be assigned.
+    //
+    // onTxAudioReady() gates on a stream id because for Flex that id IS the
+    // destination — no id means nowhere to send. A backend that modulates
+    // locally has a destination regardless, and the gate silently disabled the
+    // test tone as well, since the tone is injected inside that callback.
+    Q_INVOKABLE void setHostModulation(bool on) { m_hostModulation = on; }
+    bool hostModulation() const { return m_hostModulation; }
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
@@ -217,6 +228,10 @@ public:
     void setNr2AeFilter(bool on);
     QJsonObject nr2RuntimeDiagnostics() const;
     Q_INVOKABLE void setNr2UseOriginalGeometry(bool useOriginal);
+    // Tell the engine the main RX source is (or is not) the demo, so the main NR2
+    // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
+    // the active main NR2 filter if enabled so the change takes effect immediately.
+    Q_INVOKABLE void setMainSourceLegacyNr2(bool legacy);
     bool nr2UseOriginalGeometry() const
     {
         return m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
@@ -315,6 +330,13 @@ public:
     // overrides mic input with a sine before the user's DSP chain
     // runs — useful for setup / calibration.
     ClientTxTestTone* clientTxTestTone() { return m_clientTxTestTone.get(); }
+
+    // Sample-accurate WSPR source. It replaces the post-voice-chain signal
+    // on its own paced DAX/VITA-49 path, so speech processing and microphone
+    // callback rates cannot distort or shorten the four-tone frame.
+    WsprBeacon* wsprBeacon() { return m_wsprBeacon.get(); }
+    Q_INVOKABLE void startWsprPump();
+    Q_INVOKABLE void stopWsprPump();
 
     // Quindar tone generator (#2262).  Sits AFTER the user DSP chain
     // and PC mic gain but BEFORE the final brickwall limiter, so the
@@ -619,10 +641,26 @@ signals:
     // because those paths intentionally skip the voice chain.
     void txPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     // Mirror of txPostChainScopeReady for the RX side: high-rate emit
-    // (~125 Hz, no sample loss across audio callbacks) so the channel
-    // strip's "Aetherial Waveform — RX" panel sees a wall-clock-accurate
-    // scope.  The shared scopeSamplesReady throttles at 25 ms which made
-    // the strip's RX scroll lag wall clock at short time-window settings.
+    // (~125 Hz) so the channel strip's "Aetherial Waveform — RX" panel sees a
+    // wall-clock-accurate scope.  The shared scopeSamplesReady throttles at
+    // 25 ms which made the strip's RX scroll lag wall clock at short
+    // time-window settings.
+    //
+    // LOSSY — FOR DISPLAY ONLY.  This is throttled at 8 ms and the throttle
+    // DISCARDS the whole block, it does not merely skip a repaint.  Blocks
+    // shorter than 8 ms are therefore dropped outright: with NR2 enabled the
+    // RX drain hands over whole radio packets (5.33 ms on a Flex LAN stream)
+    // microseconds apart, and only the first of each drain tick survives —
+    // about half the audio.  An earlier version of this comment claimed "no
+    // sample loss across audio callbacks", which holds only while blocks are
+    // at least 8 ms long; Copy Assist was wired here on the strength of it and
+    // was fed a stream with a gap at every phoneme (#4486).
+    //
+    // Anything that must see EVERY sample — recognisers, decoders, recorders —
+    // belongs on receivePresentationPostDspAudioReady, which is unthrottled and
+    // additionally tags its source.  Also note this signal is emitted for every
+    // RX source with no tag, so a station running a Kiwi alongside the Flex
+    // sees the two interleaved here.
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void tncRxAudioReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
@@ -742,7 +780,8 @@ private:
     void clearLegacyKiwiDspState();
     void resetExternalKiwiDspState(ExternalRxAudioSourceState& source);
     void clearExternalKiwiDspState(ExternalRxAudioSourceState& source);
-    std::unique_ptr<SpectralNR> createNr2Filter(const QString& label) const;
+    std::unique_ptr<SpectralNR> createNr2Filter(
+        const QString& label, bool forceLegacyGeometry = false) const;
     std::unique_ptr<RNNoiseFilter> createRn2Filter(const QString& label) const;
     RNNoiseFilter* rn2ForSource(RxDspSource source,
                                 ExternalRxAudioSourceState* externalSource) const;
@@ -814,6 +853,10 @@ private:
     qint64 txCaptureBufferCapacityBytes() const;
     qint64 txCaptureNowMs() const;
     bool tciAudioFresh() const;
+    void pumpWsprBeacon();
+    void feedDaxTxAudioInternal(const QByteArray& float32pcm,
+                                bool markExternalSource,
+                                bool forceRadioDaxRoute);
     void observeTxCaptureState(QAudio::State state);
     void recordTxCaptureLocalTxAttempt();
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
@@ -849,6 +892,10 @@ private:
     quint16       m_txPort{0};
     quint32       m_txStreamId{0};         // DAX TX stream
     quint32       m_remoteTxStreamId{0};  // remote_audio_tx (voice/VOX)
+    // Host-modulating backend (HL2): no Flex stream id will ever be assigned,
+    // so the TX gate keys off this instead. setHostModulation() is the single
+    // write path.
+    bool          m_hostModulation{false};
     quint8        m_txPacketCount{0};    // 4-bit, mod 16
     QByteArray    m_txAccumulator;       // accumulate PCM until 128 stereo pairs
     QByteArray    m_voxAccumulator;     // accumulate PCM for VOX/met_in_rx stream
@@ -960,6 +1007,11 @@ private:
     std::unique_ptr<SpectralNR> m_kiwiSdrNr2;
     std::atomic<bool> m_nr2Enabled{false};
     std::atomic<bool> m_nr2UseOriginalGeometry{false};
+    // Set true while the connected MAIN source is the demo (SimBackend), whose
+    // 128-sample frames need the original 256/2 NR2 geometry (see createNr2Filter).
+    // Independent of the user-facing m_nr2UseOriginalGeometry setting, and scoped
+    // to the main filter only — real radios and Kiwi keep the 1024/4 geometry.
+    std::atomic<bool> m_mainSourceLegacyNr2{false};
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH
     std::unique_ptr<SpecbleachFilter> m_nr4;
@@ -1026,6 +1078,7 @@ private:
     std::unique_ptr<ClientReverb> m_clientReverbTx;
     std::unique_ptr<ClientFinalLimiter> m_clientFinalLimiterTx;
     std::unique_ptr<ClientTxTestTone>   m_clientTxTestTone;
+    std::unique_ptr<WsprBeacon>         m_wsprBeacon;
     std::unique_ptr<ClientQuindarTone>  m_clientQuindarTone;
     // Audio-thread-loaded pointer for the post-final-limiter monitor
     // (final-output recording).  Same lock-free atomic pointer pattern
@@ -1121,6 +1174,17 @@ private:
     // webcam mic that produces continuous ambient packets.
     QElapsedTimer m_tciAudioTimer;
     static constexpr qint64 kTciAudioActiveWindowMs = 200;
+    QTimer* m_wsprPumpTimer{nullptr};
+    QElapsedTimer m_wsprPumpClock;
+    qint64 m_wsprPumpedFrames{0};
+    QByteArray m_wsprInt16Scratch;
+    QByteArray m_wsprFloatScratch;
+    // DAX TX mode borrowed for the duration of a WSPR frame so the mic path
+    // cannot produce a second packet stream against the same m_txPacketCount.
+    // m_wsprSavedDaxTxMode makes start/stop idempotent — stopWsprPump() has
+    // several early-return callers.
+    bool m_wsprPreviousDaxTxMode{false};
+    bool m_wsprSavedDaxTxMode{false};
 
     // Stale session watchdog: detects when audio data is being written but
     // processedUSecs() hasn't advanced, indicating the WASAPI session is

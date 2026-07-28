@@ -400,6 +400,55 @@ int main(int argc, char** argv)
         CHECK(wnbSpy.count() == 1);
     }
 
+    // ---- Facet 3c: model sink — setBandwidthLimits (the zoom clamp's source) ----
+    //
+    // The X-axis counterpart to setRange. Unlike dBm bounds, span limits are only
+    // meaningful as a PAIR: the consumer clamps the operator's zoom between them,
+    // so a half-applied or inverted report would pin the span to a single value
+    // with no way back out. Every rejection below leaves the previous state — and
+    // "unknown" — intact, which is what keeps a Flex radio on its model-derived
+    // clamp rather than on a bad report.
+    {
+        PanadapterModel pan(QStringLiteral("0x40000001"));
+        QSignalSpy limits(&pan, &PanadapterModel::bandwidthLimitsChanged);
+
+        // Nothing reported yet: the GUI must be able to tell this apart from a
+        // real limit, or it would clamp every radio to zero.
+        CHECK(pan.bandwidthLimitsKnown() == false);
+
+        CHECK(pan.setBandwidthLimits(0.048, 0.384) == true);
+        CHECK(pan.bandwidthLimitsKnown() == true);
+        CHECK(qFuzzyCompare(pan.minBandwidthMhz(), 0.048));
+        CHECK(qFuzzyCompare(pan.maxBandwidthMhz(), 0.384));
+        CHECK(limits.count() == 1);
+        limits.clear();
+
+        // Idempotent: same pair → no change, no emission.
+        CHECK(pan.setBandwidthLimits(0.048, 0.384) == false);
+        CHECK(limits.count() == 0);
+
+        // Inverted (min above max) is REJECTED wholesale, not clamped or
+        // reordered: a backend that reports it is confused, and guessing which
+        // bound it meant would hand the GUI a limit nobody asked for.
+        CHECK(pan.setBandwidthLimits(0.384, 0.048) == false);
+        CHECK(qFuzzyCompare(pan.minBandwidthMhz(), 0.048));
+        CHECK(qFuzzyCompare(pan.maxBandwidthMhz(), 0.384));
+        CHECK(limits.count() == 0);
+
+        // Non-positive bounds are not limits. Zero is the "never reported"
+        // sentinel, so accepting it would make a bad report indistinguishable
+        // from silence.
+        CHECK(pan.setBandwidthLimits(0.0, 0.384) == false);
+        CHECK(pan.setBandwidthLimits(0.048, 0.0) == false);
+        CHECK(pan.setBandwidthLimits(-1.0, 0.384) == false);
+        CHECK(limits.count() == 0);
+        CHECK(pan.bandwidthLimitsKnown() == true);   // still the good pair
+
+        // A single rate (min == max) is a legitimate radio: one span, no zoom.
+        CHECK(pan.setBandwidthLimits(0.192, 0.192) == true);
+        CHECK(limits.count() == 1);
+    }
+
     if (g_failures == 0) {
         std::printf("aetherd_pan_decode_test: all checks passed\n");
         return 0;

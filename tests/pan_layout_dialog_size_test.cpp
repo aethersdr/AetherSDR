@@ -51,6 +51,9 @@ int main(int argc, char** argv)
     if (!settingsProfile.isValid()) {
         return 1;
     }
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    }
     QApplication app(argc, argv);
     AppSettings::instance().load();
     std::printf("PanLayoutDialog Cancel-button overlap test harness\n\n");

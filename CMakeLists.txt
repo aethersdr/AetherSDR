@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.7.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.7.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -524,6 +524,17 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
+    src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
+    src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
+    src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
+    src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
+    src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
+    src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
+    src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
+    src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
+    src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
     src/core/AppSettings.cpp
     src/core/GpuSelector.cpp
@@ -559,6 +570,7 @@ set(CORE_SOURCES
     src/core/ClientPhaseRotator.cpp
     src/core/ClientFinalLimiter.cpp
     src/core/ClientTxTestTone.cpp
+    src/core/WsprBeacon.cpp
     src/core/ClientQuindarTone.cpp
     src/core/QuindarLocalSink.cpp
     src/core/CwSidetoneGenerator.cpp
@@ -770,6 +782,7 @@ set(GUI_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/WaterfallHistoryBuffer.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
@@ -877,6 +890,7 @@ set(GUI_SOURCES
     src/gui/ClientCompCurveWidget.cpp
     src/gui/ClientCompKnob.cpp
     src/gui/ClientGateApplet.cpp
+    src/gui/DemoApplet.cpp                # demo mode — noise-scene control tile (RFC #4288)
     src/gui/ClientGateCurveWidget.cpp
     src/gui/ClientGateEditor.cpp
     src/gui/StripGatePanel.cpp
@@ -2602,6 +2616,57 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
+add_executable(hl2_metis_protocol_test
+    tests/hl2_metis_protocol_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_metis_protocol_test PRIVATE src)
+add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
+
+# HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
+add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
+target_include_directories(hl2_metis_client_test PRIVATE src)
+target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+
+# HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
+add_executable(hl2_spectrum_test
+    tests/hl2_spectrum_test.cpp
+    src/core/backends/hl2/Hl2Spectrum.cpp)
+target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
+target_link_libraries(hl2_spectrum_test PRIVATE ${FFTW3_LIBRARIES})
+add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
+
+# HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
+add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
+target_include_directories(hl2_rxdsp_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
+
+# The RX DSP must demodulate at every IQ rate the operator can select by zooming.
+add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
+target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
+
+# The panadapter frame rate must follow the operator's slider, not the span
+# (#4470). Wall-clock paced, so it lives in its own target.
+add_executable(hl2_spectrum_rate_test tests/hl2_spectrum_rate_test.cpp)
+target_include_directories(hl2_spectrum_rate_test PRIVATE src)
+target_link_libraries(hl2_spectrum_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_spectrum_rate_test COMMAND hl2_spectrum_rate_test)
+
+add_executable(hl2_shift_test tests/hl2_shift_test.cpp)
+target_include_directories(hl2_shift_test PRIVATE src)
+target_link_libraries(hl2_shift_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_shift_test COMMAND hl2_shift_test)
+
+# HL2 backend — IRadioBackend seam contract against a capped fake HL2.
+add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
+target_include_directories(hl2_backend_test PRIVATE src)
+target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -2666,6 +2731,28 @@ add_executable(theme_manager_test
 target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
+set_tests_properties(theme_manager_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Panadapter overlay collapse semantics for owner-managed status cards (#4387):
+# a collapse must shrink the card, survive owner re-assertion, and never make
+# the indicator disappear while its condition still holds.
+qt_add_resources(PAN_OVERLAY_TEST_RESOURCES resources/resources.qrc)
+add_executable(panadapter_message_overlay_test
+    tests/panadapter_message_overlay_test.cpp
+    src/gui/PanadapterMessageOverlay.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${PAN_OVERLAY_TEST_RESOURCES}
+)
+target_include_directories(panadapter_message_overlay_test PRIVATE src)
+target_link_libraries(panadapter_message_overlay_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+set_tests_properties(panadapter_message_overlay_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
@@ -2673,9 +2760,15 @@ add_test(NAME theme_manager_test COMMAND theme_manager_test)
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
     src/core/AppSettings.cpp
+    # Real Hl2Discovery, so the nickname-key scenario exercises the shipping key
+    # format instead of a copy of it (Qt6::Network/AUTOMOC are for its QObject
+    # + QUdpSocket; the test only calls its static helpers).
+    src/core/backends/hl2/Hl2Discovery.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
 )
+set_target_properties(app_settings_safety_test PROPERTIES AUTOMOC ON)
 target_include_directories(app_settings_safety_test PRIVATE src)
-target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core)
+target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core Qt6::Network)
 foreach(APP_SETTINGS_SCENARIO
         save-before-load
         load-then-save
@@ -2685,7 +2778,9 @@ foreach(APP_SETTINGS_SCENARIO
         missing-live-temp
         missing-live-backup
         missing-live-corrupt
-        failed-load)
+        failed-load
+        display-slice-depth-default
+        nickname-key-roundtrip)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
@@ -3419,6 +3514,14 @@ if (ENABLE_ASR)
     target_link_libraries(asr_remote_backend_test PRIVATE Qt6::Core Qt6::Network)
     add_test(NAME asr_remote_backend_test COMMAND asr_remote_backend_test)
 
+    # Copy Assist audio tap: which RX source it follows, and the stereo→mono
+    # collapse including the non-finite guard. The policy is header-only, so
+    # this needs no AudioEngine — which cannot be built headless anyway (#4486).
+    add_executable(asr_tap_policy_test tests/asr_tap_policy_test.cpp)
+    target_include_directories(asr_tap_policy_test PRIVATE src)
+    target_link_libraries(asr_tap_policy_test PRIVATE Qt6::Core)
+    add_test(NAME asr_tap_policy_test COMMAND asr_tap_policy_test)
+
     # Copy Assist panel: offscreen UI test of confidence color-coding + controls.
     add_executable(copy_assist_panel_test
         tests/copy_assist_panel_test.cpp
@@ -3853,6 +3956,46 @@ add_test(NAME health_applet_test COMMAND health_applet_test)
 set_tests_properties(health_applet_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Demo-mode SimBackend lifecycle test (RFC #4288, Phase 1). SimBackend was once
+# wire-free, but Path B (RFC #4288) had it own a RadioConnection + PanadapterStream,
+# so it no longer links against a hand-picked subset of sources: those pull in
+# RadioDiscovery.h (<QUdpSocket>) at compile time and RadioConnection/PanadapterStream
+# symbols at link time. Link aethercore (which already contains SimBackend, NoiseMixer,
+# RadioConnection and PanadapterStream) exactly like flex_backend_lifecycle_test does,
+# so the dependency closure is resolved by the library rather than re-listed here.
+add_executable(sim_backend_test tests/sim_backend_test.cpp)
+target_include_directories(sim_backend_test PRIVATE src)
+target_link_libraries(sim_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
+if(UNIX)
+    target_link_libraries(sim_backend_test PRIVATE pthread)
+endif()
+set_target_properties(sim_backend_test PROPERTIES AUTOMOC ON)
+add_test(NAME sim_backend_test COMMAND sim_backend_test)
+
+# Demo-mode signal engine — pure pattern generator (RFC #4288, Phase 2a).
+add_executable(spectrum_pattern_test
+    tests/spectrum_pattern_test.cpp
+    src/core/backends/sim/SpectrumPatternGenerator.cpp
+)
+target_include_directories(spectrum_pattern_test PRIVATE src)
+target_link_libraries(spectrum_pattern_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(spectrum_pattern_test PRIVATE pthread)
+endif()
+add_test(NAME spectrum_pattern_test COMMAND spectrum_pattern_test)
+
+add_executable(noise_mixer_test
+    tests/noise_mixer_test.cpp
+    src/core/backends/sim/NoiseMixer.cpp
+    resources/resources.qrc          # for the bundled demo voice clip (:/demo_voice.wav)
+)
+target_include_directories(noise_mixer_test PRIVATE src)
+target_link_libraries(noise_mixer_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(noise_mixer_test PRIVATE pthread)
+endif()
+add_test(NAME noise_mixer_test COMMAND noise_mixer_test)
+
 add_executable(vu_meter_settings_test
     tests/vu_meter_settings_test.cpp
     src/gui/CrossNeedleMeterSettings.cpp
@@ -3920,6 +4063,54 @@ if(Qt6WebSockets_FOUND)
 endif()
 
 # aetherd RFC 2.3 — MeterModel touchpoint: meter-status wire decode.
+add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)
+target_include_directories(hl2_txdsp_test PRIVATE src)
+target_link_libraries(hl2_txdsp_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_txdsp_test COMMAND hl2_txdsp_test)
+
+add_executable(hl2_tx_loopback_test tests/hl2_tx_loopback_test.cpp)
+target_include_directories(hl2_tx_loopback_test PRIVATE src)
+target_link_libraries(hl2_tx_loopback_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_loopback_test COMMAND hl2_tx_loopback_test)
+
+add_executable(hl2_tx_gate_test tests/hl2_tx_gate_test.cpp)
+target_include_directories(hl2_tx_gate_test PRIVATE src)
+target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
+
+add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
+target_include_directories(hl2_dbref_test PRIVATE src)
+add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
+
+add_executable(radiomodel_dax_null_test tests/radiomodel_dax_null_test.cpp)
+target_include_directories(radiomodel_dax_null_test PRIVATE src)
+target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
+
+add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
+target_include_directories(demo_backend_swap_test PRIVATE src)
+target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME demo_backend_swap_test COMMAND demo_backend_swap_test)
+
+add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
+target_include_directories(hl2_family_transition_test PRIVATE src)
+target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
+
+# TCI signaling on a backend with neither a Flex command plane nor a DAX data
+# plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of
+# the file compiles wherever HAVE_WEBSOCKETS is set for aethercore.
+add_executable(hl2_tci_signaling_test tests/hl2_tci_signaling_test.cpp)
+target_include_directories(hl2_tci_signaling_test PRIVATE src tests)
+target_link_libraries(hl2_tci_signaling_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test
+)
+if(Qt6WebSockets_FOUND)
+    target_link_libraries(hl2_tci_signaling_test PRIVATE Qt6::WebSockets)
+endif()
+set_target_properties(hl2_tci_signaling_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_tci_signaling_test COMMAND hl2_tci_signaling_test)
+
 add_executable(aetherd_meter_decode_test tests/aetherd_meter_decode_test.cpp)
 target_include_directories(aetherd_meter_decode_test PRIVATE src)
 target_link_libraries(aetherd_meter_decode_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -3986,6 +4177,20 @@ target_include_directories(aetherclock_engine_test PRIVATE src)
 target_link_libraries(aetherclock_engine_test PRIVATE aethercore Qt6::Core Qt6::Test)
 set_target_properties(aetherclock_engine_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherclock_engine_test COMMAND aetherclock_engine_test)
+
+add_executable(wspr_beacon_test tests/wspr_beacon_test.cpp)
+target_include_directories(wspr_beacon_test PRIVATE src)
+target_link_libraries(wspr_beacon_test PRIVATE aethercore Qt6::Core)
+add_test(NAME wspr_beacon_test COMMAND wspr_beacon_test)
+
+add_executable(automation_tx_watchdog_test
+    tests/automation_tx_watchdog_test.cpp
+)
+target_include_directories(automation_tx_watchdog_test PRIVATE src)
+target_link_libraries(automation_tx_watchdog_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets
+)
+add_test(NAME automation_tx_watchdog_test COMMAND automation_tx_watchdog_test)
 
 add_executable(aetherclock_model_test tests/aetherclock_model_test.cpp)
 target_include_directories(aetherclock_model_test PRIVATE src)
@@ -4191,6 +4396,8 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
+set_tests_properties(flex_control_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -4209,6 +4416,23 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+set_tests_properties(pan_layout_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(spectrum_overlay_wheel_guard_test
+    tests/spectrum_overlay_wheel_guard_test.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/DragValuePopup.cpp   # GuardedSlider.h (ControlsLock coverage)
+)
+target_include_directories(spectrum_overlay_wheel_guard_test PRIVATE src)
+target_link_libraries(spectrum_overlay_wheel_guard_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(spectrum_overlay_wheel_guard_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_wheel_guard_test
+         COMMAND spectrum_overlay_wheel_guard_test)
+set_tests_properties(spectrum_overlay_wheel_guard_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp
@@ -4290,6 +4514,33 @@ target_link_libraries(container_widget_test PRIVATE
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# PC-audio lock contract for host-modulating backends (HL2) — needs
+# QApplication + Widgets.
+add_executable(hl2_pc_audio_lock_test
+    tests/hl2_pc_audio_lock_test.cpp
+    src/gui/TitleBar.cpp
+    # TitleBar's dialogs (PC-audio tooltip help, message boxes) are frameless,
+    # so the resizer + frameless title bar come along; ThemeManager pulls its
+    # logging deps, same as container_widget_test.
+    src/gui/FramelessMessageBox.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/DragValuePopup.cpp
+    src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(hl2_pc_audio_lock_test PRIVATE src)
+target_link_libraries(hl2_pc_audio_lock_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(hl2_pc_audio_lock_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_pc_audio_lock_test COMMAND hl2_pc_audio_lock_test)
+set_tests_properties(hl2_pc_audio_lock_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(amp_applet_test

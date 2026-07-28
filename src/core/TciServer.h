@@ -49,6 +49,7 @@ struct TciClientInfo {
 class TciServer : public QObject {
     Q_OBJECT
     friend class TciServerReviewTest;
+    friend class Hl2TciSignalingTest;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -125,6 +126,11 @@ public slots:
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
                              quint32 timecode, qint64 emittedNs);
+    // A DAX channel's radio-side stream went away — drop its channel→TRX routing
+    // cache entry so a re-registration re-resolves cleanly (#3669/#3766). Bound
+    // to PanadapterStream::daxStreamUnregistered via the MainWindow stream-sink
+    // helper so it survives a backend/family swap (#4448 F6).
+    void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
     void clientCountChanged(int count);
@@ -188,6 +194,9 @@ private:
         const TciProtocol::VfoRequest& request,
         const QString& reason,
         bool rejectSplit);
+    // True when the connected backend runs the modulator/demodulator in this
+    // process (HL2) instead of inside the radio — hence has no DAX data plane.
+    bool hostModulatingBackend() const;
     void prepareTxAudio();
     void startTxChrono(QWebSocket* client, int trx);
     void stopTxChrono();

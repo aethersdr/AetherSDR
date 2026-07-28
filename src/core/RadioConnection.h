@@ -33,6 +33,7 @@ public:
 
     ConnectionState state() const       { return m_state.load(); }
     quint32 clientHandle() const        { return m_handle; }
+    bool isSyntheticDemo() const        { return m_syntheticDemo; }  // RFC #4288
     bool isConnected() const            { return m_state.load() == ConnectionState::Connected; }
     QHostAddress radioAddress() const   { return m_radioAddr; }
     QHostAddress localAddress() const   { return m_localAddr; }
@@ -60,6 +61,13 @@ public slots:
     // via QMetaObject::invokeMethod (auto-queued to worker thread). (#502)
     void writeCommand(quint32 seq, const QString& command);
 
+    // Demo fault harness (RFC #4288 #4): push a raw synthetic status line into
+    // the normal receive path (parse → statusReceived), exactly as the connect
+    // sequence does. Lets SimBackend inject faults that AE decodes as if the radio
+    // sent them (e.g. "slice 0 … removed"). Only acts while in synthetic-demo mode.
+    // A slot so SimBackend can invoke it queued onto this worker thread.
+    void injectFaultStatus(const QString& line);
+
 signals:
     void stateChanged(ConnectionState state);
     void connected();
@@ -68,6 +76,17 @@ signals:
     void messageReceived(const ParsedMessage& msg);
     void pingRttMeasured(int ms);
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    // Demo mode: the user tuned the (synthetic) slice VFO. MainWindow's
+    // wireBackendSeam() forwards this to SimBackend::setSliceFrequency so the
+    // birdie demodulates against it (pitch shifts, zero-beats). (RFC #4288)
+    void demoVfoChanged(double vfoMhz);
+    // Demo mode: the user changed the slice mode (USB/LSB/…). Forwarded to
+    // SimBackend::setSliceMode so the birdie demod picks the right sideband.
+    void demoModeChanged(const QString& mode);
+    // Demo radio-side DSP toggles → forwarded to SimBackend, which models them
+    // audibly on the mixer the operator actually hears. (RFC #4288)
+    void demoAnfChanged(bool on);
+    void demoNbChanged(bool on);
     void versionReceived(const QString& version);
     // Emitted when a response (R-line) is received from the radio.
     // Callers register callbacks keyed by seq in their own maps. (#502)
@@ -83,6 +102,16 @@ private slots:
 private:
     void processLine(const QString& line);
     void setState(ConnectionState s);
+
+    // Demo mode (RFC #4288, Stage 2): when the connect target is the synthetic
+    // demo radio, RadioConnection plays the radio's part locally instead of
+    // dialing a socket — it assigns a handle, emits connected/versionReceived,
+    // answers every writeCommand with an OK response, and (Stage 3) emits the
+    // display-pan status. This keeps the whole RadioModel connect flow unchanged;
+    // the only cost is these small demo branches in the wire class.
+    void startSyntheticDemoConnect();
+    void emitSyntheticStatus(const QString& line);
+    static bool isDemoTarget(const RadioInfo& info);
     bool sendCommandAndWait(quint32 seq, const QString& command, int timeoutMs);
     void writeDisconnectMarker();
     int  kernelRttMs() const;   // read smoothed RTT from kernel TCP_INFO
@@ -93,6 +122,11 @@ private:
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     std::atomic<quint32> m_handle{0};
+    // Written on the connection thread, read from the GUI and network threads
+    // (PanadapterStream::start, isSyntheticDemo callers) — so it needs the same
+    // treatment as its m_state/m_handle siblings above, which are atomic for
+    // exactly this reason.
+    std::atomic<bool> m_syntheticDemo{false};   // true while connected to the demo radio
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;  // fallback when kernel TCP_INFO unavailable
 

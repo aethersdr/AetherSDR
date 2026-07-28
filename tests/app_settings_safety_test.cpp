@@ -1,5 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/backends/hl2/Hl2Discovery.h"
+#include "gui/DisplaySettings.h"
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -320,7 +322,68 @@ void testFailedLoadCannotSave()
            "failed loads cannot create a replacement temporary file");
 }
 
+void testThreeDSliceDepthDefaultAndOptIn()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    expect(!DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow defaults OFF when the Display field is absent, so "
+           "an upgrade never changes an existing user's display");
+
+    DisplaySettings::setThreeDSliceDepth(true);
+    expect(DisplaySettings::threeDSliceDepth(),
+           "a persisted True keeps the user's 3D Slice Shadow opt-in");
+
+    DisplaySettings::setThreeDSliceDepth(false);
+    expect(!DisplaySettings::threeDSliceDepth(),
+           "3D Slice Shadow can be disabled again after opting in");
+}
+
 } // namespace
+
+// A nickname is stored under a key derived from the radio's MAC. AppSettings
+// writes top-level keys as XML *element names* and silently skips any key that
+// isn't a legal one, so a key built straight from the MAC ("Hl2Nickname/AA:BB:…")
+// round-trips perfectly in the in-memory map and never reaches disk — the name
+// looks saved for the whole session and is gone on restart. Assert against the
+// FILE, and go through the real Hl2Discovery helpers rather than a local copy of
+// the key format: a test that rebuilt the key itself would share the very
+// convention it is supposed to be checking.
+void testNicknameKeySurvivesDisk()
+{
+    const QString path = settingsPath();
+    expect(writeFile(path, settingsDocument(50, QStringLiteral("original"))),
+           "nickname round-trip fixture is written");
+
+    const QString serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+    const QString key = hl2::Hl2Discovery::nicknameSettingsKey(serial);
+
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(key, QStringLiteral("Pat's Hermes"));
+    settings.save();
+
+    bool valid = false;
+    const QMap<QString, QString> saved = parseSettings(readFile(path), &valid);
+    expect(valid, "settings file is still valid XML after a nickname is stored");
+    expect(saved.contains(key),
+           "the nickname key is actually written to the settings file");
+    expect(saved.value(key) == QStringLiteral("Pat's Hermes"),
+           "the stored nickname round-trips through the file verbatim");
+
+    // Re-read from disk the way a fresh launch does: the name must come back.
+    settings.reset();
+    settings.load();
+    expect(hl2::Hl2Discovery::effectiveNickname(serial, QStringLiteral("Hermes-Lite 2"))
+               == QStringLiteral("Pat's Hermes"),
+           "a nickname set in a previous session survives restart");
+
+    // Distinct radios must not collide once illegal characters are folded.
+    expect(hl2::Hl2Discovery::nicknameSettingsKey(QStringLiteral("AA:BB:CC:DD:EE:00"))
+               != key,
+           "two different MACs still map to two different keys");
+}
 
 int main(int argc, char** argv)
 {
@@ -355,6 +418,10 @@ int main(int argc, char** argv)
         testMissingLiveCorruptRecoveryFailsClosed();
     } else if (scenario == QStringLiteral("failed-load")) {
         testFailedLoadCannotSave();
+    } else if (scenario == QStringLiteral("display-slice-depth-default")) {
+        testThreeDSliceDepthDefaultAndOptIn();
+    } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
+        testNicknameKeySurvivesDisk();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return 2;

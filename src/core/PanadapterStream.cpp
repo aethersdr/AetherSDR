@@ -158,6 +158,8 @@ void PanadapterStream::init()
 
 bool PanadapterStream::isRunning() const
 {
+    // Truthful for the demo too: a demo stream binds no socket and runs no timer
+    // (SimBackend produces the demo's audio and spectrum), so it is not running.
     return m_socket && m_socket->state() == QAbstractSocket::BoundState;
 }
 
@@ -203,6 +205,24 @@ void PanadapterStream::setReceiveBufferSizeBytes(int bytes)
 bool PanadapterStream::start(RadioConnection* conn)
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
+
+    if (conn && conn->isSyntheticDemo()) {
+        // Demo radio: nothing to bind and nothing to generate.
+        //
+        // SimBackend (RFC #4288 Route A) produces the demo's audio AND its
+        // panadapter FFT from its own NoiseMixer and delivers both over the
+        // IRadioBackend seam, so one noise scene drives both what the operator
+        // hears and what the display shows. This stream is deliberately idle:
+        // an earlier revision ran a 20 fps 1024-bin spectrum timer and a 10 ms
+        // audio timer here against a SECOND NoiseMixer, which had no consumers
+        // at all (pure CPU burn) and risked drifting out of step with the scene
+        // actually being heard.
+        //
+        // The stream object still exists and starts cleanly — RadioModel harvests
+        // it from SimBackend and the rest of AE treats it as a normal idle pan
+        // stream.
+        return true;
+    }
 
     resetAudioStreamStats();
 

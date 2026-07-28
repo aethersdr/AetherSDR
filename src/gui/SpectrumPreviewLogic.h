@@ -118,6 +118,75 @@ private:
     std::optional<FrequencyRangeCommand> m_pending;
 };
 
+// Coalesces bandwidth changes into one post-settle 3D floor reacquisition.
+// A new zoom cancels any previously-armed frame so rapid gestures cannot
+// resynchronize against an intermediate bandwidth.
+class DssZoomFloorSyncGate {
+public:
+    void noteBandwidthChange()
+    {
+        m_bandwidthChangeQueued = true;
+        m_waitingForFreshFrame = false;
+    }
+
+    void settle(bool flex3dActive)
+    {
+        m_waitingForFreshFrame =
+            m_bandwidthChangeQueued && flex3dActive;
+        m_bandwidthChangeQueued = false;
+    }
+
+    bool consumeFreshFrame(bool frameReady)
+    {
+        if (!m_waitingForFreshFrame || !frameReady) {
+            return false;
+        }
+        m_waitingForFreshFrame = false;
+        return true;
+    }
+
+    void clear()
+    {
+        m_bandwidthChangeQueued = false;
+        m_waitingForFreshFrame = false;
+    }
+
+    bool bandwidthChangeQueued() const { return m_bandwidthChangeQueued; }
+    bool waitingForFreshFrame() const { return m_waitingForFreshFrame; }
+
+private:
+    bool m_bandwidthChangeQueued{false};
+    bool m_waitingForFreshFrame{false};
+};
+
+// Windows in which an FFT frame's dBm encoding does not correspond to the
+// settled zoom, so it must not anchor the 3D floor. Kept out of the widget so
+// the timing policy is testable without a live radio or a QWidget.
+struct DssZoomFloorFrameGuards {
+    // std::int64_t, not qint64: this header stays Qt-free so the logic can be
+    // unit-tested without linking Qt. Callers pass qint64 epoch values.
+    std::int64_t nowMs{0};
+    std::int64_t notBeforeMs{0};    // radio still switching bandwidth
+    std::int64_t txEndMs{0};        // 0 when no recent TX→RX transition
+    std::int64_t postTxSettleMs{0}; // receiver AGC recovery window (#2117)
+    bool scaleSettling{false};      // y_pixels change still settling
+    bool rebaseActive{false};       // bins may be reprojected preview data
+    bool draggingDbmScale{false};
+};
+
+inline bool dssZoomFloorFrameTrusted(const DssZoomFloorFrameGuards& guards)
+{
+    if (guards.nowMs < guards.notBeforeMs) {
+        return false;
+    }
+    if (guards.txEndMs > 0
+        && guards.nowMs - guards.txEndMs < guards.postTxSettleMs) {
+        return false;
+    }
+    return !guards.scaleSettling && !guards.rebaseActive
+        && !guards.draggingDbmScale;
+}
+
 enum class WaterfallPipelineMode {
     Legacy,
     RowFrequencyFrames,
@@ -175,13 +244,51 @@ inline bool dssFftScaleSettleActive(std::int64_t nowMs,
     return settleUntilMs > 0 && nowMs < settleUntilMs;
 }
 
-inline float dssHistoryAvailability(float sampleAge, float validRows)
+// Mirror of dss_mesh.vert's rear-visibility edge; it must track the shader
+// exactly, including which regime the scroll advance participates in.
+//
+// Full history (validRows >= rows): phase-stable. validRows - sourceAge is
+// permanently 1 for the oldest slot, so subtracting the advance would pulse
+// that permanent row 0 -> 1 on every arrival rather than fading anything in.
+//
+// Still filling (validRows < rows): the newest slot really is newly populated
+// each arrival, and dssRetainedSampleAge() clamps it onto its neighbour's row
+// for that one interval, so the advance is what fades the duplicate in.
+inline float dssHistoryAvailability(float sourceAge, float validRows,
+                                    float rows, float remainingRows)
 {
-    if (!std::isfinite(sampleAge) || !std::isfinite(validRows)
-        || validRows <= 0.0f) {
+    if (!std::isfinite(sourceAge) || !std::isfinite(validRows)
+        || !std::isfinite(rows) || !std::isfinite(remainingRows)
+        || validRows <= 0.0f || rows < 1.0f || remainingRows < 0.0f) {
         return 0.0f;
     }
-    return std::clamp(validRows - sampleAge, 0.0f, 1.0f);
+    const float fillFade = validRows < rows ? remainingRows : 0.0f;
+    return std::clamp(validRows - sourceAge - fillFade, 0.0f, 1.0f);
+}
+
+// Mirror of dss_mesh.vert sampleHistoryDbm()'s retained sample-age clamp, for
+// unit testing. It must track the shader exactly, including the two clamps the
+// shader applies: cap validRows to [0, rows] (cappedValidRows) and floor the
+// oldest retained age at 0. Omitting them makes the mirror diverge from the GPU
+// path it validates outside 1 <= validRows <= rows (e.g. a negative age at
+// validRows = 0.5, or an uncapped age when validRows > rows). std::nullopt is
+// the analogue of the shader returning floorDbm (sample past the valid range).
+inline std::optional<float> dssRetainedSampleAge(float sourceAge,
+                                                 float remainingRows,
+                                                 float validRows,
+                                                 float rows)
+{
+    if (!std::isfinite(sourceAge) || !std::isfinite(remainingRows)
+        || !std::isfinite(validRows) || !std::isfinite(rows)
+        || sourceAge < 0.0f || remainingRows < 0.0f || rows < 1.0f) {
+        return std::nullopt;
+    }
+    const float cappedValidRows = std::clamp(validRows, 0.0f, rows);
+    if (sourceAge >= cappedValidRows) {
+        return std::nullopt;
+    }
+    const float oldestRetainedAge = std::max(cappedValidRows - 1.0f, 0.0f);
+    return std::min(sourceAge + remainingRows, oldestRetainedAge);
 }
 
 struct StablePresentationAnchor {

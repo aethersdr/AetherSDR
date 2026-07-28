@@ -97,6 +97,111 @@ int testRetainedHistoryOffset()
     return 0;
 }
 
+int testInputScaleResetPreservesHistory()
+{
+    DssRenderer renderer;
+    renderer.setHistoryCapacityRows(12);
+    appendStableHistoryPeak(renderer, 180);
+    renderer.rebuildVisibleFromHistory(0, 14.0, 1.0, -200.0f);
+
+    const int visibleRowsBefore = renderer.rowCount();
+    const int historyRowsBefore = renderer.historyRowCount();
+    const int peakBefore = strongestBin(renderer);
+    renderer.resetInputSmoothing();
+
+    if (renderer.rowCount() != visibleRowsBefore
+        || renderer.historyRowCount() != historyRowsBefore
+        || strongestBin(renderer) != peakBefore) {
+        return fail("input scale reset must preserve decoded DSS history");
+    }
+
+    return 0;
+}
+
+int testInputScaleResetBreaksTemporalBlend()
+{
+    DssRenderer renderer;
+
+    // Settle a strong peak into the live temporal filter so the retained newest
+    // row carries it.
+    const int bin = DssRenderer::kCols / 2;
+    QVector<float> peak(DssRenderer::kCols, -120.0f);
+    peak[bin] = 0.0f;
+    for (int i = 0; i < 6; ++i) {
+        renderer.pushRow(peak);
+    }
+    const float settledPeak = renderer.rowDataRing(renderer.headRing())[bin];
+    if (settledPeak < -90.0f) {
+        return fail("peak did not settle into the live row");
+    }
+
+    // A y_pixels scale change resets input smoothing but preserves history. The
+    // first row pushed afterward must NOT blend against the retained (old-scale)
+    // peak row — a flat floor row should collapse to the floor, not stay lifted
+    // by the temporal IIR term.
+    renderer.resetInputSmoothing();
+    QVector<float> flat(DssRenderer::kCols, -120.0f);
+    renderer.pushRow(flat);
+    const float afterReset = renderer.rowDataRing(renderer.headRing())[bin];
+    if (afterReset > -110.0f) {
+        return fail("input scale reset must forget the temporal blend against "
+                    "the old-scale row");
+    }
+
+    // The break is one-shot: a second flat row is identical (baseline sanity).
+    renderer.pushRow(flat);
+    const float secondRow = renderer.rowDataRing(renderer.headRing())[bin];
+    if (secondRow > -110.0f) {
+        return fail("post-reset rows should track the new-scale input");
+    }
+
+    return 0;
+}
+
+int testDepthShadowOcclusion()
+{
+    // y grows downward; rebuild() fills each curtain to the floor, so a nearer
+    // (earlier) row hides anything below its ridge.
+
+    // A surface receding upward: every row clears the one in front of it, so
+    // nothing is occluded.
+    if (dssDepthVisibleSegments({100.0, 90.0, 80.0, 70.0})
+        != QVector<bool>{true, true, true}) {
+        return fail("a strictly rising ridge must never be culled");
+    }
+
+    // The far rows sit below the front row's ridge: their segments are behind
+    // the front curtain and must not be stroked over it.
+    const QVector<bool> behind =
+        dssDepthVisibleSegments({50.0, 120.0, 130.0, 140.0});
+    if (behind.size() != 3 || !behind.at(0) || behind.at(1) || behind.at(2)) {
+        return fail("segments behind a nearer ridge must be culled");
+    }
+
+    // A far peak that pokes back above the silhouette becomes visible again.
+    const QVector<bool> reemerges =
+        dssDepthVisibleSegments({50.0, 120.0, 40.0, 130.0});
+    if (reemerges.size() != 3 || !reemerges.at(0) || !reemerges.at(1)
+        || !reemerges.at(2)) {
+        return fail("a far ridge rising above the silhouette must reappear");
+    }
+
+    // Degenerate inputs yield no segments rather than indexing off the end.
+    if (!dssDepthVisibleSegments({}).isEmpty()
+        || !dssDepthVisibleSegments({10.0}).isEmpty()) {
+        return fail("fewer than two depths must yield no segments");
+    }
+
+    // Half-pixel slack: a ridge grazing the silhouette stays visible instead
+    // of flickering between frames.
+    if (dssDepthVisibleSegments({100.0, 100.2, 100.3})
+        != QVector<bool>{true, true}) {
+        return fail("a grazing ridge must not flicker out");
+    }
+
+    return 0;
+}
+
 int testRetainedHistoryCapacity()
 {
     DssRenderer renderer;
@@ -255,6 +360,101 @@ int testDcEdgeSpikeFlattening()
     return 0;
 }
 
+int testPerspectiveProjection()
+{
+    const QPointF frontLeft =
+        DssRenderer::projectPerspective(0.0f, 0.0f);
+    const QPointF backLeft =
+        DssRenderer::projectPerspective(0.0f, 1.0f);
+    const QPointF backCenter =
+        DssRenderer::projectPerspective(0.5f, 1.0f);
+    const QPointF backRight =
+        DssRenderer::projectPerspective(1.0f, 1.0f);
+
+    if (std::abs(frontLeft.x()) > 0.0001
+        || std::abs(frontLeft.y() - 1.0) > 0.0001) {
+        return fail("DSS perspective front edge must preserve frequency");
+    }
+    if (!(backLeft.x() > frontLeft.x())
+        || !(backRight.x() < 1.0)
+        || std::abs(backCenter.x() - 0.5) > 0.0001) {
+        return fail("DSS perspective must converge toward the center");
+    }
+    if (std::abs(backLeft.x() - 0.2) > 0.0001
+        || std::abs(backRight.x() - 0.8) > 0.0001
+        || std::abs(backCenter.y()
+                    - (1.0 - DssRenderer::kDepthSpanFrac)) > 0.0001) {
+        return fail("DSS perspective projection drifted from renderer constants");
+    }
+    if (DssRenderer::projectPerspective(0.25f, -1.0f)
+            != DssRenderer::projectPerspective(0.25f, 0.0f)
+        || DssRenderer::projectPerspective(0.25f, 2.0f)
+            != DssRenderer::projectPerspective(0.25f, 1.0f)) {
+        return fail("DSS perspective depth must be clamped");
+    }
+    return 0;
+}
+
+int testSurfaceProjection()
+{
+    constexpr float floorDbm = -120.0f;
+    constexpr float rangeDb = 80.0f;
+    constexpr float zCurve = 0.7f;
+
+    const QPointF baseline =
+        DssRenderer::projectPerspective(0.25f, 0.0f);
+    const QPointF floorPoint =
+        DssRenderer::projectSurface(
+            0.25f, 0.0f, floorDbm, floorDbm, rangeDb, zCurve);
+    if (floorPoint != baseline) {
+        return fail("a floor-level DSS surface point must stay on the baseline");
+    }
+
+    const QPointF peakPoint =
+        DssRenderer::projectSurface(
+            0.25f, 0.0f, floorDbm + rangeDb,
+            floorDbm, rangeDb, zCurve);
+    if (std::abs(
+            peakPoint.y()
+            - (baseline.y() - DssRenderer::kFrontMaxRidgeFrac)) > 0.0001) {
+        return fail("a full-strength DSS surface point must reach maximum ridge height");
+    }
+
+    const QPointF raisedFloorPoint =
+        DssRenderer::projectSurface(
+            0.25f, 0.0f, -80.0f, -100.0f, rangeDb, zCurve);
+    const QPointF loweredFloorPoint =
+        DssRenderer::projectSurface(
+            0.25f, 0.0f, -80.0f, -120.0f, rangeDb, zCurve);
+    if (!(loweredFloorPoint.y() < raisedFloorPoint.y())) {
+        return fail("moving the DSS floor must move projected surface height");
+    }
+
+    const QPointF farPeak =
+        DssRenderer::projectSurface(
+            0.25f, 1.0f, floorDbm + rangeDb,
+            floorDbm, rangeDb, zCurve);
+    const QPointF farBaseline =
+        DssRenderer::projectPerspective(0.25f, 1.0f);
+    const float expectedFarRidge =
+        DssRenderer::kFrontMaxRidgeFrac * DssRenderer::kBackWidthFrac;
+    if (std::abs(
+            farPeak.y() - (farBaseline.y() - expectedFarRidge)) > 0.0001) {
+        return fail("far DSS surface height must narrow with perspective");
+    }
+
+    const QPointF bandLeft =
+        DssRenderer::projectSurface(
+            0.40f, 0.25f, -72.0f, floorDbm, rangeDb, zCurve);
+    const QPointF bandRight =
+        DssRenderer::projectSurface(
+            0.60f, 0.25f, -72.0f, floorDbm, rangeDb, zCurve);
+    if (std::abs(bandLeft.y() - bandRight.y()) > 0.0001) {
+        return fail("one DSS passband cross-section must have a level edge");
+    }
+    return 0;
+}
+
 } // namespace
 
 int main()
@@ -263,6 +463,15 @@ int main()
         return rc;
     }
     if (int rc = testRetainedHistoryOffset(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetPreservesHistory(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testInputScaleResetBreaksTemporalBlend(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testDepthShadowOcclusion(); rc != 0) {
         return rc;
     }
     if (int rc = testRetainedHistoryCapacity(); rc != 0) {
@@ -284,6 +493,12 @@ int main()
         return rc;
     }
     if (int rc = testDcEdgeSpikeFlattening(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testPerspectiveProjection(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testSurfaceProjection(); rc != 0) {
         return rc;
     }
 

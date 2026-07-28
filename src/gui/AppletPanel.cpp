@@ -11,6 +11,7 @@
 #include "VuMeterSettings.h"
 #include "TunerApplet.h"
 #include "AmpApplet.h"
+#include "DemoApplet.h"
 #include "AcomApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
@@ -732,6 +733,16 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_ampBtn = entry.btn;
         markHardwareConditional("AMP");
+        m_appletOrder.append(entry);
+    }
+
+    // Demo mode noise control — shown only while the demo radio is connected
+    // (MainWindow calls setAppletVisible("DEMO", isSyntheticDemo)). RFC #4288.
+    m_demoApplet = new DemoApplet;
+    {
+        auto entry = makeEntry("DEMO", "Demo Noise", m_demoApplet, false,
+                               m_drawer, m_drawerLayout);
+        markHardwareConditional("DEMO");
         m_appletOrder.append(entry);
     }
 

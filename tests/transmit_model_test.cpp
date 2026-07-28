@@ -1,4 +1,5 @@
 #include "models/TransmitModel.h"
+#include "core/ClientQuindarTone.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -191,6 +192,23 @@ int main(int argc, char** argv)
     tx.setRfPower(75);
     ok &= expect(rfPowers.isEmpty(),
                  "setRfPower to the same value does not re-emit");
+    commands.clear();
+    tx.setTxFilter(1200, 1800);
+    ok &= expect(commands == QStringList({
+                     "transmit set filter_low=1200 filter_high=1800",
+                 }),
+                 "paired TX filter update is sent atomically");
+
+    ClientQuindarTone quindar;
+    quindar.prepare(24000.0);
+    quindar.setEnabled(true);
+    tx.setQuindarTone(&quindar);
+    tx.setTxModeGetter([] { return QStringLiteral("USB"); });
+    commands.clear();
+    tx.requestPttOn(TransmitModel::PttSource::Wspr);
+    ok &= expect(commands == QStringList({"xmit 1"})
+                 && quindar.phase() == ClientQuindarTone::Phase::Idle,
+                 "WSPR PTT bypasses Quindar signaling");
 
     return ok ? 0 : 1;
 }

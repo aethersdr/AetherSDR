@@ -156,6 +156,7 @@ public:
         Tune         = 3,   // local TUNE/two-tone carrier
         Dax          = 4,   // external digital-audio PTT path
         Atu          = 5,   // internal automatic-tuner carrier
+        Wspr         = 6,   // local generated WSPR audio
     };
 
     // Source of the most recently *initiated* key-up. Set by the keying entry
@@ -171,6 +172,16 @@ public:
 
     // ── Command methods (emit commandReady) ─────────────────────────────────
     void setRfPower(int power);
+
+    // The host modulates, so the microphone is a PC input and nothing else.
+    //
+    // The mic-source list (MIC / BAL / LINE / ACC / PC) enumerates a FlexRadio's
+    // physical input jacks. A Hermes-Lite 2 has none of them: audio is
+    // modulated here and handed to the radio as IQ, so "PC" is not a preference
+    // but the only thing that can possibly be true. Offering the others invites
+    // the operator to select an input that silently transmits nothing.
+    void setHostModulation(bool on);
+    [[nodiscard]] bool hostModulation() const { return m_hostModulation; }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -233,6 +244,7 @@ public:
     void setDexpLevel(int level);
     void setTxFilterLow(int hz);
     void setTxFilterHigh(int hz);
+    void setTxFilter(int lowHz, int highHz);
 
     // ── CW commands ─────────────────────────────────────────────────────────
     void setCwSpeed(int wpm);
@@ -249,6 +261,19 @@ public:
 
 signals:
     void stateChanged();
+    // (rfPowerChanged is declared once below — main already has it for the
+    // external-surface mirror path; backends that set drive through the seam
+    // reuse that same signal rather than a duplicate. #4449 recovery.)
+    // Keying and tune as INTENT rather than as a Flex command string.
+    //
+    // setMox() and startTune() emit "xmit N" / "transmit tune N" through
+    // commandReady, which is a Flex TCP command and reaches a backend with no
+    // command channel not at all. These carry the same intent for backends that
+    // key through IRadioBackend. RadioModel routes them only for non-Flex
+    // families, so Flex keeps its single command and does not key twice.
+    void moxCommandIssued(bool on);
+    void tuneCommandIssued(bool on);
+    void hostModulationChanged(bool on);
     void tuneChanged(bool tuning);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
@@ -312,6 +337,7 @@ private:
 
     // Transmit state
     int    m_rfPower{100};
+    bool   m_hostModulation{false};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};
