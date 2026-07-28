@@ -6104,6 +6104,17 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     const double mhz = value.toDouble(&okF);
     if (!okF || mhz <= 0)
         return err(QStringLiteral("tune requires a positive frequency in MHz"));
+    // Hz passed to an MHz verb. No radio AE drives reaches 1 THz, so a value this
+    // large is a unit mistake rather than an ambitious tune, and saying so beats
+    // silently doing nothing. It is NOT auto-converted: guessing the caller's
+    // intent would make 14200000 mean 14.2 MHz here and something else in every
+    // other frequency verb.
+    if (mhz > 1.0e6)
+        return err(QStringLiteral("tune takes MHz, not Hz — got ")
+                   + QString::number(mhz, 'f', 0)
+                   + QStringLiteral(" (did you mean ")
+                   + QString::number(mhz / 1.0e6, 'f', 6)
+                   + QStringLiteral("?)"));
 
     int sliceId = -1;  // -1 = active slice
     if (!id.isEmpty()) {
@@ -6140,8 +6151,32 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
         return err(QStringLiteral("refused: slice ") + s->letter() + QStringLiteral(" is VFO-locked"));
 
     s->setFrequency(mhz);
-    return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
-                       {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
+
+    // Report what the slice ACTUALLY took, not what was asked for.
+    //
+    // setFrequency() assigns unconditionally and the radio is free to reject the
+    // value — an out-of-band target leaves the slice where it was. Echoing the
+    // request made every such no-op indistinguishable from success: ok:true, the
+    // requested frequency echoed back, no error, and only a follow-up `get slices`
+    // revealing the radio had not moved. A caller that trusted the reply would go
+    // on to key on the previous band.
+    //
+    // The common way to hit this is passing Hz to a verb documented as MHz: an
+    // in-band Hz value is clamped and appears to work, so the mistake stays hidden
+    // until the first band change.
+    const double applied = s->frequency();
+    QJsonObject r{{QStringLiteral("ok"), true},
+                  {QStringLiteral("tune"), applied},
+                  {QStringLiteral("sliceId"), s->sliceId()},
+                  {QStringLiteral("letter"), s->letter()}};
+    if (!qFuzzyCompare(applied, mhz)) {
+        // Surfaced rather than failed: the radio, not this verb, decides what is
+        // reachable, and a clamp to a band edge is a legitimate outcome. The
+        // caller gets both numbers and can decide for itself.
+        r.insert(QStringLiteral("requested"), mhz);
+        r.insert(QStringLiteral("applied"), false);
+    }
+    return r;
 }
 
 // ── Demo fault injection (RFC #4288 #4) ─────────────────────────────────────
