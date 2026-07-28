@@ -736,7 +736,7 @@ radio. See §18 for the full audit and the proposed seam.
 |---|---|---|---|---|
 | 24 | RADE / DAX-bridge bare `panStream()` deref | §18.3, gap 18 | **SIGSEGV on mode change**, same shape as gap 1. Do this before any of the below | XS |
 | ~~25~~ | ~~WSPR beacon on a host-modulating backend~~ **DONE** | §18.4 | The audio route already existed (#4471); only the DAX-borrow guard was in the way. First external-oracle TX instrument we have | — |
-| 26 | Unified `RadioModel::rxAudioReady(tap, sliceId, …)` seam | §18.5 | Replaces three parallel buses. CW, RTTY and the QSO recorder RX tap are its first consumers | M |
+| ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument and a `Wideband` tap are still open — nothing needs them yet | S |
 | 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
 | 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26 | S |
 | 29 | Retire the `kiwi : "flex"` source-tag ternary | §18.2, gap 19 | Blocks a third concurrent family; `AsrTapPolicy` cannot disambiguate. Fold into 26 | XS |
@@ -1587,9 +1587,9 @@ Audited on `feat/hl2-connect-by-ip`:
 | AX.25 / APRS / KISS TNC / PMS mailbox | engine tap (`tncRxAudioReady`) | ✅ |
 | WSJT-X and any TCI client | C (bridged, PR #4471) | ✅ |
 | WFM demod, SignalClassifier, VoiceSignalDetector | engine-side | ✅ |
-| **CW decoder (RX)** | A | ❌ dead |
-| **RTTY decoder** | A | ❌ dead |
-| **QSO recorder (RX half)** | A | ❌ dead — records TX only |
+| **CW decoder (RX)** | **bus** | ✅ **as of §18.8** |
+| **RTTY decoder** | **bus** | ✅ **as of §18.8** |
+| **QSO recorder (RX half)** | **bus** | ✅ **as of §18.8** |
 | **AetherClock (WWV/WWVB)** | B + a DAX channel hold | ❌ dead |
 | **WSPR beacon** | Flex `dax_tx` | ✅ **as of §18.4** |
 | **RADE / FreeDV** | B | ❌ dead, and see §18.3 |
@@ -1794,7 +1794,7 @@ backend from re-running this audit:
 
 | # | Gap | Symptom | Fix |
 |---|---|---|---|
-| 16 | CW/RTTY decoders and the QSO recorder's RX tap bind to bus A inside `wirePanStreamRxAudioSinks()`, which early-returns on `!ps` | Decoders are silently dead; no error, no log line, the toggle works and nothing decodes | *Open* — §18.5 |
+| ~~16~~ | ~~CW/RTTY decoders and the QSO recorder's RX tap bind to bus A inside `wirePanStreamRxAudioSinks()`~~ **DONE** | Decoders were silently dead; no error, no log line, the toggle worked and nothing decoded | `rxDemodAudioReady`, §18.8 |
 | 17 | `AetherClockEngine` binds to bus B **and** to a DAX channel-hold registry, keyed on a channel number a single-DDC radio does not have | WWV/WWVB never decodes; the DAX-hold provider correctly no-ops, which hides it | *Open* — needs slice-identity routing, not channel-identity |
 | 18 | RADE and the DAX bridge dereference `panStream()` bare | **SIGSEGV on mode change** — same shape as gap 1 | *Open* — do this first |
 | 19 | Presentation audio source tag is a hardcoded `kiwi : "flex"` ternary | Third concurrent family is unaddressable; `AsrTapPolicy` cannot tell two radios apart | *Open* — fold into §18.5 |
@@ -1861,3 +1861,68 @@ decision, or an accident of the Flex being the only radio there was.
 5. **Tap kinds** (`Wideband`) — only once there is a second consumer that wants
    one, and once someone has measured whether the AGC'd TCI feed is costing
    WSJT-X decodes.
+
+### 18.8 The bus, as built
+
+`rxDemodAudioReady` landed on `feat/rx-audio-bus`. Smaller than §18.5 proposed,
+and deliberately so — it carries the taps and leaves the speaker alone.
+
+**What it is.** One signal on `RadioModel`, 24 kHz interleaved stereo float32 —
+byte-identical to what both producers already emitted. Exactly one producer is
+bound at a time, chosen in `wireRxDemodAudioBus()`:
+
+| Family | Producer |
+|---|---|
+| Flex | `PanadapterStream::audioDataReady` (an *additional* subscriber; the existing speaker connection is untouched) |
+| HL2, sim | `IRadioBackend::audioFrameReady`, via `backendAudioFrameReady` |
+
+**The predicate moved onto the backend.** `IRadioBackend::ownsRxAudio()`
+replaces a `dynamic_cast<SimBackend*>` in one place and an `m_family != "flex"`
+in another. Both older forms had to be *found* and updated when a backend was
+added, and #4490's double-feed buzz is what happens when one is missed.
+
+It is **not** "has no PanadapterStream". The sim has both — a stream carrying
+the old shim's synthetic scene, and real demodulated audio over the seam — and
+answers `true` because the seam is the real one. That silently fixed a live
+defect: in demo mode the decoders were being fed the synthetic scene while the
+speaker played the demo's actual audio. **Two audio realities in one session**,
+and nothing in the code admitted it.
+
+**What was deliberately NOT touched.** `AudioEngine::feedAudioData` keeps its
+existing per-family wiring on every family. Nothing audible changes anywhere.
+The Flex path gains one extra subscriber to a signal it already emits, and that
+is the entire blast radius — which is the shape to copy for the remaining §18
+items, not a one-off concession.
+
+**Consumers bind once and never rebind.** They hang off `RadioModel`, which
+outlives the backend swap that destroys and rebuilds a `PanadapterStream`. That
+retires the rebind fragility `wirePanStreamRxAudioSinks()`'s own comment warns
+about, for these three sinks.
+
+**The invariant worth testing is "exactly one producer", not "audio arrives".**
+Two producers is not a dead feature, it is a *wrong* one: every decoder sees
+each block twice, which a Morse decoder reads as doubled timing — wrong text
+rather than no text. `hl2_family_transition_test` asserts it across a family
+round-trip, which is the case Qt cannot clean up for us: the seam relay has
+`this` on both ends, so unlike a stream-bound connection there is nothing for Qt
+to drop when the backend is replaced. The assertion was confirmed to have teeth
+by removing the `disconnect` and watching that check — and only that check —
+fail.
+
+**Measured on hardware** (HL2 at 192.168.1.21, 21.067 MHz): the QSO recorder
+captured 21.6 s of real RX audio — peak 20504, RMS 136.5, 87.5 % non-zero —
+where the same recording was silence before. CW decode confirmed on live signals
+by the operator.
+
+**Recorder RX/TX mixing is safe, and not for the reason the header says.**
+`QsoRecorder`'s header states *"while transmitting, the radio mutes the RX
+stream"* — a Flex fact. An HL2 demodulates on this host and keeps running
+through transmit, hearing its own transmitter. The mixing is nonetheless correct
+because the gate is a hard mutually-exclusive atomic: `feedRxAudio()` returns
+early whenever `m_transmitting`, and `feedTxAudio()` whenever not. The radio
+muting is why the Flex stream *happens* to be silence, not the mechanism.
+
+**Still open on this path:** whether the HL2's in-process RX pipeline flushes a
+few blocks of transmitter leakage into the start of each RX segment after unkey
+— the same class as the Flex waterfall-freeze window. Measure with a recording
+running across a real over before deciding it needs a hold-off.
