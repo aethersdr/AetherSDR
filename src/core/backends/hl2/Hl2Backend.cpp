@@ -922,7 +922,7 @@ void Hl2Backend::setTxTestTone(double offsetHz, double amplitude)
         Q_ARG(double, offsetHz), Q_ARG(double, amplitude));
 }
 
-void Hl2Backend::setTune(bool on)
+void Hl2Backend::setTune(bool on, int tunePowerPercent)
 {
     // A tune carrier is an unmodulated steady signal at the transmit frequency.
     // The HL2 has no tune generator of its own, so it is the built-in test tone
@@ -933,14 +933,32 @@ void Hl2Backend::setTune(bool on)
     // the first frames on the air already carry it rather than silence, and drop
     // the key BEFORE the carrier on the way out so nothing is left radiating if
     // the tone clear is delayed behind other queued control verbs.
+    //
+    // Drive is set from TUNE power, not RF power. The carrier amplitude is a
+    // fixed full-scale constant, so without this the drive register still held
+    // whatever setTxPower() last pushed — the RF Power slider — and an operator
+    // running RF 100 / Tune 10 got a FULL-POWER carrier from a control whose
+    // whole purpose is to reduce it. Flex is unaffected: it receives tune power
+    // as a text command and applies it radio-side.
     m_tuning = on;
     if (on) {
+        if (tunePowerPercent >= 0) {
+            const int clamped = tunePowerPercent > 100 ? 100 : tunePowerPercent;
+            // Straight to the drive register: setTxPower() would overwrite the
+            // saved RF power we have to restore on release.
+            if (m_txAllowed)
+                setTxDriveLevel(clamped * kTxDriveMax / 100);
+        }
         setTxTestTone(0.0, kTuneCarrierAmplitude);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
         setKeying(true);
     } else {
         setKeying(false);
         setTxTestTone(0.0, 0.0);
+        // Restore the operator's RF power. m_tuning is already false, so this
+        // takes the normal path rather than being swallowed by the tuning guard.
+        if (tunePowerPercent >= 0)
+            setTxPower(m_rfPowerPercent);
     }
 }
 
@@ -960,6 +978,12 @@ void Hl2Backend::setTxPower(int percent)
     // this suggests — the mapping is linear in the register, NOT calibrated to
     // watts, and nothing here should imply otherwise.
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    // Remember the operator's drive so setTune() can drop to tune power and put
+    // this back afterwards. Recorded even while tuning: a power change made
+    // mid-tune is still what the operator wants once the carrier drops.
+    m_rfPowerPercent = clamped;
+    if (m_tuning)
+        return;   // tune power owns the drive register until the carrier drops
     setTxDriveLevel(clamped * kTxDriveMax / 100);
 }
 

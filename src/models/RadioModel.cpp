@@ -691,7 +691,9 @@ void RadioModel::setupBackend(const QString& family)
                 m_transmitModel.stopTune();
                 return;
             }
-            m_backend->setTune(on);
+            // Hand the backend the operator's TUNE power. A host-modulated
+            // backend has no other path to it — see IRadioBackend::setTune().
+            m_backend->setTune(on, m_transmitModel.tunePower());
             // A tune carrier is a transmission. Hl2Backend::setTune() calls
             // setKeying(), so the radio is on the air — the raw-TX edge has to
             // be published here for the same reason it is on the MOX path, and

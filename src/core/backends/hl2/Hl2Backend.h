@@ -59,7 +59,7 @@ public:
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
-    void setTune(bool on) override;
+    void setTune(bool on, int tunePowerPercent = -1) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
@@ -138,6 +138,11 @@ private:
     bool m_keyed = false;
     bool m_tuning = false;
     bool m_toneFromTune = false;
+    // Last drive the operator asked for through setTxPower(), so TUNE can drop to
+    // tune power and put it back on release. Seeded to the same value
+    // TransmitModel defaults rfPower to, so a TUNE before any power change
+    // restores something sane rather than 0.
+    int m_rfPowerPercent = 100;
     // Tune-carrier amplitude, full scale into the modulator. Actual radiated
     // power is governed by the TX drive register, which is where an operator
     // sets it; scaling here as well would make the power control non-linear for
