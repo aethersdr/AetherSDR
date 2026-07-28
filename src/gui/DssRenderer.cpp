@@ -254,12 +254,14 @@ std::array<float, DssRenderer::kCols> smoothDssRow(
 void DssRenderer::resetInputSmoothing()
 {
     m_rawHistCount = 0;
+    m_supplementalRawHistCount = 0;
     // Also break the temporal IIR blend for the next row of each path. Zeroing
     // the median-of-3 counters alone does not forget the previous *smoothed*
     // row that pushRow/appendHistoryRow blend the new row against — that row was
     // decoded under the old scale, so without this the first post-reset row is
     // contaminated by it.
     m_skipLiveTemporalBlendOnce = true;
+    m_skipSupplementalTemporalBlendOnce = true;
     m_skipHistoryTemporalBlendOnce = true;
     resetHistorySmoothing();
 }
@@ -289,6 +291,8 @@ quint64 DssRenderer::fixedStorageBytes() const
         + sizeof(m_rowSupplementalCenterMhz)
         + sizeof(m_rowSupplementalBandwidthMhz)
         + sizeof(m_rawPrev1) + sizeof(m_rawPrev2)
+        + sizeof(m_supplementalRawPrev1)
+        + sizeof(m_supplementalRawPrev2)
         + sizeof(m_historyRawPrev1) + sizeof(m_historyRawPrev2);
 }
 
@@ -414,8 +418,30 @@ void DssRenderer::pushRowWithSupplemental(
         && supplementalCenterMhz > 0.0
         && supplementalBandwidthMhz > 0.0;
     if (supplementalValid) {
-        m_rowSupplemental[m_head] =
+        const std::array<float, kCols> supplementalRaw =
             resampledRawRow(supplementalBinsDbm, -200.0f);
+        const int previousRing = (m_head + 1) % kRows;
+        const bool sameSupplementalFrameAsPrevious =
+            m_count > 0
+            && frequencyFramesMatch(
+                m_rowSupplementalCenterMhz[previousRing],
+                m_rowSupplementalBandwidthMhz[previousRing],
+                supplementalCenterMhz, supplementalBandwidthMhz);
+        if (m_count > 0 && !sameSupplementalFrameAsPrevious) {
+            m_supplementalRawHistCount = 0;
+        }
+        const std::array<float, kCols>* supplementalPrevious =
+            (sameSupplementalFrameAsPrevious
+             && !m_skipSupplementalTemporalBlendOnce)
+                ? &m_rowSupplemental[previousRing]
+                : nullptr;
+        m_skipSupplementalTemporalBlendOnce = false;
+        m_rowSupplemental[m_head] = smoothDssRow(
+            supplementalRaw,
+            m_supplementalRawPrev1,
+            m_supplementalRawPrev2,
+            m_supplementalRawHistCount,
+            supplementalPrevious);
         m_rowSupplementalCoverage[m_head].fill(1);
         m_rowSupplementalCenterMhz[m_head] = supplementalCenterMhz;
         m_rowSupplementalBandwidthMhz[m_head] =
@@ -425,6 +451,7 @@ void DssRenderer::pushRowWithSupplemental(
         m_rowSupplementalCoverage[m_head].fill(0);
         m_rowSupplementalCenterMhz[m_head] = 0.0;
         m_rowSupplementalBandwidthMhz[m_head] = 0.0;
+        m_supplementalRawHistCount = 0;
     }
     m_count = std::min(m_count + 1, kRows);
     m_dirty = true;

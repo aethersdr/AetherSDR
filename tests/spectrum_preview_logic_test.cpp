@@ -93,6 +93,7 @@ int testFrequencyFrameMapping()
                .isValid()) {
         return fail("non-finite frequency frames should be rejected");
     }
+
     return 0;
 }
 
@@ -482,13 +483,16 @@ int testDssStartupHistoryAvailability()
                     sourceAge, distanceRows * 0.5f, distanceRows);
             if (!before || !after || !halfway
                 || !nearlyEqual(before->overlayAge, sourceAge)
+                || !nearlyEqual(before->baseAlpha, 0.0)
                 || !nearlyEqual(before->overlayAlpha, 1.0)
                 || !nearlyEqual(after->baseAge,
                                 sourceAge + distanceRows)
+                || !nearlyEqual(after->baseAlpha, 1.0)
                 || !nearlyEqual(after->overlayAlpha, 0.0)
                 || !nearlyEqual(halfway->baseAge,
                                 sourceAge + distanceRows)
                 || !nearlyEqual(halfway->overlayAge, sourceAge)
+                || !nearlyEqual(halfway->baseAlpha, 0.5)
                 || !nearlyEqual(halfway->overlayAlpha, 0.5)) {
                 return fail("3D FFT fixed-grid crossfade ages are incorrect");
             }
@@ -510,9 +514,25 @@ int testDssStartupHistoryAvailability()
         return fail("3D FFT transition reserve must cover the trailing row");
     }
 
-    // Interior rows move instead of crossfading, so the whole surface does not
-    // shimmer. The same physical row is continuous across a multi-row head
-    // advance even though its source age changes by that distance.
+    for (const float opacity : {0.12f, 0.37f, 0.62f}) {
+        for (const float phase : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f}) {
+            const float baseAlpha =
+                dssSourceOverCrossfadeLayerAlpha(
+                    opacity, phase, false);
+            const float overlayAlpha =
+                dssSourceOverCrossfadeLayerAlpha(
+                    opacity, phase, true);
+            const float combinedAlpha =
+                baseAlpha + overlayAlpha * (1.0f - baseAlpha);
+            if (!nearlyEqual(combinedAlpha, opacity, 1.0e-6)) {
+                return fail("3D FFT outline crossfade must preserve opacity");
+            }
+        }
+    }
+
+    // Coloured curtain geometry still moves, so the same physical row is
+    // continuous across a multi-row head advance even though its source age
+    // changes by that distance.
     for (const float sourceAge : {1.0f, 17.0f, 80.0f}) {
         for (const float distanceRows : {1.0f, 3.0f, 8.0f}) {
             const std::optional<float> before =
@@ -542,6 +562,48 @@ int testDssStartupHistoryAvailability()
                             std::numeric_limits<float>::quiet_NaN()),
                         0.0, 1.0e-6)) {
         return fail("3D FFT ribbon coverage curve is incorrect");
+    }
+    const DssRibbonPixelOffset leftOffset =
+        dssRibbonPixelOffset(0.0f, -0.6f, 0.8f, 1.0f);
+    const DssRibbonPixelOffset rightOffset =
+        dssRibbonPixelOffset(1.0f, 0.6f, 0.8f, -1.0f);
+    const DssRibbonPixelOffset interiorOffset =
+        dssRibbonPixelOffset(0.5f, -0.6f, 0.8f, -1.0f);
+    const DssRibbonPixelOffset invalidOffset = dssRibbonPixelOffset(
+        std::numeric_limits<float>::quiet_NaN(),
+        -0.6f, 0.8f, 1.0f);
+    if (!nearlyEqual(leftOffset.x, 0.0, 1.0e-6)
+        || !nearlyEqual(leftOffset.y, 1.0, 1.0e-6)
+        || !nearlyEqual(rightOffset.x, 0.0, 1.0e-6)
+        || !nearlyEqual(rightOffset.y, -1.0, 1.0e-6)
+        || !nearlyEqual(interiorOffset.x, 0.6, 1.0e-6)
+        || !nearlyEqual(interiorOffset.y, -0.8, 1.0e-6)
+        || !nearlyEqual(invalidOffset.x, 0.0, 1.0e-6)
+        || !nearlyEqual(invalidOffset.y, 0.0, 1.0e-6)) {
+        return fail("3D FFT side endpoints must use a stable butt boundary");
+    }
+    if (!nearlyEqual(
+            dssSideOutlineAlphaScale(
+                0.0f, 1000.0f, 1.0f), 0.0, 1.0e-6)
+        || !nearlyEqual(
+            dssSideOutlineAlphaScale(
+                1.0f, 1000.0f, 0.5f), 0.0, 1.0e-6)
+        || !nearlyEqual(
+            dssSideOutlineAlphaScale(
+                0.004f, 1000.0f, 1.0f), 0.5, 1.0e-5)
+        || !nearlyEqual(
+            dssSideOutlineAlphaScale(
+                0.016f, 1000.0f, 0.5f), 1.0, 1.0e-6)
+        || !nearlyEqual(
+            dssSideOutlineAlphaScale(
+                0.5f, 1000.0f, 1.0f), 1.0, 1.0e-6)
+        || !nearlyEqual(
+            dssSideOutlineAlphaScale(
+                std::numeric_limits<float>::quiet_NaN(),
+                1000.0f, 1.0f),
+            0.0, 1.0e-6)) {
+        return fail(
+            "3D FFT side fade must affect only 8 pixels");
     }
 
     return 0;

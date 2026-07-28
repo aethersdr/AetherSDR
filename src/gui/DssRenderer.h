@@ -226,6 +226,13 @@ private:
     std::array<float, kCols> m_rawPrev1{};
     std::array<float, kCols> m_rawPrev2{};
     int m_rawHistCount = 0;
+    // The calibrated native-tile overhang needs an independent copy of the
+    // same smoothing chain. Sharing FFT history would blend different
+    // frequency frames; storing it raw exaggerates isolated tile maxima until
+    // exact FFT coverage replaces them.
+    std::array<float, kCols> m_supplementalRawPrev1{};
+    std::array<float, kCols> m_supplementalRawPrev2{};
+    int m_supplementalRawHistCount = 0;
 
     // One-shot flags: after resetInputSmoothing() the next pushed row must not
     // blend against the retained row that preceded the reset (it was decoded
@@ -234,6 +241,7 @@ private:
     // own; the temporal IIR term against the previous smoothed row also carries
     // pre-reset data.
     bool m_skipLiveTemporalBlendOnce = false;
+    bool m_skipSupplementalTemporalBlendOnce = false;
     bool m_skipHistoryTemporalBlendOnce = false;
 
     // Retained scrollback store. This is intentionally separate from the

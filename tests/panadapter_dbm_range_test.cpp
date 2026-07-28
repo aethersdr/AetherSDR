@@ -1,4 +1,5 @@
 #include "core/PanadapterStream.h"
+#include "core/VitaBinCoverage.h"
 #include "gui/DbmRangeTransition.h"
 
 #include <QCoreApplication>
@@ -19,6 +20,43 @@ static int g_failures = 0;
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+
+    VitaBinCoverage fragmentCoverage;
+    fragmentCoverage.reset(8);
+    CHECK(fragmentCoverage.markRange(0, 4));
+    CHECK(fragmentCoverage.uniqueBins() == 4);
+    CHECK(!fragmentCoverage.isComplete());
+    CHECK(fragmentCoverage.markRange(0, 4));
+    CHECK(fragmentCoverage.uniqueBins() == 4);
+    CHECK(!fragmentCoverage.isComplete());
+    CHECK(fragmentCoverage.markRange(4, 4));
+    CHECK(fragmentCoverage.uniqueBins() == 8);
+    CHECK(fragmentCoverage.isComplete());
+    fragmentCoverage.reset(10);
+    CHECK(fragmentCoverage.uniqueBins() == 0);
+    CHECK(fragmentCoverage.totalBins() == 10);
+    CHECK(!fragmentCoverage.isComplete());
+    CHECK(!fragmentCoverage.markRange(8, 4));
+
+    CHECK(boundedVitaPayloadBinCount(256, 2, 512) == 256);
+    CHECK(boundedVitaPayloadBinCount(256, 2, 510) == 255);
+    CHECK(boundedVitaPayloadBinCount(256, 2, 1) == 0);
+    CHECK(boundedVitaPayloadBinCount(256, 0, 512) == 0);
+
+    QVector<quint16> cleanGrowth(16, 300);
+    cleanGrowth.resize(32, 350);
+    CHECK(!hasZeroFilledFftGrowthSuffix(cleanGrowth, 16));
+
+    QVector<quint16> zeroFilledGrowth(32, 300);
+    std::fill(zeroFilledGrowth.begin() + 16,
+              zeroFilledGrowth.end(), quint16{0});
+    CHECK(hasZeroFilledFftGrowthSuffix(zeroFilledGrowth, 16));
+
+    QVector<quint16> saturatedFrame(32, 0);
+    CHECK(!hasZeroFilledFftGrowthSuffix(saturatedFrame, 16));
+    CHECK(!hasZeroFilledFftGrowthSuffix(zeroFilledGrowth, 0));
+    CHECK(!hasZeroFilledFftGrowthSuffix(zeroFilledGrowth, 32));
+
     PanadapterStream stream;
     constexpr quint32 kStreamId = 0x40000000;
 
@@ -199,6 +237,11 @@ int main(int argc, char** argv)
     CHECK(std::abs(clippedRecoveryRange.maxDbm - -21.5f) < 0.01f);
     CHECK(std::abs((clippedRecoveryRange.maxDbm
                     - clippedRecoveryRange.minDbm) - 95.0f) < 0.01f);
+    const DbmRangeTransition::Range oneShotRecoveryRange =
+        DbmRangeTransition::clippedFloorRecoveryRange(
+            -111.0f, -16.0f, 24.0f);
+    CHECK(std::abs(oneShotRecoveryRange.minDbm - -135.0f) < 0.01f);
+    CHECK(std::abs(oneShotRecoveryRange.maxDbm - -40.0f) < 0.01f);
 
     const DbmRangeTransition::Range flex2dRange =
         DbmRangeTransition::manualRequestRange(

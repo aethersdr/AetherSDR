@@ -3,10 +3,10 @@
 // 3DSS GPU height-map mesh. Each vertex carries its grid position (u = column,
 // v = row/depth) and an edge tag. The height comes from a ring-buffered dBm
 // texture; geometry is a receding perspective trapezoid built entirely on the
-// GPU, so pan/zoom never rebuild any vertices. The perspective grid stays
-// fixed at the leading/trailing rows while exact interior rows translate
-// through depth. Only those two boundary rows crossfade, avoiding whole-surface
-// shimmer without letting either timeline edge move.
+// GPU, so pan/zoom never rebuild any vertices. Curtains carry exact retained
+// rows through depth. Their white ridge outlines stay on the fixed perspective
+// grid and crossfade between exact rows, avoiding both interpolated peak bounce
+// and the coverage shimmer caused by translating a dense outline stack.
 // Outputs NDC directly (matching spectrum.vert).
 
 layout(location = 0) in vec3 inVert;   // x = u [0,1] col, y = v [0,1) row(0=front), z = edge
@@ -51,6 +51,7 @@ layout(location = 3) out float vBoundaryFade;
 layout(location = 4) out float vFrequency;
 layout(location = 5) out float vLayerAlpha;
 layout(location = 6) out float vRibbonCoord;  // -1..+1 across AA outline
+layout(location = 7) flat out float vOverlayLayer;
 
 vec4 sampleHistory(float texU, float sourceAge, float rows)
 {
@@ -160,7 +161,16 @@ void main()
         sourceAge < 0.5 || sourceAge > depthRows - 1.5;
     float sampleAge;
     float geometryV;
-    if (boundaryRow) {
+    if (ribbonOutline) {
+        // Keep the dense white ridge stack phase-stable. Crossfade whole exact
+        // FFT shapes at each fixed depth instead of either morphing their
+        // heights or translating their raster coverage through subpixels.
+        sampleAge =
+            sourceAge + (overlayLayer ? 0.0 : distanceRows);
+        geometryV = sourceV;
+        vLayerAlpha =
+            overlayLayer ? scrollPhase : 1.0 - scrollPhase;
+    } else if (boundaryRow) {
         sampleAge =
             sourceAge + (overlayLayer ? 0.0 : distanceRows);
         geometryV = sourceV;
@@ -214,7 +224,17 @@ void main()
             ? normalize(vec2(-tangentPx.y, tangentPx.x))
             : vec2(0.0, 1.0);
         vec2 pixelToNdc = 1.0 / viewportHalf;
-        ndc += normalPx * ribbonSide * pixelToNdc;
+        if (u <= 0.0 || u >= 1.0) {
+            // A perpendicular ribbon offset moves the endpoint sideways by an
+            // amount that changes with the last FFT segment's slope. Against
+            // the black outside of the perspective surface, the stacked row
+            // endpoints then form a crawling one-pixel silhouette. Use a butt
+            // boundary at the exact side plane: stable X and a fixed vertical
+            // AA width. Interior vertices retain the perpendicular ribbon.
+            ndc.y += ribbonSide * pixelToNdc.y;
+        } else {
+            ndc += normalPx * ribbonSide * pixelToNdc;
+        }
     }
     gl_Position = vec4(ndc, 0.0, 1.0);
 
@@ -225,4 +245,5 @@ void main()
     vEdge  = edge;
     vFrequency = u;
     vBoundaryFade = clamp(validRows - sampleAge, 0.0, 1.0);
+    vOverlayLayer = overlayLayer ? 1.0 : 0.0;
 }

@@ -739,6 +739,9 @@ signals:
     // Emitted when the user adjusts the dBm scale (drag or arrows).
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
     void dbmRangeDragFinished(float minDbm, float maxDbm);
+    // The radio FFT encoder is pinned to its lower endpoint. Request more
+    // radio-side headroom without moving the client-side 3D presentation.
+    void radioDbmHeadroomRecoveryRequested(float headroomDb);
     void noiseFloorPositionResolved(int pos);
     void dssFloorDepthResolved(int dB);
     void waterfallLineDurationChangeRequested(int ms);
@@ -1067,6 +1070,8 @@ private:
     void armNoiseFloorFastLock(int freshFrames, int snapFrames);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
+    bool flexDssInputFloorLooksClipped() const;
+    bool requestFlexDssRadioHeadroom(qint64 nowMs);
     void beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
                                  float newMinDbm, float newMaxDbm);
     void clearDbmReleaseRebase();
@@ -1356,6 +1361,7 @@ private:
     // ~100-300 ms to switch bandwidth; frames before this still carry the
     // pre-zoom encoding.
     qint64 m_dssZoomFloorSyncNotBeforeMs{0};
+    qint64 m_lastDssRadioHeadroomRequestMs{0};
     // The radio can briefly deliver FFT packets encoded with the old y_pixels
     // after acknowledging a new height. Keep those rows out of retained 3D
     // history; the live 2D trace and waterfall continue normally.

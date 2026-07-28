@@ -344,12 +344,14 @@ inline std::optional<float> dssRetainedSampleAge(float sourceAge,
 struct DssFixedGridCrossfade {
     float baseAge{0.0f};
     float overlayAge{0.0f};
+    float baseAlpha{1.0f};
     float overlayAlpha{0.0f};
 };
 
-// Mirror of dss_mesh.vert's fixed boundary-row scroll. Both layers sample exact
-// rows; only the new layer opacity changes. At the next head advance, the fully
-// opaque overlay becomes the following interval's base at the same depth.
+// Mirror of dss_mesh.vert's fixed ridge-outline scroll. Both layers sample
+// exact rows and trade opacity at a fixed depth. At the next head advance, the
+// fully opaque overlay becomes the following interval's base at that same
+// depth.
 inline std::optional<DssFixedGridCrossfade> dssFixedGridCrossfade(
     float sourceAge, float progressRows, float distanceRows)
 {
@@ -358,11 +360,34 @@ inline std::optional<DssFixedGridCrossfade> dssFixedGridCrossfade(
         || progressRows < 0.0f || distanceRows <= 0.0f) {
         return std::nullopt;
     }
+    const float overlayAlpha =
+        std::clamp(progressRows / distanceRows, 0.0f, 1.0f);
     return DssFixedGridCrossfade{
         sourceAge + distanceRows,
         sourceAge,
-        std::clamp(progressRows / distanceRows, 0.0f, 1.0f),
+        1.0f - overlayAlpha,
+        overlayAlpha,
     };
+}
+
+// Actual per-layer alpha used by the ridge shader. The base is rendered first,
+// then the overlay with source-over blending. Compensation keeps the combined
+// opacity constant when both exact outlines cover the same pixel.
+inline float dssSourceOverCrossfadeLayerAlpha(float opacity,
+                                              float overlayPhase,
+                                              bool overlayLayer)
+{
+    if (!std::isfinite(opacity) || !std::isfinite(overlayPhase)) {
+        return 0.0f;
+    }
+    const float clampedOpacity = std::clamp(opacity, 0.0f, 1.0f);
+    const float phase = std::clamp(overlayPhase, 0.0f, 1.0f);
+    if (!overlayLayer) {
+        return clampedOpacity * (1.0f - phase);
+    }
+    const float baseAlpha = clampedOpacity * (1.0f - phase);
+    return clampedOpacity * phase
+        / std::max(1.0f - baseAlpha, 0.0001f);
 }
 
 inline std::optional<float> dssMovingGeometryDepth(float sourceAge,
@@ -403,6 +428,53 @@ inline float dssRibbonCoverage(float coordinate)
         0.0f, 1.0f);
     const float smooth = t * t * (3.0f - 2.0f * t);
     return 1.0f - smooth;
+}
+
+struct DssRibbonPixelOffset {
+    float x{0.0f};
+    float y{0.0f};
+};
+
+// Mirror of dss_mesh.vert's side-endpoint treatment. A perpendicular
+// screen-space ribbon is correct in the trace interior, but its horizontal
+// component makes the exposed outer endpoint crawl as the adjacent FFT slope
+// changes. Endpoints use a fixed vertical butt boundary instead.
+inline DssRibbonPixelOffset dssRibbonPixelOffset(float frequencyUnit,
+                                                 float normalX,
+                                                 float normalY,
+                                                 float ribbonSide)
+{
+    if (!std::isfinite(frequencyUnit)
+        || !std::isfinite(normalX) || !std::isfinite(normalY)
+        || !std::isfinite(ribbonSide)) {
+        return {};
+    }
+    if (frequencyUnit <= 0.0f || frequencyUnit >= 1.0f) {
+        return DssRibbonPixelOffset{0.0f, ribbonSide};
+    }
+    return DssRibbonPixelOffset{
+        normalX * ribbonSide,
+        normalY * ribbonSide,
+    };
+}
+
+inline float dssSideOutlineAlphaScale(float frequencyUnit,
+                                      float plotWidthPx,
+                                      float perspectiveWidth)
+{
+    if (!std::isfinite(frequencyUnit) || !std::isfinite(plotWidthPx)
+        || !std::isfinite(perspectiveWidth)
+        || plotWidthPx <= 0.0f || perspectiveWidth <= 0.0f) {
+        return 0.0f;
+    }
+    constexpr float kFadeWidthPx = 8.0f;
+    const float edgeDistancePx =
+        std::max(0.0f, std::min(frequencyUnit, 1.0f - frequencyUnit))
+        * plotWidthPx * perspectiveWidth;
+    const float t = std::clamp(
+        edgeDistancePx / kFadeWidthPx, 0.0f, 1.0f);
+    const float smooth = t * t * (3.0f - 2.0f * t);
+    return smooth;
 }
 
 struct StablePresentationAnchor {

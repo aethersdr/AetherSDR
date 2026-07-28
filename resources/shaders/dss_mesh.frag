@@ -11,6 +11,7 @@ layout(location = 3) in float vBoundaryFade;
 layout(location = 4) in float vFrequency;
 layout(location = 5) in float vLayerAlpha;
 layout(location = 6) in float vRibbonCoord;
+layout(location = 7) flat in float vOverlayLayer;
 
 layout(std140, binding = 0) uniform U {
     float rowOffset;
@@ -106,9 +107,34 @@ void main()
         float flatOutlineScale = mix(1.0, 0.42, flatOutline);
         float ribbonCoverage =
             1.0 - smoothstep(0.15, 1.0, abs(vRibbonCoord));
-        float a =
-            (0.12 + 0.5 * fade) * vBoundaryFade * vLayerAlpha
-            * flatOutlineScale * ribbonCoverage;
+        float perspectiveWidth =
+            mix(1.0, backWidthFrac, clamp(vDepth, 0.0, 1.0));
+        float sideDistancePx =
+            max(min(vFrequency, 1.0 - vFrequency), 0.0)
+            * max(plotWidthPx, 1.0) * perspectiveWidth;
+        // The stacked endpoints form a high-contrast comb against the black
+        // outside of the perspective surface. Successive exact FFT rows can
+        // legitimately put those endpoints at different heights, so any
+        // endpoint crossfade either blinks or morphs vertically. Fade the
+        // narrow exposed side strip of the neutral ridge; every interior
+        // outline remains exact.
+        float sideOutlineScale = smoothstep(0.0, 8.0, sideDistancePx);
+        float outlineOpacity =
+            (0.12 + 0.5 * fade) * vBoundaryFade
+            * flatOutlineScale * ribbonCoverage * sideOutlineScale;
+        float a;
+        if (vOverlayLayer > 0.5) {
+            // Base is drawn first with opacity A*(1-t). Compensate the overlay
+            // under source-over blending so coincident old/new ridge pixels
+            // retain opacity A rather than dimming at the middle of every
+            // crossfade: Ab + Ao*(1-Ab) = A.
+            float baseAlpha =
+                outlineOpacity * (1.0 - vLayerAlpha);
+            a = outlineOpacity * vLayerAlpha
+                / max(1.0 - baseAlpha, 0.0001);
+        } else {
+            a = outlineOpacity * vLayerAlpha;
+        }
         fragColor = vec4(oc, a);
         return;
     }
@@ -117,5 +143,14 @@ void main()
     c = mix(c, bgFill.rgb, clamp(vDepth * haze, 0.0, 1.0));
     c = mix(bgFill.rgb, c, vBoundaryFade);
     c = applySliceShadow(c, shadowFade);
-    fragColor = vec4(c, vLayerAlpha);
+    float perspectiveWidth =
+        mix(1.0, backWidthFrac, clamp(vDepth, 0.0, 1.0));
+    float sideDistancePx =
+        max(min(vFrequency, 1.0 - vFrequency), 0.0)
+        * max(plotWidthPx, 1.0) * perspectiveWidth;
+    // The curtain has the same exposed stacked endpoints as the ridge. Fade
+    // only the narrow side strip so adjacent curtain heights cannot form a
+    // flashing comb against the black outside of the perspective surface.
+    float sideSurfaceScale = smoothstep(0.0, 8.0, sideDistancePx);
+    fragColor = vec4(c, vLayerAlpha * sideSurfaceScale);
 }

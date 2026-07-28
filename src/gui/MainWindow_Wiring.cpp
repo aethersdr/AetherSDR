@@ -2885,14 +2885,24 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     }
 
     auto pendingDbm = std::make_shared<DbmRangeTransition::Handshake>();
-    auto setStreamDbmRange = [this, applet](float minDbm, float maxDbm, bool waitForEcho = false) {
+    auto encoderDbmRange =
+        std::make_shared<DbmRangeTransition::Range>();
+    auto encoderRecoveryPending = std::make_shared<bool>(false);
+    if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+        *encoderDbmRange = {pan->minDbm(), pan->maxDbm()};
+    }
+    auto setStreamDbmRange =
+        [this, applet, encoderDbmRange]
+        (float minDbm, float maxDbm, bool waitForEcho = false) {
+        *encoderDbmRange = {minDbm, maxDbm};
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
             if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
             }
         }
     };
-    auto applyAuthoritativeDbmRange = [this, applet, sw, setStreamDbmRange]
+    auto applyAuthoritativeDbmRange =
+        [this, applet, sw, setStreamDbmRange, encoderRecoveryPending]
                                       (const DbmRangeTransition::Range& range) {
         sw->cancelPendingDbmRangeChange();
         if (auto* pan = m_radioModel.panadapter(applet->panId())) {
@@ -2901,6 +2911,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             }
         }
         setStreamDbmRange(range.minDbm, range.maxDbm);
+        if (*encoderRecoveryPending) {
+            *encoderRecoveryPending = false;
+            sw->reacquireNoiseFloorLock();
+            return;
+        }
         sw->setDbmRange(range.minDbm, range.maxDbm);
         sw->prepareForFftScaleChange();
         sw->reacquireNoiseFloorLock();
@@ -2915,7 +2930,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             }
         }
     };
-    auto retireDbmRangeWithoutEcho = [this, applet, sw]() {
+    auto retireDbmRangeWithoutEcho =
+        [this, applet, sw, encoderRecoveryPending]() {
         // Some Flex firmware accepts a display range command without echoing
         // min_dbm/max_dbm. In that case the decoder is already using the range
         // the radio adopted, so only retire the stale-echo guard; reverting to
@@ -2926,6 +2942,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             if (pan->panStreamId() && m_radioModel.panStream()) {
                 m_radioModel.panStream()->cancelPendingDbmRange(pan->panStreamId());
             }
+        }
+        if (*encoderRecoveryPending) {
+            *encoderRecoveryPending = false;
+            sw->reacquireNoiseFloorLock();
         }
     };
     auto finishDbmRangeHandshake = [pendingDbm, applyAuthoritativeDbmRange,
@@ -3185,7 +3205,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //      update pan A's dBm scale.
         connect(pan, &PanadapterModel::levelChanged,
                 sw, [sw, pendingDbm, setStreamDbmRange,
-                     applyAuthoritativeDbmRange](float minDbm, float maxDbm) {
+                     applyAuthoritativeDbmRange,
+                     encoderRecoveryPending](float minDbm, float maxDbm) {
             const DbmRangeTransition::HandshakeDecision decision =
                 pendingDbm->observeRadioRange(
                     minDbm, maxDbm, QDateTime::currentMSecsSinceEpoch(),
@@ -3199,6 +3220,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             if (decision.action
                 == DbmRangeTransition::HandshakeAction::ReconcileRadioRange) {
                 applyAuthoritativeDbmRange(decision.range);
+                return;
+            }
+            if (*encoderRecoveryPending) {
+                setStreamDbmRange(minDbm, maxDbm);
+                *encoderRecoveryPending = false;
+                sw->reacquireNoiseFloorLock();
                 return;
             }
             if (sw->isDraggingDbmScale()) {
@@ -3368,6 +3395,33 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         armDbmRangeHandshake(minDbm, maxDbm);
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
+    });
+    connect(sw, &SpectrumWidget::radioDbmHeadroomRecoveryRequested,
+            this, [this, applet, sw, encoderDbmRange,
+                   encoderRecoveryPending, armDbmRangeHandshake,
+                   setStreamDbmRange, sendDbmRangeCommand](float headroomDb) {
+        if (sw->kiwiSdrWaterfallActive()
+            || profileLoadRadioStateWritesHeld()) {
+            return;
+        }
+        if (auto* pan = m_radioModel.panadapter(applet->panId());
+            pan && !pan->ownedByClient(m_radioModel.ourClientHandle())) {
+            return;
+        }
+
+        const DbmRangeTransition::Range recoveryRange =
+            DbmRangeTransition::clippedFloorRecoveryRange(
+                encoderDbmRange->minDbm,
+                encoderDbmRange->maxDbm,
+                headroomDb);
+        *encoderRecoveryPending = true;
+        sw->cancelPendingDbmRangeChange();
+        armDbmRangeHandshake(
+            recoveryRange.minDbm, recoveryRange.maxDbm);
+        setStreamDbmRange(
+            recoveryRange.minDbm, recoveryRange.maxDbm, true);
+        sendDbmRangeCommand(
+            recoveryRange.minDbm, recoveryRange.maxDbm);
     });
     connect(sw, &SpectrumWidget::dbmRangeDragFinished,
             this, [this, applet, sw, armDbmRangeHandshake,

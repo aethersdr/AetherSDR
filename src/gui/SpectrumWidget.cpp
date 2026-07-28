@@ -406,6 +406,42 @@ static bool clampDbmRange(float& minDbm, float& maxDbm)
     return true;
 }
 
+struct FftFloorClipStats {
+    int finiteBins{0};
+    int minValueBins{0};
+    int longestMinRunBins{0};
+};
+
+static FftFloorClipStats fftFloorClipStats(const QVector<float>& bins)
+{
+    FftFloorClipStats stats;
+    float frameMinDbm = std::numeric_limits<float>::infinity();
+    for (const float value : bins) {
+        if (!std::isfinite(value)) {
+            continue;
+        }
+        frameMinDbm = std::min(frameMinDbm, value);
+        ++stats.finiteBins;
+    }
+    if (stats.finiteBins == 0) {
+        return stats;
+    }
+
+    int currentMinRunBins = 0;
+    for (const float value : bins) {
+        if (std::isfinite(value)
+            && std::abs(value - frameMinDbm) <= 0.01f) {
+            ++stats.minValueBins;
+            ++currentMinRunBins;
+            stats.longestMinRunBins =
+                std::max(stats.longestMinRunBins, currentMinRunBins);
+        } else {
+            currentMinRunBins = 0;
+        }
+    }
+    return stats;
+}
+
 static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
 {
 #ifdef Q_OS_MAC
@@ -3351,6 +3387,38 @@ void SpectrumWidget::beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
     m_resetFftSmoothingOnNextFrame = true;
 }
 
+bool SpectrumWidget::flexDssInputFloorLooksClipped() const
+{
+    if (m_spectrumRenderMode != SpectrumRenderMode::Mode3D
+        || m_kiwiSdrWaterfallActive || m_bins.isEmpty()) {
+        return false;
+    }
+    const FftFloorClipStats stats = fftFloorClipStats(m_bins);
+    return dssFrameFloorLooksClipped(
+        stats.finiteBins, stats.minValueBins, stats.longestMinRunBins);
+}
+
+bool SpectrumWidget::requestFlexDssRadioHeadroom(qint64 nowMs)
+{
+    if (!flexDssInputFloorLooksClipped()) {
+        return false;
+    }
+
+    // A clipped frame contains no usable floor estimate: its apparent floor
+    // is merely the radio encoder's lower endpoint. Do not let it move the
+    // visible 3D scale. Ask the radio for enough lower headroom in one step,
+    // then let a fresh, unclipped frame drive the normal client-side floor.
+    constexpr qint64 kRecoveryRequestIntervalMs = 1000;
+    constexpr float kRecoveryHeadroomDb = 24.0f;
+    if (m_lastDssRadioHeadroomRequestMs <= 0
+        || nowMs - m_lastDssRadioHeadroomRequestMs
+            >= kRecoveryRequestIntervalMs) {
+        m_lastDssRadioHeadroomRequestMs = nowMs;
+        emit radioDbmHeadroomRecoveryRequested(kRecoveryHeadroomDb);
+    }
+    return true;
+}
+
 void SpectrumWidget::clearDbmReleaseRebase()
 {
     m_dbmReleaseRebaseUntilMs = 0;
@@ -3429,53 +3497,38 @@ void SpectrumWidget::syncDssRangeFromFreshZoomFrame(const QVector<float>& bins)
         return;
     }
 
-    float frameMinDbm = std::numeric_limits<float>::infinity();
-    int finiteBins = 0;
-    for (const float value : bins) {
-        if (!std::isfinite(value)) {
-            continue;
-        }
-        frameMinDbm = std::min(frameMinDbm, value);
-        ++finiteBins;
-    }
-    int minValueBins = 0;
-    int currentMinRunBins = 0;
-    int longestMinRunBins = 0;
-    for (const float value : bins) {
-        if (std::isfinite(value)
-            && std::abs(value - frameMinDbm) <= 0.01f) {
-            ++minValueBins;
-            ++currentMinRunBins;
-            longestMinRunBins =
-                std::max(longestMinRunBins, currentMinRunBins);
-        } else {
-            currentMinRunBins = 0;
-        }
-    }
+    const FftFloorClipStats clipStats = fftFloorClipStats(bins);
     const bool floorLooksClipped =
         dssFrameFloorLooksClipped(
-            finiteBins, minValueBins, longestMinRunBins);
+            clipStats.finiteBins,
+            clipStats.minValueBins,
+            clipStats.longestMinRunBins);
 
     const DbmRangeTransition::Range oldRange{
         m_refLevel - m_dynamicRange, m_refLevel};
     DbmRangeTransition::Range requestedRange;
     m_dssFloorAnchorValid = true;
-    if (floorLooksClipped) {
-        // A clipped frame cannot reveal its real noise floor: estimating it
-        // only rediscovers the radio's current lower endpoint and can leave
-        // the recovery parked there. Move the whole aperture down by one 3D
-        // floor-depth step, then verify a later radio-encoded frame.
-        requestedRange = DbmRangeTransition::clippedFloorRecoveryRange(
-            oldRange.minDbm, oldRange.maxDbm);
-        m_dssFloorAnchorDbm =
-            requestedRange.minDbm - m_dssFloorOffsetDb;
-    } else {
+    if (!floorLooksClipped) {
         m_dssFloorAnchorDbm = frameFloorDbm;
         requestedRange = DbmRangeTransition::manualRequestRange(
             oldRange.minDbm, oldRange.maxDbm, true,
             peekDssFloorDbm(), m_dynamicRange);
     }
     m_measuredNoiseFloorDbm = frameFloorDbm;
+    if (floorLooksClipped) {
+        // Move only the radio encoder. Moving m_refLevel here makes the whole
+        // 3D surface visibly step down and then back up while auto-floor
+        // converges on an estimate that the clipped frame cannot provide.
+        if (m_dssZoomFloorSync.beginAdjustment(
+                kMaxRangeAdjustmentAttempts)) {
+            m_dssZoomFloorSyncNotBeforeMs =
+                guards.nowMs + kFrequencyRangeSettleMs;
+            requestFlexDssRadioHeadroom(guards.nowMs);
+            return;
+        }
+        m_dssZoomFloorSync.consumeFreshFrame(true);
+        return;
+    }
     const bool rangeValid =
         clampDbmRange(requestedRange.minDbm, requestedRange.maxDbm);
     const bool rangeNeedsAdjustment = rangeValid
@@ -3725,6 +3778,9 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
     if (noiseFloorAutoAdjustHeld(nowMs)) {
+        return;
+    }
+    if (requestFlexDssRadioHeadroom(nowMs)) {
         return;
     }
 
@@ -12226,9 +12282,9 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_dssMeshFillPipeline->setTargetBlends({fillBlend});
 
-    // Outline pipeline — alpha-blended screen-space ribbons. Metal's native
-    // one-pixel lines toggle coverage as they move through subpixels, making
-    // the entire scrolling history strobe.
+    // Outline pipeline — alpha-blended screen-space ribbons on a fixed
+    // perspective grid. The shader crossfades exact FFT shapes in place, so
+    // neither native line coverage nor translated ribbon coverage can strobe.
     QRhiGraphicsPipeline::TargetBlend lblend;
     lblend.enable = true;
     lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
@@ -12473,8 +12529,9 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
         line.reserve(rows * dssLineVerticesPerRow() * 3);
         for (int rr = rows - 1; rr >= 0; --rr) {
             const float v = static_cast<float>(rr) / rows;   // 0 front .. ~1 back
-            // Base first, overlay second. The shader uses both only for the
-            // fixed front/rear crossfades; interior base vertices are discarded.
+            // Base first, overlay second. Curtains use both only at the fixed
+            // front/rear boundaries; ridge outlines use both at every fixed
+            // depth for exact-row crossfades.
             for (int layer = 0; layer < 2; ++layer) {
                 const float fillTag = layer == 0 ? 0.0f : 2.0f;
                 const float floorTag = layer == 0 ? 1.0f : 3.0f;

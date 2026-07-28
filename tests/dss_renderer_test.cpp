@@ -132,6 +132,56 @@ int testSupplementalCoverageDoesNotReplaceFft()
     return 0;
 }
 
+int testSupplementalCoverageRejectsTransientSpikes()
+{
+    DssRenderer renderer;
+    QVector<float> fft(DssRenderer::kCols, -95.0f);
+    QVector<float> supplemental(DssRenderer::kCols, -110.0f);
+    for (int row = 0; row < 2; ++row) {
+        renderer.pushRowWithSupplemental(
+            fft, 14.2, 0.2,
+            supplemental, 14.2, 0.4);
+    }
+
+    QVector<float> transient = supplemental;
+    const int center = DssRenderer::kCols / 2;
+    transient[center] = -20.0f;
+    renderer.pushRowWithSupplemental(
+        fft, 14.2, 0.2,
+        transient, 14.2, 0.4);
+    if (std::abs(
+            renderer.rowSupplementalDataRing(renderer.headRing())[center]
+            - (-110.0f))
+        > 0.1f) {
+        return fail(
+            "supplemental DSS coverage must reject one-row tile spikes");
+    }
+
+    // A real carrier that persists for a second row must still emerge; the
+    // filter rejects isolated maxima rather than flattening supplemental data.
+    renderer.pushRowWithSupplemental(
+        fft, 14.2, 0.2,
+        transient, 14.2, 0.4);
+    if (renderer.rowSupplementalDataRing(renderer.headRing())[center]
+        <= -100.0f) {
+        return fail(
+            "persistent supplemental DSS peaks must survive spike rejection");
+    }
+
+    QVector<float> newFrame(DssRenderer::kCols, -75.0f);
+    renderer.pushRowWithSupplemental(
+        fft, 14.2, 0.2,
+        newFrame, 14.5, 0.6);
+    if (std::abs(
+            renderer.rowSupplementalDataRing(renderer.headRing())[center]
+            - (-75.0f))
+        > 0.1f) {
+        return fail(
+            "supplemental DSS frame changes must break temporal smoothing");
+    }
+    return 0;
+}
+
 int testRetainedHistoryZoomRoundTrip()
 {
     DssRenderer renderer;
@@ -609,6 +659,9 @@ int main()
         return rc;
     }
     if (int rc = testSupplementalCoverageDoesNotReplaceFft(); rc != 0) {
+        return rc;
+    }
+    if (int rc = testSupplementalCoverageRejectsTransientSpikes(); rc != 0) {
         return rc;
     }
     if (int rc = testRetainedHistoryZoomRoundTrip(); rc != 0) {
