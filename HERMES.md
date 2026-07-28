@@ -1687,6 +1687,53 @@ confirms transmit sideband, frequency accuracy, and that real RF left the
 socket. It is the cheapest external validation instrument the HL2 has, and it
 costs one 111.6-second transmission.
 
+**It paid off on the first frame.** KI6BCJ/DM06, 40 m, 2026-07-28 00:42:00 UTC,
+`rfPower=100` into a real antenna, reported 37 dBm:
+
+- **21 stations decoded it**, from 284 km (AK6RI-1, CM87xi) out to 2080 km
+  (VE6PDQ, DO34lr). Best SNR +1 dB.
+- **Sideband confirmed correct, from outside.** Dial 7.038600 plus the 1500 Hz
+  audio offset lands at **7.040100** on USB; an inverted sideband would have
+  put it at 7.037100. Reported receive frequencies span **7040098–7040113**,
+  centred on 7040100. Twenty-one independent receivers agreeing on the upper
+  sideband is the check §14.6 could not construct internally.
+- **Drift 0 on every single spot** — the TX NCO is stable across the frame.
+
+Instrument readings during the frame, for future comparison: FWDPWR 35.5 dBm
+(~3.5 W), MICPEAK **−20 dBFS** — exactly the `beacon->start(…, -20.0f, …)`
+level, which is what proves the WSPR generator and not the microphone was
+feeding the modulator. PA temperature rose 43.6 → 47.4 °C over the frame and
+was still decelerating at unkey.
+
+**Two things to know before repeating it:**
+
+- **SWR was 3.3** (1.05 W reflected of 3.5 W forward) on 7.0386. Per §17.5 the
+  SWR ratio is the one directional quantity that is trustworthy *without*
+  calibration, so that number is real — the antenna is not resonant at the
+  bottom of 40 m. It completed safely, but 111.6 s of continuous duty into
+  3.3:1 is not a thing to make routine. Check SWR at the WSPR dial frequency
+  before arming, not at the band's phone segment.
+- **`transmit dax` reads 1 afterwards, and that is not a leak.**
+  `applyBeaconBand()` sets the slice to DIGU, and the #2273 rule maps any
+  digital mode to `dax=1` on macOS/PipeWire. The beacon deliberately leaves the
+  slice on the WSPR channel in DIGU, so the two agree, and it clears when the
+  operator leaves DIGU. Worth knowing because it *looks* exactly like the
+  latched-dax failure the Flex arm's save/restore exists to prevent — and note
+  that on the FLEX path `applyBeaconBand()` runs BEFORE `prepareWsprTransmit()`,
+  so `m_wsprTxPreviousDax` is saved as `true` after the mode change already
+  flipped it, and the restore hands back `true`. Same visible end state, but
+  reached by a path that genuinely is a save/restore no-op. Untangling that is
+  a Flex-side cleanup, not an HL2 one.
+
+**And one UX defect the on-air test surfaced**, fixed in the same branch:
+selecting a WSPR band updated the status label and *nothing else*. The dial
+stayed where it was while the label advertised a different frequency, and the
+whole band change — NCO, filter relays, TX oscillator — then happened in the
+last seconds before 111.6 s of RF. Selecting a band now tunes the receiver, so
+the operator can look at the sub-band and its SWR before committing. Mode,
+slice passband and station TX filter are still deferred to arm time, because
+those are the parts that disturb a listening setup and get restored after.
+
 ### 18.5 The systemic fix, and why not to patch site-by-site
 
 Patching each dead site to *also* subscribe to `backendAudioFrameReady` takes an

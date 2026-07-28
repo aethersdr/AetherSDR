@@ -493,13 +493,44 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_beaconPower, &QComboBox::currentIndexChanged, this, [this] {
         writePskSetting("beaconPowerDbm", m_beaconPower->currentData().toInt());
     });
-    // Selecting a band only previews where the beacon will go. The radio is
-    // not touched until the operator actually arms a transmission.
+    // Selecting a band tunes the receiver to that WSPR sub-band.
+    //
+    // This used to update the status text and nothing else, on the reasoning
+    // that selecting is a choice rather than a command. In the operator's seat
+    // that reads as a broken control: the label says "40m · 7.038600 MHz USB on
+    // transmit" while the dial sits on whatever it was, there is no way to look
+    // at the sub-band before committing to it, and the entire band change —
+    // NCO, band-filter relays, TX oscillator — then happens inside the last
+    // seconds before a 111.6-second transmission. Tuning here moves that jump
+    // to a moment when the operator is watching, and makes "is anything
+    // decoding on this band right now?" answerable before arming.
+    //
+    // Only the dial moves. Mode, slice passband and the station TX filter are
+    // still applied by applyBeaconBand() at arm time, because those are the
+    // parts that disturb a listening operator's setup, and they are restored
+    // afterwards.
+    //
+    // Operator intent only: updateBeaconDefaults() drives this combo from the
+    // slice frequency behind a QSignalBlocker, so a programmatic sync cannot
+    // reach here and tune the radio back at itself.
     connect(m_beaconBand, &QComboBox::currentIndexChanged, this, [this] {
+        const double dialMhz = m_beaconBand->currentData().toDouble();
         m_beaconStatus->setText(
             tr("%1 · %2 MHz USB on transmit")
                 .arg(m_beaconBand->currentText())
-                .arg(m_beaconBand->currentData().toDouble(), 0, 'f', 6));
+                .arg(dialMhz, 0, 'f', 6));
+        if (m_beaconArmed || m_radioModel == nullptr) {
+            return;   // armed: applyBeaconBand() owns the dial until it stops
+        }
+        TransmitModel& tx = m_radioModel->transmitModel();
+        if (tx.isTransmitting() || tx.isTuning()) {
+            return;   // never move the dial out from under a live carrier
+        }
+        SliceModel* slice = m_radioModel->txSlice();
+        if (slice == nullptr || slice->isLocked()) {
+            return;   // tuneAndRecenter() would refuse anyway, and warn
+        }
+        slice->tuneAndRecenter(dialMhz);
     });
     connect(m_beaconTone, &QDoubleSpinBox::valueChanged, this, [](double hz) {
         writePskSetting("beaconToneHz", hz);
