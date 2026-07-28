@@ -2747,6 +2747,8 @@ target_include_directories(panadapter_message_overlay_test PRIVATE src)
 target_link_libraries(panadapter_message_overlay_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+set_tests_properties(panadapter_message_overlay_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
