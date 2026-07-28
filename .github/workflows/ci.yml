@@ -335,3 +335,9 @@ jobs:
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Run ASR GPU probe test (#4535 regression)
+        # arm64 runner = Apple Silicon: exercises the real Metal device init and
+        # embedded precompiled-metallib load on every PR. On the pre-#4553 code
+        # this call could invoke the runtime shader compiler and hang.
+        run: ctest --test-dir build -R asr_gpu_probe_test --output-on-failure
