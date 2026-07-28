@@ -530,6 +530,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
     src/core/backends/hl2/Hl2EmergencyStop.cpp # release the radio from a signal handler
+    src/core/backends/hl2/Hl2Receivers.cpp   # per-receiver index-space map (HERMES.md §12.5)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
@@ -2653,6 +2654,14 @@ add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
 target_include_directories(hl2_metis_client_test PRIVATE src)
 target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+
+# HL2 per-receiver index-space map — standalone, needs only QtCore for QString.
+add_executable(hl2_receivers_test
+    tests/hl2_receivers_test.cpp
+    src/core/backends/hl2/Hl2Receivers.cpp)
+target_include_directories(hl2_receivers_test PRIVATE src)
+target_link_libraries(hl2_receivers_test PRIVATE Qt6::Core)
+add_test(NAME hl2_receivers_test COMMAND hl2_receivers_test)
 
 # HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
 add_executable(hl2_spectrum_test

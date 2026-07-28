@@ -334,7 +334,7 @@ int main(int argc, char** argv)
     // itself is exercised separately below.
     for (const auto& c : cases) {
         spanSpy.clear();
-        backend.setPanBandwidth(QStringLiteral("hl2"), c.requestMhz * 1.0e6);
+        backend.setPanBandwidth(QStringLiteral("hl2-0"), c.requestMhz * 1.0e6);
         spin(220);
         // Every request re-publishes, including one that changes nothing —
         // otherwise a zoom the hardware cannot honour would leave the display
@@ -363,13 +363,13 @@ int main(int argc, char** argv)
     // not feel laggy), everything inside the cooldown is superseded, and the last
     // one wins. What must NOT happen is one rebuild per request.
     {
-        backend.setPanBandwidth(QStringLiteral("hl2"), 48000.0);
+        backend.setPanBandwidth(QStringLiteral("hl2-0"), 48000.0);
         spin(220);                            // settle, so the sweep starts clean
 
         QSignalSpy sweepSpy(&backend, &IRadioBackend::panCenterBandwidthChanged);
         // A drag: eight requests well inside one cooldown, ending on 384 kHz.
         for (const double mhz : {0.048, 0.060, 0.096, 0.120, 0.192, 0.240, 0.300, 0.384}) {
-            backend.setPanBandwidth(QStringLiteral("hl2"), mhz * 1.0e6);
+            backend.setPanBandwidth(QStringLiteral("hl2-0"), mhz * 1.0e6);
             spin(5);
         }
         const int duringSweep = sweepSpy.count();
@@ -395,12 +395,12 @@ int main(int argc, char** argv)
     // 14.100 MHz above; widening and narrowing the window around it has to leave
     // it exactly there.
     backend.setSliceFrequency(0, 14'100'000.0);
-    backend.setPanBandwidth(QStringLiteral("hl2"), 384000.0);
+    backend.setPanBandwidth(QStringLiteral("hl2-0"), 384000.0);
     spin(220);
-    backend.setPanBandwidth(QStringLiteral("hl2"), 48000.0);
+    backend.setPanBandwidth(QStringLiteral("hl2-0"), 48000.0);
     spin(220);
     QSignalSpy sliceSpy(&backend, &IRadioBackend::sliceChanged);
-    backend.setPanBandwidth(QStringLiteral("hl2"), 192000.0);
+    backend.setPanBandwidth(QStringLiteral("hl2-0"), 192000.0);
     spin(220);
     check(!sliceSpy.isEmpty(), "a span change re-publishes the slice");
     if (!sliceSpy.isEmpty()) {
@@ -523,7 +523,7 @@ int main(int argc, char** argv)
 
         // A request for the widest span must land on the ceiling, not above it.
         cappedSpan.clear();
-        capped.setPanBandwidth(QStringLiteral("hl2"), 384000.0);
+        capped.setPanBandwidth(QStringLiteral("hl2-0"), 384000.0);
         spin(60);
         check(!cappedSpan.isEmpty(), "capped backend republished its span");
         if (!cappedSpan.isEmpty()) {

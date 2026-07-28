@@ -63,6 +63,9 @@ QString neutralWfIdString(int panIdx)
                                       8, 16, QLatin1Char('0'));
 }
 
+// A pan index that cannot collide with a real one, for the "no id at all" case.
+constexpr int kNeutralPanIndexNone = -1;
+
 constexpr int kDefaultPanDimensionThreshold = 100;
 constexpr int kSessionRestorePruneDelayMs = 5000;
 constexpr int kWaterfallLineDurationMinMs = 1;
@@ -515,8 +518,16 @@ void RadioModel::setupBackend(const QString& family)
         // aetherd Gap B (Step 2c): remember the geometry even when no
         // PanadapterModel resolves — an HL2 session has none, and the neutral
         // waterfall rows below still need the band edges.
-        m_backendPanCenterMhz = centerMhz;
-        m_backendPanBandwidthMhz = bandwidthMhz;
+        // Which pane this geometry belongs to. Was pan index 0 unconditionally,
+        // which is right at one receiver and wrong at four: every pan's
+        // waterfall then scaled against the first pan's band edges, so three of
+        // them drew the correct spectrum over the wrong frequency axis.
+        const int panIdx = m_flexBackend ? kNeutralPanIndexNone
+                                         : neutralPanIndexFor(panId);
+        if (panIdx != kNeutralPanIndexNone) {
+            m_backendPanCenterMhz[panIdx] = centerMhz;
+            m_backendPanBandwidthMhz[panIdx] = bandwidthMhz;
+        }
         auto* pan = resolvePan(panId);
         if (!pan && !m_flexBackend) {
             // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend.
@@ -524,9 +535,12 @@ void RadioModel::setupBackend(const QString& family)
             // there is no PanadapterModel to route frames to and the UI never
             // builds a pane — the render path was falling back to the active
             // spectrum widget, which is null when no pan applet exists.
-            pan = ensureOwnedPanadapter(neutralPanIdString(0));
+            //
+            // One pane per backend pan id, so a multi-receiver backend gets a
+            // pane each instead of four receivers sharing one.
+            pan = ensureOwnedPanadapter(neutralPanIdString(panIdx));
             if (pan)
-                pan->setWaterfallId(neutralWfIdString(0));
+                pan->setWaterfallId(neutralWfIdString(panIdx));
         }
         if (!pan) return;
         const bool spanChanged = pan->setCenterBandwidth(centerMhz, bandwidthMhz);
@@ -767,8 +781,13 @@ void RadioModel::setupBackend(const QString& family)
         // panadapter even though the VFO shows the right frequency. Re-address the
         // delta at the pan we materialised.
         SliceDelta mapped = delta;
-        if (!m_flexBackend && mapped.panId)
-            mapped.panId = neutralPanIdString(0);
+        if (!m_flexBackend && mapped.panId) {
+            // Through the SAME allocator the geometry handler uses, so a slice
+            // lands on the pane its own receiver feeds. Pinned to index 0 while
+            // one pan existed; at four receivers that put every slice flag on
+            // the first panadapter.
+            mapped.panId = neutralPanIdString(neutralPanIndexFor(*mapped.panId));
+        }
         if (!s && !m_flexBackend) {
             // aetherd Gap B (Step 2c): no Flex "slice" status ever runs for a
             // non-Flex backend, so nothing would create the model and every delta
@@ -990,6 +1009,13 @@ void RadioModel::teardownBackend()
     m_backend.reset();
     m_connection = nullptr;
     m_panStream = nullptr;
+    // Backend pan ids are only meaningful to the backend that issued them, so
+    // the translation table dies with it. Carrying it across a family swap would
+    // let a new backend's first pan inherit an index the old one had allocated,
+    // and every pan after it would be off by one.
+    m_backendPanIndex.clear();
+    m_backendPanCenterMhz.clear();
+    m_backendPanBandwidthMhz.clear();
 }
 
 RadioModel::RadioModel(QObject* parent)
@@ -4172,7 +4198,11 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // than the frame rate (100 ms against 25-40 fps). That gate is what makes a
     // row actually represent line_duration of time — the calibration the
     // widget's time axis already assumes.
-    if (m_backendPanBandwidthMhz > 0.0) {
+    // Geometry for THIS pan. `panId` here is already the neutral index, which is
+    // the same key the geometry handler stores under.
+    const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);
+    const double panCenterMhz = m_backendPanCenterMhz.value(panId, 0.0);
+    if (panBandwidthMhz > 0.0) {
         // Row PACING (origin/main #4476): emit at the pan's declared
         // waterfallLineDuration rather than once per spectrum frame, advancing BY
         // the interval so the rate does not quantise onto the frame grid.
@@ -4198,7 +4228,7 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
             lastNs = (lastNs == 0) ? nowNs : lastNs + dueNs;
             if (nowNs - lastNs > dueNs)
                 lastNs = nowNs - dueNs;
-            const double half = m_backendPanBandwidthMhz / 2.0;
+            const double half = panBandwidthMhz / 2.0;
             // Stream ID (this branch, review finding 8): a session that owns a pan
             // must use ITS waterfall id, or every row is dropped as unmatched and
             // MainWindow logs "dropped unmatched waterfall stream" ~20x/s. The
@@ -4210,8 +4240,8 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
                     wfId = realWfId;
             }
             emit panFeedWaterfallRowReady(wfId, bins,
-                                          m_backendPanCenterMhz - half,
-                                          m_backendPanCenterMhz + half,
+                                          panCenterMhz - half,
+                                          panCenterMhz + half,
                                           m_backendWfTimecode++, nowNs);
         }
     }
@@ -6418,6 +6448,26 @@ quint32 RadioModel::clientHandle() const
     // No RadioConnection for a non-Flex backend; the Flex client-handle concept
     // does not apply there.
     return m_connection ? m_connection->clientHandle() : 0u;
+}
+
+int RadioModel::neutralPanIndexFor(const QString& backendPanId)
+{
+    // Backend pan ids are opaque strings. They are assigned neutral indices in
+    // FIRST-SEEN order rather than parsed, so that this stays family-agnostic:
+    // a backend numbering its pans "hl2-0..hl2-3", "rx1..rx4" or by UUID all
+    // work, and no naming convention is load-bearing across the seam.
+    //
+    // Allocation is stable for the life of a connection, which is what lets the
+    // waterfall geometry and the slice->pan association below stay addressed to
+    // the same pane across reconnects of the same layout.
+    if (backendPanId.isEmpty())
+        return 0;   // a backend that names no pan gets the first one
+    const auto it = m_backendPanIndex.constFind(backendPanId);
+    if (it != m_backendPanIndex.constEnd())
+        return it.value();
+    const int assigned = m_backendPanIndex.size();
+    m_backendPanIndex.insert(backendPanId, assigned);
+    return assigned;
 }
 
 PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)

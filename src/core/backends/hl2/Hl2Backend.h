@@ -9,7 +9,11 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2DbReference.h"
+#include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
+
+#include <deque>
+#include <vector>
 
 namespace AetherSDR::hl2 {
 
@@ -54,7 +58,9 @@ public:
     void setPanRfGain(const QString& panId, int gainDb) override;
 
 private:
-    // The actual span change, after the throttle above has settled.
+    // The actual span change, after the throttle above has settled. The DDC rate
+    // is a RADIO-WIDE register (0x00[25:24]), so this is not per-receiver: every
+    // panadapter shares one span.
     void applyPanBandwidth(double hz);
 
 public:
@@ -83,8 +89,10 @@ private:
     // path that can move the dial.
     void applyBandFilter(const char* reason);
 
-    void emitSliceState();   // sliceChanged(delta) from current freq/mode/filter
-    void emitPanState();     // panCenterBandwidthChanged from freq + sample rate
+    void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
+    void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
+    void emitAllSliceState();
+    void emitAllPanState();
     void pushInitialState();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
@@ -99,19 +107,105 @@ private:
     static double wattsToDbm(double watts);
 
     MetisClient* m_metis = nullptr;
-    Hl2RxDsp* m_dsp = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
 
-    // Authoritative RX state (HL2 has no status wire echoing it back).
-    // The slice's tuned frequency, and — separately — where the DDC's NCO sits.
-    // These were one value, which nailed the slice to the centre of the
-    // panadapter: every tune moved the NCO, so the pan centre moved with it
-    // and the display re-centred under the operator on every click. They are
-    // now independent, with the slice tuned inside the passband by a WDSP
-    // shift and the NCO moved only when the target would leave the window.
-    double m_rxFreqHz = 10'000'000.0;   // slice
-    double m_ncoHz    = 10'000'000.0;   // DDC / pan centre
+    // ---- per-receiver state ----
+    //
+    // One of these per running DDC. Everything here is genuinely independent
+    // between receivers; anything the HARDWARE shares (sample rate, LNA gain,
+    // the filter board) stays in the flat members below, and the split between
+    // the two is the whole design. Putting a shared register in here would give
+    // four receivers four opinions about one piece of hardware, and the last
+    // writer would win silently.
+    struct Receiver {
+        // Owns its own demod + spectrum chain. Created on connect, destroyed on
+        // disconnect, and moved to the I/O thread with everything else.
+        Hl2RxDsp* dsp = nullptr;
+
+        // Authoritative RX state (HL2 has no status wire echoing it back).
+        // The slice's tuned frequency, and — separately — where the DDC's NCO
+        // sits. These were one value, which nailed the slice to the centre of
+        // the panadapter: every tune moved the NCO, so the pan centre moved with
+        // it and the display re-centred under the operator on every click. They
+        // are now independent, with the slice tuned inside the passband by a
+        // WDSP shift and the NCO moved only when the target would leave the
+        // window.
+        double sliceFreqHz = 10'000'000.0;   // slice
+        double ncoHz       = 10'000'000.0;   // DDC / pan centre
+
+        QString mode = QStringLiteral("USB");
+        // Overwritten from defaultPassbandForMode(mode) on the first linkUp of
+        // each connect (#4484). Do not treat these initial values as a mode's
+        // passband — they match no mode (they equal the unmapped-mode fallback),
+        // and when pushInitialState() sent them verbatim a fresh USB connect got
+        // DIGU's filter with the mode indicator reading USB.
+        int filterLowHz = 150;
+        int filterHighHz = 3000;
+        // Authoritative AGC state, mirroring the DSP defaults in Hl2RxDsp::Config
+        // so the first sliceChanged reports what WDSP was actually opened with.
+        QString agcMode = QStringLiteral("med");
+        int agcThresholdDb = 65;
+
+        // Host-side per-slice audio. The radio mixes nothing for us — a Flex
+        // sums its slices on-radio and sends one stream, and an HL2 demodulates
+        // every receiver here — so muting is ours to apply.
+        bool audioMuted = false;
+
+        // Per-receiver S-meter ballistics. Deliberately NOT shared: a strong
+        // signal on receiver 1 must not move receiver 3's needle, which is what
+        // a single set of these members would have done.
+        QElapsedTimer sMeterClock;
+        double sMeterDbm = 0.0;
+        bool   haveSMeter = false;
+    };
+    std::vector<Receiver> m_rx;
+
+    // The four index spaces, never derived from one another. See Hl2Receivers.h.
+    Hl2ReceiverMap m_ids;
+
+    // The receiver that owns transmit, and whose slice is the TX slice. The HL2
+    // has one transmitter however many receivers it runs, so this is a CHOICE
+    // among the receivers rather than a property each of them has.
+    int m_txDdc = 0;
+
+    [[nodiscard]] Receiver* rx(int ddc);
+    [[nodiscard]] const Receiver* rx(int ddc) const;
+    // Resolve a seam slice id / pan id to a DDC index, or -1. Callers must
+    // check: an unknown id means a control for a receiver that is not running,
+    // and steering it to receiver 0 would move the wrong panadapter.
+    [[nodiscard]] int ddcForSlice(int sliceId) const;
+    [[nodiscard]] int ddcForPan(const QString& panId) const;
+
+    // Create/destroy the receiver set. Called on connect once the count is
+    // known, and on teardown. Not idempotent by accident: buildReceivers()
+    // tears the previous set down first, because a reconnect at a different
+    // count must not leave orphaned DSP chains consuming WDSP channel ids.
+    void buildReceivers(int count);
+    // Destroy the DSP chains but KEEP each receiver's operator-set state. The
+    // two have different lifetimes — see buildReceivers().
+    void releaseReceiverDsps();
+    void tearDownReceivers();
+
+    // Sum one receiver's demodulated audio into the host mix. The HL2 has no
+    // on-radio mixer -- a Flex sums its slices and sends one stream -- so with
+    // more than one slice open this is where they become one.
+    void mixReceiverAudio(int ddc, const std::vector<float>& pcm);
+
+    // Per-slice meter name for the seam ("SLC:LEVEL" for the first receiver, so
+    // an existing single-receiver consumer keeps the name it already binds to).
+    static QString sliceMeterName(int uiNumber);
+
+    // Mixing scratch. m_mixPending is per receiver and holds demodulated samples
+    // waiting for their peers; m_mixAccum is the summing buffer, reused because
+    // this runs ~47 times a second per receiver.
+    std::vector<std::deque<float>> m_mixPending;
+    std::vector<float> m_mixAccum;
+    // How far ahead the other receivers may get before a starved one is mixed as
+    // silence. 24 kHz audio, so this is ~85 ms -- long enough to absorb normal
+    // WDSP worker jitter, short enough that a genuinely stalled receiver does
+    // not hold the speaker silent for a noticeable time.
+    static constexpr std::size_t kMixStarvationSamples = 2048;
     // The DDC rate, which IS the panadapter span (emitPanState).
     //
     // Defaults to the NARROWEST the hardware offers, and connectRadio then
@@ -120,7 +214,18 @@ private:
     // sustained UDP, 3048 vs 381 packets/second, and 8x the samples through
     // WDSP's decimation front end -- so it is opted into, never imposed at
     // connect on an operator who may be on wifi or a host that cannot carry it.
+    //
+    // SHARED. 0x00[25:24] is one field for the whole radio, so every receiver
+    // runs at the same rate and every panadapter shows the same span. It also
+    // bounds the receiver count: see kEp6LinkBudgetFraction and
+    // maxReceiversAtRate() — four receivers at 384 kHz is ~89 Mbit/s on the
+    // HL2's 100BASE-T and is refused.
     int m_sampleRateHz = 48000;
+    // How many receivers to run. Requested by the operator (Hl2Settings),
+    // clamped by what the board reports at discovery 0x13 and by the link
+    // budget above. Never a hardcoded count — the skimmer gateware variants
+    // report 9..12 and the shipping hl2b5up_main reports 4.
+    int m_requestedNumRx = 1;
     // Zoom-sweep throttle for setPanBandwidth.
     //
     // Unlike a centre drag, which is cheap to forward, a span change is a
@@ -137,21 +242,26 @@ private:
     static constexpr int kBandwidthThrottleMs = 150;
     QTimer* m_bandwidthThrottle = nullptr;
     double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
-    QString m_mode = QStringLiteral("USB");
-    // Overwritten from defaultPassbandForMode(m_mode) on the first linkUp of
-    // each connect. Do not treat these initial values as a mode's passband —
-    // they match no mode (they equal the unmapped-mode fallback), and when
-    // pushInitialState() sent them verbatim a fresh USB connect got DIGU's
-    // filter with the mode indicator reading USB.
-    int m_filterLowHz = 150;
-    int m_filterHighHz = 3000;
-    // Has this connect already derived the passband from the mode?
+
+    // Has this connect already derived the passband from the mode? (#4484)
     //
     // pushInitialState() runs on every linkUp, and MetisClient re-emits linkUp
     // after an EP6 silence timeout with no new connectRadio(). Without this the
     // derivation would reset an operator's own filter edit on a transient glitch.
     // Cleared in connectRadio(), so a genuine reconnect re-derives.
+    //
+    // Radio-wide rather than per receiver, unlike the mode and passband it
+    // guards (those moved into Receiver): it gates the once-per-connect
+    // derivation PASS, which now runs over every receiver.
     bool m_passbandDerivedThisConnect = false;
+
+    // ---- SHARED HARDWARE ----
+    //
+    // The HL2 has ONE AD9866. Every receiver is a DDC behind that single
+    // converter, so these are radio-wide and cannot be made per-receiver however
+    // much the UI would like them to be. Four panadapters on four bands share
+    // one preamp setting and one filter selection; see applyBandFilter() for
+    // what happens when they disagree.
     int m_lnaGainDb = 20;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
@@ -215,9 +325,11 @@ private:
     // an HL2 sees meters that behave the same way.
     static constexpr double kMeterAttackAlpha = 0.5;
     static constexpr double kMeterDecayAlpha  = 0.15;
-    QElapsedTimer m_sMeterClock;
-    double m_sMeterDbm = 0.0;
-    bool   m_haveSMeter = false;
+    // The S-meter's clock and EMA are PER RECEIVER (Receiver::sMeter*). Sharing
+    // them would let a strong signal on one receiver drive every other
+    // receiver's needle, and the 100 ms rate gate would publish whichever
+    // receiver's block happened to land on the tick.
+    //
     // PA temperature rides the 10 Hz telemetry, so it needs no rate gate of its
     // own — but the instrumentation ADC's low bits are noisy enough that the
     // displayed value flickered by a degree at rest. Same EMA, symmetric:
@@ -225,10 +337,6 @@ private:
     static constexpr double kPaTempAlpha = 0.2;
     double m_paTempC = 0.0;
     bool   m_havePaTemp = false;
-    // Authoritative AGC state, mirroring the DSP defaults in Hl2RxDsp::Config so
-    // the first sliceChanged reports what WDSP was actually opened with.
-    QString m_agcMode = QStringLiteral("med");
-    int m_agcThresholdDb = 65;
 
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
@@ -236,8 +344,9 @@ private:
     // 0..60 dB; see the measurement in setSliceAgc().
     static constexpr double kAgcCeilingDbPerUnit = 0.6;
     static constexpr double kUsablePassbandFraction = 0.8;
-    static constexpr int kSliceId = 0;
-    static constexpr const char* kPanId = "hl2";
+    // Ceiling on host-mixed slice audio. N demodulated receivers are summed
+    // here, so N loud slices can sum past full scale where one never could.
+    static constexpr float kMixCeiling = 1.0f;
 
     // AD9866 LNA gain limits, in dB. These are the range ccRxGain() encodes
     // (C4 = 0x40 | (dB + 12), a 6-bit field), so they are the register's own

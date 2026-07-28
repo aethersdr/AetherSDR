@@ -118,7 +118,15 @@ public:
 
     // numRx clamped to what the board says it has, and to kMaxTunableRx.
     // See Params.
-    int effectiveNumRx() const;
+    //
+    // The STATIC form answers from a Params alone, without a running client.
+    // That exists because the caller must know the receiver count BEFORE
+    // start(): the DSP chains have to be built and configured first, and WDSP
+    // channel setup is slow enough (~17 s on a first run, generating FFTW
+    // wisdom) that doing it after start() stalls the I/O thread's EP2 pacer --
+    // and the gateware watchdog halts the stream when EP2 stops arriving.
+    static int effectiveNumRx(const Params& p);
+    int effectiveNumRx() const { return effectiveNumRx(m_params); }
 
     // ---- TRANSMIT ----
     //

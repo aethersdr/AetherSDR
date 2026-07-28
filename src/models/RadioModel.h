@@ -1179,9 +1179,21 @@ private:
     // spectra through IRadioBackend (HL2). Kept on RadioModel because such a
     // backend has no PanadapterModel yet, and the neutral waterfall rows still
     // need frequency edges.
-    double  m_backendPanCenterMhz{0.0};
-    double  m_backendPanBandwidthMhz{0.0};
+    // Per-pan, keyed by NEUTRAL pan index, because a backend may run several
+    // receivers at once (HL2 runs up to four). These were single scalars while
+    // only one non-Flex pan could exist, which quietly made every extra pan's
+    // waterfall scale against the FIRST pan's band edges.
+    QHash<int, double> m_backendPanCenterMhz;
+    QHash<int, double> m_backendPanBandwidthMhz;
     quint32 m_backendWfTimecode{0};
+
+    // Backend pan id ("hl2-2") -> neutral pan index, allocated in first-seen
+    // order. The backend's ids are OPAQUE here: RadioModel must not parse a
+    // family's naming scheme, and a backend must not have to know about the
+    // 0xE1000000 stream-id space. This table is the translation between them.
+    QHash<QString, int> m_backendPanIndex;
+    // Allocate (or recall) the neutral index for a backend pan id.
+    int neutralPanIndexFor(const QString& backendPanId);
 
     // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
     //

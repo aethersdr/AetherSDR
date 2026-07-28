@@ -39,6 +39,20 @@ public:
     // the widest span it will offer, and never writes it.
     static bool lowBandwidth();
 
+    // How many receivers the operator wants running, 1..kMaxReceivers.
+    //
+    // Persisted for the same reason the span is: receivers are not free. Each
+    // one adds an EP6 payload slot (so the packet rate rises), a WDSP channel
+    // and an FFT, and four at 384 kHz exceeds what 100BASE-T will carry. So it
+    // is opted into and remembered, never imposed at connect.
+    //
+    // Defaults to 1 — the configuration every existing HL2 session has been
+    // running — so this feature changes nothing for an operator who does not ask
+    // for it. The backend clamps the answer against the board's reported count
+    // and the link budget; this is a REQUEST, not a promise.
+    static int receiverCount();
+    static void setReceiverCount(int count);
+
 private:
     static QJsonObject readObj();
 };

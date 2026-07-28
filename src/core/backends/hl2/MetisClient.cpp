@@ -66,6 +66,27 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     // warning, and the meters would simply never move.
     qRegisterMetaType<AetherSDR::hl2::Hl2Telemetry>("AetherSDR::hl2::Hl2Telemetry");
 
+    // Seed the C&C banks from the Params defaults rather than leaving them
+    // zero-initialised until start().
+    //
+    // A default-constructed Cc is five zero bytes, which is not "no bank" -- it
+    // is a WRITE OF ZERO TO REGISTER 0x00, the config register (48 kHz, one
+    // receiver) with C0 = 0x00. Before start() the rotation was handing those
+    // out, so any caller that built a packet without starting emitted banks that
+    // looked like deliberate commands. Nothing shipped depended on it because
+    // Hl2Backend always starts first, but it made the un-started object's output
+    // meaningless, and it is what made hl2_tx_gate_test's "register address
+    // intact" check depend on the rotation's phase rather than on its content.
+    //
+    // At least one frequency bank ALWAYS exists, so the rotation length is
+    // never zero and buildNextControlPacket() has something real to send from
+    // the first call.
+    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte);
+    m_ccGain = ccRxGain(m_params.lnaGainDb);
+    m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
+    m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
+    m_ccTxDrive = ccTxDrive(0, false);
+
     // Paces EP2 from a wall clock (see kEp2PacerTickMs) so C&C keeps flowing
     // even if the EP6 receive path stalls.
     m_ep2Timer = new QTimer(this);
@@ -146,11 +167,11 @@ QList<MetisClient::Discovered> MetisClient::discover(int timeoutMs, const QHostA
     return found;
 }
 
-int MetisClient::effectiveNumRx() const
+int MetisClient::effectiveNumRx(const Params& p)
 {
-    int n = m_params.numRx < 1 ? 1 : m_params.numRx;
-    if (m_params.boardMaxRx > 0 && n > m_params.boardMaxRx)
-        n = m_params.boardMaxRx;
+    int n = p.numRx < 1 ? 1 : p.numRx;
+    if (p.boardMaxRx > 0 && n > p.boardMaxRx)
+        n = p.boardMaxRx;
     // ccRxFreq() only reaches RX1..RX7 (registers 0x02..0x08); RX8..RX12 live at
     // 0x12..0x16 and are not encoded. Clamping here rather than in the encoder
     // keeps the DEMUX in step with what we can actually tune: running 8 DDCs we
