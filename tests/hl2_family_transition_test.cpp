@@ -89,24 +89,38 @@ int main(int argc, char** argv)
     model.rebootRadio();
     check(true, "F3: rebootRadio() on HL2 did not crash");
 
-    // WSPR beacon (#4435): the beacon rides a Flex `dax_tx` stream, which no
-    // other family provides — HL2 host-modulates and has no DAX. It borrows
-    // station state (`transmit dax`, the TX filter, DAX TX stream ownership)
-    // before it ever keys, so a refusal must leave none of that latched.
-    // `transmit dax` in particular is the one that bites: its own comment notes
-    // a stuck dax=1 "would silently kill the next mic voice TX on every platform
-    // where updateDaxTxMode() is compiled out".
-    //
-    // Note this is NOT the capabilities().canTransmit gate doing the work — HL2
-    // advertises canTransmit since transmit landed, so the gate passes here and
-    // the refusal comes from the absent DAX TX stream. The gate remains the
-    // fail-closed guard for any family that reports canTransmit=false.
-    check(!model.prepareWsprTransmit(),
-          "WSPR: prepareWsprTransmit() is refused on a family with no DAX TX");
-    check(!model.hasWsprTxStream(),
-          "WSPR: a refused prepare claims no TX audio stream");
+    // WSPR beacon (#4435): the beacon used to be refused outright on HL2,
+    // because it rides a Flex `dax_tx` stream that no other family provides.
+    // It now takes the host-modulated arm instead: the modulator is ours, the
+    // AudioEngine pump already reaches it through the m_hostModulation branch
+    // of feedDaxTxAudioInternal(), and there is no transport to create.
+    check(model.prepareWsprTransmit(),
+          "WSPR: prepareWsprTransmit() succeeds on a host-modulating backend");
+    check(model.hasWsprTxStream(),
+          "WSPR: the host-modulated arm reports a ready TX audio route");
+
+    // The point of the original refusal survives the change: the beacon must
+    // still not borrow Flex station state on a radio that has none. `transmit
+    // dax` is the one that bites — its own comment notes a stuck dax=1 "would
+    // silently kill the next mic voice TX on every platform where
+    // updateDaxTxMode() is compiled out". A host-modulating radio has no
+    // radio-side modulator to point at DAX in the first place.
     check(!model.transmitModel().daxOn(),
-          "WSPR: a refused prepare does not leave `transmit dax` latched");
+          "WSPR: the host-modulated arm does not latch `transmit dax`");
+
+    model.releaseWsprTransmit();
+    check(!model.hasWsprTxStream(),
+          "WSPR: release drops the host-modulated route claim");
+    check(!model.transmitModel().daxOn(),
+          "WSPR: release leaves `transmit dax` clear");
+
+    // Prepare/release is idempotent and re-armable — the dialog defers a frame
+    // to the next two-minute slot without re-preparing, but an operator who
+    // cancels and re-arms runs this pair again.
+    check(model.prepareWsprTransmit() && model.hasWsprTxStream(),
+          "WSPR: the host-modulated arm can be re-armed after a release");
+    model.releaseWsprTransmit();
+    check(!model.hasWsprTxStream(), "WSPR: second release also clears");
 
     // ---- Round-trip back to Flex ----
     model.connectToRadio(flexInfo());
@@ -116,6 +130,11 @@ int main(int argc, char** argv)
           "round-trip: Flex regains canReboot after HL2 -> Flex");
     check(model.panStream() != nullptr,
           "round-trip: Flex owns a PanadapterStream again");
+    // A host-modulated claim must not survive into a family that DOES need a
+    // real dax_tx stream, or the dialog would arm against a stream that was
+    // never created and transmit a silent 111.6 s frame.
+    check(!model.hasWsprTxStream(),
+          "round-trip: no WSPR route is claimed on Flex before a prepare");
 
     // Flex -> HL2 -> same Flex: nothing from the HL2 session lingers as a
     // reclaim candidate (F1). No slices should have survived the switches.

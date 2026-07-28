@@ -5077,6 +5077,7 @@ void RadioModel::onDisconnected()
     // and the next connect re-reads it from status.
     m_wsprTxRestoreDax = false;
     m_wsprTxPreviousDax = false;
+    m_wsprTxHostModulated = false;
     m_deadDaxRxSeen.clear();
     m_externalDaxTxSeen.clear();
     m_externalDaxRxSeen.clear();
@@ -8604,13 +8605,31 @@ bool RadioModel::prepareWsprTransmit()
     if (!backendCapabilities().canTransmit) {
         return false;
     }
-    // The beacon rides a Flex `dax_tx` stream, and no other family provides
-    // one — HL2 host-modulates and has no DAX at all. Check before borrowing
-    // any station state: ensureDaxTxStream() below issues `stream create` and
-    // returns true optimistically on the pending reply, so on a non-Flex
-    // backend whose command sink drops that command the prepare would "succeed"
-    // with a stream that never arrives, leaving `transmit dax` latched until
-    // the beacon times out and releases it several minutes later.
+    // A host-modulating backend (HL2) runs the modulator on THIS host, so the
+    // beacon needs no transport at all: AudioEngine's WSPR pump already reaches
+    // it through feedDaxTxAudioInternal()'s m_hostModulation branch →
+    // txFinalMonitorPcmReady → submitTxAudio, the same tap the microphone and
+    // TCI use. There is nothing to create and nothing to borrow, so this arm
+    // takes none of the station state the Flex arm below does.
+    //
+    // Nor does it need `transmit dax`: that setting exists to tell a FLEX to
+    // take its modulator input from the DAX stream instead of the mic jacks,
+    // and a radio with no on-radio modulator has no such choice to make. The
+    // mic still has to be kept off the wire — two producers into one modulator
+    // would put shack ambience on the WSPR frame — but AudioEngine::
+    // startWsprPump() already does that with setDaxTxMode(true), which gates
+    // onTxAudioReady() locally on every family.
+    if (backendCapabilities().hostModulates) {
+        m_wsprTxHostModulated = true;
+        return true;
+    }
+    // Every other non-Flex family: the beacon rides a Flex `dax_tx` stream and
+    // nothing else provides one. Check before borrowing any station state —
+    // ensureDaxTxStream() below issues `stream create` and returns true
+    // optimistically on the pending reply, so on a backend whose command sink
+    // drops that command the prepare would "succeed" with a stream that never
+    // arrives, leaving `transmit dax` latched until the beacon times out and
+    // releases it several minutes later.
     if (m_flexBackend == nullptr) {
         return false;
     }
@@ -8641,6 +8660,15 @@ bool RadioModel::prepareWsprTransmit()
 
 void RadioModel::releaseWsprTransmit()
 {
+    // Host-modulated: nothing was borrowed, so nothing is handed back. Dropping
+    // the latch is the whole release — and it must happen before the DAX arm so
+    // a stale m_daxTxStreamId from an earlier Flex session in the same process
+    // cannot make this path issue `stream set … tx=0` at a radio that has no
+    // such stream.
+    if (m_wsprTxHostModulated) {
+        m_wsprTxHostModulated = false;
+        return;
+    }
     if (m_wsprTxOwnershipRequested && m_wsprTxYieldAfterUse) {
         if (m_daxTxStreamId != 0) {
             sendCmd(QStringLiteral("stream set %1 tx=0")
