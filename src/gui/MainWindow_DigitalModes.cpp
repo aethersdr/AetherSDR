@@ -244,6 +244,51 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
+    // RADE's receive path is DAX channel audio (PanadapterStream::daxAudioReady),
+    // and only a Flex backend owns a PanadapterStream — RadioModel leaves
+    // panStream() null for every other family. The connect() further down
+    // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,
+    // not a decline. Same shape as the null-deref that crashed every HL2 connect
+    // three seconds in (HERMES.md §6 gap 1) and as the startDax() guard, which
+    // this deliberately mirrors.
+    //
+    // Checked HERE rather than at the connect: everything between this point and
+    // there mutates real station state — it moves the TX-slice badge, installs a
+    // PTT-off hook on TransmitModel, calls setRadeMode() and opens mic capture.
+    // Guarding only the connect would leave a radio that is half in RADE mode
+    // with no receive path and an intercepted unkey, which is worse than the
+    // crash because it looks like it worked.
+    //
+    // Declining is the honest answer, not merely the safe one. A backend that
+    // demodulates in-process could carry RADE over the seam one day, but nothing
+    // routes modem audio there today, so there is no path to take.
+    if (!m_radioModel.panStream()) {
+        qCWarning(lcRade) << "MainWindow: RADE needs DAX audio, which this radio"
+                          << "does not provide — refusing to activate on slice"
+                          << sliceId;
+        // Un-stick the control that asked. RADE is selected by a TOGGLE
+        // (RxApplet/VfoWidget::radeActivated), not by the slice mode — it runs
+        // on an ordinary DIGU/DIGL slice — so the slice's mode is the
+        // operator's choice and is deliberately left alone. What must be reset
+        // is the toggle, which has already drawn itself active; the same three
+        // setters deactivateRADE() uses, so a decline and a teardown leave the
+        // UI in the identical state.
+        if (auto* sw = spectrumForSlice(s)) {
+            if (auto* vfo = sw->vfoWidget(sliceId))
+                vfo->setRadeActive(false);
+        }
+        if (m_appletPanel) {
+            m_appletPanel->phoneCwApplet()->setRadeActive(false);
+            if (auto* applet = m_appletPanel->radeApplet())
+                applet->setRadeActive(false);
+        }
+        QMessageBox::warning(this, tr("RADE Unavailable"),
+            tr("RADE needs DAX audio, which this radio does not provide.\n\n"
+               "RADE's modem receives on a DAX channel, and only a FlexRadio "
+               "offers one."));
+        return;
+    }
+
     // Capture TX slice owner before potentially moving the badge, so the
     // failure path can restore it.  -1 means no TX slice existed.
     int prevTxSliceId = sliceId;

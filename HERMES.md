@@ -1592,8 +1592,8 @@ Audited on `feat/hl2-connect-by-ip`:
 | **QSO recorder (RX half)** | **bus** | ✅ **as of §18.8** |
 | **AetherClock (WWV/WWVB)** | B + a DAX channel hold | ❌ dead |
 | **WSPR beacon** | Flex `dax_tx` | ✅ **as of §18.4** |
-| **RADE / FreeDV** | B | ❌ dead, and see §18.3 |
-| **DAX bridge / virtual audio device** | B | ❌ dead, and see §18.3 |
+| **RADE / FreeDV** | B | ❌ unavailable — now **declines** instead of crashing, §18.3 |
+| **DAX bridge / virtual audio device** | B | ❌ unavailable — already declined cleanly, §18.3 |
 | **DAX-IQ applet** | `iqDataReady` | ❌ dead — the HL2 has raw IQ, just not on that wire |
 | Digital Voice waveforms | radio-side firmware | N/A — a Flex feature, correctly absent |
 
@@ -1620,17 +1620,42 @@ answer. It stops being harmless the moment a third family runs concurrently —
 Fix it when the bus is unified, not before; changing the string alone would
 break the Kiwi source lock's persisted expectations for no gain.
 
-### 18.3 Two live crashes, not just dead features
+### 18.3 One live crash — RADE (fixed)
 
-RADE (`MainWindow_DigitalModes.cpp:445`) and the DAX bridge (`:1013`) both
-`connect(m_radioModel.panStream(), …)` with a **bare** pointer. This is the
-same null-deref shape as §6 gap 1, which cost a SIGSEGV three seconds after
-every connect. `RadioModel::acquireDaxChannel` and friends were made null-safe
-after that; these two call sites were not.
+**Corrected.** An earlier revision of this section claimed RADE *and* the DAX
+bridge both crashed. Only RADE did, and the correction is worth keeping because
+the mistake was made by grepping for `panStream()` derefs and never checking
+which ones already sat behind a guard.
 
-Activating RADE on an HL2 is a segfault, not a decline. **This should be fixed
-ahead of anything in §18.5** on safety grounds alone — it is reachable from a
-mode change.
+- **RADE** — `activateRADE()` ran from its first line to a bare
+  `connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady, …)` with
+  no null check anywhere in between. Selecting RADE on an HL2 was a **SIGSEGV**,
+  the same null-deref shape as §6 gap 1. **Fixed** on `feat/rx-audio-bus`.
+- **DAX bridge** — already safe. `startDax()` guards on `panStream()` before
+  touching anything and the `connect` further down is *inside* that guarded
+  region; `stopDax()` early-returns on `!m_daxBridge`, which can only be
+  non-null if the guard passed.
+
+**Where the RADE guard goes matters more than that it exists.** Guarding the
+`connect` alone would have been wrong: everything between the top of
+`activateRADE()` and that line mutates real station state — it moves the
+TX-slice badge, installs a PTT-off hook on `TransmitModel`, calls
+`setRadeMode()` and opens mic capture. That would leave a radio half in RADE
+mode with no receive path and an intercepted unkey, which is **worse than the
+crash**, because it looks like it worked. The guard goes before the first
+mutation.
+
+**What it resets matters too.** RADE is selected by a toggle
+(`RxApplet`/`VfoWidget::radeActivated`), not by the slice mode — it runs on an
+ordinary DIGU/DIGL slice. The decline therefore leaves the operator's mode alone
+and resets the toggle, using the same three setters `deactivateRADE()` uses, so
+a decline and a teardown leave the UI identical. An earlier draft of this fix
+reverted the slice to USB, which would have fought the operator's own DIGU
+selection for no reason.
+
+**Generalised:** a null guard added at the crash site is usually in the wrong
+place. The right place is before the first irreversible side effect, and the
+decline has to undo whatever the UI already drew.
 
 ### 18.4 WSPR TX: the first host-modulated transmit feature
 
