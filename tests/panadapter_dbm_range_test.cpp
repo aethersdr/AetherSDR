@@ -191,6 +191,15 @@ int main(int argc, char** argv)
     CHECK(!DbmRangeTransition::materiallyDifferent(
         movedFloorRange, {-123.48f, -113.48f}));
 
+    // A clipped frame cannot estimate the real floor. Recovery must add
+    // headroom while preserving the radio encoder span, then verify again.
+    const DbmRangeTransition::Range clippedRecoveryRange =
+        DbmRangeTransition::clippedFloorRecoveryRange(-110.5f, -15.5f);
+    CHECK(std::abs(clippedRecoveryRange.minDbm - -116.5f) < 0.01f);
+    CHECK(std::abs(clippedRecoveryRange.maxDbm - -21.5f) < 0.01f);
+    CHECK(std::abs((clippedRecoveryRange.maxDbm
+                    - clippedRecoveryRange.minDbm) - 95.0f) < 0.01f);
+
     const DbmRangeTransition::Range flex2dRange =
         DbmRangeTransition::manualRequestRange(
             -180.0f, -135.0f, false, -140.0f, 45.0f);
