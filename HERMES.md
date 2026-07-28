@@ -1805,6 +1805,48 @@ backend from re-running this audit:
 > subscribed to — and whether that was a decision or an accident of the Flex
 > being both.** Add it to the Phase-0 reference diff.
 
+### 18.6.1 The same shape again: station identity stored on the radio
+
+Found while making WSPR usable, and worth its own entry because it is the audio
+lesson with a different noun. Three facts about the OPERATOR were read from the
+RADIO, so on a radio that stores none of them the app behaved as though the
+station had no identity:
+
+| Fact | Was read from | On HL2 |
+|---|---|---|
+| Callsign | `RadioInfo::callsign`, the Flex `info` reply, `radio callsign <x>` | Empty forever. Radio Setup accepted an edit, sent Flex text nobody listened for, read back blank |
+| Grid locator | `RadioModel::gpsGrid()` — a 6000-series GPSDO reading | Empty. The WSPR grid field had no persistence of its own, so it was retyped every session |
+| Map home position | GPSDO lat/lon, then GPSDO grid | Neither exists, so `updateHomeFromRadio()` returned having set nothing |
+
+The third is the one that shows how quietly this fails. PSK Reporter drew every
+received spot correctly — each carries its own coordinates — and drew **no
+paths**, because the map had no origin to draw them from. Nothing errored. The
+operator sees a working map that is simply missing the lines.
+
+Fixed by making each fall back to a client-side value:
+
+- `RadioModel::callsign()` falls back to a station-wide `StationCallsign`
+  setting. **Station-wide, not per-serial** — unlike the nickname
+  (`Hl2Discovery::nicknameSettingsKey`), which really is a property of one
+  radio. A callsign belongs to the operator and is the same on every radio they
+  own. Radio's value still wins when present, so a Flex is unchanged.
+- The WSPR grid persists as `beaconGrid`, alongside the power and tone settings
+  that already did.
+- `updateHomeFromRadio()` gains the operator's grid as a third source after the
+  two GPSDO ones. A 4-character square is ~70 x 100 km: coarse for a fix,
+  entirely adequate for drawing a path across a continent.
+
+**The generalised rule:**
+
+> **Anything the app knows about the OPERATOR — callsign, grid, location,
+> licence class — must have a client-side home. A radio may report it and its
+> value may win, but the radio cannot be the only place it lives.** The failure
+> is silent by nature: identity is used to *decorate* and to *query*, so its
+> absence looks like "no results" rather than an error.
+
+Same discipline as the audio buses. Ask whether reading it from the radio was a
+decision, or an accident of the Flex being the only radio there was.
+
 ### 18.7 Suggested order
 
 1. **Gap 18** — the RADE/DAX-bridge null-deref. A crash outranks a feature.

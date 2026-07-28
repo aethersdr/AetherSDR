@@ -1669,6 +1669,33 @@ int RadioModel::activeTxSliceNum() const
     return -1;
 }
 
+// See the header for why this falls back and why the key is station-wide.
+QString RadioModel::callsign() const
+{
+    const QString fromRadio = m_callsign.trimmed();
+    if (!fromRadio.isEmpty())
+        return fromRadio;
+    return AppSettings::instance()
+        .value(QStringLiteral("StationCallsign"), QString())
+        .toString()
+        .trimmed();
+}
+
+void RadioModel::setStationCallsign(const QString& callsign)
+{
+    const QString wanted = callsign.trimmed().toUpper();
+    const QString before = this->callsign();
+    AppSettings::instance().setValue(QStringLiteral("StationCallsign"), wanted);
+    // Commit now rather than relying on the shutdown save: the whole point of
+    // this setting is that it survives, and an operator who types a callsign
+    // and then force-quits has done nothing wrong. Mirrors the nickname write
+    // in RadioSetupDialog.
+    AppSettings::instance().save();
+    const QString after = this->callsign();
+    if (after != before)
+        emit callsignChanged(after);
+}
+
 QString RadioModel::antennaAliasRadioKey() const
 {
     QString key = m_chassisSerial.trimmed();
@@ -4763,7 +4790,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             if (key == "callsign") {
                                 if (val != m_callsign) {
                                     m_callsign = val;
-                                    emit callsignChanged(m_callsign);
+                                    emit callsignChanged(callsign());   // effective value, not the raw radio field
                                 }
                             }
                             else if (key == "name")        m_nickname = val;
@@ -7851,7 +7878,7 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
     if (d.callsign) {
         if (*d.callsign != m_callsign) {
             m_callsign = *d.callsign;
-            emit callsignChanged(m_callsign);
+            emit callsignChanged(callsign());   // effective value, not the raw radio field
         }
         changed = true;
     }

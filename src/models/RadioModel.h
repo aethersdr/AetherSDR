@@ -155,7 +155,32 @@ public:
     QStringList knownAntennaTokens() const;
     QString serial()       const;
     QString chassisSerial() const { return m_chassisSerial; }
-    QString callsign()     const { return m_callsign; }
+    // The operator's callsign, from the radio when it has one and from the
+    // client-side station setting when it does not.
+    //
+    // Only a FlexRadio stores a callsign: it arrives in the discovery RadioInfo
+    // and in the `info` reply, and `radio callsign <x>` writes it back. Every
+    // other family has nowhere to put one, so on an HL2 this returned empty
+    // forever — Radio Setup's field accepted an edit, sent Flex text nobody was
+    // listening for, and read back blank on reopen. Everything downstream then
+    // behaved as if the station had no identity: PSK Reporter had no callsign to
+    // query, so the map stayed empty and the status bar said "No callsign —
+    // connect to a radio first" against a perfectly connected radio, and the
+    // WSPR beacon could not prefill.
+    //
+    // A callsign is the OPERATOR's, not the radio's — unlike the nickname, which
+    // is per-radio and keyed by serial (Hl2Discovery::nicknameSettingsKey). One
+    // station-wide key is therefore correct: the same callsign is right on every
+    // radio the operator owns.
+    //
+    // The radio's own value still wins when present, so a Flex behaves exactly
+    // as before and a station callsign typed while running headless cannot
+    // silently override what the radio reports.
+    QString callsign() const;
+    // Persist the operator's callsign client-side and publish it. Safe to call
+    // on any family; on a Flex the caller is additionally responsible for
+    // sending `radio callsign` so the radio's own copy stays in step.
+    void setStationCallsign(const QString& callsign);
     QString nickname()     const { return m_nickname; }
     QString region()       const { return m_region; }
     int     rttyMarkDefault() const { return m_rttyMarkDefault; }

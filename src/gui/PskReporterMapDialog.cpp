@@ -311,6 +311,14 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_beaconGrid->setAccessibleName(tr("WSPR grid locator"));
     m_beaconGrid->setAccessibleDescription(
         tr("Four-character Maidenhead locator, for example CN85"));
+    // The grid had no persistence at all. updateBeaconDefaults() prefilled it
+    // from RadioModel::gpsGrid(), which is a FlexRadio GPSDO reading — a radio
+    // without one leaves it empty, so the operator retyped their locator every
+    // time the window opened and a beacon armed with a blank grid was rejected
+    // by the encoder. Power and tone were already saved here; this was the one
+    // beacon field that was not.
+    m_beaconGrid->setText(
+        pskSettings().value("beaconGrid").toString().trimmed().toUpper());
     beaconRow->addWidget(m_beaconGrid);
 
     beaconRow->addWidget(new QLabel(tr("Band:"), beaconBox));
@@ -493,6 +501,39 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_beaconPower, &QComboBox::currentIndexChanged, this, [this] {
         writePskSetting("beaconPowerDbm", m_beaconPower->currentData().toInt());
     });
+    // Grid persists here, next to the other beacon fields.
+    connect(m_beaconGrid, &QLineEdit::editingFinished, this, [this] {
+        const QString grid = m_beaconGrid->text().trimmed().toUpper();
+        m_beaconGrid->setText(grid);
+        writePskSetting("beaconGrid", grid);
+        // This grid is also the map's home position when the radio has no GPS,
+        // so moving it has to move the marker and redraw the paths — otherwise
+        // the operator fixes their locator and the map keeps the old geometry
+        // (or, first time, stays path-less) until the window is reopened.
+        updateHomeFromRadio();
+        rebuildMarkers();
+    });
+    // The callsign writes through to the STATION callsign rather than to a
+    // beacon-private copy. There is one operator callsign, and splitting it
+    // would let the beacon transmit one identity while PSK Reporter queried
+    // another — which is exactly the confusing half-state this dialog was in:
+    // it queried RadioModel::callsign() for the map and read this field for the
+    // beacon, so on a radio that stores no callsign the map came up empty while
+    // the beacon happily transmitted whatever had been typed here.
+    //
+    // setStationCallsign() emits callsignChanged, which restarts the PSK client
+    // against the new callsign and refreshes the home marker — so typing it in
+    // either place now fixes both.
+    connect(m_beaconCallsign, &QLineEdit::editingFinished, this, [this] {
+        const QString call = m_beaconCallsign->text().trimmed().toUpper();
+        m_beaconCallsign->setText(call);
+        if (m_radioModel != nullptr && call != m_radioModel->callsign()) {
+            if (m_radioModel->usesFlexCommandPlane()) {
+                m_radioModel->sendCommand("radio callsign " + call);
+            }
+            m_radioModel->setStationCallsign(call);
+        }
+    });
     // Selecting a band tunes the receiver to that WSPR sub-band.
     //
     // This used to update the status text and nothing else, on the reasoning
@@ -574,7 +615,16 @@ void PskReporterMapDialog::updateBeaconDefaults()
         m_beaconCallsign->setText(m_radioModel->callsign().trimmed().toUpper());
     }
     if (m_beaconGrid->text().trimmed().isEmpty()) {
-        m_beaconGrid->setText(m_radioModel->gpsGrid().trimmed().left(4).toUpper());
+        // A GPSDO-derived locator is worth keeping: it seeds the field on a
+        // radio that has one, and then persists so a later session on a radio
+        // WITHOUT one (or after the fix disappears) still has the operator's
+        // grid rather than an empty box the encoder will reject.
+        const QString fromGps =
+            m_radioModel->gpsGrid().trimmed().left(4).toUpper();
+        if (!fromGps.isEmpty()) {
+            m_beaconGrid->setText(fromGps);
+            writePskSetting("beaconGrid", fromGps);
+        }
     }
     const SliceModel* slice = m_radioModel->txSlice();
     if (slice != nullptr) {
@@ -880,24 +930,55 @@ void PskReporterMapDialog::updateBeaconState()
     m_beaconStatus->setText(tr("Transmitting · pre-roll"));
 }
 
+// Where "home" is on the map. Without it the MapView has no origin, so it can
+// draw the received spots (each carries its own coordinates) but no PATHS —
+// which is exactly what an HL2 operator saw: a map full of spots and not one
+// line joining them to anything.
+//
+// Both original sources were FlexRadio GPSDO readings. A radio with no GPS
+// reports neither, MaidenheadLocator::toLatLon("") failed, and this returned
+// having set no home position at all.
+//
+// The operator's own grid is the missing third source. It is the same locator
+// the WSPR beacon encodes and transmits, it is now persisted, and a 4-character
+// square is about 70 x 100 km — coarse for a fix and entirely adequate for
+// drawing a path across a continent.
 void PskReporterMapDialog::updateHomeFromRadio()
 {
-    if (m_radioModel == nullptr) {
-        return;
-    }
-    const QString label = m_radioModel->callsign();
-    // The 6000-series GPSDO reports "N 33 33.484" (hemisphere/deg/decimal-
-    // minutes), not decimal degrees; parseGpsCoordinate accepts both forms
-    // (#3994) — plain toDouble() here would fail and drop to the coarser grid.
     double lat = 0.0, lon = 0.0;
-    const bool ok = aprs::parseGpsCoordinate(m_radioModel->gpsLat(), lat)
-                    && aprs::parseGpsCoordinate(m_radioModel->gpsLon(), lon);
-    // GPS fix preferred; fall back to the radio's grid locator.
-    if (!ok || (lat == 0.0 && lon == 0.0)) {
-        if (!MaidenheadLocator::toLatLon(m_radioModel->gpsGrid(), lat, lon)) {
-            return;
+    bool located = false;
+
+    if (m_radioModel != nullptr) {
+        // The 6000-series GPSDO reports "N 33 33.484" (hemisphere/deg/decimal-
+        // minutes), not decimal degrees; parseGpsCoordinate accepts both forms
+        // (#3994) — plain toDouble() here would fail and drop to the coarser grid.
+        const bool ok = aprs::parseGpsCoordinate(m_radioModel->gpsLat(), lat)
+                        && aprs::parseGpsCoordinate(m_radioModel->gpsLon(), lon);
+        located = ok && !(lat == 0.0 && lon == 0.0);
+        // Then the GPSDO-derived grid, still radio-sourced.
+        if (!located) {
+            located = MaidenheadLocator::toLatLon(m_radioModel->gpsGrid(), lat, lon);
         }
     }
+
+    // Finally the operator's own grid — the beacon field, or what was persisted
+    // from it. Works with no radio connected at all, which is why the whole
+    // function no longer bails out on a null model: the map is a network view
+    // and is perfectly usable before a radio is up.
+    if (!located) {
+        QString grid = m_beaconGrid != nullptr ? m_beaconGrid->text().trimmed()
+                                               : QString();
+        if (grid.isEmpty()) {
+            grid = pskSettings().value("beaconGrid").toString().trimmed();
+        }
+        located = MaidenheadLocator::toLatLon(grid, lat, lon);
+    }
+
+    if (!located) {
+        return;
+    }
+    const QString label =
+        m_radioModel != nullptr ? m_radioModel->callsign() : QString();
     m_mapView->setHomePosition(lat, lon, label);
 }
 
