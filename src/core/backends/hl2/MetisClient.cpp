@@ -151,6 +151,12 @@ int MetisClient::effectiveNumRx() const
     int n = m_params.numRx < 1 ? 1 : m_params.numRx;
     if (m_params.boardMaxRx > 0 && n > m_params.boardMaxRx)
         n = m_params.boardMaxRx;
+    // ccRxFreq() only reaches RX1..RX7 (registers 0x02..0x08); RX8..RX12 live at
+    // 0x12..0x16 and are not encoded. Clamping here rather than in the encoder
+    // keeps the DEMUX in step with what we can actually tune: running 8 DDCs we
+    // cannot retune would give the eighth panadapter a frozen NCO.
+    if (n > kMaxTunableRx)
+        n = kMaxTunableRx;
     return n;
 }
 
@@ -164,7 +170,13 @@ bool MetisClient::start(const Params& params)
     m_port = params.port;
     m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
-    m_ccFreq = ccRx1Freq(m_params.rxFrequencyHz);
+    // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
+    // brings each slice up. The BANK COUNT is fixed here and never re-derived
+    // per packet, so the round robin and the EP6 demux cannot disagree about how
+    // many receivers are running.
+    m_ccRxFreq.clear();
+    for (int rx = 0; rx < effectiveNumRx(); ++rx)
+        m_ccRxFreq.push_back(ccRxFreq(rx, m_params.rxFrequencyHz));
     m_txSeq = 0;
     m_roundRobin = 0;
     m_haveRxSeq = false;
@@ -200,7 +212,10 @@ bool MetisClient::start(const Params& params)
     sendPrimingBurst(3);
 
     // NOT the RX sample rate: EP2 is the 48 kHz TX/audio stream (see the header).
-    m_ep2IntervalUs = static_cast<qint64>(kSamplesPerPacket) * 1'000'000
+    // kTxSamplesPerPacket, not the EP6 count — the EP2 packet is a fixed 126
+    // samples whatever the receiver count is, so the pacing must not move when
+    // receivers are added. (These were the same 126 while only one RX ran.)
+    m_ep2IntervalUs = static_cast<qint64>(kTxSamplesPerPacket) * 1'000'000
                     / kEp2AudioRateHz;
     m_ep2Sent = 0;
     m_ep2Clock.restart();
@@ -277,13 +292,24 @@ void MetisClient::stop()
 
 void MetisClient::setRxFrequencyHz(std::uint32_t hz)
 {
-    m_params.rxFrequencyHz = hz;
-    m_ccFreq = ccRx1Freq(hz);
+    setRxFrequencyHz(0, hz);
+}
+
+void MetisClient::setRxFrequencyHz(int rxIndex, std::uint32_t hz)
+{
+    if (rxIndex < 0 || rxIndex >= static_cast<int>(m_ccRxFreq.size()))
+        return;   // not a running receiver -- see the header for why not clamped
+    if (rxIndex == 0)
+        m_params.rxFrequencyHz = hz;
+    m_ccRxFreq[static_cast<std::size_t>(rxIndex)] = ccRxFreq(rxIndex, hz);
     // Send the new NCO value immediately rather than waiting for the rotation.
+    // That matters more with several receivers than it did with one: the
+    // rotation is now numRx + 2 slots long, so a tune that waited its turn would
+    // lag by ~16 ms at four receivers instead of ~8 ms at one.
     //
     // This used to append a 0x39 filter-pipeline reset behind the frequency.
     // That WEDGED THE RADIO -- see requestPipelineReset() for the full story.
-    m_oneShot.push_back(m_ccFreq);
+    m_oneShot.push_back(m_ccRxFreq[static_cast<std::size_t>(rxIndex)]);
 }
 
 void MetisClient::setSampleRate(SampleRate rate)
@@ -410,8 +436,24 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         b = m_oneShot.front();
         m_oneShot.pop_front();
     } else {
-        const Cc* alt[3] = {&m_ccFreq, &m_ccGain, &kCcAdc};
-        b = *alt[m_roundRobin % 3];
+        // The rotation is every receiver's NCO, then gain, then ADC assignment:
+        // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
+        // once, for the same reason the config bank is — a radio that resets or
+        // reconnects mid-session must not be left with a stale NCO on the
+        // receivers nobody happens to be tuning.
+        //
+        // At 381 EP2 packets/s and four receivers that refreshes each bank ~64
+        // times a second, which is well inside anything the operator can see.
+        // `slotCount`, not `slots`: Qt #defines `slots` to nothing.
+        const std::size_t nFreq = m_ccRxFreq.size();
+        const std::size_t slotCount = nFreq + 2;
+        const std::size_t slot = m_roundRobin % slotCount;
+        if (slot < nFreq)
+            b = m_ccRxFreq[slot];
+        else if (slot == nFreq)
+            b = m_ccGain;
+        else
+            b = kCcAdc;
         ++m_roundRobin;
     }
     // MOX rides in C0 bit 0 of EVERY frame, so BOTH sub-frames carry it -- the
@@ -526,10 +568,24 @@ void MetisClient::onReadyRead()
             emit telemetryUpdated(m_telemetry);
         }
 
-        m_block.clear();
-        if (ep6Samples(bytes, m_block) > 0)
-            emit iqBlockReady(m_block);
+        // Decode ONCE against the receiver count we configured the radio with.
+        // The wire carries no receiver-count field, so this number is the only
+        // thing that makes the payload interpretable -- and it is the same
+        // m_ccRxFreq.size() the round robin tunes, never a fresh derivation.
+        const std::size_t numRx = m_ccRxFreq.empty() ? 1 : m_ccRxFreq.size();
+        if (m_blocks.size() != numRx)
+            m_blocks.resize(numRx);
+        for (auto& b : m_blocks)
+            b.clear();
 
+        if (ep6SamplesMulti(bytes, m_blocks) > 0) {
+            // RX1 goes out on both signals: iqBlockReady for the single-receiver
+            // consumers, iqBlocksReady for the multi-receiver ones. Emitting the
+            // first receiver twice is deliberate -- the alternative is every
+            // existing consumer growing a receiver index it has no use for.
+            emit iqBlockReady(m_blocks[0]);
+            emit iqBlocksReady(m_blocks);
+        }
     }
 }
 

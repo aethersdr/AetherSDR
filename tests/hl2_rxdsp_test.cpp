@@ -5,7 +5,7 @@
 // size, and the S-meter tracks it. Exercises the 126 -> 1024 block buffering.
 
 #include "core/backends/hl2/Hl2RxDsp.h"
-#include "core/backends/hl2/MetisProtocol.h"   // kSamplesPerPacket (EP6 block size)
+#include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples (EP6 block size)
 
 #include <QCoreApplication>
 
@@ -89,8 +89,8 @@ int main(int argc, char** argv)
                                        static_cast<float>(-std::sin(ph)));
     }
     std::span<const std::complex<float>> s(stream);
-    for (std::size_t off = 0; off < s.size(); off += kSamplesPerPacket) {
-        const std::size_t n = std::min<std::size_t>(kSamplesPerPacket, s.size() - off);
+    for (std::size_t off = 0; off < s.size(); off += kEp6BlockSamples) {
+        const std::size_t n = std::min<std::size_t>(kEp6BlockSamples, s.size() - off);
         const auto sub = s.subspan(off, n);
         dsp.processIqBlock(std::vector<std::complex<float>>(sub.begin(), sub.end()));
     }
@@ -136,8 +136,8 @@ int main(int argc, char** argv)
         // burst measures the decay slope instead of the settled level.
         std::span<const std::complex<float>> w(stream);
         for (int pass = 0; pass < 6; ++pass) {
-            for (std::size_t off = 0; off < w.size(); off += kSamplesPerPacket) {
-                const std::size_t n = std::min<std::size_t>(kSamplesPerPacket, w.size() - off);
+            for (std::size_t off = 0; off < w.size(); off += kEp6BlockSamples) {
+                const std::size_t n = std::min<std::size_t>(kEp6BlockSamples, w.size() - off);
                 const auto sub = w.subspan(off, n);
                 dsp.processIqBlock(std::vector<std::complex<float>>(sub.begin(), sub.end()));
             }
@@ -155,7 +155,7 @@ int main(int argc, char** argv)
     const int before = audioCount;
     dsp.setMode(WdspChannel::Mode::Am);
     for (int b = 0; b < 40; ++b) {
-        std::vector<std::complex<float>> blk(kSamplesPerPacket, std::complex<float>(0.2f, 0.0f));
+        std::vector<std::complex<float>> blk(kEp6BlockSamples, std::complex<float>(0.2f, 0.0f));
         dsp.processIqBlock(blk);
     }
     check(audioCount > before, "audio continues after a mode change");

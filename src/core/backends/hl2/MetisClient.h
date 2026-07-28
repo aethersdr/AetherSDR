@@ -42,6 +42,10 @@ public:
         QHostAddress host;
         quint16 port = kMetisPort;
         SampleRate sampleRate = SampleRate::R48k;
+        // RX1's NCO. Receivers beyond the first start here too and are moved by
+        // setRxFrequencyHz(rxIndex, hz); starting them all on one frequency is
+        // deliberate — an unconfigured receiver parked at 0 Hz would render a
+        // panadapter of DC and look like a hardware fault.
         std::uint32_t rxFrequencyHz = 10'000'000;
         int lnaGainDb = 20;
         // How many receivers to actually RUN. Phase 1 runs one. This is the
@@ -82,7 +86,14 @@ public:
     [[nodiscard]] const Hl2Telemetry& telemetry() const noexcept { return m_telemetry; }
 
     // Live control — latched into the next C&C round sent to the radio.
+    // Move RX1's NCO. Equivalent to setRxFrequencyHz(0, hz).
     Q_INVOKABLE void setRxFrequencyHz(std::uint32_t hz);
+    // Move receiver `rxIndex`'s NCO (zero-based). Out-of-range indices — beyond
+    // effectiveNumRx(), or beyond the RX1..RX7 register run — are IGNORED rather
+    // than clamped onto a neighbour: silently retuning a different receiver is
+    // worse than not moving one, because the panadapter that did move is not the
+    // one the operator was pointing at.
+    Q_INVOKABLE void setRxFrequencyHz(int rxIndex, std::uint32_t hz);
     Q_INVOKABLE void setSampleRate(SampleRate rate);
     Q_INVOKABLE void setLnaGainDb(int db);
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
@@ -101,7 +112,12 @@ public:
     // on the next EP2 frame, ahead of the round robin.
     Q_INVOKABLE void requestPipelineReset();
 
-    // numRx clamped to what the board says it has. See Params.
+    // Receivers this client can both RUN and TUNE: the RX1..RX7 NCO registers
+    // are one contiguous run (0x02..0x08) and RX8..RX12 are not. See ccRxFreq().
+    static constexpr int kMaxTunableRx = 7;
+
+    // numRx clamped to what the board says it has, and to kMaxTunableRx.
+    // See Params.
     int effectiveNumRx() const;
 
     // ---- TRANSMIT ----
@@ -167,7 +183,14 @@ public:
 signals:
     void linkUp();                                                  // first EP6 seen
     void linkDown();                                               // stopped
-    void iqBlockReady(const std::vector<std::complex<float>>& block);  // one per EP6 packet
+    // One per EP6 packet, carrying RX1 only. Kept for the single-receiver
+    // consumers (bring-up probes, the TX-side tests) that have no notion of a
+    // receiver index; it is emitted alongside iqBlocksReady, not instead of it.
+    void iqBlockReady(const std::vector<std::complex<float>>& block);
+    // One per EP6 packet, carrying EVERY active receiver: blocks[i] is DDC i,
+    // and blocks.size() == effectiveNumRx(). The span is a view into a buffer
+    // this object reuses, so a receiver must copy anything it keeps.
+    void iqBlocksReady(const std::vector<std::vector<std::complex<float>>>& blocks);
     void dropsUpdated(quint64 drops);                             // cumulative EP6 gaps
     // Radio telemetry decoded from the EP6 C&C bytes: forward/reverse power,
     // temperature, TX FIFO depth, ADC overload, PTT. Free-running, so it
@@ -191,13 +214,13 @@ private:
     void sendPrimingBurst(int countPerBank);
 
     // EP2 cadence follows the frame geometry, not the EP6 arrival rate: the
-    // radio consumes one EP2 frame per kSamplesPerPacket samples, so at 48 kHz
+    // radio consumes one EP2 frame per kTxSamplesPerPacket samples, so at 48 kHz
     // that is 126/48000 s = 2625 us. Driving it from a wall clock (rather than
     // replying 1:1 to EP6) means a stalled receive path cannot starve the
     // radio's watchdog and deadlock the link.
     // EP2 carries the TX IQ + speaker audio stream, which the radio clocks at a
     // FIXED 48 kHz regardless of the RX sample rate (only EP6 scales with that).
-    // One EP2 frame holds kSamplesPerPacket samples, so the cadence is a constant
+    // One EP2 frame holds kTxSamplesPerPacket samples, so the cadence is a constant
     // 126/48000 s = 2625 us. Verified against the Thetis Protocol 1 client, whose
     // EP2 thread blocks on the 48 kHz audio subsystem rather than a timer.
     static constexpr int kEp2AudioRateHz     = 48000;
@@ -229,7 +252,10 @@ private:
     // object's thread (event-driven), so no synchronization is needed today.
     Cc m_ccConfig{};
     Cc m_ccGain{};
-    Cc m_ccFreq{};
+    // One NCO bank per receiver, indexed by DDC. Sized to effectiveNumRx() at
+    // start(); every entry is a distinct register (0x02..0x08), so this is an
+    // array of banks rather than one bank with a varying payload.
+    std::vector<Cc> m_ccRxFreq;
     Cc m_ccTxFreq{};
     Cc m_ccTxDrive{};
 
@@ -255,7 +281,10 @@ private:
     quint64 m_drops = 0;
     bool m_running = false;
     bool m_linkUp = false;
-    std::vector<std::complex<float>> m_block;   // reused per-packet decode buffer
+    // Reused per-packet decode buffers, one vector per running receiver. Sized
+    // from m_ccRxFreq and reused rather than reallocated: at four receivers and
+    // 384 kHz this path runs ~10 000 times a second.
+    std::vector<std::vector<std::complex<float>>> m_blocks;
     Hl2Telemetry m_telemetry;                   // accumulated across RADDR cycles
     // Telemetry rides the C&C bytes of every EP6 frame, so it parses ~3000x/s at
     // 384 kHz. The meters only need ~10 Hz; rate-limit the cross-thread emit so
