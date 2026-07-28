@@ -43,6 +43,22 @@ SampleRate sampleRateEnum(int hz) noexcept
 // drift apart, which is exactly the failure being fixed here.
 constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 
+// Minimum forward-power reading, in raw converter counts, below which an SWR
+// ratio is noise rather than a measurement.
+//
+// With no carrier, forward and reverse are both near zero and dominated by
+// noise; reverse frequently exceeds forward and the ratio saturates. An
+// operator glancing at that sees a catastrophic mismatch on an antenna that is
+// fine. Raw counts because that is what we have — this is a noise floor, not a
+// calibrated power level.
+//
+// File-scope so EVERY consumer shares one threshold. It was previously local to
+// the meter path, so the Radio Health snapshot computed an unguarded ratio and
+// bounced at its 500 ms refresh while the meter beside it stayed silent — two
+// surfaces disagreeing about the same radio because only one of them had the
+// guard.
+constexpr int kMinForwardCountsForSwr = 16;
+
 // Snap a requested span (Hz) to the rate that best matches it.
 //
 // Nearest in the LOG domain, not the linear one: the rates are octave-spaced, so
@@ -447,6 +463,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.hasRadioSideDsp = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
+    c.hasGpsLocation = false;           // no GNSS receiver on the board
     // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
     return c;
 }
@@ -1224,9 +1241,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // Meaningful without calibration — it is a ratio of two readings from the
     // same converter, so the unknown scale cancels. Absent below the noise
     // floor, where a ratio of two noise samples is not a mismatch reading.
+    //
+    // That last sentence described the intent but not the code: this site had no
+    // floor, so with no carrier it recomputed a noise ratio at the dialog's
+    // 500 ms refresh and the row visibly bounced — while the TX:SWR meter, which
+    // did apply the floor, correctly showed nothing. Same guard here now, from
+    // the shared constant, so the two surfaces cannot disagree.
     {
         QVariant swr;
-        if (m_telemetry.forwardPowerRaw && m_telemetry.reversePowerRaw) {
+        if (m_telemetry.forwardPowerRaw && m_telemetry.reversePowerRaw
+            && *m_telemetry.forwardPowerRaw >= kMinForwardCountsForSwr) {
             if (const auto v = swrFromRaw(*m_telemetry.forwardPowerRaw,
                                           *m_telemetry.reversePowerRaw))
                 swr = *v;
@@ -1416,8 +1440,8 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     // catastrophic mismatch on an antenna that is fine.
     //
     // The threshold is in raw counts because that is what we have; it is a
-    // noise floor, not a calibrated power level.
-    static constexpr int kMinForwardCountsForSwr = 16;
+    // noise floor, not a calibrated power level. It lives at file scope so the
+    // Radio Health snapshot applies the SAME floor — see kMinForwardCountsForSwr.
     if (t.forwardPowerRaw && t.reversePowerRaw
         && *t.forwardPowerRaw >= kMinForwardCountsForSwr) {
         if (const auto swr = swrFromRaw(*t.forwardPowerRaw, *t.reversePowerRaw))

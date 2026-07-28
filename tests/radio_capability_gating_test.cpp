@@ -125,6 +125,8 @@ int main(int argc, char** argv)
               "Flex declares hasWaveforms (installable SmartSDR waveforms)");
         check(caps.hasMultiClientSessions,
               "Flex declares hasMultiClientSessions (multiFLEX)");
+        check(caps.hasGpsLocation,
+              "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -153,6 +155,8 @@ int main(int argc, char** argv)
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
+        check(!caps.hasGpsLocation,
+              "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -191,6 +195,7 @@ int main(int argc, char** argv)
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
+        check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
 
         // The surfaces the GUI drives off those flags, evaluated the way the
         // GUI evaluates them. A CONNECTED radio that says no means hidden.

@@ -301,6 +301,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    caps.hasGpsLocation = false;         // synthetic radio has no position source
     return caps;
 }
 

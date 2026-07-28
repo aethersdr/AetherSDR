@@ -158,6 +158,7 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasRadioSideDsp = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
+    caps.hasGpsLocation = true;          // GPSDO / on-board GNSS, `gps` status
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and
