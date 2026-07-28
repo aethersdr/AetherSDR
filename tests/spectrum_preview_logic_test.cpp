@@ -755,6 +755,28 @@ int testDssSupplementalCoverageCalibration()
         }
     }
 
+    // Waterfall intensities are arbitrary display units, not dBm.  In
+    // particular, their signal span need not match the FFT span one-for-one.
+    // Calibrate both the floor and span so a retained off-screen carrier does
+    // not become taller than the same carrier once live FFT coverage arrives.
+    std::fill(tile.begin() + 48, tile.begin() + 80, 142.0f);
+    tile[8] = 142.0f; // same carrier level, outside the current FFT frame
+    std::fill(fft.begin() + 16, fft.begin() + 48, -88.0f);
+    const std::vector<float> scaled =
+        AetherSDR::buildDssSupplementalCoverage(
+            tile, 14.0, 14.4,
+            fft, 14.2, 0.2,
+            -130.0f, -20.0f);
+    if (scaled.size() != tile.size()) {
+        return fail("scaled waterfall tile should produce DSS supplemental coverage");
+    }
+    if (!nearlyEqual(scaled[16], -108.0, 0.25)
+        || !nearlyEqual(scaled[64], -88.0, 0.25)
+        || !nearlyEqual(scaled[8], -88.0, 0.25)) {
+        return fail(
+            "supplemental calibration must match the FFT floor and signal span");
+    }
+
     const std::vector<float> disjoint =
         AetherSDR::buildDssSupplementalCoverage(
             tile, 13.0, 13.1,
