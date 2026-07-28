@@ -224,7 +224,7 @@ apart from that audit loses the point.
 | 7 | No pan-geometry down-verb on `IRadioBackend` | Zoom/pan can't reach the backend; waterfall and pan disagree | *Open* — structural |
 | 8 | Slice frequency **is** pan center (`Hl2Backend.cpp:165`) | Click-to-tune recenters the world instead of landing | *Open* — needs slice-offset-within-passband |
 | 9 | Same null-deref shape in the RADE path (`MainWindow_DigitalModes.cpp:461`) | Will crash HL2 whenever RADE starts | *Open* |
-| 10 | `AETHER_AUTOMATION_NO_AUTOCONNECT` appears not to suppress autoconnect on the HL2 path | Test instance grabs a radio | *Open* |
+| 10 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` appears not to suppress autoconnect~~ | Test instance grabs a radio | **Not a bug — the variable does not exist.** Removed application-wide by #4421/#4401; autoconnect is `AutoConnectToLastRadio` alone (`MainWindow.cpp`). Use the isolated profile in §10 |
 | 11 | `SpectrumWidget` **drops** inbound pan geometry during a gesture, assuming another status is coming | View parks at the old centre while slice/pan/waterfall move — measured **permanently 6.3 kHz** out after one drag-tune | `3d52d07d` |
 
 | 12 | Slice frequency WAS the DDC NCO, so the pan centre tracked every tune | Display re-centred on every click; a slice offset from centre was unrepresentable | `a1cbe154` |
@@ -424,10 +424,41 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build
 cd /Users/patj/aether/tools-external/pihpsdr && ./hpsdrsim -hermeslite2 -P1
 
 # App with bridge, without grabbing a live radio
-AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 \
-AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
+# App with bridge, on an ISOLATED settings profile so it cannot grab a radio
+# and cannot touch the operator's real configuration.
+#
+# AETHER_AUTOMATION_NO_AUTOCONNECT DOES NOT EXIST -- it was removed
+# application-wide (#4421/#4401) and nothing reads it. Autoconnect is governed
+# by AutoConnectToLastRadio alone, so the way to not grab a radio is a profile
+# that has never connected to one.
+export T=/tmp/aether-hl2-test
+mkdir -p $T/Library/Preferences/AetherSDR
+cat > $T/Library/Preferences/AetherSDR/AetherSDR.settings <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<Settings>
+  <AutoConnectToLastRadio>False</AutoConnectToLastRadio>
+  <Hl2>{&quot;receiverCount&quot;:4,&quot;spanMhz&quot;:0.192}</Hl2>
+</Settings>
+XML
+HOME=$T CFFIXED_USER_HOME=$T XDG_CONFIG_HOME=$T/.config \
+QT_LOGGING_RULES="aether.hl2*=true" \
+AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
 ./build/AetherSDR.app/Contents/MacOS/AetherSDR
 ```
+
+- The settings store is **XML**, not JSON, and a malformed file is refused with
+  `AppSettings: cannot load ... Start tag expected.` followed by
+  `refusing to save before a successful load` -- the app then runs on defaults,
+  which looks like the settings simply not taking effect.
+- `QT_LOGGING_RULES="aether.hl2*=true"` is needed to see the band-filter and
+  receiver-count lines; they are `qCInfo` on a category that is off by default.
+- Connecting by IP needs the radio TYPE picked as well as the address:
+  `connectionManualModeButton` -> `connectionManualRadioType` ->
+  `connectionManualIp` -> `connectionManualConnectButton`. The bridge's
+  `connect ip` verb alone leaves the dialog waiting.
+- `hpsdrsim` serves ONE client. A leftover app instance still holds it and the
+  next connect times out with nothing in the log to say why -- check
+  `pgrep -f MacOS/AetherSDR` before blaming the change.
 
 - Launch the app as the **foreground process of a backgrounded shell**;
   launching it with `&` inside a foreground command gets it killed with the
@@ -706,7 +737,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
 | 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
 | 10 | RADE null-deref at `MainWindow_DigitalModes.cpp:461` | ours, gap 9 | Same shape as the DAX crash; will kill HL2 the moment RADE starts | XS |
-| 11 | `AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured on the HL2 path | ours, gap 10 | Test instances grab a live radio | S |
+| 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
 | 12 | One dB-reference object per slice (LNA + calibration + AGC threshold) | A2 §A3 | Every LNA change shifts the absolute reference; the trace jumps and users read it as a real event | S |
 | ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
 | 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
