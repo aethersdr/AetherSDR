@@ -254,6 +254,15 @@ int testDssFrameFloorClipDetection()
         || dssFrameFloorLooksClipped(63, 63, 63)) {
         return fail("3D floor clipping threshold is incorrect");
     }
+    if (!flexFftFrameNeedsHeadroomRecovery(
+            false, 1600, 1558, 298)
+        || flexFftFrameNeedsHeadroomRecovery(
+            true, 1600, 1558, 298)
+        || flexFftFrameNeedsHeadroomRecovery(
+            false, 1600, 500, 19)) {
+        return fail(
+            "FLEX floor recovery must cover both render modes but not Kiwi");
+    }
     return 0;
 }
 

@@ -31,7 +31,10 @@ class DssRenderer
 {
 public:
     static constexpr int kVisibleRows = 96;    // front → back display depth
-    static constexpr int kTransitionRows = 8;  // outgoing rows kept during scroll
+    // Outgoing rows kept during scroll. Must cover the largest row distance
+    // passed to SpectrumWidget::startWaterfallScrollAnimation(); the current
+    // Flex, Kiwi, and fallback producers append at most one row per update.
+    static constexpr int kTransitionRows = 8;
     static constexpr int kRows = kVisibleRows + kTransitionRows;
     static constexpr int kCols = 768;  // resampled columns per row
 

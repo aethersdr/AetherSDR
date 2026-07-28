@@ -36,6 +36,9 @@ layout(std140, binding = 0) uniform U {
     vec4  shadowBands[8];     // low u, high u, centre u, band alpha
     vec4  shadowStyles[8];    // cue rgb, centre-line alpha
     vec4  shadowMeta;         // descriptor count, enabled, plot width px, pad
+    // Fixed GLSL array sizes cannot consume a C++ constant. SpectrumWidget has
+    // a matching static_assert against DssRenderer::kRows; update both shaders
+    // and the frame-age clamp below if that row count changes.
     vec4  rowFrames[104];     // FFT centre/bw, supplemental centre/bw; age order
 };
 

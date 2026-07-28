@@ -129,6 +129,10 @@ bool waterfallFrameResizeFailureForced()
 
 constexpr int dssFillVerticesPerRow()
 {
+    // Two exact-row crossfade layers, each with two triangles per column.
+    // Together with the matching ribbon VBO this is about 20.2 MiB of static
+    // vertex storage at 768 columns x 96 visible rows (about 7.3 MiB before
+    // fixed-grid crossfading). It is built once, never rebuilt while scrolling.
     return (DssRenderer::kCols - 1) * 6 * 2;
 }
 
@@ -136,6 +140,11 @@ constexpr int dssLineVerticesPerRow()
 {
     return (DssRenderer::kCols - 1) * 6 * 2;
 }
+
+constexpr int kMaxWaterfallRowsPerUpdate = 1;
+static_assert(
+    kMaxWaterfallRowsPerUpdate <= DssRenderer::kTransitionRows,
+    "DSS transition reserve must hold every row in one scroll update");
 
 void appendDssVertex(QVector<float>& vertices, float u, float v, float edge)
 {
@@ -1318,35 +1327,77 @@ QVariantMap SpectrumWidget::automationDssSnapshot() const
     int dssCurrentFrameRows = 0;
     int dssSupplementalRows = 0;
     double dssSupplementalMaxBandwidthMhz = 0.0;
+    int peakBin = -1;
+    float peakDbm = -1000.0f;
+    float frontMinDbm = -1000.0f;
+    float frontMaxDbm = -1000.0f;
+    float frontSpanDb = 0.0f;
+    int frontMinValueBins = 0;
+    int frontLongestFlatRunBins = 0;
+    int maxMinValueBins = 0;
+    int maxLongestFlatRunBins = 0;
+    int flatRows = 0;
+    int nonFlatRows = 0;
     for (int age = 0; age < m_dss.visibleRowCount(); ++age) {
         const double rowCenterMhz = m_dss.rowCenterMhzAtAge(age);
         const double rowBandwidthMhz = m_dss.rowBandwidthMhzAtAge(age);
-        if (!std::isfinite(rowCenterMhz)
-            || !std::isfinite(rowBandwidthMhz)
-            || rowCenterMhz <= 0.0 || rowBandwidthMhz <= 0.0) {
+        if (std::isfinite(rowCenterMhz)
+            && std::isfinite(rowBandwidthMhz)
+            && rowCenterMhz > 0.0 && rowBandwidthMhz > 0.0) {
+            dssFrameMinCenterMhz =
+                std::min(dssFrameMinCenterMhz, rowCenterMhz);
+            dssFrameMaxCenterMhz =
+                std::max(dssFrameMaxCenterMhz, rowCenterMhz);
+            ++dssFramedRows;
+            if (mhzNearlyEqual(rowCenterMhz, m_centerMhz)
+                && mhzNearlyEqual(rowBandwidthMhz, m_bandwidthMhz)) {
+                ++dssCurrentFrameRows;
+            }
+            const double supplementalCenterMhz =
+                m_dss.rowSupplementalCenterMhzAtAge(age);
+            const double supplementalBandwidthMhz =
+                m_dss.rowSupplementalBandwidthMhzAtAge(age);
+            if (std::isfinite(supplementalCenterMhz)
+                && std::isfinite(supplementalBandwidthMhz)
+                && supplementalCenterMhz > 0.0
+                && supplementalBandwidthMhz > 0.0) {
+                ++dssSupplementalRows;
+                dssSupplementalMaxBandwidthMhz = std::max(
+                    dssSupplementalMaxBandwidthMhz,
+                    supplementalBandwidthMhz);
+            }
+        }
+
+        const DssRenderer::RowStats rowStats = m_dss.rowStats(age);
+        if (age == 0) {
+            const int ring = m_dss.headRing();
+            const float* row = m_dss.rowDataRing(ring);
+            for (int column = 0; column < m_dss.cols(); ++column) {
+                if (std::isfinite(row[column])
+                    && (peakBin < 0 || row[column] > peakDbm)) {
+                    peakBin = column;
+                    peakDbm = row[column];
+                }
+            }
+        }
+        if (rowStats.finiteBins == 0) {
             continue;
         }
-        dssFrameMinCenterMhz =
-            std::min(dssFrameMinCenterMhz, rowCenterMhz);
-        dssFrameMaxCenterMhz =
-            std::max(dssFrameMaxCenterMhz, rowCenterMhz);
-        ++dssFramedRows;
-        if (mhzNearlyEqual(rowCenterMhz, m_centerMhz)
-            && mhzNearlyEqual(rowBandwidthMhz, m_bandwidthMhz)) {
-            ++dssCurrentFrameRows;
+        const float rowSpanDb = rowStats.maxDbm - rowStats.minDbm;
+        if (age == 0) {
+            frontMinDbm = rowStats.minDbm;
+            frontMaxDbm = rowStats.maxDbm;
+            frontSpanDb = rowSpanDb;
+            frontMinValueBins = rowStats.minValueBins;
+            frontLongestFlatRunBins = rowStats.longestFlatRunBins;
         }
-        const double supplementalCenterMhz =
-            m_dss.rowSupplementalCenterMhzAtAge(age);
-        const double supplementalBandwidthMhz =
-            m_dss.rowSupplementalBandwidthMhzAtAge(age);
-        if (std::isfinite(supplementalCenterMhz)
-            && std::isfinite(supplementalBandwidthMhz)
-            && supplementalCenterMhz > 0.0
-            && supplementalBandwidthMhz > 0.0) {
-            ++dssSupplementalRows;
-            dssSupplementalMaxBandwidthMhz = std::max(
-                dssSupplementalMaxBandwidthMhz,
-                supplementalBandwidthMhz);
+        maxMinValueBins = std::max(maxMinValueBins, rowStats.minValueBins);
+        maxLongestFlatRunBins =
+            std::max(maxLongestFlatRunBins, rowStats.longestFlatRunBins);
+        if (rowSpanDb > 0.01f) {
+            ++nonFlatRows;
+        } else {
+            ++flatRows;
         }
     }
     m[QStringLiteral("dssVisibleFramedRows")] = dssFramedRows;
@@ -1404,50 +1455,6 @@ QVariantMap SpectrumWidget::automationDssSnapshot() const
     m[QStringLiteral("waterfallHistoryBytes")] =
         static_cast<qulonglong>(m_waterfallHistory.allocatedBytes());
 
-    int peakBin = -1;
-    float peakDbm = -1000.0f;
-    float frontMinDbm = -1000.0f;
-    float frontMaxDbm = -1000.0f;
-    float frontSpanDb = 0.0f;
-    int frontMinValueBins = 0;
-    int frontLongestFlatRunBins = 0;
-    int maxMinValueBins = 0;
-    int maxLongestFlatRunBins = 0;
-    int flatRows = 0;
-    int nonFlatRows = 0;
-    for (int age = 0; age < m_dss.visibleRowCount(); ++age) {
-        const int ring = (m_dss.headRing() + age) % m_dss.rows();
-        const float* row = m_dss.rowDataRing(ring);
-        const DssRenderer::RowStats rowStats = m_dss.rowStats(age);
-        for (int c = 0; c < m_dss.cols(); ++c) {
-            if (!std::isfinite(row[c])) {
-                continue;
-            }
-            if (age == 0 && (peakBin < 0 || row[c] > peakDbm)) {
-                peakBin = c;
-                peakDbm = row[c];
-            }
-        }
-        if (rowStats.finiteBins == 0) {
-            continue;
-        }
-        const float rowSpanDb = rowStats.maxDbm - rowStats.minDbm;
-        if (age == 0) {
-            frontMinDbm = rowStats.minDbm;
-            frontMaxDbm = rowStats.maxDbm;
-            frontSpanDb = rowSpanDb;
-            frontMinValueBins = rowStats.minValueBins;
-            frontLongestFlatRunBins = rowStats.longestFlatRunBins;
-        }
-        maxMinValueBins = std::max(maxMinValueBins, rowStats.minValueBins);
-        maxLongestFlatRunBins =
-            std::max(maxLongestFlatRunBins, rowStats.longestFlatRunBins);
-        if (rowSpanDb > 0.01f) {
-            ++nonFlatRows;
-        } else {
-            ++flatRows;
-        }
-    }
     m[QStringLiteral("dssVisiblePeakBin")] = peakBin;
     m[QStringLiteral("dssVisiblePeakDbm")] = peakDbm;
     m[QStringLiteral("dssVisibleFrontMinDbm")] = frontMinDbm;
@@ -3387,20 +3394,27 @@ void SpectrumWidget::beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
     m_resetFftSmoothingOnNextFrame = true;
 }
 
-bool SpectrumWidget::flexDssInputFloorLooksClipped() const
+bool SpectrumWidget::flexInputFloorLooksClipped() const
 {
-    if (m_spectrumRenderMode != SpectrumRenderMode::Mode3D
-        || m_kiwiSdrWaterfallActive || m_bins.isEmpty()) {
+    if (m_kiwiSdrWaterfallActive || m_bins.isEmpty()) {
         return false;
     }
     const FftFloorClipStats stats = fftFloorClipStats(m_bins);
-    return dssFrameFloorLooksClipped(
-        stats.finiteBins, stats.minValueBins, stats.longestMinRunBins);
+    return flexFftFrameNeedsHeadroomRecovery(
+        m_kiwiSdrWaterfallActive,
+        stats.finiteBins,
+        stats.minValueBins,
+        stats.longestMinRunBins);
 }
 
-bool SpectrumWidget::requestFlexDssRadioHeadroom(qint64 nowMs)
+bool SpectrumWidget::requestFlexRadioHeadroom(qint64 nowMs)
 {
-    if (!flexDssInputFloorLooksClipped()) {
+    if (m_transmitting
+        || flexDssFftScaleSettling()
+        || isDraggingDbmScale()
+        || m_pendingDbmRangeEcho
+        || m_dbmReleaseRebaseUntilMs > nowMs
+        || !flexInputFloorLooksClipped()) {
         return false;
     }
 
@@ -3523,7 +3537,7 @@ void SpectrumWidget::syncDssRangeFromFreshZoomFrame(const QVector<float>& bins)
                 kMaxRangeAdjustmentAttempts)) {
             m_dssZoomFloorSyncNotBeforeMs =
                 guards.nowMs + kFrequencyRangeSettleMs;
-            requestFlexDssRadioHeadroom(guards.nowMs);
+            requestFlexRadioHeadroom(guards.nowMs);
             return;
         }
         m_dssZoomFloorSync.consumeFreshFrame(true);
@@ -3780,7 +3794,7 @@ void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
     if (noiseFloorAutoAdjustHeld(nowMs)) {
         return;
     }
-    if (requestFlexDssRadioHeadroom(nowMs)) {
+    if (requestFlexRadioHeadroom(nowMs)) {
         return;
     }
 
@@ -5019,10 +5033,10 @@ void SpectrumWidget::appendLatestDssWaterfallRow(double frameCenterMhz,
     appendDssWaterfallRow(displaySpectrumBins(), frameCenterMhz, frameBandwidthMhz);
 }
 
-void SpectrumWidget::appendNativeDssWaterfallRow(
+QVector<float> SpectrumWidget::buildNativeDssSupplementalRow(
     const QVector<float>& tileIntensity,
     double tileLowMhz,
-    double tileHighMhz)
+    double tileHighMhz) const
 {
     const QVector<float>& fftBins = displaySpectrumBins();
     const std::vector<float> calibrated =
@@ -5042,14 +5056,7 @@ void SpectrumWidget::appendNativeDssWaterfallRow(
     for (const float dbm : calibrated) {
         supplemental.append(dbm);
     }
-    appendDssWaterfallRow(
-        fftBins,
-        -1.0,
-        -1.0,
-        true,
-        supplemental,
-        (tileLowMhz + tileHighMhz) * 0.5,
-        tileHighMhz - tileLowMhz);
+    return supplemental;
 }
 
 void SpectrumWidget::appendVisibleRow(const QRgb* rowData,
@@ -7767,6 +7774,10 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         m_fftFallbackSeedMask.clear();
     }
     m_bins = *spectrumBins;
+    // Decoder floor clipping affects the shared FLEX FFT input, not only the
+    // 3D renderer. Recover the radio encoder aperture for 2D as well, even when
+    // client-side automatic floor placement is disabled.
+    requestFlexRadioHeadroom(nowMs);
     syncDssRangeFromFreshZoomFrame(*spectrumBins);
 
     if (m_kiwiSdrWaterfallActive) {
@@ -7976,7 +7987,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     const int h = m_waterfall.height();
     if (h <= 1) return;
 
-    int rowsToPush = 1;
+    int rowsToPush = kMaxWaterfallRowsPerUpdate;
     rowsToPush = std::min(rowsToPush, h - 1);
 
     // Render the tile row into a temporary scanline.
@@ -8074,6 +8085,16 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // Write rows into history + visible viewport.
     const bool canInterp = (m_prevTileLevels.size() == destWidth && rowsToPush > 1);
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
+    const double supplementalCenterMhz =
+        (lowFreqMhz + highFreqMhz) * 0.5;
+    const double supplementalBandwidthMhz =
+        highFreqMhz - lowFreqMhz;
+    // Every row delivered by one native tile shares this calibration. Keep the
+    // overlap scan, quantile sort, and whole-tile conversion out of the row
+    // loop if a backend ever delivers more than one row per update.
+    const QVector<float> dssSupplemental =
+        buildNativeDssSupplementalRow(
+            binsIntensity, lowFreqMhz, highFreqMhz);
     for (int r = 0; r < rowsToPush; ++r) {
         QVector<quint8> interpolatedLevels(destWidth, 0);
         QVector<QRgb> interpolatedRow(destWidth, qRgb(0, 0, 0));
@@ -8097,18 +8118,20 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
             supplementalRow[x] = colorLut[supplementalLevels[x]];
         }
 
-        const double supplementalCenterMhz =
-            (lowFreqMhz + highFreqMhz) * 0.5;
-        const double supplementalBandwidthMhz =
-            highFreqMhz - lowFreqMhz;
         appendHistoryRow(
             interpolatedLevels.constData(), nowMs,
             -1.0, -1.0,
             supplementalLevels.constData(),
             supplementalCenterMhz,
             supplementalBandwidthMhz);
-        appendNativeDssWaterfallRow(
-            binsIntensity, lowFreqMhz, highFreqMhz);
+        appendDssWaterfallRow(
+            displaySpectrumBins(),
+            -1.0,
+            -1.0,
+            true,
+            dssSupplemental,
+            supplementalCenterMhz,
+            supplementalBandwidthMhz);
         if (m_wfLive) {
             // The whole tile gets one start() after the loop; don't restart the
             // scroll clock once per appended row.

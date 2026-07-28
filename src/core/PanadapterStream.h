@@ -272,6 +272,7 @@ private:
         quint16        lastAcceptedTotalBins{0};
         QVector<quint16> buf;          // raw uint16 bins, host byte-order
         VitaBinCoverage coverage;
+        FftGrowthSuffixGuard growthSuffixGuard;
 
         void reset(quint32 idx, quint16 total) {
             frameIndex   = idx;

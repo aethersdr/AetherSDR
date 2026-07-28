@@ -990,10 +990,10 @@ private:
                                double supplementalBandwidthMhz = -1.0);
     void appendLatestDssWaterfallRow(double frameCenterMhz = -1.0,
                                      double frameBandwidthMhz = -1.0);
-    void appendNativeDssWaterfallRow(
+    QVector<float> buildNativeDssSupplementalRow(
         const QVector<float>& tileIntensity,
         double tileLowMhz,
-        double tileHighMhz);
+        double tileHighMhz) const;
     void pushDssLiveRow(DssRenderer& dss, const QVector<float>& binsDbm,
                         bool hiddenStream, double frameCenterMhz,
                         double frameBandwidthMhz,
@@ -1070,8 +1070,8 @@ private:
     void armNoiseFloorFastLock(int freshFrames, int snapFrames);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
-    bool flexDssInputFloorLooksClipped() const;
-    bool requestFlexDssRadioHeadroom(qint64 nowMs);
+    bool flexInputFloorLooksClipped() const;
+    bool requestFlexRadioHeadroom(qint64 nowMs);
     void beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
                                  float newMinDbm, float newMaxDbm);
     void clearDbmReleaseRebase();
@@ -1867,6 +1867,10 @@ private:
     // frequency-frame vec4 for every live-ring age.
     static constexpr int kDssMeshUboFloats =
         92 + DssRenderer::kRows * 4;
+    static_assert(
+        DssRenderer::kRows == 104,
+        "dss_mesh.{vert,frag} declare rowFrames[104] and clamp frame ages "
+        "at 103; update both shaders with DssRenderer::kRows");
     static constexpr int kDssMeshShadowSlices = 8;
     QRhiTexture* m_dssHeightTex{nullptr};    // RGBA16F dBm + coverage ring
     QRhiTexture* m_dssPaletteTex{nullptr};   // 256x1 RGBA8 floor->peak LUT

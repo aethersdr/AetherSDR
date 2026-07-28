@@ -38,6 +38,8 @@ layout(std140, binding = 0) uniform U {
     vec4  shadowBands[8];
     vec4  shadowStyles[8];
     vec4  shadowMeta;
+    // Must match DssRenderer::kRows; SpectrumWidget enforces 104 with a
+    // static_assert so a C++ row-count change cannot silently overrun this UBO.
     vec4  rowFrames[104];
 };
 

@@ -223,6 +223,19 @@ inline bool dssFrameFloorLooksClipped(int finiteBins,
         && longestMinRunBins >= std::max(16, finiteBins / 16);
 }
 
+// Clipped FLEX FFT input needs radio-side encoder headroom in both 2D and 3D.
+// Deliberately takes no render-mode argument: limiting recovery to the 3D
+// renderer regresses the shared 2D FFT path when y_pixels/range state is stale.
+inline bool flexFftFrameNeedsHeadroomRecovery(bool kiwiActive,
+                                              int finiteBins,
+                                              int minValueBins,
+                                              int longestMinRunBins)
+{
+    return !kiwiActive
+        && dssFrameFloorLooksClipped(
+            finiteBins, minValueBins, longestMinRunBins);
+}
+
 // Windows in which an FFT frame's dBm encoding does not correspond to the
 // settled zoom, so it must not anchor the 3D floor. Kept out of the widget so
 // the timing policy is testable without a live radio or a QWidget.

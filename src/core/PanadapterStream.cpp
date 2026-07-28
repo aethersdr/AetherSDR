@@ -942,11 +942,20 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     // max dBm in the radio's vertical pixel encoding. Reject that placeholder
     // before it reaches FFT averaging or retained 3D history; the previous
     // complete FFT remains live until the first valid expanded frame arrives.
-    if (hasZeroFilledFftGrowthSuffix(
-            frame.buf, frame.lastAcceptedTotalBins)) {
+    const bool zeroFilledGrowth = hasZeroFilledFftGrowthSuffix(
+        frame.buf, frame.lastAcceptedTotalBins);
+    const FftGrowthSuffixAction growthAction =
+        frame.growthSuffixGuard.observe(zeroFilledGrowth, frame.totalBins);
+    if (growthAction == FftGrowthSuffixAction::Reject) {
         return;
     }
-    frame.lastAcceptedTotalBins = frame.totalBins;
+    const int floorFilledSuffixStart =
+        growthAction == FftGrowthSuffixAction::EmitWithFloorSuffix
+        ? frame.lastAcceptedTotalBins
+        : -1;
+    if (growthAction == FftGrowthSuffixAction::Accept) {
+        frame.lastAcceptedTotalBins = frame.totalBins;
+    }
 
     // Convert to dBm using per-stream range
     QPair<float,float> dbmRange;
@@ -970,8 +979,16 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     const float yPix = static_cast<float>(std::max(yPixVal, 2));
 
     for (int i = 0; i < count; ++i) {
-        const float pixel = std::clamp(
-            static_cast<float>(frame.buf[i]), 0.0f, yPix - 1.0f);
+        // If firmware repeats its resize placeholder, keep the panadapter live
+        // after a bounded wait without ever interpreting the zero-filled suffix
+        // as max dBm. A later populated growth frame is still detected against
+        // lastAcceptedTotalBins and replaces this floor extension normally.
+        const bool floorFillSuffix = floorFilledSuffixStart >= 0
+            && i >= floorFilledSuffixStart;
+        const float pixel = floorFillSuffix
+            ? yPix - 1.0f
+            : std::clamp(
+                static_cast<float>(frame.buf[i]), 0.0f, yPix - 1.0f);
         const float dbm = maxDbm - (pixel / (yPix - 1.0f)) * range;
         bins[i] = std::clamp(dbm, minDbm, maxDbm);
     }
@@ -1070,6 +1087,7 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     // refactor that breaks the wfFrame.buf.size() <-> wfFrame.totalBins
     // invariant.  GHSA-7gvg-x594-pprq.
     if (firstBinIndex + binsToRead > wfFrame.buf.size()) return;
+    if (wfFrame.isComplete()) return;
     if (!wfFrame.coverage.markRange(firstBinIndex, binsToRead)) return;
 
     for (int i = 0; i < binsToRead; ++i) {

@@ -26,8 +26,11 @@ int main(int argc, char** argv)
     CHECK(fragmentCoverage.markRange(0, 4));
     CHECK(fragmentCoverage.uniqueBins() == 4);
     CHECK(!fragmentCoverage.isComplete());
-    CHECK(fragmentCoverage.markRange(0, 4));
+    CHECK(!fragmentCoverage.markRange(0, 4));
     CHECK(fragmentCoverage.uniqueBins() == 4);
+    CHECK(!fragmentCoverage.isComplete());
+    CHECK(fragmentCoverage.markRange(2, 4));
+    CHECK(fragmentCoverage.uniqueBins() == 6);
     CHECK(!fragmentCoverage.isComplete());
     CHECK(fragmentCoverage.markRange(4, 4));
     CHECK(fragmentCoverage.uniqueBins() == 8);
@@ -56,6 +59,23 @@ int main(int argc, char** argv)
     CHECK(!hasZeroFilledFftGrowthSuffix(saturatedFrame, 16));
     CHECK(!hasZeroFilledFftGrowthSuffix(zeroFilledGrowth, 0));
     CHECK(!hasZeroFilledFftGrowthSuffix(zeroFilledGrowth, 32));
+
+    FftGrowthSuffixGuard growthGuard;
+    for (int frame = 0;
+         frame < FftGrowthSuffixGuard::kRejectedFramesBeforeFloorFallback;
+         ++frame) {
+        CHECK(growthGuard.observe(true, 32)
+              == FftGrowthSuffixAction::Reject);
+    }
+    CHECK(growthGuard.observe(true, 32)
+          == FftGrowthSuffixAction::EmitWithFloorSuffix);
+    CHECK(growthGuard.consecutiveRejectedFrames() == 4);
+    CHECK(growthGuard.observe(false, 32)
+          == FftGrowthSuffixAction::Accept);
+    CHECK(growthGuard.consecutiveRejectedFrames() == 0);
+    CHECK(growthGuard.observe(true, 48)
+          == FftGrowthSuffixAction::Reject);
+    CHECK(growthGuard.consecutiveRejectedFrames() == 1);
 
     PanadapterStream stream;
     constexpr quint32 kStreamId = 0x40000000;
