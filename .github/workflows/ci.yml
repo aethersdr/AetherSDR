@@ -312,6 +312,15 @@ jobs:
           key: ccache-macos-ci
           max-size: 500M
 
+      - name: Ensure offline Metal toolchain
+        # Build-time ASR kernel compilation (#4535) needs the offline Metal
+        # compiler at configure. Xcode 16 bundles it (probe succeeds, no-op);
+        # Xcode 26 ships it as a separate download, so this step keeps the job
+        # working across a runner-image Xcode bump.
+        run: |
+          xcrun -sdk macosx metal --version >/dev/null 2>&1 || \
+            sudo xcodebuild -downloadComponent MetalToolchain
+
       - name: Configure
         run: |
           cmake -B build -G Ninja \

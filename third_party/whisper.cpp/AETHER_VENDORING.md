@@ -43,10 +43,40 @@ At runtime, `asrGpuAvailable()` (`ggml_backend_dev_by_type(GPU)`) decides whethe
 to use the GPU, so a GPU-enabled binary still runs on GPU-less hosts (CPU
 fallback). `GGML_NATIVE=OFF` is forced for portable/Pi/CI binaries.
 
+## Local patches (deviations from pristine upstream)
+
+Two vendored files carry AetherSDR-local changes; the pristine-mirror rule
+above holds for everything else. Each patch is recorded in git-apply form in
+[`patches/`](patches/) and must be re-applied after any refresh — the
+re-vendoring recipe below otherwise silently reverts them and reintroduces
+#4535.
+
+- `ggml/src/ggml-metal/CMakeLists.txt` — build-time kernel compilation
+  (`GGML_METAL_EMBED_LIBRARY_COMPILED`): compiles `ggml-metal.metal` to a
+  metallib at build time and embeds the compiled library instead of the
+  shader source; missing-toolchain handling (fatal under `REQUIRE_ASR_GPU`,
+  else warn + source-embed fallback). PR #4553, fixes #4535.
+- `ggml/src/ggml-metal/ggml-metal-device.m` — loads the embedded compiled
+  metallib (skipping runtime source compilation) and clamps
+  `props.has_tensor` to the kernels actually present in the library.
+  PR #4553.
+
+Re-apply after a refresh (from the repo root; patch paths are
+repo-root-relative):
+
+    git apply third_party/whisper.cpp/patches/*.patch
+
+Regenerate after changing either file (diff against the pristine copy, e.g.
+a `main` checkout that predates the patch, from the repo root):
+
+    git diff <pristine> -- third_party/whisper.cpp/ggml/src/ggml-metal/<file> \
+        > third_party/whisper.cpp/patches/000N-<slug>.patch
+
 ## Re-vendoring / adding another GPU backend
 
 To add a different GPU backend (CUDA, Metal, …), **re-copy that backend's
 directory** from upstream at the pinned commit and turn its `GGML_<X>` option ON
 (with the matching toolchain + CI runner). To refresh: clone upstream at
 `COMMIT`, re-run the same trim (keeping `ggml-cpu`, `ggml-blas`, `ggml-vulkan`),
-and diff.
+and diff — then re-apply `patches/` (see **Local patches** above); a clean diff
+plus exactly those patches is the expected end state.

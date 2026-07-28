@@ -131,10 +131,14 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         // on every cold-cache launch and can live-lock on Intel-GPU Macs)
         GGML_LOG_INFO("%s: using embedded precompiled metal library\n", __func__);
 
+        // the payload is static (.incbin'd into __DATA) and outlives any use of
+        // the library, so hand Metal the bytes directly instead of copying them:
+        // a custom (here: no-op) destructor block suppresses the buffer copy
+        // that DISPATCH_DATA_DESTRUCTOR_DEFAULT would make
         dispatch_data_t data = dispatch_data_create(ggml_metallib_start,
                                                     ggml_metallib_end - ggml_metallib_start,
                                                     NULL,
-                                                    DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+                                                    ^{});
 
         library = [device newLibraryWithData:data error:&error];
 

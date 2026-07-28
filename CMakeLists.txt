@@ -1260,9 +1260,25 @@ if (ENABLE_ASR)
     # cold-cache launch — seconds on Apple Silicon, and on Intel-GPU Macs
     # Apple's runtime compiler can live-lock indefinitely, freezing the GUI
     # (#4535). The compiled embed keeps #4333's no-file-lookup property while
-    # never invoking the runtime compiler. Needs full Xcode (same requirement
-    # REQUIRE_ASR_GPU already states for macOS).
-    set(GGML_METAL_EMBED_LIBRARY_COMPILED ${_asr_metal} CACHE BOOL "" FORCE)
+    # never invoking the runtime compiler. Needs the offline Metal toolchain,
+    # which newer Xcode ships as a separate downloadable component — so keep it
+    # opt-out: a host without the component can still build with
+    # -DENABLE_ASR_METAL_PRECOMPILE=OFF (source embed + runtime compile).
+    option(ENABLE_ASR_METAL_PRECOMPILE
+        "Compile the ASR Metal kernels at build time (needs the offline Metal toolchain)" ON)
+    if (_asr_metal AND ENABLE_ASR_METAL_PRECOMPILE)
+        set(GGML_METAL_EMBED_LIBRARY_COMPILED ON CACHE BOOL "" FORCE)
+        # Pin the shader language so the kernel set inside the embedded library
+        # is a property of this file, not of the build host's default Metal std:
+        # the bf16 kernels compile only at >= metal3.1, while props.has_bfloat
+        # is a runtime device query — a host defaulting lower would embed a
+        # library missing kernels the device then asks for. metal3.1 == macOS 14,
+        # the Apple Silicon deployment floor (macos-dmg.yml); Intel Macs never
+        # load the library (ASR is CPU-gated there, #4535).
+        set(GGML_METAL_STD "metal3.1" CACHE STRING "" FORCE)
+    else()
+        set(GGML_METAL_EMBED_LIBRARY_COMPILED OFF CACHE BOOL "" FORCE)
+    endif()
 
     # Every other non-CPU backend OFF (their source dirs are not vendored):
     foreach(_ggml_backend
