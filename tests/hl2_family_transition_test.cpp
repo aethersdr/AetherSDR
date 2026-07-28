@@ -72,6 +72,43 @@ int main(int argc, char** argv)
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
 
+    // ── The normalized RX-audio bus ────────────────────────────────────────
+    //
+    // The CW decoder, the RTTY decoder and the QSO recorder's RX tap all ride
+    // rxDemodAudioReady. Two properties have to hold, and the second is the one
+    // that has actually broken before.
+    //
+    //   1. It is FED on a radio with no PanadapterStream. That is the whole
+    //      point: bound to the stream, these three were silently dead on an HL2.
+    //   2. EXACTLY ONE producer is connected. Connecting both is the double-feed
+    //      shape of #4490, where the sim's frames arrived over two routes and
+    //      the engine consumed at double rate. Here it would hand every decoder
+    //      each block twice — which a Morse decoder reads as doubled timing,
+    //      i.e. wrong text rather than no text.
+    //
+    // Re-entering the family swap is what makes (2) worth asserting: the seam
+    // relay has `this` on BOTH ends, so unlike a stream-bound connection Qt has
+    // nothing to drop for us when the backend is replaced.
+    {
+        int busBlocks = 0;
+        QObject::connect(&model, &RadioModel::rxDemodAudioReady,
+                         &model, [&busBlocks](const QByteArray&) { ++busBlocks; });
+
+        const QByteArray frame(256, '\0');
+        emit model.backendAudioFrameReady(frame);
+        check(busBlocks == 1,
+              "RX bus: a seam backend's audio reaches rxDemodAudioReady exactly once");
+
+        // Flex -> HL2 again: re-enters wireRxDemodAudioBus() with the same
+        // endpoints on the seam relay.
+        model.connectToRadio(flexInfo());
+        model.connectToRadio(hl2Info());
+        busBlocks = 0;
+        emit model.backendAudioFrameReady(frame);
+        check(busBlocks == 1,
+              "RX bus: still exactly one producer after a family round-trip");
+    }
+
     // Keying a backend with no live link must not spuriously enter TX,
     // regardless of capability — connectToRadio() reached the post-swap state
     // against an unroutable address, so there is nothing to key.

@@ -501,6 +501,11 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::audioFrameReady,
             this, &RadioModel::backendAudioFrameReady);
 
+    // Pick the one producer for the normalized RX-audio bus. Done here, once
+    // per backend, so every consumer of rxDemodAudioReady is family-blind and
+    // survives a swap without rewiring. See the signal's header comment.
+    wireRxDemodAudioBus();
+
     // aetherd RFC 2.3: the first converted touchpoint. The backend decodes the
     // universal pan center/bandwidth from Flex status and emits this normalized
     // signal; RadioModel drives the addressed PanadapterModel. (Template for the
@@ -1667,6 +1672,32 @@ int RadioModel::activeTxSliceNum() const
             return s->sliceId();
     }
     return -1;
+}
+
+void RadioModel::wireRxDemodAudioBus()
+{
+    // Exactly one producer, ever. Drop the previous binding first: on a family
+    // swap the old PanadapterStream is usually destroyed (which would drop its
+    // connection anyway), but a swap BETWEEN two seam backends re-enters here
+    // with the same `this` on both ends and nothing would be dropped for us.
+    QObject::disconnect(m_rxDemodBusConn);
+    m_rxDemodBusConn = {};
+
+    if (m_backend && m_backend->ownsRxAudio()) {
+        // Seam-native audio (HL2 in-process demod, the sim's real demo audio).
+        // Chained off backendAudioFrameReady rather than the backend's own
+        // signal so both relays cross the thread boundary identically.
+        m_rxDemodBusConn = connect(this, &RadioModel::backendAudioFrameReady,
+                                   this, &RadioModel::rxDemodAudioReady);
+        return;
+    }
+    if (m_panStream) {
+        // Flex: the VITA-49 slice audio, unchanged and still feeding the engine
+        // by its own existing connection. This is an ADDITIONAL subscriber to
+        // the same signal, so the audible path is untouched.
+        m_rxDemodBusConn = connect(m_panStream, &PanadapterStream::audioDataReady,
+                                   this, &RadioModel::rxDemodAudioReady);
+    }
 }
 
 // See the header for why this falls back and why the key is station-wide.

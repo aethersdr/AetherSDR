@@ -1745,22 +1745,45 @@ void MainWindow::wirePanStreamRxAudioSinks()
                 Qt::UniqueConnection);
     }
 
-    // QSO recorder RX tap (float32). TX monitor + MOX gating are wired to
-    // AudioEngine/TransmitModel, which survive the swap, so they stay in buildUI.
+    // The QSO recorder's RX tap and the CW/RTTY decoder feeds used to be wired
+    // HERE, to this stream. They now ride RadioModel::rxDemodAudioReady — see
+    // wireRxDemodAudioSinks(), called once from buildUI. Two reasons:
+    //
+    //   1. A radio without a PanadapterStream (HL2) never reached this function
+    //      at all — the early return above — so all three were silently dead.
+    //   2. Even for a Flex they had to be re-bound on every family swap, which
+    //      is the fragility the comment above this function warns about. Bound
+    //      to RadioModel they simply outlive the swap.
+    //
+    // The primary RX audio → QAudioSink connection above stays exactly where it
+    // was, deliberately: nothing audible changes on any family.
+}
+
+// The RX-audio taps that listen ALONGSIDE the speaker: the QSO recorder and the
+// CW/RTTY decoders. Wired once, to RadioModel's normalized bus, and never
+// rebound — RadioModel outlives the backend swaps that destroy a
+// PanadapterStream, and it publishes whichever producer is real for the
+// connected family.
+//
+// The gates stay live (read per block) rather than driving connect/disconnect,
+// so toggling CW decode or starting RTTY never has to touch wiring — the
+// property this had before and worth keeping.
+void MainWindow::wireRxDemodAudioSinks()
+{
     if (m_qsoRecorder) {
-        connect(ps, &PanadapterStream::audioDataReady,
+        connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
                 m_qsoRecorder, &QsoRecorder::feedRxAudio);
     }
 
-    // CW decoder RX feed — gated live on the toggle so it need not rewire (#2417).
-    connect(ps, &PanadapterStream::audioDataReady,
+    // CW decoder RX feed — gated live on the toggle (#2417).
+    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
             &m_cwDecoder, [this](const QByteArray& pcm) {
                 if (CwDecodeSettings::rxEnabled())
                     m_cwDecoder.feedAudio(pcm);
             });
 
     // RTTY decoder RX feed — gated on the decoder being running.
-    connect(ps, &PanadapterStream::audioDataReady,
+    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
             &m_rttyDecoder, [this](const QByteArray& pcm) {
                 if (m_rttyDecoder.isRunning())
                     m_rttyDecoder.feedAudio(pcm);

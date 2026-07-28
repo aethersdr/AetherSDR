@@ -701,6 +701,33 @@ signals:
     // 24 kHz stereo float32 — the format AudioEngine::feedAudioData expects.
     // Flex never emits this; its audio arrives on the PanadapterStream path.
     void backendAudioFrameReady(const QByteArray& pcm);
+
+    // ── The normalized demodulated-RX-audio bus ────────────────────────────
+    //
+    // The audio the OPERATOR HEARS, whoever produced it: 24 kHz interleaved
+    // stereo float32, byte-identical to what both producers already emit.
+    //
+    // Exactly one producer is connected at a time — PanadapterStream::
+    // audioDataReady for a Flex, IRadioBackend::audioFrameReady for a backend
+    // that answers ownsRxAudio() — and that choice is made in ONE place
+    // (wireRxDemodAudioBus). Consumers subscribe once and never rebind, because
+    // this signal belongs to RadioModel, which OUTLIVES the backend swap that
+    // destroys and rebuilds a PanadapterStream.
+    //
+    // That is the actual bug this fixes, and it is a shape rather than an
+    // instance. Three features — the CW decoder, the RTTY decoder and the QSO
+    // recorder's RX tap — were bound directly to the Flex stream, so on any
+    // radio without one they bound to nothing: no error, no log line, the
+    // toggle worked and nothing ever decoded. See HERMES.md §18.
+    //
+    // Deliberately NOT the speaker path. AudioEngine::feedAudioData keeps its
+    // existing per-family wiring untouched, so nothing audible changes on any
+    // radio; this carries the taps that listen alongside it.
+    //
+    // Named for the tap it carries. A future filter-flat, pre-AGC feed for
+    // modems is a SEPARATE signal (rxWidebandAudioReady), not a mode flag on
+    // this one — see HERMES.md §18.5.
+    void rxDemodAudioReady(const QByteArray& pcm24kStereoFloat);
     // The backend was replaced because the operator picked a radio of another
     // family. Consumers holding backend-owned objects (PanadapterStream) must
     // re-establish anything that binds to them directly.
@@ -1047,6 +1074,9 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // Bind the one producer for rxDemodAudioReady. Idempotent; call after
+    // m_backend and m_panStream are both settled for the new family.
+    void wireRxDemodAudioBus();
 
     // aetherd RFC step 2 (§5.5): the radio-facing seam. Held via std::unique_ptr
     // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
@@ -1072,6 +1102,11 @@ private:
     std::atomic<quint32> m_seqCounter{1};
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
     PanadapterStream* m_panStream{nullptr};    // non-owning — owned by m_backend
+    // The single live producer feeding rxDemodAudioReady. Held so re-entry can
+    // drop the previous one: connecting both producers is the double-feed that
+    // made the engine consume at double rate in #4490, and here it would make
+    // every decoder see each block twice.
+    QMetaObject::Connection m_rxDemodBusConn;
     // aetherd Gap B (Step 2c): geometry + row counter for backends that deliver
     // spectra through IRadioBackend (HL2). Kept on RadioModel because such a
     // backend has no PanadapterModel yet, and the neutral waterfall rows still

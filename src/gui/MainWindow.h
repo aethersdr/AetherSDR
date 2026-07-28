@@ -423,6 +423,7 @@ private:
     // Every stream-bound sink lives in one of these; a new one added here is
     // automatically re-bound after a Flex->HL2->Flex swap.
     void wirePanStreamRxAudioSinks();         // MainWindow_Session.cpp
+    void wireRxDemodAudioSinks();             // MainWindow_Session.cpp
     // True when the connected backend supplies RX audio over the IRadioBackend
     // seam rather than through PanadapterStream — i.e. the demo (RFC #4288
     // Route A), which is the one backend that owns BOTH. Every site that wires

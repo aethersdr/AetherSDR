@@ -1359,11 +1359,15 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned by
     // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
-    // Every RX-audio sink for that signal — the QAudioSink feed, the QSO-recorder
-    // RX tap, and the CW/RTTY decoder feeds — is wired in one helper so a Flex-
-    // backend swap can rebind an identical set (the stream is destroyed/rebuilt
-    // on a family change; audioDataReady carries Flex RX audio itself).
+    // The QAudioSink feed is wired in one helper so a Flex-backend swap can
+    // rebind it (the stream is destroyed/rebuilt on a family change;
+    // audioDataReady carries Flex RX audio itself, so a missed rebind is
+    // silence rather than a degraded feature).
     wirePanStreamRxAudioSinks();
+    // The taps that listen alongside the speaker — QSO recorder RX, CW and RTTY
+    // — ride RadioModel's normalized bus instead, so they are wired ONCE here
+    // and are never part of the rebind. RadioModel outlives the swap.
+    wireRxDemodAudioSinks();
     // Separately, wire the backend-OWNED seam signals (audio + spectrum), which do
     // not flow through PanadapterStream: the demo/sim backend delivers RX audio and
     // its panadapter FFT directly over IRadioBackend (no VITA-49), in the same
@@ -1398,8 +1402,9 @@ MainWindow::MainWindow(QWidget* parent)
     wireKiwiSdr();
 
     // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
-    // RX (float32) comes from the panadapter stream (wired in
-    // wirePanStreamRxAudioSinks() above); TX (int16 post-limiter monitor) from
+    // RX (float32) comes from RadioModel's normalized RX-audio bus (wired in
+    // wireRxDemodAudioSinks() above), so it works on every family rather than
+    // only on one with a VITA-49 stream; TX (int16 post-limiter monitor) from
     // AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
@@ -1429,7 +1434,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in
-    // wirePanStreamRxAudioSinks() above (RX feed gated on
+    // wireRxDemodAudioSinks() above (RX feed gated on
     // CwDecodeSettings::rxEnabled(), #2417). Text/stats output is routed to the
     // pan owning the active slice via routeCwDecoderOutput(), which re-wires on
     // active slice change (#864).
@@ -1456,7 +1461,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
-    // RTTY decoder audio feed is wired in wirePanStreamRxAudioSinks() above,
+    // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
 
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
