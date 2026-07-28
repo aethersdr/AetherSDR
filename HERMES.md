@@ -513,7 +513,7 @@ always "a later refinement"; the watchdog turns it into a correctness issue.
 | RQST/ACK state machine (§5) | Gate for everything below it. Single outstanding request, no transaction id, echo-matched. Do NOT model as RPC |
 | ADC overload bit + clip counter (§6) | Addendum 2 §A3: the CORRECT driver for any gain decision. Audio level in one slice says nothing about what saturates a converter seeing 0–38.4 MHz |
 | Discovery telemetry (§1) | Temperature, power, clip count, PTT are pollable WITHOUT a stream — cheapest possible first increment, and a diagnostic when the stream itself is broken |
-| Receiver count at discovery `0x13` | We hardcode `maxSlices = 1`. Standard gateware is 4; skimmer variants 9–12 with NO transmit |
+| ~~Receiver count at discovery `0x13`~~ | **DONE — §19.** Read and clamped against; skimmer variants 9–12 with NO transmit are still untested |
 | TX FIFO depth (§6) | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift |
 | Wideband bandscope (§7) | Unimplemented by piHPSDR (dead code) and declined by SDR Console. A differentiation opportunity, with the 4-vs-32 packets-per-block trap already documented |
 
@@ -702,7 +702,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| 7 | Read receiver count from discovery `0x13` | O §1 | We hardcode `maxSlices=1`. Standard gateware is 4; skimmer variants 9–12 with no TX | S |
+| 7 | ~~Read receiver count from discovery `0x13`~~ | O §1 | **DONE — §19.** `maxSlices`/`maxPanadapters` report the RUNNING count: requested, clamped by discovery `0x13`, clamped again by the link budget | S |
 | ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
 | 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
 | 10 | RADE null-deref at `MainWindow_DigitalModes.cpp:461` | ours, gap 9 | Same shape as the DAX crash; will kill HL2 the moment RADE starts | XS |
@@ -722,7 +722,7 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 17 | TX IQ FIFO depth + servo | O §6, A1 §B3 | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift | M |
 | 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
 | ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
-| 20 | Multi-slice: index-space mapping object | A3 §3 | `{ddcIndex, dspChannel, analyzerId, uiNumber}` — never derive arithmetically. Trivial now at one slice, which is when to build it | S |
+| 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
 | 22 | Hardware-managed T/R LNA gain (`0x0e[15]`) | A2 §A2 | Quisk uses it; lower latency than any host round trip; PureSignal needs an unclipped feedback path | S |
 | 23 | PureSignal | O §11, A1 §B6 | Needs everything above. Consumes 4 RX (2 feedback), halving the slice budget | L |
@@ -2233,3 +2233,206 @@ worker thread and reaches `Connected` before its queued signal has crossed to
 the model's thread, so a `while (!isConnected())` pump exits *before* the
 emission under test and the assertion fails against working code. Wait on the
 signal.
+**Still open on this path:** whether the HL2's in-process RX pipeline flushes a
+few blocks of transmitter leakage into the start of each RX segment after unkey
+— the same class as the Flex waterfall-freeze window. Measure with a recording
+running across a real over before deciding it needs a hold-off.
+
+---
+
+## 19. Four receivers
+
+The backend ran one DDC. It now runs up to four, each with its own NCO, WDSP
+channel, spectrum, slice and panadapter. Closes backlog items 7 and 20.
+
+### 19.1 One ADC, four receivers — the distinction that shapes everything
+
+The HL2 has a single AD9866. "Four receivers" means four DDCs behind one
+converter, so the split between what is per-receiver and what is shared is not
+a style choice — it is the hardware:
+
+| Per receiver | Shared, because there is one ADC |
+|---|---|
+| NCO (`0x02`..`0x08`), slice frequency | Sample rate `0x00[25:24]` — one field, so one span for every pan |
+| Mode, passband, AGC | LNA gain `0x0a[5:0]`, and the dBm reference it drives |
+| Spectrum, S-meter ballistics, pan frame rate | Companion filter board (J16 open-collector) |
+| Demodulated audio | The transmitter, and therefore the TX slice |
+
+Anything shared that gets stored per receiver gives four receivers four
+opinions about one register, and the last writer wins silently.
+
+### 19.2 The EP6 payload geometry is not a constant
+
+The payload is a sequence of ROUNDS: one sample from every active receiver plus
+a 2-byte mic word, so a round is `6N + 2` bytes and the per-packet sample count
+**falls** as receivers are added.
+
+At one receiver a round is 8 bytes and 504 divides exactly — which is why
+`kRxSampleBytes = 8` and `kSamplesPerPacket = 126` survived as constants for the
+whole single-receiver bring-up. Neither is true at two.
+
+Rounds never straddle a 512-byte frame. The gateware emits whole rounds while
+another fits and then ZERO-PADS the rest (`usopenhpsdr1.v`, `MIC0 ->
+(byte_no[8:0] > round_bytes) ? RXDATA2 : PAD`). So rounds-per-frame is a floor
+division and the tail bytes are not samples:
+
+| N | round bytes | rounds/frame | payload used | padding | samples/RX/packet |
+|---|---|---|---|---|---|
+| 1 | 8 | 63 | 504 | 0 | 126 |
+| 2 | 14 | 36 | 504 | 0 | 72 |
+| 3 | 20 | 25 | 500 | 4 | 50 |
+| 4 | 26 | 19 | 494 | 10 | 38 |
+
+Decoding the pad as samples injects a burst of digital silence into every
+receiver, every packet. `hpsdrsim` computes `n = 504 / size` the same way from an
+independent codebase, which is what makes it evidence rather than an echo.
+
+**EP2 is a different, receiver-count-INDEPENDENT layout** — a fixed 126 samples
+of 8 bytes whatever N is. It was sharing the EP6 constants; they are now
+separate (`kTxSampleBytes`, `kTxSamplesPerPacket`) so adding receivers cannot
+reshape the transmit packet or move its pacing.
+
+### 19.3 The receiver count field is FOUR bits
+
+`0x00[6:3]`, `0000`=1 to `1011`=12. The encoder masked with `0x07`, which capped
+the encodable count at 8 and would have wrapped 9..12 into 1..4 — a request for
+nine receivers configuring the radio for one. Latent while only one ran.
+
+### 19.4 The link budget is a real limit, not a footnote
+
+Both axes cost bandwidth: more receivers shrink the per-receiver payload of a
+fixed-size packet, so the radio sends more packets. Sustained EP6 wire rate,
+Mbit/s, including UDP/IP/Ethernet headers and the inter-frame gap:
+
+|  | 1 RX | 2 RX | 3 RX | 4 RX |
+|---|---|---|---|---|
+| 48 k | 3.3 | 5.9 | 8.4 | 11.1 |
+| 96 k | 6.7 | 11.7 | 16.9 | 22.2 |
+| 192 k | 13.4 | 23.4 | 33.7 | 44.4 |
+| 384 k | 26.8 | 46.8 | 67.5 | **88.8** |
+
+**The HL2's ethernet is 100BASE-T.** Four receivers at 384 kHz does not fail
+cleanly — the link drops packets, and a dropped EP6 packet is a simultaneous gap
+in *every* panadapter. `maxReceiversAtRate()` admits 4 receivers through 192 kHz
+and 3 at 384 kHz, at a 70% budget. The reported zoom LIMITS shrink with the
+receiver count, so the operator cannot reach a span that would then be refused —
+a refused control reads as broken, an absent one reads as a limit.
+
+### 19.5 Agree-or-bypass on the shared filter board
+
+One relay bank, four receivers, four possible opinions.
+
+If every active receiver wants the same filter, engage it. If they disagree,
+release every relay rather than pick a winner. Picking a winner is the tempting
+alternative and it is worse: a low-pass chosen for 40 m *attenuates* a receiver
+on 15 m, so three panadapters would show a level that is an artefact of the
+fourth receiver's tuning. Bypass is honest — every receiver sees the same front
+end, and a level comparison between panes means something.
+
+**What it costs, stated plainly:** bypass drops the AM-broadcast HPF, which
+matters more here than on radios with better dynamic range (oracle §8). Near a
+broadcast transmitter, spanning bands can raise the noise floor on every
+receiver. The log line names the spanning frequencies and says the HPF is out,
+because "why did my noise floor rise when I opened a second receiver" is
+otherwise an unanswerable support question.
+
+Measured on the simulator, the full round trip:
+
+```
+band filter: 0x48 (HPF + 30/20m LPF) for 10.000000 MHz, trigger=connect
+band filter: 0x00 (none (bypass)) for receivers spanning bands
+             (7.200, 10.000, 10.000, 10.000 MHz) — BYPASSED, AM-broadcast HPF
+             is out — was 0x48, trigger=tune
+band filter: 0x44 (HPF + 60/40m LPF) for 7.200000 MHz — was 0x00, trigger=tune
+```
+
+**While KEYED the transmit receiver's filter wins outright.** Radiating through a
+bypassed bank because another receiver was parked elsewhere would put harmonics
+on the air, and no receive-side convenience justifies that.
+
+### 19.6 Transmit stays singular
+
+One transmitter, however many receivers. Exactly one slice reports
+`txSlice=true`, and the TX NCO, mode and passband follow *that* receiver.
+Tuning receiver 3 must not drag the transmit frequency; putting it into CW to
+chase beacons must not switch the transmitter out of SSB.
+
+Marking every slice as the TX slice would be worse than marking none: RadioModel's
+interlock would find one whichever pane was selected, and the operator could key
+from a receiver the TX NCO is not following.
+
+### 19.7 Host-side audio mixing
+
+A Flex sums its slices on-radio and sends one stream. An HL2 demodulates every
+receiver on this host, so the sum is ours.
+
+Receivers share an input clock (one EP6 packet feeds them all) but WDSP's worker
+is asynchronous, so blocks are mixed `min()`-aligned rather than smeared. A
+**starvation guard** mixes a stalled receiver as silence past ~85 ms: without it
+one stalled DSP holds `min()` at zero and the whole radio goes silent, which is
+strictly worse than the fault it reacts to.
+
+Clamped, not scaled by 1/N. Dividing would make every slice quieter the moment a
+second one is opened, which an operator reads as the radio going deaf.
+
+### 19.8 Ordering: DSP chains are built BEFORE start()
+
+Opening a WDSP channel costs ~17 s on a first run (FFTW wisdom) and runs on the
+I/O thread — **the thread that paces EP2**. Configuring after `start()` stalls
+the pacer for all of it, and the gateware watchdog halts the stream when EP2
+stops arriving; it also stalls the EP6 reader, so the connect watchdog can time
+out against a radio that is answering perfectly well.
+
+This was caught by `hl2_backend_test`, which stopped seeing `connected()` at all.
+It is the same lesson as §15.4 from the other direction: EP2 is not best-effort.
+
+The count therefore comes from a **static** `MetisClient::effectiveNumRx(Params)`
+— the same clamp the running client applies to the same struct. The demux and
+the radio must not disagree about how many receivers exist, because the EP6
+payload carries no receiver-count field and a mismatch reinterprets every round
+with no error anywhere.
+
+### 19.9 Seam gap this exposed: pan-id namespaces
+
+`RadioModel` materialised exactly one panadapter for a non-Flex backend —
+`ensureOwnedPanadapter(neutralPanIdString(0))`, hardcoded in three places — and
+kept the backend pan geometry in two scalars.
+
+Worse, every *other* backend pan signal resolved the raw backend pan id through
+`resolvePan()`, whose fallback is the ACTIVE pan. With one pan that looked
+correct, because the only pan was the active one. With four, every pan-addressed
+update landed on whichever pane happened to be selected: **RF gain reported 20 dB
+on one pan and 0 on the other three, from a single radio-wide LNA.**
+
+Backend pan ids are now translated through a first-seen-order allocator and stay
+OPAQUE in both directions — `RadioModel` does not parse a family's naming scheme,
+and a backend does not learn about the `0xE1000000` stream-id space.
+
+### 19.10 What is proven, and what is not
+
+**Proven against `hpsdrsim -hermeslite2 -P1`:** four receivers configured and
+streaming; four independent NCOs (7.200 / 7.150 / 7.100 / 7.050 MHz);
+four panadapters with their own spectrum and waterfall; `txSlice` on slice 0
+only; agree-or-bypass across the full round trip; RF gain consistent across all
+four pans. 193/193 tests green.
+
+**NOT proven, and it matters:**
+
+- **Nothing has run on real hardware yet.** The simulator generates its scene
+  independently of the NCO, so four receivers on four frequencies show the same
+  synthetic content there. That four DDCs genuinely tune *independently* is
+  argued from the register map (`0x02`..`0x08`) and confirmed only in that the
+  radio accepts the writes. **On a real HL2 the check is four receivers on four
+  bands showing four different noise floors and different signals** — WWV on
+  10 MHz against a quiet 40 m is the cheapest version.
+- **The link-budget ceiling is derived, not measured.** 70% of 100BASE-T is a
+  working figure. Whether 4 × 192 kHz actually runs clean over a real switch, and
+  where the drop counter starts moving, is a measurement nobody has taken.
+- **Audio mixing has not been heard.** The min-alignment and the starvation guard
+  are reasoned and unit-tested at the seam, not listened to with two real signals.
+- **The skimmer gateware variants** (9–12 RX, no transmit) are still untested.
+  `kMaxTunableRx = 7` bounds us to the contiguous `0x02`..`0x08` NCO run;
+  RX8..RX12 at `0x12`..`0x16` are deliberately not encoded.
+- **CPU cost is unmeasured beyond one observation:** 54.7% on an M-series laptop
+  at 4 × 192 kHz with four panadapters rendering. That is a whole-app number from
+  the status bar, not a profile.

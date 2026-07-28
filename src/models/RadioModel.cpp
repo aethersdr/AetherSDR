@@ -528,7 +528,7 @@ void RadioModel::setupBackend(const QString& family)
             m_backendPanCenterMhz[panIdx] = centerMhz;
             m_backendPanBandwidthMhz[panIdx] = bandwidthMhz;
         }
-        auto* pan = resolvePan(panId);
+        auto* pan = resolveBackendPan(panId);
         if (!pan && !m_flexBackend) {
             // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend.
             // No Flex "display pan" status exists to create one, so without this
@@ -570,7 +570,7 @@ void RadioModel::setupBackend(const QString& family)
     // emit is intentionally dropped rather than resurrected. #4065 review.)
     connect(m_backend.get(), &IRadioBackend::panRangeChanged, this,
             [this](const QString& panId, double minDbm, double maxDbm) {
-        auto* pan = resolvePan(panId);
+        auto* pan = resolveBackendPan(panId);
         if (!pan) return;
         if (pan->setRange(minDbm, maxDbm)) {
             m_panStream->setDbmRange(pan->panStreamId(), pan->minDbm(), pan->maxDbm());
@@ -585,7 +585,7 @@ void RadioModel::setupBackend(const QString& family)
     // report has to reach the widgets already on screen.
     connect(m_backend.get(), &IRadioBackend::panBandwidthLimitsChanged, this,
             [this](const QString& panId, double minMhz, double maxMhz) {
-        auto* pan = resolvePan(panId);
+        auto* pan = resolveBackendPan(panId);
         if (!pan) return;
         if (pan->setBandwidthLimits(minMhz, maxMhz)) {
             emit panBandwidthLimitsChanged(pan->panId(),
@@ -601,21 +601,21 @@ void RadioModel::setupBackend(const QString& family)
     // parse of ant_list in handlePanadapterStatus onto this single source.
     connect(m_backend.get(), &IRadioBackend::panRfGainChanged, this,
             [this](const QString& panId, int gain) {
-        if (auto* pan = resolvePan(panId)) pan->setRfGain(gain);
+        if (auto* pan = resolveBackendPan(panId)) pan->setRfGain(gain);
     });
     connect(m_backend.get(), &IRadioBackend::panRfGainInfoChanged, this,
             [this](const QString& panId, int low, int high, int step) {
         if (step <= 0)
             return;                       // a zero step would freeze the slider
-        if (auto* pan = resolvePan(panId)) pan->setRfGainInfo(low, high, step);
+        if (auto* pan = resolveBackendPan(panId)) pan->setRfGainInfo(low, high, step);
     });
     connect(m_backend.get(), &IRadioBackend::panRxAntennaChanged, this,
             [this](const QString& panId, const QString& ant) {
-        if (auto* pan = resolvePan(panId)) pan->setRxAntenna(ant);
+        if (auto* pan = resolveBackendPan(panId)) pan->setRxAntenna(ant);
     });
     connect(m_backend.get(), &IRadioBackend::panAntennaListChanged, this,
             [this](const QString& panId, const QStringList& ants) {
-        if (auto* pan = resolvePan(panId)) pan->setAntList(ants);
+        if (auto* pan = resolveBackendPan(panId)) pan->setAntList(ants);
         // Converged RadioModel-level antenna list (the old inline dual-parse).
         // Not gated on a resolved pan — matches the old unconditional emit.
         if (ants != m_antList) {
@@ -625,7 +625,7 @@ void RadioModel::setupBackend(const QString& family)
     });
     connect(m_backend.get(), &IRadioBackend::panWaterfallLineDurationChanged, this,
             [this](const QString& panId, int ms) {
-        if (auto* pan = resolvePan(panId)) pan->setWaterfallLineDuration(ms);
+        if (auto* pan = resolveBackendPan(panId)) pan->setWaterfallLineDuration(ms);
     });
 
     // aetherd RFC 2.3 extension channel: Flex-specific pan fields ride the
@@ -6448,6 +6448,24 @@ quint32 RadioModel::clientHandle() const
     // No RadioConnection for a non-Flex backend; the Flex client-handle concept
     // does not apply there.
     return m_connection ? m_connection->clientHandle() : 0u;
+}
+
+PanadapterModel* RadioModel::resolveBackendPan(const QString& backendPanId)
+{
+    // Every pan signal from a non-Flex backend has to come through here.
+    //
+    // A backend labels its pans in its own namespace ("hl2-2"); the models are
+    // keyed by the NEUTRAL id ("0xe1000002"). resolvePan() on the raw backend id
+    // therefore never matches, and its fallback is the ACTIVE pan — so with one
+    // pan everything looked correct (the only pan was the active one), and with
+    // four, every pan-addressed update landed on whichever pane happened to be
+    // selected. Measured: RF gain reported 20 dB on one pan and 0 on the other
+    // three, from a single radio-wide LNA.
+    //
+    // Flex keeps its existing behaviour: its pan ids ARE the model keys.
+    if (m_flexBackend)
+        return resolvePan(backendPanId);
+    return panadapter(neutralPanIdString(neutralPanIndexFor(backendPanId)));
 }
 
 int RadioModel::neutralPanIndexFor(const QString& backendPanId)

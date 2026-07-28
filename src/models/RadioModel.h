@@ -1194,6 +1194,11 @@ private:
     QHash<QString, int> m_backendPanIndex;
     // Allocate (or recall) the neutral index for a backend pan id.
     int neutralPanIndexFor(const QString& backendPanId);
+    // Resolve a BACKEND-namespaced pan id to its PanadapterModel, translating
+    // through the neutral index. Every IRadioBackend pan signal must use this
+    // rather than resolvePan(), whose active-pan fallback silently misdirects a
+    // multi-pan backend's updates. See the definition.
+    PanadapterModel* resolveBackendPan(const QString& backendPanId);
 
     // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
     //

@@ -38,6 +38,12 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   there means wider mode coverage, panadapter/waterfall parity with the Flex
   path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client does
   all the tune/decimate/demodulate work a Flex does on-radio).
+  **Multi-receiver** is now in: the shipping gateware exposes four DDCs behind
+  its single ADC, and the backend runs up to four independent slices and
+  panadapters, opted into and remembered. Both axes draw on one 100BASE-T link,
+  so four receivers are available through 192 kHz and three at 384 kHz. Still to
+  prove on real hardware — the simulator's scene does not follow the NCO, so
+  independent tuning is confirmed only at the register level.
 - **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
   public-receiver browser (per-receiver passwords, idle-release, and
   waterfall polish already landed in v26.7.2).
