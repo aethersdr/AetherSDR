@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "AetherSDR (feat-hl2-connect-by-ip)",
+      "runtimeExecutable": "build/AetherSDR.app/Contents/MacOS/AetherSDR",
+      "runtimeArgs": [],
+      "port": 0
+    }
+  ]
+}

@@ -359,9 +359,18 @@ public:
     bool prepareWsprTransmit();
     void releaseWsprTransmit();
     void restoreWsprTransmitDax();
+    // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
+    // literally a `dax_tx` stream; on a host-modulating backend (HL2) there is
+    // no stream to own — the modulator is ours and the pump feeds it through
+    // txFinalMonitorPcmReady → submitTxAudio, which needs nothing created.
+    //
+    // The dialog polls this every 50 ms while transmitting and aborts the frame
+    // if it goes false, so the host-modulated flag must stay latched from
+    // prepareWsprTransmit() to releaseWsprTransmit() rather than being derived
+    // from anything that can flicker.
     bool hasWsprTxStream() const
     {
-        return m_daxTxStreamId != 0 && m_daxTxActive;
+        return m_wsprTxHostModulated || (m_daxTxStreamId != 0 && m_daxTxActive);
     }
     QJsonObject troubleshootingSnapshot() const;
 
@@ -1359,6 +1368,10 @@ private:
     bool        m_wsprTxReleaseWhenReady{false};
     bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed
     bool        m_wsprTxRestoreDax{false};    // beacon changed it and owes a restore
+    // The beacon armed against a host-modulating backend, so it borrowed no DAX
+    // stream and no `transmit dax`. Latched by prepareWsprTransmit() and the
+    // only thing releaseWsprTransmit() has to undo on that path.
+    bool        m_wsprTxHostModulated{false};
     quint32     m_daxTxClientHandle{0};  // Tracked for diagnostics only — not consulted in routing.
     bool        m_daxTxCreatePending{false};
     QSet<quint32> m_deadDaxRxSeen;

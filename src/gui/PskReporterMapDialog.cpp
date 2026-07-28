@@ -601,6 +601,15 @@ bool PskReporterMapDialog::applyBeaconBand()
     // Standard WSPR dial frequencies use upper sideband on every band. Keep
     // both the slice display passband and radio TX passband comfortably around
     // the selectable 1400–1600 Hz WSPR offset.
+    //
+    // DIGU is what actually selects the transmit sideband, and it is the one
+    // line here that every family honours: a Flex takes it as slice mode, and
+    // Hl2Backend maps it to the WDSP TX channel's mode. `transmit filter_*`
+    // below is Flex station state — a host-modulating backend derives its TX
+    // passband from the mode instead (DIGU → 150…3000 Hz), which contains the
+    // WSPR offset, so the request is advisory there rather than dropped-and-
+    // wrong. The generated tone is a single 4-FSK carrier ~6 Hz wide; nothing
+    // about the frame depends on the narrower passband being applied.
     slice->tuneAndRecenter(m_beaconBand->currentData().toDouble());
     slice->setMode(QStringLiteral("DIGU"));
     slice->setFilterWidth(1200, 1800);
