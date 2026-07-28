@@ -1286,16 +1286,20 @@ void section15(CatClient& c, Runner& r)
 
     // 15.25  DN with a step count large enough to underflow past 0 at any tuning
     // step. tuneSliceForCat rejects the resulting non-positive target at the
-    // boundary, so the tune is dropped and VFO A is left untouched — it must NOT
-    // move, clamp to a band edge, or emit a negative "slice tune". FA stays at
-    // base. (Regression guard for the cmdDN underflow; the guard lives in
-    // RadioModel::tuneSliceForCat.)
-    c.send(QStringLiteral("DN99999999"));
+    // boundary, so cmdDN answers "?;" and the tune is dropped — VFO A must NOT
+    // move, clamp to a band edge, or emit a negative "slice tune". (Regression
+    // guard for the cmdDN underflow; the guard lives in RadioModel::tuneSliceForCat.)
+    //
+    // Use query() not send(): the "?;" rejection is a real response now, so it
+    // must be consumed here or it desyncs the FA poll (and every later read).
+    const QString dnUnder = c.query(QStringLiteral("DN99999999"));
+    r.check(QStringLiteral("15.25 DN99999999 (underflow) rejected with \"?;\""),
+            dnUnder == QLatin1String("?"), repr(dnUnder));
     QString faUnder;
     pollFreqEquals(c, QStringLiteral("FA"), QStringLiteral("FA") + hz11(baseHz), faUnder);
     qint64 underHz = (faUnder.startsWith(QLatin1String("FA")) && isDigits(faUnder.mid(2), 11))
                      ? faUnder.mid(2).toLongLong() : -1;
-    r.check(QStringLiteral("15.25 DN99999999 (underflow) → VFO A unchanged, no negative freq"),
+    r.check(QStringLiteral("15.26 DN99999999 (underflow) → VFO A unchanged, no negative freq"),
             underHz == baseHz, repr(faUnder));
 }
 

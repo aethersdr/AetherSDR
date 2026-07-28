@@ -2054,6 +2054,10 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
 
     if (op == "UP") {
         const double mhz = slice->frequency() + slice->stepHz() / 1e6;
+        // Validate before queueing: tuneSliceForCat's bool is unobservable across
+        // the queued invocation, so a rejected target would otherwise be dropped
+        // while we answered RPRT 0 (a false success). Mirrors set_freq/set_split_freq.
+        if (!(mhz > 0.0)) return rprt(-1);
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);
@@ -2062,6 +2066,9 @@ QString RigctlProtocol::cmdVfoOp(const QString& arg)
     }
     if (op == "DOWN") {
         const double mhz = slice->frequency() - slice->stepHz() / 1e6;
+        // A multi-step DOWN can underflow past 0; reject here (see UP above) rather
+        // than acknowledge a tune tuneSliceForCat will silently drop.
+        if (!(mhz > 0.0)) return rprt(-1);
         RadioModel* model = m_model;
         QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
             if (model) model->tuneSliceForCat(slice, mhz);

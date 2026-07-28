@@ -36,6 +36,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QSysInfo>
+#include <QThread>
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
@@ -4599,6 +4600,12 @@ bool RadioModel::requestPanBand(const QString& panId, const QString& bandKey)
 
 bool RadioModel::tuneSliceForCat(SliceModel* slice, double mhz)
 {
+    // This mutates SliceModel, which lives on this model's (GUI) thread. Every
+    // caller must reach here on that thread: SmartCAT/CatPort calls it directly
+    // (it runs on the GUI thread), while rigctld marshals through a queued
+    // invocation delivered on the GUI thread. Assert the precondition so a future
+    // off-thread caller is caught in debug rather than silently racing SliceModel.
+    Q_ASSERT(QThread::currentThread() == thread());
     if (!slice) {
         return false;
     }
