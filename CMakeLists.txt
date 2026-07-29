@@ -546,6 +546,7 @@ set(CORE_SOURCES
     src/core/OccupiedRegion.cpp
     src/core/SettingsHelpers.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
@@ -2787,6 +2788,7 @@ qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
 add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -2806,6 +2808,7 @@ add_executable(panadapter_message_overlay_test
     tests/panadapter_message_overlay_test.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -3617,6 +3620,8 @@ if (ENABLE_ASR)
         src/gui/FramelessResizer.cpp
         src/gui/FramelessWindowTitleBar.cpp
         src/core/ThemeManager.cpp
+        src/core/ThemeSeedGenerated.cpp
+    src/core/ThemeSeedGenerated.cpp
         src/core/AppSettings.cpp
         src/core/LogManager.cpp
         src/core/AsyncLogWriter.cpp
@@ -3657,6 +3662,7 @@ add_executable(s_meter_geometry_test
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4002,6 +4008,7 @@ add_executable(cwx_panel_test
     # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4031,6 +4038,7 @@ add_executable(health_applet_test
     src/gui/HealthApplet.cpp
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4488,6 +4496,7 @@ add_executable(help_dialog_test
     # HelpDialog.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4512,6 +4521,7 @@ add_executable(flex_control_dialog_size_test
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4532,6 +4542,7 @@ add_executable(pan_layout_dialog_size_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/AppSettings.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4635,6 +4646,7 @@ add_executable(container_widget_test
     # logging deps so the test links.  ThemeManager's compiled-in
     # seedBuiltinDefaults() means we don't need the theme resource here.
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4662,6 +4674,7 @@ add_executable(hl2_pc_audio_lock_test
     src/gui/DragValuePopup.cpp
     src/core/AppSettings.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4680,6 +4693,7 @@ add_executable(amp_applet_test
     src/gui/DragValuePopup.cpp
     src/core/AppSettings.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4717,6 +4731,7 @@ add_executable(container_manager_test
     src/gui/containers/FloatingContainerWindow.cpp
     src/core/AppSettings.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4735,6 +4750,7 @@ add_executable(container_nesting_test
     src/gui/containers/FloatingContainerWindow.cpp
     src/core/AppSettings.cpp
     src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )

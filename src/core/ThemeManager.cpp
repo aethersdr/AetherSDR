@@ -337,218 +337,28 @@ ThemeManager::ThemeManager()
     }
 }
 
+void ThemeManager::seedScopedToken(const QString& containerPath,
+                                   const QString& token, const QVariant& value)
+{
+    if (ThemeScope* s = scopeOrCreate(containerPath))
+        s->tokens.insert(token, value);
+}
+
 void ThemeManager::seedBuiltinDefaults()
 {
-    // Compiled-in defaults — the Phase 2 canonical taxonomy from
-    // docs/theming/canonical-tokens.md.  Mirrors default-dark.json so
-    // the UI is usable even with zero theme files on disk.  Kept in sync
-    // with the JSON resource manually; Phase 5's editor will eventually
-    // generate this table from the resource at compile time.
-
-    // Backgrounds (6 tiers).  background.0 is the dominant codebase
-    // QWidget base (#0f0f1a, 84 refs); aligning the canonical token to
-    // that value makes the migration bit-identical at every QWidget
-    // that doesn't paint its own background.
-    m_tokens.insert("color.background.0",        QString("#0f0f1a"));
-    m_tokens.insert("color.background.1",        QString("#1a2a3a"));
-    m_tokens.insert("color.background.2",        QString("#304050"));
-    m_tokens.insert("color.background.3",        QString("#506070"));
-    m_tokens.insert("color.background.tx",       QString("#3a2a0e"));
-    m_tokens.insert("color.background.success",  QString("#006040"));
-    m_tokens.insert("color.background.warning",  QString("#5a3a0a"));
-    m_tokens.insert("color.background.spectrum", QString("#000000"));
-    // App-level backdrop painted by MainWindow itself.  Honours alpha for
-    // the "fade to desktop" experiment — when this token's value is
-    // translucent, the compositor renders the desktop wallpaper through
-    // any pixels the rest of the app didn't claim.  Opaque by default so
-    // existing installs see no visual change.
-    m_tokens.insert("color.background.app",      QString("#0f0f1a"));
-
-    // Accents
-    m_tokens.insert("color.accent",          QString("#00b4d8"));
-    m_tokens.insert("color.accent.bright",   QString("#00c8f0"));
-    m_tokens.insert("color.accent.dim",      QString("#0090e0"));
-    m_tokens.insert("color.accent.warning",  QString("#ffb84d"));
-    m_tokens.insert("color.accent.danger",   QString("#ff4d4d"));
-    m_tokens.insert("color.accent.success",  QString("#4dd87a"));
-
-    // Waterfall LIVE chip — dedicated so the live/history indicator can be
-    // recolored independently of the shared danger/label semantics (#3744).
-    // Defaults mirror the prior shared values (red live, grey history).
-    m_tokens.insert("color.waterfall.live",    QString("#ff4d4d"));
-    m_tokens.insert("color.waterfall.history", QString("#506070"));
-
-    // MOX idle accent — dedicated so the "this is the transmit button" amber
-    // can be recolored independently of the shared button styling (#3663).
-    // Defaults mirror the prior hardcoded literals; the same values seed both
-    // presets, so the appearance is theme-agnostic exactly as before.
-    m_tokens.insert("color.tx.mox.border",       QString("#d08020"));
-    m_tokens.insert("color.tx.mox.text",         QString("#f0c890"));
-    m_tokens.insert("color.tx.mox.border.hover", QString("#e09030"));
-    m_tokens.insert("color.tx.mox.text.hover",   QString("#ffd8a0"));
-
-    // Text (4 tiers — label and disabled distinct for Phase 4 contrast
-    // tuning).  text.primary aligned to the dominant codebase body-text
-    // value (#c8d8e8, 367 refs across applets / dialogs / labels).
-    m_tokens.insert("color.text.primary",   QString("#c8d8e8"));
-    m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
-    m_tokens.insert("color.text.label",     QString("#506070"));
-    m_tokens.insert("color.text.disabled",  QString("#3a4a5a"));
-
-    // Borders
-    m_tokens.insert("color.border.subtle", QString("#1a2330"));
-    m_tokens.insert("color.border.strong", QString("#2a3a4d"));
-    m_tokens.insert("color.border.accent", QString("#00b4d8"));
-    m_tokens.insert("color.border.tx",     QString("#5a4a28"));
-
-    // Meters (paint code only)
-    m_tokens.insert("color.meter.crst",          QString("#ff4d4d"));
-    m_tokens.insert("color.meter.rms",           QString("#00b4d8"));
-    m_tokens.insert("color.meter.thresh",        QString("#ffb84d"));
-    m_tokens.insert("color.meter.peak",          QString("#e6f0fa"));
-    m_tokens.insert("color.meter.gainReduction", QString("#f2c14e"));
-    m_tokens.insert("color.meter.bar.fill",      QString("#405060"));
-    // S-meter needle-pivot moulding cover + warm backlight glow (paint code only).
-    m_tokens.insert("color.meter.pivot.fill",    QString("#050509"));
-    m_tokens.insert("color.meter.pivot.rim",     QString("#3a3e48"));
-    m_tokens.insert("color.meter.pivot.glow",    QString("#ffb060"));
-    // Vertical (bottom→top, angle 0°) green→amber→red ramp painted by
-    // ClientLevelMeter / ClientCompMeter into the level bar.  Seeded so
-    // a missing theme file doesn't fall back to whatever the meter
-    // widgets used to hardcode — the editor expects this token to always
-    // exist as a gradient.
-    {
-        ThemeGradient g;
-        g.type = ThemeGradient::Linear;
-        g.angle = 0.0;
-        g.stops = {
-            {0.00, QColor("#2f9e6a")},
-            {0.55, QColor("#6cc56a")},
-            {0.80, QColor("#e8b94c")},
-            {0.95, QColor("#e8553c")},
-            {1.00, QColor("#f2362a")},
-        };
-        m_tokens.insert("color.meter.bar.fillGradient",
-                        QVariant::fromValue(g));
-    }
-
-    // Spectrum + waterfall (paint code only — gradient waterfall.colormap
-    // lands when gradient-token support follows this PR)
-    m_tokens.insert("color.spectrum.trace",    QString("#00b4d8"));
-    m_tokens.insert("color.spectrum.peakHold", QString("#ffb84d"));
-    m_tokens.insert("color.spectrum.average",  QString("#8ea8c0"));
-    m_tokens.insert("color.spectrum.grid",     QString("#1a2330"));
-
-    // Slice indicators A-H + TX-active highlight.  Preliminary values —
-    // a dedicated slice-colour audit may tune these in a follow-up.
-    m_tokens.insert("color.slice.a",  QString("#ff4040"));
-    m_tokens.insert("color.slice.b",  QString("#ff8c00"));
-    m_tokens.insert("color.slice.c",  QString("#ffd040"));
-    m_tokens.insert("color.slice.d",  QString("#40c060"));
-    m_tokens.insert("color.slice.e",  QString("#00b4d8"));
-    m_tokens.insert("color.slice.f",  QString("#4080ff"));
-    m_tokens.insert("color.slice.g",  QString("#c060ff"));
-    m_tokens.insert("color.slice.h",  QString("#ff60a0"));
-    m_tokens.insert("color.slice.tx", QString("#ff4d4d"));
-
-    // Slider + knob component tokens — seeded so themes that pre-date
-    // the namespace (e.g. user copies forked before this PR) still
-    // resolve the canonical Wave-blue look instead of falling through
-    // to empty QSS.  Default Dark / Default Light's JSON aliases
-    // override these when those themes load.
-    m_tokens.insert("color.slider.background",          QString("#1a2a3a"));
-    m_tokens.insert("color.slider.foreground",          QString("#00b4d8"));
-    m_tokens.insert("color.slider.handle",              QString("#c8d8e8"));
-    m_tokens.insert("color.slider.background.disabled", QString("#1a2330"));
-    m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
-    m_tokens.insert("color.slider.handle.disabled",     QString("#506070"));
-    m_tokens.insert("color.knob.background",            QString("#1a2a3a"));
-    m_tokens.insert("color.knob.foreground",            QString("#0070c0"));
-    m_tokens.insert("color.knob.handle",                QString("#c8d8e8"));
-    m_tokens.insert("color.knob.background.disabled",   QString("#1a2330"));
-    m_tokens.insert("color.knob.foreground.disabled",   QString("#3a4a5a"));
-    m_tokens.insert("color.knob.handle.disabled",       QString("#506070"));
-
-    // Toggle button tribes — three semantic colour families (accent /
-    // success / warning), each providing background.checked /
-    // foreground.checked / border.checked.  Unchecked + disabled state
-    // tokens are shared across tribes.  Sites pick a tribe up-front via
-    // ToggleTribe in Theme.h; the accent tribe additionally carries
-    // per-applet background overrides (TX red / RX green / comp amber)
-    // seeded into the scope tree further down.
-    m_tokens.insert("color.toggle.background",          QString("#1a2a3a"));
-    m_tokens.insert("color.toggle.foreground",          QString("#c8d8e8"));
-    m_tokens.insert("color.toggle.border",              QString("#304050"));
-    m_tokens.insert("color.toggle.background.disabled", QString("#0f0f1a"));
-    m_tokens.insert("color.toggle.foreground.disabled", QString("#3a4a5a"));
-    m_tokens.insert("color.toggle.border.disabled",     QString("#0f0f1a"));
-    m_tokens.insert("color.toggle.accent.background.checked",  QString("#0070c0"));
-    m_tokens.insert("color.toggle.accent.foreground.checked",  QString("#00b4d8"));
-    m_tokens.insert("color.toggle.accent.border.checked",      QString("#00b4d8"));
-    m_tokens.insert("color.toggle.success.background.checked", QString("#006040"));
-    m_tokens.insert("color.toggle.success.foreground.checked", QString("#4dd87a"));
-    m_tokens.insert("color.toggle.success.border.checked",     QString("#4dd87a"));
-    m_tokens.insert("color.toggle.warning.background.checked", QString("#5a3a0a"));
-    m_tokens.insert("color.toggle.warning.foreground.checked", QString("#ffb84d"));
-    m_tokens.insert("color.toggle.warning.border.checked",     QString("#ffb84d"));
-
-    // Font + sizing
-    m_tokens.insert("font.family.ui",        QString("Inter"));
-    m_tokens.insert("font.family.mono",      QString("monospace"));
-    // Bundled DSEG fonts (SIL OFL 1.1) — third_party/dseg/, loaded into
-    // QFontDatabase at app startup so themes can resolve them by family
-    // name without depending on the system having them installed.
-    m_tokens.insert("font.family.segment7",  QString("DSEG7 Modern"));
-    m_tokens.insert("font.family.segment14", QString("DSEG14 Modern"));
-    m_tokens.insert("font.family.weather",   QString("DSEGWeather"));
-    // Widget-class tokens — paint a class of widgets (frequency displays,
-    // temperature readouts) so the operator can swap font families across
-    // all members of the class with one Theme Editor pick.
-    m_tokens.insert("font.family.freq",      QString("DSEG7 Modern"));
-    m_tokens.insert("font.family.temp",      QString("DSEG7 Modern"));
-    m_tokens.insert("font.size.tiny",       9);
-    m_tokens.insert("font.size.small",      10);
-    m_tokens.insert("font.size.normal",     12);
-    m_tokens.insert("font.size.large",      14);
-    m_tokens.insert("sizing.panel.padding",      4);
-    m_tokens.insert("sizing.panel.spacing",      4);
-    m_tokens.insert("sizing.panel.cornerRadius", 4);
-    m_tokens.insert("sizing.border.subtle",      1);
-    m_tokens.insert("sizing.border.strong",      2);
-
-    // Per-applet slider + knob foreground overrides seeded into the
-    // scope tree so user themes that pre-date the v2 scope architecture
-    // (e.g. "My Default Dark" forked before this PR) still get the
-    // visible per-applet differentiation.  Bundled themes' JSON
-    // re-asserts these via {color.red.500} aliases — idempotent and
-    // editable in the Theme Editor.  Raw hex used here so the seeds
-    // don't depend on the primitives palette being loaded yet
-    // (older user themes have no primitives section).
+    // Compiled-in defaults, so the UI is usable with zero theme files on disk.
     //
-    // KEEP IN SYNC: the hex values below mirror the primitives palette
-    // in resources/themes/default-dark.json (color.red.500 / .green.500
-    // / .amber.500).  If those primitives shift, update both sites or
-    // the seeded look will drift from the JSON-defined look on bundled
-    // themes (silently — both layers resolve, the JSON wins, but the
-    // visible vs. seeded values diverge for pre-PR user themes).
-    {
-        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/tx"));
-        s->tokens.insert("color.slider.foreground",                QString("#ff4d4d"));
-        s->tokens.insert("color.knob.foreground",                  QString("#ff4d4d"));
-        s->tokens.insert("color.toggle.accent.background.checked", QString("#ff4d4d"));
-    }
-    {
-        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/rx"));
-        s->tokens.insert("color.slider.foreground",                QString("#4dd87a"));
-        s->tokens.insert("color.knob.foreground",                  QString("#4dd87a"));
-        s->tokens.insert("color.toggle.accent.background.checked", QString("#4dd87a"));
-    }
-    {
-        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/comp"));
-        s->tokens.insert("color.slider.foreground",                QString("#ffb84d"));
-        s->tokens.insert("color.knob.foreground",                  QString("#ffb84d"));
-        s->tokens.insert("color.toggle.accent.background.checked", QString("#ffb84d"));
-    }
+    // The table is GENERATED from resources/themes/default-dark.json — see
+    // src/core/ThemeSeedGenerated.cpp and tools/gen_theme_seed.py. It used to be
+    // maintained by hand, and both failure modes the old comment warned about
+    // had already happened (#3184): 9 tokens had drifted from the JSON, and 25
+    // more were never seeded at all, resolving TRANSPARENT on any theme that
+    // predated them.
+    //
+    // Regenerate with `python tools/gen_theme_seed.py` after editing the bundled
+    // theme; tools/check_theme_seed.py --strict fails the build's PR gate when
+    // the two disagree.
+    seedGeneratedDefaults();
 }
 
 void ThemeManager::scanAvailableThemes()

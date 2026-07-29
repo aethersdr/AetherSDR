@@ -443,6 +443,19 @@ private:
     // Built-in compiled-in defaults so a totally missing theme file
     // still produces a usable UI.  Populated in the constructor.
     void seedBuiltinDefaults();
+    // Generated from resources/themes/default-dark.json by
+    // tools/gen_theme_seed.py; defined in ThemeSeedGenerated.cpp. Never edit
+    // that file by hand — regenerate it. (#3184)
+    void seedGeneratedDefaults();
+    // Seed one token into a scope, creating the scope if needed.
+    //
+    // Exists so the generated translation unit never has to see ThemeScope,
+    // whose definition is private to ThemeManager.cpp. Silent by design: this
+    // runs during construction, before any consumer could be connected, so
+    // emitting themeChanged() per token would be both pointless and 128 signals
+    // deep. The public setColor()/setSizing() overloads are the notifying path.
+    void seedScopedToken(const QString& containerPath,
+                         const QString& token, const QVariant& value);
 
     // Scope-tree helpers.
     //   * `scopeForPath(path)`   — returns the scope at `path` (nullptr
