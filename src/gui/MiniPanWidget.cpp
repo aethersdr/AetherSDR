@@ -12,6 +12,9 @@
 #include <QShowEvent>
 #include <QMoveEvent>
 #include <QResizeEvent>
+#include <QContextMenuEvent>
+#include <QMenu>
+#include <QActionGroup>
 #include <QByteArray>
 #include <QFont>
 
@@ -63,8 +66,13 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     m_scope = new MiniPanScope(body);
     m_scope->setObjectName("miniPanScope");
     m_scope->setDbmRange(-130.0f, -40.0f);
-    m_scope->setSpanKHz(10.0);
     bodyLayout->addWidget(m_scope, 1);
+
+    // Restore the client-side display span (±5/±10 kHz) — no emit at construction;
+    // MainWindow reads spanMhz() when it creates the pan.
+    m_spanKHz = AppSettings::instance().value(kBandwidthKey, 10.0).toDouble();
+    if (m_spanKHz != 10.0 && m_spanKHz != 20.0) m_spanKHz = 10.0;
+    m_scope->setSpanKHz(m_spanKHz);
 
     m_layout->addWidget(body, 1);
 
@@ -80,6 +88,11 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     connect(&m_xpixTimer, &QTimer::timeout, this, [this]() { emit scopeResized(); });
 
     FramelessResizer::install(this);
+
+    // Restore always-on-top (useful floating over contest-logging software).
+    if (AppSettings::instance().value(kAlwaysTopKey, "False").toString() == "True")
+        setAlwaysOnTop(true);
+
     refreshHeader();
 }
 
@@ -91,7 +104,49 @@ void MiniPanWidget::setCenterMhz(double mhz)
 
 void MiniPanWidget::setSpanKHz(double kHz)
 {
+    applySpanKHz(kHz, /*persistAndEmit=*/false);
+}
+
+void MiniPanWidget::applySpanKHz(double kHz, bool persistAndEmit)
+{
+    m_spanKHz = kHz;
     if (m_scope) m_scope->setSpanKHz(kHz);
+    if (persistAndEmit) {
+        AppSettings::instance().setValue(kBandwidthKey, kHz);
+        AppSettings::instance().save();
+        emit spanChanged(kHz);   // MainWindow re-pushes the radio pan bandwidth
+    }
+}
+
+void MiniPanWidget::contextMenuEvent(QContextMenuEvent* e)
+{
+    QMenu menu(this);
+
+    auto* spanGroup = new QActionGroup(&menu);
+    spanGroup->setExclusive(true);
+    const auto addSpan = [&](const QString& text, double kHz) {
+        QAction* a = menu.addAction(text);
+        a->setCheckable(true);
+        a->setChecked(qFuzzyCompare(m_spanKHz, kHz));
+        a->setActionGroup(spanGroup);
+        connect(a, &QAction::triggered, this, [this, kHz]() {
+            applySpanKHz(kHz, /*persistAndEmit=*/true);
+        });
+    };
+    addSpan("±5 kHz", 10.0);    // ±5 kHz → 10 kHz span
+    addSpan("±10 kHz", 20.0);   // ±10 kHz → 20 kHz span
+
+    menu.addSeparator();
+    QAction* top = menu.addAction("Always on Top");
+    top->setCheckable(true);
+    top->setChecked(m_alwaysOnTop);
+    connect(top, &QAction::toggled, this, [this](bool on) {
+        setAlwaysOnTop(on);
+        AppSettings::instance().setValue(kAlwaysTopKey, on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
+    menu.exec(e->globalPos());
 }
 
 void MiniPanWidget::setPassbandHz(int lowHz, int highHz)

@@ -42,23 +42,29 @@ public:
     void setPassbandHz(int lowHz, int highHz);
 
     MiniPanScope* scope() const { return m_scope; }
+    double spanMhz() const { return m_spanKHz / 1000.0; }   // for the radio pan bandwidth
 
-    static constexpr auto kGeometryKey = "MiniPanGeometry";
-    static constexpr auto kOpenKey     = "MiniPanOpen";
+    static constexpr auto kGeometryKey   = "MiniPanGeometry";
+    static constexpr auto kOpenKey       = "MiniPanOpen";
+    static constexpr auto kBandwidthKey  = "MiniPanSpanKHz";      // client-side display span
+    static constexpr auto kAlwaysTopKey  = "MiniPanAlwaysOnTop";
 
 signals:
-    void closedByUser();   // window hidden via its close button (menu should uncheck)
-    void scopeResized();   // debounced — MainWindow re-pushes xpixels
+    void closedByUser();          // window hidden via its close button (menu should uncheck)
+    void scopeResized();          // debounced — MainWindow re-pushes xpixels
+    void spanChanged(double kHz); // user picked ±5/±10 kHz — MainWindow re-pushes bandwidth
 
 protected:
     void closeEvent(QCloseEvent* e) override;   // close == hide
     void showEvent(QShowEvent* e) override;      // restore geometry on first show
     void moveEvent(QMoveEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
+    void contextMenuEvent(QContextMenuEvent* e) override;   // span / always-on-top
 
 private:
     void saveGeometryToSettings() const;
     void refreshHeader();
+    void applySpanKHz(double kHz, bool persistAndEmit);
 
     FramelessWindowTitleBar* m_titleBar{nullptr};
     QVBoxLayout*  m_layout{nullptr};
@@ -66,6 +72,7 @@ private:
     MiniPanScope* m_scope{nullptr};
 
     double  m_centerMhz{0.0};
+    double  m_spanKHz{10.0};   // ±5 kHz default (10 kHz total span)
     QTimer  m_saveTimer;
     QTimer  m_xpixTimer;
     bool    m_restoring{false};

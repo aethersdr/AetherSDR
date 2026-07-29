@@ -104,6 +104,28 @@ void testGeometryPersistence()
            (std::to_string(w2.width()) + "x" + std::to_string(w2.height())));
 }
 
+void testSpanPersistence()
+{
+    AppSettings::instance().setValue(MiniPanWidget::kBandwidthKey, 20.0);
+    {
+        MiniPanWidget w;
+        report("restores ±10 kHz span (20 kHz) from settings",
+               qFuzzyCompare(w.spanMhz(), 0.020),
+               std::to_string(w.spanMhz()));
+        w.setSpanKHz(10.0);
+        report("spanMhz() reflects setSpanKHz(10)",
+               qFuzzyCompare(w.spanMhz(), 0.010));
+    }
+    // A bogus persisted value falls back to the ±5 kHz default.
+    AppSettings::instance().setValue(MiniPanWidget::kBandwidthKey, 7.0);
+    {
+        MiniPanWidget w;
+        report("invalid persisted span falls back to ±5 kHz",
+               qFuzzyCompare(w.spanMhz(), 0.010));
+    }
+    AppSettings::instance().remove(MiniPanWidget::kBandwidthKey);
+}
+
 void testFramelessToggle()
 {
     MiniPanWidget w;
@@ -126,6 +148,7 @@ int main(int argc, char** argv)
     testWindowBasics();
     testCloseIsHide();
     testGeometryPersistence();
+    testSpanPersistence();
     testFramelessToggle();
 
     std::printf(g_failed ? "\n%d check(s) FAILED\n" : "\nAll checks passed\n", g_failed);

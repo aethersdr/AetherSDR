@@ -996,6 +996,11 @@ void MainWindow::buildMenuBar()
                 // Debounced resize → re-push the pan's xpixels from scope width.
                 connect(m_miniPan, &MiniPanWidget::scopeResized, this,
                         [this]() { pushMiniPanXpixels(); });
+                // ±5/±10 kHz change → re-push the radio pan bandwidth.
+                connect(m_miniPan, &MiniPanWidget::spanChanged, this,
+                        [this](double kHz) {
+                    m_radioModel.setMiniPanBandwidth(kHz / 1000.0);
+                });
             }
             m_miniPanFeedWanted = true;               // intent survives (dis)connect
             m_miniPan->show();

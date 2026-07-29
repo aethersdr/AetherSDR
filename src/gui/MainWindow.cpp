@@ -7057,7 +7057,7 @@ void MainWindow::ensureMiniPanFeed()
     // main pan is added — panadapterAdded re-invokes us once it is. (#minipan)
     if (m_radioModel.panadapters().isEmpty()) return;
     const double c = activeSlice() ? activeSlice()->frequency() : 0.0;
-    m_radioModel.createMiniPan(c, 0.010);            // 10 kHz (±5 kHz) for v1
+    m_radioModel.createMiniPan(c, m_miniPan->spanMhz());   // ±5/±10 kHz per the window
     refreshMiniPanFollow();
     pushMiniPanXpixels();
 }
