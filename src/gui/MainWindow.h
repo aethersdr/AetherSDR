@@ -1125,6 +1125,9 @@ private:
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
     QPointer<MiniPanWidget> m_miniPan;  // detachable K4-style mini-pan window
+    QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
+    QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
+    bool m_miniPanFeedWanted{false};              // window open intent (survives disconnect)
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
     QPointer<PanadapterApplet> m_cwDecoderApplet;
     QPointer<PanadapterApplet> m_rttyDecoderApplet;
@@ -1218,9 +1221,6 @@ private:
     QPointer<CopyAssistController> m_copyAssistController;
     QPointer<PanadapterApplet> m_copyAssistApplet;
     QMetaObject::Connection m_copyAssistFreqConn; // active-slice retune → clear decode
-    QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
-    QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
-    bool m_miniPanFeedWanted{false};              // window open intent (survives disconnect)
 #endif
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<GpsLocationDialog> m_gpsLocationDialog;
