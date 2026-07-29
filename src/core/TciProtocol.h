@@ -9,6 +9,7 @@ namespace AetherSDR {
 class RadioModel;
 class SliceModel;
 class TciRoutingState;
+class TciTrxMap;
 
 // TCI protocol handler — text command parser and response generator.
 // No I/O — receives a command string, returns the response.
@@ -35,7 +36,8 @@ public:
         QString source;
     };
 
-    explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr);
+    explicit TciProtocol(RadioModel* model, TciRoutingState* routingState = nullptr,
+                         const TciTrxMap* trxMap = nullptr);
 
     // Process one TCI command (without trailing semicolon).
     // Returns response string (with trailing semicolon) or empty if no response.
@@ -209,6 +211,9 @@ private:
 
     RadioModel* m_model;
     TciRoutingState* m_routingState;
+    // #4567: stable receiver numbering; nullptr falls back to the positional
+    // statics (tests construct TciProtocol without a map).
+    const TciTrxMap* m_trxMap{nullptr};
     QString m_pendingNotification;
     std::optional<VfoRequest> m_vfoRequest;
     std::optional<SplitRequest> m_splitRequest;

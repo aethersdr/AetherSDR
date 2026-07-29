@@ -616,6 +616,7 @@ set(CORE_SOURCES
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/TciTrxMap.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
@@ -4070,6 +4071,11 @@ if(Qt6WebSockets_FOUND)
     target_include_directories(tci_protocol_test PRIVATE src)
     target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
+
+    add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
+    target_include_directories(tci_trxmap_test PRIVATE src)
+    target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_trxmap_test COMMAND tci_trxmap_test)
 
     add_executable(tci_automation_test tests/tci_automation_test.cpp)
     target_include_directories(tci_automation_test PRIVATE src tests)
