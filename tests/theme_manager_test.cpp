@@ -4,6 +4,8 @@
 
 #include <QApplication>
 #include <QLabel>
+#include <QStackedWidget>
+#include <QVBoxLayout>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -416,6 +418,56 @@ int main(int argc, char** argv)
         EXPECT_TRUE(probe->styleSheet().contains("#ff4d4d"));
 
         delete probe;
+        QApplication::processEvents();
+    }
+
+    // ── #4520: a tracked widget re-resolves when an ANCESTOR is reparented ──
+    //
+    // The case above works because `probe` itself is reparented, and the
+    // ParentChange filter watches `probe`. The reported bug is the indirect
+    // shape, which is what real construction code produces:
+    //
+    //     stack = new QStackedWidget;        // NO parent
+    //     label = new QLabel;                // NO parent
+    //     applyStyleSheet(label, ...);       // resolves at ROOT — wrong scope
+    //     stack->addWidget(label);           // ParentChange on the LABEL, but
+    //                                        // the stack is still unparented
+    //     host->layout()->addWidget(stack);  // ParentChange on the STACK —
+    //                                        // which is not tracked, so the
+    //                                        // label never re-resolves
+    //
+    // The label is then stuck with root-scope values until the next
+    // themeChanged(). On the VFO flag that means a band change (which destroys
+    // and rebuilds the flag) reverts the operator's chosen frequency font,
+    // while touching anything in the Theme Editor appears to "fix" it.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+
+        QWidget host;
+        theme::setContainer(&host, "applet/tx");
+        auto* hostLayout = new QVBoxLayout(&host);
+
+        auto* stack = new QStackedWidget;      // unparented, as VfoWidget did
+        auto* label = new QLabel;              // unparented
+        tm.applyStyleSheet(label,
+            "QLabel { color: {{color.slider.foreground}}; }");
+        EXPECT_TRUE(label->styleSheet().contains("#00b4d8"));   // root, expected
+
+        stack->addWidget(label);               // label reparented onto an
+                                               // orphan → still root
+        hostLayout->addWidget(stack);          // stack joins the scoped host
+        // show() drives Qt's polish pass, which is when a widget is first
+        // prepared for display and is guaranteed to be in its final parent
+        // chain. The real VfoWidget is shown too, so this matches the app.
+        host.show();
+        QApplication::processEvents();
+
+        // The label must now carry applet/tx's red, not root's blue. Before the
+        // fix this stayed #00b4d8 — the ParentChange landed on the untracked
+        // stack and nothing re-resolved the label.
+        EXPECT_TRUE(label->styleSheet().contains("#ff4d4d"));
+
         QApplication::processEvents();
     }
 

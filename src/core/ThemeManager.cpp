@@ -1708,7 +1708,40 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
 
 bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::ParentChange) {
+    // Polish is delivered to a widget when Qt first prepares it for display —
+    // by which time it IS in its final parent chain, however it got there.
+    //
+    // ParentChange alone is not enough, and #4520 is why: the filter is only
+    // installed on TRACKED widgets, so when an untracked ANCESTOR is reparented
+    // the tracked child inside it hears nothing. Real construction code
+    // produces exactly that shape:
+    //
+    //     stack = new QStackedWidget;    // no parent
+    //     label = new QLabel;            // no parent
+    //     applyStyleSheet(label, ...);   // resolves at ROOT — wrong scope
+    //     stack->addWidget(label);       // ParentChange on the LABEL, but the
+    //                                    // stack is still an orphan
+    //     layout->addWidget(stack);      // ParentChange on the STACK, which is
+    //                                    // untracked → the label never re-resolves
+    //
+    // The label then keeps root-scope values until the next themeChanged(). On
+    // the VFO flag that meant a band change (which destroys and rebuilds the
+    // flag) silently reverted the operator's chosen frequency font, while
+    // touching anything in the Theme Editor appeared to "fix" it.
+    //
+    // Show / ShowToParent are the ones that actually catch it: they arrive when
+    // the widget first becomes visible, by which point it is unavoidably in its
+    // final chain no matter how it got there. Polish is kept alongside them for
+    // widgets that are styled but never shown. ParentChange stays because it is
+    // the earliest and cheapest signal for the direct case.
+    //
+    // All four fire a handful of times per widget over a session, never during
+    // paint or drag, so re-resolving on them is not a hot path. resolveFor() is
+    // a regex pass over a short template.
+    if (event->type() == QEvent::ParentChange
+        || event->type() == QEvent::Polish
+        || event->type() == QEvent::Show
+        || event->type() == QEvent::ShowToParent) {
         QWidget* w = qobject_cast<QWidget*>(watched);
         if (w) {
             const auto it = m_trackedWidgets.constFind(w);
