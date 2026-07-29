@@ -128,10 +128,18 @@ private:
     QString currentManualFamily() const;
     void setManualFamily(const QString& family);
     void updateManualFamilyHints();
-    // Directed (unicast) Metis discovery against one host. Returns true when an
-    // HL2 answered and the connect/refusal has been reported; false means no
-    // Hermes-Lite 2 replied and the caller owns the error message.
-    bool probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
+    // Directed (unicast) Metis discovery against one host.
+    //
+    // Three outcomes, not two: "nothing answered" and "we never got to ask" need
+    // different messages, and collapsing them into a bool sent the operator to
+    // power-cycle a radio that was never contacted. Only NoAnswer leaves the
+    // error message to the caller — the other two have already reported.
+    enum class Hl2ProbeResult {
+        Answered,    // an HL2 replied; connect or refusal already reported
+        NoAnswer,    // nothing replied within the deadline; caller owns the message
+        BindFailed,  // could not open/bind the probe socket; already reported here
+    };
+    Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
     void resetManualConnectButton();
     void saveManualProfile(const QString& targetIp,

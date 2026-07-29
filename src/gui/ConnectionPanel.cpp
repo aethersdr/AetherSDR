@@ -1646,6 +1646,16 @@ void ConnectionPanel::setManualFamily(const QString& family)
     }
 
     m_manualRadioTypeCombo->setCurrentIndex(index);   // persists via currentIndexChanged
+    // Render the hint here too, rather than relying on currentIndexChanged.
+    //
+    // The constructor calls this BEFORE that signal is connected, so
+    // setCurrentIndex() fires into nothing and the hint paragraph — constructed
+    // empty — stayed blank with the Flex placeholder still showing. Only `hl2`
+    // reached this line at construction time: `flex` is already the current
+    // index and returns through the branch above, which is why the default
+    // looked correct and a saved HL2 did not. Idempotent, so the signal doing it
+    // again once connected is harmless. (PR #4528 review.)
+    updateManualFamilyHints();
 }
 
 void ConnectionPanel::updateManualFamilyHints()
@@ -1800,13 +1810,19 @@ void ConnectionPanel::probeRadio(const QString& ip)
     // and trying HL2 first (as this used to) charged every Flex connect the HL2
     // timeout before it started.
     if (currentManualFamily() == QLatin1String(kFamilyHl2)) {
-        if (!probeHermesLite2(trimmedIp, bindSettings)) {
+        // Only a genuine timeout earns the "check the radio" message. A bind
+        // failure has already reported itself, and pointing the operator at the
+        // radio would be actively wrong. (PR #4528 review.)
+        const Hl2ProbeResult probe = probeHermesLite2(trimmedIp, bindSettings);
+        if (probe == Hl2ProbeResult::NoAnswer) {
             resetManualConnectButton();
             setManualMessage(
                 QStringLiteral("No Hermes-Lite 2 answered at %1. Check the address, and that the "
                                "radio is powered, idle, and reachable on UDP port 1024.")
                     .arg(trimmedIp),
                 true);
+        } else if (probe == Hl2ProbeResult::BindFailed) {
+            resetManualConnectButton();
         }
         return;
     }
@@ -1827,18 +1843,49 @@ void ConnectionPanel::resetManualConnectButton()
 // HL2 on a routed/VPN path — the broadcast sweep never leaves the local subnet.
 // Bounded (~600 ms) blocking wait on a path that is already a modal
 // "Checking..." step, matching the Flex probe's synchronous feel.
-bool ConnectionPanel::probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings)
+ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
+    const QString& ip, const RadioBindSettings& bindSettings)
 {
     QUdpSocket hpsdr;
     // Honour the Advanced source-path choice the same way the Flex probe does.
     // On a VPN that exposes more than one adapter, letting the OS pick can send
     // the request out the wrong interface and the reply never comes back.
-    const bool bound = bindSettings.mode == RadioBindMode::Explicit
-                           && !bindSettings.bindAddress.isNull()
+    const bool explicitBind = bindSettings.mode == RadioBindMode::Explicit
+                           && !bindSettings.bindAddress.isNull();
+    const bool bound = explicitBind
         ? hpsdr.bind(bindSettings.bindAddress, 0)
         : hpsdr.bind(QHostAddress(QHostAddress::AnyIPv4), 0);
-    if (!bound)
-        return false;
+    if (!bound) {
+        // REPORT THE BIND FAILURE AS ITSELF, not as silence from the radio.
+        //
+        // Returning a bare false here made this indistinguishable from "nothing
+        // answered", and the caller renders that as "check the radio is powered,
+        // idle, and reachable" — sending the operator to power-cycle a radio
+        // that was never contacted. The Explicit path exists because a VPN can
+        // expose several adapters, so the likeliest cause of a bind failure is
+        // an Advanced source path naming an adapter that has since gone away:
+        // precisely the case where pointing at the radio is wrong.
+        //
+        // probeFlexRadio() already reports this properly; the two paths had
+        // drifted apart. (PR #4528 review.)
+        if (explicitBind) {
+            m_manualSourceWarningLabel->setText(
+                QStringLiteral("Failed to bind %1: %2")
+                    .arg(bindSettings.bindAddress.toString(), hpsdr.errorString()));
+            m_manualSourceWarningLabel->setVisible(true);
+            updateManualAdvancedVisibility();
+            setManualMessage(
+                QStringLiteral("AetherSDR could not use that VPN source path. "
+                               "Try Auto or choose another path."),
+                true);
+        } else {
+            setManualMessage(
+                QStringLiteral("Could not open a UDP socket to probe for a "
+                               "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
+                true);
+        }
+        return Hl2ProbeResult::BindFailed;
+    }
 
     const auto request = hl2::discoveryRequest();
     hpsdr.writeDatagram(reinterpret_cast<const char*>(request.data()),
@@ -1894,7 +1941,7 @@ bool ConnectionPanel::probeHermesLite2(const QString& ip, const RadioBindSetting
                     QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
                                    "and can't be shared.").arg(ip),
                     true);
-                return true;
+                return Hl2ProbeResult::Answered;
             }
 
             saveManualProfile(ip, bindSettings, info.sessionBindAddress);
@@ -1906,11 +1953,11 @@ bool ConnectionPanel::probeHermesLite2(const QString& ip, const RadioBindSetting
             setManualMessage(
                 QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
             emit connectRequested(info);
-            return true;
+            return Hl2ProbeResult::Answered;
         }
     }
 
-    return false;
+    return Hl2ProbeResult::NoAnswer;
 }
 
 void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSettings& bindSettings)
