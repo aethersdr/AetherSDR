@@ -1070,6 +1070,61 @@ int main(int argc, char** argv)
         qInstallMessageHandler(s_verPrev);
     }
 
+    // ---- reset-to-factory follows the ACTIVE theme's base (#3184) ----
+    //
+    // The factory snapshot was hardcoded to default-dark.json, so pressing
+    // "Reset to default" while editing Default Light restored the DARK value.
+    // That is wrong for 96 of the 147 root tokens the two bundled themes
+    // share — including color.background.0, which flipped a near-white
+    // background to near-black.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QColor darkBg     = tm.factoryColor("color.background.0");
+        const QColor darkAccent = tm.factoryColor("color.accent");
+        EXPECT_EQ(darkBg.name().toLower(),     QString("#0f0f1a"));
+        EXPECT_EQ(darkAccent.name().toLower(), QString("#00b4d8"));
+
+        // Switching base must RE-snapshot, not serve the previous one.
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        const QColor lightBg     = tm.factoryColor("color.background.0");
+        const QColor lightAccent = tm.factoryColor("color.accent");
+        EXPECT_EQ(lightBg.name().toLower(),     QString("#f5f5f8"));
+        EXPECT_EQ(lightAccent.name().toLower(), QString("#0088b0"));
+
+        // And back again — proves the snapshot isn't a one-shot latch.
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_EQ(tm.factoryColor("color.background.0").name().toLower(),
+                  QString("#0f0f1a"));
+    }
+
+    // ---- a theme name that becomes a filename can't carry path structure ----
+    //
+    // importThemeFromFile() already refused separators; the two entry points
+    // where the OPERATOR types the name did not, so the name went straight into
+    // a path and could write outside the themes directory.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QString before = tm.activeTheme();
+
+        EXPECT_TRUE(!tm.saveCurrentThemeAs(QStringLiteral("../escape")));
+        EXPECT_TRUE(!tm.saveCurrentThemeAs(QStringLiteral("sub/dir")));
+        EXPECT_TRUE(!tm.saveCurrentThemeAs(QStringLiteral("back\\slash")));
+        // A refused save must not have switched the active theme.
+        EXPECT_EQ(tm.activeTheme(), before);
+        // Not in the theme list either.
+        EXPECT_TRUE(!tm.availableThemes().contains(QStringLiteral("../escape")));
+
+        // A legitimate name still works — the guard rejects separators, not
+        // ordinary punctuation.
+        EXPECT_TRUE(tm.saveCurrentThemeAs(QStringLiteral("Nigel's Theme (v2)")));
+        EXPECT_TRUE(tm.availableThemes().contains(QStringLiteral("Nigel's Theme (v2)")));
+
+        // Rename is the other filename-building entry point.
+        EXPECT_TRUE(!tm.renameTheme(QStringLiteral("Nigel's Theme (v2)"),
+                                    QStringLiteral("../escaped")));
+        EXPECT_TRUE(tm.availableThemes().contains(QStringLiteral("Nigel's Theme (v2)")));
+    }
+
     // Restore Default Dark for any future test additions below.
     tm.setActiveTheme("Default Dark");
 

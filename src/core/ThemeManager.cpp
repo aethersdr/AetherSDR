@@ -912,11 +912,43 @@ bool ThemeManager::saveActiveTheme()
     return writeThemeFile(m_activeTheme, it.value());
 }
 
+QString ThemeManager::factoryBaselinePath() const
+{
+    // Which bundled theme "factory default" means depends on what the operator
+    // is editing. This used to be hardcoded to default-dark.json, so pressing
+    // "Reset to default" while editing Default Light restored the DARK value —
+    // wrong for 96 of the 147 root tokens the two themes share, including
+    // color.background.0, which flipped a near-white background to near-black.
+    //
+    // A user theme forked from Light keeps its light baseline: the fork's own
+    // JSON is not a factory artefact, so the closest honest answer is the
+    // bundled theme it descends from. We can't know that for certain, so we use
+    // the theme's own background luminance as the discriminator — a theme whose
+    // background is light resets to Light's values.
+    if (m_activeTheme == QLatin1String("Default Light"))
+        return QStringLiteral(":/themes/default-light.json");
+    if (m_activeTheme == QLatin1String("Default Dark"))
+        return QStringLiteral(":/themes/default-dark.json");
+
+    const QColor bg = const_cast<ThemeManager*>(this)
+                          ->color(QStringLiteral("color.background.0"));
+    if (bg.isValid() && bg.lightness() > 127)
+        return QStringLiteral(":/themes/default-light.json");
+    return QStringLiteral(":/themes/default-dark.json");
+}
+
 void ThemeManager::ensureFactoryLoaded() const
 {
-    if (m_factoryLoaded) return;
-    m_factoryLoaded = true;  // one shot — even if loading fails, don't re-try
-    QFile f(QStringLiteral(":/themes/default-dark.json"));
+    // Keyed on the baseline the ACTIVE theme resolves to, not loaded once for
+    // the process: switching Dark -> Light has to re-snapshot, or the editor
+    // keeps offering the previous base's values.
+    const QString wanted = factoryBaselinePath();
+    if (m_factoryLoaded && m_factoryBaselinePath == wanted) return;
+    m_factoryLoaded = true;   // even if loading fails, don't spin on re-try
+    m_factoryBaselinePath = wanted;
+    m_factoryTokens.clear();  // stale entries from the other base must not leak
+
+    QFile f(wanted);
     if (!f.open(QIODevice::ReadOnly)) {
         qCWarning(lcGui) << "ThemeManager: factory snapshot — failed to open"
                          << f.fileName();
@@ -1062,11 +1094,34 @@ bool ThemeManager::deleteTheme(const QString& name)
     return true;
 }
 
+// A theme name that becomes a filename must not carry path structure.
+//
+// Checked rather than silently rewritten at these two call sites: the operator
+// TYPED this name, so replacing characters would save their theme under a name
+// they did not choose. importThemeFromFile() substitutes instead, correctly —
+// there the name comes from a file's JSON, nobody is watching, and refusing
+// would strand an otherwise-valid import.
+//
+// Both separators are rejected on every platform: '\' is not a separator on
+// Unix, but a theme file is portable and a name containing one would become a
+// traversal the moment the file is opened on Windows.
+static bool containsPathSeparator(const QString& name)
+{
+    return name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'));
+}
+
 bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
 {
     const QString trimmed = newName.trimmed();
     if (oldName.isEmpty() || trimmed.isEmpty()) return false;
     if (oldName == trimmed) return true;  // no-op rename
+    // Becomes a filename below — same rule as saveCurrentThemeAs() and
+    // importThemeFromFile().
+    if (containsPathSeparator(trimmed)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: refusing name with"
+                            "a path separator:" << trimmed;
+        return false;
+    }
     if (isBuiltInTheme(oldName)) {
         qCWarning(lcGui) << "ThemeManager::renameTheme: refusing to rename "
                             "built-in theme" << oldName;
@@ -1242,6 +1297,17 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
 bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
 {
     if (newThemeName.trimmed().isEmpty()) return false;
+    // The name becomes a FILENAME below. importThemeFromFile() already refuses
+    // path separators for exactly this reason ("sanitise so we can't
+    // path-traverse via a malicious name field"), but this entry point — the
+    // editor's Save As, where the operator types the name — did not, so a name
+    // containing a separator wrote outside the themes directory. Same rule,
+    // applied consistently.
+    if (containsPathSeparator(newThemeName)) {
+        qCWarning(lcGui) << "ThemeManager::saveCurrentThemeAs: refusing name with"
+                            "a path separator:" << newThemeName;
+        return false;
+    }
 
     // Mirror scanAvailableThemes — GenericConfigLocation + "/AetherSDR"
     // keeps the saved theme alongside the existing user-dir layout

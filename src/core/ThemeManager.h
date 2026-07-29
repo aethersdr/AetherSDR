@@ -332,11 +332,13 @@ public:
     // on the next reapplyAllTrackedStyleSheets() pass.
     QString     resolveFor(const QWidget* widget, const QString& stylesheetTemplate) const;
 
-    // Factory-default lookups — read from a one-shot snapshot of the
-    // bundled `:/themes/default-dark.json` so every Reset-to-default
-    // affordance in the editor restores the canonical value.  Each
-    // returns a sentinel (empty / invalid / 0 / -1) when the token has
-    // no factory baseline — callers should check before using.
+    // Factory-default lookups — read from a snapshot of the bundled theme
+    // the ACTIVE theme descends from (`default-light.json` when editing a
+    // light theme, `default-dark.json` otherwise), so every Reset-to-default
+    // affordance in the editor restores the canonical value *for that base*.
+    // The snapshot re-loads when the active theme changes base.  Each returns
+    // a sentinel (empty / invalid / 0 / -1) when the token has no factory
+    // baseline — callers should check before using.
     ThemeGradient factoryGradient(const QString& token) const;
     QColor        factoryColor(const QString& token) const;
     int           factorySizing(const QString& token) const;     // -1 = none
@@ -519,7 +521,12 @@ private:
     // doesn't take the whole singleton down.
     mutable QHash<QString, QVariant> m_factoryTokens;
     mutable bool m_factoryLoaded{false};
+    // Which bundled theme the current snapshot came from, so a Dark -> Light
+    // switch re-snapshots instead of serving the previous base's values.
+    mutable QString m_factoryBaselinePath;
     void ensureFactoryLoaded() const;
+    // Bundled theme the active theme's "factory default" should come from.
+    QString factoryBaselinePath() const;
 
     // Smart-invalidation hint — set transiently by setColor / setGradient
     // / setSizing / setString to the token that just changed, then
