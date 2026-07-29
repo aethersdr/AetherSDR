@@ -2213,6 +2213,12 @@ void MainWindow::onSliceRemoved(int id)
     // must keep their live radio state. The post-reconnect stale-slice prune
     // emits sliceRemoved too but is not live (slice(id) is non-null, same
     // discriminator as the Center Lock guard below) and must not end it.
+    // Limit: the discriminator holds while the reconnected session
+    // re-enumerates the same slice ids; when it does not, the prune's ids
+    // read as live removals and the window closes early. That failure only
+    // skips restores: the flag's sole restore-side consumer is the apply-gate
+    // in onSliceAdded (false = log-and-skip branch), so an early close cannot
+    // cause a restore to fire.
     if (m_daxRestoreWindowOpen && !m_radioModel.slice(id)) {
         m_daxRestoreWindowOpen = false;
         qCDebug(lcDax) << "MainWindow: last-session DAX restore window closed"

@@ -3477,8 +3477,15 @@ void MainWindow::closeEvent(QCloseEvent* event)
         // survivor (e.g. DaxChannel_SliceB from an old two-slice quit) is what
         // arms the restore mis-key — this makes an affected config self-heal.
         // 'Z' bounds the historical letter space, not any radio's slice count.
-        for (int i = slices.size(); i <= 'Z' - 'A'; ++i) {
-            s.remove(QString("DaxChannel_Slice%1").arg(QChar('A' + i)));
+        // Prune only while connected: only then is the slice list an
+        // authoritative enumeration. Quitting radio-less (never connected,
+        // failed connect, or disconnected first) must not erase the previous
+        // session's keys — that would lose the restore data on any
+        // radio-less launch (#4572 review).
+        if (m_radioModel.isConnected()) {
+            for (int i = slices.size(); i <= 'Z' - 'A'; ++i) {
+                s.remove(QString("DaxChannel_Slice%1").arg(QChar('A' + i)));
+            }
         }
     }
 
