@@ -198,6 +198,12 @@ void MainWindow::wireDiscovery()
     connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
             m_audio, [this](const QByteArray& pcm) {
         if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
+        // Playback mute. The Flex path mutes by disconnecting the stream's
+        // audioDataReady from feedAudioData; against a null PanadapterStream
+        // that disconnect is a silent no-op, so a seam backend would keep
+        // feeding live receive UNDER the playback. Reachable in practice only
+        // now that the recorder captures RX on such a radio at all. (#4537.)
+        if (m_rxMutedForPlayback) return;
         m_audio->feedAudioData(pcm);
     });
 

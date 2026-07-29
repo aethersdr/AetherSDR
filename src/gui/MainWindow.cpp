@@ -1076,6 +1076,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_qsoRecorder = new QsoRecorder(this);
     // During playback, block live RX audio from entering the buffer
     connect(m_qsoRecorder, &QsoRecorder::muteRxRequested, this, [this](bool mute) {
+        // Covers BOTH producers. The disconnect below is the Flex path and is
+        // left exactly as it was; the flag is what mutes a seam backend, whose
+        // audio reaches the engine through RadioModel::backendAudioFrameReady
+        // and so has no stream connection to drop. (PR #4537 review.)
+        m_rxMutedForPlayback = mute;
         if (mute) {
             disconnect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                        m_audio, &AudioEngine::feedAudioData);
@@ -1175,6 +1180,7 @@ MainWindow::MainWindow(QWidget* parent)
     // the sink volume to 0 would mute our playback too.
     connect(m_finalMonitor, &ClientPuduMonitor::muteRxRequested,
             this, [this](bool mute) {
+        m_rxMutedForPlayback = mute;   // seam backends — see the recorder handler
         if (mute) {
             disconnect(m_radioModel.panStream(),
                        &PanadapterStream::audioDataReady,
