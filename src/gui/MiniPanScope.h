@@ -34,9 +34,16 @@ protected:
     void paintEvent(QPaintEvent* e) override;
 
 private:
+    // Auto-scale headroom: park the noise floor ~75% down (kHeadroomDb of the
+    // kHeadroomDb+kFloorMarginDb window sits above it) with room for signals above.
+    static constexpr float kHeadroomDb    = 45.0f;
+    static constexpr float kFloorMarginDb = 15.0f;
+
     QVector<float> m_bins;
-    float  m_minDbm{-130.0f};
+    float  m_minDbm{-130.0f};   // fixed fallback until the first bins arrive
     float  m_maxDbm{-40.0f};
+    float  m_noiseFloorDbm{-110.0f};
+    bool   m_noiseFloorValid{false};
     double m_spanKHz{10.0};
     int    m_pbLoHz{0};
     int    m_pbHiHz{0};

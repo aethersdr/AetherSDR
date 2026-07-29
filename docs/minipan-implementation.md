@@ -1,6 +1,6 @@
 # Implementation Plan — K4-Style Mini-Pan (narrow bandwidth scope)
 
-Status: draft for review. Target: AetherSDR (`/home/tonyc/github/AetherSDR`).
+Status: draft for review. Target: AetherSDR.
 
 ---
 

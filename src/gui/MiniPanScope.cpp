@@ -17,6 +17,21 @@ MiniPanScope::MiniPanScope(QWidget* parent)
 void MiniPanScope::updateSpectrum(const QVector<float>& binsDbm)
 {
     m_bins = binsDbm;
+
+    // Auto-scale like the main panadapter's noise-floor tracking: estimate the
+    // noise floor (a low percentile of the bins) and park it near the bottom of
+    // the box, leaving the upper portion as headroom for signals. Without this a
+    // fixed dBm window lets the noise floor float high and the filled trace eats
+    // most of the box. EMA-smoothed so the scale doesn't jitter frame to frame.
+    if (m_bins.size() >= 8) {
+        QVector<float> sorted = m_bins;
+        const int k = sorted.size() / 5;   // ~20th percentile
+        std::nth_element(sorted.begin(), sorted.begin() + k, sorted.end());
+        const float nf = sorted[k];
+        m_noiseFloorDbm = m_noiseFloorValid ? (0.85f * m_noiseFloorDbm + 0.15f * nf)
+                                            : nf;
+        m_noiseFloorValid = true;
+    }
     update();
 }
 
@@ -70,9 +85,18 @@ void MiniPanScope::paintEvent(QPaintEvent*)
     // FFT trace: filled polygon + bright line.
     const int n = m_bins.size();
     if (n >= 2) {
-        const double span = std::max(1.0f, m_maxDbm - m_minDbm);
+        // Effective window: noise floor near the bottom (~75% down) with headroom
+        // above for signals, or the fixed range before any bins have arrived.
+        float hiDbm = m_maxDbm, loDbm = m_minDbm;
+        if (m_noiseFloorValid) {
+            hiDbm = m_noiseFloorDbm + kHeadroomDb;   // signal headroom above noise
+            loDbm = m_noiseFloorDbm - kFloorMarginDb; // noise sits near the bottom
+        }
+        // (std::max) parenthesised so MSVC's windows.h max() macro (pulled in
+        // transitively by Qt on Windows) can't mangle the call. (#4562 CI)
+        const double span = (std::max)(1.0f, hiDbm - loDbm);
         const auto yOf = [&](float dbm) {
-            const double t = (m_maxDbm - dbm) / span;   // 0 at top (max), 1 at bottom
+            const double t = (hiDbm - dbm) / span;   // 0 at top (max), 1 at bottom
             return std::clamp(t, 0.0, 1.0) * h;
         };
         QPainterPath line;
