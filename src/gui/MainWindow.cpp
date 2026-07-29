@@ -3472,6 +3472,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
                 s.remove(key);
             }
         }
+        // #4558: also drop keys beyond the slice count at quit. They could
+        // only be written by a session that had more slices open, and a stale
+        // survivor (e.g. DaxChannel_SliceB from an old two-slice quit) is what
+        // arms the restore mis-key — this makes an affected config self-heal.
+        // 'Z' bounds the historical letter space, not any radio's slice count.
+        for (int i = slices.size(); i <= 'Z' - 'A'; ++i) {
+            s.remove(QString("DaxChannel_Slice%1").arg(QChar('A' + i)));
+        }
     }
 
     // DAX IQ channel is radio-authoritative — no client-side persistence needed.
@@ -5378,6 +5386,15 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (connected) {
         m_terminalConnectionError.clear();
         m_suppressStartupPanLayoutRearrange = false;
+        // #4558: open the last-session DAX restore window for the initial
+        // slice enumeration only (see MainWindow.h). 10 s covers a slow
+        // WAN/SmartLink status trickle with a wide margin.
+        m_daxRestoreWindowOpen = true;
+        const int gen = ++m_daxRestoreWindowGen;
+        QTimer::singleShot(10000, this, [this, gen]() {
+            if (m_daxRestoreWindowGen == gen)
+                m_daxRestoreWindowOpen = false;
+        });
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
         m_radioVersionLabel->setText(statusBarVersionText(

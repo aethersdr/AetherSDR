@@ -1424,6 +1424,16 @@ private:
     // User layout choices should suppress startup rearrange, but still allow
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
+    // #4558: the last-session DAX restore (#1221) may only apply during the
+    // initial post-connect slice enumeration. The window opens on connect and
+    // closes on the first LIVE slice removal (a band-stack recreate is always
+    // preceded by one; the post-reconnect stale-slice prune is not live and
+    // must not close it) or after a settle timeout, whichever comes first —
+    // a slice recreated mid-session has current state that last-session keys
+    // must never override. The generation guard keeps a previous connect's
+    // pending timeout from closing the next connect's window.
+    bool m_daxRestoreWindowOpen{false};
+    int  m_daxRestoreWindowGen{0};
     QTimer* m_heartbeatMissTimer{nullptr}; // fires every 1.5s to detect missed discovery beats
     QTimer* m_bsExpiryTimer{nullptr};    // band-stack bookmark auto-expiry, started on connect only (#1471)
     QTimer* m_bsAutoSaveTimer{nullptr};  // band-stack dwell auto-save (single-shot per dwell window)

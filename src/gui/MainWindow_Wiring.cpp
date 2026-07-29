@@ -1683,7 +1683,15 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // during profile recall: setDaxChannel() updates local slice state before
     // sending the radio command, and profile-created slices must keep the
     // radio/profile DAX assignment.
-    {
+    //
+    // #4558: only within the post-connect restore window. The keys are
+    // position-based (A = index 0, ...), so a mid-session destroy/recreate —
+    // which re-enters the list at the tail — resolves to the WRONG key when
+    // other slices are open: with B alive, a recreated A reads
+    // DaxChannel_SliceB and steals B's live channel 300 ms later. Mid-session
+    // adds have current radio/TCI state; last-session keys apply only to the
+    // initial enumeration.
+    if (m_daxRestoreWindowOpen) {
         const int sliceIdx = m_radioModel.slices().indexOf(s);
         if (sliceIdx >= 0) {
             const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + sliceIdx));
@@ -1695,13 +1703,23 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 // Removing the slice within this 300 ms window (rapid
                 // add/remove) would otherwise dereference freed memory. (#3646)
                 QPointer<SliceModel> sp(s);
-                QTimer::singleShot(300, this, [this, sp, savedDax]() {
+                QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
                     if (sp && !profileLoadRadioStateWritesHeld()) {
+                        // The send path below (SliceModel::commandReady) has no
+                        // logging of its own; without this line the restore is
+                        // invisible in any capture (#4558).
+                        qCDebug(lcDax) << "MainWindow: restoring last-session DAX"
+                                       << key << "=" << savedDax
+                                       << "to slice" << sp->sliceId();
                         sp->setDaxChannel(savedDax);
                     }
                 });
             }
         }
+    } else {
+        qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore for"
+                          " mid-session slice add, id" << s->sliceId()
+                       << "(#4558)";
     }
 
     // Re-claim TX assignment after profile load or slice recreation (#145).
@@ -2189,6 +2207,17 @@ void MainWindow::onSliceRemoved(int id)
     if (m_applyingLayout) return;
 
     qDebug() << "MainWindow: slice removed" << id;
+
+    // #4558: any LIVE removal ends the last-session DAX restore window — from
+    // here on, slice adds are mid-session (band-stack recreates included) and
+    // must keep their live radio state. The post-reconnect stale-slice prune
+    // emits sliceRemoved too but is not live (slice(id) is non-null, same
+    // discriminator as the Center Lock guard below) and must not end it.
+    if (m_daxRestoreWindowOpen && !m_radioModel.slice(id)) {
+        m_daxRestoreWindowOpen = false;
+        qCDebug(lcDax) << "MainWindow: last-session DAX restore window closed"
+                          " (live slice removal, id" << id << ")";
+    }
 
     // Center Lock (#3854 review): a LIVE removal normally clears the persisted
     // letter intent too — Flex recycles letters lowest-free, so a dormant
