@@ -1,6 +1,6 @@
 #pragma once
 
-// MiniPanWidget — the detachable K4-style mini-pan window (PR1: window shell).
+// MiniPanWidget — the detachable K4-style mini-pan window (presentation only).
 //
 // An INDEPENDENT top-level window (QWidget + Qt::Window, like FloatingContainerWindow)
 // — NOT a QDialog/PersistentDialog — so it floats over third-party contest-logging
@@ -8,10 +8,12 @@
 // close == hide (WA_DeleteOnClose stays false) so geometry/state persist cheaply and
 // the View-menu toggle and the window's close button do the same thing.
 //
-// PR1 scope: frameless chrome + resize, geometry persistence, big frequency readout,
-// and a MiniPanScope rendering an empty field (no radio feed yet). PR2 wires the
-// dedicated narrow pan into MiniPanScope::updateSpectrum and drives the centre/span
-// from the followed VFO. See docs/minipan-implementation.md.
+// This widget holds NO radio/slice references (so it links into a light offscreen
+// test). MainWindow owns the data glue: it creates the dedicated narrow pan
+// (RadioModel::createMiniPan), feeds MiniPanScope via panFeedSpectrumReady, and drives
+// centre/passband from the followed VFO by calling the setters below. The window
+// reports its own two intents back up: closedByUser() (X button) and scopeResized()
+// (debounced — MainWindow re-pushes the pan's xpixels from scope()->width()).
 
 #include <QWidget>
 #include <QString>
@@ -34,9 +36,10 @@ public:
     void setFramelessMode(bool on);
     void setAlwaysOnTop(bool on);
 
-    // Followed-VFO readout + view (PR2 drives these live).
-    void setCenterMhz(double mhz);
+    // Driven by MainWindow from the followed VFO slice.
+    void setCenterMhz(double mhz);        // 0 → placeholder readout
     void setSpanKHz(double kHz);
+    void setPassbandHz(int lowHz, int highHz);
 
     MiniPanScope* scope() const { return m_scope; }
 
@@ -45,6 +48,7 @@ public:
 
 signals:
     void closedByUser();   // window hidden via its close button (menu should uncheck)
+    void scopeResized();   // debounced — MainWindow re-pushes xpixels
 
 protected:
     void closeEvent(QCloseEvent* e) override;   // close == hide
@@ -63,6 +67,7 @@ private:
 
     double  m_centerMhz{0.0};
     QTimer  m_saveTimer;
+    QTimer  m_xpixTimer;
     bool    m_restoring{false};
     bool    m_geometryRestored{false};
     bool    m_alwaysOnTop{false};

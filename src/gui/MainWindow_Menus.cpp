@@ -986,17 +986,27 @@ void MainWindow::buildMenuBar()
                 m_miniPan->setFramelessMode(
                     AppSettings::instance().value("FramelessWindow", "True")
                         .toString() == "True");
+                // X-button close: uncheck the menu AND free the radio-side pan.
                 connect(m_miniPan, &MiniPanWidget::closedByUser, this,
-                        [miniPanAct]() {
-                    QSignalBlocker b(miniPanAct);
-                    miniPanAct->setChecked(false);
+                        [this, miniPanAct]() {
+                    m_miniPanFeedWanted = false;
+                    { QSignalBlocker b(miniPanAct); miniPanAct->setChecked(false); }
+                    teardownMiniPanFeed();
                 });
+                // Debounced resize → re-push the pan's xpixels from scope width.
+                connect(m_miniPan, &MiniPanWidget::scopeResized, this,
+                        [this]() { pushMiniPanXpixels(); });
             }
+            m_miniPanFeedWanted = true;               // intent survives (dis)connect
             m_miniPan->show();
             m_miniPan->raise();
             m_miniPan->activateWindow();
+            refreshMiniPanFollow();                   // centre on the active VFO
+            ensureMiniPanFeed();                      // create the pan if connected
             AppSettings::instance().setValue("MiniPanOpen", "True");
         } else {
+            m_miniPanFeedWanted = false;
+            teardownMiniPanFeed();                    // free the radio-side pan
             if (m_miniPan) m_miniPan->hide();
             AppSettings::instance().setValue("MiniPanOpen", "False");
         }

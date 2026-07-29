@@ -50,6 +50,9 @@
 #include "DaxIqApplet.h"
 #include "TciApplet.h"
 #include "PanadapterStack.h"
+#include "gui/MiniPanWidget.h"
+#include "gui/MiniPanScope.h"
+#include "models/PanadapterModel.h"
 #include "SMeterWidget.h"
 #include "core/ThemeManager.h"
 #include "SpectrumWidget.h"
@@ -1229,6 +1232,24 @@ void MainWindow::wirePanLifecycle()
     connect(&m_radioModel, &RadioModel::panFeedSpectrumReady,
             this, &MainWindow::onSpectrumReadyForAdaptiveFilter);
 
+    // ── Mini-pan — feed its scope from the dedicated narrow pan's stream ──
+    connect(&m_radioModel, &RadioModel::panFeedSpectrumReady, this,
+            [this](quint32 streamId, const QVector<float>& bins, qint64) {
+        if (!m_miniPan || !m_miniPanFeedWanted) return;
+        const QString id = m_radioModel.miniPanId();
+        if (id.isEmpty()) return;
+        if (auto* pan = m_radioModel.panadapter(id);
+            pan && pan->panStreamId() == streamId) {
+            m_miniPan->scope()->updateSpectrum(bins);
+        }
+    });
+    // Create/recreate the mini-pan's pan whenever we (re)connect and it's wanted —
+    // covers "opened while disconnected then connected" and reconnect.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) {
+        if (connected) ensureMiniPanFeed();
+    });
+
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
             this, [this, profileLoadFrameReady](quint32 streamId,
                                                 const QVector<float>& bins,
@@ -1416,6 +1437,21 @@ void MainWindow::wirePanLifecycle()
         // During layout application, applyLayout/createPansSequentially handles
         // applet creation and wiring — don't duplicate here.
         if (m_applyingLayout) return;
+
+        // A real pan just appeared — the mini-pan's prerequisite. Create the
+        // mini-pan now if it was opened before the main pan existed (open-at-
+        // startup restore, where connect fires first). Idempotent; the mini-pan
+        // itself never reaches here (it does not emit panadapterAdded).
+        ensureMiniPanFeed();
+
+        // The mini-pan's dedicated pan renders in its own floating MiniPanWidget,
+        // never the main stack. Building a main-stack applet for it would also
+        // auto-create a slice on it and make it the active pan — exactly what the
+        // mini-pan must avoid. Leave it out of the stack entirely.
+        if (!m_radioModel.miniPanId().isEmpty()
+            && pan->panId() == m_radioModel.miniPanId()) {
+            return;
+        }
 
         // Skip if this pan already has an applet
         if (m_panStack->panadapter(pan->panId())) {

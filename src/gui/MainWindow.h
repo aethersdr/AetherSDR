@@ -432,6 +432,12 @@ private:
         RadioSliceSelectionSource source);
     void queueActiveSliceForSpectrumTarget(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
+
+    // Mini-pan glue (window is presentation-only; MainWindow owns the radio pan).
+    void ensureMiniPanFeed();      // create the pan iff wanted+connected+not-yet (idempotent)
+    void refreshMiniPanFollow();   // rebind centre/passband to the active slice
+    void teardownMiniPanFeed();    // remove the dedicated pan + clear the trace
+    void pushMiniPanXpixels();     // re-push xpixels from the scope's width
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
     bool reattachSliceVisualsToPanadapter(SliceModel* s);
@@ -1212,6 +1218,9 @@ private:
     QPointer<CopyAssistController> m_copyAssistController;
     QPointer<PanadapterApplet> m_copyAssistApplet;
     QMetaObject::Connection m_copyAssistFreqConn; // active-slice retune → clear decode
+    QMetaObject::Connection m_miniPanFreqConn;    // active-slice freq → mini-pan centre
+    QMetaObject::Connection m_miniPanFiltConn;    // active-slice filter → mini-pan passband
+    bool m_miniPanFeedWanted{false};              // window open intent (survives disconnect)
 #endif
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<GpsLocationDialog> m_gpsLocationDialog;

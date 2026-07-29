@@ -32,6 +32,7 @@
 #endif
 #include "PanadapterStack.h"
 #include "gui/MiniPanWidget.h"
+#include "gui/MiniPanScope.h"
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
@@ -6833,6 +6834,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     const int prevId = m_activeSliceId;
     m_activeSliceId = sliceId;
 
+    // Keep the mini-pan centred on the active VFO (rebind to the new slice).
+    refreshMiniPanFollow();
+
     // Send "slice set N active=1" only when switching to a different slice
     // (matches SmartSDR pcap — sent on VFO flag click, not on every tune).
     // Guard: don't send if triggered by the radio's own activeChanged echo
@@ -7034,6 +7038,79 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 #endif
 
     qDebug() << "MainWindow: active slice set to" << sliceId;
+}
+
+// ── Mini-pan glue ─────────────────────────────────────────────────────────────
+// The mini-pan window is pure presentation; MainWindow owns its dedicated radio
+// pan, feeds its scope, and drives its centre/passband from the followed VFO.
+
+void MainWindow::ensureMiniPanFeed()
+{
+    // The single create chokepoint — safe to call from the menu toggle, from a
+    // connect event, and when the main pan appears, in any order. Idempotent.
+    if (!m_miniPanFeedWanted || !m_miniPan) return;
+    if (!m_radioModel.isConnected()) return;         // create once connected
+    if (!m_radioModel.miniPanId().isEmpty()) return; // already have the pan
+    // Wait for the main pan: the mini-pan must be created AFTER it (the model's
+    // maxPanadapters and the mini-pan ownership-claim both rely on the main pan
+    // already existing). On an open-at-startup restore, connect fires before the
+    // main pan is added — panadapterAdded re-invokes us once it is. (#minipan)
+    if (m_radioModel.panadapters().isEmpty()) return;
+    const double c = activeSlice() ? activeSlice()->frequency() : 0.0;
+    m_radioModel.createMiniPan(c, 0.010);            // 10 kHz (±5 kHz) for v1
+    refreshMiniPanFollow();
+    pushMiniPanXpixels();
+}
+
+void MainWindow::refreshMiniPanFollow()
+{
+    disconnect(m_miniPanFreqConn);
+    disconnect(m_miniPanFiltConn);
+    if (!m_miniPan || !m_miniPanFeedWanted) return;
+
+    auto* s = activeSlice();
+    if (!s) {
+        m_miniPan->setCenterMhz(0.0);
+        m_miniPan->setPassbandHz(0, 0);
+        return;
+    }
+    // Live centre: update the readout, and re-centre the radio pan (no-op until
+    // the pan exists). The mini-pan owns its centre — it is exempt from the
+    // global Pan-Follows-VFO logic, which only moves the active pan.
+    m_miniPanFreqConn = connect(s, &SliceModel::frequencyChanged, this,
+                                [this](double mhz) {
+        if (m_miniPan) m_miniPan->setCenterMhz(mhz);
+        m_radioModel.setMiniPanCenter(mhz);
+    });
+    m_miniPanFiltConn = connect(s, &SliceModel::filterChanged, this,
+                                [this]() {
+        if (auto* cur = activeSlice(); cur && m_miniPan)
+            m_miniPan->setPassbandHz(cur->filterLow(), cur->filterHigh());
+    });
+    m_miniPan->setCenterMhz(s->frequency());
+    m_radioModel.setMiniPanCenter(s->frequency());
+    m_miniPan->setPassbandHz(s->filterLow(), s->filterHigh());
+}
+
+void MainWindow::teardownMiniPanFeed()
+{
+    disconnect(m_miniPanFreqConn);
+    disconnect(m_miniPanFiltConn);
+    m_radioModel.removeMiniPan();
+    if (m_miniPan) m_miniPan->scope()->updateSpectrum(QVector<float>{});
+}
+
+void MainWindow::pushMiniPanXpixels()
+{
+    if (!m_miniPan) return;
+    const QString id = m_radioModel.miniPanId();
+    if (id.isEmpty()) return;
+    auto* sc = m_miniPan->scope();
+    if (sc && sc->width() > 0 && sc->height() > 0) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 xpixels=%2 ypixels=%3")
+                .arg(id).arg(sc->width()).arg(sc->height()));
+    }
 }
 
 void MainWindow::updateFilterLimitsForMode(const QString& mode)

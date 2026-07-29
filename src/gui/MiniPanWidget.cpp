@@ -73,6 +73,12 @@ MiniPanWidget::MiniPanWidget(QWidget* parent)
     connect(&m_saveTimer, &QTimer::timeout, this,
             [this]() { saveGeometryToSettings(); });
 
+    // Debounce resize → one scopeResized() so MainWindow re-pushes xpixels once,
+    // not once per intermediate resize step.
+    m_xpixTimer.setSingleShot(true);
+    m_xpixTimer.setInterval(150);
+    connect(&m_xpixTimer, &QTimer::timeout, this, [this]() { emit scopeResized(); });
+
     FramelessResizer::install(this);
     refreshHeader();
 }
@@ -88,12 +94,19 @@ void MiniPanWidget::setSpanKHz(double kHz)
     if (m_scope) m_scope->setSpanKHz(kHz);
 }
 
+void MiniPanWidget::setPassbandHz(int lowHz, int highHz)
+{
+    if (m_scope) m_scope->setPassbandHz(lowHz, highHz);
+}
+
 void MiniPanWidget::refreshHeader()
 {
     m_freqLabel->setText(m_centerMhz > 0.0
                              ? QString::number(m_centerMhz, 'f', 6)
                              : QStringLiteral("—.———"));
 }
+
+// ── Window chrome / persistence ───────────────────────────────────────────────
 
 void MiniPanWidget::setFramelessMode(bool on)
 {
@@ -149,13 +162,16 @@ void MiniPanWidget::moveEvent(QMoveEvent* e)
 void MiniPanWidget::resizeEvent(QResizeEvent* e)
 {
     QWidget::resizeEvent(e);
-    if (!m_restoring) m_saveTimer.start();
+    if (!m_restoring) {
+        m_saveTimer.start();
+        m_xpixTimer.start();   // → scopeResized() (debounced)
+    }
 }
 
 void MiniPanWidget::closeEvent(QCloseEvent* e)
 {
-    // Close == hide: keep the instance and its radio-side pan (PR2) alive; the
-    // View-menu toggle and the window close button are the same action.
+    // Close == hide: keep the instance; MainWindow frees the radio-side pan on
+    // closedByUser. Geometry/open-state persist for the next session.
     m_saveTimer.stop();
     saveGeometryToSettings();
     AppSettings::instance().setValue(kOpenKey, "False");

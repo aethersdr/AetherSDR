@@ -3644,6 +3644,100 @@ void RadioModel::removePanadapter(const QString& panId)
     // Radio will send "display pan <id> removed" → handled in onStatusReceived
 }
 
+// ── Mini-pan: dedicated narrow display-only pan ───────────────────────────────
+
+QString RadioModel::firstActiveEligiblePan() const
+{
+    for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it)
+        if (it.key() != m_miniPanId)
+            return it.key();
+    return QString();
+}
+
+void RadioModel::createMiniPan(double centerMhz, double spanMhz)
+{
+    if (!m_miniPanId.isEmpty()) {          // already have one
+        emit miniPanReady(m_miniPanId);
+        return;
+    }
+    const int limit = maxPanadapters();
+    if (static_cast<int>(m_panadapters.size()) >= limit) {
+        qCWarning(lcProtocol) << "RadioModel::createMiniPan: pan limit" << limit << "reached";
+        emit panadapterLimitReached(limit, m_model);
+        return;
+    }
+    const int gen = ++m_miniPanGen;        // stamp this create attempt
+    m_miniPanPending = true;               // the next new pan is ours (claimed in
+                                           // ensureOwnedPanadapter before panadapterAdded)
+    qCDebug(lcProtocol) << "RadioModel::createMiniPan: center" << centerMhz
+                        << "span" << spanMhz << "gen" << gen;
+    sendCmd("display panafall create x=100 y=100",
+            [this, gen, centerMhz, spanMhz](int code, const QString& body) {
+        if (code != 0) {
+            qCWarning(lcProtocol) << "RadioModel::createMiniPan: create failed, code"
+                                  << Qt::hex << code << "body:" << body;
+            if (gen == m_miniPanGen)
+                emit panadapterLimitReached(maxPanadapters(), m_model);
+            return;
+        }
+        const QString panId = parsePanadapterCreateId(body);
+        // Generation changed → a removeMiniPan()/disconnect raced ahead of this
+        // reply. Free the just-created pan rather than leak it, and drop it.
+        if (gen != m_miniPanGen) {
+            if (!panId.isEmpty()) {
+                const QString wfId = body.section(QLatin1Char(','), 1, 1).trimmed();
+                sendCommand(QStringLiteral("display pan remove ") + panId);
+                if (!wfId.isEmpty())
+                    sendCommand(QStringLiteral("display panafall remove ") + wfId);
+            }
+            return;
+        }
+        if (panId.isEmpty()) {
+            qCWarning(lcProtocol) << "RadioModel::createMiniPan: no pan id in" << body;
+            return;
+        }
+        m_miniPanId = panId;
+        ensureOwnedPanadapter(panId);      // owned — but setActivePanId refuses it
+        QTimer::singleShot(200, this, [this, panId, gen, centerMhz, spanMhz]() {
+            if (gen != m_miniPanGen || m_miniPanId != panId) return;
+            // Initial FFT grid so bins flow before the window pushes its real
+            // width; the mini-pan window re-pushes xpixels from its scope size.
+            sendCmd(QString("display pan set %1 xpixels=400 ypixels=200").arg(panId));
+            sendCmd(QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(panId));
+            sendCmd(QString("display pan set %1 bandwidth=%2")
+                        .arg(panId).arg(spanMhz, 0, 'f', 6));
+            sendCmd(QString("display pan set %1 center=%2")
+                        .arg(panId).arg(centerMhz, 0, 'f', 6));
+        });
+        qCDebug(lcProtocol) << "RadioModel::createMiniPan: id" << panId;
+        emit miniPanReady(panId);
+    });
+}
+
+void RadioModel::removeMiniPan()
+{
+    ++m_miniPanGen;                        // invalidate any in-flight create reply
+    m_miniPanPending = false;              // ...and any unclaimed pending create
+    if (m_miniPanId.isEmpty()) return;
+    const QString id = m_miniPanId;
+    m_miniPanId.clear();                   // clear first — active-pan guard tracks it
+    removePanadapter(id);
+}
+
+void RadioModel::setMiniPanCenter(double centerMhz)
+{
+    if (m_miniPanId.isEmpty()) return;
+    sendCommand(QString("display pan set %1 center=%2")
+                    .arg(m_miniPanId).arg(centerMhz, 0, 'f', 6));
+}
+
+void RadioModel::setMiniPanBandwidth(double spanMhz)
+{
+    if (m_miniPanId.isEmpty()) return;
+    sendCommand(QString("display pan set %1 bandwidth=%2")
+                    .arg(m_miniPanId).arg(spanMhz, 0, 'f', 6));
+}
+
 // ── Pan accessor implementations ──────────────────────────────────────────────
 
 PanadapterModel* RadioModel::activePanadapter() const
@@ -4548,6 +4642,9 @@ void RadioModel::stageSessionModelsForReconnect()
         }
     }
     m_panadapters.clear();
+    m_miniPanId.clear();   // mini-pan is ephemeral; gone with the connection
+    ++m_miniPanGen;        // invalidate any in-flight createMiniPan reply
+    m_miniPanPending = false;
 
     m_ownedSliceIds.clear();
     if (!m_rawSliceModeLists.isEmpty()) {
@@ -4630,6 +4727,9 @@ void RadioModel::dropAllSessionModelsForFamilySwitch()
     }
     const QMap<QString, PanadapterModel*> livePans = m_panadapters;
     m_panadapters.clear();
+    m_miniPanId.clear();   // mini-pan is ephemeral; gone with the connection
+    ++m_miniPanGen;        // invalidate any in-flight createMiniPan reply
+    m_miniPanPending = false;
     for (auto it = livePans.cbegin(); it != livePans.cend(); ++it) {
         if (!it.value()) continue;
         emit panadapterRemoved(it.key());
@@ -7088,11 +7188,22 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
         }
     } else {
         pan = new PanadapterModel(normalizedPanId, this);
+        // Claim the mini-pan id the instant its pan is created — synchronously,
+        // before panadapterAdded is emitted below — so that emit (and every
+        // active-pan/applet guard) sees it. The create reply that names the id
+        // can otherwise race behind the pan's own status message. Require a pan
+        // to already exist (map non-empty): the mini-pan is always created after
+        // the main pan, so the FIRST pan can never mis-claim the pending flag,
+        // even if createMiniPan set it before the main pan appeared. (#minipan)
+        if (m_miniPanPending && !m_panadapters.isEmpty()) {
+            m_miniPanId = normalizedPanId;
+            m_miniPanPending = false;
+        }
     }
     pan->setClientHandle(QString::number(clientHandle(), 16));
     m_panadapters[normalizedPanId] = pan;
     if (m_activePanId.isEmpty())
-        m_activePanId = normalizedPanId;
+        setActivePanId(normalizedPanId);   // guarded: never activates the mini-pan
 
     // Apply active throttle cap immediately — applyAdaptiveFrameRate only fires
     // on tier transitions, so a pan opened mid-throttle would run at the radio
@@ -7140,7 +7251,9 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
                         << "panadapter" << normalizedPanId;
     if (reclaimed) {
         emit panadapterReclaimed(pan);
-    } else {
+    } else if (normalizedPanId != m_miniPanId) {
+        // The mini-pan is a display-only pan — never announce it as a UI pan, so
+        // it gets no main-stack applet, no auto-slice, and no TCI wiring.
         emit panadapterAdded(pan);
     }
 
@@ -7927,8 +8040,7 @@ void RadioModel::onStatusReceived(const QString& object,
                     pan->deleteLater();
                 }
                 if (m_activePanId == panId) {
-                    m_activePanId = m_panadapters.isEmpty() ? QString()
-                                                            : m_panadapters.firstKey();
+                    m_activePanId = firstActiveEligiblePan();   // never the mini-pan
                 }
                 return;
             }
@@ -8018,8 +8130,7 @@ void RadioModel::onStatusReceived(const QString& object,
                     emit panadapterRemoved(panId);
                     rejectedPan->deleteLater();
                     if (m_activePanId == panId) {
-                        m_activePanId = m_panadapters.isEmpty() ? QString()
-                                                                : m_panadapters.firstKey();
+                        m_activePanId = firstActiveEligiblePan();   // never the mini-pan
                     }
                 } else if (m_panadapters.contains(panId)
                            && kvs.contains(QStringLiteral("client_handle"))) {
@@ -8897,7 +9008,15 @@ void RadioModel::handleSliceStatus(int id,
         m_meterModel.setActiveTxSlice(activeTxSliceNum());
         enforceTransmitInhibitForSlice(s);
         syncDigitalVoiceTxSelection();
-        if (!reclaimed) {
+        // The FLEX firmware auto-creates a slice on every pan create. The mini-pan
+        // is a display-only pan and must not consume a slice slot or show a phantom
+        // slice — remove the auto-slice (the pan and its FFT stream survive without
+        // it) and never announce it to the UI. (#minipan)
+        if (!m_miniPanId.isEmpty() && s->panId() == m_miniPanId) {
+            qCDebug(lcProtocol) << "RadioModel: removing FLEX auto-slice" << id
+                                << "on display-only mini-pan" << m_miniPanId;
+            sendCmd(QString("slice remove %1").arg(id));
+        } else if (!reclaimed) {
             emit sliceAdded(s);
         } else if (s->isTxSlice()
                    && transmitInhibitMessageForSlice(s).isEmpty()
