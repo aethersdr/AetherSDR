@@ -59,7 +59,10 @@ public:
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
-    void setTune(bool on, int tunePowerPercent = -1) override;
+    // No default argument here on purpose: defaults on virtuals bind statically,
+    // so repeating the base's is how the two quietly diverge later. The sole
+    // call site passes it explicitly.
+    void setTune(bool on, int tunePowerPercent) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
@@ -75,6 +78,9 @@ private:
     void pushInitialState();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
+    // Clamp 0..100, map onto the drive register, honour the transmit gate.
+    // Shared by setTxPower() and setTune() so the mapping exists exactly once.
+    void applyDrive(int percent);
     static double temperatureCelsius(int raw);
 
     MetisClient* m_metis = nullptr;
