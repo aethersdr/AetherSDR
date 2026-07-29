@@ -61,6 +61,17 @@ QString trKiwiSdrClient(const char* sourceText)
     return QCoreApplication::translate("KiwiSdrClient", sourceText);
 }
 
+// Shared by kiwiMode() (checks the already-tracked mode) and
+// setTrackedSlice()'s dedup guard (checks the incoming mode before it's
+// assigned to m_trackedMode) so both agree on what counts as CW.
+bool isCwModeString(const QString& mode)
+{
+    const QString normalized = mode.trimmed().toUpper();
+    return normalized == QStringLiteral("CW")
+        || normalized == QStringLiteral("CWU")
+        || normalized == QStringLiteral("CWL");
+}
+
 KiwiSdrProtocol::WaterfallDisplayRange clampedWaterfallDisplayRange(
     KiwiSdrProtocol::WaterfallDisplayRange range)
 {
@@ -978,6 +989,14 @@ void KiwiSdrClient::setTrackedSlice(int sliceId, double frequencyMhz,
                                     const QString& bandName, int cwPitchHz)
 {
     const QString normalizedBandName = bandName.trimmed();
+    // cwPitchHz only affects the wire command in CW mode (formatSoundTuneCommand
+    // ignores it otherwise) — comparing it unconditionally here made every CW
+    // pitch step re-send an identical SET to every non-CW Kiwi-tracked slice too.
+    // Against a public KiwiSDR, dragging the pitch control turned into a
+    // sustained burst of redundant commands risking a kick/rate-limit policy
+    // (#4423 review). Skip the comparison outright when the incoming mode
+    // isn't CW, so a pitch-only "change" on a USB/LSB/AM slice dedups away.
+    const bool cwPitchMatters = isCwModeString(mode);
     if (m_trackedSliceId == sliceId
         && qFuzzyCompare(m_trackedFrequencyMhz, frequencyMhz)
         && m_trackedMode == mode
@@ -985,7 +1004,7 @@ void KiwiSdrClient::setTrackedSlice(int sliceId, double frequencyMhz,
         && m_trackedFilterHighHz == filterHighHz
         && m_trackedPanId == panId
         && m_trackedBandName == normalizedBandName
-        && m_trackedCwPitchHz == cwPitchHz) {
+        && (!cwPitchMatters || m_trackedCwPitchHz == cwPitchHz)) {
         return;
     }
 
@@ -1767,8 +1786,7 @@ QString KiwiSdrClient::kiwiMode() const
         || mode == QStringLiteral("RTTY")) {
         return QStringLiteral("usb");
     }
-    if (mode == QStringLiteral("CW") || mode == QStringLiteral("CWU")
-        || mode == QStringLiteral("CWL")) {
+    if (isCwModeString(mode)) {
         return QStringLiteral("cw");
     }
     if (mode == QStringLiteral("NFM") || mode == QStringLiteral("FM")) {
