@@ -4,24 +4,14 @@
 
 namespace AetherSDR {
 
-// Qt 6.11's Cocoa plugin bitmap-renders cursor shapes without native NSCursor
-// equivalents. On macOS 26 that fallback can trap in QImage::toCGImage()
-// while realizing the cursor, so substitute shapes backed by native cursors.
+// Qt 6.11's Cocoa plugin has no native NSCursor for SizeAllCursor and
+// bitmap-renders it instead. On macOS 26 that fallback can trap in
+// QImage::toCGImage(), so substitute the native open-hand cursor.
 inline Qt::CursorShape macSafeCursorShape(Qt::CursorShape shape)
 {
 #ifdef Q_OS_MAC
-    switch (shape) {
-    case Qt::SplitVCursor:
-        return Qt::SizeVerCursor;
-    case Qt::SplitHCursor:
-        return Qt::SizeHorCursor;
-    case Qt::SizeAllCursor:
+    if (shape == Qt::SizeAllCursor) {
         return Qt::OpenHandCursor;
-    case Qt::SizeBDiagCursor:
-    case Qt::SizeFDiagCursor:
-        return Qt::SizeHorCursor;
-    default:
-        break;
     }
 #endif
     return shape;

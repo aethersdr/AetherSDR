@@ -24,21 +24,24 @@ void expectShape(const char* name,
 int main()
 {
 #ifdef Q_OS_MAC
-    expectShape("vertical split uses native vertical resize",
+    expectShape("vertical split remains unchanged",
                 macSafeCursorShape(Qt::SplitVCursor),
-                Qt::SizeVerCursor);
-    expectShape("horizontal split uses native horizontal resize",
+                Qt::SplitVCursor);
+    expectShape("horizontal split remains unchanged",
                 macSafeCursorShape(Qt::SplitHCursor),
-                Qt::SizeHorCursor);
+                Qt::SplitHCursor);
     expectShape("move cursor uses native open hand",
                 macSafeCursorShape(Qt::SizeAllCursor),
                 Qt::OpenHandCursor);
-    expectShape("backward diagonal uses native horizontal resize",
+    expectShape("horizontal resize remains unchanged",
+                macSafeCursorShape(Qt::SizeHorCursor),
+                Qt::SizeHorCursor);
+    expectShape("backward diagonal remains unchanged",
                 macSafeCursorShape(Qt::SizeBDiagCursor),
-                Qt::SizeHorCursor);
-    expectShape("forward diagonal uses native horizontal resize",
+                Qt::SizeBDiagCursor);
+    expectShape("forward diagonal remains unchanged",
                 macSafeCursorShape(Qt::SizeFDiagCursor),
-                Qt::SizeHorCursor);
+                Qt::SizeFDiagCursor);
 #else
     expectShape("vertical split remains unchanged",
                 macSafeCursorShape(Qt::SplitVCursor),
@@ -49,6 +52,9 @@ int main()
     expectShape("move cursor remains unchanged",
                 macSafeCursorShape(Qt::SizeAllCursor),
                 Qt::SizeAllCursor);
+    expectShape("horizontal resize remains unchanged",
+                macSafeCursorShape(Qt::SizeHorCursor),
+                Qt::SizeHorCursor);
     expectShape("backward diagonal remains unchanged",
                 macSafeCursorShape(Qt::SizeBDiagCursor),
                 Qt::SizeBDiagCursor);

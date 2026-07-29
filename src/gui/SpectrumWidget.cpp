@@ -406,6 +406,17 @@ static bool clampDbmRange(float& minDbm, float& maxDbm)
     return true;
 }
 
+static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
+{
+#ifdef Q_OS_MAC
+    // Preserve SpectrumWidget's established vertical split appearance.
+    if (shape == Qt::SplitVCursor) {
+        return Qt::SizeVerCursor;
+    }
+#endif
+    return macSafeCursorShape(shape);
+}
+
 static void setCursorOverride(QWidget* widget, Qt::CursorShape shape)
 {
     if (!widget) {
@@ -418,7 +429,7 @@ static void setCursorOverride(QWidget* widget, Qt::CursorShape shape)
                             static_cast<int>(widget->cursor().shape()));
         widget->setProperty(kSliceCursorOverrideActiveProperty, true);
     }
-    widget->setCursor(AetherSDR::macSafeCursorShape(shape));
+    widget->setCursor(normalizedSpectrumCursorShape(shape));
 }
 
 static void clearCursorOverride(QWidget* widget)
@@ -8125,7 +8136,7 @@ void SpectrumWidget::setSpectrumCursor(Qt::CursorShape shape)
     // standard Qt cursor changes can pass through QImage::toCGImage() in the
     // Cocoa platform plugin; issue #2458 crashed in that path while dispatching
     // enter/leave events.
-    shape = macSafeCursorShape(shape);
+    shape = normalizedSpectrumCursorShape(shape);
     if (cursor().shape() == shape) {
         return;
     }
