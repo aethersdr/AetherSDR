@@ -312,6 +312,16 @@ int main()
         return fail("sound tune command formatting is wrong");
     }
 
+    // A pitch near the top of TransmitModel's 100-6000 Hz CW pitch range
+    // would otherwise slide high_cut past the Kiwi's ~6 kHz audio Nyquist,
+    // putting the tone at the very edge of (or past) the passband and
+    // reproducing #4423's silence with a different root cause. The shift
+    // must clamp so high_cut never exceeds kKiwiMaxAudioBandwidthHz.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 6000)
+        != QStringLiteral("SET mod=cw low_cut=5200 high_cut=6000 freq=6994.400")) {
+        return fail("sound tune command should clamp CW shift to the Kiwi audio Nyquist");
+    }
+
     const QVector<MsgToken> msgTokens = parseMsgTokens(
         QStringLiteral("MSG wb_only password_timeout inactivity_timeout=15 "
                        "kiwi_kick=1%2coperator%20request badp=5 =ignored"));

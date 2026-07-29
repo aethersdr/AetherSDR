@@ -26,6 +26,9 @@ inline constexpr int kAgcFastDecayMs = 300;
 inline constexpr int kAgcMedDecayMs = 1000;
 inline constexpr int kAgcSlowDecayMs = 3000;
 inline constexpr int kAgcSlopeDb = 6;
+// Kiwi sound stream is ~12 kHz-sampled (KiwiSdrClient::m_soundSampleRateHz),
+// so its audio passband can't extend past this Nyquist limit.
+inline constexpr int kKiwiMaxAudioBandwidthHz = 6000;
 
 struct SoundFrameHeader {
     int sequence{-1};

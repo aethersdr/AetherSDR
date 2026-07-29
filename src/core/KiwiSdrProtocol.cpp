@@ -1602,10 +1602,15 @@ QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
         // Reproduce the Flex behavior by shifting the whole receive chain
         // by the pitch: move the BFO down so the carrier demodulates to
         // +cwPitchHz, and slide the passband up by the same amount so that
-        // frequency is still inside it.
-        tunedLowCutHz += cwPitchHz;
-        tunedHighCutHz += cwPitchHz;
-        tunedFreqKhz -= cwPitchHz / 1000.0;
+        // frequency is still inside it. Clamp the shift so the passband
+        // doesn't slide past the Kiwi's audio Nyquist — an unclamped shift
+        // at the top of the CW pitch range pushes the tone to the band edge
+        // and reproduces #4423's silence with a different root cause.
+        const int shiftHz = std::min(
+            cwPitchHz, kKiwiMaxAudioBandwidthHz - tunedHighCutHz);
+        tunedLowCutHz += shiftHz;
+        tunedHighCutHz += shiftHz;
+        tunedFreqKhz -= shiftHz / 1000.0;
     }
     return QStringLiteral("SET mod=%1 low_cut=%2 high_cut=%3 freq=%4")
         .arg(mode)
