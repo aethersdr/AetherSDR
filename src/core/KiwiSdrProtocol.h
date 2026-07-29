@@ -329,7 +329,8 @@ int agcDecayMsForMode(const QString& mode);
 QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
                          int manualGainDb, int decayMs);
 QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
-                               double freqKhz, int cwPitchHz);
+                               double freqKhz, int cwPitchHz,
+                               bool cwLowerSideband = false);
 MeterReading meterUnavailable(MeterSource source, const QString& notes = {});
 MeterReading extractMeterFromSndVerifiedLayout(const QByteArray& frame,
                                                const MeterContext& context);

@@ -1586,7 +1586,7 @@ QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
 }
 
 QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
-                               double freqKhz, int cwPitchHz)
+                               double freqKhz, int cwPitchHz, bool cwLowerSideband)
 {
     int tunedLowCutHz = lowCutHz;
     int tunedHighCutHz = highCutHz;
@@ -1600,14 +1600,21 @@ QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
         // Sending freq=carrier with the passband as reported puts the
         // carrier at 0 Hz (audible only as a DC thump, not a tone) — #4423.
         // Reproduce the Flex behavior by shifting the whole receive chain
-        // by the pitch: move the BFO down so the carrier demodulates to
-        // +cwPitchHz, and slide the passband up by the same amount so that
-        // frequency is still inside it. Clamp the shift so the passband
-        // doesn't slide past the Kiwi's audio Nyquist — an unclamped shift
-        // at the top of the CW pitch range pushes the tone to the band edge
-        // and reproduces #4423's silence with a different root cause.
-        const int shiftHz = std::min(
-            cwPitchHz, kKiwiMaxAudioBandwidthHz - tunedHighCutHz);
+        // by the pitch: move the BFO so the carrier demodulates to
+        // +cwPitchHz (CWU) or -cwPitchHz (CWL), and slide the passband by
+        // the same signed amount so that frequency is still inside it. This
+        // mirrors which side of the carrier the Flex itself listens to, so
+        // adjacent-signal rejection matches instead of always landing on
+        // the USB side regardless of sideband.
+        const int sign = cwLowerSideband ? -1 : 1;
+        // Clamp the shift so the passband doesn't slide past the Kiwi's
+        // audio Nyquist — an unclamped shift at the top of the CW pitch
+        // range pushes the tone to the band edge and reproduces #4423's
+        // silence with a different root cause.
+        const int headroomHz = cwLowerSideband
+            ? kKiwiMaxAudioBandwidthHz + tunedLowCutHz
+            : kKiwiMaxAudioBandwidthHz - tunedHighCutHz;
+        const int shiftHz = sign * std::min(cwPitchHz, headroomHz);
         tunedLowCutHz += shiftHz;
         tunedHighCutHz += shiftHz;
         tunedFreqKhz -= shiftHz / 1000.0;

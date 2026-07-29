@@ -1393,8 +1393,10 @@ void KiwiSdrClient::sendTrackedSliceToServer()
             << "high_cut=" << highCutHz;
         return;
     }
+    const bool cwLowerSideband =
+        m_trackedMode.trimmed().compare(QStringLiteral("CWL"), Qt::CaseInsensitive) == 0;
     sendSoundCommand(KiwiSdrProtocol::formatSoundTuneCommand(
-        mode, lowCutHz, highCutHz, freqKhz, m_trackedCwPitchHz));
+        mode, lowCutHz, highCutHz, freqKhz, m_trackedCwPitchHz, cwLowerSideband));
 }
 
 void KiwiSdrClient::sendReceiverControlsToServer()

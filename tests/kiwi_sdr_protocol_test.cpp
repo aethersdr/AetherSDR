@@ -322,6 +322,21 @@ int main()
         return fail("sound tune command should clamp CW shift to the Kiwi audio Nyquist");
     }
 
+    // kiwiMode() collapses CWU/CWL to "cw", so the sideband must be plumbed
+    // in separately. In CWL the Flex listens below the carrier, so the Kiwi
+    // shift must mirror CWU: BFO moves up (freq increases) and the passband
+    // slides down, landing the tone at -cwPitchHz instead of +cwPitchHz, so
+    // adjacent-signal rejection matches which side of the carrier the Flex
+    // itself demodulates.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 600,
+                               /*cwLowerSideband=*/true)
+            != QStringLiteral("SET mod=cw low_cut=-1000 high_cut=-200 freq=7000.600")
+        || formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 6000,
+                                  /*cwLowerSideband=*/true)
+            != QStringLiteral("SET mod=cw low_cut=-6000 high_cut=-5200 freq=7005.600")) {
+        return fail("sound tune command should mirror the CW shift for CWL");
+    }
+
     const QVector<MsgToken> msgTokens = parseMsgTokens(
         QStringLiteral("MSG wb_only password_timeout inactivity_timeout=15 "
                        "kiwi_kick=1%2coperator%20request badp=5 =ignored"));
