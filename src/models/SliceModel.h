@@ -296,6 +296,22 @@ signals:
     // setAgcThreshold(), and always carries BOTH values because a backend
     // configuring a DSP AGC needs the pair to act on either.
     void agcCommandIssued(const QString& mode, int thresholdDb);
+    // Operator-issued per-slice AUDIO changes, same discipline as the three
+    // above: audioMuteChanged/audioGainChanged/audioPanChanged also fire when
+    // radio status is applied, so driving a command off those would echo the
+    // radio's own state back as a request (Principle II).
+    //
+    // These exist because a Flex mixes its slices ON THE RADIO and these
+    // controls are wire commands to it, while a host-mixing backend (HL2)
+    // demodulates every receiver here and has to apply them in its own mixer.
+    // Without them the operator's mute moved the model and the fader, and the
+    // audio kept playing.
+    void audioMuteCommandIssued(bool mute);
+    void audioGainCommandIssued(int gainPercent);
+    void audioPanCommandIssued(int panPercent);      // 0=left, 50=centre, 100=right
+    // Operator asked for THIS slice to own transmit. A radio with one
+    // transmitter and several receivers has to move it rather than set a flag.
+    void txSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
     void filterChanged(int low, int high);

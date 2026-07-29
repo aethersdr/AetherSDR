@@ -861,6 +861,31 @@ void RadioModel::setupBackend(const QString& family)
                     [this, s](const QString& mode, int thresholdDb) {
                 if (m_backend) m_backend->setSliceAgc(s->sliceId(), mode, thresholdDb);
             });
+            // Per-slice AUDIO, same shape and the same reason. A Flex applies
+            // mute/level/pan on the radio and sends one mixed stream; a backend
+            // that demodulates every receiver on this host has to apply them in
+            // its own mixer. Without these the VFO panel's mute and balance
+            // moved the model and the audio carried on unchanged.
+            connect(s, &SliceModel::audioMuteCommandIssued, this,
+                    [this, s](bool mute) {
+                if (m_backend) m_backend->setSliceAudioMute(s->sliceId(), mute);
+            });
+            connect(s, &SliceModel::audioGainCommandIssued, this,
+                    [this, s](int gainPercent) {
+                if (m_backend) m_backend->setSliceAudioGain(s->sliceId(), gainPercent);
+            });
+            connect(s, &SliceModel::audioPanCommandIssued, this,
+                    [this, s](int panPercent) {
+                if (m_backend) m_backend->setSliceAudioPan(s->sliceId(), panPercent);
+            });
+            // "Make this the transmit slice." On a radio with one transmitter
+            // the backend MOVES transmit rather than setting a flag, and then
+            // republishes both the old and the new slice so the indicator
+            // follows — which is why nothing is assumed here.
+            connect(s, &SliceModel::txSliceCommandIssued, this,
+                    [this, s]() {
+                if (m_backend) m_backend->setTxSlice(s->sliceId());
+            });
             m_slices.append(s);
             s->applyChanges(mapped);
             emit sliceAdded(s);

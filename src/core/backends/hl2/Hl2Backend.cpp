@@ -797,14 +797,19 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
     auto& q = m_mixPending[static_cast<std::size_t>(ddc)];
     q.insert(q.end(), pcm.begin(), pcm.end());
 
-    // FAST PATH. One unmuted receiver is not a mix, and making it walk the
-    // summing code below would add a copy and a clamp to the single-slice case
-    // that has been on the air for weeks.
+    // FAST PATH. One unmuted receiver at unity gain and centre balance is not a
+    // mix, and making it walk the summing code below would add a copy and a
+    // clamp to the single-slice case that has been on the air for weeks.
+    //
+    // The gain/pan test is part of the condition, not an afterthought: taking
+    // this path with a non-unity level would silently ignore the operator's
+    // fader whenever only one slice happened to be open.
     int contributors = 0;
     for (const Receiver& other : m_rx)
         if (other.dsp && !other.audioMuted)
             ++contributors;
-    if (contributors <= 1) {
+    if (contributors <= 1 && r->audioGain == 1.0f
+        && r->audioPanPercent == kAudioPanCentre) {
         emit audioFrameReady(floatBytes(pcm));
         q.clear();
         return;
@@ -838,14 +843,39 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
             return;
     }
 
+    // Drain a whole number of STEREO FRAMES. The stream is interleaved L,R, so
+    // an odd sample count would swap the channels of everything after it — and
+    // it stays swapped, because the offset carries into the next block.
+    n &= ~std::size_t{1};
+    if (n == 0)
+        return;
+
     m_mixAccum.assign(n, 0.0f);
     for (std::size_t i = 0; i < m_rx.size(); ++i) {
-        if (!m_rx[i].dsp || m_rx[i].audioMuted)
+        const Receiver& src_rx = m_rx[i];
+        if (!src_rx.dsp || src_rx.audioMuted)
             continue;
         auto& src = m_mixPending[i];
-        const std::size_t take = std::min(n, src.size());
-        for (std::size_t k = 0; k < take; ++k)
-            m_mixAccum[k] += src[k];
+        const std::size_t take = std::min(n, src.size()) & ~std::size_t{1};
+
+        // Balance is a BALANCE, not a constant-power pan: centre leaves both
+        // channels at unity rather than dipping them by 3 dB, so moving the
+        // control off centre only ever attenuates the side you moved away from.
+        // That matches what the operator expects of the Flex control this
+        // mirrors, and keeps a centred slice bit-identical to no processing.
+        const float g = src_rx.audioGain;
+        const int p = src_rx.audioPanPercent;
+        const float lw = g * (p <= kAudioPanCentre
+                                  ? 1.0f
+                                  : static_cast<float>(100 - p) / kAudioPanCentre);
+        const float rw = g * (p >= kAudioPanCentre
+                                  ? 1.0f
+                                  : static_cast<float>(p) / kAudioPanCentre);
+
+        for (std::size_t k = 0; k + 1 < take; k += 2) {
+            m_mixAccum[k]     += src[k]     * lw;
+            m_mixAccum[k + 1] += src[k + 1] * rw;
+        }
         src.erase(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(take));
     }
 
@@ -1458,6 +1488,82 @@ void Hl2Backend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     if (r->dsp)
         QMetaObject::invokeMethod(r->dsp, "setAgc", Qt::QueuedConnection,
             Q_ARG(int, wdspAgc), Q_ARG(double, ceilingDb));
+    emitSliceState(ddc);
+}
+
+void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
+{
+    Receiver* r = rx(ddcForSlice(sliceId));
+    if (!r || r->audioMuted == mute)
+        return;
+    r->audioMuted = mute;
+    // Drop what this receiver had already queued for the mix. Those blocks are
+    // older than the mute and would play out after it — a mute with a tail is
+    // indistinguishable from a mute that did not take.
+    const int ddc = ddcForSlice(sliceId);
+    if (ddc >= 0 && static_cast<std::size_t>(ddc) < m_mixPending.size())
+        m_mixPending[static_cast<std::size_t>(ddc)].clear();
+    qCDebug(lcHl2) << "HL2: slice" << sliceId << (mute ? "muted" : "unmuted");
+}
+
+void Hl2Backend::setSliceAudioGain(int sliceId, int gainPercent)
+{
+    Receiver* r = rx(ddcForSlice(sliceId));
+    if (!r)
+        return;
+    // 0..100 -> 0.0..1.0 LINEAR, matching what a Flex does with audio_level
+    // rather than inventing a dB curve here. Unity at 100 keeps a single
+    // unmuted slice at exactly the level it has today.
+    r->audioGain = std::clamp(gainPercent, 0, 100) / 100.0f;
+}
+
+void Hl2Backend::setSliceAudioPan(int sliceId, int panPercent)
+{
+    Receiver* r = rx(ddcForSlice(sliceId));
+    if (!r)
+        return;
+    r->audioPanPercent = std::clamp(panPercent, 0, 100);
+}
+
+void Hl2Backend::setTxSlice(int sliceId)
+{
+    const int ddc = ddcForSlice(sliceId);
+    const Receiver* r = rx(ddc);
+    if (!r) {
+        qCWarning(lcHl2) << "HL2: cannot move transmit to slice" << sliceId
+                         << "— no such receiver";
+        return;
+    }
+    if (ddc == m_txDdc)
+        return;
+
+    const int previous = m_txDdc;
+    m_txDdc = ddc;
+    qCInfo(lcHl2) << "HL2: transmit moves from DDC" << previous << "to" << ddc
+                  << "(slice" << sliceId << ")";
+
+    // Everything transmit-shaped follows the new owner. The TX NCO is a separate
+    // register from any RX DDC and nothing reads it back, so leaving it on the
+    // old receiver's frequency would key on the wrong band with nothing to say
+    // so — the exact failure §14 records from the first bring-up.
+    setTxFrequency(r->sliceFreqHz);
+    if (m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
+            Q_ARG(WdspChannel::Mode, modeFromString(r->mode)));
+        const auto [txLo, txHi] = defaultTxPassbandForMode(r->mode);
+        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
+            Q_ARG(double, static_cast<double>(txLo)),
+            Q_ARG(double, static_cast<double>(txHi)));
+    }
+    // The band filter's keyed-TX override follows m_txDdc, so re-evaluate it.
+    applyBandFilter("tx slice");
+    publishWideState();
+
+    // Republish BOTH slices: the one that lost transmit and the one that gained
+    // it. Publishing only the new one would leave the old indicator lit, and two
+    // slices claiming transmit is worse than none — the interlock would find
+    // whichever was selected.
+    emitSliceState(previous);
     emitSliceState(ddc);
 }
 

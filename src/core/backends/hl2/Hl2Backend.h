@@ -53,6 +53,10 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    void setSliceAudioMute(int sliceId, bool mute) override;
+    void setSliceAudioGain(int sliceId, int gainPercent) override;
+    void setSliceAudioPan(int sliceId, int panPercent) override;
+    void setTxSlice(int sliceId) override;
     void setPanCenter(const QString& panId, double hz) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
@@ -151,8 +155,14 @@ private:
 
         // Host-side per-slice audio. The radio mixes nothing for us — a Flex
         // sums its slices on-radio and sends one stream, and an HL2 demodulates
-        // every receiver here — so muting is ours to apply.
+        // every receiver here — so mute, level and balance are ours to apply.
+        //
+        // gain is a LINEAR multiplier derived from the operator's 0..100, and
+        // pan is 0=left .. 50=centre .. 100=right, matching SliceModel so the
+        // seam does not introduce a second scale.
         bool audioMuted = false;
+        float audioGain = 1.0f;
+        int audioPanPercent = 50;
 
         // Per-receiver S-meter ballistics. Deliberately NOT shared: a strong
         // signal on receiver 1 must not move receiver 3's needle, which is what
@@ -373,6 +383,8 @@ private:
     // Ceiling on host-mixed slice audio. N demodulated receivers are summed
     // here, so N loud slices can sum past full scale where one never could.
     static constexpr float kMixCeiling = 1.0f;
+    // Centre of SliceModel's 0..100 balance range.
+    static constexpr int kAudioPanCentre = 50;
 
     // AD9866 LNA gain limits, in dB. These are the range ccRxGain() encodes
     // (C4 = 0x40 | (dB + 12), a 6-bit field), so they are the register's own

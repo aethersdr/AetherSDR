@@ -2853,12 +2853,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTestTone(a.action, a.value);
             });
 
-        add("pan", {}, "pan <create|add|remove|close|center> [value]",
+        add("pan", {}, "pan <create|add|remove|close|center|rfgain> [value]",
             parseActionValue,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(
-                        "pan requires an action (create|add|remove|close|center)"));
+                        "pan requires an action (create|add|remove|close|center|rfgain)"));
                 return s.doPan(a.action, a.value);
             });
 
@@ -7922,6 +7922,36 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                            {QStringLiteral("centerMhz"), mhz}, {QStringLiteral("requested"), true}};
     }
 
+    if (action == QLatin1String("rfgain")) {
+        // `pan rfgain <dB>` or `pan rfgain <panId> <dB>`.
+        //
+        // Added because the control itself lives in the SpectrumOverlayMenu,
+        // which is hidden until the operator opens it — so the only way to
+        // exercise RF gain from a script was to drive a popup. On a radio where
+        // the preamp is RADIO-WIDE (the HL2's single AD9866 behind every DDC)
+        // the thing worth asserting is that one change reaches EVERY pan, and
+        // that is exactly what could not be tested before.
+        const QStringList parts = arg.trimmed().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+            return err(QStringLiteral("pan rfgain requires a gain in dB"));
+        bool okG = false;
+        const QString panId = (parts.size() > 1) ? parts.first() : QString();
+        const int gain = parts.last().toInt(&okG);
+        if (!okG)
+            return err(QStringLiteral("pan rfgain requires an integer gain in dB"));
+        const QString target = panId.isEmpty()
+                                   ? (radio->activePanadapter()
+                                          ? radio->activePanadapter()->panId()
+                                          : QString())
+                                   : panId;
+        if (target.isEmpty())
+            return err(QStringLiteral("pan rfgain: no panadapter to address"));
+        radio->setPanRfGainFor(target, gain);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("rfgain")},
+                           {QStringLiteral("panId"), target},
+                           {QStringLiteral("gain"), gain}, {QStringLiteral("requested"), true}};
+    }
+
     if (action == QLatin1String("close") || action == QLatin1String("remove")) {
         const QString a = arg.trimmed();
         if (a.isEmpty())
@@ -7981,7 +8011,7 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
     }
 
     return err(QStringLiteral("unknown pan action: ") + action
-               + QStringLiteral(" (create|add|remove|close|center)"));
+               + QStringLiteral(" (create|add|remove|close|center|rfgain)"));
 }
 
 // ── Panadapter layout (bridge test hook) ────────────────────────────────────

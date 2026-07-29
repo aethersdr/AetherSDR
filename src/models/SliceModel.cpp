@@ -675,6 +675,12 @@ void SliceModel::setDiguOffset(int hz)
 void SliceModel::setTxSlice(bool on)
 {
     sendCommand(QString("slice set %1 tx=%2").arg(m_id).arg(on ? 1 : 0));
+    // Only the REQUEST to take transmit is forwarded. There is no "stop being
+    // the TX slice" on a radio with one transmitter — transmit always lives
+    // somewhere — so a backend is told which slice should own it, never that
+    // one should stop. Clearing is what the operator does by choosing another.
+    if (on)
+        emit txSliceCommandIssued();
 }
 
 void SliceModel::setActive(bool on)
@@ -773,6 +779,9 @@ void SliceModel::setAudioGain(float gain)
     m_audioGain = gain;
     emit commandReady(QString("slice set %1 audio_level=%2")
         .arg(m_id).arg(static_cast<int>(gain)));
+    // Operator-issued, for a backend that mixes slice audio on THIS host and
+    // never sees the Flex wire text above. See audioGainCommandIssued.
+    emit audioGainCommandIssued(static_cast<int>(gain));
     emit audioGainChanged(m_audioGain);
 }
 
@@ -799,6 +808,7 @@ void SliceModel::setAudioMute(bool mute)
     if (m_audioMute == mute) return;
     m_audioMute = mute;
     sendCommand(QString("slice set %1 audio_mute=%2").arg(m_id).arg(mute ? 1 : 0));
+    emit audioMuteCommandIssued(m_audioMute);
     if (audioMute() != previousVisibleMute) {
         emit audioMuteChanged(audioMute());
     }
@@ -961,6 +971,7 @@ void SliceModel::setAudioPan(int pan)
     if (m_audioPan == pan) return;
     m_audioPan = pan;
     sendCommand(QString("slice set %1 audio_pan=%2").arg(m_id).arg(pan));
+    emit audioPanCommandIssued(pan);
     emit audioPanChanged(pan);
 }
 

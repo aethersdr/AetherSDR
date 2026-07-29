@@ -175,6 +175,38 @@ public:
         Q_UNUSED(fps);
     }
 
+    // ---- per-slice audio ----
+    //
+    // A Flex mixes its slices ON THE RADIO, so these are wire commands to it and
+    // these defaults are never reached. A backend that demodulates on this host
+    // has to apply them in its own mixer, and without that the operator's mute
+    // moves the fader while the audio keeps playing.
+    //
+    // gain and pan are 0..100 to match SliceModel's own range (pan: 0 left,
+    // 50 centre, 100 right) rather than introducing a second scale at the seam.
+    virtual void setSliceAudioMute(int sliceId, bool mute)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(mute);
+    }
+    virtual void setSliceAudioGain(int sliceId, int gainPercent)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(gainPercent);
+    }
+    virtual void setSliceAudioPan(int sliceId, int panPercent)
+    {
+        Q_UNUSED(sliceId);
+        Q_UNUSED(panPercent);
+    }
+
+    // Move transmit to this slice. A radio with one transmitter and several
+    // receivers has to MOVE it — retarget the TX oscillator, mode and passband —
+    // rather than set a per-slice flag, so this is a verb and not a setter with
+    // a bool. There is no "stop being the TX slice": transmit always lives
+    // somewhere, and it is cleared only by another slice taking it.
+    virtual void setTxSlice(int sliceId) { Q_UNUSED(sliceId); }
+
     // ---- panadapter lifecycle ----
     //
     // Bring up / tear down a panadapter (and, on a backend where a pan IS a
