@@ -1192,13 +1192,39 @@ private:
     // family's naming scheme, and a backend must not have to know about the
     // 0xE1000000 stream-id space. This table is the translation between them.
     QHash<QString, int> m_backendPanIndex;
+    // The inverse, for commands going DOWN. Filled alongside the forward map.
+    QHash<int, QString> m_backendPanIdByIndex;
     // Allocate (or recall) the neutral index for a backend pan id.
     int neutralPanIndexFor(const QString& backendPanId);
     // Resolve a BACKEND-namespaced pan id to its PanadapterModel, translating
     // through the neutral index. Every IRadioBackend pan signal must use this
     // rather than resolvePan(), whose active-pan fallback silently misdirects a
     // multi-pan backend's updates. See the definition.
+public:
+    // Test hooks for the backend<->model pan-id mapping.
+    //
+    // Exposed because the property they pin is exactly the one that broke: the
+    // mapping was built in ONE direction, so every pan signal arrived correctly
+    // and every pan COMMAND was refused by a backend that could not resolve the
+    // model's id. A round-trip assertion is the cheapest thing that fails when
+    // half of a two-way mapping goes missing.
+    int panIndexForBackendIdForTest(const QString& backendPanId)
+    {
+        return neutralPanIndexFor(backendPanId);
+    }
+    QString backendPanIdForTest(const QString& modelPanId) const
+    {
+        return backendPanIdFor(modelPanId);
+    }
+    static QString neutralPanIdStringForTest(int panIdx);
+
+private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
+    // Translate a MODEL pan id to the backend's own id for a command going down
+    // the seam. The inverse of resolveBackendPan(); both are needed or the
+    // mapping is one-way and every pan command addresses a pan the backend
+    // cannot resolve. Identity for Flex.
+    QString backendPanIdFor(const QString& modelPanId) const;
 
     // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
     //

@@ -1014,6 +1014,7 @@ void RadioModel::teardownBackend()
     // let a new backend's first pan inherit an index the old one had allocated,
     // and every pan after it would be off by one.
     m_backendPanIndex.clear();
+    m_backendPanIdByIndex.clear();
     m_backendPanCenterMhz.clear();
     m_backendPanBandwidthMhz.clear();
 }
@@ -3711,7 +3712,7 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
         // production. Only the waterfall's line_duration is paced up here —
         // see onBackendSpectrumFrame for why the two live in different places.
         if (fps > 0)
-            m_backend->setPanFrameRate(panId, fps);
+            m_backend->setPanFrameRate(backendPanIdFor(panId), fps);
         return true;
     }
 
@@ -3834,14 +3835,14 @@ bool RadioModel::dispatchPanCenterBandwidth(const QString& panId,
     // panCenterBandwidthChanged, which drives the model.
     if (!m_flexBackend && m_backend) {
         if (hasCenter)
-            m_backend->setPanCenter(panId, centerMhz * 1.0e6);
+            m_backend->setPanCenter(backendPanIdFor(panId), centerMhz * 1.0e6);
         // Bandwidth goes through the seam for the same reason center does. This
         // used to fall straight into the model write below, which is why zooming
         // an HL2 produced black bars: the span the operator asked for became the
         // view's span while the receiver kept sending its old, narrower window,
         // and the honest VITA-49 tiles left the difference unpainted.
         if (hasBandwidth)
-            m_backend->setPanBandwidth(panId, bandwidthMhz * 1.0e6);
+            m_backend->setPanBandwidth(backendPanIdFor(panId), bandwidthMhz * 1.0e6);
         if (pan) {
             // Center only. The backend snaps a span REQUEST to a rate it can
             // actually run, so the resulting bandwidth is not ours to predict —
@@ -4052,7 +4053,7 @@ void RadioModel::setPanRfGainFor(const QString& panId, int gain)
     // Without this the HL2's RF Gain slider moved, persisted, and changed
     // nothing: lnaGainDb was applied once at connect and never again.
     if (!m_flexBackend && m_backend) {
-        m_backend->setPanRfGain(panId, gain);
+        m_backend->setPanRfGain(backendPanIdFor(panId), gain);
         return;
     }
     sendCmd(QString("display pan set %1 rfgain=%2").arg(panId).arg(gain));
@@ -6468,6 +6469,41 @@ PanadapterModel* RadioModel::resolveBackendPan(const QString& backendPanId)
     return panadapter(neutralPanIdString(neutralPanIndexFor(backendPanId)));
 }
 
+QString RadioModel::neutralPanIdStringForTest(int panIdx)
+{
+    return neutralPanIdString(panIdx);
+}
+
+QString RadioModel::backendPanIdFor(const QString& modelPanId) const
+{
+    // THE RETURN TRIP. resolveBackendPan() translates backend -> model for every
+    // signal coming UP; this translates model -> backend for every command going
+    // DOWN, and both directions are required for the pair to be a mapping at all.
+    //
+    // Without it the app sends the MODEL's id ("0xe1000002") to a backend whose
+    // pan ids are its own ("hl2-2"). A backend that ignored the argument (as the
+    // single-pan HL2 did) never noticed. One that resolves it — as it must, to
+    // know WHICH of four receivers to move — refuses the command outright, and
+    // the symptom is a panadapter whose centre never moves while the widget's
+    // own drag preview slides over a waterfall still drawn at the old edges.
+    //
+    // Flex pan ids ARE the model keys, so this is identity there.
+    if (m_flexBackend || modelPanId.isEmpty())
+        return modelPanId;
+    bool ok = false;
+    const quint32 id = modelPanId.toUInt(&ok, 0);   // base 0: honours the "0x"
+    if (ok && id >= kNeutralPanStreamIdBase) {
+        const int idx = static_cast<int>(id - kNeutralPanStreamIdBase);
+        const auto it = m_backendPanIdByIndex.constFind(idx);
+        if (it != m_backendPanIdByIndex.constEnd())
+            return it.value();
+    }
+    // Not one of ours: hand it back untouched rather than inventing an id. A
+    // backend that does not recognise it will refuse, which is the correct
+    // outcome for a pan this session never mapped.
+    return modelPanId;
+}
+
 int RadioModel::neutralPanIndexFor(const QString& backendPanId)
 {
     // Backend pan ids are opaque strings. They are assigned neutral indices in
@@ -6485,6 +6521,9 @@ int RadioModel::neutralPanIndexFor(const QString& backendPanId)
         return it.value();
     const int assigned = m_backendPanIndex.size();
     m_backendPanIndex.insert(backendPanId, assigned);
+    // Both directions are filled at the same moment, from the same allocation,
+    // so the pair cannot drift. See backendPanIdFor().
+    m_backendPanIdByIndex.insert(assigned, backendPanId);
     return assigned;
 }
 
