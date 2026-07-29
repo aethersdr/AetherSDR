@@ -25,6 +25,7 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTcpSocket>
+#include <QHostInfo>
 #include <QUdpSocket>
 #include <QNetworkDatagram>
 #include <QDeadlineTimer>
@@ -1831,7 +1832,7 @@ void ConnectionPanel::probeRadio(const QString& ip)
                                "radio is powered, idle, and reachable on UDP port 1024.")
                     .arg(trimmedIp),
                 true);
-        } else if (probe == Hl2ProbeResult::BindFailed) {
+        } else if (probe == Hl2ProbeResult::NotAttempted) {
             resetManualConnectButton();
         }
         return;
@@ -1923,14 +1924,59 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                                "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
                 true);
         }
-        return Hl2ProbeResult::BindFailed;
+        return Hl2ProbeResult::NotAttempted;
+    }
+
+    // RESOLVE A NAME BEFORE PROBING IT.
+    //
+    // QHostAddress(ip) is null for anything that is not a literal address, and a
+    // writeDatagram() to a null destination sends nothing — so a hostname used to
+    // fail as a 600 ms silence and then get reported as "No Hermes-Lite 2 answered
+    // … check the radio is powered", blaming the radio for an input this path
+    // never tried to send to.
+    //
+    // Names have to work here because the Flex path accepts them (connectToHost()
+    // resolves internally) and docs/automation-bridge.md documents the verb as
+    // `connect ip <host-or-ip> [flex|hl2]`. QHostInfo::fromName() is synchronous,
+    // which suits a path that already blocks ~600 ms on the reply.
+    //
+    // IPv4 only, and not an arbitrary pick from the list: Metis is IPv4-only, so a
+    // AAAA-only name has nothing this protocol can talk to and should say so
+    // rather than fail as silence. (PR #4528 review.)
+    QHostAddress dest(ip);
+    if (dest.isNull()) {
+        const QHostInfo resolved = QHostInfo::fromName(ip);
+        for (const QHostAddress& a : resolved.addresses()) {
+            if (a.protocol() == QAbstractSocket::IPv4Protocol) {
+                dest = a;
+                break;
+            }
+        }
+        if (dest.isNull()) {
+            setManualMessage(
+                resolved.error() != QHostInfo::NoError
+                    ? QStringLiteral("Could not resolve “%1”: %2")
+                          .arg(ip, resolved.errorString())
+                    : QStringLiteral("“%1” has no IPv4 address, and a Hermes-Lite 2 "
+                                     "is reachable over IPv4 only.").arg(ip),
+                true);
+            return Hl2ProbeResult::NotAttempted;
+        }
     }
 
     const auto request = hl2::discoveryRequest();
-    hpsdr.writeDatagram(reinterpret_cast<const char*>(request.data()),
-                        qint64(request.size()),
-                        QHostAddress(ip),
-                        hl2::kMetisPort);
+    // A send that never left is not a radio that stayed silent. Without this the
+    // two are indistinguishable and both surface as "check the radio is powered".
+    if (hpsdr.writeDatagram(reinterpret_cast<const char*>(request.data()),
+                            qint64(request.size()),
+                            dest,
+                            hl2::kMetisPort) < 0) {
+        setManualMessage(
+            QStringLiteral("Could not send a discovery request to %1: %2")
+                .arg(dest.toString(), hpsdr.errorString()),
+            true);
+        return Hl2ProbeResult::NotAttempted;
+    }
 
     QDeadlineTimer deadline(600);
     while (!deadline.hasExpired()) {
@@ -1950,12 +1996,17 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
 
             RadioInfo info;
             info.family   = QString::fromLatin1(kFamilyHl2);
-            info.address  = QHostAddress(ip);
+            info.address  = dest;
             info.port     = hl2::kMetisPort;            // Metis, not Flex 4992
             info.model    = QStringLiteral("Hermes-Lite 2");
             info.name     = info.model;
-            info.nickname = info.model;
             info.serial   = hl2::Hl2Discovery::macToSerial(reply->mac);
+            // Same nickname the broadcast sweep shows for this MAC. An HL2 has no
+            // on-radio name store, so the operator's custom name lives client-side
+            // keyed by serial — and hard-coding the model here meant a radio named
+            // in Radio Setup showed that name when found locally and
+            // "Hermes-Lite 2" when reached over the VPN. Needs the serial first.
+            info.nickname = hl2::Hl2Discovery::effectiveNickname(info.serial, info.model);
             info.version  = QString::number(reply->gatewareVersion);
             // Streaming (status byte 0x03) means another client already owns
             // the radio. Reflect it rather than hard-coding Available.

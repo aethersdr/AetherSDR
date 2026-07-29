@@ -135,9 +135,9 @@ private:
     // power-cycle a radio that was never contacted. Only NoAnswer leaves the
     // error message to the caller — the other two have already reported.
     enum class Hl2ProbeResult {
-        Answered,    // an HL2 replied; connect or refusal already reported
-        NoAnswer,    // nothing replied within the deadline; caller owns the message
-        BindFailed,  // could not open/bind the probe socket; already reported here
+        Answered,      // an HL2 replied; connect or refusal already reported
+        NoAnswer,      // nothing replied within the deadline; caller owns the message
+        NotAttempted,  // never got to ask — bind, resolve or send failed; reported here
     };
     Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);

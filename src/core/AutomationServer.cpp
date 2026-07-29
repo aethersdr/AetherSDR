@@ -5193,7 +5193,8 @@ QJsonObject AutomationServer::doConnect(const QString& action,
         // The optional family picks which wire protocol to probe. Omitted keeps
         // whatever the connect dialog's radio-type selector is set to, so every
         // pre-existing `connect ip <addr>` script keeps working.
-        const QStringList ipTokens = arg.trimmed().split(QRegularExpression("\\s+"),
+        static const QRegularExpression ipTokenSep(QStringLiteral("\\s+"));
+        const QStringList ipTokens = arg.trimmed().split(ipTokenSep,
                                                          Qt::SkipEmptyParts);
         if (ipTokens.isEmpty()) {
             return err(QStringLiteral("connect ip requires a host or IP address"));
