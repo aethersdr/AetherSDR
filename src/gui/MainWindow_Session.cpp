@@ -1249,6 +1249,15 @@ void MainWindow::wirePanLifecycle()
             [this](bool connected) {
         if (connected) ensureMiniPanFeed();
     });
+    // Once the pan actually exists (async create resolved), push our real scope
+    // width and centre it on the VFO — pushMiniPanXpixels/refreshMiniPanFollow at
+    // create-time no-op because miniPanId() is still empty then.
+    connect(&m_radioModel, &RadioModel::miniPanReady, this,
+            [this](const QString&) {
+        if (!m_miniPan || !m_miniPanFeedWanted) return;
+        refreshMiniPanFollow();
+        pushMiniPanXpixels();
+    });
 
     connect(&m_radioModel, &RadioModel::panFeedWaterfallRowReady,
             this, [this, profileLoadFrameReady](quint32 streamId,

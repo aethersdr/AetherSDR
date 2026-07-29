@@ -191,6 +191,27 @@ QString parsePanadapterCreateId(const QString& body)
     return RadioStatusOwnership::parsePanafallCreatePanId(body);
 }
 
+// The panafall-create reply names the waterfall id in one of two forms:
+//   "0xPAN,0xWF"                (comma-delimited)  or
+//   "pan=0x.. waterfall=0x.."   (kv-delimited).
+// Extract it robustly so a race-cleanup can't leak the waterfall stream.
+QString parsePanafallCreateWaterfallId(const QString& body)
+{
+    const QString t = body.trimmed();
+    const int kv = t.indexOf(QStringLiteral("waterfall="));
+    if (kv >= 0) {
+        const QString rest = t.mid(kv + 10);   // len("waterfall=")
+        return RadioStatusOwnership::normalizedFlexId(
+            rest.section(QLatin1Char(' '), 0, 0).trimmed());
+    }
+    const int comma = t.indexOf(QLatin1Char(','));
+    if (comma >= 0) {
+        return RadioStatusOwnership::normalizedFlexId(
+            t.mid(comma + 1).section(QLatin1Char(' '), 0, 0).trimmed());
+    }
+    return QString();
+}
+
 struct StreamObjectParts {
     bool valid{false};
     quint32 streamId{0};
@@ -3660,6 +3681,16 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
         emit miniPanReady(m_miniPanId);
         return;
     }
+    if (m_miniPanPending)                  // a create is already in flight — don't
+        return;                            // double-create (spurious limit toast / churn)
+    // The synchronous claim in ensureOwnedPanadapter requires the pan map to be
+    // non-empty (so the FIRST pan can never mis-claim). The mini-pan is always
+    // created after the main pan; if there's no pan yet, defer — MainWindow
+    // re-invokes us from panadapterAdded once one appears.
+    if (m_panadapters.isEmpty()) {
+        qCDebug(lcProtocol) << "RadioModel::createMiniPan: no pan yet; deferring";
+        return;
+    }
     const int limit = maxPanadapters();
     if (static_cast<int>(m_panadapters.size()) >= limit) {
         qCWarning(lcProtocol) << "RadioModel::createMiniPan: pan limit" << limit << "reached";
@@ -3676,8 +3707,10 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
         if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel::createMiniPan: create failed, code"
                                   << Qt::hex << code << "body:" << body;
-            if (gen == m_miniPanGen)
+            if (gen == m_miniPanGen) {
+                m_miniPanPending = false;  // disarm — else the next user pan is hijacked
                 emit panadapterLimitReached(maxPanadapters(), m_model);
+            }
             return;
         }
         const QString panId = parsePanadapterCreateId(body);
@@ -3685,18 +3718,20 @@ void RadioModel::createMiniPan(double centerMhz, double spanMhz)
         // reply. Free the just-created pan rather than leak it, and drop it.
         if (gen != m_miniPanGen) {
             if (!panId.isEmpty()) {
-                const QString wfId = body.section(QLatin1Char(','), 1, 1).trimmed();
                 sendCommand(QStringLiteral("display pan remove ") + panId);
+                const QString wfId = parsePanafallCreateWaterfallId(body);
                 if (!wfId.isEmpty())
                     sendCommand(QStringLiteral("display panafall remove ") + wfId);
             }
-            return;
+            return;   // gen change already reset m_miniPanPending (remove/disconnect)
         }
         if (panId.isEmpty()) {
             qCWarning(lcProtocol) << "RadioModel::createMiniPan: no pan id in" << body;
+            m_miniPanPending = false;      // disarm — else the next user pan is hijacked
             return;
         }
-        m_miniPanId = panId;
+        m_miniPanId = panId;               // authoritative id from the create reply
+        m_miniPanPending = false;          // claim resolved (status-first path already did)
         ensureOwnedPanadapter(panId);      // owned — but setActivePanId refuses it
         QTimer::singleShot(200, this, [this, panId, gen, centerMhz, spanMhz]() {
             if (gen != m_miniPanGen || m_miniPanId != panId) return;
@@ -9012,7 +9047,8 @@ void RadioModel::handleSliceStatus(int id,
         // is a display-only pan and must not consume a slice slot or show a phantom
         // slice — remove the auto-slice (the pan and its FFT stream survive without
         // it) and never announce it to the UI. (#minipan)
-        if (!m_miniPanId.isEmpty() && s->panId() == m_miniPanId) {
+        if (!m_miniPanId.isEmpty()
+            && RadioStatusOwnership::normalizedFlexId(s->panId()) == m_miniPanId) {
             qCDebug(lcProtocol) << "RadioModel: removing FLEX auto-slice" << id
                                 << "on display-only mini-pan" << m_miniPanId;
             sendCmd(QString("slice remove %1").arg(id));

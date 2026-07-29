@@ -2373,6 +2373,7 @@ void MainWindow::onSliceRemoved(int id)
             m_activeSliceId = -1;
             if (m_ax25HfPacketDecodeDialog)
                 m_ax25HfPacketDecodeDialog->setAttachedSlice(nullptr);
+            refreshMiniPanFollow();   // no active slice → blank the mini-pan readout/passband
         }
     }
 

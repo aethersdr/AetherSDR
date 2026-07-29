@@ -699,6 +699,7 @@ public:
     void setMiniPanCenter(double centerMhz);
     void setMiniPanBandwidth(double spanMhz);
     QString miniPanId() const { return m_miniPanId; }
+    bool miniPanCreating() const { return m_miniPanPending; }   // a create is in flight
     void setPanBandwidth(double bandwidthMhz);
     void setPanCenter(double centerMhz);
     void setPanDbmRange(float minDbm, float maxDbm);

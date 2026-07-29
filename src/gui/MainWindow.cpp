@@ -7051,6 +7051,7 @@ void MainWindow::ensureMiniPanFeed()
     if (!m_miniPanFeedWanted || !m_miniPan) return;
     if (!m_radioModel.isConnected()) return;         // create once connected
     if (!m_radioModel.miniPanId().isEmpty()) return; // already have the pan
+    if (m_radioModel.miniPanCreating()) return;      // a create is already in flight
     // Wait for the main pan: the mini-pan must be created AFTER it (the model's
     // maxPanadapters and the mini-pan ownership-claim both rely on the main pan
     // already existing). On an open-at-startup restore, connect fires before the
