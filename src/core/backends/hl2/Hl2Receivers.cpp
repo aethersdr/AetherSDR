@@ -29,6 +29,7 @@ std::optional<int> hl2PanNumber(const QString& panId)
 void Hl2ReceiverMap::reset(int count)
 {
     m_rx.clear();
+    m_nextUiNumber = 0;   // a new session starts UI numbering over
     if (count < 0)
         count = 0;
     m_rx.reserve(static_cast<std::size_t>(count));
@@ -42,6 +43,10 @@ void Hl2ReceiverMap::reset(int count)
         // whole type exists to prevent.
         m_rx.push_back(std::move(ids));
     }
+    // Leave the counter past everything just issued, so a later append() cannot
+    // hand out a UI number that is already in use. Missing this made the first
+    // appended receiver collide with receiver 0.
+    m_nextUiNumber = count;
 }
 
 const Hl2ReceiverIds* Hl2ReceiverMap::byDdc(int ddcIndex) const
@@ -82,6 +87,35 @@ Hl2ReceiverIds* Hl2ReceiverMap::mutableByDdc(int ddcIndex)
         if (r.ddcIndex == ddcIndex)
             return &r;
     return nullptr;
+}
+
+int Hl2ReceiverMap::append()
+{
+    Hl2ReceiverIds ids;
+    ids.ddcIndex = static_cast<int>(m_rx.size());   // contiguous, as the gateware needs
+    ids.uiNumber = m_nextUiNumber++;                // monotonic, never reused
+    ids.panId = hl2PanId(ids.uiNumber);
+    // dspChannel and analyzerId stay -1 until the DSP actually opens.
+    m_rx.push_back(std::move(ids));
+    return m_rx.back().ddcIndex;
+}
+
+bool Hl2ReceiverMap::remove(int ddcIndex)
+{
+    for (std::size_t i = 0; i < m_rx.size(); ++i) {
+        if (m_rx[i].ddcIndex != ddcIndex)
+            continue;
+        m_rx.erase(m_rx.begin() + static_cast<std::ptrdiff_t>(i));
+        // Close the gap in the DDC space ONLY. Every receiver after the removed
+        // one moves down one hardware slot, because that index is its position
+        // in the EP6 round and the gateware streams numRx contiguous receivers.
+        // Their uiNumber and panId are untouched, so the panes the operator
+        // still has open keep their identity.
+        for (std::size_t k = i; k < m_rx.size(); ++k)
+            m_rx[k].ddcIndex = static_cast<int>(k);
+        return true;
+    }
+    return false;
 }
 
 }  // namespace AetherSDR::hl2

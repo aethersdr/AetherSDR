@@ -95,6 +95,24 @@ public:
     // one the operator was pointing at.
     Q_INVOKABLE void setRxFrequencyHz(int rxIndex, std::uint32_t hz);
     Q_INVOKABLE void setSampleRate(SampleRate rate);
+
+    // Change how many receivers the radio streams, while it is running.
+    //
+    // THIS RESTARTS THE EP6 STREAM, and that is deliberate rather than lazy.
+    // The receiver count changes the PAYLOAD LAYOUT — a round goes from 6N+2 to
+    // 6M+2 bytes — and the EP6 packet carries no receiver-count field and no
+    // marker for the packet where the change took effect. Simply re-sending the
+    // config bank would leave a window of some milliseconds in which the radio
+    // has switched layouts and the host has not, and every round in that window
+    // is misread as garbage on EVERY receiver, with nothing reporting an error.
+    //
+    // metis-stop / reconfigure / metis-start makes the transition a hard edge
+    // instead. It costs a brief gap in audio and spectrum, which is what adding
+    // or closing a receiver looks like anyway, and it cannot silently corrupt.
+    //
+    // No-op if `count` resolves to the count already running. Frequencies for
+    // receivers that survive are PRESERVED; new ones start on RX1's.
+    Q_INVOKABLE void setReceiverCount(int count);
     Q_INVOKABLE void setLnaGainDb(int db);
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     //

@@ -175,6 +175,29 @@ public:
         Q_UNUSED(fps);
     }
 
+    // ---- panadapter lifecycle ----
+    //
+    // Bring up / tear down a panadapter (and, on a backend where a pan IS a
+    // receiver, the receiver behind it). Return true if the backend took
+    // ownership of the request; the new or removed pan is then reported through
+    // the normal signals — panCenterBandwidthChanged and sliceChanged for a
+    // creation, panRemoved for a teardown — exactly as at connect.
+    //
+    // Default FALSE, meaning "not mine". A Flex creates pans with its own wire
+    // commands (`display panafall create`) and RadioModel keeps doing that; only
+    // a backend that owns its own receivers needs these.
+    //
+    // Deliberately NOT a count setter. "Add a panadapter" is the operator's
+    // actual intent and it is what the UI offers; a setReceiverCount(n) would
+    // make every caller compute n from the current state and race anything else
+    // that changed it.
+    virtual bool createPanadapter() { return false; }
+    virtual bool removePanadapter(const QString& panId)
+    {
+        Q_UNUSED(panId);
+        return false;
+    }
+
     // TX keying intent. The decision to allow keying is made ABOVE this seam by
     // the engine guard (RFC §6, single-holder lock + capability check); the
     // backend only translates an already-authorized intent to its mechanism
@@ -347,6 +370,21 @@ signals:
     // universal pan fields + the other mixed models follow.)
     void panCenterBandwidthChanged(const QString& panId,
                                    double centerMhz, double bandwidthMhz);
+
+    // A pan the backend owned is GONE. Emitted after removePanadapter() has
+    // actually torn the receiver down, so the model removes the pane only once
+    // the thing behind it has stopped — never optimistically, which would leave
+    // a receiver streaming into a pane nobody is listening to.
+    void panRemoved(const QString& panId);
+
+    // The pan's front end is WIDE: the hardware band filter cannot serve every
+    // active receiver at once, so it has been bypassed. On a Flex this is what
+    // a pan sharing an ADC across bands reports; on an HL2 it is the
+    // agree-or-bypass policy in applyBandFilter() becoming visible.
+    //
+    // Radio-wide in cause but reported PER PAN, because that is where the
+    // operator sees it and because a future radio could bypass per receiver.
+    void panWideChanged(const QString& panId, bool wide);
 
     // Panadapter display level range (universal — the Y-axis geometry that
     // pairs with center/bandwidth's X-axis). Unlike center/bandwidth, dBm is

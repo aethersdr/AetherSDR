@@ -65,6 +65,8 @@ private:
 
 public:
     void setPanFrameRate(const QString& panId, int fps) override;
+    bool createPanadapter() override;
+    bool removePanadapter(const QString& panId) override;
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
@@ -182,6 +184,17 @@ private:
     // tears the previous set down first, because a reconnect at a different
     // count must not leave orphaned DSP chains consuming WDSP channel ids.
     void buildReceivers(int count);
+    // Create and configure one receiver's DSP chain at `ddc`, wiring its
+    // outputs. Shared by buildReceivers() and createPanadapter() so a receiver
+    // added at runtime is identical to one built at connect — a second, nearly
+    // identical wiring block is exactly how a signal gets connected in one path
+    // and forgotten in the other.
+    bool openReceiverDsp(int ddc, std::string* error);
+    // How many receivers this radio may run right now: the board's reported
+    // count, capped by the link budget at the current sample rate.
+    [[nodiscard]] int receiverCeiling() const;
+    // Re-evaluate the shared band filter and publish the resulting WIDE state.
+    void publishWideState();
     // Destroy the DSP chains but KEEP each receiver's operator-set state. The
     // two have different lifetimes — see buildReceivers().
     void releaseReceiverDsps();
@@ -226,6 +239,11 @@ private:
     // budget above. Never a hardcoded count — the skimmer gateware variants
     // report 9..12 and the shipping hl2b5up_main reports 4.
     int m_requestedNumRx = 1;
+    // What the BOARD said it has (discovery byte 0x13), or 0 when the reply was
+    // a short one that omits it. Kept here as well as in MetisClient::Params
+    // because createPanadapter() has to answer "may I add one?" on this thread,
+    // and the wire object lives on the I/O thread.
+    int m_boardMaxRx = 0;
     // Zoom-sweep throttle for setPanBandwidth.
     //
     // Unlike a centre drag, which is cheap to forward, a span change is a

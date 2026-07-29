@@ -1,7 +1,6 @@
 #include "core/backends/hl2/Hl2Settings.h"
 
 #include "core/AppSettings.h"
-#include "core/backends/hl2/MetisProtocol.h"   // kMaxReceivers
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -17,7 +16,6 @@ namespace {
 const QString kRootKey = QStringLiteral("Hl2");
 
 constexpr const char* kFieldSpanMhz = "spanMhz";
-constexpr const char* kFieldReceiverCount = "receiverCount";
 
 // Owned by the connection panel, not by us. Read only; see the header.
 const QString kLowBandwidthKey = QStringLiteral("LowBandwidthConnect");
@@ -51,33 +49,6 @@ void Hl2Settings::setSpanMhz(double mhz)
     // (Principle XIV) — never half a config after a crash mid-write.
     QJsonObject o = readObj();
     o[QLatin1String(kFieldSpanMhz)] = mhz;
-    auto& s = AppSettings::instance();
-    s.setValue(kRootKey,
-               QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
-    s.save();
-}
-
-int Hl2Settings::receiverCount()
-{
-    // Clamped on READ as well as on write. A hand-edited or truncated settings
-    // file must not be able to command a receiver count the protocol cannot
-    // encode, and defaulting to 1 on anything unparseable keeps the failure mode
-    // "the radio comes up as it always did" rather than "the radio will not
-    // start" (Principle VII).
-    const int v = readObj().value(QLatin1String(kFieldReceiverCount)).toInt(1);
-    if (v < 1)
-        return 1;
-    if (v > hl2::kMaxReceivers)
-        return hl2::kMaxReceivers;
-    return v;
-}
-
-void Hl2Settings::setReceiverCount(int count)
-{
-    if (count < 1 || count > hl2::kMaxReceivers)
-        return;
-    QJsonObject o = readObj();
-    o[QLatin1String(kFieldReceiverCount)] = count;
     auto& s = AppSettings::instance();
     s.setValue(kRootKey,
                QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));

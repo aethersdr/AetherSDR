@@ -336,6 +336,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         pushInitialState();
         emitAllSliceState();
         defineMeters();
+        // At connect there is one receiver, so this is always "not wide" — but
+        // it is published rather than assumed, so the indicator starts from a
+        // stated value instead of whatever the widget happened to hold.
+        publishWideState();
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
@@ -445,76 +449,335 @@ void Hl2Backend::buildReceivers(int count)
         r.haveSMeter = false;
         r.sMeterClock = QElapsedTimer{};
 
-        r.dsp = new Hl2RxDsp(nullptr);   // no parent: moveToThread refuses one
-        r.dsp->moveToThread(m_ioThread);
-
-        // Capture the DDC index BY VALUE. Capturing a pointer into m_rx would
-        // dangle the moment the vector reallocates, and capturing the loop
-        // variable by reference is the classic way to wire every receiver to the
-        // last index.
-        const int ddc = i;
-
-        connect(r.dsp, &Hl2RxDsp::spectrumReady, this,
-                [this, ddc](const std::vector<float>& bins) {
-            const auto* ids = m_ids.byDdc(ddc);
-            if (!ids)
-                return;
-            // dBFS -> dBm through the one object that owns the reference. With
-            // an uncalibrated fullScaleDbm this is a pure -lnaGain shift, which
-            // is the part that is exactly right: it holds the trace still across
-            // a gain change instead of letting the whole display jump.
-            //
-            // The reference is SHARED because the LNA it describes is shared —
-            // one AD9866 behind every DDC — so a gain change moves all four
-            // traces together, which is what actually happened to the signals.
-            const double off = m_dbRef.offsetDb();
-            if (off == 0.0) {
-                emit spectrumFrameReady(ids->uiNumber, floatBytes(bins));
-                return;
-            }
-            std::vector<float> dbm(bins.size());
-            for (std::size_t i = 0; i < bins.size(); ++i)
-                dbm[i] = static_cast<float>(bins[i] + off);
-            emit spectrumFrameReady(ids->uiNumber, floatBytes(dbm));
-        });
-
-        connect(r.dsp, &Hl2RxDsp::audioReady, this,
-                [this, ddc](const std::vector<float>& pcm) {
-            mixReceiverAudio(ddc, pcm);
-        });
-
-        connect(r.dsp, &Hl2RxDsp::meterUpdate, this,
-                [this, ddc](float dbfs) {
-            Receiver* r = rx(ddc);
-            const auto* ids = m_ids.byDdc(ddc);
-            if (!r || !ids)
-                return;
-            // Same reference as the spectrum -- a meter that moved on a gain
-            // change while the trace stayed put would be its own kind of lie.
-            const double dbm = m_dbRef.toDbm(dbfs);
-
-            // Smooth EVERY sample, publish only on the tick. Both halves matter:
-            // smoothing all of them is what makes the published value represent
-            // the whole interval rather than one arbitrary instant inside it,
-            // and the tick is what stops ~47 cross-thread emits a second
-            // repainting a widget nobody can read that fast. Per receiver, so a
-            // strong signal on one does not drive another's needle.
-            if (!r->haveSMeter) {
-                r->sMeterDbm = dbm;
-                r->haveSMeter = true;
-            } else {
-                const double alpha = (dbm > r->sMeterDbm) ? kMeterAttackAlpha
-                                                          : kMeterDecayAlpha;
-                r->sMeterDbm = alpha * dbm + (1.0 - alpha) * r->sMeterDbm;
-            }
-            if (r->sMeterClock.isValid()
-                && r->sMeterClock.elapsed() < kMeterPublishIntervalMs)
-                return;
-            r->sMeterClock.restart();
-            emit meterUpdate(sliceMeterName(ids->uiNumber), r->sMeterDbm);
-        });
+        std::string err;
+        if (!openReceiverDsp(i, &err)) {
+            qCWarning(lcHl2) << "HL2: could not create receiver" << i << "—"
+                             << QString::fromStdString(err);
+        }
     }
     qCInfo(lcHl2) << "HL2: running" << count << "receiver(s)";
+}
+
+bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
+{
+    Receiver* r = rx(ddc);
+    const auto* ids = m_ids.byDdc(ddc);
+    if (!r || !ids) {
+        if (error) *error = "no such receiver";
+        return false;
+    }
+
+    r->dsp = new Hl2RxDsp(nullptr);   // no parent: moveToThread refuses one
+    r->dsp->moveToThread(m_ioThread);
+
+    // CAPTURE THE UI NUMBER, NOT THE DDC INDEX.
+    //
+    // A DDC index is not stable for the life of a receiver: closing the middle
+    // of three renumbers every receiver after it, because the gateware streams
+    // numRx CONTIGUOUS receivers and the index IS the slot in the EP6 round.
+    // A lambda holding the old index would resolve to the wrong receiver — or,
+    // at the end of the list, to none at all, and that receiver's spectrum would
+    // simply stop arriving with nothing logged.
+    //
+    // The UI number never changes (Hl2ReceiverMap::remove), so resolving through
+    // it at signal time survives any renumbering with no rewiring at all.
+    const int ui = ids->uiNumber;
+
+    connect(r->dsp, &Hl2RxDsp::spectrumReady, this,
+            [this, ui](const std::vector<float>& bins) {
+        if (!m_ids.byUi(ui))
+            return;
+        // dBFS -> dBm through the one object that owns the reference. With
+        // an uncalibrated fullScaleDbm this is a pure -lnaGain shift, which
+        // is the part that is exactly right: it holds the trace still across
+        // a gain change instead of letting the whole display jump.
+        //
+        // The reference is SHARED because the LNA it describes is shared —
+        // one AD9866 behind every DDC — so a gain change moves all four
+        // traces together, which is what actually happened to the signals.
+        const double off = m_dbRef.offsetDb();
+        if (off == 0.0) {
+            emit spectrumFrameReady(ui, floatBytes(bins));
+            return;
+        }
+        std::vector<float> dbm(bins.size());
+        for (std::size_t i = 0; i < bins.size(); ++i)
+            dbm[i] = static_cast<float>(bins[i] + off);
+        emit spectrumFrameReady(ui, floatBytes(dbm));
+    });
+
+    connect(r->dsp, &Hl2RxDsp::audioReady, this,
+            [this, ui](const std::vector<float>& pcm) {
+        const auto* ids = m_ids.byUi(ui);
+        if (ids)
+            mixReceiverAudio(ids->ddcIndex, pcm);
+    });
+
+    connect(r->dsp, &Hl2RxDsp::meterUpdate, this,
+            [this, ui](float dbfs) {
+        const auto* ids = m_ids.byUi(ui);
+        Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!r)
+            return;
+        // Same reference as the spectrum -- a meter that moved on a gain
+        // change while the trace stayed put would be its own kind of lie.
+        const double dbm = m_dbRef.toDbm(dbfs);
+
+        // Smooth EVERY sample, publish only on the tick. Both halves matter:
+        // smoothing all of them is what makes the published value represent
+        // the whole interval rather than one arbitrary instant inside it,
+        // and the tick is what stops ~47 cross-thread emits a second
+        // repainting a widget nobody can read that fast. Per receiver, so a
+        // strong signal on one does not drive another's needle.
+        if (!r->haveSMeter) {
+            r->sMeterDbm = dbm;
+            r->haveSMeter = true;
+        } else {
+            const double alpha = (dbm > r->sMeterDbm) ? kMeterAttackAlpha
+                                                      : kMeterDecayAlpha;
+            r->sMeterDbm = alpha * dbm + (1.0 - alpha) * r->sMeterDbm;
+        }
+        if (r->sMeterClock.isValid()
+            && r->sMeterClock.elapsed() < kMeterPublishIntervalMs)
+            return;
+        r->sMeterClock.restart();
+        emit meterUpdate(sliceMeterName(ui), r->sMeterDbm);
+    });
+    return true;
+}
+
+int Hl2Backend::receiverCeiling() const
+{
+    // Two independent limits and the smaller wins. Neither may be assumed: the
+    // shipping gateware reports 4 at discovery byte 0x13 and the skimmer builds
+    // report 9-12, while the link budget depends on the span the operator is
+    // currently running.
+    MetisClient::Params p;
+    p.numRx = kMaxReceivers;
+    p.boardMaxRx = m_boardMaxRx;
+    const int board = MetisClient::effectiveNumRx(p);
+    return std::min(board, maxReceiversAtRate(m_sampleRateHz, board));
+}
+
+bool Hl2Backend::createPanadapter()
+{
+    if (!m_connected) {
+        qCWarning(lcHl2) << "HL2: cannot add a receiver before the radio is connected";
+        return false;
+    }
+    const int running = m_ids.size();
+    const int ceiling = receiverCeiling();
+    if (running >= ceiling) {
+        // Say WHICH limit was hit. "Limit reached" on a 4-receiver board that is
+        // only allowed 3 because the operator zoomed out to 384 kHz is the kind
+        // of message that sends someone hunting for a hardware fault.
+        qCWarning(lcHl2).nospace()
+            << "HL2: cannot add a receiver — running " << running << " of " << ceiling
+            << " (board reports " << (m_boardMaxRx > 0 ? QString::number(m_boardMaxRx)
+                                                       : QStringLiteral("unknown"))
+            << ", link budget allows " << maxReceiversAtRate(m_sampleRateHz, kMaxReceivers)
+            << " at " << m_sampleRateHz / 1000 << " kHz)";
+        return false;
+    }
+
+    const int ddc = m_ids.append();
+    m_rx.emplace_back();
+    Receiver& r = m_rx.back();
+    // Inherit the first receiver's settings, not construction defaults: a new
+    // pane opening on 10 MHz USB when the operator is working 40 m would look
+    // like the radio changed band on its own. Same reasoning as at connect.
+    if (m_rx.size() > 1) {
+        const Receiver& first = m_rx.front();
+        r.sliceFreqHz = first.sliceFreqHz;
+        r.ncoHz = first.ncoHz;
+        r.mode = first.mode;
+        r.filterLowHz = first.filterLowHz;
+        r.filterHighHz = first.filterHighHz;
+        r.agcMode = first.agcMode;
+        r.agcThresholdDb = first.agcThresholdDb;
+    }
+
+    // The WIRE FIRST, so the radio is already streaming the new layout before
+    // the DSP that consumes it exists. The reverse order would leave a
+    // configured chain briefly reading a payload with one fewer receiver in it.
+    // This restarts the EP6 stream — see MetisClient::setReceiverCount.
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::BlockingQueuedConnection,
+            Q_ARG(int, static_cast<int>(m_rx.size())));
+    }
+
+    std::string err;
+    if (!openReceiverDsp(ddc, &err)) {
+        qCWarning(lcHl2) << "HL2: receiver" << ddc << "could not be created —"
+                         << QString::fromStdString(err);
+        m_rx.pop_back();
+        m_ids.remove(ddc);
+        if (m_metis) {
+            QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
+                Q_ARG(int, static_cast<int>(m_rx.size())));
+        }
+        return false;
+    }
+
+    Hl2RxDsp::Config dc;
+    dc.inputSampleRateHz = m_sampleRateHz;
+    dc.audioSampleRateHz = 24000;
+    dc.mode = modeFromString(r.mode);
+    dc.filterLowHz = r.filterLowHz;
+    dc.filterHighHz = r.filterHighHz;
+    dc.agcMode = wdspAgcMode(r.agcMode);
+    dc.maximumAgcGainDb = r.agcThresholdDb * kAgcCeilingDbPerUnit;
+    bool ok = false;
+    Hl2RxDsp* dsp = r.dsp;
+    QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &ok] {
+        ok = dsp->configure(dc, &err);
+    }, Qt::BlockingQueuedConnection);
+    if (!ok) {
+        qCWarning(lcHl2) << "HL2: receiver" << ddc << "DSP failed —"
+                         << QString::fromStdString(err);
+        dsp->disconnect(this);
+        dsp->deleteLater();
+        m_rx.pop_back();
+        m_ids.remove(ddc);
+        if (m_metis) {
+            QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
+                Q_ARG(int, static_cast<int>(m_rx.size())));
+        }
+        return false;
+    }
+
+    int channelId = -1;
+    QMetaObject::invokeMethod(dsp, [dsp, &channelId] {
+        channelId = dsp->wdspChannelId();
+    }, Qt::BlockingQueuedConnection);
+    if (auto* ids = m_ids.mutableByDdc(ddc)) {
+        ids->dspChannel = channelId;
+        ids->analyzerId = ids->uiNumber;
+    }
+
+    // Put the NCO where this receiver's state says it should be. setReceiverCount
+    // starts a new receiver on RX1's frequency, which is only right if nothing
+    // moved it since.
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(int, ddc),
+            Q_ARG(std::uint32_t, static_cast<std::uint32_t>(r.ncoHz < 0 ? 0 : r.ncoHz)));
+    }
+    QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
+        Q_ARG(double, r.sliceFreqHz - r.ncoHz));
+
+    const auto* ids = m_ids.byDdc(ddc);
+    qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << (ids ? ids->panId : QString())
+                  << "WDSP channel" << channelId
+                  << "; running" << m_rx.size() << "of" << ceiling;
+
+    // Publish it exactly as at connect, in the same order: pan geometry first so
+    // the model can materialise the pane, then the slice that lives in it.
+    emitPanState(ddc);
+    emitSliceState(ddc);
+    if (ids) {
+        emit panBandwidthLimitsChanged(
+            ids->panId,
+            static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
+            static_cast<double>(m_sampleRateHz) / 1.0e6);
+        emit panRfGainInfoChanged(ids->panId, kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
+        emit panRfGainChanged(ids->panId, m_lnaGainDb);
+    }
+    // A new receiver can change whether the set spans bands.
+    applyBandFilter("add receiver");
+    publishWideState();
+    return true;
+}
+
+bool Hl2Backend::removePanadapter(const QString& panId)
+{
+    const int ddc = ddcForPan(panId);
+    const auto* ids = m_ids.byDdc(ddc);
+    if (ddc < 0 || !ids) {
+        qCWarning(lcHl2) << "HL2: no receiver behind pan" << panId;
+        return false;
+    }
+    if (m_ids.size() <= 1) {
+        // A radio with no receivers is not a state worth being able to reach:
+        // there would be nothing to hear, nothing to display, and no pane left
+        // to reopen one from. Closing the last pan is refused, not obeyed.
+        qCWarning(lcHl2) << "HL2: refusing to close the last receiver";
+        return false;
+    }
+    if (ddc == m_txDdc) {
+        // Transmit has to live SOMEWHERE. Move it to the first surviving
+        // receiver rather than leaving m_txDdc pointing at a receiver that no
+        // longer exists — which would make txSlice() null and every later key
+        // attempt die in the interlock with no explanation.
+        const int fallback = (ddc == 0) ? 1 : 0;
+        qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc << "to" << fallback
+                      << "— its receiver is closing";
+        m_txDdc = fallback;
+    }
+
+    const QString removedPanId = ids->panId;
+    const int removedUi = ids->uiNumber;
+
+    // Tear the DSP down BEFORE the wire shrinks, so nothing is left consuming a
+    // slot the radio has stopped sending. The reverse order feeds the surviving
+    // receivers' samples into a chain that thinks it is still receiver N.
+    Receiver& r = m_rx[static_cast<std::size_t>(ddc)];
+    if (r.dsp) {
+        r.dsp->disconnect(this);
+        r.dsp->deleteLater();
+        r.dsp = nullptr;
+    }
+    m_rx.erase(m_rx.begin() + ddc);
+    m_ids.remove(ddc);        // renumbers DDC indices; UI numbers are untouched
+    m_mixPending.clear();     // the per-receiver queues describe the old set
+    m_mixAccum.clear();
+
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::BlockingQueuedConnection,
+            Q_ARG(int, static_cast<int>(m_rx.size())));
+        // Every SURVIVING receiver may have moved down a hardware slot, and the
+        // NCO registers are addressed by that slot. Re-assert all of them, or
+        // the receivers after the closed one keep tuning the register that used
+        // to be theirs — silently, because nothing reads a NCO back.
+        for (const auto& s : m_ids.all()) {
+            if (const Receiver* sr = rx(s.ddcIndex)) {
+                QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
+                    Q_ARG(int, s.ddcIndex),
+                    Q_ARG(std::uint32_t,
+                          static_cast<std::uint32_t>(sr->ncoHz < 0 ? 0 : sr->ncoHz)));
+            }
+        }
+    }
+
+    qCInfo(lcHl2) << "HL2: closed receiver — pan" << removedPanId << "(UI" << removedUi
+                  << "); running" << m_rx.size() << "receiver(s)";
+
+    emit panRemoved(removedPanId);
+    // Closing one can take the set back onto a single band.
+    applyBandFilter("close receiver");
+    publishWideState();
+    // The TX slice may have moved; republish so the indicator follows.
+    emitAllSliceState();
+    return true;
+}
+
+void Hl2Backend::publishWideState()
+{
+    // WIDE means the shared band filter could not serve every active receiver,
+    // so it was bypassed. Computed from the same rule applyBandFilter() applies,
+    // rather than from a flag it sets, so the indicator cannot drift out of step
+    // with the relays.
+    int want = -1;
+    bool spanned = false;
+    for (const Receiver& r : m_rx) {
+        const int w = static_cast<int>(ocFilterByteForHz(r.sliceFreqHz));
+        if (want < 0)
+            want = w;
+        else if (w != want)
+            spanned = true;
+    }
+    for (const auto& ids : m_ids.all())
+        emit panWideChanged(ids.panId, spanned);
 }
 
 void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
@@ -762,7 +1025,18 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     //      384 kHz is ~89 Mbit/s on 100BASE-T, which does not fail cleanly: the
     //      link drops packets, and a dropped EP6 packet is a simultaneous gap in
     //      every panadapter.
-    m_requestedNumRx = Hl2Settings::receiverCount();
+    //
+    // CONNECT ALWAYS COMES UP WITH ONE. Receivers are added afterwards, by the
+    // operator, through "Add Panadapter" — createPanadapter() below. That is
+    // where the intent actually is, and it means a radio never starts spending
+    // link budget and WDSP channels on receivers nobody asked for.
+    //
+    // The persisted count is gone as the way in. It required editing settings to
+    // get a second receiver, made the connect path the only place the count
+    // could change, and meant a saved 4 would be re-imposed on every connect
+    // even at a span that could not carry it. `numRx` survives ONLY as an
+    // explicit connect param, for automation that wants a known starting state.
+    m_requestedNumRx = 1;
     if (request.params.contains(QStringLiteral("numRx")))
         m_requestedNumRx = request.params.value(QStringLiteral("numRx")).toInt();
     if (m_requestedNumRx < 1)
@@ -787,7 +1061,8 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.rxFrequencyHz = static_cast<std::uint32_t>(startFreqHz < 0 ? 0 : startFreqHz);
     mp.lnaGainDb = m_lnaGainDb;
     mp.numRx = rateLimited;
-    mp.boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
+    m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
+    mp.boardMaxRx = m_boardMaxRx;
     // The filter board has to be right from the FIRST config frame, not from
     // the operator's first band change. m_rxFreqHz here is the persisted
     // frequency this session is coming up on, so a launch straight onto 40 m
@@ -1024,6 +1299,9 @@ void Hl2Backend::setSliceFrequency(int sliceId, double hz)
     // every receiver, and on transmit it is what keeps the harmonics legal.
     // Change-gated inside, so tuning within a band sends nothing.
     applyBandFilter("tune");
+    // Tuning one receiver can take the set on or off a shared band, which is
+    // what the WIDE indicator reports.
+    publishWideState();
 
     emitSliceState(ddc);
     emitPanState(ddc);
@@ -1170,6 +1448,7 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz)
     // Panning one receiver can move it onto another band, which changes what the
     // SHARED filter board should be doing. Re-evaluate across every receiver.
     applyBandFilter("pan");
+    publishWideState();
     emitPanState(ddc);
 }
 

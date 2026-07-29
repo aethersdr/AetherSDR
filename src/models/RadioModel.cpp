@@ -628,6 +628,46 @@ void RadioModel::setupBackend(const QString& family)
         if (auto* pan = resolveBackendPan(panId)) pan->setWaterfallLineDuration(ms);
     });
 
+    // The backend confirms a pan is GONE. Only now is the pane dropped: the
+    // backend can refuse a close (the last receiver on an HL2), and tearing the
+    // model down optimistically would leave a receiver streaming into nothing.
+    connect(m_backend.get(), &IRadioBackend::panRemoved, this,
+            [this](const QString& backendPanId) {
+        auto* pan = resolveBackendPan(backendPanId);
+        if (!pan)
+            return;
+        const QString modelPanId = pan->panId();
+        // Retire the id translation for this pan. The index is NOT reused —
+        // neutralPanIndexFor() counts up — so a later pan cannot inherit the
+        // stream ids of the one just closed and start painting into its pane.
+        if (const int idx = m_backendPanIndex.take(backendPanId); true) {
+            m_backendPanIdByIndex.remove(idx);
+            m_backendPanCenterMhz.remove(idx);
+            m_backendPanBandwidthMhz.remove(idx);
+            m_backendWfLastRowNs.remove(idx);
+        }
+        m_panadapters.remove(modelPanId);
+        if (m_panStream) {
+            m_panStream->unregisterPanStream(pan->panStreamId());
+            m_panStream->unregisterWfStream(pan->wfStreamId());
+        }
+        qCDebug(lcProtocol) << "RadioModel: backend pan removed" << backendPanId
+                            << "->" << modelPanId;
+        emit panadapterRemoved(modelPanId);
+        pan->deleteLater();
+        if (m_activePanId == modelPanId) {
+            m_activePanId = m_panadapters.isEmpty() ? QString()
+                                                    : m_panadapters.firstKey();
+        }
+    });
+
+    // The pan's front end is wide (its band filter had to be bypassed).
+    connect(m_backend.get(), &IRadioBackend::panWideChanged, this,
+            [this](const QString& panId, bool wide) {
+        if (auto* pan = resolveBackendPan(panId))
+            pan->setWide(wide);
+    });
+
     // aetherd RFC 2.3 extension channel: Flex-specific pan fields ride the
     // namespaced extensionStatus channel; RadioModel routes them to the addressed
     // PanadapterModel. Two kinds: "panWnb" (noise blanker) and "panState" (wide,
@@ -3372,6 +3412,24 @@ void RadioModel::createPanadapter()
         emit panadapterLimitReached(limit, m_model);
         return;
     }
+
+    // A backend that owns its own receivers creates them at the seam. The Flex
+    // wire text below (`display panafall create`) goes nowhere on such a radio,
+    // which is why "Add Panadapter" did nothing on an HL2 and the only way to
+    // get a second receiver was a persisted count applied at connect.
+    //
+    // The backend reports the new pan through panCenterBandwidthChanged, which
+    // materialises the model exactly as it does for the pans that exist at
+    // connect — so there is ONE path that creates a pane, not two.
+    if (!m_flexBackend && m_backend) {
+        if (!m_backend->createPanadapter()) {
+            // The backend refused: it knows limits the model cannot see (the
+            // board's own receiver count, the link budget at this span).
+            qCWarning(lcProtocol) << "RadioModel::createPanadapter: backend declined";
+            emit panadapterLimitReached(limit, m_model);
+        }
+        return;
+    }
     const auto handleCreatedPan = [this](const QString& source, int code, const QString& body) {
         if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel:" << source << "failed, code"
@@ -3426,6 +3484,17 @@ void RadioModel::removePanadapter(const QString& panId)
     const QString wfId = pan ? pan->waterfallId() : QString();
     qCDebug(lcProtocol) << "RadioModel::removePanadapter:" << panId
                         << "waterfall:" << (wfId.isEmpty() ? QStringLiteral("(none)") : wfId);
+
+    // Same reasoning as createPanadapter(): on a backend that owns its
+    // receivers this is a seam verb, and the Flex teardown pair below would go
+    // nowhere. The model pane is dropped when the backend confirms with
+    // panRemoved — never optimistically, or a refused close (the last receiver)
+    // would take the pane away while the receiver kept streaming into nothing.
+    if (!m_flexBackend && m_backend) {
+        if (!m_backend->removePanadapter(backendPanIdFor(panId)))
+            qCWarning(lcProtocol) << "RadioModel::removePanadapter: backend declined" << panId;
+        return;
+    }
     sendCommand(QStringLiteral("display pan remove ") + panId);
     if (!wfId.isEmpty())
         sendCommand(QStringLiteral("display panafall remove ") + wfId);

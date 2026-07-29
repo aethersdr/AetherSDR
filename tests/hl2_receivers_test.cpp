@@ -108,6 +108,59 @@ int main()
         check(m.byDdc(1)->ddcIndex == 1, "the DDC index is unchanged by the UI renumber");
     }
 
+    // ---- append and remove: the two index spaces diverge on purpose ----
+    //
+    // This is the scenario the whole type exists for. The gateware streams
+    // `numRx` CONTIGUOUS receivers and a receiver's DDC index IS its slot in the
+    // interleaved EP6 round, so closing the middle one must renumber the
+    // hardware indices. The operator's panes must NOT be renumbered with them —
+    // closing panadapter 2 of 3 cannot turn their third panadapter into their
+    // second one.
+    {
+        Hl2ReceiverMap m;
+        m.reset(3);
+        const QString pan2 = m.byUi(2)->panId;
+
+        check(m.remove(1), "removing the middle receiver succeeds");
+        check(m.size() == 2, "two receivers left");
+
+        // DDC indices closed the gap...
+        check(m.byDdc(0) != nullptr && m.byDdc(1) != nullptr,
+              "DDC indices stay contiguous from zero");
+        check(m.byDdc(2) == nullptr, "no DDC 2 remains");
+
+        // ...but the UI numbers did NOT.
+        check(m.byUi(0) != nullptr, "UI 0 survives");
+        check(m.byUi(1) == nullptr, "UI 1 is gone — that pane was closed");
+        check(m.byUi(2) != nullptr, "UI 2 survives and is STILL called 2");
+        check(m.byUi(2)->ddcIndex == 1, "the surviving pane moved to DDC 1");
+        check(m.byUi(2)->panId == pan2, "its pan id is unchanged");
+        check(m.byPanId(pan2)->ddcIndex == 1, "and resolves to its new DDC");
+
+        // Appending must not reuse the retired UI number, or two panes would
+        // share an identity and every pan-addressed update would be ambiguous.
+        const int ddc = m.append();
+        check(ddc == 2, "the new receiver takes the next free DDC index");
+        check(m.byDdc(2)->uiNumber == 3, "the new pane is 3, NOT the retired 1");
+        check(m.byUi(1) == nullptr, "UI 1 is still retired");
+        check(m.byDdc(2)->dspChannel == -1, "a new receiver has no DSP channel yet");
+        check(m.byDdc(2)->panId == hl2PanId(3), "its pan id follows its UI number");
+
+        check(!m.remove(9), "removing an index that does not exist fails");
+        check(m.size() == 3, "a failed remove changes nothing");
+    }
+
+    // ---- removing the last receiver leaves an empty map ----
+    {
+        Hl2ReceiverMap m;
+        m.reset(1);
+        check(m.remove(0), "the only receiver can be removed from the map");
+        check(m.empty(), "map is empty");
+        // reset() starts UI numbering over — a new session, not a continuation.
+        m.reset(1);
+        check(m.byDdc(0)->uiNumber == 0, "reset restarts UI numbering at 0");
+    }
+
     // ---- degenerate sizes ----
     {
         Hl2ReceiverMap m;

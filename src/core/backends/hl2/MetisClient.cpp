@@ -347,6 +347,75 @@ void MetisClient::setSampleRate(SampleRate rate)
     m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte);
 }
 
+void MetisClient::setReceiverCount(int count)
+{
+    const int before = effectiveNumRx();
+    Params next = m_params;
+    next.numRx = count;
+    const int after = effectiveNumRx(next);
+    if (after == before)
+        return;                       // nothing to do; do NOT restart for a no-op
+
+    // Preserve the frequency of every receiver that survives. They are the
+    // operator's tuning, and a restart that silently returned them all to RX1's
+    // frequency would look like the radio jumping bands on its own.
+    std::vector<std::uint32_t> keptHz;
+    keptHz.reserve(m_ccRxFreq.size());
+    for (const Cc& bank : m_ccRxFreq) {
+        keptHz.push_back((std::uint32_t(bank[1]) << 24) | (std::uint32_t(bank[2]) << 16)
+                       | (std::uint32_t(bank[3]) << 8)  |  std::uint32_t(bank[4]));
+    }
+
+    m_params.numRx = count;
+
+    if (!m_running || !m_socket) {
+        // Not streaming: just restate the banks. There is no layout to race.
+        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+        m_ccRxFreq.assign(static_cast<std::size_t>(after),
+                          ccRxFreq(0, m_params.rxFrequencyHz));
+        for (int i = 0; i < after; ++i) {
+            const std::uint32_t hz = (static_cast<std::size_t>(i) < keptHz.size())
+                                         ? keptHz[static_cast<std::size_t>(i)]
+                                         : m_params.rxFrequencyHz;
+            m_ccRxFreq[static_cast<std::size_t>(i)] = ccRxFreq(i, hz);
+        }
+        return;
+    }
+
+    qInfo() << "MetisClient: receiver count" << before << "->" << after
+                  << "— restarting the EP6 stream so the payload layout"
+                     " changes on a hard edge";
+
+    // STOP first. Past this point the radio sends nothing, so there is no packet
+    // that could be decoded against the wrong layout.
+    sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port);
+
+    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+    m_ccRxFreq.clear();
+    for (int i = 0; i < after; ++i) {
+        const std::uint32_t hz = (static_cast<std::size_t>(i) < keptHz.size())
+                                     ? keptHz[static_cast<std::size_t>(i)]
+                                     : m_params.rxFrequencyHz;
+        m_ccRxFreq.push_back(ccRxFreq(i, hz));
+    }
+    // The decode buffers describe the OLD layout; drop them so the first packet
+    // after the restart sizes them from the new m_ccRxFreq.
+    m_blocks.clear();
+
+    // Re-prime with the new config bank before starting, so the very first
+    // packet the radio sends is already in the new layout.
+    sendPrimingBurst(3);
+    sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
+    sendPrimingBurst(3);
+
+    // Sequence tracking restarts with the stream. Without this the first packet
+    // after the restart counts as a gap of tens of thousands of "dropped"
+    // packets and the health panel reports a link fault that never happened.
+    m_haveRxSeq = false;
+    m_expectedRxSeq = 0;
+    m_sinceLastEp6.restart();
+}
+
 void MetisClient::setLnaGainDb(int db)
 {
     m_params.lnaGainDb = db;
