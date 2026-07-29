@@ -94,7 +94,13 @@ LogManager::LogManager()
         // distinguishes 'the audio is wrong' from 'the audio never arrived'".
         // An underflow is exactly what a mid-transmission click sounds like,
         // and it was undiagnosable from a log file.
-        {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry: TX IQ FIFO depth with underflow/overflow flags, and forward/reflected power counts"},
+        // SEPARATE TOGGLE from "Hermes-Lite 2", deliberately: the FIFO depth is
+        // sampled per telemetry frame, so this is high-rate next to the rest of
+        // the HL2 category and is not something to leave on by default. Said
+        // explicitly in the description because the two labels otherwise read as
+        // one control, and someone chasing transmit telemetry will tick the
+        // wrong box and conclude the logging is still broken.
+        {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry: TX IQ FIFO depth with underflow/overflow flags, and forward/reflected power counts. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
