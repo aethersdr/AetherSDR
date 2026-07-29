@@ -298,10 +298,32 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
         r.mac[i] = pkt[3 + i];
     r.gatewareVersion = pkt[9];
     r.boardId = pkt[10];
-    // Byte 20 carries the board's receiver count on full-length replies. Short
-    // replies omit it; leave 0 so callers fall back to a single receiver.
-    if (pkt.size() > 20)
-        r.numRx = pkt[20];
+    // OFFSET 19 (0x13), not 20. This was off by one, and the byte it was
+    // actually reading is a real field with plausible values — so the error
+    // could not show up as an obviously wrong answer.
+    //
+    // Settled against all three tiers of the source-precedence ladder, which
+    // agree:
+    //
+    //   gateware  usopenhpsdr1.v emits the discovery reply from a DOWN-counting
+    //             state, so the packet offset is 0x3B - state. Anchor it on two
+    //             knowns — `6'h32: VERSION_MAJOR` is offset 9 and `6'h31:
+    //             idhermeslite ? 8'h06 : 8'h01` is offset 10, both fixed by the
+    //             map below — and `6'h28: ... NR` lands at 0x3B-0x28 = 0x13.
+    //   wiki      discovery map, offset 0x13 = "Number of hardware receivers".
+    //   hpsdrsim  writes `buffer[19] = 4` for a Hermes-Lite 2.
+    //
+    // Offset 20 (0x14) is `{BANDSCOPE_BITS, BOARD[5:0]}` — the wideband format
+    // in [7:6] and the board build id in [5:0]. On a build-5 board with the
+    // wideband bits set that reads as a receiver count in the dozens, which the
+    // caller then clamps to the register maximum. So the old code did not fail
+    // loudly on real hardware; it quietly authorised more receivers than the
+    // board has, and the extra ones stream correctly framed, correctly paced,
+    // all-ZERO IQ — indistinguishable from a dead antenna.
+    //
+    // Short replies omit it; leave 0 so callers apply their own default.
+    if (pkt.size() > 19)
+        r.numRx = pkt[19];
     return r;
 }
 

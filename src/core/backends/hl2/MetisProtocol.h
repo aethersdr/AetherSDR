@@ -440,8 +440,10 @@ struct DiscoveryReply {
     std::uint8_t gatewareVersion = 0;   // raw byte; HL2 gateware e.g. 0x4A -> 7.4
     std::uint8_t boardId = 0;           // 0x06 = Hermes-Lite / Hermes-Lite 2
     bool streaming = false;             // discovery status byte 0x03 = already sending IQ
-    // Receiver count the board reports. Only present on full-length replies
-    // (>= 21 bytes); 0 means "not reported" and callers should assume 1.
+    // Receiver count the board reports, from discovery offset 0x13. Only present
+    // on full-length replies (> 19 bytes); 0 means "not reported" and callers
+    // apply their own default. See parseDiscoveryReply for why this offset is
+    // 19 and not 20, and what the byte at 20 actually is.
     std::uint8_t numRx = 0;
     [[nodiscard]] bool isHermesLite2() const noexcept { return boardId == 0x06; }
 };

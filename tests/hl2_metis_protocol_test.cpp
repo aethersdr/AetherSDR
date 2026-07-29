@@ -204,17 +204,29 @@ int main()
             reply[3 + i] = static_cast<std::uint8_t>(0x10 + i);       // MAC
         reply[9] = 0x4A;                                              // gateware
         reply[10] = 0x06;                                            // board id: HL2
-        reply[20] = 0x02;                                           // receiver count
+        // Receiver count is at offset 0x13 = 19. The two neighbours are filled
+        // with DIFFERENT, plausible values on purpose: this assertion used to
+        // write the count at 20 and read it back from 20, so it agreed with an
+        // implementation that was off by one and could never have caught it.
+        //
+        // Offset 20 is {BANDSCOPE_BITS, BOARD[5:0]} — 0x45 is a build-5 board
+        // with the wideband bits set, which is exactly the kind of value that
+        // reads as a believable receiver count.
+        reply[19] = 0x04;                                          // receiver count (0x13)
+        reply[20] = 0x45;                                          // NOT the count
+        reply[18] = 0x77;                                          // NOT the count
         const auto r = parseDiscoveryReply(reply);
         check(r.has_value(), "valid discovery reply parses");
         check(r && r->isHermesLite2(), "board 0x06 -> Hermes-Lite 2");
         check(r && r->mac[0] == 0x10 && r->mac[5] == 0x15, "MAC parsed");
         check(r && r->gatewareVersion == 0x4A, "gateware byte parsed");
-        check(r && r->numRx == 0x02, "receiver count (byte 20) parsed");
+        check(r && r->numRx == 0x04, "receiver count read from offset 0x13 (19)");
+        check(r && r->numRx != 0x45, "not offset 20 — that is the board/bandscope byte");
+        check(r && r->numRx != 0x77, "not offset 18");
         check(r && !r->streaming, "status 0x02 -> not streaming");
         reply[2] = 0x03;
         check(parseDiscoveryReply(reply)->streaming, "status 0x03 -> streaming (busy)");
-        // Short replies omit byte 20 — numRx must fall back to 0, not read OOB.
+        // A reply that stops before offset 19 must fall back to 0, not read OOB.
         std::array<std::uint8_t, 11> shortReply{};
         shortReply[0] = 0xEF; shortReply[1] = 0xFE; shortReply[2] = 0x02;
         shortReply[10] = 0x06;

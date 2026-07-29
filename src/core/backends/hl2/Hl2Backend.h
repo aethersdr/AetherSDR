@@ -244,6 +244,14 @@ private:
     // because createPanadapter() has to answer "may I add one?" on this thread,
     // and the wire object lives on the I/O thread.
     int m_boardMaxRx = 0;
+    // What to assume when the board never reported its receiver count — a short
+    // discovery reply, or a unicast probe that went unanswered. The shipping
+    // hl2b5up_main gateware is built with NR=4 (variants/hl2b5up_main/
+    // hermeslite.v), so four is the informed guess rather than the register's
+    // encodable maximum. Erring HIGH would stream slots with no DDC behind
+    // them — correctly framed, correctly paced, all-zero IQ, which looks
+    // exactly like a dead antenna.
+    static constexpr int kAssumedBoardMaxRx = 4;
     // Zoom-sweep throttle for setPanBandwidth.
     //
     // Unlike a centre drag, which is cheap to forward, a span change is a

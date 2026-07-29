@@ -928,16 +928,23 @@ RadioCapabilities Hl2Backend::capabilities() const
     RadioCapabilities c;
     c.family = QStringLiteral("hl2");
     c.model = QStringLiteral("Hermes-Lite 2");
-    // Reported from what is actually RUNNING, not from what the board could do.
-    // A capability that promised four slices while one receiver was configured
-    // would let the UI offer three panes that never receive a frame.
+    // The CEILING, not the running count. A capability answers "what can this
+    // radio do", and receivers are now added on demand — so reporting the
+    // running count would tell the UI the limit was already reached and
+    // "Add Panadapter" could never be offered.
+    //
+    // The ceiling is the board's own reported count (discovery byte 0x13,
+    // never hardcoded — oracle §1) capped by the link budget at the span
+    // currently running, so it FALLS when the operator zooms out. That is
+    // correct rather than awkward: at 384 kHz a fourth receiver genuinely
+    // cannot be delivered, and the honest limit is 3.
     //
     // Backlog item 6 ("receiver count from discovery 0x13; stop hardcoding
-    // maxSlices") is what this closes — but the honest number is the running
-    // count, which is already the discovery count clamped by the link budget.
-    const int running = m_ids.empty() ? 1 : m_ids.size();
-    c.maxSlices = running;
-    c.maxPanadapters = running;
+    // maxSlices") is what this closes.
+    const int ceiling = m_connected ? receiverCeiling()
+                                    : std::max(1, m_ids.size());
+    c.maxSlices = ceiling;
+    c.maxPanadapters = ceiling;
     for (const int rate : kIqSampleRatesHz)
         c.sampleRatesHz.append(rate);
     // The AD9866 samples at 76.8 MHz, so the first Nyquist zone — everything
@@ -1062,6 +1069,39 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.lnaGainDb = m_lnaGainDb;
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
+    if (m_boardMaxRx <= 0) {
+        // ASK THE RADIO. Connecting by IP skips the broadcast sweep, so nothing
+        // has read discovery byte 0x13 and the board's receiver count is
+        // unknown — which left the ceiling at whatever the register can encode
+        // (7) on a board that has 4. Sending a count the gateware does not have
+        // makes it stream slots with no DDC behind them: correctly framed,
+        // correctly paced, all-zero IQ on the receivers that do not exist.
+        //
+        // A UNICAST discovery to the host we are about to connect to answers it
+        // in one round trip, using the same parser the broadcast sweep uses.
+        // Short timeout: this is on the connect path, and a board that does not
+        // answer just leaves us with the conservative default below.
+        QMetaObject::invokeMethod(m_metis, [this, &host] {
+            for (const auto& d : m_metis->discover(400, host, kMetisPort)) {
+                if (d.reply.numRx > 0) {
+                    m_boardMaxRx = d.reply.numRx;
+                    break;
+                }
+            }
+        }, Qt::BlockingQueuedConnection);
+    }
+    if (m_boardMaxRx <= 0) {
+        // Still unknown — a short reply, or a radio that did not answer the
+        // unicast probe. Assume the SHIPPING gateware's four (hl2b5up_main is
+        // built with NR=4) rather than the register's maximum. Guessing high
+        // hands out receivers that stream zeros and look like a dead antenna;
+        // guessing low costs at most a receiver the operator can still not have.
+        m_boardMaxRx = kAssumedBoardMaxRx;
+        qCInfo(lcHl2) << "HL2: board did not report a receiver count — assuming"
+                      << m_boardMaxRx << "(shipping gateware NR)";
+    } else {
+        qCInfo(lcHl2) << "HL2: board reports" << m_boardMaxRx << "receiver(s)";
+    }
     mp.boardMaxRx = m_boardMaxRx;
     // The filter board has to be right from the FIRST config frame, not from
     // the operator's first band change. m_rxFreqHz here is the persisted

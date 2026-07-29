@@ -312,6 +312,20 @@ public:
     // instead of 4.  Examples: FLEX-6700 -> 8; 6600/6500/8600/AU-520/ML/CL -> 4;
     // 6300/6400/8400/AU-510/RT-2122 -> 2.
     int maxPanadapters() const {
+        // A backend that reports its own capability is the AUTHORITY for its
+        // radio. capabilitiesFor() is a FlexLib platform table keyed by model
+        // string (Principle I) and has nothing true to say about a non-Flex
+        // radio — "Hermes-Lite 2" simply falls through it to the 2-pan default,
+        // which then refused a third receiver on a board that reported four.
+        //
+        // This is consulted by more than one caller (the GUI's Add Panadapter,
+        // the automation bridge's `pan create`), which is exactly why it is
+        // fixed here rather than at either call site.
+        if (!m_flexBackend && m_backend) {
+            const int reported = m_backend->capabilities().maxPanadapters;
+            if (reported > 0)
+                return reported;
+        }
         return capabilitiesFor(m_model).maxSlices;
     }
 

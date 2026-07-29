@@ -3405,29 +3405,36 @@ void RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
 
 void RadioModel::createPanadapter()
 {
-    int limit = maxPanadapters();
-    if (static_cast<int>(m_panadapters.size()) >= limit) {
-        qCWarning(lcProtocol) << "RadioModel::createPanadapter: limit of" << limit
-                              << "panadapters reached for model" << m_model;
-        emit panadapterLimitReached(limit, m_model);
-        return;
-    }
-
     // A backend that owns its own receivers creates them at the seam. The Flex
     // wire text below (`display panafall create`) goes nowhere on such a radio,
     // which is why "Add Panadapter" did nothing on an HL2 and the only way to
     // get a second receiver was a persisted count applied at connect.
     //
-    // The backend reports the new pan through panCenterBandwidthChanged, which
+    // Checked BEFORE the limit below, because that limit is a FLEX MODEL-STRING
+    // TABLE (capabilitiesFor(m_model)) and has nothing to say about this radio.
+    // Applying it to an HL2 would refuse the add against a number derived from
+    // a FlexLib platform lookup that never heard of the board.
+    //
+    // The backend is the only thing that knows the real limits — the receiver
+    // count the board reported at discovery, and the link budget at the span
+    // currently running — so it decides, and says which limit it hit.
+    //
+    // The new pan is reported through panCenterBandwidthChanged, which
     // materialises the model exactly as it does for the pans that exist at
     // connect — so there is ONE path that creates a pane, not two.
     if (!m_flexBackend && m_backend) {
         if (!m_backend->createPanadapter()) {
-            // The backend refused: it knows limits the model cannot see (the
-            // board's own receiver count, the link budget at this span).
             qCWarning(lcProtocol) << "RadioModel::createPanadapter: backend declined";
-            emit panadapterLimitReached(limit, m_model);
+            emit panadapterLimitReached(m_backend->capabilities().maxPanadapters, m_model);
         }
+        return;
+    }
+
+    int limit = maxPanadapters();
+    if (static_cast<int>(m_panadapters.size()) >= limit) {
+        qCWarning(lcProtocol) << "RadioModel::createPanadapter: limit of" << limit
+                              << "panadapters reached for model" << m_model;
+        emit panadapterLimitReached(limit, m_model);
         return;
     }
     const auto handleCreatedPan = [this](const QString& source, int code, const QString& body) {
