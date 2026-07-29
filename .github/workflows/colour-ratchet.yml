@@ -1,0 +1,51 @@
+name: Colour Ratchet
+
+# Hardcoded-colour counts may not rise above the baseline recorded in
+# tools/audit_colours.py (RFC #3076 / #4569).
+#
+# The problem it solves: colour REFERENCES are down ~22% against the documented
+# baseline while UNIQUE colours went UP ~105 — new one-offs are minted faster
+# than old ones collapse, because nothing enforces the taxonomy. Every migration
+# PR was uphill against a slope that kept regenerating.
+#
+# Stage 1 tracks COUNTS. A set (like check_engine_boundary.py's EB3 vendor
+# baseline) is the right endpoint — only a set catches a lateral swap that keeps
+# the count flat — but EB3's inputs are unambiguous #include stems, whereas
+# colour extraction is a text heuristic. This scanner has just had a phantom
+# class removed (29 issue references were being counted as colours); flipping to
+# a set before it has run clean for a while would mean the baseline's first
+# entries are its own bugs.
+#
+# Stdlib-only and no build, so it gates on src/ + the tool + this file.
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "src/**"
+      - "tools/audit_colours.py"
+      - ".github/workflows/colour-ratchet.yml"
+
+# Auto-cancel superseded runs. Matches ci.yml / codeql.yml / engine-boundary.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  colour-ratchet:
+    name: Hardcoded-colour count
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Check hardcoded-colour counts against the baseline
+        run: python tools/audit_colours.py --summary-only --strict

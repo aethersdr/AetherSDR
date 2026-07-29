@@ -66,11 +66,70 @@ QCOLOR_RGB = re.compile(
 # string literals separately so we capture them anywhere (stylesheets,
 # QSS resource files inlined as C++ strings, etc.).
 HEX_INSIDE_STRING = re.compile(r'#[0-9a-fA-F]{3,8}\b')
+
+# `#1839` in "see issue #1839" matches the pattern above but is an ISSUE
+# REFERENCE, not a colour — and this repo's house style is to cite the issue
+# number in the log line that fixes it, so they are everywhere. On main today
+# that is 29 of the 650 "unique colours" (45 references).
+#
+# Cosmetic under a count-based ratchet; fatal under a set-based one, where a PR
+# whose only change is `qCWarning(...) << "... (#1234)"` would mint a
+# never-before-seen colour and fail the gate. A tool that cries wolf on the
+# first unrelated logging change will not survive contact with contributors.
+#
+# Rule: a 4- or 5-digit run of DECIMAL digits is an issue number. Real colours
+# are 3, 6 or 8 hex digits — 4 and 5 are not valid CSS/Qt lengths at all — so
+# nothing legitimate is excluded. A 4-digit value containing a-f is still
+# rejected on length, exactly as before.
+ISSUE_REFERENCE = re.compile(r'^#[0-9]{4,5}$')
+
+
+def is_issue_reference(token: str) -> bool:
+    """True for '#1839'-style issue/PR citations that are not colours."""
+    return bool(ISSUE_REFERENCE.match(token))
 STRING_LITERAL    = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
 # Setstylesheet call sites — count without parsing the argument; the
 # string-literal scanner above catches the colours inside.
 SET_STYLESHEET    = re.compile(r'\bsetStyleSheet\s*\(')
+
+# ── Ratchet: files whose hardcoded colours are NOT taxonomy violations ──────
+#
+# Excluded BY PATH, not by suggested token. suggest_token() is called once per
+# COLOUR, not per reference, so a colour shared between a palette and a button
+# gets one bucket for both — the classifier cannot carry an exclusion rule even
+# now that its context is fixed.
+#
+# ThemeManager.cpp is the important entry and the one that makes the ratchet
+# usable at all: its ~97 references ARE the canonical default token values. They
+# define the taxonomy rather than violating it, and without this every
+# legitimate token addition would read as a regression.
+COLOUR_ALLOWLIST = (
+    'src/core/ThemeManager.cpp',        # the default token values themselves
+    'src/core/ThemeSeedGenerated.cpp',  # generated from the bundled theme (#3184)
+)
+
+# Recorded ceiling. These may only ever SHRINK: --strict fails when the tree
+# exceeds them, --update-baseline rewrites them after a genuine reduction.
+#
+# Deliberately COUNTS, not a set of colours, for now. A set is the right
+# endpoint — it is what stops a lateral swap (delete #1a2a3a, add #1b2b3b:
+# count flat, taxonomy worse), exactly as check_engine_boundary.py's EB3 argues
+# for vendor includes. But EB3 earned that strictness because its inputs are
+# unambiguous `#include` stems, whereas colour extraction is a text heuristic.
+# Flip to a per-file set once this scanner has run clean for a while; the
+# phantom-issue-number class it just fixed is the reason not to do both at once.
+COLOUR_BASELINE = {
+    'unique_colours':   607,
+    'total_references': 2710,
+    'setstylesheet':    1111,
+}
+
+
+def is_allowlisted(path: Path) -> bool:
+    posix = path.as_posix()
+    return any(posix.endswith(entry) for entry in COLOUR_ALLOWLIST)
+
 
 # Naive semantic heuristics for suggested token names.  Two passes:
 #   1. By colour family (luma/saturation buckets)
@@ -146,6 +205,12 @@ def normalise_colour(raw: str) -> str:
     s = raw.lstrip('#').lower()
     if len(s) == 3:
         s = ''.join(ch * 2 for ch in s)
+    if len(s) == 8:
+        # Qt's #AARRGGBB carries alpha in the LEADING pair, so the RGB triple is
+        # the LAST six characters. Truncating to the first six turned
+        # MainWindow.cpp's #FFFFC857 into #ffffc8 instead of #ffc857 — one site
+        # today, but a baseline would enshrine the wrong value.
+        return '#' + s[2:]
     if len(s) >= 6:
         return '#' + s[:6]
     return '#' + s
@@ -197,6 +262,8 @@ def scan_file(path: Path) -> list[dict]:
         for str_m in STRING_LITERAL.finditer(line):
             body = str_m.group(1)
             for hex_m in HEX_INSIDE_STRING.finditer(body):
+                if is_issue_reference(hex_m.group(0)):
+                    continue   # "…restarting RX (#1361)" is not a colour
                 records.append({
                     'colour': normalise_colour(hex_m.group(0)),
                     'form':   'inline string',
@@ -214,6 +281,10 @@ def main() -> int:
     p.add_argument('--out', default='/tmp/colour-audit.csv', help='CSV output path')
     p.add_argument('--summary-only', action='store_true',
                    help='Skip CSV; print summary to stdout only')
+    p.add_argument('--strict', action='store_true',
+                   help='Exit 1 if any tracked count exceeds its recorded baseline')
+    p.add_argument('--update-baseline', action='store_true',
+                   help='Rewrite the baseline from the current tree (only ever shrinks)')
     args = p.parse_args()
 
     src_root = Path(args.src)
@@ -223,6 +294,8 @@ def main() -> int:
 
     paths = [p for p in src_root.rglob('*')
              if p.is_file() and p.suffix in {'.cpp', '.h', '.hpp', '.cc'}]
+    allowlisted = [p for p in paths if is_allowlisted(p)]
+    paths = [p for p in paths if not is_allowlisted(p)]
 
     all_records: list[dict] = []
     setStyleSheet_count = 0
@@ -243,7 +316,18 @@ def main() -> int:
     # common file-name token (best-effort context).
     suggestions = {}
     for colour, refs in by_colour.items():
+        # Context = file stems AND the surrounding source line.
+        #
+        # This used to be stems only, which quietly disabled several
+        # classifier branches: the waterfall/colormap test could fire only if a
+        # FILE was named for it, but the palettes live in SpectrumWidget.cpp, so
+        # every palette colour fell through to the later 'spectrum' branch and
+        # `color.waterfall.*` resolved 0 references. `border` and `slice` were
+        # dead for the same reason. The docstring already promised "nearby
+        # identifiers"; scan_file was already recording `snippet`. It simply was
+        # never passed in.
         ctx = ' '.join(Path(r['file']).stem for r in refs[:5])
+        ctx += ' ' + ' '.join(r.get('snippet', '') for r in refs[:5])
         suggestions[colour] = suggest_token(colour, ctx)
 
     if not args.summary_only:
@@ -282,6 +366,54 @@ def main() -> int:
     print('Top 20 most-used colours (good first migration targets):')
     for colour, count in top.most_common(20):
         print(f'  {colour}  {count:4d}  → {suggestions[colour]}')
+
+    # ── Ratchet ────────────────────────────────────────────────────────────
+    current = {
+        'unique_colours':   len(by_colour),
+        'total_references': len(all_records),
+        'setstylesheet':    setStyleSheet_count,
+    }
+
+    if args.update_baseline:
+        print()
+        print('--- baseline update ---')
+        for key, value in current.items():
+            recorded = COLOUR_BASELINE[key]
+            if value > recorded:
+                print(f'  REFUSED {key}: {value} > recorded {recorded} — the '
+                      f'baseline only shrinks. Reduce first, then update.')
+                return 1
+            print(f'  {key}: {recorded} -> {value}')
+        print('\nEdit COLOUR_BASELINE in this file to the values above.')
+        return 0
+
+    if allowlisted:
+        print()
+        print(f'Allow-listed (excluded by path, {len(allowlisted)} file(s)):')
+        for path in allowlisted:
+            print(f'  {path.as_posix()}')
+
+    print()
+    print('=== ratchet ===')
+    regressions = []
+    for key, value in current.items():
+        recorded = COLOUR_BASELINE[key]
+        marker = 'OK ' if value <= recorded else 'OVER'
+        print(f'  {marker} {key:18} {value:5d}  (baseline {recorded})')
+        if value > recorded:
+            regressions.append((key, value, recorded))
+
+    if regressions:
+        print()
+        print('FAIL: the hardcoded-colour count rose above its recorded baseline.')
+        for key, value, recorded in regressions:
+            print(f'  {key}: {value} > {recorded}  (+{value - recorded})')
+        print('\nEither migrate the new colour to a token in docs/theming/'
+              'canonical-tokens.md, or — if it genuinely belongs hardcoded — add '
+              'its file to COLOUR_ALLOWLIST with a reason.')
+        if args.strict:
+            return 1
+
     return 0
 
 
