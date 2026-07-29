@@ -1085,7 +1085,7 @@ MainWindow::MainWindow(QWidget* parent)
             // never had this connection — re-adding it here would resurrect the
             // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
             // Qt permits duplicates, so every unmute would stack another copy.
-            if (!backendOwnsRxAudio()) {
+            if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                         m_audio, &AudioEngine::feedAudioData,
                         Qt::UniqueConnection);
@@ -1182,7 +1182,7 @@ MainWindow::MainWindow(QWidget* parent)
         } else {
             // Same rule as the QSO-recorder unmute above: never resurrect the
             // stream→sink feed for a backend that supplies its own seam audio.
-            if (!backendOwnsRxAudio()) {
+            if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(),
                         &PanadapterStream::audioDataReady,
                         m_audio, &AudioEngine::feedAudioData,
@@ -5767,7 +5767,7 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // HL2: HL2 demodulates in-process and audioFrameReady is its ONLY audio
     // route (Hl2Backend.cpp, emit audioFrameReady). It therefore arrived here
     // AND via the RadioModel::backendAudioFrameReady relay in
-    // MainWindow_Session.cpp, whose gate — backendOwnsRxAudio() — excludes only
+    // MainWindow_Session.cpp, whose gate — backendFeedsEngineDirectly() — excludes only
     // the sim. Every HL2 frame was delivered twice and the engine consumed at
     // double rate: measured 48043 Hz at the raw tap against a nominal 24000
     // (ratio 2.002), audible as popping and crackling on every mode.

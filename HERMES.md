@@ -1901,10 +1901,32 @@ bound at a time, chosen in `wireRxDemodAudioBus()`:
 | Flex | `PanadapterStream::audioDataReady` (an *additional* subscriber; the existing speaker connection is untouched) |
 | HL2, sim | `IRadioBackend::audioFrameReady`, via `backendAudioFrameReady` |
 
-**The predicate moved onto the backend.** `IRadioBackend::ownsRxAudio()`
-replaces a `dynamic_cast<SimBackend*>` in one place and an `m_family != "flex"`
-in another. Both older forms had to be *found* and updated when a backend was
-added, and #4490's double-feed buzz is what happens when one is missed.
+**The predicate the bus keys off now lives on the backend.**
+`IRadioBackend::ownsRxAudio()` is self-declared rather than inferred from a
+family name or a `dynamic_cast`, so a backend added later cannot be missed by
+the bus wiring.
+
+It does **not** replace the existing casts, and an earlier draft of this section
+claimed it did. `MainWindow::backendFeedsEngineDirectly()` (was
+`backendOwnsRxAudio()`) is still a `dynamic_cast<SimBackend*>`, and it gates the
+two SPEAKER-path sites — which are the two that actually produced #4490's
+double-feed. The new virtual buys its "can't be missed" property for the tap bus
+only.
+
+**The two are deliberately not merged, and the MainWindow one was renamed to
+stop anyone merging them.** They read alike and disagree about the HL2:
+
+| Predicate | Asks | HL2 | sim | Flex |
+|---|---|---|---|---|
+| `IRadioBackend::ownsRxAudio()` | "audio arrives over the seam" | **true** | true | false |
+| `MainWindow::backendFeedsEngineDirectly()` | "backend already feeds AudioEngine, so no relay" | **false** | true | false |
+
+An HL2 owns its RX audio *and* needs the relay: `wireBackendSeam()` connects
+`audioFrameReady → feedAudioData` for the sim only, so HL2 audio reaches the
+engine via `RadioModel::backendAudioFrameReady`. Delegating the MainWindow
+helper to `backend()->ownsRxAudio()` would therefore make the relay's early
+return swallow every HL2 frame and **silence the speaker on the radio this whole
+section exists to support**.
 
 It is **not** "has no PanadapterStream". The sim has both — a stream carrying
 the old shim's synthetic scene, and real demodulated audio over the seam — and
@@ -1939,15 +1961,32 @@ captured 21.6 s of real RX audio — peak 20504, RMS 136.5, 87.5 % non-zero —
 where the same recording was silence before. CW decode confirmed on live signals
 by the operator.
 
-**Recorder RX/TX mixing is safe, and not for the reason the header says.**
-`QsoRecorder`'s header states *"while transmitting, the radio mutes the RX
-stream"* — a Flex fact. An HL2 demodulates on this host and keeps running
-through transmit, hearing its own transmitter. The mixing is nonetheless correct
-because the gate is a hard mutually-exclusive atomic: `feedRxAudio()` returns
-early whenever `m_transmitting`, and `feedTxAudio()` whenever not. The radio
-muting is why the Flex stream *happens* to be silence, not the mechanism.
+**Recorder RX/TX mixing is safe, and the Flex-shaped premise happens to hold
+for a different reason.** `QsoRecorder`'s header states *"while transmitting,
+the radio mutes the RX stream"* — a Flex fact about the wire. An earlier draft
+of this section asserted the HL2 keeps demodulating through transmit and so
+violates that premise. It does not: `Hl2Backend` drops the frame outright while
+keyed —
 
-**Still open on this path:** whether the HL2's in-process RX pipeline flushes a
-few blocks of transmitter leakage into the start of each RX segment after unkey
-— the same class as the Flex waterfall-freeze window. Measure with a recording
-running across a real over before deciding it needs a hold-off.
+```cpp
+connect(m_dsp, &Hl2RxDsp::audioReady, this, [this](const std::vector<float>& pcm) {
+    if (m_keyed) return;
+    emit audioFrameReady(floatBytes(pcm));
+});
+```
+
+— and `Hl2RxDsp::setAudioMuted` stops the pipeline filling in the first place.
+So `rxDemodAudioReady` goes silent for the duration of a transmission. **The HL2
+mutes at the backend rather than at the radio; same observable behaviour,
+different side of the wire.**
+
+The conclusion is unchanged, and it is worth keeping the reason straight: the
+`m_transmitting` gate in `QsoRecorder` is still the actual mechanism, and it is
+still a hard mutual exclusion, so the recorder would be correct even if a future
+backend *did* keep feeding through transmit. This also disposes of a review
+finding that the CW/RTTY decoders would transcribe the operator's own sending —
+they receive nothing to transcribe.
+
+**Still open, narrowed:** only the UNKEY edge — whether `m_keyed` clears before
+the last leakage-contaminated block drains out of `Hl2RxDsp`. The key-down edge
+and the body of the transmission are both covered by the gate above.

@@ -99,9 +99,18 @@ int main(int argc, char** argv)
         check(busBlocks == 1,
               "RX bus: a seam backend's audio reaches rxDemodAudioReady exactly once");
 
-        // Flex -> HL2 again: re-enters wireRxDemodAudioBus() with the same
-        // endpoints on the seam relay.
+        // On the Flex leg the seam relay must be GONE, not merely outnumbered.
+        // This is the state wireRxDemodAudioBus()'s disconnect exists to
+        // produce, and asserting it directly names the failure better than
+        // catching a doubled count later would. (PR #4537 review.)
         model.connectToRadio(flexInfo());
+        busBlocks = 0;
+        emit model.backendAudioFrameReady(frame);
+        check(busBlocks == 0,
+              "RX bus: the seam relay is dropped when a Flex takes over");
+
+        // Back to HL2: re-enters wireRxDemodAudioBus() with the same endpoints
+        // on the seam relay, which is the case Qt cannot clean up for us.
         model.connectToRadio(hl2Info());
         busBlocks = 0;
         emit model.backendAudioFrameReady(frame);
@@ -158,6 +167,21 @@ int main(int argc, char** argv)
           "WSPR: the host-modulated arm can be re-armed after a release");
     model.releaseWsprTransmit();
     check(!model.hasWsprTxStream(), "WSPR: second release also clears");
+
+    // An ARMED beacon must not carry its route claim onto another radio.
+    // connectToRadio() on a family switch runs dropAllSessionModelsForFamily-
+    // Switch() -> teardownBackend() -> setupBackend() and reaches neither
+    // releaseWsprTransmit() nor onDisconnected(), so the host-modulated latch
+    // used to survive — and hasWsprTxStream() would then tell the beacon dialog
+    // its route was ready on a FLEX, which keys the radio for a full 111.6 s
+    // frame with no dax_tx stream behind it. Unintended transmission, so it is
+    // asserted rather than reasoned about. (PR #4537 review, finding 2.)
+    check(model.prepareWsprTransmit(), "WSPR: armed on HL2 for the switch test");
+    check(model.hasWsprTxStream(), "WSPR: armed claim is live before the switch");
+    model.connectToRadio(flexInfo());
+    check(!model.hasWsprTxStream(),
+          "WSPR: an armed host-modulated claim does NOT survive onto a Flex");
+    model.connectToRadio(hl2Info());
 
     // ---- Round-trip back to Flex ----
     model.connectToRadio(flexInfo());

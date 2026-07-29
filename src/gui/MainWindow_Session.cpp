@@ -197,7 +197,7 @@ void MainWindow::wireDiscovery()
     // arriving at the same slot, so nothing looks duplicate to Qt.
     connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
             m_audio, [this](const QByteArray& pcm) {
-        if (backendOwnsRxAudio()) return;   // demo feeds the engine directly
+        if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
         m_audio->feedAudioData(pcm);
     });
 
@@ -1713,7 +1713,26 @@ void MainWindow::wireCatPorts()
 // RX audio itself rides audioDataReady, so a missed one is silence, not a
 // degraded feature. Keeping the list here (not open-coded in two places) is why
 // a new sink added to buildUI cannot silently go un-rebound after a swap.
-bool MainWindow::backendOwnsRxAudio()
+// Deliberately NOT IRadioBackend::ownsRxAudio(), despite the near-identical
+// English. The two ask different questions and disagree about the HL2:
+//
+//   IRadioBackend::ownsRxAudio()      "audio arrives over the seam"
+//                                       HL2 TRUE, sim true, Flex false
+//   MainWindow::backendFeedsEngineDirectly()
+//                                     "the backend already feeds AudioEngine
+//                                      itself, so no relay"
+//                                       HL2 FALSE, sim true, Flex false
+//
+// An HL2 owns its RX audio AND needs the relay: wireBackendSeam() connects
+// audioFrameReady -> feedAudioData for the sim ONLY, so HL2 audio reaches the
+// engine through RadioModel::backendAudioFrameReady instead.
+//
+// So the tempting cleanup — delegating this to backend()->ownsRxAudio() —
+// makes the relay's `if (…) return;` swallow every HL2 frame and SILENCES the
+// speaker on the radio this all exists to support. Renamed away from the
+// collision precisely so nobody makes that substitution on the strength of the
+// names matching. (PR #4537 review.)
+bool MainWindow::backendFeedsEngineDirectly()
 {
     // The demo (RFC #4288 Route A) is the one backend that BOTH vends a
     // PanadapterStream and emits its own seam audio: SimBackend::onAudioTick →
@@ -1739,7 +1758,7 @@ void MainWindow::wirePanStreamRxAudioSinks()
     // wobble plus distortion, and recognisably "the waterfall you can hear".
     // The backend's own audio wins; the stream's other RX taps below stay wired.
     // Primary RX audio → QAudioSink (skipped when the backend owns its audio).
-    if (!backendOwnsRxAudio()) {
+    if (!backendFeedsEngineDirectly()) {
         connect(ps, &PanadapterStream::audioDataReady,
                 m_audio, &AudioEngine::feedAudioData,
                 Qt::UniqueConnection);

@@ -505,6 +505,29 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_beaconGrid, &QLineEdit::editingFinished, this, [this] {
         const QString grid = m_beaconGrid->text().trimmed().toUpper();
         m_beaconGrid->setText(grid);
+        // Empty is "no change" (see the callsign handler); nothing to validate
+        // and nothing to erase.
+        if (grid.isEmpty()) {
+            return;
+        }
+        // Validate BEFORE persisting. Writing first meant a typo was saved and
+        // then silently ignored: updateHomeFromRadio() fails to decode it and
+        // returns having changed nothing, so every path stayed drawn from the
+        // PREVIOUS origin while the field showed the new value. The operator
+        // sees a saved grid and a map that disagrees with it, with nothing
+        // saying which one is wrong — and the beacon would later refuse to
+        // encode the same string. (PR #4537 review.)
+        double lat = 0.0, lon = 0.0;
+        if (!MaidenheadLocator::toLatLon(grid, lat, lon)) {
+            m_beaconStatus->setText(
+                tr("“%1” is not a valid grid locator — expected 4 characters "
+                   "like DM06").arg(grid));
+            // Put the last good value back rather than leaving an unusable
+            // string in a field the beacon will read at arm time.
+            m_beaconGrid->setText(
+                pskSettings().value("beaconGrid").toString().trimmed().toUpper());
+            return;
+        }
         writePskSetting("beaconGrid", grid);
         // This grid is also the map's home position when the radio has no GPS,
         // so moving it has to move the marker and redraw the paths — otherwise
@@ -527,6 +550,15 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_beaconCallsign, &QLineEdit::editingFinished, this, [this] {
         const QString call = m_beaconCallsign->text().trimmed().toUpper();
         m_beaconCallsign->setText(call);
+        // Empty is "no change", never "erase". Writing through on empty would
+        // let clearing this field wipe the persisted StationCallsign — one
+        // stray select-all-delete and PSK Reporter, the beacon and QRZ
+        // own-callsign lookup all lose the station's identity, with no undo.
+        // (PR #4537 review.) Clearing the field is how an operator retypes it;
+        // it is not how they retire a callsign.
+        if (call.isEmpty()) {
+            return;
+        }
         if (m_radioModel != nullptr && call != m_radioModel->callsign()) {
             if (m_radioModel->usesFlexCommandPlane()) {
                 m_radioModel->sendCommand("radio callsign " + call);
@@ -652,10 +684,18 @@ void PskReporterMapDialog::setBeaconControlsEnabled(bool enabled)
     m_beaconTone->setEnabled(enabled);
 }
 
-// Retune/reshape the TX slice for the selected WSPR band. Called ONLY from
-// scheduleBeacon(): selecting a band in the combo is a choice, not a command,
-// and must not retune the operator's slice or rewrite the station-wide TX
-// filter before they have armed anything.
+// Retune/reshape the TX slice for the selected WSPR band, at ARM time.
+//
+// Called only from scheduleBeacon(). This comment used to say selecting a band
+// "must not retune the operator's slice" — that is no longer true and had
+// become the opposite of the code: the band combo now tunes the dial on
+// selection, so the operator can look at the sub-band (and its SWR) before
+// committing to 111.6 s of transmission.
+//
+// What is still deferred to here is everything that disturbs a listening
+// setup and gets restored afterwards: the slice MODE, the slice passband, and
+// the station-wide TX filter. The dial is not restored — the operator asked to
+// go there.
 bool PskReporterMapDialog::applyBeaconBand()
 {
     if (m_radioModel == nullptr) {

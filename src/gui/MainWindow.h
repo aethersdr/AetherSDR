@@ -429,7 +429,7 @@ private:
     // Route A), which is the one backend that owns BOTH. Every site that wires
     // PanadapterStream::audioDataReady → AudioEngine::feedAudioData must consult
     // this, or the two sources sum at the sink (wobble + distortion).
-    bool backendOwnsRxAudio();                // MainWindow_Session.cpp
+    bool backendFeedsEngineDirectly();        // MainWindow_Session.cpp
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp

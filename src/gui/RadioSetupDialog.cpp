@@ -1131,6 +1131,16 @@ QWidget* RadioSetupDialog::buildRadioTab()
             // corrected callsign would publish the OLD radio value and listeners
             // would restart against it. Send first, persist second.
             const QString entered = m_callsignEdit->text().trimmed().toUpper();
+            // Empty is "no change", never "erase". Before the station-callsign
+            // setting existed, blanking this field sent `radio callsign ` with
+            // an empty argument and was otherwise harmless; now it would ALSO
+            // wipe a persisted setting that PSK Reporter, the WSPR beacon and
+            // QRZ lookup all read. A silent wipe of persisted state is not an
+            // acceptable cost for a stray keystroke. (PR #4537 review.)
+            if (entered.isEmpty()) {
+                m_callsignEdit->setText(m_model->callsign());
+                return;
+            }
             if (m_model->usesFlexCommandPlane()) {
                 m_model->sendCommand("radio callsign " + entered);
             }
