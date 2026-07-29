@@ -224,8 +224,24 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // A recreate (same Flex slice id, removal < 500 ms ago) reuses
             // its existing binding; a genuinely new slice gets the lowest
             // free number.
-            if (s)
-                m_trxMap.acquire(s->sliceId());
+            //
+            // Bind by walking EVERY live slice in list order, not just the
+            // new one (#4577 review): after a reconnect the previous
+            // session's slices are reclaimed by the status replay without
+            // sliceAdded (RadioModel's !reclaimed guard) while the map was
+            // cleared at disconnect — live slices with no binding. Acquiring
+            // only the new slice would hand it trx 0 on top of a slice the
+            // fallback resolves positionally to 0. The walk is idempotent
+            // (acquire reuses existing bindings) and on an empty map
+            // reproduces exactly the positional numbering, restoring the
+            // invariant that every live slice is bound. The added slice is
+            // already in the list here (append precedes the emit).
+            if (s) {
+                for (SliceModel* live : m_model->slices()) {
+                    if (live)
+                        m_trxMap.acquire(live->sliceId());
+                }
+            }
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) {
                     qCInfo(lcCat) << "TCI: slice added — re-arming DAX"
@@ -250,7 +266,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             }
             m_tciDaxSlices.remove(sliceId);
 
-            // Removal renumbers every later slice's trx (#4160).
+            // Under the #4567 sticky map a removal does NOT renumber the
+            // survivors (that renumbering was #4160's original concern) —
+            // publishActiveTrx() still runs because the removed slice may
+            // have been the focused one, and the active-trx broadcast must
+            // move off the dead index.
             publishActiveTrx();
 
             // m_lastTxTrx caches the last TX slice's trx so a power change
@@ -280,6 +300,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // same Flex slice id well within 500 ms and reclaims its number
             // via acquire() (so surviving slices never renumber); a genuine
             // close leaves the id dead and frees the number for reuse.
+            // The timer also fires during teardown after m_trxMap.clear() —
+            // intentional no-op: release() of an absent key does nothing and
+            // the liveness guard holds.
             QTimer::singleShot(500, this, [this, sliceId]() {
                 if (m_model && !m_model->slice(sliceId)) {
                     m_trxMap.release(sliceId);

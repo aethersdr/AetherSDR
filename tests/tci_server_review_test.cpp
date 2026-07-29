@@ -2,7 +2,10 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
+#include "core/RadioDiscovery.h"
 #include "core/TciServer.h"
+#include "core/TciTrxMap.h"
+#include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -10,6 +13,7 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QJsonObject>
+#include <QSet>
 #include <QTimer>
 #include <QWebSocket>
 
@@ -507,6 +511,141 @@ public:
             && server.m_trxMap.sliceForTrx(&model, 1) == b;
     }
 
+    // #4577 review — the reconnect hole: stageSessionModelsForReconnect()
+    // reclaims the previous session's slices without sliceAdded (RadioModel's
+    // !reclaimed guard) while the map was cleared at disconnect, so every
+    // slice is live but unbound. The next genuine slice-add must not collide:
+    // binding only the new slice would hand it trx 0 on top of the slice the
+    // positional fallback already resolves to 0. The fixture reproduces the
+    // reclaim END STATE directly (live slices + cleared map) rather than the
+    // staging machinery — identical from the map's point of view.
+    static bool liveSlicesKeepDistinctTrxAfterReconnect()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "reconnect fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+
+        // The disconnect/reclaim cycle: bindings die with the connection,
+        // slices survive into the new session unbound.
+        server.m_trxMap.clear();
+
+        // First slice-add of the new session.
+        if (!model.automationApplySliceFixture(2, QStringLiteral("C"),
+                                               &error)) {
+            std::fprintf(stderr, "reconnect add failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+
+        // The invariant the design rests on: no two live slices resolve to
+        // the same trx.
+        QSet<int> seen;
+        for (SliceModel* s : model.slices()) {
+            const int trx = server.m_trxMap.trxForSlice(&model, s);
+            if (seen.contains(trx)) {
+                std::fprintf(stderr,
+                             "duplicate trx %d among live slices after "
+                             "reconnect + add\n",
+                             trx);
+                return false;
+            }
+            seen.insert(trx);
+        }
+        // And the rebind walk reproduces the numbering the positional policy
+        // would have given: A=0 B=1 C=2 in list order.
+        return server.m_trxMap.trxForSlice(&model, model.slice(0)) == 0
+            && server.m_trxMap.trxForSlice(&model, model.slice(1)) == 1
+            && server.m_trxMap.trxForSlice(&model, model.slice(2)) == 2;
+    }
+
+    // #4577 review — inside the 500 ms settle window the two lookup
+    // directions must not contradict: trxForSlice answers from the held
+    // binding (the survivor keeps its number), so sliceForTrx answering the
+    // held number positionally would route an inbound command to the wrong
+    // slice — during exactly the window a band-changing client is most
+    // likely to send one. A held-but-not-live trx answers "no slice right
+    // now"; callers already treat null as unknown-receiver and drop the
+    // command.
+    //
+    // Runs against the demo's synthetic wire (the demo_backend_swap_test
+    // pattern): the positional fallback opens with an isConnected() guard,
+    // so on a disconnected fixture model the pre-fix code answers null by
+    // coincidence and the case cannot discriminate. The event loop spins
+    // only BEFORE the removal — the deferred release stays held through the
+    // assertions, exactly as it is on hardware inside the window.
+    static bool heldTrxRefusesInsteadOfRepointing()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        RadioInfo demo;
+        demo.name    = QStringLiteral("FLEX-6700");
+        demo.model   = SimBackend::demoModelName();
+        demo.serial  = SimBackend::demoSerial();
+        demo.family  = SimBackend::familyName();
+        demo.address = QHostAddress(QHostAddress::LocalHost);  // never dialed
+        demo.port    = 4992;
+        model.connectToRadio(demo);
+        for (int i = 0;
+             i < 40 && !(model.isConnected() && !model.slices().isEmpty());
+             ++i) {
+            QEventLoop loop;
+            QTimer::singleShot(50, &loop, &QEventLoop::quit);
+            loop.exec();
+        }
+        if (!model.isConnected() || model.slices().isEmpty()) {
+            std::fprintf(stderr,
+                         "settle: demo connect did not settle (connected=%d "
+                         "slices=%d)\n",
+                         model.isConnected(), int(model.slices().size()));
+            return false;
+        }
+        SliceModel* live = model.slices().first();
+
+        // A standalone map holding the settle-window state directly: trx 0 is
+        // bound to a slice id with no live slice (exactly what the deferred
+        // release preserves after a band-change destroy), while a live slice
+        // sits at list position 0. The demo cannot grow a second slice and
+        // the slice fixtures refuse while connected, so the held state is
+        // constructed on the map itself — identical from sliceForTrx's point
+        // of view, and the model is genuinely connected, which is what arms
+        // the positional fallback the pre-fix code fell through to.
+        TciTrxMap map;
+        const int heldTrx = map.acquire(9999);            // dead id holds 0
+        const int liveTrx = map.acquire(live->sliceId()); // live slice gets 1
+        if (heldTrx != 0 || liveTrx != 1) {
+            std::fprintf(stderr, "settle setup: expected held=0 live=1, got "
+                         "%d/%d\n", heldTrx, liveTrx);
+            return false;
+        }
+
+        // Outbound: the live slice keeps its own number.
+        if (map.trxForSlice(&model, live) != liveTrx) {
+            std::fprintf(stderr, "live slice lost trx %d\n", liveTrx);
+            return false;
+        }
+        // Inbound: the held number answers nothing. The pre-fix fallback
+        // answered the live slice at list position 0 — an inbound command
+        // for the held receiver re-pointed at a different slice, the very
+        // failure #4567 is about.
+        if (SliceModel* wrong = map.sliceForTrx(&model, heldTrx)) {
+            std::fprintf(stderr,
+                         "held trx %d answered slice id %d instead of null\n",
+                         heldTrx, wrong->sliceId());
+            return false;
+        }
+        // The live slice's own number still resolves to it.
+        return map.sliceForTrx(&model, liveTrx) == live;
+    }
+
     // ── vfo: SET must confirm the frequency it actually reached (#4500/#4493) ──
     //
     // A raw `slice tune` written at the connection bypasses SliceModel, and the
@@ -684,6 +823,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::activeSliceFollowsSliceRemoval();
     const bool trxStableRecreate
         = AetherSDR::TciServerReviewTest::trxStableAcrossSliceRecreate();
+    const bool trxDistinctReconnect
+        = AetherSDR::TciServerReviewTest::liveSlicesKeepDistinctTrxAfterReconnect();
+    const bool heldTrxRefuses
+        = AetherSDR::TciServerReviewTest::heldTrxRefusesInsteadOfRepointing();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -709,6 +852,11 @@ int main(int argc, char** argv)
                 activeSliceRemoval ? "PASS" : "FAIL");
     std::printf("%s  receiver numbers stable across slice recreate (#4567)\n",
                 trxStableRecreate ? "PASS" : "FAIL");
+    std::printf("%s  live slices keep distinct trx after reconnect (#4577)\n",
+                trxDistinctReconnect ? "PASS" : "FAIL");
+    std::printf("%s  held trx refuses instead of re-pointing in the settle "
+                "window (#4577)\n",
+                heldTrxRefuses ? "PASS" : "FAIL");
     std::printf("%s  vfo: SET confirms the frequency reached (#4500/#4493)\n",
                 vfoConfirmsAccepted ? "PASS" : "FAIL");
     std::printf("%s  vfo: SET confirms the truth when the tune is refused\n",
@@ -720,6 +868,7 @@ int main(int argc, char** argv)
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
+        && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
         ? 0 : 1;
 }

@@ -52,9 +52,15 @@ SliceModel* TciTrxMap::sliceForTrx(RadioModel* model, int trx) const
                 continue;
             if (SliceModel* s = model->slice(it.key()))
                 return s;
-            // Bound but not live (band-change settle window): fall through to
-            // the positional fallback rather than answering with a dead id.
-            break;
+            // Bound but not live (band-change settle window). The binding is
+            // held because this slice is expected back; answering positionally
+            // would route an inbound command to whichever slice happens to sit
+            // at that index — the very re-pointing #4567 is about, inside the
+            // one window a band-changing client is most likely to send
+            // commands. Refuse until the recreate reclaims the number or the
+            // deferred release frees it; callers already treat a null slice
+            // as "unknown receiver" and drop the command (#4577 review).
+            return nullptr;
         }
     }
     return TciProtocol::resolveSliceForTrx(model, trx);
