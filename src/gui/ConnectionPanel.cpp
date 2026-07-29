@@ -549,10 +549,11 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualLayout->addWidget(m_manualHintLabel);
 
     auto* manualGroup = new QGroupBox("Radio IP address", manualPage);
-    // Two label+field rows, the action row, the reserved result line, and the
-    // Advanced toggle need this much room. Without a floor the surrounding
-    // layout hands the group less than its content needs and Qt resolves the
-    // shortfall by overlapping children rather than by growing the dialog.
+    // Baseline floor for the collapsed page. The rows and the result line carry
+    // explicit minimums of their own, but a word-wrapped QLabel under-reports
+    // its height, so without this the surrounding layout can still hand the
+    // group less than it needs and Qt overlaps children rather than growing the
+    // dialog. refitToContent() covers the taller states (Advanced expanded).
     manualGroup->setMinimumHeight(240);
     auto* manualGroupLayout = new QVBoxLayout(manualGroup);
     manualGroupLayout->setContentsMargins(12, 14, 12, 12);
@@ -858,7 +859,11 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // restored at the old 660 px height clipped the bottom of that page, so
     // hold a floor that fits it. Everything above the stack is fixed-height, so
     // this is the page height plus the surrounding chrome.
-    setMinimumHeight(700);
+    // Derive the height floor from the built layout rather than hardcoding it:
+    // the manual page is the tallest of the three and it grew a Radio type row,
+    // and a stale pixel count here is exactly what let the rows overlap before.
+    // refitToContent() raises it again if the page later gets taller.
+    refitToContent();
 
     setConnected(false);
     setCurrentMode(LocalMode);
@@ -1052,6 +1057,8 @@ void ConnectionPanel::setManualMessage(const QString& text, bool error)
     m_manualResultLabel->setText(text);
     m_manualResultLabel->setStyleSheet(error ? kErrorLabelStyle : kInfoLabelStyle);
     m_manualResultLabel->setVisible(true);
+    // A long message wraps to more lines than the reserved height covers.
+    refitToContent();
 }
 
 void ConnectionPanel::updateLocalPageState()
@@ -1166,20 +1173,23 @@ void ConnectionPanel::updateManualAdvancedVisibility()
         }
         m_manualAdvancedToggle->setArrowType(Qt::RightArrow);
         m_manualAdvancedWidget->setVisible(false);
-        return;
-    }
-
-    if (hasExplicitSelection || m_manualSourceWarningLabel->isVisible()) {
+    } else if (hasExplicitSelection || m_manualSourceWarningLabel->isVisible()) {
         const QSignalBlocker blocker(m_manualAdvancedToggle);
         m_manualAdvancedToggle->setChecked(true);
         m_manualAdvancedToggle->setArrowType(Qt::DownArrow);
         m_manualAdvancedWidget->setVisible(true);
-        return;
+    } else {
+        m_manualAdvancedWidget->setVisible(m_manualAdvancedToggle->isChecked());
+        m_manualAdvancedToggle->setArrowType(
+            m_manualAdvancedToggle->isChecked() ? Qt::DownArrow : Qt::RightArrow);
     }
 
-    m_manualAdvancedWidget->setVisible(m_manualAdvancedToggle->isChecked());
-    m_manualAdvancedToggle->setArrowType(
-        m_manualAdvancedToggle->isChecked() ? Qt::DownArrow : Qt::RightArrow);
+    // Expanding the Advanced section is the biggest single height change this
+    // page has, and it happens on its own whenever a saved source path goes
+    // stale — the exact VPN case this feature exists for. Without this the
+    // group is handed less room than it needs and the "Radio type"/"Radio IP"
+    // rows overlap their own labels.
+    refitToContent();
 }
 
 void ConnectionPanel::setCurrentMode(ConnectionMode mode)
@@ -1828,6 +1838,35 @@ void ConnectionPanel::probeRadio(const QString& ip)
     }
 
     probeFlexRadio(trimmedIp, bindSettings);
+}
+
+void ConnectionPanel::refitToContent()
+{
+    if (!layout())
+        return;
+
+    // minimumSize() is the layout's own answer to "how small can this get
+    // before children start overlapping", so it already accounts for whichever
+    // page is current and whether the Advanced section is expanded. Deriving
+    // the floor beats a hardcoded pixel count, which would go stale the moment
+    // the page gains a row or the operator runs a larger UI font.
+    layout()->activate();
+    const int needed = layout()->minimumSize().height();
+    if (needed <= 0)
+        return;
+
+    setMinimumHeight(needed);
+
+    // Grow whenever the current page needs it. Shrink only back to a height we
+    // set ourselves — otherwise collapsing the Advanced section would discard a
+    // size the operator chose by dragging the window. Without the shrink the
+    // dialog keeps the taller size and leaves a band of dead space.
+    const bool grow    = height() < needed;
+    const bool reclaim = height() > needed && height() == m_autoFitHeight;
+    if (grow || reclaim) {
+        resize(width(), needed);
+        m_autoFitHeight = needed;
+    }
 }
 
 void ConnectionPanel::resetManualConnectButton()

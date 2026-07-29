@@ -142,6 +142,11 @@ private:
     Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
     void resetManualConnectButton();
+    // Grow the dialog when the current page needs more room than it has. The
+    // manual page's height is not constant — the Advanced source-path section
+    // expands, and the result line wraps — and a dialog that cannot grow makes
+    // Qt overlap the rows instead. Cheap and idempotent; safe to call often.
+    void refitToContent();
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp);
@@ -197,6 +202,9 @@ private:
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
     bool         m_manualConnectPending{false};
+    // Last height refitToContent() set, so it can tell its own sizing from a
+    // height the operator dragged to and only reclaim the former.
+    int          m_autoFitHeight{0};
 
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry

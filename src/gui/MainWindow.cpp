@@ -4085,9 +4085,12 @@ void MainWindow::buildUI()
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     // Height floor comes from the panel itself — its "Connect by IP" page grew a
     // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
-    // page (the Advanced disclosure fell outside the mode stack).
+    // page (the Advanced disclosure fell outside the mode stack). Open at
+    // exactly that floor, not floor + slack: the panel reclaims height it set
+    // itself when a page shrinks, and it can only tell its own sizing from an
+    // operator's drag if the two agree to start with.
     m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
-    m_connPanel->resize(760, m_connPanel->minimumHeight() + 20);
+    m_connPanel->resize(760, m_connPanel->minimumHeight());
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
