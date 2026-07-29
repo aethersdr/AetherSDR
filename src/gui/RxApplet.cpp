@@ -1402,9 +1402,9 @@ void RxApplet::setManualSqlLevelForCurrentSurface(int level)
 
     // Per-slice (#3326): the attached slice keeps its own threshold. The
     // shared m_sqlManualLevel / AppSettings key still get updated too, but
-    // only as the seed a NEWLY created slice starts from — see
-    // RadioModel.cpp's SliceModel construction — not a live cross-slice
-    // value read back here.
+    // only as the seed a NEWLY created slice starts from when the radio's
+    // status carries no squelch_level of its own — see RadioModel.cpp's
+    // SliceModel construction — not a live cross-slice value read back here.
     if (m_slice) {
         m_slice->setManualSquelchLevel(clamped);
     } else {

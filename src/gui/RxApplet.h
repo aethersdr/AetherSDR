@@ -279,8 +279,9 @@ private:
     // values every FFT tick, so the manual value needs to be cached
     // separately to restore when the user comes back to Manual — but that
     // cache now lives per-slice on SliceModel::manualSquelchLevel(), seeded
-    // from AppSettings when a slice is first created (RadioModel.cpp), so
-    // switching the active slice doesn't pull in another slice's threshold.
+    // when a slice is first created (RadioModel.cpp) from the radio's own
+    // squelch_level when the status frame carries one, else from AppSettings,
+    // so switching the active slice doesn't pull in another slice's threshold.
     int          m_sqlManualLevel{20};
 
     void applySqlModeVisuals();
