@@ -1100,6 +1100,18 @@ only.
 ← {"ok":true,"memory":"activate","index":12,"panId":"0x40000000"}
 ```
 
+Works the same whether the slots live in the radio (Flex) or in the host-side
+memory bank (`LocalMemoryBank`, used by HL2/Kiwi/demo and whenever no radio is
+connected). On the local bank there is no radio-side `memory apply`, so
+`RadioModel::recallLocalMemory()` applies the stored channel to the active slice
+through SliceModel's operator-issue setters — the same path the panel controls
+use, so the write reaches the radio through the backend seam.
+
+`activate` is currently the only action. Saving, listing, and removing memories
+still require driving the GUI (the Memory dialog's Import/Export use NATIVE file
+dialogs, which the bridge cannot reach at all) — see the verb suggestions at the
+end of this document.
+
 ### `slice`
 Slice lifecycle, mode, diversity, Center Lock, Slice Link, TX assignment,
 antennas, and receive source. All actions are RX/config — none keys the
@@ -2702,3 +2714,32 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |
 
 <!-- END GENERATED VERB TABLE -->
+
+---
+
+## Suggested verbs
+
+Gaps found while proving a feature against real hardware, kept here so the next
+person hits a note instead of the wall.
+
+### `memory save|list|remove`
+
+`memory` can only `activate`. Everything else about a memory channel has to be
+driven through the GUI: quick-save is a modal dialog whose QLineEdit has no
+`objectName` (it is reachable only via the scoped `QDialog/QLineEdit` form), and
+the Memory dialog's **Import…/Export… open NATIVE file dialogs, which the bridge
+cannot drive at all**. So the CSV round trip — the thing most likely to regress,
+because it is a chained `create`→`set` per record — has no automated proof at
+the GUI level today.
+
+Proposed:
+
+| Verb | Purpose |
+|---|---|
+| `memory save <name>` | Save the active slice as a memory; returns the new index. Covers `createMemoryFromSlice()` without the modal. |
+| `memory list` | Dump the memory cache as JSON — lets a test assert on channels without screenshotting a table. |
+| `memory remove <index>` | Delete a slot; makes tests self-cleaning instead of leaving channels in the operator's bank. |
+| `memory import <path>` / `memory export <path>` | Take a path directly, bypassing the native file dialog. The only way to get the CSV flows under automation. |
+
+All four are RX/config, no TX gate. `memory list` in particular would have
+replaced several screenshots in this feature's verification.

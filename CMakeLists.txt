@@ -523,6 +523,7 @@ endif()
 
 # Sources
 set(CORE_SOURCES
+    src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -667,6 +668,8 @@ set(CORE_SOURCES
     src/core/DxccWorkedStatus.cpp
     src/core/DxccColorProvider.cpp
     src/core/SleepInhibitor.cpp
+    src/core/LocalMemoryBank.cpp
+    src/core/LocalMemoryStore.cpp
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryFieldValues.cpp
     src/core/MemoryRecallPolicy.cpp
@@ -4382,6 +4385,27 @@ add_executable(memory_field_values_test
 target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
+
+add_executable(local_memory_store_test
+    tests/local_memory_store_test.cpp
+    src/core/LocalMemoryStore.cpp
+)
+target_include_directories(local_memory_store_test PRIVATE src)
+target_link_libraries(local_memory_store_test PRIVATE Qt6::Core)
+add_test(NAME local_memory_store_test COMMAND local_memory_store_test)
+
+add_executable(local_memory_bank_test
+    tests/local_memory_bank_test.cpp
+    src/core/LocalMemoryBank.cpp
+    src/core/LocalMemoryStore.cpp
+    src/core/backends/MemoryWireCodec.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/LogManager.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(local_memory_bank_test PRIVATE src)
+target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
+add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
 
 add_executable(memory_csv_compat_test
     tests/memory_csv_compat_test.cpp

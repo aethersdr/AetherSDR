@@ -13,8 +13,10 @@
 #include "core/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
+#include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
@@ -412,6 +414,34 @@ public:
     void loadGlobalProfile(const QString& name);
     void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
     void resetPanState();
+
+    // True when a text command issued through sendCmd() can actually reach the
+    // radio. False for a backend that owns no RadioConnection (HL2 and any
+    // other family that takes typed intents through the IRadioBackend seam) —
+    // there, Flex wire text has nowhere to go and is dropped at the sink.
+    bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+
+    // ── Local memory bank (radios with no memory slots of their own) ─────────
+    //
+    // Answer a `memory …` command out of the local bank. Returns the sequence
+    // number sendCmd() would have returned (non-zero — sendCommand() reads that
+    // as "dispatched"), or nullopt when the command is not one the bank owns
+    // and must take its normal path.
+    // (spelled out rather than the ResponseCallback alias — that is declared
+    // further down this class.)
+    std::optional<quint32> tryLocalMemoryCommand(
+        const QString& command, const RadioConnection::ResponseCallback& cb);
+    // Settle which store owns the memory cache for the session being started:
+    // the local bank, or the radio's own slots.
+    void syncMemoryStoreForSession();
+    // Push the loaded bank into m_memories, emitting per-slot memoryChanged so
+    // the browse panel and the panadapter memory-spot feed populate exactly as
+    // they do from a Flex's memory-status dump.
+    void publishLocalMemories();
+    // Apply a stored channel to the active slice. This is what `memory apply`
+    // does on a Flex; with no radio to do it, the model drives SliceModel's
+    // operator-issue setters so the change routes through the backend seam.
+    void recallLocalMemory(int index);
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
     bool prepareWsprTransmit();
@@ -449,6 +479,15 @@ public:
     // Memory channel cache
     const QMap<int, MemoryEntry>& memories() const { return m_memories; }
     void handleMemoryStatus(int index, const QMap<QString, QString>& kvs);
+
+    // True when memory channels live in a file on THIS host rather than in the
+    // radio — the HL2/Kiwi/demo case, and the disconnected case. Driven by
+    // RadioCapabilities::persistsMemories, so a new backend gets the local bank
+    // by default rather than writing channels into a radio that drops them.
+    bool usesLocalMemoryBank() const;
+    // The bank itself, for the automation bridge and tests. Empty and unread
+    // until the first local memory command or connect.
+    LocalMemoryBank& localMemoryBank() { return m_localMemories; }
     bool    lowLatencyDigital()        const { return m_lowLatencyDigital; }
     bool    hasStaticIp()     const { return m_hasStaticIp; }
     QString staticIp()        const { return m_staticIp; }
@@ -1469,6 +1508,10 @@ private:
     quint32 m_staleSessionOwnHandle{0};
     quint32 m_ownSessionHandle{0};   // this session's handle, set at registration
     QMap<int, MemoryEntry> m_memories;
+    // Backing store for m_memories when the radio has no memory slots of its
+    // own. It is always constructed but only read/written on that path, so a
+    // Flex session never touches the file.
+    LocalMemoryBank m_localMemories;
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};

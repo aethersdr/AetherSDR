@@ -66,6 +66,17 @@ struct RadioCapabilities {
     // non-Flex backend must NOT open the mic on connect. (#4449 review)
     bool hostModulates = false;
 
+    // The RADIO stores memory channels and re-dumps them on connect. True for a
+    // Flex, whose memory slots live in the radio and are shared by every client
+    // attached to it; false for a direct-sampling or receiver-only backend (HL2,
+    // Kiwi, demo) that has nowhere to put them.
+    //
+    // False is the load-bearing default: a backend that says nothing gets the
+    // client-side memory bank, so an operator's channels survive rather than
+    // being written into a radio that silently drops them. A backend only sets
+    // this true when it can prove the radio gives the slots back.
+    bool persistsMemories = false;
+
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
     bool hasTuner = false;         // antenna tuner / ATU

@@ -7,6 +7,7 @@
 #include "core/LogManager.h"
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
+#include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
 
@@ -183,6 +184,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // one-line change, because the gate's test helper mirrors
     // `!connected || declared` exactly.
     caps.hasGpsLocation = true;
+    // The radio owns the memory slots and re-dumps them on every connect, so
+    // the client must NOT keep a local bank for a Flex — two stores that both
+    // believe they are authoritative would fight over slot indices.
+    caps.persistsMemories = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and
@@ -974,42 +979,10 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 void FlexBackend::decodeMemoryStatus(int index, const QMap<QString, QString>& kvs)
 {
     // Memory-slot status → typed MemoryDelta (aetherd RFC 2.3 — RadioModel
-    // residual). Removal: the radio sends "in_use=0" or a bare "removed".
-    MemoryDelta d;
-    d.index = index;
-    if (kvs.value(QStringLiteral("in_use")) == QLatin1String("0")
-        || kvs.contains(QStringLiteral("removed"))) {
-        d.removed = true;
-        emit memoryChanged(d);
-        return;
-    }
-
-    // Text fields ride raw — the protocol space-encoding (0x7f→' ') and the
-    // NUL/control-byte sanitisation (MemoryFields) are a model concern applied in
-    // RadioModel::applyMemoryChanges, so the backend keeps no models/ dependency.
-    carry(kvs, "group", d.group);
-    carry(kvs, "owner", d.owner);
-    carry(kvs, "name", d.name);
-    carry(kvs, "mode", d.mode);
-    carry(kvs, "repeater", d.offsetDir);
-    carry(kvs, "tone_mode", d.toneMode);
-    // Numeric fields — ok-guarded (a malformed *present* value is dropped, so the
-    // model keeps the slot's prior value rather than clobbering it with 0). The
-    // old handler applied an unguarded toInt/toDouble (→0); the carry() guard is
-    // the same fail-closed improvement made at the slice/transmit sites.
-    carry(kvs, "freq", d.freq);
-    carry(kvs, "repeater_offset", d.repeaterOffset);
-    carry(kvs, "tone_value", d.toneValue);
-    carry(kvs, "step", d.step);
-    carry(kvs, "squelch", d.squelch);
-    carry(kvs, "squelch_level", d.squelchLevel);
-    carry(kvs, "rx_filter_low", d.rxFilterLow);
-    carry(kvs, "rx_filter_high", d.rxFilterHigh);
-    carry(kvs, "rtty_mark", d.rttyMark);
-    carry(kvs, "rtty_shift", d.rttyShift);
-    carry(kvs, "digl_offset", d.diglOffset);
-    carry(kvs, "digu_offset", d.diguOffset);
-    emit memoryChanged(d);
+    // residual). The decode itself moved to MemoryWire::decodeStatus so the
+    // local memory bank — which decodes the very same kv-set for a radio that
+    // has no memory storage of its own — cannot drift from what a Flex reports.
+    emit memoryChanged(MemoryWire::decodeStatus(index, kvs));
 }
 
 void FlexBackend::decodeProfileStatus(const QString& profileType, const QString& rawBody)

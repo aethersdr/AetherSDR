@@ -14,6 +14,7 @@
 #include "core/DigitalVoiceWaveformProcess.h"
 #include "core/LogManager.h"
 #include "core/MemoryFieldValues.h"
+#include "core/backends/MemoryWireCodec.h"
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
@@ -46,6 +47,10 @@ namespace {
 // the radio-assigned Flex stream-ids. streamId = base + panId. (Step 3 will
 // namespace this by session so ids stay unique across concurrent radios.)
 constexpr quint32 kNeutralPanStreamIdBase = 0xE1000000u;
+// Internal sentinel for a command issued to a backend that owns no command
+// plane. Not a SmartSDR protocol response code; numbered alongside
+// kProfileLoadSuppressedCommandCode (0x50000061), the other such drop.
+constexpr int kNoCommandPlaneCode = 0x50000063;
 // Waterfall ids must be distinct from pan ids: the UI routes waterfall rows by
 // PanadapterModel::wfStreamId() and spectrum frames by panStreamId().
 constexpr quint32 kNeutralWfStreamIdBase  = 0xE2000000u;
@@ -1010,6 +1015,14 @@ RadioModel::RadioModel(QObject* parent)
     qRegisterMetaType<ProfileDelta>();
     qRegisterMetaType<AmpDelta>();
     qRegisterMetaType<TunerDelta>();
+
+    // Publish the host-side memory bank once the event loop turns. Deferred
+    // rather than done here because MainWindow connects to memoryChanged AFTER
+    // constructing this model — emitting inside the ctor would reach nobody and
+    // the browse panel would sit empty until the first connect. With no radio
+    // attached yet, usesLocalMemoryBank() is true, so a Flex-only operator with
+    // an empty bank file publishes nothing and sees no change.
+    QTimer::singleShot(0, this, [this]() { publishLocalMemories(); });
 
     DigitalVoiceWaveformProcess& digitalVoiceProcess =
         DigitalVoiceWaveformProcess::instance();
@@ -3855,8 +3868,20 @@ bool RadioModel::dispatchPanBand(const QString& panId, const QString& bandKey)
 
     emit panBandAboutToDispatch(panId);
     if (!sendCommand(command)) {
-        qCWarning(lcProtocol).noquote()
-            << "RadioModel: pan band write not dispatched —" << command;
+        // The band stack is a Flex concept. On a backend with no command plane
+        // this write was never going to land — that is expected, not the #4142
+        // signature the warning exists to catch, and warning on it would fire on
+        // every band change the operator makes on an HL2. The failure signal
+        // still goes out either way: it restores the KiwiSDR mute handoff that
+        // panBandAboutToDispatch just lifted, which is needed precisely BECAUSE
+        // the write did not reach the radio.
+        if (hasCommandPlane()) {
+            qCWarning(lcProtocol).noquote()
+                << "RadioModel: pan band write not dispatched —" << command;
+        } else {
+            qCDebug(lcProtocol).noquote()
+                << "RadioModel: no command plane for the band stack, skipping" << command;
+        }
         emit panBandDispatchFailed(panId);
         return false;
     }
@@ -4238,6 +4263,11 @@ void RadioModel::onConnected()
         m_sleepInhibitor.acquire("AetherSDR connected to radio");
 
     emit connectionStateChanged(true);
+    // A Flex dumps its memory slots as status during the handshake below. A
+    // radio without any has nothing to dump, so the bank is what populates the
+    // cache — settle which store owns the session here, on the same edge, so
+    // the browse panel and the memory-spot feed come up populated either way.
+    syncMemoryStoreForSession();
     // Delay network monitor until after client gui registration
     // (pings sent before registration cause "Malformed command" on WAN)
 
@@ -5317,6 +5347,16 @@ void RadioModel::onDisconnected()
         m_memories.clear();
         emit memoriesCleared();
     }
+    // The cache is connection-scoped and just went; the bank on disk is not.
+    // Write out anything still inside the debounce window before the session
+    // that made those edits ends.
+    m_localMemories.flush();
+    // Then put the bank straight back. Host-side memories are not the radio's
+    // to take away — the Memory dialog stays open and fully usable while
+    // disconnected (Add, Import and Export are all live there), so leaving the
+    // cache empty would show an operator an empty channel list and let them
+    // import into a bank they cannot see.
+    publishLocalMemories();
     m_clientStations.clear();
     m_clientInfoMap.clear();
     // #3977: handles are radio-boot-scoped and recycled across connections —
@@ -5855,7 +5895,172 @@ void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs
     // moved to FlexBackend::decodeMemoryStatus → memoryChanged → applyMemoryChanges
     // (the model-side MemoryEntry update, text sanitisation, and emits). Thin
     // forwarder behind the seam.
-    if (m_flexBackend) m_flexBackend->decodeMemoryStatus(index, kvs);
+    if (m_flexBackend) {
+        m_flexBackend->decodeMemoryStatus(index, kvs);
+        return;
+    }
+    // No Flex backend means no decoder on the other side of the seam, and this
+    // used to be a silent no-op. The memory dialog calls it after every
+    // successful write to fold the values it just sent into the cache, so on a
+    // locally-banked radio dropping it left the UI showing a channel that never
+    // updated. Same decoder, same delta path.
+    if (usesLocalMemoryBank())
+        applyMemoryChanges(MemoryWire::decodeStatus(index, kvs));
+}
+
+bool RadioModel::usesLocalMemoryBank() const
+{
+    // While nothing is connected, no radio owns the slots, so the host bank
+    // does. This is not just tidiness: a backend object exists from startup and
+    // defaults to the Flex family, so keying off capabilities alone would call
+    // the bank unused before the operator has connected to anything — and the
+    // Memory dialog is fully usable right there, with Add, Import and Export
+    // all live. Connecting to a radio that does own its slots hands ownership
+    // back; see syncMemoryStoreForSession().
+    if (!isConnected())
+        return true;
+    return !backendCapabilities().persistsMemories;
+}
+
+std::optional<quint32> RadioModel::tryLocalMemoryCommand(
+    const QString& command, const RadioConnection::ResponseCallback& cb)
+{
+    if (!usesLocalMemoryBank())
+        return std::nullopt;
+    if (!command.startsWith(QLatin1String("memory ")))
+        return std::nullopt;
+
+    const LocalMemoryBank::CommandResult result = m_localMemories.handleCommand(command);
+    if (!result.handled)
+        return std::nullopt;
+
+    if (result.delta) {
+        applyMemoryChanges(*result.delta);
+        // applyMemoryChanges owns the space-decode and sanitisation, so read the
+        // slot back out of the cache to persist: the file then holds exactly
+        // what the UI and a CSV export see, not a second interpretation of the
+        // same kv-set.
+        if (result.delta->removed) {
+            m_localMemories.forget(result.delta->index);
+        } else if (const auto it = m_memories.constFind(result.delta->index);
+                   it != m_memories.constEnd()) {
+            m_localMemories.record(result.delta->index, it.value());
+        }
+    }
+
+    if (result.recallIndex >= 0)
+        recallLocalMemory(result.recallIndex);
+
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    if (cb) {
+        // Queued, never re-entrant. On the wire a response always arrives on a
+        // later turn of the event loop, and the CSV import chains its next
+        // record from inside this callback — answering inline would recurse two
+        // frames per imported channel and blow the stack on a large file.
+        QMetaObject::invokeMethod(this, [cb, code = result.code, body = result.body]() {
+            cb(code, body);
+        }, Qt::QueuedConnection);
+    }
+    return seq;
+}
+
+void RadioModel::syncMemoryStoreForSession()
+{
+    if (usesLocalMemoryBank()) {
+        publishLocalMemories();
+        return;
+    }
+    // This radio owns its memory slots and is about to dump them. Anything the
+    // local bank published while we were disconnected has to go first: both
+    // number their slots from 0, so a leftover local slot 0 would sit in the
+    // cache pretending to be the radio's slot 0 until the dump overwrote it —
+    // and any local slot the radio doesn't have would never be overwritten at
+    // all.
+    if (!m_memories.isEmpty()) {
+        m_memories.clear();
+        emit memoriesCleared();
+    }
+}
+
+void RadioModel::publishLocalMemories()
+{
+    if (!usesLocalMemoryBank())
+        return;
+
+    m_localMemories.load();
+    const QMap<int, MemoryEntry>& stored = m_localMemories.entries();
+    if (stored.isEmpty())
+        return;
+
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
+        MemoryEntry entry = it.value();
+        entry.index = it.key();
+        m_memories.insert(it.key(), entry);
+        emit memoryChanged(it.key());
+    }
+    qCInfo(lcProtocol).noquote()
+        << "RadioModel: published" << stored.size() << "memories from the local bank";
+}
+
+void RadioModel::recallLocalMemory(int index)
+{
+    const auto it = m_memories.constFind(index);
+    if (it == m_memories.constEnd()) {
+        qCWarning(lcProtocol) << "RadioModel: local memory recall for unknown slot" << index;
+        return;
+    }
+    // `memory apply` lands on the ACTIVE slice on a Flex, so resolve the same
+    // one here. MainWindow has already made its recall target active by the
+    // time this runs. The first slice is the fallback for a single-slice
+    // backend that never marks one active — better than dropping the recall.
+    SliceModel* target = nullptr;
+    for (SliceModel* s : m_slices) {
+        if (s && s->isActive()) {
+            target = s;
+            break;
+        }
+    }
+    if (!target && !m_slices.isEmpty())
+        target = m_slices.first();
+    if (!target) {
+        qCWarning(lcProtocol) << "RadioModel: local memory recall with no slice to apply it to";
+        return;
+    }
+
+    const MemoryEntry& memory = it.value();
+
+    // These are the operator-issue setters, the same ones the panel controls
+    // call, so each emits its *CommandIssued signal and reaches the radio
+    // through the backend seam. Order matches what `memory apply` does on a
+    // Flex: mode first (it resets the filter to the mode default), then the
+    // stored filter, then frequency.
+    if (!memory.mode.isEmpty())
+        target->setMode(memory.mode);
+    if (memory.rxFilterLow != 0 || memory.rxFilterHigh != 0)
+        target->setFilterWidth(memory.rxFilterLow, memory.rxFilterHigh);
+
+    // FM repeater and tone fields have no seam route today — a non-Flex backend
+    // never sees SliceModel's Flex wire text for them. Applying them anyway
+    // keeps the model and the UI honest about what the recalled channel is; on
+    // a backend that grows FM support they will already be set.
+    if (!memory.offsetDir.isEmpty()) {
+        target->setRepeaterOffsetDir(memory.offsetDir);
+        target->setFmRepeaterOffsetFreq(std::abs(memory.repeaterOffset));
+    }
+    if (!memory.toneMode.isEmpty()) {
+        target->setFmToneMode(memory.toneMode);
+        target->setFmToneValue(QString::number(memory.toneValue, 'f', 1));
+    }
+    target->setSquelch(memory.squelch, memory.squelchLevel);
+
+    if (memory.freq > 0.0)
+        target->setFrequency(memory.freq);
+
+    qCInfo(lcProtocol).noquote().nospace()
+        << "RadioModel: recalled local memory " << index
+        << " onto slice " << target->sliceId()
+        << " freq=" << QString::number(memory.freq, 'f', 6)
+        << " mode=" << memory.mode;
 }
 
 void RadioModel::applyMemoryChanges(const MemoryDelta& d)
@@ -6308,6 +6513,17 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         perf.recordPanCenterCommand();
     }
 
+    // Memory commands against a radio with no memory slots are answered by the
+    // local bank, before anything else looks at them. This is the single seam
+    // that keeps the whole memory feature working off-Flex: the dialog, the
+    // browse panel, CSV import/export, the spot feed and the automation verb
+    // all reach the radio through these four commands, so answering them here
+    // means none of them needed changing. It sits above the profile-load hold
+    // deliberately — a local bank edit is not a radio-state write and has
+    // nothing to reconcile with a profile load.
+    if (const auto seq = tryLocalMemoryCommand(command, cb))
+        return *seq;
+
     const ProfileLoadCommand profileLoad = parseProfileLoadCommand(command);
     if (profileLoad.valid) {
         const bool topologyProfile = profileLoadMayRebuildRadioTopology(profileLoad.type);
@@ -6398,6 +6614,19 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
 
     if (m_wanConn)
         return m_wanConn->sendCommand(command, std::move(cb));
+
+    // A backend that is not Flex or Sim owns no RadioConnection, so there is
+    // nothing to write to — invokeMethod() below would dereference null. This
+    // is reachable on the memory-recall path (MainWindow follows `memory apply`
+    // with a `slice tune`, and the tune is Flex wire text), so fail the way the
+    // rest of sendCmd's drops do: sequence 0, meaning "not dispatched".
+    if (!hasCommandPlane()) {
+        qCDebug(lcProtocol).noquote()
+            << "RadioModel: no command plane for this backend, dropping" << command;
+        if (cb)
+            cb(kNoCommandPlaneCode, QStringLiteral("this radio has no command plane"));
+        return 0;
+    }
 
     // Allocate seq on main thread, store callback locally. (#502)
     const quint32 seq = m_seqCounter.fetch_add(1);
