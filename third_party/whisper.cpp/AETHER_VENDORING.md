@@ -2,8 +2,15 @@
 
 Upstream: <https://github.com/ggml-org/whisper.cpp>
 Version: **1.9.1** — commit pinned in [`COMMIT`](COMMIT)
-License: MIT (see [`LICENSE`](LICENSE)) — GPL-v3-compatible; attribute in the
-third-party notices, do **not** modify vendored sources in place.
+License: MIT (see [`LICENSE`](LICENSE)) — GPL-v3-compatible; attributed as entry
+20 of the repo-root [`THIRD_PARTY_LICENSES`](../../THIRD_PARTY_LICENSES). The
+upstream `LICENSE` covers the bundled `ggml/` tree too — upstream ships one MIT
+file for both.
+
+Keep this a pristine mirror: do **not** modify vendored sources in place unless
+the change genuinely cannot live outside the tree. Two files currently do;
+every one is recorded in [`AETHERSDR-PATCHES.md`](AETHERSDR-PATCHES.md), and
+anything not listed there is a drift bug.
 
 This is the ASR engine adopted in RFC #4333. Weights are **not** vendored — they
 are downloaded on first enable (primary Hugging Face, fallback GitHub release
@@ -45,32 +52,18 @@ fallback). `GGML_NATIVE=OFF` is forced for portable/Pi/CI binaries.
 
 ## Local patches (deviations from pristine upstream)
 
-Two vendored files carry AetherSDR-local changes; the pristine-mirror rule
-above holds for everything else. Each patch is recorded in git-apply form in
-[`patches/`](patches/) and must be re-applied after any refresh — the
-re-vendoring recipe below otherwise silently reverts them and reintroduces
-#4535.
+Two vendored files carry AetherSDR-local changes; the pristine-mirror rule above
+holds for everything else. Both are described — with their rationale and the
+refresh checklist — in [`AETHERSDR-PATCHES.md`](AETHERSDR-PATCHES.md), following
+the same convention as `third_party/wdsp` and `third_party/smartsdr-dsp`:
 
 - `ggml/src/ggml-metal/CMakeLists.txt` — build-time kernel compilation
-  (`GGML_METAL_EMBED_LIBRARY_COMPILED`): compiles `ggml-metal.metal` to a
-  metallib at build time and embeds the compiled library instead of the
-  shader source; missing-toolchain handling (fatal under `REQUIRE_ASR_GPU`,
-  else warn + source-embed fallback). PR #4553, fixes #4535.
+  (`GGML_METAL_EMBED_LIBRARY_COMPILED`). PR #4553, fixes #4535.
 - `ggml/src/ggml-metal/ggml-metal-device.m` — loads the embedded compiled
-  metallib (skipping runtime source compilation) and clamps
-  `props.has_tensor` to the kernels actually present in the library.
-  PR #4553.
+  metallib and clamps `props.has_tensor`. PR #4553.
 
-Re-apply after a refresh (from the repo root; patch paths are
-repo-root-relative):
-
-    git apply third_party/whisper.cpp/patches/*.patch
-
-Regenerate after changing either file (diff against the pristine copy, e.g.
-a `main` checkout that predates the patch, from the repo root):
-
-    git diff <pristine> -- third_party/whisper.cpp/ggml/src/ggml-metal/<file> \
-        > third_party/whisper.cpp/patches/000N-<slug>.patch
+They must be re-applied after any refresh; the re-vendoring recipe below
+otherwise silently reverts them and reintroduces #4535.
 
 ## Re-vendoring / adding another GPU backend
 
@@ -78,5 +71,5 @@ To add a different GPU backend (CUDA, Metal, …), **re-copy that backend's
 directory** from upstream at the pinned commit and turn its `GGML_<X>` option ON
 (with the matching toolchain + CI runner). To refresh: clone upstream at
 `COMMIT`, re-run the same trim (keeping `ggml-cpu`, `ggml-blas`, `ggml-vulkan`),
-and diff — then re-apply `patches/` (see **Local patches** above); a clean diff
-plus exactly those patches is the expected end state.
+and diff — then re-apply the two local patches (see **Local patches** above); a
+clean diff plus exactly those two files is the expected end state.

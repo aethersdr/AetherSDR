@@ -40,6 +40,18 @@ int chooseThreadCount()
 bool asrMetalUsableHost()
 {
 #ifdef Q_OS_MACOS
+    int isArm64 = 0;
+    size_t size = sizeof(isArm64);
+    if (sysctlbyname("hw.optional.arm64", &isArm64, &size, nullptr, 0) != 0) {
+        isArm64 = 0; // key absent = pre-Apple-Silicon macOS
+    }
+    if (isArm64 == 1) {
+        return true;
+    }
+    // Test the override only once the host is known NOT to be Apple Silicon, so
+    // the log line describes what actually happened. (Checking it first made an
+    // Apple Silicon run with the variable set announce a "non-Apple-Silicon
+    // host".)
     if (qEnvironmentVariableIsSet("AETHER_ASR_FORCE_METAL")) {
         static const bool logged = [] {
             qCInfo(lcAsrWhisper) << "AETHER_ASR_FORCE_METAL set - offering Metal despite non-Apple-Silicon host";
@@ -48,20 +60,12 @@ bool asrMetalUsableHost()
         Q_UNUSED(logged)
         return true;
     }
-    int isArm64 = 0;
-    size_t size = sizeof(isArm64);
-    if (sysctlbyname("hw.optional.arm64", &isArm64, &size, nullptr, 0) != 0) {
-        isArm64 = 0; // key absent = pre-Apple-Silicon macOS
-    }
-    if (isArm64 != 1) {
-        static const bool logged = [] {
-            qCInfo(lcAsrWhisper) << "Intel Mac - ASR is CPU-only (Metal not offered)";
-            return true;
-        }();
-        Q_UNUSED(logged)
-        return false;
-    }
-    return true;
+    static const bool logged = [] {
+        qCInfo(lcAsrWhisper) << "Intel Mac - ASR is CPU-only (Metal not offered)";
+        return true;
+    }();
+    Q_UNUSED(logged)
+    return false;
 #else
     return true;
 #endif

@@ -18,8 +18,16 @@
 //
 // A detached watchdog turns a regression into a fast, labeled failure instead
 // of a ctest timeout.
+//
+// With AETHER_ASR_EXPECT_PRECOMPILED=1 (set by CI) the test additionally asserts
+// that a Metal device really was enumerated and that ggml logged the *compiled*
+// embed branch — without that, a host with no GPU, or a build that quietly fell
+// back to the source embed when the offline Metal toolchain was missing, would
+// pass this test while exercising none of what it guards.
 
 #include "asr/WhisperAsrBackend.h"
+
+#include <ggml.h>
 
 #include <QElapsedTimer>
 #include <QtGlobal>
@@ -27,6 +35,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <thread>
 
 #ifdef Q_OS_MACOS
@@ -45,6 +54,20 @@ static bool hostIsAppleSilicon()
 
 using namespace AetherSDR;
 
+// ggml narrates which library path it took ("using embedded precompiled metal
+// library" vs "using embedded metal library"). Capturing it is what makes the
+// silent-degradation mode visible: the CMake toolchain probe falls back to the
+// source embed with only a message(WARNING), which scrolls past in a 2000-line
+// build, so a green build is not by itself evidence the compiled embed engaged.
+static std::string g_ggmlLog;
+
+static void captureGgmlLog(enum ggml_log_level, const char* text, void*)
+{
+    if (text) {
+        g_ggmlLog += text;
+    }
+}
+
 int main()
 {
     std::thread([] {
@@ -54,6 +77,8 @@ int main()
                              "probe path)\n");
         std::_Exit(2);
     }).detach();
+
+    ggml_log_set(captureGgmlLog, nullptr);
 
     QElapsedTimer timer;
 
@@ -95,6 +120,45 @@ int main()
                 devices.size(), static_cast<long long>(probeMs));
     for (const AsrGpuDevice& d : devices) {
         std::printf("     device %d: %s\n", d.index, qPrintable(d.name));
+    }
+
+    // A probe that enumerates no GPU never reaches newLibraryWithData, so on a
+    // host with no Metal device this test says nothing about the load path it
+    // exists to guard. CI sets AETHER_ASR_EXPECT_PRECOMPILED=1 to turn that
+    // silent vacuousness into a failure; a developer running ctest on a GPU-less
+    // box (or with -DENABLE_ASR_METAL_PRECOMPILE=OFF) just gets the note.
+    const bool expectPrecompiled = qEnvironmentVariableIsSet("AETHER_ASR_EXPECT_PRECOMPILED");
+
+    if (devices.empty()) {
+        if (expectPrecompiled) {
+            std::fprintf(stderr, "[FAIL] AETHER_ASR_EXPECT_PRECOMPILED is set but no "
+                                 "Metal device was enumerated - the embedded-metallib "
+                                 "load path never ran, so this test proved nothing\n");
+            return 1;
+        }
+        std::printf("[note] no GPU enumerated - embedded-metallib load path not "
+                    "exercised on this host\n");
+        return 0;
+    }
+
+    // "using embedded precompiled metal library" is the compiled-embed branch;
+    // "using embedded metal library" is the source embed that runs the runtime
+    // shader compiler — the exact #4535 path.
+    const bool loadedPrecompiled =
+        g_ggmlLog.find("using embedded precompiled metal library") != std::string::npos;
+
+    if (loadedPrecompiled) {
+        std::printf("[ok] embedded PRECOMPILED metallib loaded (no runtime shader compile)\n");
+    } else if (expectPrecompiled) {
+        std::fprintf(stderr, "[FAIL] a Metal device initialized without loading the "
+                             "embedded precompiled metallib - the build fell back to "
+                             "the embedded-source runtime-compile path (#4535). Check "
+                             "the configure log for the offline Metal toolchain "
+                             "warning.\n");
+        return 1;
+    } else {
+        std::printf("[note] precompiled metallib not reported - build may have "
+                    "fallen back to source embed\n");
     }
 
     return 0;

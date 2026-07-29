@@ -1273,8 +1273,12 @@ if (ENABLE_ASR)
         # the bf16 kernels compile only at >= metal3.1, while props.has_bfloat
         # is a runtime device query — a host defaulting lower would embed a
         # library missing kernels the device then asks for. metal3.1 == macOS 14,
-        # the Apple Silicon deployment floor (macos-dmg.yml); Intel Macs never
-        # load the library (ASR is CPU-gated there, #4535).
+        # which is the Apple Silicon DMG's deployment target (macos-dmg.yml).
+        # The Intel DMG targets 13.0 and also builds this backend, so it embeds
+        # a library its own OS floor could not load — harmless, because Intel
+        # Macs never load it at all (ASR is CPU-gated there, #4535), and no
+        # -mmacosx-version-min is passed to the Metal compiler, so the build
+        # itself does not object.
         set(GGML_METAL_STD "metal3.1" CACHE STRING "" FORCE)
     else()
         set(GGML_METAL_EMBED_LIBRARY_COMPILED OFF CACHE BOOL "" FORCE)

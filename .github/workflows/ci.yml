@@ -340,4 +340,13 @@ jobs:
         # arm64 runner = Apple Silicon: exercises the real Metal device init and
         # embedded precompiled-metallib load on every PR. On the pre-#4553 code
         # this call could invoke the runtime shader compiler and hang.
-        run: ctest --test-dir build -R asr_gpu_probe_test --output-on-failure
+        #
+        # AETHER_ASR_EXPECT_PRECOMPILED=1 makes the test fail (rather than pass
+        # quietly) if no Metal device is enumerated or if the build fell back to
+        # the embedded-source runtime-compile path — the CMake toolchain probe
+        # degrades with only a message(WARNING), so without this the gate could
+        # be green while guarding nothing. -V keeps the device list and the
+        # library-path line in the log, where a reviewer can actually see them.
+        env:
+          AETHER_ASR_EXPECT_PRECOMPILED: "1"
+        run: ctest --test-dir build -R asr_gpu_probe_test -V
