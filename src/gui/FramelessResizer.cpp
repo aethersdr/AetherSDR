@@ -1,4 +1,5 @@
 #include "FramelessResizer.h"
+#include "MacCursorCompat.h"
 
 #include <QEvent>
 #include <QGuiApplication>
@@ -76,7 +77,7 @@ void FramelessResizer::enterEdgeZone(Qt::Edges edges)
     else                                                 shape = Qt::SizeVerCursor;
 
     if (m_cursorOverridden) QGuiApplication::restoreOverrideCursor();
-    QGuiApplication::setOverrideCursor(QCursor(shape));
+    QGuiApplication::setOverrideCursor(QCursor(macSafeCursorShape(shape)));
     m_cursorOverridden = true;
     m_lastEdges = edges;
 }

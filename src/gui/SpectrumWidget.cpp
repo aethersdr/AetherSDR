@@ -8,6 +8,7 @@
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "DisplaySettings.h"
+#include "MacCursorCompat.h"
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
@@ -405,21 +406,6 @@ static bool clampDbmRange(float& minDbm, float& maxDbm)
     return true;
 }
 
-static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
-{
-#ifdef Q_OS_MAC
-    switch (shape) {
-    case Qt::SplitVCursor:
-        return Qt::SizeVerCursor;
-    case Qt::SizeAllCursor:
-        return Qt::OpenHandCursor;
-    default:
-        break;
-    }
-#endif
-    return shape;
-}
-
 static void setCursorOverride(QWidget* widget, Qt::CursorShape shape)
 {
     if (!widget) {
@@ -432,7 +418,7 @@ static void setCursorOverride(QWidget* widget, Qt::CursorShape shape)
                             static_cast<int>(widget->cursor().shape()));
         widget->setProperty(kSliceCursorOverrideActiveProperty, true);
     }
-    widget->setCursor(normalizedSpectrumCursorShape(shape));
+    widget->setCursor(AetherSDR::macSafeCursorShape(shape));
 }
 
 static void clearCursorOverride(QWidget* widget)
@@ -8139,7 +8125,7 @@ void SpectrumWidget::setSpectrumCursor(Qt::CursorShape shape)
     // standard Qt cursor changes can pass through QImage::toCGImage() in the
     // Cocoa platform plugin; issue #2458 crashed in that path while dispatching
     // enter/leave events.
-    shape = normalizedSpectrumCursorShape(shape);
+    shape = macSafeCursorShape(shape);
     if (cursor().shape() == shape) {
         return;
     }
