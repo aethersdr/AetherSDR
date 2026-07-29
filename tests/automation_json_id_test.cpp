@@ -79,6 +79,14 @@ QJsonObject tuneRequest(const QJsonValue& id = QJsonValue::Undefined)
     return request;
 }
 
+QJsonObject tuneValueRequest(const QString& value)
+{
+    return QJsonObject{
+        {QStringLiteral("cmd"), QStringLiteral("tune")},
+        {QStringLiteral("value"), value},
+    };
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -153,6 +161,33 @@ int main(int argc, char** argv)
                    "near-integer numeric id is not rounded up to a slice");
     expectRejected(tuneRequest(0.9999999), integerError,
                    "near-integer numeric id is not rounded down to a slice");
+
+    // ---- #4550: Hz passed to an MHz verb is refused, not silently no-opped ----
+    //
+    // A tune handler IS installed above, exactly as MainWindow_Session.cpp:1937
+    // does in the shipping app. That matters: the guard is only worth anything
+    // if it runs BEFORE the m_tuneHandler dispatch, so these cases also pin that
+    // ordering — expectRejected asserts the handler was never reached.
+    auto expectTuneValueRejected = [&](const QString& value, const char* description) {
+        const int callsBefore = handlerCalls;
+        const QJsonObject response = client.request(tuneValueRequest(value));
+        const QString error = response.value(QStringLiteral("error")).toString();
+        check(!response.value(QStringLiteral("ok")).toBool()
+                  && error.startsWith(QStringLiteral("tune takes MHz, not Hz"))
+                  && handlerCalls == callsBefore,
+              description);
+    };
+    expectTuneValueRejected(QStringLiteral("14200000"),
+                            "#4550: 20m expressed in Hz is refused, not tuned");
+    // The case a 1 THz threshold let through: below the old guard, so it fell
+    // past it and became a 500000 MHz request — the silent no-op this refuses.
+    expectTuneValueRejected(QStringLiteral("500000"),
+                            "#4550: 500 kHz expressed in Hz is refused too");
+
+    // The ceiling must not refuse anything real. 10368.1 is the 3cm calling
+    // frequency, the top of the band table, and it has to keep working.
+    expectAccepted(tuneValueRequest(QStringLiteral("10368.1")), -1,
+                   "#4550: the top of the band table still tunes");
 
     server.stop();
     return failures == 0 ? 0 : 1;

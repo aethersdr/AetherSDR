@@ -1077,6 +1077,25 @@ belongs to another client` when another client owns it (Multi-Flex). To
 recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
+**The value is MHz.** Passing Hz is refused rather than converted:
+
+```json
+→ {"cmd":"tune","value":"14200000"}
+← {"ok":false,"error":"tune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)"}
+```
+
+The threshold is 105000 (ten times the top of the band table), so any value a
+transverter could plausibly need still passes. It is deliberately not
+auto-corrected: `14200000` would have to mean 14.2 MHz here and something else
+in every other frequency verb.
+
+Note `ok:true` is an **acknowledgement, not a confirmation** — `tune` echoes the
+frequency you asked for. The slice model records a tune optimistically and the
+radio's own value arrives asynchronously afterwards, so a request the radio
+rejects or clamps still returns `ok:true` with the requested value echoed back.
+Read the frequency back with [`get slices`](#get) if you need to know where the
+radio actually landed.
+
 ### `targettune`
 Tune through the same absolute-target policy used by typed frequency entry and
 other commanded jumps. Unlike `tune`, this can preselect a different band stack

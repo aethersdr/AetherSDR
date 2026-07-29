@@ -6104,12 +6104,20 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     const double mhz = value.toDouble(&okF);
     if (!okF || mhz <= 0)
         return err(QStringLiteral("tune requires a positive frequency in MHz"));
-    // Hz passed to an MHz verb. No radio AE drives reaches 1 THz, so a value this
-    // large is a unit mistake rather than an ambitious tune, and saying so beats
-    // silently doing nothing. It is NOT auto-converted: guessing the caller's
-    // intent would make 14200000 mean 14.2 MHz here and something else in every
-    // other frequency verb.
-    if (mhz > 1.0e6)
+    // Hz passed to an MHz verb. A value above anything AE can tune is a unit
+    // mistake rather than an ambitious request, and saying so beats silently
+    // doing nothing. It is NOT auto-converted: guessing the caller's intent
+    // would make 14200000 mean 14.2 MHz here and something else in every other
+    // frequency verb.
+    //
+    // The ceiling is 10x the top of the band table (3cm ends at 10.5 GHz), so it
+    // clears any real transverter setup with an order of magnitude to spare
+    // while still catching the whole family of Hz-for-MHz mistakes — including
+    // the ones a 1 THz threshold let through, such as `tune 500000` for 500 kHz,
+    // which would otherwise fall past the guard and land back in the silent
+    // no-op this refusal exists to prevent.
+    constexpr double kMaxTunableMhz = 105'000.0;
+    if (mhz > kMaxTunableMhz)
         return err(QStringLiteral("tune takes MHz, not Hz — got ")
                    + QString::number(mhz, 'f', 0)
                    + QStringLiteral(" (did you mean ")
@@ -6151,32 +6159,20 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
         return err(QStringLiteral("refused: slice ") + s->letter() + QStringLiteral(" is VFO-locked"));
 
     s->setFrequency(mhz);
-
-    // Report what the slice ACTUALLY took, not what was asked for.
+    // The reply echoes the REQUEST, and cannot do better from here.
     //
-    // setFrequency() assigns unconditionally and the radio is free to reject the
-    // value — an out-of-band target leaves the slice where it was. Echoing the
-    // request made every such no-op indistinguishable from success: ok:true, the
-    // requested frequency echoed back, no error, and only a follow-up `get slices`
-    // revealing the radio had not moved. A caller that trusted the reply would go
-    // on to key on the previous band.
-    //
-    // The common way to hit this is passing Hz to a verb documented as MHz: an
-    // in-band Hz value is clamped and appears to work, so the mistake stays hidden
-    // until the first band change.
-    const double applied = s->frequency();
-    QJsonObject r{{QStringLiteral("ok"), true},
-                  {QStringLiteral("tune"), applied},
-                  {QStringLiteral("sliceId"), s->sliceId()},
-                  {QStringLiteral("letter"), s->letter()}};
-    if (!qFuzzyCompare(applied, mhz)) {
-        // Surfaced rather than failed: the radio, not this verb, decides what is
-        // reachable, and a clamp to a band edge is a legitimate outcome. The
-        // caller gets both numbers and can decide for itself.
-        r.insert(QStringLiteral("requested"), mhz);
-        r.insert(QStringLiteral("applied"), false);
-    }
-    return r;
+    // Confirming what the radio actually took would need a read-back, and there
+    // is nothing to read: SliceModel::setFrequency() assigns m_frequency = mhz
+    // before it sends `slice tune` (SliceModel.cpp:117-124), so the model holds
+    // the request by construction and the radio's real value only arrives later,
+    // asynchronously, in applyStatus(). An echo is at least honest about being
+    // an acknowledgement rather than a confirmation. Closing the gap properly
+    // means waiting on that status update — a different change, and one that
+    // has to be made in MainWindow::automationTune (MainWindow.cpp:6355), which
+    // is the path the shipping app actually takes (see the m_tuneHandler
+    // dispatch above).
+    return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
+                       {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
 }
 
 // ── Demo fault injection (RFC #4288 #4) ─────────────────────────────────────
