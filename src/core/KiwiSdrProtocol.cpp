@@ -1586,7 +1586,8 @@ QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
 }
 
 QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
-                               double freqKhz, int cwPitchHz, bool cwLowerSideband)
+                               double freqKhz, int cwPitchHz, bool cwLowerSideband,
+                               int maxAudioBandwidthHz)
 {
     int tunedLowCutHz = lowCutHz;
     int tunedHighCutHz = highCutHz;
@@ -1610,10 +1611,17 @@ QString formatSoundTuneCommand(const QString& mode, int lowCutHz, int highCutHz,
         // Clamp the shift so the passband doesn't slide past the Kiwi's
         // audio Nyquist — an unclamped shift at the top of the CW pitch
         // range pushes the tone to the band edge and reproduces #4423's
-        // silence with a different root cause.
-        const int headroomHz = cwLowerSideband
-            ? kKiwiMaxAudioBandwidthHz + tunedLowCutHz
-            : kKiwiMaxAudioBandwidthHz - tunedHighCutHz;
+        // silence with a different root cause. maxAudioBandwidthHz is the
+        // caller's negotiated Nyquist (sampleRateHz / 2), not a fixed
+        // constant — the Kiwi's audio sample rate is negotiated per
+        // connection, not always ~12 kHz. Floor headroom at 0: if the
+        // passband is already outside Nyquist (a filter width wider than
+        // the negotiated rate allows), a negative headroom would otherwise
+        // flip the shift's sign and push the passband further out of range
+        // instead of leaving it alone.
+        const int headroomHz = std::max(0, cwLowerSideband
+            ? maxAudioBandwidthHz + tunedLowCutHz
+            : maxAudioBandwidthHz - tunedHighCutHz);
         const int shiftHz = sign * std::min(cwPitchHz, headroomHz);
         tunedLowCutHz += shiftHz;
         tunedHighCutHz += shiftHz;

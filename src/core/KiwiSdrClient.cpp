@@ -1395,8 +1395,13 @@ void KiwiSdrClient::sendTrackedSliceToServer()
     }
     const bool cwLowerSideband =
         m_trackedMode.trimmed().compare(QStringLiteral("CWL"), Qt::CaseInsensitive) == 0;
+    // Nyquist of the negotiated sound-stream rate, not the ~12 kHz default —
+    // the Kiwi renegotiates m_soundSampleRateHz per connection (8-48 kHz).
+    const int maxAudioBandwidthHz =
+        static_cast<int>(m_soundSampleRateHz / 2.0);
     sendSoundCommand(KiwiSdrProtocol::formatSoundTuneCommand(
-        mode, lowCutHz, highCutHz, freqKhz, m_trackedCwPitchHz, cwLowerSideband));
+        mode, lowCutHz, highCutHz, freqKhz, m_trackedCwPitchHz, cwLowerSideband,
+        maxAudioBandwidthHz));
 }
 
 void KiwiSdrClient::sendReceiverControlsToServer()

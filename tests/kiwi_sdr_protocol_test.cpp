@@ -337,6 +337,26 @@ int main()
         return fail("sound tune command should mirror the CW shift for CWL");
     }
 
+    // The Nyquist clamp must track the caller's actual negotiated sound-
+    // stream rate, not a fixed ~12 kHz assumption — the Kiwi renegotiates
+    // audio_rate per connection (8-48 kHz), so a receiver running at a
+    // lower rate has a lower Nyquist than kKiwiMaxAudioBandwidthHz.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -400, 400, 7000.0, 3800,
+                               /*cwLowerSideband=*/false, /*maxAudioBandwidthHz=*/4000)
+        != QStringLiteral("SET mod=cw low_cut=3200 high_cut=4000 freq=6996.400")) {
+        return fail("sound tune command should clamp CW shift to the caller's negotiated Nyquist");
+    }
+
+    // A passband already outside the negotiated Nyquist (e.g. a filter
+    // width that predates a rate renegotiation) must leave the shift at
+    // zero rather than flip sign on a negative headroom and push the
+    // passband further out of range.
+    if (formatSoundTuneCommand(QStringLiteral("cw"), -4500, 4500, 7000.0, 600,
+                               /*cwLowerSideband=*/false, /*maxAudioBandwidthHz=*/4000)
+        != QStringLiteral("SET mod=cw low_cut=-4500 high_cut=4500 freq=7000.000")) {
+        return fail("sound tune command should floor a negative Nyquist headroom at zero shift");
+    }
+
     const QVector<MsgToken> msgTokens = parseMsgTokens(
         QStringLiteral("MSG wb_only password_timeout inactivity_timeout=15 "
                        "kiwi_kick=1%2coperator%20request badp=5 =ignored"));
