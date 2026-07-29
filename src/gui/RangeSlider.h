@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QTimer>
 
 // Compact double-handle range slider.
 //
@@ -59,4 +60,15 @@ private:
     QRect handleRect(int val) const;
     int   valueToX(int val)   const;
     int   xToValue(int x)     const;
+
+    // Debounced accessibility announcements — arrow-key nudges auto-repeat at
+    // OS key-repeat rate, so collapse bursts to one announcement per interval
+    // instead of firing updateAccessibility() per keystroke. Same pattern as
+    // SMeterWidget/VfoWidget (see docs/a11y.md "Throttle high-rate updaters").
+    static constexpr int kAccessibilityAnnouncementIntervalMs = 100;
+    void scheduleAccessibleAnnouncement(const QString& text);
+    void publishAccessibleAnnouncement();
+    QTimer  m_accessibilityTimer;
+    QString m_pendingAccessibleText;
+    QString m_lastAccessibleText;
 };

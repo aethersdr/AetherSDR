@@ -403,15 +403,29 @@ public:
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setFocusPolicy(Qt::TabFocus);
         setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
+
+        // Direct hardware state pushes (e.g. TGXL relay updates during an
+        // ATU sweep) arrive unthrottled from the device — debounce the
+        // accessibility announcement so a rapid sweep doesn't turn into an
+        // updateAccessibility() storm. Same pattern as SMeterWidget/VfoWidget
+        // (see docs/a11y.md "Throttle high-rate updaters").
+        m_accessibilityTimer.setSingleShot(true);
+        m_accessibilityTimer.setInterval(kAccessibilityAnnouncementIntervalMs);
+        connect(&m_accessibilityTimer, &QTimer::timeout, this, [this]() {
+            if (!hasFocus() || !QAccessible::isActive()) return;
+            if (m_value == m_lastAccessibleValue) return;
+            m_lastAccessibleValue = m_value;
+            QAccessibleValueChangeEvent event(this, QVariant(m_value));
+            QAccessible::updateAccessibility(&event);
+        });
     }
 
     void setValue(int v) {
         if (m_value == v) return;
         m_value = v;
         update();
-        if (hasFocus()) {
-            QAccessibleValueChangeEvent event(this, QVariant(v));
-            QAccessible::updateAccessibility(&event);
+        if (hasFocus() && QAccessible::isActive() && !m_accessibilityTimer.isActive()) {
+            m_accessibilityTimer.start();
         }
     }
 
@@ -492,10 +506,14 @@ protected:
     }
 
 private:
+    static constexpr int kAccessibilityAnnouncementIntervalMs = 100;
+
     QString m_label;
     int m_value{0};
     bool m_scrollEnabled{false};
     int m_angleAccum{0};
+    QTimer m_accessibilityTimer;
+    int m_lastAccessibleValue{std::numeric_limits<int>::min()};
 };
 
 } // namespace AetherSDR
