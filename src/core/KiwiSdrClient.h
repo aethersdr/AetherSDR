@@ -278,7 +278,7 @@ private:
     QString m_trackedMode;
     int m_trackedFilterLowHz{0};
     int m_trackedFilterHighHz{0};
-    int m_trackedCwPitchHz{600};
+    int m_trackedCwPitchHz{0};
     QString m_trackedPanId;
     bool m_userDisconnecting{false};
     bool m_secureWebSocket{false};
