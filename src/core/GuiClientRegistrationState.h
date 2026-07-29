@@ -27,7 +27,6 @@ public:
         QString detail;
 
         bool accepted() const { return action == Action::ContinueHandshake; }
-        bool automaticRetryAllowed() const { return accepted(); }
     };
 
     void begin()

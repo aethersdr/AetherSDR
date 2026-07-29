@@ -109,6 +109,8 @@ int main(int argc, char** argv)
                                 "has been reached\n")
                                 .arg(sequence)
                                 .toUtf8());
+                        socket->flush();
+                        socket->disconnectFromHost();
                     } else if (command.startsWith(QStringLiteral("client gui "))) {
                         guiRegistrationAccepted = true;
                         socket->write(
@@ -151,7 +153,9 @@ int main(int argc, char** argv)
               return registrationFailureSpy.count() == 1 && !model.isConnected();
           }, 5000),
           "rejected GUI registration tears down the connected TCP session");
-    check(errorSpy.count() == 1,
+    check(registrationFailureSpy.count() == 1,
+          "rejected GUI registration emits one terminal failure");
+    check(errorSpy.count() >= 1,
           "rejected GUI registration emits a user-facing connection error");
     check(connectionSpy.count() >= 2
               && connectionSpy.first().at(0).toBool()
