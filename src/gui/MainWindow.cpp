@@ -237,6 +237,7 @@
 #endif
 #include <QDebug>
 #ifdef Q_OS_WIN
+#include <QDataStream>
 #ifndef NOMINMAX
 #define NOMINMAX  // guard against redefinition when an earlier include/toolchain predefines it (#4031)
 #endif
@@ -444,6 +445,35 @@ bool mainWindowCustomFrameEnabled()
 {
     return AppSettings::instance()
         .value("FramelessWindow", "True").toString() == "True";
+}
+
+bool savedFrameTopLeft(const QByteArray& geometryBlob, QPoint* topLeft)
+{
+    if (!topLeft) {
+        return false;
+    }
+
+    QDataStream stream(geometryBlob);
+    stream.setVersion(QDataStream::Qt_4_0);
+
+    constexpr quint32 kGeometryMagic = 0x1D9D0CB;
+    constexpr quint16 kCurrentGeometryMajorVersion = 3;
+    quint32 magic = 0;
+    quint16 majorVersion = 0;
+    quint16 minorVersion = 0;
+    QRect savedFrame;
+    stream >> magic >> majorVersion >> minorVersion >> savedFrame;
+    Q_UNUSED(minorVersion);
+
+    if (stream.status() != QDataStream::Ok
+        || magic != kGeometryMagic
+        || majorVersion > kCurrentGeometryMajorVersion
+        || !savedFrame.isValid()) {
+        return false;
+    }
+
+    *topLeft = savedFrame.topLeft();
+    return true;
 }
 
 int windowsResizeBorderThickness(HWND hwnd)
@@ -2950,7 +2980,26 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    restoreGeometry(m_startupGeometryForFirstShow);
+    const bool restored = restoreGeometry(m_startupGeometryForFirstShow);
+
+#ifdef Q_OS_WIN
+    // Qt keeps a saved window inside the available screen by reserving
+    // PM_TitleBarHeight above its client geometry.  Our mapped custom frame
+    // removes that caption through WM_NCCALCSIZE, so the same adjustment
+    // becomes a visible title-bar-sized gap at the top of the screen.  Re-anchor
+    // the saved frame origin after mapping, when move() uses the real zero top
+    // frame margin.  Keep maximized/fullscreen restoration entirely with Qt.
+    if (restored
+        && mainWindowCustomFrameEnabled()
+        && !(windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen))) {
+        QPoint savedTopLeft;
+        if (savedFrameTopLeft(m_startupGeometryForFirstShow, &savedTopLeft)) {
+            move(savedTopLeft);
+        }
+    }
+#else
+    Q_UNUSED(restored);
+#endif
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a
