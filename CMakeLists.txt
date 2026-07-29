@@ -853,6 +853,8 @@ set(GUI_SOURCES
     src/gui/ProfileImportExportDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
+    src/gui/MiniPanScope.cpp
+    src/gui/MiniPanWidget.cpp
     src/gui/RangeSlider.cpp
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
@@ -4739,6 +4741,28 @@ target_link_libraries(container_widget_test PRIVATE
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_test(NAME container_widget_test COMMAND container_widget_test)
 set_tests_properties(container_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Mini-pan window shell (PR1): scope render API + independent-window behavior,
+# close==hide, geometry/open-state persistence, frameless toggle.  Offscreen.
+add_executable(mini_pan_widget_test
+    tests/mini_pan_widget_test.cpp
+    src/gui/MiniPanScope.cpp
+    src/gui/MiniPanWidget.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(mini_pan_widget_test PRIVATE src)
+target_link_libraries(mini_pan_widget_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(mini_pan_widget_test PROPERTIES AUTOMOC ON)
+add_test(NAME mini_pan_widget_test COMMAND mini_pan_widget_test)
+set_tests_properties(mini_pan_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # PC-audio lock contract for host-modulating backends (HL2) — needs

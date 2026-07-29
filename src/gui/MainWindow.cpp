@@ -31,6 +31,7 @@
 #include "CopyAssistController.h"
 #endif
 #include "PanadapterStack.h"
+#include "gui/MiniPanWidget.h"
 #include "PanLayoutDialog.h"
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
@@ -7845,6 +7846,8 @@ void MainWindow::setFramelessWindow(bool on)
         m_appletPanel->containerManager()->setFramelessMode(on);
     if (m_connPanel)
         m_connPanel->setFramelessMode(on);
+    if (m_miniPan)
+        m_miniPan->setFramelessMode(on);
     if (m_titleBar)
         m_titleBar->setChildDialogsFramelessMode(on);
     // RadioSetupDialog frameless propagation flows through the

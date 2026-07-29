@@ -115,6 +115,7 @@ class SpectrumWidget;
 class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
+class MiniPanWidget;
 class PanadapterStack;
 class AdaptiveFilterEngine;
 class AppletPanel;
@@ -1117,6 +1118,7 @@ private:
     ::QSizeGrip*      m_sizeGrip{nullptr};
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
+    QPointer<MiniPanWidget> m_miniPan;  // detachable K4-style mini-pan window
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
     QPointer<PanadapterApplet> m_cwDecoderApplet;
     QPointer<PanadapterApplet> m_rttyDecoderApplet;

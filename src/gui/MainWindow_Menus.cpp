@@ -48,6 +48,7 @@
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "gui/MiniPanWidget.h"
 
 #include <QActionGroup>
 #include <QColor>
@@ -969,6 +970,43 @@ void MainWindow::buildMenuBar()
     connect(m_minimalModeAction, &QAction::toggled, this, [this](bool on) {
         toggleMinimalMode(on);
     });
+
+    // Mini-Pan — detachable K4-style narrow scope. A single long-lived window;
+    // toggling off (or its close button) hides it, preserving geometry/state.
+    auto* miniPanAct = viewMenu->addAction("Mini-Pan");
+    miniPanAct->setCheckable(true);
+    miniPanAct->setToolTip(
+        "A small ±5/±10 kHz scope centered on the active VFO, in its own\n"
+        "floating window — usable alongside contest logging software and\n"
+        "when the main panadapter is hidden in Minimal Mode.");
+    connect(miniPanAct, &QAction::toggled, this, [this, miniPanAct](bool on) {
+        if (on) {
+            if (!m_miniPan) {
+                m_miniPan = new MiniPanWidget(this);
+                m_miniPan->setFramelessMode(
+                    AppSettings::instance().value("FramelessWindow", "True")
+                        .toString() == "True");
+                connect(m_miniPan, &MiniPanWidget::closedByUser, this,
+                        [miniPanAct]() {
+                    QSignalBlocker b(miniPanAct);
+                    miniPanAct->setChecked(false);
+                });
+            }
+            m_miniPan->show();
+            m_miniPan->raise();
+            m_miniPan->activateWindow();
+            AppSettings::instance().setValue("MiniPanOpen", "True");
+        } else {
+            if (m_miniPan) m_miniPan->hide();
+            AppSettings::instance().setValue("MiniPanOpen", "False");
+        }
+        AppSettings::instance().save();
+    });
+    // Reopen at startup if it was open last session (deferred so initial layout
+    // settles first — matches the applet-panel-float restore).
+    if (AppSettings::instance().value("MiniPanOpen", "False").toString() == "True") {
+        QTimer::singleShot(0, this, [miniPanAct]() { miniPanAct->setChecked(true); });
+    }
 
     auto* framelessAct = viewMenu->addAction("Frameless Window");
     framelessAct->setCheckable(true);
