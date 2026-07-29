@@ -658,8 +658,9 @@ private:
     ScrollableLabel* m_digOffsetLabel{nullptr};   // read-only display, scroll-wheel steps
     QLineEdit*       m_digOffsetEdit{nullptr};     // inline direct-entry (double-click)
     QStackedWidget*  m_digOffsetStack{nullptr};    // switches between label and edit
-    // FM OPT controls (shown only in FM/NFM mode)
+    // FM-family OPT controls. DSTR uses the duplex controls but not CTCSS.
     QWidget*       m_fmContainer{nullptr};
+    QWidget*       m_fmToneContainer{nullptr};
     QComboBox*     m_fmToneModeCmb{nullptr};
     QComboBox*     m_fmToneValueCmb{nullptr};
     QDoubleSpinBox* m_fmOffsetSpin{nullptr};

@@ -18,6 +18,12 @@ constexpr float  kTemporalAlpha = 0.60f; // temporal IIR: fraction of the new ro
 constexpr double kSlopeGain     = 0.55;  // slope shading strength
 constexpr double kShadeLo       = 0.68;
 constexpr double kShadeHi       = 1.32;
+using CoverageRow = std::array<quint8, DssRenderer::kCols>;
+
+struct ReprojectedRow {
+    std::array<float, DssRenderer::kCols> values;
+    CoverageRow coverage;
+};
 
 inline int chan(double v) { return static_cast<int>(std::clamp(v, 0.0, 255.0)); }
 
@@ -41,10 +47,24 @@ inline QColor lerpColor(const QColor& c, const QColor& t, double f)
                   chan(c.blue()  + (t.blue()  - c.blue())  * f));
 }
 
-float rowSample(const std::array<float, DssRenderer::kCols>& row,
-                double srcLeft, double srcRight, double srcCenter,
-                float fallback)
+bool frequencyFramesMatch(double firstCenterMhz, double firstBandwidthMhz,
+                          double secondCenterMhz, double secondBandwidthMhz)
 {
+    const auto nearlyEqual = [](double first, double second) {
+        const double scale =
+            std::max({1.0, std::abs(first), std::abs(second)});
+        return std::abs(first - second) <= scale * 1.0e-9;
+    };
+    return nearlyEqual(firstCenterMhz, secondCenterMhz)
+        && nearlyEqual(firstBandwidthMhz, secondBandwidthMhz);
+}
+
+float rowSample(const std::array<float, DssRenderer::kCols>& row,
+                const CoverageRow* coverage,
+                double srcLeft, double srcRight, double srcCenter,
+                float fallback, bool& sampledCoverage)
+{
+    sampledCoverage = false;
     if (srcRight <= 0.0 || srcLeft >= DssRenderer::kCols) {
         return fallback;
     }
@@ -63,10 +83,24 @@ float rowSample(const std::array<float, DssRenderer::kCols>& row,
         const int left = std::clamp(static_cast<int>(std::floor(clampedCenter)),
                                     0, DssRenderer::kCols - 1);
         const int right = std::min(left + 1, DssRenderer::kCols - 1);
-        const float leftValue = std::isfinite(row[left]) ? row[left] : fallback;
-        const float rightValue = std::isfinite(row[right]) ? row[right] : leftValue;
         const float frac = static_cast<float>(clampedCenter - left);
-        return leftValue + frac * (rightValue - leftValue);
+        double weightedSum = 0.0;
+        double totalWeight = 0.0;
+        const auto add = [&](int index, double weight) {
+            if (weight <= 0.0
+                || (coverage != nullptr && (*coverage)[index] == 0)
+                || !std::isfinite(row[index])) {
+                return;
+            }
+            weightedSum += row[index] * weight;
+            totalWeight += weight;
+        };
+        add(left, 1.0 - frac);
+        add(right, frac);
+        sampledCoverage = totalWeight > 0.0;
+        return sampledCoverage
+            ? static_cast<float>(weightedSum / totalWeight)
+            : fallback;
     }
 
     const int first = std::clamp(static_cast<int>(std::floor(clampedLeft)),
@@ -76,7 +110,8 @@ float rowSample(const std::array<float, DssRenderer::kCols>& row,
     double weightedSum = 0.0;
     double totalWeight = 0.0;
     for (int i = first; i <= last; ++i) {
-        if (!std::isfinite(row[i])) {
+        if ((coverage != nullptr && (*coverage)[i] == 0)
+            || !std::isfinite(row[i])) {
             continue;
         }
         const double binLeft = static_cast<double>(i);
@@ -90,21 +125,24 @@ float rowSample(const std::array<float, DssRenderer::kCols>& row,
         weightedSum += row[i] * weight;
         totalWeight += weight;
     }
-    return totalWeight > 0.0
+    sampledCoverage = totalWeight > 0.0;
+    return sampledCoverage
         ? static_cast<float>(weightedSum / totalWeight)
         : fallback;
 }
 
-std::array<float, DssRenderer::kCols> reprojectRow(
+ReprojectedRow reprojectRow(
     const std::array<float, DssRenderer::kCols>& row,
+    const CoverageRow* sourceCoverage,
     double oldCenterMhz,
     double oldBandwidthMhz,
     double newCenterMhz,
     double newBandwidthMhz,
     float fallback)
 {
-    std::array<float, DssRenderer::kCols> remapped;
-    remapped.fill(fallback);
+    ReprojectedRow remapped;
+    remapped.values.fill(fallback);
+    remapped.coverage.fill(0);
     if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
         return remapped;
     }
@@ -128,11 +166,16 @@ std::array<float, DssRenderer::kCols> reprojectRow(
             || srcCenter > static_cast<double>(DssRenderer::kCols) - 0.5) {
             continue;
         }
-        remapped[dst] = rowSample(row,
-                                  srcCenter - srcWidthBins * 0.5,
-                                  srcCenter + srcWidthBins * 0.5,
-                                  srcCenter,
-                                  fallback);
+        bool sampledCoverage = false;
+        remapped.values[dst] = rowSample(
+            row,
+            sourceCoverage,
+            srcCenter - srcWidthBins * 0.5,
+            srcCenter + srcWidthBins * 0.5,
+            srcCenter,
+            fallback,
+            sampledCoverage);
+        remapped.coverage[dst] = sampledCoverage ? quint8(1) : quint8(0);
     }
     return remapped;
 }
@@ -211,12 +254,14 @@ std::array<float, DssRenderer::kCols> smoothDssRow(
 void DssRenderer::resetInputSmoothing()
 {
     m_rawHistCount = 0;
+    m_supplementalRawHistCount = 0;
     // Also break the temporal IIR blend for the next row of each path. Zeroing
     // the median-of-3 counters alone does not forget the previous *smoothed*
     // row that pushRow/appendHistoryRow blend the new row against — that row was
     // decoded under the old scale, so without this the first post-reset row is
     // contaminated by it.
     m_skipLiveTemporalBlendOnce = true;
+    m_skipSupplementalTemporalBlendOnce = true;
     m_skipHistoryTemporalBlendOnce = true;
     resetHistorySmoothing();
 }
@@ -225,6 +270,13 @@ void DssRenderer::clear()
 {
     m_head  = 0;
     m_count = 0;
+    m_rowCenterMhz.fill(0.0);
+    m_rowBandwidthMhz.fill(0.0);
+    m_rowSupplementalCenterMhz.fill(0.0);
+    m_rowSupplementalBandwidthMhz.fill(0.0);
+    for (CoverageRow& coverage : m_rowSupplementalCoverage) {
+        coverage.fill(0);
+    }
     m_dirty = true;
     m_historyWriteRow = 0;
     m_historyRowCount = 0;
@@ -233,8 +285,14 @@ void DssRenderer::clear()
 
 quint64 DssRenderer::fixedStorageBytes() const
 {
-    return sizeof(m_rows)
+    return sizeof(m_rows) + sizeof(m_rowCoverage)
+        + sizeof(m_rowSupplemental) + sizeof(m_rowSupplementalCoverage)
+        + sizeof(m_rowCenterMhz) + sizeof(m_rowBandwidthMhz)
+        + sizeof(m_rowSupplementalCenterMhz)
+        + sizeof(m_rowSupplementalBandwidthMhz)
         + sizeof(m_rawPrev1) + sizeof(m_rawPrev2)
+        + sizeof(m_supplementalRawPrev1)
+        + sizeof(m_supplementalRawPrev2)
         + sizeof(m_historyRawPrev1) + sizeof(m_historyRawPrev2);
 }
 
@@ -312,19 +370,89 @@ DssRenderer::RowStats DssRenderer::rowStats(int age, float epsilonDb) const
     return stats;
 }
 
-void DssRenderer::pushRow(const QVector<float>& binsDbm)
+void DssRenderer::pushRow(const QVector<float>& binsDbm,
+                          double centerMhz,
+                          double bandwidthMhz)
+{
+    pushRowWithSupplemental(
+        binsDbm, centerMhz, bandwidthMhz,
+        QVector<float>{}, 0.0, 0.0);
+}
+
+void DssRenderer::pushRowWithSupplemental(
+    const QVector<float>& binsDbm,
+    double centerMhz,
+    double bandwidthMhz,
+    const QVector<float>& supplementalBinsDbm,
+    double supplementalCenterMhz,
+    double supplementalBandwidthMhz)
 {
     const std::array<float, kCols> raw = resampledRawRow(binsDbm, -200.0f);
+    const bool sameFrameAsPrevious =
+        m_count > 0
+        && frequencyFramesMatch(
+            m_rowCenterMhz[m_head], m_rowBandwidthMhz[m_head],
+            centerMhz, bandwidthMhz);
+    if (m_count > 0 && !sameFrameAsPrevious) {
+        // Adjacent bin indices no longer represent the same frequencies.
+        // Blending them would smear a signal in the direction of the pan.
+        m_rawHistCount = 0;
+    }
     const std::array<float, kCols>* previous =
-        (m_count > 0 && !m_skipLiveTemporalBlendOnce)
-        ? &m_rows[m_head]
-        : nullptr;
+        (sameFrameAsPrevious && !m_skipLiveTemporalBlendOnce)
+            ? &m_rows[m_head]
+            : nullptr;
     m_skipLiveTemporalBlendOnce = false;
     const std::array<float, kCols> nr =
         smoothDssRow(raw, m_rawPrev1, m_rawPrev2, m_rawHistCount, previous);
 
     m_head = (m_head - 1 + kRows) % kRows;
     m_rows[m_head] = nr;
+    m_rowCoverage[m_head].fill(1);
+    m_rowCenterMhz[m_head] = centerMhz;
+    m_rowBandwidthMhz[m_head] = bandwidthMhz;
+    const bool supplementalValid =
+        !supplementalBinsDbm.isEmpty()
+        && std::isfinite(supplementalCenterMhz)
+        && std::isfinite(supplementalBandwidthMhz)
+        && supplementalCenterMhz > 0.0
+        && supplementalBandwidthMhz > 0.0;
+    if (supplementalValid) {
+        const std::array<float, kCols> supplementalRaw =
+            resampledRawRow(supplementalBinsDbm, -200.0f);
+        const int previousRing = (m_head + 1) % kRows;
+        const bool sameSupplementalFrameAsPrevious =
+            m_count > 0
+            && frequencyFramesMatch(
+                m_rowSupplementalCenterMhz[previousRing],
+                m_rowSupplementalBandwidthMhz[previousRing],
+                supplementalCenterMhz, supplementalBandwidthMhz);
+        if (m_count > 0 && !sameSupplementalFrameAsPrevious) {
+            m_supplementalRawHistCount = 0;
+        }
+        const std::array<float, kCols>* supplementalPrevious =
+            (sameSupplementalFrameAsPrevious
+             && !m_skipSupplementalTemporalBlendOnce)
+                ? &m_rowSupplemental[previousRing]
+                : nullptr;
+        m_skipSupplementalTemporalBlendOnce = false;
+        m_rowSupplemental[m_head] = smoothDssRow(
+            supplementalRaw,
+            m_supplementalRawPrev1,
+            m_supplementalRawPrev2,
+            m_supplementalRawHistCount,
+            supplementalPrevious);
+        m_rowSupplementalCoverage[m_head].fill(1);
+        m_rowSupplementalCenterMhz[m_head] = supplementalCenterMhz;
+        m_rowSupplementalBandwidthMhz[m_head] =
+            supplementalBandwidthMhz;
+    } else {
+        m_rowSupplemental[m_head].fill(-200.0f);
+        m_rowSupplementalCoverage[m_head].fill(0);
+        m_rowSupplementalCenterMhz[m_head] = 0.0;
+        m_rowSupplementalBandwidthMhz[m_head] = 0.0;
+        m_supplementalRawHistCount = 0;
+    }
     m_count = std::min(m_count + 1, kRows);
     m_dirty = true;
     ++m_rowGeneration;
@@ -377,11 +505,25 @@ void DssRenderer::appendHistoryRow(const QVector<float>& binsDbm,
     std::array<float, kCols> previousRow;
     const std::array<float, kCols>* previous = nullptr;
     if (m_historyRowCount > 0 && !m_skipHistoryTemporalBlendOnce) {
-        const qfloat16* src = m_historyRows.constData() + m_historyWriteRow * kCols;
-        for (int c = 0; c < kCols; ++c) {
-            previousRow[c] = static_cast<float>(src[c]);
+        const double previousCenterMhz =
+            m_historyRowCenterMhz.value(m_historyWriteRow, 0.0);
+        const double previousBandwidthMhz =
+            m_historyRowBandwidthMhz.value(m_historyWriteRow, 0.0);
+        if (frequencyFramesMatch(
+                previousCenterMhz, previousBandwidthMhz,
+                centerMhz, bandwidthMhz)) {
+            const qfloat16* src =
+                m_historyRows.constData() + m_historyWriteRow * kCols;
+            for (int c = 0; c < kCols; ++c) {
+                previousRow[c] = static_cast<float>(src[c]);
+            }
+            previous = &previousRow;
+        } else {
+            // Adjacent bin indices represent different frequencies across a
+            // zoom or band change. Blending them creates a synthetic low row at
+            // the frame boundary that later appears to rise from the floor.
+            resetHistorySmoothing();
         }
-        previous = &previousRow;
     }
     m_skipHistoryTemporalBlendOnce = false;
     const std::array<float, kCols> row =
@@ -428,6 +570,8 @@ void DssRenderer::rebuildVisibleFromHistory(int offsetRows,
             (m_historyWriteRow + historyAge) % m_historyCapacityRows;
         const qfloat16* src = m_historyRows.constData() + historyRing * kCols;
         std::array<float, kCols> row;
+        CoverageRow coverage;
+        coverage.fill(1);
         for (int c = 0; c < kCols; ++c) {
             row[c] = static_cast<float>(src[c]);
         }
@@ -438,13 +582,24 @@ void DssRenderer::rebuildVisibleFromHistory(int offsetRows,
         if (rowCenterMhz > 0.0 && rowBandwidthMhz > 0.0
             && centerMhz > 0.0 && bandwidthMhz > 0.0
             && (rowCenterMhz != centerMhz || rowBandwidthMhz != bandwidthMhz)) {
-            row = reprojectRow(row,
-                               rowCenterMhz, rowBandwidthMhz,
-                               centerMhz, bandwidthMhz,
-                               fallbackDbm);
+            const ReprojectedRow remapped = reprojectRow(
+                row,
+                nullptr,
+                rowCenterMhz, rowBandwidthMhz,
+                centerMhz, bandwidthMhz,
+                fallbackDbm);
+            row = remapped.values;
+            coverage = remapped.coverage;
         }
 
         m_rows[age] = row;
+        m_rowCoverage[age] = coverage;
+        m_rowCenterMhz[age] = centerMhz;
+        m_rowBandwidthMhz[age] = bandwidthMhz;
+        m_rowSupplemental[age].fill(-200.0f);
+        m_rowSupplementalCoverage[age].fill(0);
+        m_rowSupplementalCenterMhz[age] = 0.0;
+        m_rowSupplementalBandwidthMhz[age] = 0.0;
     }
 
     m_dirty = true;
@@ -456,34 +611,127 @@ void DssRenderer::reprojectFrequencyFrame(double oldCenterMhz,
                                           double oldBandwidthMhz,
                                           double newCenterMhz,
                                           double newBandwidthMhz,
-                                          float fallbackDbm)
+                                          float fallbackDbm,
+                                          bool refreshFromRetainedHistory)
 {
+    // The compact visible ring is already resampled to kCols. Reprojecting it
+    // repeatedly across large zoom changes compounds that loss: zooming far
+    // out can collapse a signal into one column, and zooming back in expands
+    // that column into a false ridge while uncovered bins become flat floor
+    // segments. Refresh each existing ring slot from its frame-stamped retained
+    // source instead. This preserves the head, row count, and scroll phase, so
+    // the timeline remains continuously populated throughout the zoom.
+    if (refreshFromRetainedHistory
+        && m_count > 0 && m_historyRowCount >= m_count
+        && historyStorageMatchesCapacity()) {
+        for (int age = 0; age < m_count; ++age) {
+            const int historyRing =
+                (m_historyWriteRow + age) % m_historyCapacityRows;
+            const qfloat16* src =
+                m_historyRows.constData() + historyRing * kCols;
+            std::array<float, kCols> row;
+            CoverageRow coverage;
+            coverage.fill(1);
+            for (int c = 0; c < kCols; ++c) {
+                row[c] = static_cast<float>(src[c]);
+            }
+
+            const double rowCenterMhz =
+                m_historyRowCenterMhz.value(historyRing, 0.0);
+            const double rowBandwidthMhz =
+                m_historyRowBandwidthMhz.value(historyRing, 0.0);
+            if (rowCenterMhz > 0.0 && rowBandwidthMhz > 0.0
+                && newCenterMhz > 0.0 && newBandwidthMhz > 0.0
+                && (rowCenterMhz != newCenterMhz
+                    || rowBandwidthMhz != newBandwidthMhz)) {
+                const ReprojectedRow remapped = reprojectRow(
+                    row,
+                    nullptr,
+                    rowCenterMhz, rowBandwidthMhz,
+                    newCenterMhz, newBandwidthMhz,
+                    fallbackDbm);
+                row = remapped.values;
+                coverage = remapped.coverage;
+            }
+
+            const int visibleRing = (m_head + age) % kRows;
+            m_rows[visibleRing] = row;
+            m_rowCoverage[visibleRing] = coverage;
+            m_rowCenterMhz[visibleRing] = newCenterMhz;
+            m_rowBandwidthMhz[visibleRing] = newBandwidthMhz;
+            m_rowSupplemental[visibleRing].fill(-200.0f);
+            m_rowSupplementalCoverage[visibleRing].fill(0);
+            m_rowSupplementalCenterMhz[visibleRing] = 0.0;
+            m_rowSupplementalBandwidthMhz[visibleRing] = 0.0;
+        }
+        m_dirty = true;
+        // The previous live row was just replaced from retained history.
+        // Its bin coordinates are not valid temporal-filter inputs for the
+        // first newly decoded target-frame row.
+        resetInputSmoothing();
+        ++m_rowGeneration;
+        return;
+    }
+
     if (m_count <= 0 || oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
         return;
     }
 
     for (int age = 0; age < m_count; ++age) {
         const int ring = (m_head + age) % kRows;
-        m_rows[ring] = reprojectRow(m_rows[ring],
-                                    oldCenterMhz, oldBandwidthMhz,
-                                    newCenterMhz, newBandwidthMhz,
-                                    fallbackDbm);
+        const ReprojectedRow remapped = reprojectRow(
+            m_rows[ring],
+            &m_rowCoverage[ring],
+            oldCenterMhz, oldBandwidthMhz,
+            newCenterMhz, newBandwidthMhz,
+            fallbackDbm);
+        m_rows[ring] = remapped.values;
+        m_rowCoverage[ring] = remapped.coverage;
+        m_rowCenterMhz[ring] = newCenterMhz;
+        m_rowBandwidthMhz[ring] = newBandwidthMhz;
+        m_rowSupplemental[ring].fill(-200.0f);
+        m_rowSupplementalCoverage[ring].fill(0);
+        m_rowSupplementalCenterMhz[ring] = 0.0;
+        m_rowSupplementalBandwidthMhz[ring] = 0.0;
     }
-    if (m_rawHistCount >= 1) {
-        m_rawPrev1 = reprojectRow(m_rawPrev1,
-                                  oldCenterMhz, oldBandwidthMhz,
-                                  newCenterMhz, newBandwidthMhz,
-                                  fallbackDbm);
-    }
-    if (m_rawHistCount >= 2) {
-        m_rawPrev2 = reprojectRow(m_rawPrev2,
-                                  oldCenterMhz, oldBandwidthMhz,
-                                  newCenterMhz, newBandwidthMhz,
-                                  fallbackDbm);
-    }
-
     m_dirty = true;
+    // Even when retained history is unavailable, the first target-frame row
+    // must stand on its own. Carrying old-frame filter inputs forward would
+    // blend fallback floor into newly covered frequencies.
+    resetInputSmoothing();
     ++m_rowGeneration;
+}
+
+double DssRenderer::rowCenterMhzAtAge(int age) const
+{
+    if (age < 0 || age >= m_count) {
+        return 0.0;
+    }
+    return m_rowCenterMhz[(m_head + age) % kRows];
+}
+
+double DssRenderer::rowBandwidthMhzAtAge(int age) const
+{
+    if (age < 0 || age >= m_count) {
+        return 0.0;
+    }
+    return m_rowBandwidthMhz[(m_head + age) % kRows];
+}
+
+double DssRenderer::rowSupplementalCenterMhzAtAge(int age) const
+{
+    if (age < 0 || age >= m_count) {
+        return 0.0;
+    }
+    return m_rowSupplementalCenterMhz[(m_head + age) % kRows];
+}
+
+double DssRenderer::rowSupplementalBandwidthMhzAtAge(int age) const
+{
+    if (age < 0 || age >= m_count) {
+        return 0.0;
+    }
+    return m_rowSupplementalBandwidthMhz[(m_head + age) % kRows];
 }
 
 const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
@@ -546,7 +794,7 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
     const double frontMaxRidge = H * kFrontMaxRidgeFrac;
     // Match dss_mesh.vert's depth parametrization exactly (v = rr / rows), so
     // the CPU fallback and the GPU mesh place rows at the same depth.
-    const double denom         = kRows;
+    const double denom         = kVisibleRows;
 
     std::array<QPointF, kCols> pts;
     std::array<QColor, kCols>  cols;   // depth/slope-shaded fill colour per column
@@ -560,7 +808,7 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
 
     // Back (oldest) → front (newest): painter's algorithm. Nearer traces are
     // wider, sit lower, and fill to the floor, so they occlude farther ones.
-    for (int age = m_count - 1; age >= 0; --age) {
+    for (int age = visibleRowCount() - 1; age >= 0; --age) {
         const double depthFrac    = age / denom;
         const double rowWidthFrac = 1.0 - depthFrac * (1.0 - kBackWidthFrac);
         const double inset        = W * (1.0 - rowWidthFrac) * 0.5;
@@ -570,12 +818,15 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
         const double dim          = kMinDim + (1.0 - kMinDim) * (1.0 - depthFrac);
 
         const auto& row = rowAt(age);
+        const int ring = (m_head + age) % kRows;
+        const auto& coverage = m_rowCoverage[ring];
         // Pass 1: geometry — noise-floor-anchored ridge heights, with the same
         // pow(s, zCurve) floor-lift the GPU shader applies.
         for (int c = 0; c < kCols; ++c) {
             const double x = inset + (kCols > 1 ? double(c) / (kCols - 1) : 0.0) * rowW;
-            const float dbm = row[c];
-            double strength = std::clamp((dbm - floorDbm) / rangeDb, 0.0f, 1.0f);
+            const float dbm = coverage[c] != 0 ? row[c] : floorDbm;
+            double strength = std::clamp(
+                (dbm - floorDbm) / rangeDb, 0.0f, 1.0f);
             strength = std::pow(strength, zc);
             pts[c] = QPointF(x, baselineY - strength * maxRidge);
         }
@@ -586,7 +837,8 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
             const int cr = std::min(kCols - 1, c + 1);
             const double slope = (pts[cl].y() - pts[cr].y()) / slopeScale; // +: rises to right
             const double shade = std::clamp(1.0 + kSlopeGain * slope, kShadeLo, kShadeHi);
-            QColor base = QColor(palette(row[c]));
+            const float dbm = coverage[c] != 0 ? row[c] : floorDbm;
+            QColor base = QColor(palette(dbm));
             base = lerpColor(base, bgFill, depthFrac * kHaze);
             cols[c] = scaled(base, dim * shade);
         }
@@ -609,7 +861,8 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
         p.setRenderHint(QPainter::Antialiasing, true);
         ridgePen.setWidthF(age == 0 ? 1.6 : 1.0);
         for (int c = 0; c < kCols - 1; ++c) {
-            QColor rc = QColor(palette(row[c])).lighter(165);
+            const float dbm = coverage[c] != 0 ? row[c] : floorDbm;
+            QColor rc = QColor(palette(dbm)).lighter(165);
             rc = lerpColor(rc, bgFill, depthFrac * kHaze);
             ridgePen.setColor(scaled(rc, dim));
             p.setPen(ridgePen);
