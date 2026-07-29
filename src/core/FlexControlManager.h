@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QSerialPort>
 #include <QByteArray>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -37,11 +38,23 @@ public:
     // Scan QSerialPortInfo for VID 0x2192, PID 0x0010
     static QString detectPort();
 
+    // True while the driver is retrying a connection it still wants. Exposed so
+    // the recovery behaviour is observable without a FlexControl attached —
+    // "is it still trying?" is otherwise indistinguishable from "it gave up",
+    // which is precisely the bug in #4574.
+    bool isReconnecting() const { return m_reconnectTimer.isActive(); }
+
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
     void setActiveLedButton(int button);
 
     static constexpr quint16 VendorId  = 0x2192;
     static constexpr quint16 ProductId = 0x0010;
+
+    // Retry cadence after the port drops. 2 s is between AcomConnection's
+    // reconnect and MidiControlManager's 5 s hotplug scan: the knob is a
+    // hands-on control, so a slow recovery is felt, and re-detection is just a
+    // QSerialPortInfo enumeration.
+    static constexpr int kReconnectIntervalMs = 2000;
 
 signals:
     // +N = tune up N steps, -N = tune down N steps
@@ -58,10 +71,27 @@ private:
     void writeLedState();
     void writeLedCommand(int button);
 
+    // A serial error means the port is gone (USB drop, driver reset, the host
+    // reclaiming the device). Tear the handle down and start retrying so the
+    // knob comes back by itself. (#4574)
+    void handlePortError(QSerialPort::SerialPortError error);
+    // Release the OS handle without the LED write / connectionChanged that
+    // close() performs — used when the port is already in an error state and
+    // writing to it would be pointless.
+    void releasePort();
+    void armReconnect();
+
     QSerialPort m_port;
     QByteArray  m_buffer;
     bool        m_invertDirection{false};
     int         m_activeLedButton{0};
+
+    // Reconnect state. Mirrors AcomConnection's serial recovery: a repeating
+    // timer re-detects the device while a connection is WANTED, and an
+    // operator-initiated close() suppresses it so Disconnect stays disconnected.
+    QTimer  m_reconnectTimer;
+    QString m_wantedPort;              // empty = no connection wanted
+    bool    m_deliberateDisconnect{false};
 };
 
 } // namespace AetherSDR

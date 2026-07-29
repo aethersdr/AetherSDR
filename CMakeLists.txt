@@ -4881,6 +4881,24 @@ add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# FlexControl port-loss recovery (#4574). Guarded on SERIALPORT for the same
+# reason FlexControlManager itself is: the whole class is inside
+# #ifdef HAVE_SERIALPORT, so without Qt SerialPort there is nothing to test.
+if(TARGET Qt6::SerialPort)
+    add_executable(flex_control_recovery_test
+        tests/flex_control_recovery_test.cpp
+    )
+    target_include_directories(flex_control_recovery_test PRIVATE src)
+    # aethercore already carries FlexControlManager and the logging category it
+    # uses; compiling the .cpp standalone would drag in LogManager -> AppSettings
+    # -> AsyncLogWriter and need most of the core library linked by hand anyway.
+    target_link_libraries(flex_control_recovery_test PRIVATE
+        aethercore Qt6::Core Qt6::SerialPort Qt6::Test
+    )
+    set_target_properties(flex_control_recovery_test PROPERTIES AUTOMOC ON)
+    add_test(NAME flex_control_recovery_test COMMAND flex_control_recovery_test)
+endif()
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
