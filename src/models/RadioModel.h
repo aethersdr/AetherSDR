@@ -223,7 +223,23 @@ public:
     QString gpsNtpServerAddress() const;
 
     // Max slices reported by radio
-    int maxSlices() const { return m_maxSlices; }
+    int maxSlices() const {
+        // Same authority rule as maxPanadapters(): a backend that reports its
+        // own slice capacity knows its radio, and m_maxSlices is either a
+        // FlexLib model-table estimate or a Flex `slices=N` status — neither of
+        // which a Hermes-Lite 2 ever produces, so it sat at the 2-slice default
+        // regardless of how many receivers the board actually has.
+        //
+        // TciServer's own comment recorded the consequence: "maxSlices() is the
+        // model-string-derived Flex estimate (2 by default), not the backend's
+        // own maxSlices, so a single-slice HL2 looks like it has room."
+        if (!m_flexBackend && m_backend) {
+            const int reported = m_backend->capabilities().maxSlices;
+            if (reported > 0)
+                return reported;
+        }
+        return m_maxSlices;
+    }
     static int maxSlicesForModel(const QString& model);
 
     // Per-model feature flags from the central ModelCapabilities table.
@@ -1234,6 +1250,10 @@ public:
 
 private:
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
+    // Connect a slice's operator-issued AUDIO and TX-slice intents to the
+    // backend seam. Must be called from EVERY site that constructs a
+    // SliceModel — see the definition for why that is not a style preference.
+    void wireSliceAudioIntentsToBackend(SliceModel* s);
     // Translate a MODEL pan id to the backend's own id for a command going down
     // the seam. The inverse of resolveBackendPan(); both are needed or the
     // mapping is one-way and every pan command addresses a pan the backend

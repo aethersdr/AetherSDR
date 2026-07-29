@@ -1534,8 +1534,15 @@ void Hl2Backend::setTxSlice(int sliceId)
                          << "— no such receiver";
         return;
     }
-    if (ddc == m_txDdc)
+    if (ddc == m_txDdc) {
+        // Already ours — but CONFIRM it rather than returning silently. The
+        // asker may believe otherwise (a client that restored its own state, a
+        // model seeded from somewhere else), and a request answered with
+        // nothing leaves that disagreement standing. Republishing costs one
+        // signal and makes the backend's answer the one that survives.
+        emitSliceState(ddc);
         return;
+    }
 
     const int previous = m_txDdc;
     m_txDdc = ddc;
