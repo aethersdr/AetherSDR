@@ -43,6 +43,14 @@ ThemeGradient parseGradient(const QJsonObject& obj)
         const QJsonArray c = obj.value("center").toArray();
         if (c.size() >= 2) {
             g.center = QPointF(c.at(0).toDouble(0.5), c.at(1).toDouble(0.5));
+        } else if (obj.contains("centerX") || obj.contains("centerY")) {
+            // Recovery path for themes written before the writer was fixed: it
+            // emitted centerX/centerY as two scalars, which this parser never
+            // looked for, so those files load with a lost centre. Accept the
+            // old shape on read so an existing user theme keeps its gradient;
+            // the next save rewrites it as the "center" array.
+            g.center = QPointF(obj.value("centerX").toDouble(0.5),
+                               obj.value("centerY").toDouble(0.5));
         }
         g.radius = obj.value("radius").toDouble(0.5);
     }
@@ -1104,8 +1112,14 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
                                     : QStringLiteral("linear-gradient"));
                 gj.insert("angle", g.angle);
                 if (g.type == ThemeGradient::Radial) {
-                    gj.insert("centerX", g.center.x());
-                    gj.insert("centerY", g.center.y());
+                    // "center" as a [x, y] ARRAY — the shape the reader
+                    // parses and this file's own format comment documents.
+                    // This used to write centerX/centerY as two scalars, which
+                    // the reader never looks for, so a radial gradient came
+                    // back at the {0.5, 0.5} default. `radius` round-tripped
+                    // fine, which made the loss look like a half-working
+                    // feature rather than a format mismatch.
+                    gj.insert("center", QJsonArray{g.center.x(), g.center.y()});
                     gj.insert("radius",  g.radius);
                 }
                 QJsonArray stops;
@@ -1240,62 +1254,39 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
     if (themeName.isEmpty()) return fail(QStringLiteral("Empty theme name."));
     if (filePath.isEmpty())  return fail(QStringLiteral("Empty file path."));
 
-    // For the *active* theme, the live m_tokens already holds the operator's
-    // session edits — saveCurrentThemeAs uses that snapshot.  For any other
-    // theme, re-read its on-disk JSON so we don't accidentally export the
+    // For the *active* theme, the live scope tree already holds the operator's
+    // session edits — saveCurrentThemeAs serialises the same thing.  For any
+    // other theme, re-read its on-disk JSON so we don't accidentally export the
     // active theme's tokens under a different name.
     QJsonObject doc;
     if (themeName == m_activeTheme) {
-        QJsonObject tokensObj;
-        const int gradMetaId = qMetaTypeId<ThemeGradient>();
-        const int fontMetaId = qMetaTypeId<ThemeFont>();
-        for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
-            const QVariant& v = it.value();
-            const int ut = v.userType();
-            QJsonValue leaf;
-            if (ut == QMetaType::QString)      leaf = v.toString();
-            else if (ut == QMetaType::Int)     leaf = v.toInt();
-            else if (ut == QMetaType::Double)  leaf = v.toDouble();
-            else if (ut == QMetaType::Bool)    leaf = v.toBool();
-            else if (ut == gradMetaId) {
-                const ThemeGradient g = v.value<ThemeGradient>();
-                QJsonObject gj;
-                gj.insert("type", g.type == ThemeGradient::Radial
-                                    ? QStringLiteral("radial-gradient")
-                                    : QStringLiteral("linear-gradient"));
-                gj.insert("angle", g.angle);
-                if (g.type == ThemeGradient::Radial) {
-                    gj.insert("centerX", g.center.x());
-                    gj.insert("centerY", g.center.y());
-                    gj.insert("radius",  g.radius);
-                }
-                QJsonArray stops;
-                for (const auto& s : g.stops) {
-                    QJsonObject sj;
-                    sj.insert("at",    s.at);
-                    sj.insert("color", colorToTokenString(s.color));
-                    stops.append(sj);
-                }
-                gj.insert("stops", stops);
-                leaf = gj;
-            }
-            else if (ut == fontMetaId) {
-                const ThemeFont f = v.value<ThemeFont>();
-                QJsonObject fj;
-                fj.insert("family", f.family);
-                if (f.size > 0)        fj.insert("size",  f.size);
-                if (f.color.isValid()) fj.insert("color", colorToTokenString(f.color));
-                leaf = fj;
-            }
-            else continue;
-            tokensObj.insert(it.key(), leaf);
-        }
-        doc.insert("schemaVersion", 1);
+        // Reuse the SAVE path's serialiser instead of hand-rolling a flat dump.
+        //
+        // The old code walked m_tokens and wrote a top-level "tokens" object.
+        // But m_tokens is a reference into the ROOT SCOPE only (see the header)
+        // — every child scope lives in m_rootScope/m_scopeByPath and was simply
+        // absent from the export. On the bundled dark theme that silently drops
+        // 9 of 12 scoped tokens: all the per-applet slider/knob/toggle
+        // overrides for applet/tx, applet/rx and applet/comp.
+        //
+        // The file still LOADED (the reader has a legacy flat-"tokens"
+        // fallback), which is what made this invisible: the operator got a
+        // theme file back that opened cleanly and had quietly lost its
+        // per-applet differentiation.
+        //
+        // scopeToJson() emits the schemaVersion-2 { "scopes": { "root": ... } }
+        // shape the loader prefers, recursing through the whole tree, and is
+        // already what saveCurrentThemeAs() uses — so export and save can no
+        // longer disagree about what a theme file contains.
+        QJsonObject scopes;
+        scopes.insert(QStringLiteral("root"), scopeToJson(m_rootScope.get()));
+
+        doc.insert("schemaVersion", 2);
         doc.insert("name",          themeName);
         doc.insert("author",        QStringLiteral("AetherSDR user"));
         doc.insert("version",       QStringLiteral("1.0"));
         doc.insert("description",   QStringLiteral("Exported via the Theme Editor."));
-        doc.insert("tokens",        tokensObj);
+        doc.insert("scopes",        scopes);
     } else {
         const auto pit = m_themePaths.constFind(themeName);
         if (pit == m_themePaths.constEnd())
@@ -1506,6 +1497,27 @@ QString ThemeManager::cssFragment(const QString& token) const
         if (compound.userType() == qMetaTypeId<ThemeFont>()) {
             const int sz = compound.value<ThemeFont>().size;
             if (sz > 0) return QString::number(sz);
+        }
+    }
+    // Unknown token. The empty string still goes back to resolveFor(), because
+    // substituting a placeholder would be worse — Qt would apply a wrong colour
+    // rather than none — but it must not vanish silently.
+    //
+    // What the caller sees without this: `{{color.acent}}` (typo) resolves to
+    // "", the template becomes `color: ;`, Qt discards the malformed
+    // declaration, and the widget keeps its previous appearance. No error, no
+    // log line, and the theme looks "nearly right" — which is far harder to
+    // diagnose than an obviously missing colour.
+    //
+    // Warned once per token: resolveFor() runs on every theme change and every
+    // tracked-stylesheet reapply, so an unguarded warning would flood the log.
+    {
+        QMutexLocker lock(&m_unknownTokenMutex);
+        if (!m_warnedUnknownTokens.contains(token)) {
+            m_warnedUnknownTokens.insert(token);
+            qCWarning(lcGui) << "ThemeManager: stylesheet references unknown token"
+                             << token << "— it resolves to an empty fragment, so the"
+                             << "declaration using it will be dropped by Qt";
         }
     }
     return QString();

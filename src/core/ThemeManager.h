@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QMutex>
 #include <QSet>
 #include <QColor>
 #include <QFont>
@@ -490,6 +491,13 @@ private:
     // every loadThemeFromPath().
     QSet<QString>                    m_declaredContainers;
     QString m_activeTheme;
+
+    // Tokens already warned about by cssFragment(), so a stylesheet typo is
+    // reported once rather than on every theme change and every tracked-
+    // stylesheet reapply.  Mutable + guarded because cssFragment() is const
+    // and resolveFor() may be reached from more than one thread.
+    mutable QSet<QString>            m_warnedUnknownTokens;
+    mutable QMutex                   m_unknownTokenMutex;
 
     // Factory-default snapshot, loaded once from `:/themes/default-dark.json`
     // at construction.  Drives the gradient editor's "Reset to default"

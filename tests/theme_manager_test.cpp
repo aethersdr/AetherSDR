@@ -826,6 +826,101 @@ int main(int argc, char** argv)
         EXPECT_EQ(rt.color.name().toLower(), QString("#aabbcc"));
     }
 
+    // ---- round-trip correctness (#3184) ----
+    //
+    // Three independent losses, each silent: the file still loads, so nothing
+    // announces that something went missing.
+    {
+        // (1) A radial gradient must keep its CENTRE across save + reload.
+        //
+        // The writer emitted centerX/centerY as two scalars; the reader only
+        // looked for a "center" ARRAY, so the centre silently reverted to the
+        // {0.5, 0.5} default. `radius` used the same key on both sides and DID
+        // survive, which made the loss look like a half-working feature.
+        ThemeGradient g;
+        g.type   = ThemeGradient::Radial;
+        g.center = QPointF(0.2, 0.8);      // deliberately not the 0.5,0.5 default
+        g.radius = 0.7;
+        g.stops  = { {0.0, QColor("#000000")}, {1.0, QColor("#ffffff")} };
+        tm.setGradient("color.test.radial", g);
+
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Radial Round Trip"));
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("Radial Round Trip"));
+
+        const ThemeGradient rt = tm.gradient("color.test.radial");
+        EXPECT_EQ(rt.type, ThemeGradient::Radial);
+        EXPECT_TRUE(qFuzzyCompare(rt.center.x(), 0.2));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.center.y(), 0.8));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.radius,     0.7));
+    }
+
+    {
+        // (2) The reader still accepts the OLD centerX/centerY shape, so a
+        // theme written by a pre-fix build keeps its gradient instead of being
+        // stranded at the default.
+        QTemporaryDir legacyDir;
+        EXPECT_TRUE(legacyDir.isValid());
+        const QString path = legacyDir.filePath(QStringLiteral("legacy.json"));
+        QFile f(path);
+        EXPECT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(R"({
+          "schemaVersion": 2, "name": "Legacy Centre",
+          "scopes": { "root": { "tokens": {
+            "color.test.legacy": { "type": "radial-gradient", "angle": 180,
+              "centerX": 0.25, "centerY": 0.75, "radius": 0.6,
+              "stops": [ {"at":0.0,"color":"#000000"}, {"at":1.0,"color":"#ffffff"} ] }
+          } } } })");
+        f.close();
+
+        QString impErr;
+        const QString name = tm.importThemeFromFile(path, &impErr);
+        EXPECT_EQ(name, QString("Legacy Centre"));
+        EXPECT_TRUE(impErr.isEmpty());
+
+        const ThemeGradient lg = tm.gradient("color.test.legacy");
+        EXPECT_TRUE(qFuzzyCompare(lg.center.x(), 0.25));
+        EXPECT_TRUE(qFuzzyCompare(lg.center.y(), 0.75));
+    }
+
+    {
+        // (3) Exporting the ACTIVE theme must not drop scoped tokens.
+        //
+        // The old export walked m_tokens, which is a reference into the ROOT
+        // SCOPE ONLY — every child scope lives in the scope tree and was simply
+        // absent. It wrote a flat top-level "tokens" object, which the reader's
+        // legacy fallback still accepts, so the file loaded cleanly and had
+        // quietly lost its per-applet overrides.
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        tm.setColor(QStringLiteral("applet/tx"),
+                    QStringLiteral("color.slider.foreground"),
+                    QColor("#123456"));
+
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        const QString out = tmp.filePath(QStringLiteral("exported.json"));
+        QString err;
+        EXPECT_TRUE(tm.exportThemeToFile(tm.activeTheme(), out, &err));
+
+        QFile ef(out);
+        EXPECT_TRUE(ef.open(QIODevice::ReadOnly));
+        const QJsonObject doc = QJsonDocument::fromJson(ef.readAll()).object();
+        ef.close();
+
+        // Schema-2 shape, not the flat legacy dump.
+        EXPECT_TRUE(doc.contains("scopes"));
+        const QJsonObject root = doc.value("scopes").toObject()
+                                    .value("root").toObject();
+        // The scoped override survived the export.
+        const QJsonObject applet = root.value("scopes").toObject()
+                                       .value("applet").toObject();
+        const QJsonObject tx = applet.value("scopes").toObject()
+                                     .value("tx").toObject();
+        EXPECT_EQ(tx.value("tokens").toObject()
+                    .value("color.slider.foreground").toString().toLower(),
+                  QString("#123456"));
+    }
+
     // Restore Default Dark for any future test additions below.
     tm.setActiveTheme("Default Dark");
 
