@@ -360,7 +360,7 @@ void MainWindow::wireDiscovery()
             reconnectDialog->close();
             reconnectDialog->deleteLater();
         }
-        m_connPanel->show();
+        showConnectionDialog();
     });
     connect(&m_smartLink, &SmartLinkClient::serverConnected,
             this, [this] {

@@ -165,6 +165,7 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
+#include <QStyle>
 #include <QTimer>
 #include <QDateTime>
 #include <QPropertyAnimation>
@@ -1006,7 +1007,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
             if (radioInfo.address.isNull()) {
                 setPanadapterConnectionAnimation(false);
                 m_connPanel->setStatusText("Select a radio to reconnect");
-                m_connPanel->show();
+                showConnectionDialog();
                 return;
             }
 
@@ -3708,19 +3709,22 @@ void MainWindow::showConnectionDialog()
     if (!screen)
         screen = QApplication::primaryScreen();
 
+    m_connPanel->fitToScreen(screen);
     const QSize dlgSize = m_connPanel->size();
-    QPoint pos(labelCenter.x() - dlgSize.width() / 2,
-               statusBarTop.y() - dlgSize.height() - 8);
+    const QMargins frameMargins = m_connPanel->screenFitFrameMargins();
+    const QSize frameSize(
+        dlgSize.width() + frameMargins.left() + frameMargins.right(),
+        dlgSize.height() + frameMargins.top() + frameMargins.bottom());
+    QPoint frameTopLeft(labelCenter.x() - frameSize.width() / 2,
+                        statusBarTop.y() - frameSize.height() - 8);
 
     if (screen) {
-        const QRect available = screen->availableGeometry();
-        const int maxX = available.left() + available.width() - dlgSize.width();
-        const int maxY = available.top() + available.height() - dlgSize.height();
-        pos.setX(qMax(available.left(), qMin(pos.x(), maxX)));
-        pos.setY(qMax(available.top(), qMin(pos.y(), maxY)));
+        frameTopLeft = m_connPanel->constrainedFrameTopLeft(
+            frameTopLeft, screen->availableGeometry());
     }
 
-    m_connPanel->move(pos);
+    // QWidget::move() positions a top-level widget by its frame top-left.
+    m_connPanel->move(frameTopLeft);
     m_connPanel->show();
     m_connPanel->raise();
     m_connPanel->activateWindow();
@@ -4220,14 +4224,12 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    // Height floor comes from the panel itself — its "Connect by IP" page grew a
-    // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
-    // page (the Advanced disclosure fell outside the mode stack). Open at
-    // exactly that floor, not floor + slack: the panel reclaims height it set
-    // itself when a page shrinks, and it can only tell its own sizing from an
-    // operator's drag if the two agree to start with.
-    m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
-    m_connPanel->resize(760, m_connPanel->minimumHeight());
+    // The body scrolls when its content exceeds the available height; the
+    // footer remains outside that viewport and therefore always reachable.
+    m_connPanel->setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
+                                ConnectionPanel::kSafeMinimumHeight);
+    m_connPanel->resize(ConnectionPanel::kPreferredWidth,
+                        ConnectionPanel::kPreferredHeight);
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -5751,7 +5753,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 s.remove("LastConnectedRadioSerial");
                 s.remove("LastRoutedRadioIp");
                 s.save();
-                m_connPanel->show();
+                showConnectionDialog();
             });
             m_reconnectDlg->show();
         }

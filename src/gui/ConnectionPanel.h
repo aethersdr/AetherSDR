@@ -5,6 +5,9 @@
 #include "core/IConnectionAutomation.h"
 
 #include <QWidget>
+#include <QMargins>
+#include <QPoint>
+#include <QRect>
 #include <QListWidget>
 #include <QPushButton>
 #include <QLabel>
@@ -17,6 +20,7 @@
 #include <QToolButton>
 
 class QVBoxLayout;
+class QScreen;
 
 namespace AetherSDR {
 
@@ -27,7 +31,16 @@ class ConnectionPanel : public QWidget, public IConnectionAutomation {
 public:
     explicit ConnectionPanel(QWidget* parent = nullptr);
 
+    static constexpr int kSafeMinimumWidth = 640;
+    static constexpr int kSafeMinimumHeight = 360;
+    static constexpr int kPreferredWidth = 760;
+    static constexpr int kPreferredHeight = 660;
+
     void setFramelessMode(bool on);
+    void fitToScreen(QScreen* preferredScreen = nullptr);
+    QMargins screenFitFrameMargins() const;
+    QPoint constrainedFrameTopLeft(const QPoint& preferredFrameTopLeft,
+                                   const QRect& availableGeometry) const;
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
@@ -50,6 +63,7 @@ public:
     void automationSetDialogVisible(bool visible) override
     {
         if (visible) {
+            fitToScreen();
             show();
             raise();
             activateWindow();
@@ -202,10 +216,6 @@ private:
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
     bool         m_manualConnectPending{false};
-    // Last height refitToContent() set, so it can tell its own sizing from a
-    // height the operator dragged to and only reclaim the former.
-    int          m_autoFitHeight{0};
-
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry
 
