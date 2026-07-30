@@ -46,6 +46,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
 | `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row, the 8-band hardware EQ applet |
+| `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `extensionNamespaces` | `["flex"]` | — | — | `invokeExtension` pre-check | Amp / tuner operate/bypass/autotune verbs |
@@ -68,6 +69,41 @@ them would leave nothing at all.
 
 The test for whether a control belongs behind this flag is whether its only
 effect is to emit a verb the radio's firmware executes.
+
+### What `hasRadioSideWaterfallAutoBlack` must never hide
+
+The same rule one plane over. `SW` — the client-side noise-floor estimate — is
+not gated on it and must not be: on a radio reporting false it is the only
+automatic waterfall floor the operator has, and hiding it would leave only the
+manual slider.
+
+The flag is deliberately separate from `hasRadioSideDsp` rather than riding on
+it. Both describe work the radio does instead of this host, but one is audio DSP
+driven by command-plane verbs and the other is a display-plane computation
+embedded in the waterfall stream. A backend could plausibly have either without
+the other, and merging them would make the first such backend a rewrite.
+
+### A gate masks; it must not write through
+
+`DisplayWfAutoBlackRadioSide` is the operator's **intent**, and the capability
+decides what is **in effect**. `SpectrumWidget` exposes both —
+`wfAutoBlackRadioSide()` for the intent, `effectiveWfAutoBlackRadioSide()` for
+intent ∧ capability — and only a deliberate operator action reaches the setter
+that persists.
+
+The first implementation coerced the mode and let the normal change signals fire,
+which reach `setWfAutoBlackRadioSide()` and write AppSettings. Connecting an HL2
+once then destroyed a Flex user's stored HW preference for good. **Rule 2 above
+implies this generally:** a gate that persists its coercion cannot restore
+anything, so no capability gate may write through to settings.
+
+Note the related gap this exposes, deliberately *not* fixed here: display
+settings keys are scoped by pan index only (`SpectrumWidget::settingsKey`), not
+by radio family the way `MainWindow::rfGainSettingsKey` is. Two radios share one
+preference. Family-scoping them is the more complete answer, but the widget loads
+its settings at construction — before any backend has reported a family — so it
+cannot build a family-scoped key the way MainWindow can at use time. That is its
+own change, and it applies to more than this one control.
 
 ## Declared, but the consumer bypasses the seam
 

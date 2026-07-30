@@ -312,6 +312,13 @@ public:
     // Says nothing about the CLIENT-side modules (NR2/NR4/MNR/BNR/DFNR/RN2),
     // which run on this host and work on any family.
     bool hasRadioSideDsp() const;
+    // Whether the RADIO computes the waterfall black level per tile
+    // (RadioCapabilities::hasRadioSideWaterfallAutoBlack) — the HW position of
+    // the Display panel's Black Level button. Same permissive disconnected rule.
+    //
+    // Says nothing about auto-black itself: the client-side (SW) estimate works
+    // on every family and is never gated on this.
+    bool hasRadioSideWaterfallAutoBlack() const;
     // Whether this radio has DAX audio/IQ channels. Same permissive
     // disconnected rule as hasRadioSideDsp(): with nothing attached there is
     // nothing to be honest about, and blanking the controls on unplug would look
@@ -1326,9 +1333,11 @@ private:
     // history was several times shorter than the axis claimed.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Covers only the window before MainWindow seeds the pan model from the
-    // operator's sliders. 100 ms matches SpectrumWidget's own m_wfLineDuration
-    // default, so the time axis is right from the very first row.
-    static constexpr int kBackendDefaultWfLineDurationMs = 100;
+    // operator's sliders. 100 is the top of the 1..100 rate control and matches
+    // SpectrumWidget's own m_wfLineDuration default, so a self-shaping backend
+    // starts at full speed rather than at the 10 fps the number used to mean
+    // when it was read as milliseconds (#4600).
+    static constexpr int kBackendDefaultWfRate = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
     TunerModel       m_tunerModel;
@@ -1704,7 +1713,7 @@ private:
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
     void applyAdaptiveFrameRate(NetState newState, NetState oldState);
     static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
-    // adaptiveWfMsForCap() moved to the public network-diagnostics section (#4261).
+    // adaptiveWfRateForCap() moved to the public network-diagnostics section (#4261).
     void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
@@ -1759,10 +1768,12 @@ public:
     int     maxPingRtt()       const { return m_maxPingRtt; }
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
-    // Waterfall line-duration the adaptive throttle caps to for a given fps cap.
-    // Public so MainWindow can recognize (and suppress) that cap's own status
-    // echo while distinguishing it from a real radio/profile update (#4261).
-    int     adaptiveWfMsForCap(int fpsCap) const;
+    // The 1..100 waterfall RATE the adaptive throttle caps to for a given fps
+    // cap — NOT milliseconds, see core/WaterfallRate.h for why the distinction
+    // is load-bearing. Public so MainWindow can recognize (and suppress) that
+    // cap's own status echo while distinguishing it from a real radio/profile
+    // update (#4261).
+    int     adaptiveWfRateForCap(int fpsCap) const;
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }

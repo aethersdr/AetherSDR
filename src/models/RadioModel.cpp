@@ -18,6 +18,7 @@
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "core/WaterfallRate.h"
 #include "ProfileLoadCommand.h"
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
@@ -73,8 +74,6 @@ constexpr int kNeutralPanIndexNone = -1;
 
 constexpr int kDefaultPanDimensionThreshold = 100;
 constexpr int kSessionRestorePruneDelayMs = 5000;
-constexpr int kWaterfallLineDurationMinMs = 1;
-constexpr int kWaterfallLineDurationMaxMs = 100;
 
 // parseDeclaredBands() moved to DeclaredBands.{h,cpp} so the Principle-VII
 // validation (allow-list against BandDefs, dedup, case-fold) has a light,
@@ -2803,6 +2802,14 @@ bool RadioModel::hasRadioSideDsp() const
     return backendCapabilities().hasRadioSideDsp;
 }
 
+bool RadioModel::hasRadioSideWaterfallAutoBlack() const
+{
+    if (!m_backend || !isConnected()) {
+        return true;   // nothing attached — assume present, see the header
+    }
+    return backendCapabilities().hasRadioSideWaterfallAutoBlack;
+}
+
 bool RadioModel::hasDaxStreams() const
 {
     if (!m_backend || !isConnected()) {
@@ -4322,10 +4329,10 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // waterfall plane (Flex gets one from the radio), so the panadapter row IS
     // the waterfall row; it needs real band edges to scale against.
     //
-    // Gated once more, because line_duration is a SEPARATE control and slower
-    // than the frame rate (100 ms against 25-40 fps). That gate is what makes a
-    // row actually represent line_duration of time — the calibration the
-    // widget's time axis already assumes.
+    // Gated once more, because the waterfall rate is a SEPARATE control from
+    // the frame rate and normally asks for something slower. That gate is what
+    // makes a row actually represent the requested span of time — the
+    // calibration the widget's time axis already assumes.
     // Geometry for THIS pan. `panId` here is already the neutral index, which is
     // the same key the geometry handler stores under.
     const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);
@@ -4342,13 +4349,19 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
         // back to the active pan, which is what the spectrum path above uses and
         // why that side reports zero drops.
         const PanadapterModel* pan = resolvePan(neutralPanIdString(panId));
-        const int wfMs = (pan && pan->waterfallLineDuration() > 0)
-                             ? pan->waterfallLineDuration()
-                             : kBackendDefaultWfLineDurationMs;
+        // waterfallLineDuration() carries the 1..100 RATE, not milliseconds —
+        // low is slow, high is fast (see WaterfallRate.h). Pacing on the raw
+        // number ran the control backwards here: rate 1 gated at 1 ms and gave
+        // the full 25 fps, rate 100 gated at 100 ms and gave 10 (#4600).
+        const int wfRate = (pan && pan->waterfallLineDuration() > 0)
+                               ? pan->waterfallLineDuration()
+                               : kBackendDefaultWfRate;
+        const int wfMs = AetherSDR::WaterfallRate::localRowIntervalMs(wfRate);
         qint64& lastNs = m_backendWfLastRowNs[panId];
         const qint64 dueNs = static_cast<qint64>(wfMs) * 1000000;
         // First row goes out immediately: the interval is the gap BETWEEN rows,
-        // not a delay before the first one.
+        // not a delay before the first one. A zero interval is the top of the
+        // control asking for one row per frame, which this same test gives.
         if (lastNs == 0 || (nowNs - lastNs) >= dueNs) {
             // Advance BY the interval rather than resetting to now, so the row
             // rate does not quantise down onto the frame grid. Clamped to one
@@ -5842,12 +5855,23 @@ int RadioModel::currentAdaptiveFpsCap() const
 }
 
 
-int RadioModel::adaptiveWfMsForCap(int fpsCap) const
+int RadioModel::adaptiveWfRateForCap(int fpsCap) const
 {
     if (fpsCap <= 0) return 0;
-    return std::clamp((1000 + fpsCap / 2) / fpsCap,
-                      kWaterfallLineDurationMinMs,
-                      kWaterfallLineDurationMaxMs);
+    // The caller knows a frame cap; the control speaks the 1..100 rate. Going
+    // straight from 1000/fps to the wire treated the rate as milliseconds and
+    // inverted the throttle: a Poor-network 4 fps cap produced 250, clamped to
+    // 100 — the FASTEST setting — while a mild Good-network 15 fps cap produced
+    // 67, about 4.5 rows/s. Worse network, faster waterfall. (#4600)
+    //
+    // Which law converts depends on who turns the rate into rows: ask a Flex in
+    // the units its display engine answers in, and this host in ours.
+    if (shapesDisplayRatesLocally()) {
+        return AetherSDR::WaterfallRate::localRateForRowsPerSec(
+            static_cast<float>(fpsCap));
+    }
+    return AetherSDR::WaterfallRate::flexRateForMsPerRow(
+        1000.0f / static_cast<float>(fpsCap));
 }
 
 void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
@@ -5861,13 +5885,13 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
     // to it — on the one backend where the frame cost is paid by THIS host.
     // Route it the same way an operator's slider goes. (#4470)
     if (shapesDisplayRatesLocally()) {
-        requestPanDisplayRates(panId, fpsCap, adaptiveWfMsForCap(fpsCap));
+        requestPanDisplayRates(panId, fpsCap, adaptiveWfRateForCap(fpsCap));
         return;
     }
     sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
     if (!pan->waterfallId().isEmpty())
         sendCommand(QString("display panafall set %1 line_duration=%2")
-                        .arg(pan->waterfallId()).arg(adaptiveWfMsForCap(fpsCap)));
+                        .arg(pan->waterfallId()).arg(adaptiveWfRateForCap(fpsCap)));
 }
 
 void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
@@ -5885,7 +5909,7 @@ void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
         m_lastThrottleEngageMs = QDateTime::currentMSecsSinceEpoch();
         m_pendingThrottleLift = false;
         qCDebug(lcProtocol) << "RadioModel: adaptive throttle engaged — fps cap"
-                            << newCap << "/ wf line" << adaptiveWfMsForCap(newCap) << "ms";
+                            << newCap << "/ wf rate" << adaptiveWfRateForCap(newCap);
         for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it)
             sendAdaptiveCapToPan(it.key(), newCap);
         emit adaptiveThrottleChanged(throttling, newCap);

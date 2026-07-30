@@ -1050,6 +1050,12 @@ void KiwiSdrClient::setWaterfallView(const QString& panId, double centerMhz,
 
 void KiwiSdrClient::setWaterfallLineDurationMs(int lineDurationMs)
 {
+    // Misnamed, and load-bearing if anyone ever wires it up: what arrives here
+    // is the 1..100 waterfall RATE, low slow / high fast, not milliseconds. See
+    // core/WaterfallRate.h — reading it as ms is what inverted the control on
+    // the HL2 (#4600). Auto mode below ignores the value entirely today and
+    // requests the fastest validated Kiwi speed; a future auto that actually
+    // follows the rate must convert, not divide.
     const int clamped = std::clamp(lineDurationMs, 1, 100);
     if (m_waterfallLineDurationMs == clamped) {
         return;

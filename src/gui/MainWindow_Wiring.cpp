@@ -51,6 +51,7 @@
 #include "core/BandStackSettings.h"
 #include "core/AppSettings.h"
 #include "core/SpotCommandPolicy.h"
+#include "core/WaterfallRate.h"
 #include "core/SpotModeResolver.h"
 #include "core/LogManager.h"
 #ifdef HAVE_RADE
@@ -2849,7 +2850,7 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
         sw, [this, sw](int lineDurationMs) {
             if (applyThrottledDisplayReport(
                     m_adaptiveThrottleActive,
-                    m_radioModel.adaptiveWfMsForCap(m_adaptiveFpsCap),
+                    m_radioModel.adaptiveWfRateForCap(m_adaptiveFpsCap),
                     lineDurationMs)) {
                 sw->setWfLineDuration(lineDurationMs);
             }
@@ -2862,6 +2863,12 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     // needs. Done before the reads below so those still see a populated model.
     // Without it the stream is shaped to the built-in defaults until the
     // operator happens to touch a slider.
+    // Same predicate, told to the widget: it selects which rate-to-cadence law
+    // seeds the time axis, and the two disagree by more than 10x in the middle
+    // of the slider (core/WaterfallRate.h). Set unconditionally, not inside the
+    // branch below — a pan re-wired after switching from a self-shaping backend
+    // to a Flex has to be told the law changed back.
+    sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
     if (m_radioModel.shapesDisplayRatesLocally()) {
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
@@ -2881,7 +2888,7 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     }
     if (applyThrottledDisplayReport(
             m_adaptiveThrottleActive,
-            m_radioModel.adaptiveWfMsForCap(m_adaptiveFpsCap),
+            m_radioModel.adaptiveWfRateForCap(m_adaptiveFpsCap),
             pan->waterfallLineDuration())) {
         sw->setWfLineDuration(pan->waterfallLineDuration());
     }
@@ -3173,7 +3180,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setRadioCapabilities(m_radioModel.capabilities());
     menu->setDeclaredBands(m_radioModel.declaredBands());
     applyTuningRangeToOverlayMenu(menu);
-    applyRadioSideDspToOverlayMenu(menu);
+    applyRadioSideDspToPanDisplay(sw);
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
     connect(&m_radioModel, &RadioModel::antListChanged,
@@ -3822,8 +3829,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // client-side → stop it (auto_black=0) and use our own estimate.
         m_radioModel.setWaterfallAutoBlackSource(radioSide);
     });
-    const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
-        const int clampedMs = std::clamp(ms, 1, 100);
+    // `rate` is the 1..100 control value, low slow / high fast — NOT the
+    // milliseconds its Flex wire name (`line_duration`) suggests. See
+    // core/WaterfallRate.h; reading it as ms is what inverted the slider on the
+    // Hermes-Lite 2 (#4600).
+    const auto applyWaterfallLineDuration = [this, applet, sw](int rate) {
+        const int clampedRate = std::clamp(rate,
+                                           AetherSDR::WaterfallRate::kMin,
+                                           AetherSDR::WaterfallRate::kMax);
         const QString profileId = kiwiSdrProfileForPan(applet->panId());
         if (!profileId.isEmpty() && kiwiSdrPanDisplaysKiwi(applet->panId())) {
             const KiwiSdrAntennaProfile profile =
@@ -3838,16 +3851,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                     }
                     m_kiwiSdrManager->updateWaterfallView(
                         slice->sliceId(), applet->panId(), sw->centerMhz(),
-                        sw->bandwidthMhz(), clampedMs);
+                        sw->bandwidthMhz(), clampedRate);
                     break;
                 }
             }
             return;
         }
-        sw->setWfLineDuration(clampedMs);
+        sw->setWfLineDuration(clampedRate);
         // Same reason as the FPS slider above: on a raw-spectrum backend this is
         // the engine's waterfall shaping target, not a radio setting.
-        m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedMs);
+        m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedRate);
     };
     connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
             this, applyWaterfallLineDuration);

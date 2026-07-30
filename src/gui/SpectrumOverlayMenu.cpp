@@ -1638,7 +1638,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit wfBlackLevelChanged(v);
         }
     });
-    // One click advances the 3-way mode: Off → Auto-C → Auto-R → Off.
+    // One click advances the mode: Off → SW → HW → Off, or Off → SW → Off on a
+    // radio that computes no black level of its own (see autoBlackModeCount).
     // In Kiwi mode the same button requests the computed auto floor/ceiling scale.
     connect(m_autoBlackBtn, &QPushButton::clicked, this, [this]() {
         if (m_kiwiWaterfallControlMode) {
@@ -1650,7 +1651,12 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             return;
         }
 
-        applyAutoBlackMode((m_autoBlackMode + 1) % 3, /*emitSignals=*/true);
+        // From what the operator can SEE, not from a masked intent: showing SW
+        // and advancing to HW-as-SW again would look like a dead button. A click
+        // is a real choice on this radio, so it overwrites the stored intent —
+        // the one case where losing a stashed HW is correct.
+        applyAutoBlackMode((effectiveAutoBlackMode() + 1) % autoBlackModeCount(),
+                           /*emitSignals=*/true);
     });
     applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);  // initial label/slider role
 
@@ -2016,9 +2022,49 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 // swaps between its manual and auto-offset roles.  When emitSignals is true (a
 // user click) it drives the on/off + client/radio-source signals plus the
 // matching slider-value signal so the renderer and radio both update.
+int SpectrumOverlayMenu::autoBlackModeCount() const
+{
+    // HW is only a reachable position when the radio actually computes a black
+    // level. Without it the button cycles Off <-> SW: two positions, not three
+    // with one that does nothing. (#4600)
+    return m_radioSideAutoBlackAvailable ? 3 : 2;
+}
+
+int SpectrumOverlayMenu::effectiveAutoBlackMode() const
+{
+    // m_autoBlackMode is the operator's stored INTENT and may legitimately hold
+    // HW while attached to a radio that has none. What the button shows, and
+    // what the rest of the app acts on, is that intent MASKED by the capability.
+    //
+    // SW rather than Off for a masked HW: the intent behind HW was "pick the
+    // floor for me", and the client-side estimate is the one that still can.
+    if (m_autoBlackMode == 2 && !m_radioSideAutoBlackAvailable) {
+        return 1;
+    }
+    return m_autoBlackMode;
+}
+
+void SpectrumOverlayMenu::setRadioSideAutoBlackAvailable(bool available)
+{
+    if (m_radioSideAutoBlackAvailable == available) {
+        return;
+    }
+    m_radioSideAutoBlackAvailable = available;
+    // Intent is NOT rewritten here and no wf* signal is emitted — those reach
+    // SpectrumWidget::setWfAutoBlackRadioSide, which writes AppSettings, and a
+    // capability is not a choice the operator made. Coercing through them meant
+    // one session on an HL2 permanently deleted a Flex user's HW preference.
+    // MainWindow applies the same mask to the widget and to the radio push; all
+    // this has to do is re-render the button. (#4600)
+    applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);
+}
+
 void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
 {
-    m_autoBlackMode = mode;
+    // Intent keeps the full 0..2 range even while HW is masked off, so coming
+    // back to a Flex restores HW without the operator re-selecting it.
+    m_autoBlackMode = std::clamp(mode, 0, 2);
+    mode = effectiveAutoBlackMode();
     const bool autoOn    = (mode != 0);
     const bool radioSide = (mode == 2);
 
@@ -2029,11 +2075,29 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
         // SW = client-side (software) estimate, HW = radio's (hardware) level —
         // short labels that fit the compact button.
         m_autoBlackBtn->setText(mode == 0 ? "Off" : mode == 1 ? "SW" : "HW");
-        m_autoBlackBtn->setToolTip(
-            "Waterfall auto-black (click to cycle):\n"
-            "Off = manual black level\n"
-            "SW = client-side noise-floor estimate (software)\n"
-            "HW = radio's per-tile auto-black level (hardware)");
+        m_autoBlackBtn->setToolTip(m_radioSideAutoBlackAvailable
+            ? QStringLiteral(
+                "Waterfall auto-black (click to cycle):\n"
+                "Off = manual black level\n"
+                "SW = client-side noise-floor estimate (software)\n"
+                "HW = radio's per-tile auto-black level (hardware)")
+            : QStringLiteral(
+                "Waterfall auto-black (click to cycle):\n"
+                "Off = manual black level\n"
+                "SW = client-side noise-floor estimate (software)\n"
+                "This radio computes no black level of its own, so there is no "
+                "hardware option."));
+        // Kiwi mode owns its own wording (setKiwiWaterfallControlMode); outside
+        // it, keep the spoken description in step with the gate the same way the
+        // tooltip is, so the two cannot disagree about whether HW exists.
+        if (!m_kiwiWaterfallControlMode) {
+            m_autoBlackBtn->setAccessibleDescription(m_radioSideAutoBlackAvailable
+                ? tr("Cycles the waterfall auto-black mode: off (manual black "
+                     "level), software noise-floor estimate, or hardware level.")
+                : tr("Cycles the waterfall auto-black mode: off (manual black "
+                     "level) or software noise-floor estimate. This radio "
+                     "computes no black level of its own."));
+        }
     }
     if (m_blackSlider) {
         QSignalBlocker bs(m_blackSlider);
@@ -2234,10 +2298,17 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
         m_autoBlackBtn->setToolTip(kiwiMode
             ? "Apply the KiwiSDR automatic waterfall floor and ceiling scale."
             : "Use the measured noise floor for waterfall black level.");
+        // The non-Kiwi wording tracks the capability gate, like the tooltip:
+        // announcing a hardware position a screen-reader user cannot reach is
+        // worse than not mentioning it. (#4600)
         m_autoBlackBtn->setAccessibleDescription(kiwiMode
             ? tr("Applies the computed KiwiSDR waterfall floor and ceiling levels.")
-            : tr("Cycles the waterfall auto-black mode: off (manual black "
-                 "level), software noise-floor estimate, or hardware level."));
+            : (m_radioSideAutoBlackAvailable
+                ? tr("Cycles the waterfall auto-black mode: off (manual black "
+                     "level), software noise-floor estimate, or hardware level.")
+                : tr("Cycles the waterfall auto-black mode: off (manual black "
+                     "level) or software noise-floor estimate. This radio "
+                     "computes no black level of its own.")));
         if (kiwiMode) {
             m_autoBlackBtn->setCheckable(true);
             m_autoBlackBtn->setText("Auto");

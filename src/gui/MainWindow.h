@@ -370,7 +370,7 @@ private:
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
     // as pans appear, and those sites must seed a new menu with the current
     // value — the same reason applyTuningRangeToOverlayMenu() exists.
-    void applyRadioSideDspToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    void applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const;
 
     // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
     //

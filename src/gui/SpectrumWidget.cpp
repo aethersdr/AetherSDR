@@ -78,6 +78,7 @@
 #include <memory>
 #include <utility>
 #include "core/ThemeManager.h"
+#include "core/WaterfallRate.h"
 
 namespace AetherSDR {
 
@@ -580,51 +581,21 @@ static_assert(ratePercentToLineDuration(100) == 100);
 static_assert(lineDurationToRatePercent(1) == 1);
 static_assert(lineDurationToRatePercent(100) == 100);
 
-static float lineDurationToVisualMsPerRow(int lineDurationMs)
+// The rate-to-cadence laws live in core/WaterfallRate.h, because RadioModel's
+// row pacer has to agree with this axis exactly — a backend that shapes its own
+// display rate reads the same number and must land on the same cadence.
+//
+// `shapedLocally` picks WHICH law, and it matters: the two disagree by more than
+// an order of magnitude in the middle of the slider. Seeding a locally-paced
+// waterfall from the Flex curve would claim 677 ms/row where the pacer is
+// actually producing 79. Only a seed — real row timestamps take over within a
+// second (see the measured-cadence cache below) — but a wrong seed is a visible
+// jump in the time axis on every rate change.
+static float lineDurationToVisualMsPerRow(int lineDurationMs, bool shapedLocally)
 {
-    const int clamped = std::clamp(lineDurationMs,
-                                   kWaterfallLineDurationMinMs,
-                                   kWaterfallLineDurationMaxMs);
-    struct RateCalibration {
-        int ratePercent;
-        float msPerRow;
-    };
-    static constexpr RateCalibration kMeasuredRateCurve[] = {
-        {1, 6000.0f},
-        {8, 4000.9f},
-        {50, 677.2f},
-        {56, 473.2f},
-        {67, 223.0f},
-        {69, 192.1f},
-        {71, 163.9f},
-        {75, 120.7f},
-        {77, 102.0f},
-        {78, 90.5f},
-        {79, 88.8f},
-        {80, 81.2f},
-        {83, 64.2f},
-        {90, 46.3f},
-        {93, 42.0f},
-        {100, 42.0f},
-    };
-
-    if (clamped <= kMeasuredRateCurve[0].ratePercent) {
-        return kMeasuredRateCurve[0].msPerRow;
-    }
-    constexpr int kMeasuredRateCurveSize =
-        static_cast<int>(sizeof(kMeasuredRateCurve) / sizeof(kMeasuredRateCurve[0]));
-    for (int i = 1; i < kMeasuredRateCurveSize; ++i) {
-        const RateCalibration& lower = kMeasuredRateCurve[i - 1];
-        const RateCalibration& upper = kMeasuredRateCurve[i];
-        if (clamped <= upper.ratePercent) {
-            const float fraction = static_cast<float>(clamped - lower.ratePercent)
-                / static_cast<float>(upper.ratePercent - lower.ratePercent);
-            const float lowerLog = std::log(lower.msPerRow);
-            const float upperLog = std::log(upper.msPerRow);
-            return std::exp(lowerLog + (upperLog - lowerLog) * fraction);
-        }
-    }
-    return kMeasuredRateCurve[kMeasuredRateCurveSize - 1].msPerRow;
+    return shapedLocally
+        ? AetherSDR::WaterfallRate::localMsPerRow(lineDurationMs)
+        : AetherSDR::WaterfallRate::flexMsPerRow(lineDurationMs);
 }
 
 static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& lhs,
@@ -4069,6 +4040,24 @@ void SpectrumWidget::setRadioAutoBlackLevel(quint32 rawLevel) {
     m_radioAutoBlackRaw = v;
     update();
 }
+void SpectrumWidget::setRadioSideAutoBlackAvailable(bool available) {
+    if (available == m_radioSideAutoBlackAvailable) {
+        return;
+    }
+    m_radioSideAutoBlackAvailable = available;
+    // No AppSettings write here, and that is load-bearing rather than an
+    // oversight. This is a fact about the radio currently attached, not a choice
+    // the operator made; persisting it would let one session on an HL2 delete a
+    // Flex user's HW preference for good. Intent stays put and the mask decides
+    // what runs. (#4600)
+    if (!available) {
+        // A radio-supplied level cannot arrive on this backend, and a stale one
+        // from the previous radio must not keep driving the floor.
+        m_radioAutoBlackRaw = 0.0f;
+    }
+    update();
+}
+
 void SpectrumWidget::setWfAutoBlackRadioSide(bool radioSide) {
     if (radioSide == m_wfAutoBlackRadioSide) {
         return;
@@ -4084,6 +4073,21 @@ void SpectrumWidget::setWfAutoBlackRadioSide(bool radioSide) {
     }
     update();
 }
+void SpectrumWidget::setWfRateShapedLocally(bool shapedLocally) {
+    if (m_wfRateShapedLocally == shapedLocally) {
+        return;
+    }
+    m_wfRateShapedLocally = shapedLocally;
+    // The cached per-rate measurements were taken under the other law and are
+    // now claims about a cadence this pan no longer produces. Re-seed from the
+    // law that applies and let measurement rebuild the cache.
+    m_wfMeasuredMsPerRowByLineDuration.clear();
+    m_wfMeasuredSampleCountByLineDuration.clear();
+    m_wfHasMeasuredMsPerRow = false;
+    resetWfTimeScale();
+    markOverlayDirty();
+}
+
 void SpectrumWidget::setWfLineDuration(int ms) {
     const int clamped = std::clamp(ms, kWaterfallLineDurationMinMs, kWaterfallLineDurationMaxMs);
     if (m_wfLineDuration == clamped) {
@@ -4549,7 +4553,8 @@ void SpectrumWidget::resetWfTimeScale() {
     const int lineDuration = std::clamp(m_wfLineDuration,
                                         kWaterfallLineDurationMinMs,
                                         kWaterfallLineDurationMaxMs);
-    const float previewMsPerRow = lineDurationToVisualMsPerRow(lineDuration);
+    const float previewMsPerRow =
+        lineDurationToVisualMsPerRow(lineDuration, m_wfRateShapedLocally);
     const auto measuredIt = m_wfMeasuredMsPerRowByLineDuration.constFind(lineDuration);
     const bool hasMeasured = measuredIt != m_wfMeasuredMsPerRowByLineDuration.constEnd();
     float estimatedMsPerRow = hasMeasured ? *measuredIt : previewMsPerRow;
@@ -11526,7 +11531,7 @@ float SpectrumWidget::intensityToWaterfallLevel(float intensity) const
     // <50 darker, >50 lighter.
     float blackThresh;   // low point  (intensity domain)
     float rangeWidth;    // high − low (intensity domain)
-    if (m_wfAutoBlack && m_wfAutoBlackRadioSide && m_radioAutoBlackRaw > 0.0f) {
+    if (m_wfAutoBlack && effectiveWfAutoBlackRadioSide() && m_radioAutoBlackRaw > 0.0f) {
         // Clamp once so the black point, white point, and range all derive from
         // the same low value — the offset can push lowRaw out of [0, 65535].
         const float lowRaw = qBound(
