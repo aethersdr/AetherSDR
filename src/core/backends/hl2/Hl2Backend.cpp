@@ -270,17 +270,34 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // RadioModel::onConnected() stages every existing model as "previous
         // session" leftovers, so anything emitted earlier is wiped before the UI
         // ever sees it (slice panel stuck empty / 0.000000).
-        // ORDER MATTERS: assert the radio's state BEFORE publishing it.
+        // ORDER MATTERS, in two directions, and they pull against each other.
         //
         // pushInitialState() derives the passband from the mode and updates the
-        // members that emitSliceState() then publishes. Run the other way round
-        // — as this was — and the slice is told the stale members, so a fresh
-        // USB connect showed DIGU's 150..3000 while the backend itself had since
-        // corrected to 100..2900. The radio was right and the UI was wrong, which
-        // is the harder direction to notice.
+        // members that emitSliceState() then publishes. Publish before deriving
+        // — as this originally did — and the slice is told the stale members, so
+        // a fresh USB connect showed DIGU's 150..3000 while the backend itself
+        // had corrected to 100..2900. The radio was right and the UI was wrong,
+        // which is the harder direction to notice.
+        //
+        // But pushInitialState() ALSO reports this pan's zoom limits, and
+        // RadioModel drops that report when no PanadapterModel resolves: its
+        // panBandwidthLimitsChanged handler does `if (!pan) return;` with no
+        // materialisation, and onConnected() — synchronous inside emit
+        // connected() above — just ran stageSessionModelsForReconnect(), which
+        // clears m_panadapters AND m_activePanId. Only emitPanState()'s
+        // panCenterBandwidthChanged materialises our pan.
+        //
+        // So emitPanState() has to come FIRST: the pan must exist before
+        // anything describes it. Otherwise the limits are dropped for the whole
+        // session, nothing re-emits them, and SpectrumWidget keeps the FlexLib
+        // fallback of 5.4 MHz — fourteen times the widest window this receiver
+        // has, which is the black-bar over-zoom #4470 fixed.
+        //
+        // emitPanState() reads only m_ncoHz and m_sampleRateHz, neither of which
+        // pushInitialState() touches, so hoisting it changes nothing else.
+        emitPanState();
         pushInitialState();
         emitSliceState();
-        emitPanState();
         defineMeters();
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
@@ -427,6 +444,10 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         emit connectionError(QStringLiteral("HL2: invalid host '%1'").arg(request.host));
         return;
     }
+
+    // A new connect re-derives the passband from the mode; a mid-session linkUp
+    // (EP6 silence then resume) does not. See m_passbandDerivedThisConnect.
+    m_passbandDerivedThisConnect = false;
 
     // The span the operator last chose, snapped to a rate we can actually run
     // and to the current low-bandwidth ceiling. Applied BEFORE the explicit
@@ -1193,23 +1214,41 @@ void Hl2Backend::pushInitialState()
     // resetting here silently undid it and the radio transmitted at drive 0
     // with the PA disabled. Caught by measurement: forward power went to 0.
 
+    // Derive the passband from the MODE, not from the members.
+    //
+    // The member defaults (150..3000) correspond to no mode at all — they happen
+    // to equal the unmapped-mode fallback — so a fresh connect in the default USB
+    // left the radio with DIGU's passband while the mode indicator read USB. Same
+    // category as the mode-change stickiness in HERMES.md 15.7: mode and passband
+    // must agree, and CONNECT is a place they can disagree just as easily as a
+    // mode change.
+    //
+    // Found by radiocert's mode-map stage: 150..3000 for USB at connect,
+    // 100..2900 for the same mode once any other mode had intervened.
+    //
+    // OUTSIDE the m_dsp guard: these are the backend's OWN members, published by
+    // emitSliceState() and read by sliceDetail(), so with a null m_dsp the UI
+    // would still be told 150..3000 for USB — the very bug this fixes.
+    //
+    // ONCE PER CONNECT, not once per linkUp. pushInitialState() runs on every
+    // linkUp, and MetisClient re-emits that after a silence timeout without any
+    // new connectRadio(): onWatchdogTick() clears m_linkUp on EP6 silence while
+    // m_running stays true, then resuming EP6 fires linkUp again. Deriving
+    // unconditionally there would reset an operator's own filter edit — say
+    // 300..2400 on USB — after a few seconds of packet loss, which contradicts
+    // the override-preservation rule setSliceMode() documents ("adopted on
+    // CHANGE only, so an operator's own filter edit survives"). A reconnect is a
+    // new session and should re-derive; a transient glitch is not.
+    if (!m_passbandDerivedThisConnect) {
+        const auto [pbLowHz, pbHighHz] = defaultPassbandForMode(m_mode);
+        m_filterLowHz = pbLowHz;
+        m_filterHighHz = pbHighHz;
+        m_passbandDerivedThisConnect = true;
+    }
+
     if (m_dsp) {
         QMetaObject::invokeMethod(m_dsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(m_mode)));
-        // Derive the passband from the MODE, not from the members.
-        //
-        // The member defaults (150..3000) correspond to no mode at all — they
-        // happen to equal the unmapped-mode fallback — so a fresh connect in the
-        // default USB left the radio with DIGU's passband while the mode
-        // indicator read USB. Same category as the mode-change stickiness in
-        // HERMES.md 15.7: mode and passband must agree, and CONNECT is a place
-        // they can disagree just as easily as a mode change.
-        //
-        // Found by radiocert's mode-map stage: 150..3000 for USB at connect,
-        // 100..2900 for the same mode once any other mode had intervened.
-        const auto pb = defaultPassbandForMode(m_mode);
-        m_filterLowHz = pb.first;
-        m_filterHighHz = pb.second;
         QMetaObject::invokeMethod(m_dsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(m_filterLowHz)),
             Q_ARG(double, static_cast<double>(m_filterHighHz)));

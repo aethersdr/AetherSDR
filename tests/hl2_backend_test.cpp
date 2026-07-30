@@ -21,6 +21,7 @@
 #include <QHostAddress>
 #include <QNetworkDatagram>
 #include <QScopeGuard>
+#include <QStringList>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QUdpSocket>
@@ -156,8 +157,29 @@ int main(int argc, char** argv)
     qsizetype lastSpecBytes = 0;
     QObject::connect(&backend, &IRadioBackend::spectrumFrameReady, &backend,
                      [&](int, const QByteArray& ba) { ++specCount; lastSpecBytes = ba.size(); });
+    // The passband the FIRST slice report carries, and the order in which the pan
+    // is announced versus described. Both are connect-time-only facts, so they
+    // have to be captured from before connectRadio().
+    int firstFilterLow = -1, firstFilterHigh = -1;
+    QStringList panEventOrder;
     QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
-                     [&](int, const SliceDelta&) { ++sliceCount; });
+                     [&](int, const SliceDelta& d) {
+                         if (sliceCount == 0) {
+                             if (d.filterLow)  firstFilterLow  = *d.filterLow;
+                             if (d.filterHigh) firstFilterHigh = *d.filterHigh;
+                         }
+                         ++sliceCount;
+                     });
+    QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged, &backend,
+                     [&](const QString&, double, double) {
+                         if (!panEventOrder.contains(QStringLiteral("geometry")))
+                             panEventOrder << QStringLiteral("geometry");
+                     });
+    QObject::connect(&backend, &IRadioBackend::panBandwidthLimitsChanged, &backend,
+                     [&](const QString&, double, double) {
+                         if (!panEventOrder.contains(QStringLiteral("limits")))
+                             panEventOrder << QStringLiteral("limits");
+                     });
 
     // ---- connect ----
     RadioConnectRequest req;
@@ -231,6 +253,28 @@ int main(int argc, char** argv)
                   && qFuzzyCompare(limitsSpy.first().at(2).toDouble(), 0.384),
               "reported limits are the real rate range, 48 kHz .. 384 kHz");
     }
+
+    // ---- the pan is ANNOUNCED before it is DESCRIBED ----
+    //
+    // RadioModel materialises the HL2's PanadapterModel from
+    // panCenterBandwidthChanged; its panBandwidthLimitsChanged handler is
+    // `if (!pan) return;` with no materialisation. onConnected() clears
+    // m_panadapters and m_activePanId synchronously inside emit connected(), so
+    // limits reported before the geometry are dropped for the whole session and
+    // nothing re-emits them — leaving the 5.4 MHz FlexLib fallback and the
+    // black-bar over-zoom. Ordering is the invariant, so assert the ordering.
+    check(panEventOrder == QStringList({QStringLiteral("geometry"),
+                                        QStringLiteral("limits")}),
+          "pan geometry is reported BEFORE the pan's zoom limits");
+
+    // ---- a fresh connect derives the passband from the MODE ----
+    //
+    // The member defaults are 150..3000, which is DIGU's passband and no other
+    // mode's. Publishing them verbatim on a default-USB connect told the UI
+    // DIGU's filter while the mode indicator read USB, and the radio was the
+    // side that was right. USB is 100..2900.
+    check(firstFilterLow == 100 && firstFilterHigh == 2900,
+          "first slice report carries USB's passband (100..2900), not the 150..3000 defaults");
 
     // ---- a span request snaps to a rate the DDC can actually run ----
     //

@@ -132,12 +132,20 @@ private:
     QTimer* m_bandwidthThrottle = nullptr;
     double m_pendingBandwidthHz = 0.0;   // 0 = nothing coalesced
     QString m_mode = QStringLiteral("USB");
-    // Overwritten from defaultPassbandForMode(m_mode) at connect. Do not treat
-    // these initial values as a mode's passband — they match no mode, and when
+    // Overwritten from defaultPassbandForMode(m_mode) on the first linkUp of
+    // each connect. Do not treat these initial values as a mode's passband —
+    // they match no mode (they equal the unmapped-mode fallback), and when
     // pushInitialState() sent them verbatim a fresh USB connect got DIGU's
     // filter with the mode indicator reading USB.
     int m_filterLowHz = 150;
     int m_filterHighHz = 3000;
+    // Has this connect already derived the passband from the mode?
+    //
+    // pushInitialState() runs on every linkUp, and MetisClient re-emits linkUp
+    // after an EP6 silence timeout with no new connectRadio(). Without this the
+    // derivation would reset an operator's own filter edit on a transient glitch.
+    // Cleared in connectRadio(), so a genuine reconnect re-derives.
+    bool m_passbandDerivedThisConnect = false;
     int m_lnaGainDb = 20;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
