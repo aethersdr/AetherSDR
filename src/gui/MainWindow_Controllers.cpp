@@ -2763,6 +2763,7 @@ void MainWindow::wireExternalControllers()
                 id == QLatin1String(kCwLeftPaddleActionId) ||
                 id == QLatin1String(kCwRightPaddleActionId)) {
                 if (!m_radioModel.isConnected()) return;
+                if (action != 1 && action != 0) return;
                 const bool down = (action == 1);
                 const quint64 sourceMs = cwTraceNowMs();
                 const quint64 traceId = nextCwTraceId();
@@ -2798,6 +2799,7 @@ void MainWindow::wireExternalControllers()
                 if (action != 1) return;
                 p->setter(p->rangeMax);
             } else if (p->type == MidiParamType::Gate) {
+                if (action != 1 && action != 0) return;
                 p->setter(action == 1 ? p->rangeMax : p->rangeMin);
             }
         }

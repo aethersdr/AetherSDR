@@ -231,9 +231,20 @@ void EvdevEncoderManager::onReadable()
         ssize_t n = ::read(m_fd, ev, sizeof(ev));
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-            qCWarning(lcDevices) << "EvdevEncoderManager: read failed on" << m_devicePath
-                                 << strerror(errno);
+            if (errno == ENODEV) {
+                qCInfo(lcDevices) << "EvdevEncoderManager: device removed";
+            } else {
+                qCWarning(lcDevices) << "EvdevEncoderManager: read failed on" << m_devicePath
+                                     << std::strerror(errno);
+            }
             closeFd();
+            m_rescanTimer->start();
+            return;
+        }
+        if (n == 0) {
+            qCInfo(lcDevices) << "EvdevEncoderManager: EOF on" << m_devicePath;
+            closeFd();
+            m_rescanTimer->start();
             return;
         }
         size_t count = static_cast<size_t>(n) / sizeof(struct input_event);
