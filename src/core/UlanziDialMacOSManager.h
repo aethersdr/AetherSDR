@@ -49,6 +49,8 @@ private:
     bool m_ctrlDown{false};
     int  m_lastNonModKey{-1};
     bool m_prevsongAlongsideCtrl{false};
+    int  m_suppressReleaseNonModKey{-1};
+    bool m_suppressReleasePrevsong{false};
 
     // Static C-API callback shims forward to the instance via context.
     static void hidValueCb(void* ctx, int /*result*/, void* /*sender*/, void* value);

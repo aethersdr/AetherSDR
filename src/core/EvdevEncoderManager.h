@@ -84,6 +84,8 @@ private:
     bool m_ctrlDown{false};
     int m_lastNonModKey{-1};        // most recent non-mod key while Ctrl held
     bool m_prevsongAlongsideCtrl{false};  // KEY_PREVIOUSSONG present in chord window
+    int m_suppressReleaseNonModKey{-1};   // suppress trailing bare release for non-mod key
+    bool m_suppressReleasePrevsong{false}; // suppress trailing bare release for KEY_PREVIOUSSONG
 };
 
 } // namespace AetherSDR

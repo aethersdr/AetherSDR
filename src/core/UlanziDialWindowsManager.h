@@ -74,6 +74,8 @@ private:
     bool m_ctrlDown{false};
     int  m_lastNonModKey{-1};
     bool m_prevsongAlongsideCtrl{false};
+    int  m_suppressReleaseNonModKey{-1};
+    bool m_suppressReleasePrevsong{false};
 
     static constexpr int POLL_INTERVAL_MS    = 5;
     static constexpr int HOTPLUG_INTERVAL_MS = 3000;

@@ -216,6 +216,8 @@ void EvdevEncoderManager::closeFd()
         m_ctrlDown = false;
         m_lastNonModKey = -1;
         m_prevsongAlongsideCtrl = false;
+        m_suppressReleaseNonModKey = -1;
+        m_suppressReleasePrevsong = false;
         if (!name.isEmpty())
             emit connectionChanged(false, name);
     }
@@ -229,30 +231,17 @@ void EvdevEncoderManager::onReadable()
         ssize_t n = ::read(m_fd, ev, sizeof(ev));
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-            // ENODEV typically means the BT dial disconnected.
-            if (errno == ENODEV) {
-                qCInfo(lcDevices) << "EvdevEncoderManager: device removed";
-                closeFd();
-                m_rescanTimer->start();  // wait for hot-plug re-add
-                return;
-            }
-            qCWarning(lcDevices) << "EvdevEncoderManager: read err"
-                                 << std::strerror(errno);
+            qCWarning(lcDevices) << "EvdevEncoderManager: read failed on" << m_devicePath
+                                 << strerror(errno);
             closeFd();
             return;
         }
-        if (n == 0) break;
-        const int count = static_cast<int>(n / sizeof(input_event));
-        for (int i = 0; i < count; ++i) {
-            const struct input_event& e = ev[i];
-            if (e.type != EV_KEY) continue;
+        size_t count = static_cast<size_t>(n) / sizeof(struct input_event);
+        for (size_t i = 0; i < count; ++i) {
+            if (ev[i].type != EV_KEY) continue;
+            const int keycode = ev[i].code;
+            const int value   = ev[i].value;
 
-            const int keycode = e.code;
-            const int value   = e.value;  // 0 = release, 1 = press, 2 = autorepeat
-
-            // Rotary: emit a tick per press or autorepeat tick.  The
-            // ~30 Hz autorepeat rate from the dial firmware gives a
-            // natural acceleration feel under continuous rotation.
             if (keycode == kRotaryCwKey) {
                 if (value == 1 || value == 2) emit tuneSteps(+1);
                 continue;
@@ -279,20 +268,41 @@ void EvdevEncoderManager::onReadable()
             }
 
             // PREVIOUSSONG can arrive alongside a Ctrl chord (Mode Cycle
-            // emits Ctrl+Y+KEY_PREVIOUSSONG as a compound).  Track that
-            // it was present during a chord window so we can emit the
-            // compound signature.
-            if (keycode == KEY_PREVIOUSSONG && m_ctrlDown && value == 1) {
-                m_prevsongAlongsideCtrl = true;
-                continue;
-            }
-            if (keycode == KEY_PREVIOUSSONG && m_ctrlDown && value == 0) {
-                // chord-window release; handled when Ctrl + non-mod release
+            // emits Ctrl+Y+KEY_PREVIOUSSONG as a compound).
+            if (keycode == KEY_PREVIOUSSONG) {
+                if (m_ctrlDown) {
+                    if (value == 1) {
+                        m_prevsongAlongsideCtrl = true;
+                        m_suppressReleasePrevsong = true;
+                    } else if (value == 0) {
+                        m_suppressReleasePrevsong = false;
+                    }
+                    continue;
+                }
+                if (m_suppressReleasePrevsong) {
+                    if (value == 0) {
+                        m_suppressReleasePrevsong = false;
+                    } else if (value == 1) {
+                        m_suppressReleasePrevsong = false;
+                    }
+                    if (value == 0) continue; // suppress trailing release from chord
+                }
+                if (value == 1 || value == 0) {
+                    emit buttonEvent(bareKeySignature(keycode), value);
+                }
                 continue;
             }
 
             // Bare key press/release (no Ctrl).
             if (!m_ctrlDown) {
+                if (keycode == m_suppressReleaseNonModKey) {
+                    if (value == 0) {
+                        m_suppressReleaseNonModKey = -1;
+                    } else if (value == 1) {
+                        m_suppressReleaseNonModKey = -1;
+                    }
+                    if (value == 0) continue; // suppress trailing release from chord
+                }
                 if (value == 1 || value == 0) {
                     emit buttonEvent(bareKeySignature(keycode), value);
                 }
@@ -302,11 +312,13 @@ void EvdevEncoderManager::onReadable()
             // Ctrl is down — this is a chord.
             if (value == 1) {
                 m_lastNonModKey = keycode;
+                m_suppressReleaseNonModKey = keycode;
                 emit buttonEvent(chordSignature(keycode, m_prevsongAlongsideCtrl), 1);
             } else if (value == 0 && keycode == m_lastNonModKey) {
                 emit buttonEvent(chordSignature(keycode, m_prevsongAlongsideCtrl), 0);
                 m_lastNonModKey = -1;
                 m_prevsongAlongsideCtrl = false;
+                m_suppressReleaseNonModKey = -1;
             }
         }
     }

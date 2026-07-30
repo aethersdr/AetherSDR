@@ -193,6 +193,8 @@ void UlanziDialMacOSManager::onDeviceRemoval()
     m_ctrlDown = false;
     m_lastNonModKey = -1;
     m_prevsongAlongsideCtrl = false;
+    m_suppressReleaseNonModKey = -1;
+    m_suppressReleasePrevsong = false;
     emit connectionChanged(false, name);
 }
 
@@ -227,25 +229,50 @@ void UlanziDialMacOSManager::emitKeyTransition(int linuxKey, int value)
         }
         return;
     }
-    if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 1) {
-        m_prevsongAlongsideCtrl = true;
-        return;
-    }
-    if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 0) {
+    if (linuxKey == KEY_PREVIOUSSONG) {
+        if (m_ctrlDown) {
+            if (value == 1) {
+                m_prevsongAlongsideCtrl = true;
+                m_suppressReleasePrevsong = true;
+            } else if (value == 0) {
+                m_suppressReleasePrevsong = false;
+            }
+            return;
+        }
+        if (m_suppressReleasePrevsong) {
+            if (value == 0) {
+                m_suppressReleasePrevsong = false;
+            } else if (value == 1) {
+                m_suppressReleasePrevsong = false;
+            }
+            if (value == 0) return;
+        }
+        if (value == 1 || value == 0)
+            emit buttonEvent(bareKeySignature(linuxKey), value);
         return;
     }
     if (!m_ctrlDown) {
+        if (linuxKey == m_suppressReleaseNonModKey) {
+            if (value == 0) {
+                m_suppressReleaseNonModKey = -1;
+            } else if (value == 1) {
+                m_suppressReleaseNonModKey = -1;
+            }
+            if (value == 0) return;
+        }
         if (value == 1 || value == 0)
             emit buttonEvent(bareKeySignature(linuxKey), value);
         return;
     }
     if (value == 1) {
         m_lastNonModKey = linuxKey;
+        m_suppressReleaseNonModKey = linuxKey;
         emit buttonEvent(chordSignature(linuxKey, m_prevsongAlongsideCtrl), 1);
     } else if (value == 0 && linuxKey == m_lastNonModKey) {
         emit buttonEvent(chordSignature(linuxKey, m_prevsongAlongsideCtrl), 0);
         m_lastNonModKey = -1;
         m_prevsongAlongsideCtrl = false;
+        m_suppressReleaseNonModKey = -1;
     }
 }
 
