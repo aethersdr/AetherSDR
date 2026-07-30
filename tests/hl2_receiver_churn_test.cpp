@@ -3,19 +3,24 @@
 // This is the one test in the suite where the operator's "Add Panadapter" and
 // pane-close run against a live stream, and that combination is the whole point.
 //
-// m_rx is read on the I/O thread by the EP6 fan-out — which iterates it and
-// dereferences m_rx[i].dsp for every arriving packet — and is RESHAPED on this
-// thread by createPanadapter()/removePanadapter(). A push_back reallocates and an
-// erase shifts, so either can pull the storage out from under a fan-out that is
-// halfway through it. Hl2Backend::fenceIo() serialises the two by running the
-// mutation on the I/O thread itself.
+// m_rx is RESHAPED on this thread by createPanadapter()/removePanadapter(): a
+// push_back reallocates and an erase shifts. The EP6 fan-out used to iterate that
+// same vector on the I/O thread, dereferencing m_rx[i].dsp for every arriving
+// packet, so either reshape could pull the storage out from under it. The fan-out
+// now works from its own list — see Hl2Backend::publishIoDsps() — and this test
+// exercises the window where the two used to collide.
 //
-// A pass here does NOT prove the serialisation on its own: a use-after-free on a
+// A pass here does NOT prove the separation on its own: a use-after-free on a
 // four-element vector usually reads memory the allocator has handed straight back,
 // and nothing visible happens. What this test does is put the contended window on
-// the wire so a sanitizer can see it. The weekly TSan job
-// (.github/workflows/sanitizers.yml) builds the whole suite with
-// -fsanitize=thread and runs ctest; unfenced, that job reports the race here.
+// the wire so a sanitizer can see it — under -fsanitize=thread, the old fan-out
+// reports the receiver vector as raced from here and the current one does not.
+//
+// Read that as a DIFFERENTIAL, never as a count: QtCore ships uninstrumented, so
+// every Qt::BlockingQueuedConnection in the backend reports as a race whatever the
+// receiver set is doing. hl2_backend_test, which predates this work, reports 57.
+// HERMES §20.15.1 has the full account.
+//
 // Under a plain build, treat the checks below as what they are — churn does not
 // corrupt the receiver set or lose a receiver's signals.
 //
