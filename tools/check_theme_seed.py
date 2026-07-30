@@ -26,9 +26,22 @@ This is a stopgap. The real fix is to GENERATE the seed table from the resource
 at build time so the two cannot disagree; see the tracking issue. Until then
 this pins the current state and stops it widening.
 
+SCOPE — COLOUR TOKENS ONLY. The parser captures QString("#hex") inserts and
+nothing else. Seeds that are not hex colours never enter the comparison and
+can drift silently: the seven font.family.*, four font.size.*, five sizing.*
+values, and color.meter.bar.fillGradient (inserted via QVariant::fromValue(g),
+no literal at all, so it is invisible even to the completeness guard below).
+Three of those non-colour tokens exist on BOTH sides today (font.size.normal,
+sizing.panel.padding, sizing.panel.cornerRadius) and would drift exactly the
+way the colours did. If the parser is ever widened to cover them, switch the
+completeness guard from hex-literal equality to counting tokens.insert(
+occurrences — the two invariants are only correct one at a time (see the
+review reconciliation on PR #4570).
+
 Usage:
     python tools/check_theme_seed.py            # report drift, exit 0
-    python tools/check_theme_seed.py --strict   # exit 1 on any NEW drift
+    python tools/check_theme_seed.py --strict   # exit 1 on NEW drift or a
+                                                #   stale KNOWN_SEED_DRIFT entry
 """
 
 from __future__ import annotations
@@ -64,6 +77,24 @@ THEME_JSON = REPO / "resources" / "themes" / "default-dark.json"
 THEME_CPP = REPO / "src" / "core" / "ThemeManager.cpp"
 
 HEX = r"#[0-9a-fA-F]{3,8}"
+
+
+def normalise_hex(value: str) -> str:
+    """Canonicalise hex colour spellings so equal colours compare equal.
+
+    #fff -> #ffffff, #fabc -> #ffaabbcc, and a fully-opaque leading alpha is
+    dropped (#ffRRGGBB -> #RRGGBB — Qt's alpha is LEADING). Non-hex values
+    pass through untouched so a genuine type mismatch still reads as drift.
+    """
+    v = str(value).strip().lower()
+    if not re.fullmatch(HEX, v):
+        return v
+    digits = v[1:]
+    if len(digits) in (3, 4):                      # short form: double each
+        digits = "".join(ch * 2 for ch in digits)
+    if len(digits) == 8 and digits.startswith("ff"):
+        digits = digits[2:]                        # opaque alpha adds nothing
+    return "#" + digits
 
 
 def flatten(node, prefix: str = "") -> dict:
@@ -129,6 +160,16 @@ def cpp_tokens() -> dict:
                 block.group(2)):
             seeded[(scope, match.group(1))] = match.group(2)
 
+    # A PARTIAL parse is the dangerous failure: renaming m_tokens or reindenting
+    # a scoped block drops tokens while `shared` stays non-zero, so main()'s
+    # zero-token guard never trips and the missing tokens surface as "stale"
+    # baseline entries. Every hex literal in the body must have been captured.
+    expected = len(re.findall(rf'QString\("{HEX}"\)', body))
+    if len(seeded) != expected:
+        raise SystemExit(f"check_theme_seed: captured {len(seeded)} of {expected} "
+                         "seeded colour literals — the parser is out of date with "
+                         "seedBuiltinDefaults(). Refusing to report a clean run.")
+
     return seeded
 
 
@@ -151,19 +192,21 @@ def main() -> int:
 
     drift = [(scope, token, from_cpp[(scope, token)], from_json[(scope, token)])
              for scope, token in shared
-             if str(from_cpp[(scope, token)]).lower()
-             != str(from_json[(scope, token)]).lower()]
+             if normalise_hex(from_cpp[(scope, token)])
+             != normalise_hex(from_json[(scope, token)])]
 
     known = [d for d in drift if (d[0], d[1]) in KNOWN_SEED_DRIFT]
     new = [d for d in drift if (d[0], d[1]) not in KNOWN_SEED_DRIFT]
     stale = sorted(KNOWN_SEED_DRIFT - {(d[0], d[1]) for d in drift})
 
-    print("=== theme seed vs default-dark.json ===")
-    print(f"  tokens compared      : {len(shared)}")
-    print(f"  seeded only in C++   : {len(set(from_cpp) - set(from_json))}")
-    print(f"  present only in JSON : {len(set(from_json) - set(from_cpp))}")
-    print(f"  drifted (known)      : {len(known)}")
-    print(f"  drifted (NEW)        : {len(new)}")
+    # "colour" is load-bearing in these labels: non-colour seeds (fonts,
+    # sizing, the meter gradient) are out of scope — see the module docstring.
+    print("=== theme seed vs default-dark.json (colour tokens) ===")
+    print(f"  colour tokens compared     : {len(shared)}")
+    print(f"  colour seeds only in C++   : {len(set(from_cpp) - set(from_json))}")
+    print(f"  colours present only in JSON: {len(set(from_json) - set(from_cpp))}")
+    print(f"  drifted (known)            : {len(known)}")
+    print(f"  drifted (NEW)              : {len(new)}")
 
     for scope, token, cpp_value, json_value in known:
         print(f"  known  [{scope}] {token}: C++={cpp_value} JSON={json_value}")
@@ -176,12 +219,23 @@ def main() -> int:
         for scope, token in stale:
             print(f"    {scope} / {token}")
 
+    failed = False
     if args.strict and new:
         print(f"\nFAIL: {len(new)} new seed/JSON divergence(s). Update BOTH "
               f"sites, or add to KNOWN_SEED_DRIFT with a reason.")
-        return 1
+        failed = True
+    # Stale entries FAIL strict runs too. A ratchet whose baseline can hold
+    # dead entries silently stops ratcheting — and worse, a parser regression
+    # that drops tokens surfaces AS stale entries, so a green run that says
+    # "empty the baseline" would be actively misleading. Fix the entry (or the
+    # parser) in the same change.
+    if args.strict and stale:
+        print(f"\nFAIL: {len(stale)} stale KNOWN_SEED_DRIFT entr"
+              f"{'y' if len(stale) == 1 else 'ies'} — remove them (or fix the "
+              f"parser, if tokens went missing rather than converged).")
+        failed = True
 
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
