@@ -22,6 +22,19 @@ namespace {
 // exactly, while any genuine reading (0 dBm is already 30 dB below a 1 W
 // carrier) stays on the smoothed path.
 constexpr float kNoCarrierWatts = 0.0011f;
+// Minimum instantaneous forward power for an SWR ratio to mean anything.
+//
+// A radio with no carrier reports 0 dBm on FWDPWR, which is 10^(0/10)/1000 =
+// 0.001 W — small but not zero. SWR is computed from forward and reflected
+// power, so below this there is no power behind the ratio and it saturates:
+// an HL2 published 255.99 and held it. The threshold sits a hair above that
+// floor, and 0 dBm is already 30 dB below a 1 W carrier, so nothing real
+// lives underneath it. (#4533)
+constexpr float kMinForwardWattsForSwr = 0.0011f;
+// NOTE: kNoCarrierWatts (#4540) and kMinForwardWattsForSwr (#4533) share the
+// same numeric floor but answer different questions -- "is a carrier present"
+// versus "is there power behind this ratio" -- and are kept separate so a
+// future change to one cannot silently move the other.
 
 constexpr qint64 kCompressionSummaryLogIntervalMs = 500;
 constexpr qint64 kDirectionalMeterFreshnessMs = 500;
@@ -462,6 +475,31 @@ void MeterModel::logCompressionSummary(const char* reason, bool force)
                       << "available" << m_hasCompPeakValue;
 }
 
+bool MeterModel::swrSampleLive(qint64 nowMs, qint64 swrMaxAgeMs) const
+{
+    // See the declaration for the contract. Order matters: the SWR sample's
+    // own age is always required — a stale ratio is not a measurement no
+    // matter what power is doing (#4533, the 16-minute-old reading).
+    const bool swrFresh = m_lastSwrUpdateMs > 0
+        && (nowMs - m_lastSwrUpdateMs) <= swrMaxAgeMs;
+    if (!swrFresh)
+        return false;
+    // Backend never published forward power (HL2): SWR self-gates upstream.
+    if (m_lastFwdPowerUpdateMs == 0)
+        return true;
+    // Backend does publish power: a fresh ratio with no qualifying power
+    // behind it is two noise samples divided (#4533's saturated 255.99).
+    return (nowMs - m_lastFwdPowerUpdateMs) <= kDirectionalMeterFreshnessMs
+        && m_fwdPowerInstant > kMinForwardWattsForSwr;
+}
+
+std::optional<float> MeterModel::swrIfLive() const
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    return swrSampleLive(now, kTxMeterStaleMs) ? std::optional<float>(m_swr)
+                                               : std::nullopt;
+}
+
 bool MeterModel::hasRecentTxMeters(qint64 maxAgeMs) const
 {
     if (m_lastTxMeterUpdateMs <= 0 || maxAgeMs < 0)
@@ -628,9 +666,43 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         emit meterUpdated(idx, v);
     }
 
+    // SWR as published to consumers. It is derived from forward and reflected
+    // power, so once the TX meters go stale it is not a measurement any more —
+    // it is whatever was last read during a previous transmit, and on a radio
+    // that publishes SWR but no FWDPWR it saturates at 255.99 and stays there
+    // (#4533).
+    //
+    // Gated HERE, at the single point both signals read it, rather than in each
+    // consumer: HealthApplet already qualifies SWR on instantaneous forward
+    // power (#4243), but that gate cannot fire on a backend which never sends
+    // FWDPWR at all, so every such consumer is defeated by the absence of the
+    // very quantity it gates on.
+    //
+    // ⚠ Gate on SWR'S OWN AGE (swrUpdatedAtMs), NOT on forward power and NOT
+    // on hasRecentTxMeters(). The earlier forward-power gate silently zeroed
+    // SWR forever on any backend that publishes SWR without FWDPWR — the HL2
+    // does exactly that, by design (its forward counts are uncalibrated ADC
+    // values; the RATIO survives the unknown scale, which is why its SWR is
+    // the most trustworthy meter it has). "This SWR reading is old" is the
+    // claim this gate makes; power flowing is evidence for a different
+    // proposition, and #4243's HealthApplet already qualifies on power where
+    // power data exists.
+    //
+    // ⚠ The two emits stay CO-EMITTED and in this order — #4243 depends on
+    // directionalPowerMetersChanged landing in the same cycle as
+    // txMetersChanged. Only the values carried change here, never the timing.
+    const bool swrValid =
+        m_swrIdx >= 0
+        && swrSampleLive(packetUpdatedMs, kDirectionalMeterFreshnessMs);
+    // 0.0f is a PLACEHOLDER carried alongside swrValid=false, never a value:
+    // RadioSwrValidityFilter reads <1.0 as the radio's over-range sentinel and
+    // other consumers clamp it to 1.0, so an unaccompanied 0.0f means opposite
+    // things on different surfaces (#4536 review, blocker 2).
+    const float publishedSwr = swrValid ? m_swr : 0.0f;
+
     // sLevelChanged is now emitted per-slice inline above
     if (txChanged)
-        emit txMetersChanged(m_fwdPower, m_swr);
+        emit txMetersChanged(m_fwdPower, publishedSwr, swrValid);
     if (directionalChanged) {
         const bool reflectedPowerMeasured = m_refPwrIdx >= 0
             && m_lastReflectedPowerUpdateMs > 0
@@ -638,7 +710,8 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
                 <= kDirectionalMeterFreshnessMs;
         emit directionalPowerMetersChanged(m_fwdPowerInstant,
                                            m_reflectedPower,
-                                           m_swr,
+                                           publishedSwr,
+                                           swrValid,
                                            reflectedPowerMeasured);
     }
     // Separate signal carries the raw pre-smoothed sample so consumers
@@ -686,9 +759,22 @@ QJsonArray MeterModel::allMeters() const
 {
     QJsonArray meters;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // One predicate for every surface — see swrSampleLive() (#4536).
+    const bool swrFresh = swrSampleLive(now, kTxMeterStaleMs);
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto valueIt = m_values.constFind(it.key());
-        const bool hasValue = valueIt != m_values.constEnd();
+        bool hasValue = valueIt != m_values.constEnd();
+        // SWR is derived from forward and reflected power, so once the TX
+        // meters go stale it is not a measurement any more — it is the last
+        // reading from a previous transmit. Reporting it as a live value sends
+        // the operator hunting for an antenna fault that isn't there (#4533).
+        // Present it the same way FWDPWR/REFPWR already present themselves when
+        // the radio isn't sending them: has_value=false, value=null, age=-1.
+        // Matches the existing gates in RigctlProtocol (which additionally
+        // requires an active transmit) and the Amp/Acom applets, both of which
+        // blank SWR without drive.
+        if (hasValue && it.key() == m_swrIdx && !swrFresh)
+            hasValue = false;
         const qint64 upd = m_valueUpdatedMs.value(it.key(), 0);
         const qint64 ageMs = (hasValue && upd > 0) ? (now - upd) : -1;
         meters.append(meterToJson(*it, hasValue, hasValue ? valueIt.value() : 0.0f, ageMs));
@@ -700,6 +786,8 @@ QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) c
 {
     QJsonArray meters;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // One predicate for every surface — see swrSampleLive() (#4536).
+    const bool swrFresh = swrSampleLive(now, kTxMeterStaleMs);
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const MeterDef& def = *it;
         if (def.source != source)
@@ -708,7 +796,13 @@ QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) c
             continue;
 
         const auto valueIt = m_values.constFind(it.key());
-        const bool hasValue = valueIt != m_values.constEnd();
+        bool hasValue = valueIt != m_values.constEnd();
+        // Same SWR gate as allMeters(). Without it a `tx`-source query answered
+        // has_value=true for the identical meter that `all` reports as absent —
+        // two views of one model disagreeing about the same reading, which is
+        // the disagreement #4533 was filed about rather than a second bug.
+        if (hasValue && it.key() == m_swrIdx && !swrFresh)
+            hasValue = false;
         const qint64 upd = m_valueUpdatedMs.value(it.key(), 0);
         const qint64 ageMs = (hasValue && upd > 0) ? (now - upd) : -1;
         meters.append(meterToJson(def, hasValue, hasValue ? valueIt.value() : 0.0f, ageMs));

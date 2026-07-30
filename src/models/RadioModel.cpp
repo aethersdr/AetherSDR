@@ -9033,7 +9033,31 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     telemetry["pa_temp_c"] = m_meterModel.paTemp();
     telemetry["supply_volts"] = m_meterModel.supplyVolts();
     telemetry["tx_forward_power_w"] = m_meterModel.fwdPower();
-    telemetry["tx_swr"] = m_meterModel.swr();
+    // Null rather than a leftover ratio when the TX meters are stale — this
+    // snapshot feeds support bundles, and a stale SWR reads as a live antenna
+    // fault to whoever opens the report (#4533).
+    if (const auto liveSwr = m_meterModel.swrIfLive())
+        telemetry["tx_swr"] = *liveSwr;
+    else
+        telemetry["tx_swr"] = QJsonValue();
+    // Whether the TX meter group above is current, so the whole group is
+    // interpretable at once.
+    //
+    // tx_forward_power_w is NOT nulled alongside tx_swr, and the asymmetry is
+    // deliberate: forward power is a measured quantity that decays toward zero
+    // and reads zero when the carrier drops, so its last value is meaningful on
+    // its own. SWR is a RATIO derived from it, and a ratio computed from
+    // quantities that are no longer arriving is not a smaller number — it is
+    // undefined, which is why it goes null. Without this flag the pair
+    // `tx_forward_power_w: 5.0, tx_swr: null` invites the reader to conclude
+    // forward power is live and only SWR is missing. (#4533 review)
+    telemetry["tx_meters_fresh"] =
+        m_meterModel.hasRecentTxMeters(MeterModel::kTxMeterStaleMs);
+    // -1 when no TX meter has ever arrived, matching the age convention the
+    // automation bridge's meters snapshot already uses.
+    const qint64 txMetersAtMs = m_meterModel.txMetersUpdatedAtMs();
+    telemetry["tx_meters_age_ms"] =
+        txMetersAtMs > 0 ? QDateTime::currentMSecsSinceEpoch() - txMetersAtMs : -1;
     // SliceTroubleshootingDialog renders this with the literal label
     // "HWALC", so keep it pointed at the external Hardware ALC RCA voltage
     // (m_hwAlc) — the gauge in the Phone/CW applet now uses swAlc().

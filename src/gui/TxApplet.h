@@ -46,7 +46,7 @@ public:
     void setBandPlanManager(BandPlanManager* bandPlan);
 
 public slots:
-    void updateMeters(float fwdPower, float swr);
+    void updateMeters(float fwdPower, float swr, bool swrValid);
     // Capture raw pre-smoothed FWDPWR for PEP peak-hold tick. (#2561)
     void updatePeakPower(float fwdPowerInstant);
     // Reset the peak-hold tick when TX ends so a held peak does not linger

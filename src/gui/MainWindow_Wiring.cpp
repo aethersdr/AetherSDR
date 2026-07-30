@@ -1466,9 +1466,10 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
         vfo->setTxCompression(compPeak);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            vfo, [vfo](float fwd, float swr) {
+            vfo, [vfo](float fwd, float swr, bool swrValid) {
         vfo->setTxPower(fwd);
-        vfo->setTxSwr(swr);
+        // Absent SWR keeps the widget's idle value rather than a stale ratio.
+        vfo->setTxSwr(swrValid ? swr : 0.0f);
     });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             vfo, &VfoWidget::setTransmitting);
@@ -5302,11 +5303,16 @@ void MainWindow::wireMeters()
     // exciter sample here to stop the alternating-writer pulse where exciter
     // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            this, [this](float fwd, float swr) {
+            this, [this](float fwd, float swr, bool swrValid) {
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
+        // Absent SWR is forwarded as 1.0: RadioSwrValidityFilter downstream
+        // reads <1.0 WITH forward power as the radio's over-range sentinel
+        // and would peg the S-meter full-scale on a matched antenna (#4536
+        // review, blocker 2). 1.0 is the meter's rest position.
         m_appletPanel->setStandardRadioMeterTxValues(
-            fwd, m_radioModel.meterModel().fwdPowerInstant(), swr);
+            fwd, m_radioModel.meterModel().fwdPowerInstant(),
+            swrValid ? swr : 1.0f);
 #ifdef HAVE_HIDAPI
         m_tmate2TxWatts = fwd;
         if (m_radioModel.transmitModel().isTransmitting()) {
@@ -5318,13 +5324,15 @@ void MainWindow::wireMeters()
     connect(&m_radioModel.meterModel(),
             &MeterModel::directionalPowerMetersChanged,
             this, [this](float fwd, float reflected, float swr,
-                         bool reflectedPowerMeasured) {
+                         bool swrValid, bool reflectedPowerMeasured) {
         if (m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate()) {
             return;
         }
+        // The cross-needle already clamps sub-1.0 values to 1.0 (its rest
+        // position); absent maps there explicitly rather than by accident.
         m_appletPanel->setCrossNeedleDirectionalValues(
-            fwd, reflected, swr, reflectedPowerMeasured);
+            fwd, reflected, swrValid ? swr : 1.0f, reflectedPowerMeasured);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);

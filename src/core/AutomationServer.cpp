@@ -1900,7 +1900,12 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
          age(m->reflectedPowerUpdatedAtMs())},
         {QStringLiteral("reflectedPowerMeasured"),
          m->hasRecentReflectedPower(500)},
-        {QStringLiteral("swr"),             m->swr()},
+        // Null rather than a stale ratio, matching the SWR entry in `all` and
+        // the fwdPower/reflectedPower pair above — a client reading this scalar
+        // must not get a different answer from the one reading the array
+        // (#4533). swrAgeMs is still reported so a consumer can see WHY.
+        {QStringLiteral("swr"),
+         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C
         {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
@@ -1912,7 +1917,10 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
         {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
         {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
-        {QStringLiteral("txMetersFresh"),   m->hasRecentTxMeters(2000)},
+        // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
+        // SWR is live" cannot drift apart as two different literals.
+        {QStringLiteral("txMetersFresh"),
+         m->hasRecentTxMeters(MeterModel::kTxMeterStaleMs)},
         {QStringLiteral("txMetersAgeMs"),   age(m->txMetersUpdatedAtMs())},
         {QStringLiteral("all"),             all},                     // every meter + age_ms + reliability
     };
