@@ -792,6 +792,11 @@ signals:
     // 24 kHz stereo float32 — the format AudioEngine::feedAudioData expects.
     // Flex never emits this; its audio arrives on the PanadapterStream path.
     void backendAudioFrameReady(const QByteArray& pcm);
+    // ONE slice's demodulated audio, relayed from IRadioBackend. The per-slice
+    // counterpart of backendAudioFrameReady, which is the mixed speaker feed.
+    // Only a backend that demodulates in this process emits it; Flex per-slice
+    // audio arrives as DAX channels instead.
+    void backendSliceAudioFrameReady(int sliceId, const QByteArray& pcm);
 
     // ── The normalized demodulated-RX-audio bus ────────────────────────────
     //

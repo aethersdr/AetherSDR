@@ -504,6 +504,11 @@ void RadioModel::setupBackend(const QString& family)
     connect(m_backend.get(), &IRadioBackend::audioFrameReady,
             this, &RadioModel::backendAudioFrameReady);
 
+    // Per-slice demodulated audio. Signal-to-signal like the mixed feed above:
+    // the payload is already the engine's native format.
+    connect(m_backend.get(), &IRadioBackend::sliceAudioFrameReady,
+            this, &RadioModel::backendSliceAudioFrameReady);
+
     // Pick the one producer for the normalized RX-audio bus. Done here, once
     // per backend, so every consumer of rxDemodAudioReady is family-blind and
     // survives a swap without rewiring. See the signal's header comment.

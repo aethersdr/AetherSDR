@@ -426,6 +426,26 @@ signals:
     // a receiver streaming into a pane nobody is listening to.
     void panRemoved(const QString& panId);
 
+    // ONE SLICE's demodulated RX audio, tagged with the slice it came from.
+    //
+    // The sibling of audioFrameReady, which is the SPEAKER feed — already mixed
+    // down to a single stream, with per-slice mute, level and balance applied.
+    // That is the right shape for the speaker and the wrong shape for every
+    // per-slice consumer: a TCI receiver channel, a decoder, a recorder. They
+    // each need one slice's audio, and asking them to un-mix a sum is not
+    // possible.
+    //
+    // Emitted PRE-mute, PRE-gain and PRE-balance, deliberately. On a Flex these
+    // consumers are fed by DAX, which is a separate plane from the speaker —
+    // muting a slice silences the monitor and the DAX stream a decoder is using
+    // keeps flowing. Applying the speaker's mute here would make muting a slice
+    // stop WSJT-X decoding on it, which is not what the control means.
+    //
+    // Flex does NOT emit this: its per-slice audio already arrives as DAX
+    // channels, which are per-slice by construction. Only a backend that
+    // demodulates in this process has to say which slice a buffer belongs to.
+    void sliceAudioFrameReady(int sliceId, const QByteArray& pcm);
+
 
     // The pan's front end is WIDE: the hardware band filter cannot serve every
     // active receiver at once, so it has been bypassed. On a Flex this is what

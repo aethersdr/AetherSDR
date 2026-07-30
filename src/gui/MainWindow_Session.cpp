@@ -1789,17 +1789,29 @@ void MainWindow::wireCatPorts()
     // never decoded a single signal.
     //
     // The payload is already what onDaxAudioReady expects: float32 interleaved
-    // stereo at 24 kHz (Hl2RxDsp::Config::audioSampleRateHz). Channel 1 is not an
-    // arbitrary pick — with no slice claiming a DAX channel, onDaxAudioReady's
-    // fallback maps channel N to trx N-1, so 1 → trx 0, the single receiver such
-    // a radio advertises in trx_count.
+    // stereo at 24 kHz (Hl2RxDsp::Config::audioSampleRateHz).
     //
-    // Bound to m_radioModel, not the backend, so it survives a family swap; Flex
-    // never emits backendAudioFrameReady, so there is no double-feed.
-    connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
-            this, [this](const QByteArray& pcm) {
+    // PER SLICE, and this used to be hardcoded to channel 1.
+    //
+    // That was correct while such a radio ran ONE receiver: with no slice
+    // claiming a DAX channel, onDaxAudioReady's fallback maps channel N to
+    // trx N-1, so 1 → trx 0, the only receiver advertised in trx_count. With
+    // two receivers it is the bug — nothing ever fed channel 2, so a second TCI
+    // client bound to RX2 got full CAT control and total silence. Worse, the
+    // signal it was fed carries the MIXED speaker audio, so even routed to
+    // channel 2 it would have been the sum of every receiver rather than slice B.
+    //
+    // sliceId + 1 continues the same fallback: slice 0 → channel 1 → trx 0,
+    // slice 1 → channel 2 → trx 1. Single-receiver behaviour is unchanged.
+    //
+    // Bound to m_radioModel, not the backend, so it survives a family swap. Flex
+    // never emits this signal — its per-slice audio arrives as real DAX channels
+    // through wirePanStreamTciSinks() above — so there is no double-feed and no
+    // change to the Flex path.
+    connect(&m_radioModel, &RadioModel::backendSliceAudioFrameReady,
+            this, [this](int sliceId, const QByteArray& pcm) {
         if (tciServer())
-            tciServer()->onDaxAudioReady(1, pcm);
+            tciServer()->onDaxAudioReady(sliceId + 1, pcm);
     });
 
     // TCI client count changes no longer auto-create/remove the audio stream.

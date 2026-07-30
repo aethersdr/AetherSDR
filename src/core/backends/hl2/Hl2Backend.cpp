@@ -509,8 +509,19 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     connect(r->dsp, &Hl2RxDsp::audioReady, this,
             [this, ui](const std::vector<float>& pcm) {
         const auto* ids = m_ids.byUi(ui);
-        if (ids)
-            mixReceiverAudio(ids->ddcIndex, pcm);
+        if (!ids)
+            return;
+        // THIS SLICE's audio, before the mixer touches it. Per-slice consumers
+        // (a TCI receiver channel, a decoder) need one slice's audio and cannot
+        // un-mix the speaker sum. Pre-mute and pre-gain on purpose — see the
+        // signal's comment: muting a slice must not stop WSJT-X decoding on it.
+        //
+        // Emitted even while keyed. The mixer drops keyed audio for the speaker
+        // (we hear our own transmitter), but a per-slice consumer decides that
+        // for itself, and the TX path already mutes the demodulator.
+        emit sliceAudioFrameReady(ids->uiNumber, floatBytes(pcm));
+
+        mixReceiverAudio(ids->ddcIndex, pcm);
     });
 
     connect(r->dsp, &Hl2RxDsp::meterUpdate, this,

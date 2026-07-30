@@ -2439,7 +2439,190 @@ Backend pan ids are now translated through a first-seen-order allocator and stay
 OPAQUE in both directions — `RadioModel` does not parse a family's naming scheme,
 and a backend does not learn about the `0xE1000000` stream-id space.
 
-### 19.10 What is proven, and what is not
+### 19.10 The dynamic lifecycle: receivers come and go while the radio runs
+
+The count was fixed at connect, from a persisted setting. It is now the
+operator's, at runtime: "Add Panadapter" and the pane close button. Connect
+always comes up with ONE receiver.
+
+Retiring the persisted count mattered for a reason beyond tidiness: it made
+connect the only place the count could change, and a saved 4 was re-imposed on
+every connect even at a span that could not carry it.
+
+Changing the count RESTARTS the EP6 stream, deliberately. The count changes the
+payload layout (`6N+2` bytes per round) and the packet carries no
+receiver-count field and no marker for the packet where the change took effect.
+Re-sending the config bank alone leaves a window of milliseconds in which the
+radio has switched layouts and the host has not, and every round in that window
+is misread on EVERY receiver with nothing reporting an error. `metis-stop` /
+reconfigure / `metis-start` makes it a hard edge; the brief audio gap is what
+adding a receiver looks like.
+
+Two things must be re-asserted after a removal, because nothing reads them back:
+
+- **Every surviving receiver's NCO.** They may have moved down a hardware slot
+  and the NCO registers are addressed by that slot.
+- **Transmit ownership**, if it lived on the closed receiver.
+
+### 19.11 Identifier allocation after a removal — the same bug three times
+
+This is the most transferable lesson in the section. Three separate allocators
+picked *the next* identifier instead of *the lowest free* one, which is only
+equivalent while nothing is ever removed. Each failed differently and none
+failed loudly.
+
+| Allocator | Wrong rule | What it produced |
+|---|---|---|
+| Receiver UI number (= seam slice id) | monotonic counter | after 4 open / 3 closed, asked for slice id 4 on a radio whose ids run 0..3 → *"Slice capacity is full"* |
+| Neutral pan index in `RadioModel` | `m_backendPanIndex.size()` | closing 1 of 4 leaves size 3 while index 3 is live → new pan resolved to an EXISTING `PanadapterModel`, no pane created, occupant's frames taken over (`pans=3 slices=4`) |
+| TX / active-slice role indices | kept the stored DDC index | `remove()` renumbers, so closing DDC 0 of three left transmit naming index 2 — now a different receiver |
+
+The UI-number case is worth dwelling on because the wrong choice was
+*deliberate*. The reasoning was "reusing a retired number would give two panes
+the same identity" — which is false, because the retired pane does not exist.
+The cost of that reasoning was real: the UI number IS the seam's slice id, and
+that space is bounded by the radio's slice capacity. Reuse is also what a Flex
+does with its own slice ids, so it matches what every consumer above the seam
+was written against.
+
+**The rule:** an id space with a bounded range and a remove operation must
+allocate lowest-free. `size()` and `++counter` are both wrong, in opposite
+directions.
+
+Related and separate: DDC indices MUST be renumbered on removal (the gateware
+streams `numRx` contiguous receivers and the index is the slot in the EP6
+round), while UI numbers and pan ids must NOT be. `hl2RoleAfterRemove()` states
+the three-case rule once — below the removed index, above it, or on it.
+
+### 19.12 A closing receiver retires its slice AND its pan
+
+`removePanadapter` emitted only `panRemoved`. The `SliceModel` outlived its
+receiver, still naming a pan id that no longer existed, and `slices().size()`
+never fell — so the next create failed a capacity guard against a stale count.
+
+On a backend where a slice IS a receiver, both go. `IRadioBackend::sliceRemoved`
+already existed for the Flex path; it simply had no HL2 emitter.
+
+**Invariant worth asserting directly: pan count and slice count move in
+lockstep on this backend.** Every bug in 19.11 and 19.12 shows up as those two
+numbers disagreeing.
+
+### 19.13 Exactly one: the singular roles
+
+Two roles are singular, and publishing them unconditionally was correct while
+there was one slice and wrong at two.
+
+- **`txSlice`** — one transmitter. Marking every slice as the TX slice is worse
+  than marking none: the interlock finds one whichever pane is selected, and the
+  operator can key from a receiver the TX NCO is not following.
+- **`active`** — one selected slice. `d.active = true` was unconditional, so
+  every slice claimed it. Two slices claiming to be active is
+  indistinguishable from none: tuning across a panadapter moved the right DDC
+  and showed the right frequency on its VFO flag, while the RX Controls applet
+  stayed pointed at a different receiver.
+
+A Flex arbitrates both on the radio and ECHOES the deselection back. Nothing
+echoes here, so the backend has to clear the previous holder itself and
+republish BOTH the old and the new slice. Keep them separate: listening on one
+slice while transmitting on another is routine, so selecting a pane must not
+drag transmit with it.
+
+### 19.14 The recurring failure shape: Flex wire text on a seam backend
+
+Every remaining multi-DDC defect this session had the same shape, and it is
+worth naming because it will recur for every feature added from here.
+
+A control is implemented as Flex wire text (`slice set N active=1`,
+`display panafall create`, `slice set N audio_mute=1`). On a host-demodulating
+backend that text goes nowhere. The control reports success, the model updates,
+and nothing happens to the radio.
+
+The variant that hurts most is **wire text with a completion callback**:
+
+```
+createPansSequentially()  -->  sendCmdPublic("display panafall create", cb)
+                                   cb never runs on a seam backend
+                                   ...so the recursion driving it stops dead
+```
+
+That is why "Add Panadapter → pick a layout" created nothing on an HL2 while
+the bridge's `pan create` worked throughout — the verb goes through
+`RadioModel::createPanadapter()`, the dialog talked to the connection directly.
+One entry point was wired to the seam and the other was not.
+
+Found this way, all fixed the same way (route through the seam / the
+`SliceModel` setter): per-slice mute, level, balance; TX-slice selection;
+active-slice selection; pan creation from the layout dialog; the bridge's
+`slice select`; both TCI guards.
+
+**When adding any control, the question is not "does it work?" but "which of the
+two paths did I test?"** A passing bridge verb proves nothing about the button,
+and vice versa.
+
+Two authority bugs of the same family: `maxPanadapters()` and `maxSlices()` read
+`capabilitiesFor(m_model)`, a FlexLib platform table keyed by model string.
+"Hermes-Lite 2" fell through to a 2-pan default and refused a third receiver on
+a board reporting four. `TciServer`'s own comment had recorded the consequence
+and it was still true.
+
+### 19.15 Certification targets — invariants, and the bridge verbs that check them
+
+Written as propositions rather than steps, because each one is a defect this
+session actually produced. All are reachable from the automation bridge with a
+simulator; none needs hardware.
+
+**Lifecycle and counting**
+
+1. Connect yields exactly one receiver, with no settings file.
+   `get radio` → `panCount == 1 && sliceCount == 1`
+2. `panCount == sliceCount` after EVERY create and remove. The single most
+   productive assertion in this section — 19.11 and 19.12 all violate it.
+3. Adds are refused at the board's reported count, not a model-string default.
+   `pan create` × N → the (N+1)th returns `ok:false`, and the limit in the
+   message equals discovery byte `0x13`.
+4. Closing the last receiver is refused.
+5. Freed ids are reused: open 4, close 3, reopen → slice id 1, not 4.
+6. Closing the MIDDLE of four then reopening fills the gap, and the survivors
+   keep their own numbers. This is the case that caught two separate bugs.
+7. Add/close repeated ~10× leaks no WDSP channel (the pool is 32, shared with
+   transmit).
+
+**Singular roles**
+
+8. Exactly one slice has `txSlice: true`; exactly one has `active: true`.
+   `get slices` → both counts are 1, at every point in a lifecycle sequence.
+9. `slice tx N` moves transmit and CLEARS the previous holder.
+10. `slice select N` sets active and clears the previous holder.
+11. Closing the receiver that owns transmit moves transmit to a survivor,
+    and `get slice tx` still resolves.
+
+**Shared hardware**
+
+12. `pan rfgain <panId> <dB>` changes RF gain on EVERY pan, not the addressed
+    one. One AD9866.
+13. Receivers on one band → filter engaged, `wide: false` on all pans.
+    Receivers spanning bands → `wide: true` on all pans, filter bypassed.
+14. Span is radio-wide: a zoom on one pan reports the same `bandwidthMhz` on all.
+
+**Link budget**
+
+15. Four receivers refuse 384 kHz; three accept it. The reported zoom limits
+    shrink with the receiver count, so a refused span is unreachable from the UI.
+
+**Both paths, every time**
+
+16. For each control, exercise the GUI widget AND the bridge verb. The layout
+    dialog is modal — a synthetic click needs a settle delay before the tile
+    click, or the second click lands on whatever is behind the dialog and the
+    button looks dead.
+
+**Bridge verbs currently sufficient for the above:** `connect`, `pan
+create|remove|rfgain`, `slice select|tx`, `tune`, `get radio|slices|pans|slice`,
+`invoke`, `clickAt`, `dumpTree`, `get_log`. Gaps worth adding when these become
+real certification cases: a verb for per-slice mute/gain/balance (today only
+reachable by clicking the applet), and one for pane pop-out / maximize.
+
+### 19.16 What is proven, and what is not
 
 **Proven against `hpsdrsim -hermeslite2 -P1`:** four receivers configured and
 streaming; four independent NCOs (7.200 / 7.150 / 7.100 / 7.050 MHz);
