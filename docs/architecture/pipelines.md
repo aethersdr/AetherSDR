@@ -107,6 +107,29 @@ independently of microphone callbacks and sends it through a client-owned
 `dax_tx` stream in DIGU. Its dedicated non-voice PTT source suppresses Quindar,
 and the generator holds silence through the unkey edge.
 
+Four conventions in that generator are taken from WSJT-X's `Modulator.cpp`
+rather than invented, because a WSPR frame is judged by decoders we do not own:
+
+- **Tone 0 sits at the requested audio frequency**, with the constellation
+  running upward from it (`m_frequency + itone[isym] * m_toneSpacing`). Centring
+  the four tones on it instead shifts every resulting spot 2.2 Hz low.
+- **Both ends of the frame are tapered** over 0.017 symbols (11.6 ms). WSJT-X
+  fades only the tail; the head ramp is ours. Phase is continuous across symbol
+  boundaries, so these are the only two discontinuities in 111.6 s, and an
+  untapered one is a broadband click in a 200 Hz-wide shared sub-band.
+- **The lead-in is referenced to the slot**, not to whenever the pump started,
+  so scheduling latency is absorbed rather than reported as DT.
+- **A missed boundary truncates the head** of the frame instead of sliding the
+  whole transmission later.
+
+Arming also borrows station state that is not slice state and hands it back on
+stop: the transmit passband, the speech processor, the compander and the TX
+equalizer. None of those are bypassed by selecting DIGU, and all of them
+misshape a constant-envelope tone. Mode and both passbands are re-asserted
+immediately before the key, because a cross-band `slice tune` triggers an
+asynchronous band-stack recall that can land after them (§6.2 of the FlexLib
+oracle; #2824), and arming happens up to 120 s ahead of the key.
+
 TCP COMMAND PIPELINE (bidirectional):
   GUI widget ──→ SliceModel.setXxx() ──→ emit commandReady("slice ...")  [MAIN]
                  TransmitModel          ──→ emit commandReady("xmit ...")

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -103,7 +104,7 @@ void testSampleTimingAndTailSilence()
                            QStringLiteral("FN42"), 37);
     WsprBeacon beacon;
     beacon.prepare(WsprBeacon::kSampleRate);
-    beacon.start(encoded.symbols, 1500.0f, -20.0f, 10);
+    beacon.start(encoded.symbols, 1500.0, -20.0f, 10);
 
     std::vector<int16_t> pcm(20, 1234);
     beacon.process(pcm.data(), 10, 2);
@@ -144,7 +145,7 @@ void testTwentyOneSecondsDoesNotComplete()
                            QStringLiteral("FN42"), 37);
     WsprBeacon beacon;
     beacon.prepare(WsprBeacon::kSampleRate);
-    beacon.start(encoded.symbols, 1500.0f, -20.0f);
+    beacon.start(encoded.symbols, 1500.0, -20.0f);
 
     int64_t remaining =
         WsprBeacon::framesForElapsedNanoseconds(21000000000LL);
@@ -182,7 +183,7 @@ void testIndependentDaxPump()
         }
     });
 
-    engine.wsprBeacon()->start(encoded.symbols, 1500.0f, -20.0f, 0);
+    engine.wsprBeacon()->start(encoded.symbols, 1500.0, -20.0f, 0);
     engine.startWsprPump();
     QEventLoop loop;
     QTimer::singleShot(250, &loop, &QEventLoop::quit);
@@ -203,6 +204,170 @@ void testIndependentDaxPump()
           "stopping the independent pump resets generator state");
 }
 
+// Generate `frames` mono float frames with the pre-roll already spent.
+std::vector<float> generate(const WsprBeacon::Symbols& symbols,
+                            double toneZeroHz, float levelDb, int64_t frames,
+                            int skipFrames = 0)
+{
+    WsprBeacon beacon;
+    beacon.prepare(WsprBeacon::kSampleRate);
+    beacon.start(symbols, toneZeroHz, levelDb, 0, skipFrames);
+    std::vector<float> out(static_cast<size_t>(frames), 0.0f);
+    int64_t done = 0;
+    while (done < frames) {
+        const int block =
+            static_cast<int>(std::min<int64_t>(frames - done, 8192));
+        beacon.process(out.data() + done, block, 1);
+        done += block;
+    }
+    return out;
+}
+
+WsprBeacon::Symbols uniformSymbols(uint8_t value)
+{
+    WsprBeacon::Symbols symbols{};
+    symbols.fill(value);
+    return symbols;
+}
+
+// Positive-going zero crossings, which is one per cycle.
+int countCycles(const std::vector<float>& pcm, int64_t from, int64_t to)
+{
+    int cycles = 0;
+    for (int64_t i = from + 1; i < to; ++i) {
+        if (pcm[static_cast<size_t>(i - 1)] <= 0.0f
+            && pcm[static_cast<size_t>(i)] > 0.0f) {
+            ++cycles;
+        }
+    }
+    return cycles;
+}
+
+// Tone 0 must sit AT the requested frequency with the constellation running
+// upward from it, as in WSJT-X (Modulator.cpp: m_frequency + itone*spacing).
+//
+// The arithmetic is exact and that is what makes this a sharp test: one symbol
+// is 16384/24000 s and one tone step is 12000/8192 Hz, so each step adds
+// exactly ONE cycle per symbol. At 1500 Hz an all-zeros frame is 1024 cycles
+// per symbol on the nose, and all-threes is 1027.
+//
+// The superseded convention centred the four tones on the requested frequency,
+// which put tone 0 at 1497.803 Hz — 1022.5 cycles, and every spot 2.2 Hz low.
+void testToneConventionMatchesWsjtx()
+{
+    // Ten symbols, starting at symbol 1 so the head ramp is behind us. Ten
+    // rather than one because a window edge can land on the crossing sample
+    // itself and cost a count — a ±1 artifact against a 30-cycle signal.
+    constexpr int kSymbols = 10;
+    constexpr int64_t kFrom = WsprBeacon::kFramesPerSymbol;
+    constexpr int64_t kTo = kFrom + kSymbols * WsprBeacon::kFramesPerSymbol;
+    const std::vector<float> tone0 =
+        generate(uniformSymbols(0), 1500.0, -6.0f, kTo);
+    const std::vector<float> tone3 =
+        generate(uniformSymbols(3), 1500.0, -6.0f, kTo);
+
+    // 1500 Hz for ten symbols is 10240 cycles. The superseded centred
+    // convention put tone 0 at 1497.803 Hz — 10225 — so this is 15 cycles
+    // clear of the behaviour it replaced, not a rounding-width assertion.
+    check(std::abs(countCycles(tone0, kFrom, kTo) - 10240) <= 1,
+          "symbol 0 is emitted at the requested frequency, not below it");
+    check(std::abs(countCycles(tone3, kFrom, kTo) - 10270) <= 1,
+          "symbol 3 sits three tone spacings above the requested frequency");
+}
+
+// Both ends of the frame are tapered, so the transmission neither starts nor
+// stops on a step discontinuity. WSJT-X fades its tail over 0.017 symbols
+// (Modulator.cpp); the head ramp is ours, and costs 1.7% of one sync symbol.
+void testFrameEndsAreTapered()
+{
+    const std::vector<float> pcm = generate(
+        uniformSymbols(0), 1500.0, -20.0f, WsprBeacon::kMessageFrames);
+    constexpr float kAmplitude = 0.1f;   // -20 dBFS
+
+    const auto peakOver = [&pcm](int64_t from, int64_t to) {
+        float peak = 0.0f;
+        for (int64_t i = from; i < to; ++i) {
+            peak = std::max(peak, std::abs(pcm[static_cast<size_t>(i)]));
+        }
+        return peak;
+    };
+
+    // Full amplitude through the body.
+    const float body = peakOver(WsprBeacon::kFramesPerSymbol,
+                                2LL * WsprBeacon::kFramesPerSymbol);
+    check(body > kAmplitude * 0.99f && body <= kAmplitude * 1.001f,
+          "body of the frame runs at the requested level");
+
+    // Both ends land near -97 dB. Before the taper existed the final sample
+    // was an arbitrary point on a full-scale sine — a step straight to zero,
+    // which is a broadband click in a 200 Hz-wide shared sub-band.
+    check(peakOver(0, 4) < kAmplitude * 1e-3f,
+          "frame ramps up rather than starting at full amplitude");
+    check(peakOver(WsprBeacon::kMessageFrames - 4,
+                   WsprBeacon::kMessageFrames) < kAmplitude * 1e-3f,
+          "frame is faded out rather than cut at an arbitrary phase");
+
+    // And the taper is confined to the ends — a symbol boundary well inside
+    // the frame must not be attenuated, since phase is continuous there.
+    const float atBoundary = peakOver(
+        80LL * WsprBeacon::kFramesPerSymbol - 64,
+        80LL * WsprBeacon::kFramesPerSymbol + 64);
+    check(atBoundary > kAmplitude * 0.99f,
+          "interior symbol boundaries are not tapered");
+}
+
+// A slot boundary already missed truncates the HEAD of the frame rather than
+// sliding the whole thing later, which is what WSJT-X does with m_ic. The
+// head ramp still applies, because it follows the audio and not the symbol
+// clock — a skipped start is still a start.
+void testLateStartSkipsIntoTheFrame()
+{
+    constexpr int kSkip = WsprBeacon::kSampleRate;   // one second late
+    const std::vector<float> pcm =
+        generate(uniformSymbols(0), 1500.0, -20.0f, 64, kSkip);
+
+    WsprBeacon beacon;
+    beacon.prepare(WsprBeacon::kSampleRate);
+    beacon.start(uniformSymbols(0), 1500.0, -20.0f, 0, kSkip);
+    std::vector<float> one(1, 0.0f);
+    beacon.process(one.data(), 1, 1);
+    check(beacon.currentSymbol() == kSkip / WsprBeacon::kFramesPerSymbol,
+          "a late start resumes at the symbol the slot clock is already on");
+
+    float peak = 0.0f;
+    for (int i = 0; i < 4; ++i) {
+        peak = std::max(peak, std::abs(pcm[static_cast<size_t>(i)]));
+    }
+    check(peak < 0.1f * 1e-3f,
+          "a skipped start is still ramped, not keyed at full amplitude");
+}
+
+// The two process() overloads drive one generator, so they cannot drift.
+void testFloatAndIntegerPathsAgree()
+{
+    constexpr int kFrames = 4096;
+    const WsprBeacon::Symbols symbols = uniformSymbols(2);
+    const std::vector<float> asFloat =
+        generate(symbols, 1500.0, -20.0f, kFrames);
+
+    WsprBeacon beacon;
+    beacon.prepare(WsprBeacon::kSampleRate);
+    beacon.start(symbols, 1500.0, -20.0f, 0);
+    std::vector<int16_t> asInt(kFrames, 0);
+    beacon.process(asInt.data(), kFrames, 1);
+
+    int mismatches = 0;
+    for (int i = 0; i < kFrames; ++i) {
+        const int expected = static_cast<int>(asFloat[static_cast<size_t>(i)]
+                                              * 32767.0f);
+        if (std::abs(expected - asInt[static_cast<size_t>(i)]) > 1) {
+            ++mismatches;
+        }
+    }
+    check(mismatches == 0,
+          "int16 and float outputs agree to within one quantization step");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -212,6 +377,10 @@ int main(int argc, char** argv)
     testValidation();
     testSampleTimingAndTailSilence();
     testTwentyOneSecondsDoesNotComplete();
+    testToneConventionMatchesWsjtx();
+    testFrameEndsAreTapered();
+    testLateStartSkipsIntoTheFrame();
+    testFloatAndIntegerPathsAgree();
     testIndependentDaxPump();
     if (failures == 0) {
         std::puts("WSPR beacon tests passed");
