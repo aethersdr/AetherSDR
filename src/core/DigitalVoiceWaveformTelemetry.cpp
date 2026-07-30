@@ -52,7 +52,8 @@ bool parseBoundedUnsigned(const QHash<QByteArray, QByteArray>& fields,
 
 bool isDegradedDigitalVoiceWaveformHealth(DigitalVoiceWaveformHealth health)
 {
-    return health == DigitalVoiceWaveformHealth::CadenceDegraded
+    return health == DigitalVoiceWaveformHealth::NoInput
+        || health == DigitalVoiceWaveformHealth::CadenceDegraded
         || health == DigitalVoiceWaveformHealth::TransportLoss
         || health == DigitalVoiceWaveformHealth::SourceDeficits;
 }

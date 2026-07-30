@@ -15,6 +15,7 @@
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
 #include "core/AetherDspModePolicy.h"
+#include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
@@ -107,6 +108,7 @@ class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 class SpectrumWidget;
+class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
 class PanadapterStack;
@@ -343,6 +345,24 @@ private:
                                            bool resetOutput,
                                            bool reinitializePcInput);
     SliceModel* activeSlice() const;
+
+    // Push the connected backend's reported tuning range into one overlay
+    // menu's band panel, so bands the radio cannot reach are disabled rather
+    // than tuning it somewhere it hears nothing. A backend that reports no
+    // range leaves every band enabled (the Flex behaviour).
+    void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+
+    // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
+    //
+    // RF gain is the one "display" setting that is really a hardware register,
+    // and its range is family-specific: a Flex's is -8..+32 in 8 dB steps, the
+    // HL2's AD9866 LNA is -12..+48 in 1 dB steps. Sharing one key meant a value
+    // last set on a Flex was restored onto an HL2 as an LNA gain the operator
+    // never chose for that radio — harmless while the HL2 ignored it, real now
+    // that the slider reaches the register.
+    //
+    // Flex keeps the unsuffixed key so existing settings survive untouched.
+    QString rfGainSettingsKey(SpectrumWidget* sw) const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
     BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,
@@ -404,12 +424,19 @@ private:
     // Every stream-bound sink lives in one of these; a new one added here is
     // automatically re-bound after a Flex->HL2->Flex swap.
     void wirePanStreamRxAudioSinks();         // MainWindow_Session.cpp
+    void wireRxDemodAudioSinks();             // MainWindow_Session.cpp
     // True when the connected backend supplies RX audio over the IRadioBackend
     // seam rather than through PanadapterStream — i.e. the demo (RFC #4288
     // Route A), which is the one backend that owns BOTH. Every site that wires
     // PanadapterStream::audioDataReady → AudioEngine::feedAudioData must consult
     // this, or the two sources sum at the sink (wobble + distortion).
-    bool backendOwnsRxAudio();                // MainWindow_Session.cpp
+    bool backendFeedsEngineDirectly();        // MainWindow_Session.cpp
+    // Live RX is muted while the QSO recorder or the PUDU monitor plays audio
+    // back through the same sink. The Flex path achieves that by disconnecting
+    // PanadapterStream::audioDataReady; a seam backend has no such connection
+    // to drop, so its relay consults this instead. See the muteRxRequested
+    // handlers in MainWindow.cpp. (PR #4537 review.)
+    bool m_rxMutedForPlayback{false};
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
@@ -427,6 +454,7 @@ private:
     void restoreKiwiSdrSliceMute();
     bool kiwiSdrTransmitMuteRequired() const;
     void syncKiwiSdrTransmitMute();
+    void refreshKiwiSdrVirtualAudioControls();
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     // Worker for the above. selectSlice=false suppresses the active-slice steal
     // for automatic re-arms (band-recall finish, #4158 recreation re-bind).
@@ -438,7 +466,8 @@ private:
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
-    void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
+    void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice,
+                                                   bool includeEnable = true);
     void updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice);
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
@@ -703,6 +732,16 @@ private:
     void showMultiFlexDialog();
     void handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName);
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
+    // Startup/reconnect autoconnect: called for every discovered radio, from EVERY
+    // discovery source (Flex RadioDiscovery *and* hl2::Hl2Discovery). Connects when
+    // the radio is the saved LastConnectedRadioSerial and the operator has left
+    // "AutoConnectToLastRadio" on. Family-agnostic on purpose — wiring it to one
+    // discovery object only is what left HL2 owners hand-picking their radio at
+    // every launch.
+    void maybeAutoConnectToDiscoveredRadio(const RadioInfo& info);
+    // Settle the bookkeeping for an auto-connect that has reached a terminal
+    // state. A no-op when the connect in question was a manual one.
+    void noteAutoConnectFinished(bool ok);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
@@ -1051,6 +1090,8 @@ private:
     bool             m_kiwiSdrAudioMuteApplied{false};
     bool             m_kiwiSdrAudioMuteChanging{false};
     bool             m_kiwiSdrAudioTransmitMuted{false};
+    AetherSDR::KiwiSdrTxMuteLatch m_kiwiSdrTxMuteLatch;
+    AetherSDR::KiwiSdrTxMaskWatchdog m_kiwiSdrTxMaskWatchdog;
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
     struct KiwiSdrBandRecallPreparation {
@@ -1223,7 +1264,18 @@ private:
     bool m_hasPaTempTelemetry{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
+    //
+    // The slot is driven by radioUpdated as well as radioDiscovered, and
+    // radioUpdated repeats. Neither of these is bookkeeping for its own sake:
+    // without the in-flight serial the slot re-enters its own handshake, and
+    // without the attempt count a radio that never completes one re-triggers it
+    // forever.
+    QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
+    QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
+    QString m_terminalConnectionError; // preserved until the next explicit connect
     QPointer<class ThemeEditorDialog> m_themeEditorDialog; // Phase 5 — lazy, modeless
     void cancelTransmitFromIndicator();
     void beginProfileLoadRadioStateWriteHold(const QString& profileType, const QString& profileName);

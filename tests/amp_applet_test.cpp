@@ -4,9 +4,11 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -30,6 +32,11 @@ void report(const char* name, bool ok, const QString& detail = QString())
 QPushButton* tempButton(AmpApplet& applet)
 {
     return applet.findChild<QPushButton*>(QStringLiteral("ampTempUnitButton"));
+}
+
+QComboBox* fanCombo(AmpApplet& applet)
+{
+    return applet.findChild<QComboBox*>(QStringLiteral("ampFanModeCombo"));
 }
 
 void resetSettings()
@@ -134,6 +141,50 @@ void testPreferenceReload()
            button->text());
 }
 
+void testFanModePulldown()
+{
+    resetSettings();
+
+    AmpApplet applet;
+    auto* combo = fanCombo(applet);
+    report("fan combo exists", combo != nullptr);
+    if (!combo) return;
+
+    report("fan combo has three modes", combo->count() == 3, QString::number(combo->count()));
+    // isVisibleTo(&applet), not isVisible(): the applet is never shown as a
+    // top-level window in this offscreen harness, so isVisible() would be
+    // false regardless of the combo's own shown/hidden state.
+    report("fan combo starts hidden", !combo->isVisibleTo(&applet));
+
+    QSignalSpy spy(&applet, &AmpApplet::fanModeChanged);
+
+    // Reflecting an incoming PGXL status must select the right item, show
+    // the combo, and NOT emit fanModeChanged (#3905) — that would echo a
+    // redundant "setup fanmode=" command straight back to the amp.
+    applet.setFanMode("contest");
+    report("setFanMode selects the matching item",
+           combo->currentData().toString() == QStringLiteral("CONTEST"),
+           combo->currentData().toString());
+    report("setFanMode shows the combo", combo->isVisibleTo(&applet));
+    report("setFanMode does not emit fanModeChanged", spy.isEmpty());
+
+    // A user-driven selection must emit the uppercase mode.
+    combo->setCurrentIndex(combo->findData(QStringLiteral("BROADCAST")));
+    report("user selection emits fanModeChanged", spy.count() == 1, QString::number(spy.count()));
+    if (!spy.isEmpty()) {
+        report("emitted mode is uppercase BROADCAST",
+               spy.takeFirst().at(0).toString() == QStringLiteral("BROADCAST"));
+    }
+
+    // An unrecognized mode from the radio must not crash or desync the
+    // combo's selection.
+    const QString before = combo->currentData().toString();
+    applet.setFanMode("bogus");
+    report("unknown fanmode leaves combo selection unchanged",
+           combo->currentData().toString() == before,
+           combo->currentData().toString());
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -155,6 +206,7 @@ int main(int argc, char** argv)
     testSingleSensorToggle();
     testDualSensorToggle();
     testPreferenceReload();
+    testFanModePulldown();
 
     std::printf("\n%s\n",
                 g_failed == 0

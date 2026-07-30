@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.7.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.7.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -529,6 +529,7 @@ set(CORE_SOURCES
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2EmergencyStop.cpp # release the radio from a signal handler
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
@@ -930,6 +931,7 @@ set(GUI_SOURCES
     src/gui/TitleBar.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
+    src/gui/RadioHealthDialog.cpp
     src/gui/KeyboardMapWidget.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/MultiFlexDialog.cpp
@@ -2623,6 +2625,29 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 live band-filter probe — REQUIRES REAL HARDWARE, so deliberately NOT
+# registered with add_test(). Build it and run it by hand against a radio:
+#   cmake --build build --target hl2_live_band_filter_probe
+#   ./build/hl2_live_band_filter_probe 192.168.1.21
+add_executable(hl2_live_band_filter_probe EXCLUDE_FROM_ALL
+    tests/hl2_live_band_filter_probe.cpp)
+target_include_directories(hl2_live_band_filter_probe PRIVATE src)
+target_link_libraries(hl2_live_band_filter_probe PRIVATE aethercore Qt6::Core Qt6::Network)
+
+# A killed AetherSDR must still release the radio. A child process runs a real
+# MetisClient against a fake radio; the Python driver kills it and requires a
+# metis-stop datagram to arrive. End-to-end on purpose — see the .py header.
+add_executable(hl2_signal_stop_child tests/hl2_signal_stop_child.cpp)
+target_include_directories(hl2_signal_stop_child PRIVATE src)
+target_link_libraries(hl2_signal_stop_child PRIVATE aethercore Qt6::Core Qt6::Network)
+find_package(Python3 COMPONENTS Interpreter)
+if(NOT WIN32 AND Python3_Interpreter_FOUND)
+    add_test(NAME hl2_signal_stop_test
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/hl2_signal_stop_test.py
+                     $<TARGET_FILE:hl2_signal_stop_child>)
+endif()
+
 # HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
 add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
 target_include_directories(hl2_metis_client_test PRIVATE src)
@@ -2707,6 +2732,13 @@ target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 
+add_executable(mac_cursor_compat_test
+    tests/mac_cursor_compat_test.cpp
+)
+target_include_directories(mac_cursor_compat_test PRIVATE src)
+target_link_libraries(mac_cursor_compat_test PRIVATE Qt6::Core)
+add_test(NAME mac_cursor_compat_test COMMAND mac_cursor_compat_test)
+
 add_executable(slice_model_letter_test
     tests/slice_model_letter_test.cpp
     src/models/SliceModel.cpp
@@ -2731,6 +2763,8 @@ add_executable(theme_manager_test
 target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
+set_tests_properties(theme_manager_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
@@ -2749,6 +2783,8 @@ target_include_directories(panadapter_message_overlay_test PRIVATE src)
 target_link_libraries(panadapter_message_overlay_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+set_tests_properties(panadapter_message_overlay_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
@@ -3510,6 +3546,14 @@ if (ENABLE_ASR)
     target_link_libraries(asr_remote_backend_test PRIVATE Qt6::Core Qt6::Network)
     add_test(NAME asr_remote_backend_test COMMAND asr_remote_backend_test)
 
+    # Copy Assist audio tap: which RX source it follows, and the stereo→mono
+    # collapse including the non-finite guard. The policy is header-only, so
+    # this needs no AudioEngine — which cannot be built headless anyway (#4486).
+    add_executable(asr_tap_policy_test tests/asr_tap_policy_test.cpp)
+    target_include_directories(asr_tap_policy_test PRIVATE src)
+    target_link_libraries(asr_tap_policy_test PRIVATE Qt6::Core)
+    add_test(NAME asr_tap_policy_test COMMAND asr_tap_policy_test)
+
     # Copy Assist panel: offscreen UI test of confidence color-coding + controls.
     add_executable(copy_assist_panel_test
         tests/copy_assist_panel_test.cpp
@@ -3632,6 +3676,23 @@ add_executable(gui_client_identity_policy_test
 target_include_directories(gui_client_identity_policy_test PRIVATE src)
 target_link_libraries(gui_client_identity_policy_test PRIVATE Qt6::Core)
 add_test(NAME gui_client_identity_policy_test COMMAND gui_client_identity_policy_test)
+
+add_executable(gui_client_registration_state_test
+    tests/gui_client_registration_state_test.cpp
+)
+target_include_directories(gui_client_registration_state_test PRIVATE src)
+target_link_libraries(gui_client_registration_state_test PRIVATE Qt6::Core)
+add_test(NAME gui_client_registration_state_test COMMAND gui_client_registration_state_test)
+
+add_executable(gui_client_registration_recovery_test
+    tests/gui_client_registration_recovery_test.cpp
+)
+target_include_directories(gui_client_registration_recovery_test PRIVATE src tests)
+target_link_libraries(gui_client_registration_recovery_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test
+)
+add_test(NAME gui_client_registration_recovery_test
+         COMMAND gui_client_registration_recovery_test)
 
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp
@@ -4384,6 +4445,8 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
+set_tests_properties(flex_control_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -4402,6 +4465,8 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+set_tests_properties(pan_layout_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_overlay_wheel_guard_test
     tests/spectrum_overlay_wheel_guard_test.cpp
@@ -4468,6 +4533,11 @@ target_include_directories(transmit_inhibit_policy_test PRIVATE src)
 target_link_libraries(transmit_inhibit_policy_test PRIVATE Qt6::Core)
 add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
+add_executable(kiwi_sdr_tx_mute_policy_test
+    tests/kiwi_sdr_tx_mute_policy_test.cpp
+)
+target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )

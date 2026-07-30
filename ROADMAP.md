@@ -7,17 +7,21 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.7.2
+## Current cycle: post-v26.7.4.1
 
 ### In flight
 
 - **aetherd — vendor-neutral radio backend** — extracting an
   `IRadioBackend` seam (`RadioCapabilities` + typed status/command deltas)
   so radio-family logic lives behind a stable interface instead of being
-  woven through `RadioModel`. FlexBackend now owns the Flex wire objects
+  woven through `RadioModel`. FlexBackend owns the Flex wire objects
   and threads, and the Panadapter / Slice / Meter / Transmit / Amp / Tuner
-  status+command paths decode behind the seam (RFC steps 2.1–2.4). This is
-  the foundation for non-Flex radio families — see Hermes-Lite 2 below.
+  status+command paths decode behind the seam (RFC steps 2.1–2.4). The seam
+  now carries **three** backends — `FlexBackend`, `HL2Backend`, and the
+  synthetic `SimBackend` — which is what took it from a design to a proven
+  interface. Remaining: the versioned protocol (RFC step 3+) that lets a
+  headless `aetherd` and thin UI clients split apart; UI code still consumes
+  models directly, and that remains correct until it lands.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
   Mechanical migration tooling is the prerequisite work.
@@ -28,12 +32,12 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Queued (next cycle)
 
-- **Hermes-Lite 2 support** — a first *non-Flex* `IRadioBackend`. HL2 ships
-  raw IQ (the client does all DSP — tune/decimate/demodulate), unlike Flex's
-  cooked audio + spectrum. A throwaway Phase-0 data-plane spike + design note
-  landed in [`prototypes/hl2/`](prototypes/hl2/) ([#4171](https://github.com/aethersdr/AetherSDR/pull/4171));
-  the in-tree backend is demand-driven and, as a new radio family, needs an
-  approved design doc first (per `AGENTS.md`).
+- **Hermes-Lite 2 — from experimental to supported** — an experimental backend
+  landed in v26.7.4 (receive, transmit, TCI/WSJT-X, operator-controllable span,
+  per-radio nicknames), but HL2 is not a supported radio family yet. Getting
+  there means wider mode coverage, panadapter/waterfall parity with the Flex
+  path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client does
+  all the tune/decimate/demodulate work a Flex does on-radio).
 - **KiwiSDR follow-ups** — WebSDR / OpenWebRX support on top of the shipped
   public-receiver browser (per-receiver passwords, idle-release, and
   waterfall polish already landed in v26.7.2).
@@ -105,6 +109,33 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **TCI rig control hotfix** — a `vfo:` SET confirmed the *pre-tune* frequency,
+  so WSJT-X concluded the radio had never moved and failed every band change,
+  and relative tuning from a control surface oscillated instead of walking.
+  Transmissions could go out of band. Same-day hotfix on top of v26.7.4
+  (v26.7.4.1).
+- **Hermes-Lite 2 — experimental** — receive, transmit, and TCI signaling for
+  WSJT-X on the aetherd `IRadioBackend` seam, with an operator-controllable
+  panadapter span (6 Mb low-bandwidth mode) and per-radio nicknames keyed by
+  MAC. Early and experimental — **not** a supported radio family; FlexRadio
+  remains the supported target (v26.7.4).
+- **Built-in demo mode** — a synthetic `SimBackend` that generates its own RX
+  audio and matching panadapter render, plus a fault-injection harness, so the
+  app can be demonstrated, developed against, and regression-tested with no
+  hardware attached. It cannot key (v26.7.4).
+- **Copy Assist — on-device speech-to-text** — whisper.cpp transcription with a
+  transcription-language selector, running locally (v26.7.4).
+- **AetherClock** — a NIST time-signal decode engine plus an applet and
+  alignment display (v26.7.4).
+- **GPS & station-location dashboard** — position and timing surfaced in one
+  place (v26.7.4).
+- **3D FFT polish pass** — surface-mapped slice shadows, cached elevation
+  shadows on slice flags, preserved history across smooth-scroll boundaries,
+  and motion smoothing for both Flex and KiwiSDR sources (v26.7.4).
+- **ACOM S-series amplifiers** — serial / ser2net support (v26.7.4).
+- **Cross-needle PWR / SWR applet** — an analog cross-needle forward-power,
+  reflected-power, and SWR meter face, joined by configurable analog S-meter
+  themes (v26.7.3).
 - **RTX 50-series / Blackwell BNR** — the in-process NVIDIA AFX denoiser now
   covers consumer Blackwell (RTX 50xx) on Windows and Linux; the app
   auto-detects the GPU and downloads the matching per-arch model pack
@@ -138,20 +169,11 @@ Highlights from the last 30 days — full list in
 - **FlexLib-sourced model capabilities** — extended-DSP, diversity, and slice/pan
   counts now come from the FlexLib `ModelInfo` platform table, fixing the AU-510
   and ML/CL/S-variant gaps (v26.7.1).
-- **KiwiSDR receive sync** — GCC-PHAT Auto-Assist that time-aligns the Flex
-  and a public KiwiSDR receiver in both audio and the spectrum/waterfall
-  (v26.6.5).
-- **SmartMTR TX meters** — selectable SWR, forward-power, and compression
-  gauges with analog ballistics for the VFO flag, including VOX-keyed
-  transmit (v26.6.5).
-- **PROF profile-switcher applet** — live Global / TX / Mic profile
-  selection from a sidebar applet (v26.6.5).
-- **Agent automation bridge expansion** — radio connect/disconnect,
-  display-stream leak detection (`streams`), custom context-menu inspection,
-  and a panadapter/waterfall control surface (v26.6.5).
-For older highlights (the KiwiSDR public-receiver browser, SmartMTR meters,
-the agent automation bridge, the accessibility pass, CAT/rigctld parity, and
-packaging work) see [`CHANGELOG.md`](CHANGELOG.md).
+
+For older highlights (KiwiSDR receive sync and the public-receiver browser,
+SmartMTR TX meters, the PROF profile-switcher, the agent automation bridge,
+the accessibility pass, CAT/rigctld parity, and packaging work) see
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ## How to influence the roadmap
 

@@ -491,8 +491,40 @@ void TxApplet::setTransmitModel(TransmitModel* model)
         m_updatingFromModel = false;
     });
 
+    // Whether this radio has an ATU at all. A Hermes-Lite 2 does not, and a
+    // live-looking ATU button on a radio with no tuner is worse than a missing
+    // one: pressing it KEYS THE TRANSMITTER (markTxKeying above) to run a tune
+    // cycle that nothing will answer.
+    connect(m_model, &TransmitModel::hasTunerChanged, this, [this](bool present) {
+        m_radioHasTuner = present;
+        updateAtuAvailability();
+    });
+    m_radioHasTuner = m_model->hasTuner();
+
     syncFromModel();
     syncAtuIndicators();
+    updateAtuAvailability();
+}
+
+void TxApplet::updateAtuAvailability()
+{
+    if (!m_atuBtn || !m_memBtn)
+        return;
+    const bool enabled = m_radioHasTuner && !m_tgxlOperate;
+    m_atuBtn->setEnabled(enabled);
+    m_memBtn->setEnabled(enabled);
+
+    // The radio-has-no-tuner reason is checked FIRST because it is the more
+    // fundamental one: with no ATU fitted, what the TGXL is doing is beside the
+    // point, and "Disabled — TGXL is in OPERATE mode" would send the operator
+    // looking at the wrong box.
+    QString tip;
+    if (!m_radioHasTuner)
+        tip = tr("This radio has no antenna tuner");
+    else if (m_tgxlOperate)
+        tip = tr("Disabled — TGXL is in OPERATE mode");
+    m_atuBtn->setToolTip(tip);
+    m_memBtn->setToolTip(tip);
 }
 
 void TxApplet::setTunerModel(TunerModel* tuner)
@@ -503,12 +535,8 @@ void TxApplet::setTunerModel(TunerModel* tuner)
         // When TGXL is in Operate, disable only the internal ATU controls.
         // TUNE stays enabled — it sends a carrier through the TGXL for
         // power/SWR checks, matching SmartSDR behavior (#443).
-        bool tgxlOperate = tuner->isPresent() && tuner->isOperate() && !tuner->isBypass();
-        m_atuBtn->setEnabled(!tgxlOperate);
-        m_memBtn->setEnabled(!tgxlOperate);
-        QString tip = tgxlOperate ? "Disabled — TGXL is in OPERATE mode" : "";
-        m_atuBtn->setToolTip(tip);
-        m_memBtn->setToolTip(tip);
+        m_tgxlOperate = tuner->isPresent() && tuner->isOperate() && !tuner->isBypass();
+        updateAtuAvailability();
     };
 
     connect(tuner, &TunerModel::stateChanged, this, updateButtons);

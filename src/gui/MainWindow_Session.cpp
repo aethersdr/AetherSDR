@@ -197,7 +197,13 @@ void MainWindow::wireDiscovery()
     // arriving at the same slot, so nothing looks duplicate to Qt.
     connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
             m_audio, [this](const QByteArray& pcm) {
-        if (backendOwnsRxAudio()) return;   // demo feeds the engine directly
+        if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
+        // Playback mute. The Flex path mutes by disconnecting the stream's
+        // audioDataReady from feedAudioData; against a null PanadapterStream
+        // that disconnect is a silent no-op, so a seam backend would keep
+        // feeding live receive UNDER the playback. Reachable in practice only
+        // now that the recorder captures RX on such a radio at all. (#4537.)
+        if (m_rxMutedForPlayback) return;
         m_audio->feedAudioData(pcm);
     });
 
@@ -207,6 +213,32 @@ void MainWindow::wireDiscovery()
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost,
             m_connPanel, &ConnectionPanel::onRadioLost);
+    // A radio that left discovery altogether gets its auto-connect attempts
+    // back. Power-cycling the radio is the operator's natural way of clearing a
+    // run of failures, and it should not require restarting the app.
+    //
+    // The in-flight serial is released here too. Every connect we start should
+    // end in connected() or connectionError(), but if one ever does neither the
+    // serial would latch and auto-connect would be dead for that radio until
+    // restart. The radio vanishing is unambiguous, so use it to let go.
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    // "Auto-reconnect to last radio" used to be wired to the Flex RadioDiscovery
+    // only, so an HL2 owner watched their radio appear in the picker and then had
+    // to click it by hand at every launch. The HL2 sweep feeds the same slot.
+    // An HL2 that answers 0x03 (already streaming to somebody else) is skipped
+    // inside the slot — Protocol 1 is single-client, so there is nothing to join.
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    // A radio first seen In_Use flips to Available when the other client drops;
+    // that arrives as radioUpdated, not radioDiscovered, so listen to both or the
+    // saved radio stays unconnected until it disappears and comes back.
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
@@ -223,6 +255,14 @@ void MainWindow::wireDiscovery()
     });
     connect(&m_discovery, &RadioDiscovery::radioLost,
             m_connPanel, &ConnectionPanel::onRadioLost);
+    // Same reset for the Flex sweep — the slot is family-agnostic, so its
+    // bookkeeping is too.
+    connect(&m_discovery, &RadioDiscovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
     connect(m_connPanel, &ConnectionPanel::retryDiscoveryRequested, this, [this] {
         m_connPanel->setStatusText("Searching your local network…");
         if (m_titleBar) m_titleBar->setDiscovering(true);
@@ -256,6 +296,7 @@ void MainWindow::wireDiscovery()
             return;
         }
         m_radioModel.setPendingClientDisconnects(disconnectHandles);
+        m_terminalConnectionError.clear();
         m_connPanel->setStatusText("Connecting…");
         m_userDisconnected = false;
         setPanadapterConnectionAnimation(true, "Connecting to radio…");
@@ -276,30 +317,12 @@ void MainWindow::wireDiscovery()
     // the audio engine and main window are fully up first.
     QTimer::singleShot(0, this, [this] { startKissTncOnStartupIfConfigured(); });
 
-    // Auto-connect: when a radio is discovered, check if it matches the last one
+    // Auto-connect: when a radio is discovered, check if it matches the last one.
+    // Wired to the Flex discovery here; the HL2 sweep is wired to the SAME slot
+    // where Hl2Discovery is set up above, so both families honour the
+    // "Auto-reconnect to last radio" setting.
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
-            this, [this](const RadioInfo& info) {
-        if (m_userDisconnected) return;
-        if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
-            return;
-        const QString lastSerial = AppSettings::instance()
-            .value("LastConnectedRadioSerial").toString();
-        if (!lastSerial.isEmpty() && info.serial == lastSerial
-            && !m_radioModel.isConnected()) {
-            QList<quint32> disconnectHandles;
-            if (!confirmClientSlotAvailability(info, &disconnectHandles)) {
-                m_userDisconnected = true;
-                m_connPanel->setStatusText("Connection canceled");
-                setPanadapterConnectionAnimation(false);
-                return;
-            }
-            m_radioModel.setPendingClientDisconnects(disconnectHandles);
-            qDebug() << "Auto-connecting to" << info.displayName();
-            m_connPanel->setStatusText("Auto-connecting…");
-            setPanadapterConnectionAnimation(true, "Connecting to radio…");
-            m_radioModel.connectToRadio(info);
-        }
-    });
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{
         m_userDisconnected = true;
@@ -426,6 +449,92 @@ void MainWindow::wireDiscovery()
 
 }
 
+void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
+{
+    if (m_userDisconnected) return;
+    if (m_radioModel.isConnected()) return;
+    if (AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() != "True")
+        return;
+    const QString lastSerial = AppSettings::instance()
+        .value("LastConnectedRadioSerial").toString();
+    if (lastSerial.isEmpty() || info.serial != lastSerial)
+        return;
+
+    // AN AUTO-CONNECT WE STARTED IS ALREADY IN FLIGHT FOR THIS RADIO.
+    //
+    // Everything below would re-enter our own handshake, and the busy gate in
+    // particular would misread OUR OWN stream as a competing client: the radio
+    // starts answering discovery with 0x03 the moment it is told to start, while
+    // isConnected() stays false until the first EP6 packet arrives (Hl2Backend
+    // sets m_connected on linkUp, not on connectRadio). That window is the whole
+    // Metis handshake, so without this guard a normal connect reports "already in
+    // use by another client" about itself and kills its own connecting overlay.
+    if (!m_autoConnectSerial.isEmpty() && info.serial == m_autoConnectSerial)
+        return;
+
+    // BOUNDED RETRY — this slot now has a signal that repeats behind it.
+    //
+    // radioUpdated fires on every status CHANGE, and our own attempt is what
+    // produces those changes: starting the stream flips the radio to In_Use,
+    // tearing it down flips it back to Available. So a radio that never completes
+    // a handshake re-triggers this slot indefinitely — roughly every two
+    // discovery sweeps — and each pass overwrites the real error with
+    // "Auto-connecting…", so the operator never gets to read why it failed.
+    //
+    // The Flex path could not do this: radioDiscovered fires once per appearance.
+    // Adding radioUpdated is what made a latch necessary.
+    //
+    // Counted per serial and reset on a successful connect or when the radio
+    // leaves discovery entirely (radioLost) — a radio that was power-cycled
+    // deserves a fresh set of attempts, and that is also the operator's way of
+    // clearing this without restarting the app.
+    if (m_autoConnectAttempts.value(info.serial) >= kMaxAutoConnectAttempts)
+        return;
+
+    // Fail closed on a busy non-Flex radio, matching the manual connect gate in
+    // ConnectionPanel (#4448): HPSDR Protocol 1 is single-client, so connecting to
+    // an HL2 that is already streaming wedges both clients. Say so instead of
+    // silently doing nothing — this is the startup path, and the operator is
+    // staring at "Looking for your radio…".
+    if (info.inUse && info.family.compare(QLatin1String("flex"), Qt::CaseInsensitive) != 0) {
+        m_connPanel->setStatusText(
+            QStringLiteral("%1 is already in use by another client and can't be shared.")
+                .arg(info.model));
+        setPanadapterConnectionAnimation(false);
+        return;
+    }
+
+    QList<quint32> disconnectHandles;
+    if (!confirmClientSlotAvailability(info, &disconnectHandles)) {
+        m_userDisconnected = true;
+        m_connPanel->setStatusText("Connection canceled");
+        setPanadapterConnectionAnimation(false);
+        return;
+    }
+    m_radioModel.setPendingClientDisconnects(disconnectHandles);
+    qDebug() << "Auto-connecting to" << info.displayName();
+    m_connPanel->setStatusText("Auto-connecting…");
+    setPanadapterConnectionAnimation(true, "Connecting to radio…");
+    // Claim the attempt BEFORE handing off. connectToRadio() can emit
+    // synchronously, so setting this afterwards would leave the window it exists
+    // to close.
+    m_autoConnectSerial = info.serial;
+    m_radioModel.connectToRadio(info);
+}
+
+void MainWindow::noteAutoConnectFinished(bool ok)
+{
+    if (m_autoConnectSerial.isEmpty())
+        return;   // a manual connect — this bookkeeping is not ours to touch
+    const QString serial = m_autoConnectSerial;
+    m_autoConnectSerial.clear();
+    if (ok) {
+        m_autoConnectAttempts.remove(serial);
+    } else {
+        ++m_autoConnectAttempts[serial];
+    }
+}
+
 void MainWindow::wireRadioModel()
 {
     // ── Wire up radio model ────────────────────────────────────────────────
@@ -488,6 +597,23 @@ void MainWindow::wireRadioModel()
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
+            this, [this](const QString& message) {
+        // A rejected GUI registration is terminal for this attempt. Keep the
+        // reason visible, suppress both LAN and WAN automatic reconnect loops,
+        // and let the operator retry normally after freeing a radio slot.
+        m_userDisconnected = true;
+        m_wanReconnectTimer.stop();
+        m_wanReconnectAttemptInProgress = false;
+        m_terminalConnectionError = message;
+        setPanadapterConnectionAnimation(false);
+        if (m_reconnectDlg) {
+            QDialog* reconnectDialog = m_reconnectDlg;
+            m_reconnectDlg = nullptr;
+            reconnectDialog->close();
+            reconnectDialog->deleteLater();
+        }
+    });
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
             this, &MainWindow::onWanCertFingerprintMismatch);
     connect(&m_radioModel, &RadioModel::forcedDisconnectRequested,
@@ -1207,10 +1333,35 @@ void MainWindow::wirePanLifecycle()
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
             int wnbLevel = s.value(sw->settingsKey("DisplayWnbLevel"), "50").toInt();
-            int rfGain = s.value(sw->settingsKey("DisplayRfGain"), "0").toInt();
+            // RF gain: push ONLY a value the operator actually saved.
+            //
+            // With no saved value there is nothing to restore, and the radio's
+            // own gain is the right answer — so leave it alone and mirror it
+            // into the widgets instead.
+            //
+            // Writing a default here is what made this subtle. On a Flex,
+            // rfgain 0 is the neutral middle of a -8..+32 range, so pushing a
+            // hardcoded 0 was invisible. On a backend that owns its gain in a
+            // register it is not: the HL2 comes up at 20 dB of AD9866 LNA gain,
+            // and a never-saved "0" pushed it 20 dB down — a receiver that is
+            // simply deaf, with nothing in the UI saying anything was applied.
+            //
+            // Seeding the default from the pan model instead does NOT fix it.
+            // This restore runs off panadapterInfoChanged, which can land
+            // before the backend has published its gain, so the model still
+            // reads its own 0 and the same 0 goes back to the hardware.
+            // Measured: Radio Health showed "LNA gain 0 dB" on a fresh HL2
+            // profile. The only correct rule is not to write at all.
+            const QString rfGainKey = rfGainSettingsKey(sw);
+            const bool haveSavedRfGain = s.contains(rfGainKey);
+            PanadapterModel* activePan = m_radioModel.activePanadapter();
+            const int rfGain = haveSavedRfGain
+                ? s.value(rfGainKey).toInt()
+                : (activePan ? activePan->rfGain() : 0);
             m_radioModel.setPanWnb(wnbOn);
             m_radioModel.setPanWnbLevel(wnbLevel);
-            m_radioModel.setPanRfGain(rfGain);
+            if (haveSavedRfGain)
+                m_radioModel.setPanRfGain(rfGain);
             sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
@@ -1255,6 +1406,7 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioModel(&m_radioModel);
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 menu->setDeclaredBands(m_radioModel.declaredBands());
+                applyTuningRangeToOverlayMenu(menu);
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 // Re-push authoritative geometry when a gesture that was
@@ -1655,7 +1807,26 @@ void MainWindow::wireCatPorts()
 // RX audio itself rides audioDataReady, so a missed one is silence, not a
 // degraded feature. Keeping the list here (not open-coded in two places) is why
 // a new sink added to buildUI cannot silently go un-rebound after a swap.
-bool MainWindow::backendOwnsRxAudio()
+// Deliberately NOT IRadioBackend::ownsRxAudio(), despite the near-identical
+// English. The two ask different questions and disagree about the HL2:
+//
+//   IRadioBackend::ownsRxAudio()      "audio arrives over the seam"
+//                                       HL2 TRUE, sim true, Flex false
+//   MainWindow::backendFeedsEngineDirectly()
+//                                     "the backend already feeds AudioEngine
+//                                      itself, so no relay"
+//                                       HL2 FALSE, sim true, Flex false
+//
+// An HL2 owns its RX audio AND needs the relay: wireBackendSeam() connects
+// audioFrameReady -> feedAudioData for the sim ONLY, so HL2 audio reaches the
+// engine through RadioModel::backendAudioFrameReady instead.
+//
+// So the tempting cleanup — delegating this to backend()->ownsRxAudio() —
+// makes the relay's `if (…) return;` swallow every HL2 frame and SILENCES the
+// speaker on the radio this all exists to support. Renamed away from the
+// collision precisely so nobody makes that substitution on the strength of the
+// names matching. (PR #4537 review.)
+bool MainWindow::backendFeedsEngineDirectly()
 {
     // The demo (RFC #4288 Route A) is the one backend that BOTH vends a
     // PanadapterStream and emits its own seam audio: SimBackend::onAudioTick →
@@ -1681,28 +1852,51 @@ void MainWindow::wirePanStreamRxAudioSinks()
     // wobble plus distortion, and recognisably "the waterfall you can hear".
     // The backend's own audio wins; the stream's other RX taps below stay wired.
     // Primary RX audio → QAudioSink (skipped when the backend owns its audio).
-    if (!backendOwnsRxAudio()) {
+    if (!backendFeedsEngineDirectly()) {
         connect(ps, &PanadapterStream::audioDataReady,
                 m_audio, &AudioEngine::feedAudioData,
                 Qt::UniqueConnection);
     }
 
-    // QSO recorder RX tap (float32). TX monitor + MOX gating are wired to
-    // AudioEngine/TransmitModel, which survive the swap, so they stay in buildUI.
+    // The QSO recorder's RX tap and the CW/RTTY decoder feeds used to be wired
+    // HERE, to this stream. They now ride RadioModel::rxDemodAudioReady — see
+    // wireRxDemodAudioSinks(), called once from buildUI. Two reasons:
+    //
+    //   1. A radio without a PanadapterStream (HL2) never reached this function
+    //      at all — the early return above — so all three were silently dead.
+    //   2. Even for a Flex they had to be re-bound on every family swap, which
+    //      is the fragility the comment above this function warns about. Bound
+    //      to RadioModel they simply outlive the swap.
+    //
+    // The primary RX audio → QAudioSink connection above stays exactly where it
+    // was, deliberately: nothing audible changes on any family.
+}
+
+// The RX-audio taps that listen ALONGSIDE the speaker: the QSO recorder and the
+// CW/RTTY decoders. Wired once, to RadioModel's normalized bus, and never
+// rebound — RadioModel outlives the backend swaps that destroy a
+// PanadapterStream, and it publishes whichever producer is real for the
+// connected family.
+//
+// The gates stay live (read per block) rather than driving connect/disconnect,
+// so toggling CW decode or starting RTTY never has to touch wiring — the
+// property this had before and worth keeping.
+void MainWindow::wireRxDemodAudioSinks()
+{
     if (m_qsoRecorder) {
-        connect(ps, &PanadapterStream::audioDataReady,
+        connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
                 m_qsoRecorder, &QsoRecorder::feedRxAudio);
     }
 
-    // CW decoder RX feed — gated live on the toggle so it need not rewire (#2417).
-    connect(ps, &PanadapterStream::audioDataReady,
+    // CW decoder RX feed — gated live on the toggle (#2417).
+    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
             &m_cwDecoder, [this](const QByteArray& pcm) {
                 if (CwDecodeSettings::rxEnabled())
                     m_cwDecoder.feedAudio(pcm);
             });
 
     // RTTY decoder RX feed — gated on the decoder being running.
-    connect(ps, &PanadapterStream::audioDataReady,
+    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
             &m_rttyDecoder, [this](const QByteArray& pcm) {
                 if (m_rttyDecoder.isRunning())
                     m_rttyDecoder.feedAudio(pcm);

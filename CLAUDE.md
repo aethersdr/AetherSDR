@@ -43,7 +43,7 @@ codebase. Everything else is in `AGENTS.md`.
   not project-canon; `AGENTS.md`, `CONSTITUTION.md`, and
   `CONTRIBUTING.md` are.
 - **Memory directory** — Claude Code's auto-memory lives at
-  `~/.claude/projects/-home-jeremy-build-AetherSDR/memory/`. Index
+  `~/.claude/projects/AetherSDR/memory/`. Index
   is `MEMORY.md`. Use it for cross-session continuity; everything in
   it is operator-scoped (per Principle XIII), not project-canon.
 

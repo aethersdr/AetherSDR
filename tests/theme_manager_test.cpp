@@ -59,6 +59,9 @@ int main(int argc, char** argv)
         QDir(sandboxAppDir).removeRecursively();
     }
 
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    }
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("AetherSDR-test");
     QCoreApplication::setApplicationName("AetherSDR-test");

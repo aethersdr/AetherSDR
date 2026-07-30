@@ -30,7 +30,11 @@ public:
     // Drive the normal connect path. Return false + fill *error on failure.
     virtual bool automationConnectLocalSerial(const QString& serial,
                                               QString* error = nullptr) = 0;
+    // family selects the wire protocol to probe: "flex" (TCP/4992) or "hl2"
+    // (HPSDR Protocol 1 discovery on UDP/1024). Empty keeps whatever the
+    // connect dialog's radio-type selector is currently set to.
     virtual bool automationConnectByIp(const QString& hostOrIp,
+                                       const QString& family = QString(),
                                        QString* error = nullptr) = 0;
     virtual bool automationDisconnect(QString* error = nullptr) = 0;
 

@@ -38,14 +38,15 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
     m_gpu->setObjectName(QStringLiteral("CopyAssistGpuCombo"));
     m_gpu->setAccessibleName(tr("Copy Assist compute device"));
     m_gpu->setToolTip(tr("Which device runs the model (a GPU, or CPU)"));
+    m_gpu->addItem(tr("Detecting…"), kGpuDiscoveryPending);
     connect(m_gpu, &QComboBox::currentIndexChanged, this,
             [this](int) { emit gpuChanged(currentGpu()); });
     m_gpuLabel = new QLabel(tr("Compute:"), this);
     form->addRow(m_gpuLabel, m_gpu);
-    // Hidden until the controller reports a GPU exists (CPU-only hosts show no
-    // device picker at all).
-    m_gpuLabel->hide();
-    m_gpu->hide();
+    // Device discovery can initialize Metal and compile its embedded shader
+    // library. Keep the row visible but inactive while that work runs off the
+    // GUI thread; CPU-only hosts hide it once discovery finishes.
+    setGpuSelectorEnabled(false);
 
     m_language = new QComboBox(this);
     m_language->setObjectName(QStringLiteral("CopyAssistLanguageCombo"));
@@ -196,6 +197,11 @@ void CopyAssistSettingsDialog::addGpuDevice(int index, const QString& name)
     m_gpu->addItem(name, index);
 }
 
+void CopyAssistSettingsDialog::clearGpuDevices()
+{
+    m_gpu->clear();
+}
+
 void CopyAssistSettingsDialog::setCurrentGpu(int index)
 {
     const int idx = m_gpu->findData(index);
@@ -206,13 +212,21 @@ void CopyAssistSettingsDialog::setCurrentGpu(int index)
 
 int CopyAssistSettingsDialog::currentGpu() const
 {
-    return m_gpu->currentData().toInt();
+    bool ok = false;
+    const int index = m_gpu->currentData().toInt(&ok);
+    return ok ? index : kGpuDiscoveryPending;
 }
 
 void CopyAssistSettingsDialog::setGpuSelectorVisible(bool on)
 {
     m_gpuLabel->setVisible(on);
     m_gpu->setVisible(on);
+}
+
+void CopyAssistSettingsDialog::setGpuSelectorEnabled(bool on)
+{
+    m_gpuLabel->setEnabled(on);
+    m_gpu->setEnabled(on);
 }
 
 void CopyAssistSettingsDialog::addLanguage(const QString& code, const QString& name)

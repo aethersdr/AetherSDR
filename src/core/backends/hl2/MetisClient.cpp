@@ -1,4 +1,5 @@
 #include "core/backends/hl2/MetisClient.h"
+#include "core/backends/hl2/Hl2EmergencyStop.h"
 
 #include <QElapsedTimer>
 #include <QThread>
@@ -161,7 +162,7 @@ bool MetisClient::start(const Params& params)
     m_params = params;
     m_host = params.host;
     m_port = params.port;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx());
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     m_ccFreq = ccRx1Freq(m_params.rxFrequencyHz);
     m_txSeq = 0;
@@ -184,6 +185,16 @@ bool MetisClient::start(const Params& params)
     // again so nothing is lost to the start transition. Starting before any C&C
     // has landed makes the firmware stream ADC-idle samples (Q pinned to zero).
     m_running = true;
+
+    // Arm the signal-handler stop BEFORE the first start datagram goes out.
+    //
+    // Ordering matters and it is one-sided: armed-but-not-streaming costs a
+    // stray 64-byte datagram to a radio that is not listening for it, while
+    // streaming-but-not-armed is a radio that has to be power-cycled. Arm
+    // early, on the pessimistic side.
+    armEmergencyStop(m_socket->socketDescriptor(), m_host, m_port,
+                     metisStop(m_watchdogEnabled));
+
     sendPrimingBurst(3);
     sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
     sendPrimingBurst(3);
@@ -248,6 +259,11 @@ void MetisClient::stop()
     if (m_connectWatchdog) m_connectWatchdog->stop();
     if (m_socket) {
         sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port);
+        // Disarm only AFTER the normal stop has gone out, and before the
+        // descriptor is closed. Disarming earlier would leave a window where a
+        // signal arriving mid-teardown released nothing; later would leave a
+        // closed — or worse, recycled — descriptor armed.
+        disarmEmergencyStop();
         m_socket->close();
         m_socket->deleteLater();
         m_socket = nullptr;
@@ -276,13 +292,31 @@ void MetisClient::setSampleRate(SampleRate rate)
     // Was hardcoded to 1: changing sample rate silently reset the receiver
     // count, so any multi-receiver configuration would have collapsed to a
     // single receiver the first time the operator changed bandwidth.
-    m_ccConfig = ccConfig(rate, effectiveNumRx());
+    //
+    // The filter byte is here for the SAME reason. Everything that shares this
+    // register has to be carried through every rebuild of it; anything a
+    // rebuild re-defaults gets silently dropped the next time an unrelated
+    // control changes — a zoom would have released the band relays.
+    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte);
 }
 
 void MetisClient::setLnaGainDb(int db)
 {
     m_params.lnaGainDb = db;
     m_ccGain = ccRxGain(db);
+}
+
+void MetisClient::setBandFilter(int ocFilterByte)
+{
+    const std::uint8_t oc = static_cast<std::uint8_t>(ocFilterByte & 0x7F);
+    if (oc == m_params.ocFilterByte)
+        return;                       // relays already where they belong
+    m_params.ocFilterByte = oc;
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc);
+    // Ahead of the rotation: a band change moves the NCO and the filter in the
+    // same gesture, and waiting for the round robin would leave the relays on
+    // the old band for up to three EP2 frames.
+    m_oneShot.push_back(m_ccConfig);
 }
 
 void MetisClient::requestPipelineReset()

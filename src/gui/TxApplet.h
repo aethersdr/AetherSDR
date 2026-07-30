@@ -58,6 +58,14 @@ private:
     void buildUI();
     void syncFromModel();
     void syncAtuIndicators();
+    // Single owner of the ATU/MEM enabled state.
+    //
+    // Two independent reasons exist to grey these out — the radio has no tuner
+    // at all, and a TunerGenius XL is in Operate — and they arrive from
+    // different models at different times. Before this they each called
+    // setEnabled() directly, so whichever fired last won and a TGXL state change
+    // could re-enable an ATU button on a radio that has no ATU.
+    void updateAtuAvailability();
     // Right-click menu on the ATU button — exposes Pre-tune Bands and
     // Clear ATU Memories. Pre-tune is grayed when MEM is off. (#2624)
     void showAtuContextMenu(const QPoint& pos);
@@ -80,6 +88,12 @@ private:
     // current TX frequency still matches the freq we tuned at.  Any freq
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
+
+    // Inputs to updateAtuAvailability(). Both default to the permissive value
+    // so an applet built before either model has reported looks exactly as it
+    // did before this gate existed.
+    bool m_radioHasTuner{true};
+    bool m_tgxlOperate{false};
 
     // Gauges (HGauge*)
     QWidget* m_fwdGauge{nullptr};

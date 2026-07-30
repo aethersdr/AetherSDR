@@ -8,22 +8,194 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.7.4.1] — 2026-07-27
+
+### Hotfix: TCI rig control restored for WSJT-X and control surfaces
+
+One fix on top of v26.7.4, no other changes.
+
+- **fix(tci): confirm the frequency a `vfo:` SET actually reached (#4500,
+  #4493)** — v26.7.4 lost all WSJT-X rig control over TCI. Band changes
+  failed, the reported dial frequency was wrong, and transmissions could go
+  out of band.
+
+  The v26.7.4 TCI refactor replaced the model-driven tune with a raw
+  `slice tune` written straight at the connection, then read the frequency
+  back out of `SliceModel` when the radio's command reply arrived. The raw
+  command bypasses `SliceModel`, so nothing updated the model — and the radio
+  does not answer `slice tune` with an `RF_frequency` status either. The
+  read-back could only ever observe the **pre-tune** value, so every `vfo:`
+  confirmation echoed the frequency the slice had already left.
+
+  WSJT-X's `do_frequency()` waits on that echo: it concluded the radio had not
+  moved and reported rig-control failure on every band change, while the radio
+  was in fact on the new band. Any client accumulating a relative change — a
+  Stream Deck tuning encoder, a band stepper — had its position reset by the
+  stale echo and oscillated around one frequency instead of walking.
+
+  A second short-circuit added in the same refactor confirmed from the model
+  *without commanding the radio* when the request matched what the model held.
+  Once model and radio had diverged, that silently dropped real tunes and
+  falsely acknowledged them.
+
+  Tuning now goes through `SliceModel::setFrequency()` / `tuneAndRecenter()`
+  again on every command plane. The setter *is* the command path — it emits
+  the byte-identical `slice tune` and additionally updates the model, honours a
+  locked slice, and routes through the TX-inhibit guard the raw command
+  bypassed. Confirmations now carry the frequency the radio actually reached.
+
+  Reported by @rah501xx and @milenjb.
+
+## [v26.7.4] — 2026-07-26
+
+### Demo mode · on-device speech-to-text · experimental Hermes-Lite 2
+
+94 commits since v26.7.3. The headline addition is **demo mode**: a synthetic `SimBackend` on the aetherd `IRadioBackend` seam that generates its own RX audio and matching panadapter, so AetherSDR can be demonstrated, developed against, and regression-tested with no hardware attached. **Experimental Hermes-Lite 2 support** lands on the same seam — receive, transmit, TCI signaling for WSJT-X, an operator-controllable panadapter span, and per-radio nicknames. HL2 is an early, experimental backend and is **not** a supported radio family yet; FlexRadio remains the supported target.
+
+Alongside those, **Copy Assist** brings on-device speech-to-text via whisper.cpp with a transcription-language selector, **AetherClock** decodes NIST time signals into an alignment display, and a new **GPS and station-location dashboard** surfaces position and timing. The 3D stacked-trace spectrum gets its largest polish pass yet — surface-mapped slice shadows, preserved history across scroll boundaries, and a series of edge-artifact and motion-smoothness fixes across both Flex and KiwiSDR sources.
+
+The automation bridge gains an observe-only mode, phaseful pointer gestures, subsystem memory telemetry, and a secured fresh-build MCP auth handoff. TCI broadcasts considerably more model state. Peripheral support adds ACOM S-series amplifiers.
+
+### Hermes-Lite 2 & the aetherd backend seam (experimental)
+
+> Hermes-Lite 2 is an **experimental** backend in this release, not a supported
+> radio family. FlexRadio remains the supported target.
+
+- Add Hermes-Lite 2 receive support via the aetherd `IRadioBackend` seam — the first non-Flex backend. (#4448 — @ten9876)
+- Add Hermes-Lite 2 transmit. (#4466 — @ten9876)
+- Add basic TCI signaling for HL2, enough to run WSJT-X over a Hermes-Lite 2. (#4471 — @jensenpat)
+- Make the HL2 panadapter span operator-controllable, with a 6 Mb low-bandwidth mode. (#4470 — @jensenpat)
+- Add a user-assignable per-radio nickname for HL2, keyed by MAC. (#4468 — @nigelfenton)
+- Vendor WDSP 2.00 into `libaethercore` for Hermes-Lite receive. (#4278 — @jensenpat)
+
+### Demo mode
+
+- Add a built-in demo mode: `SimBackend` behind the `IRadioBackend` seam synthesizes RX audio and a matching panadapter render, with a fault-injection harness for exercising error paths. It only ever synthesizes receive audio — it cannot key (Principle VI). (#4473 — @nigelfenton)
+- Gate the demo's direct seam-audio connect so it no longer double-feeds Hermes-Lite 2 receive. The connect added for the demo was unconditional, so any backend that demodulates in-process — HL2 included — delivered every frame twice. (#4490 — @jensenpat)
+
+### Speech-to-text — Copy Assist
+
+- Add on-device speech-to-text "Copy Assist" via whisper.cpp. (#4338 — @ten9876)
+- Add a Copy Assist transcription-language selector. (#4399 — @K5PTB)
+- Nest Copy Assist settings under a single configuration key (Principle V). (#4420 — @ten9876)
+- Move Copy Assist off the lossy visualization tap. It subscribed to `rxPostChainScopeReady`, an 8 ms-throttled *visualization* signal that discards whole blocks rather than skipping a repaint — with NR2 on, blocks arrive 5.33 ms apart and roughly half the speech samples were dropped, then spliced into a stream with a discontinuity at every join. Now driven from the unconditional, source-tagged presentation signal, which also stops a Kiwi running alongside a Flex from interleaving two receivers into one transcript. (#4486 via #4488 — @ten9876)
+- Fix frameless window support in Copy Assist Settings. (#4417 — @rfoust)
+
+### Time & location
+
+- Add an AetherClock NIST time-signal decode engine. (#4336 — @Ozy311)
+- Add the AetherClock applet and alignment display. (#4337 — @Ozy311)
+- Add a GPS and station-location dashboard. (#4290 — @jensenpat)
+- Restore the GPS status label layout. (#4431 — @jensenpat)
+
+### Spectrum, waterfall & 3D FFT
+
+- Add surface-mapped slice shadows to the 3D FFT. (#4439 — @rfoust)
+- Add cached elevation shadows to slice flags. (#4442 — @rfoust)
+- Preserve 3D FFT history and stabilize smooth-scroll boundaries. (#4432 — @rfoust)
+- Smooth waterfall and 3D FFT motion for both Flex and KiwiSDR sources. (#4425 — @rfoust)
+- Smooth window resize and panadapter navigation with GPU previews. (#4303 — @rfoust)
+- Stabilize the 3D FFT rear edge during delayed row arrivals. (#4476 — @rfoust)
+- Resynchronize the 3D FFT floor after a bandwidth zoom. (#4477 — @rfoust)
+- Fix flat 3D FFT traces after dBm scale changes. (#4279 — @rfoust)
+- Fix the wide 3D stacked-trace right-edge artifact. (#4371 — @rfoust)
+- Fix the DC-edge 3D comb and a stalled waterfall. (#4413 — @rfoust)
+- Add an independent FFT trace line color, separate from the fill. (#4239 via #4312 — @aethersdr-agent)
+- Preserve panadapter Center Lock across band changes. (#4327 — @rfoust)
+- Unify the waterfall pane height split. (#4322 — @nigelfenton)
+- Make multi-pan pop-out uploads safe. (#4329 — @rfoust)
+- Contain panadapter overlay wheel events. (#4463 — @rfoust)
+
+### Slices & tuning
+
+- Add Slice Link: right-click a panadapter to link two slices so tuning either retunes the other — across panadapters, including Kiwi-sourced slices. Propagation rides the shared tuning policy (lock/SWR guards, reveal/pan-follow), suspends while a member is VFO-locked, and shows a ⇄ marker on both linked slices. Bridge: `slice link <a> <b> on|off` and a `linkedTo` slice-snapshot field. (#4326 — @quelleck)
+- Treat a diversity slice as not a split partner. (#4374 — @nigelfenton)
+- Accept conventional band-name aliases (`70cm` → `440`) in declared bands. (#4259 — @nigelfenton)
+
+### Audio & DSP
+
+- Improve NR2 suppression quality and settings reliability. (#4400 — @rfoust)
+- Preserve the global AetherDSP selection across mode changes. (#4418 — @rfoust)
+- Preserve Kiwi diversity slice volume across an antenna change. (#4302 — @wa2n-code)
+- Fix KiwiSDR mute poisoning FLEX band-stack recall. (#4375 — @rfoust)
+- Make the KiwiSDR status overlay dismissible. (#4446 — @rfoust)
+- Name Kiwi waterfall controls for assistive tools. (#4373 — @rfoust)
+
+### Automation bridge & MCP
+
+- Add an operator-controlled observe-only bridge mode. (#4188 via #4208 — @ten9876)
+- Add phaseful pointer gestures. (#4355 — @rfoust)
+- Add an optional slice id to the bridge `tune` verb (`tune <mhz> [sliceId]`, JSON `id` field) so scripts can drive a non-active slice directly instead of the racy `slice select` → `tune` → re-select flap. No id keeps today's active-slice behavior; lock, SWR-sweep, and Multi-Flex ownership refusals apply to both forms. (#4325 — @quelleck)
+- Add cross-platform subsystem memory telemetry to the bridge. (#4293 — @jensenpat)
+- Secure the fresh-build MCP auth handoff. (#4356 — @rfoust)
+- Remove the `AETHER_AUTOMATION_NO_AUTOCONNECT` env gate, with the original behavior restored in follow-up. (#4401, #4421 — @jensenpat, @rfoust)
+- Memoize SWR guide samples to end an `AETHER_AUTOMATION` GUI freeze. (#4376 — @Ozy311)
+- Pre-fill issue reports with a redacted log tail. (#4314 — @aethersdr-agent)
+
+### TCI
+
+- Broadcast which slice has GUI focus. (#4160 via #4323 — @milenjb)
+- Broadcast DSP, squelch, RIT/XIT and TX power on model change. (#4430 — @milenjb)
+- Serialize split routing and power replies. (#4407 — @jensenpat)
+
+### Spotting
+
+- Add a column-visibility menu and shrinkable width to SpotHub. (#4157 via #4280 — @M7HNF-Ian)
+- Add a one-shot WSPR beacon transmitter to PSK Reporter. (#4435 — @jensenpat)
+- Give operator feedback when Add Spot forwards to DX Cluster. (#2857 via #4294 — @aethersdr-agent)
+
+### Controllers & peripherals
+
+- Add ACOM S-series amplifier support over serial / ser2net. (#4298 — @NF0T)
+- Self-heal a stale relative-CC encoding lock on a controller knob-mode change. (#4318 — @skerker)
+- Fix center-64 MIDI VFO tuning jumps (CTR2-Midi). (#4271 — @jensenpat)
+- Fix the AetherControl Compact mode trap on short displays. (#4365 — @jensenpat)
+- Guard the amp-handle cache against a mis-routed tuner handle. (#4203 via #4313 — @aethersdr-agent)
+
 ### Operator workflow
 
-- Add Slice Link: right-click a panadapter to link two slices so tuning
-  either retunes the other — across panadapters, including Kiwi-sourced
-  slices. Propagation rides the shared tuning policy (lock/SWR guards,
-  reveal/pan-follow), suspends while a member is VFO-locked, and shows a ⇄
-  marker on both linked slices. Bridge: `slice link <a> <b> on|off` and a
-  `linkedTo` slice-snapshot field. (#4291 — @quelleck)
+- Add an animated community credits experience. (#4250 — @jensenpat)
+- Add import and export backups for keyboard shortcuts. (#4226 — @jensenpat)
+- Name the target and report the result on Profile Manager Save. (#4396, #4362 via #4464 — @Ozy311)
+- Fix deferred pan writes during profile loads. (#4224 — @Ozy311)
+- Reset stale per-connection state (radio-name label, DAX-TX stream) on reconnect. (#4260 — @nigelfenton)
+- Persist container dock transitions to disk immediately. (#4427 via #4428 — @aethersdr-agent)
+- Keep TX power sliders stable during a drag. (#4351 — @rfoust)
+- Gate the status-bar TX timer during tune carriers. (#4422 — @jensenpat)
+- Gate the DAX nudge as a per-stream one-shot. (#1439 via #4384 — @aethersdr-agent)
+- Allow a compact floating PWR meter. (#4315 — @rfoust)
+- Honor frameless mode for radio M-message dialogs. (#4370 — @rfoust)
+- Route the UI Scale restart prompt through `FramelessMessageBox`. (#4392 — @rfoust)
+- Reflect toggle state in labels. (#4389 — @K5PTB)
+- Organize and stabilize the network diagnostics tooltip. (#4393 — @rfoust)
+- Restore Display panel tooltip frames. (#4440 — @rfoust)
+- Fix stale CW and RTTY panels after pan routing. (#4410 — @rfoust)
 
-### Audio, diagnostics & automation
+### macOS
 
-- Add an optional slice id to the automation bridge `tune` verb
-  (`tune <mhz> [sliceId]`, JSON `id` field) so scripts can drive a non-active
-  slice directly instead of the racy `slice select` → `tune` → re-select flap.
-  No id keeps today's active-slice behavior; lock, SWR-sweep, and Multi-Flex
-  ownership refusals apply to both forms. (#4324 — @quelleck)
+- Fix native Metal backing-store growth. (#4352 — @rfoust)
+- Fail cleanly without GUI services. (#4238 — @rfoust)
+- Fix waveform resize geometry. (#4386 — @rfoust)
+
+### Packaging, build & documentation
+
+- Check that system libraries build in CI/CD. (#4256 — @dawkagaming)
+- Propagate the system RtMidi dependency. (#4255 — @dawkagaming)
+- Install ThumbDV udev rules only with DVStar. (#4254 — @dawkagaming)
+- Clean compiler and linker warnings. (#4369 — @rfoust)
+- Auto-cancel superseded workflow runs via concurrency groups. (#4346 — @ten9876)
+- Read the log back in Text mode so `async_log_writer_test` passes on Windows. (#4321 — @nigelfenton)
+- Fix Windows local build prerequisites — the `QT_ROOT_DIR` step and a PowerShell 5.1 parse failure. (#4378 — @Ozy311)
+- Move `THIRD_PARTY_LICENSES` from CODEOWNERS Tier 1 to Tier 2. (#4465 — @ten9876)
+- Add a first-contribution cheat sheet for the video tutorial. (#4469 — @ten9876)
+- Add a cheat sheet covering model, effort and context as usage levers. (#4479 — @ten9876)
+- Bump `docker/login-action` 4.4.0 → 4.5.1, `microsoft/microsoft-store-apppublisher` 1.3 → 1.4, `actions/checkout` 7.0.0 → 7.0.1, and `actions/setup-python` 6.3.0 → 7.0.0. (#4450, #4451, #4452, #4453 — @dependabot)
+
+### Contributors
+
+Big thanks to **@rfoust** (33 commits — the 3D FFT and waterfall pass, macOS fixes, automation gestures and MCP auth, NR2, and a long run of GUI polish), **@jensenpat** (15 commits — GPS dashboard, HL2 TCI and panadapter span, WDSP vendoring, WSPR beacon, the demo seam-audio gate, TCI and controller work), **@ten9876** (maintainer, 10 commits — experimental Hermes-Lite 2 receive and transmit, Copy Assist and its audio-tap fix, observe-only bridge mode, CI and documentation), **@nigelfenton** (7 commits — demo mode / `SimBackend`, HL2 nicknames, reconnect state, band-name aliases, waterfall split), **@Ozy311** (6 commits — AetherClock engine and applet, Profile Manager Save, SWR guide memoization, Windows build prerequisites), **@aethersdr-agent** (the AetherClaude orchestrator, 6 commits — FFT trace color, dock persistence, DAX nudge gating, amp-handle guard, spot feedback, redacted issue-report logs), **@dawkagaming** (3 commits — system-library CI, RtMidi, udev rules), **@quelleck** (2 commits — Slice Link, bridge `tune` slice id), **@K5PTB** (2 commits — Copy Assist language selector, toggle labels), **@milenjb** (2 commits — TCI broadcasts), **@NF0T** (1 commit — ACOM S-series amplifiers), **@wa2n-code** (1 commit — Kiwi diversity volume), **@M7HNF-Ian** (1 commit — SpotHub columns), and **@skerker** (1 commit — MIDI VFO self-heal). Dependabot contributed 4 dependency bumps.
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
 
 ## [v26.7.3] — 2026-07-19
 

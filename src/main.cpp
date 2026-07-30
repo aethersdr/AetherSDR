@@ -13,6 +13,8 @@
 #include "MacStartupAbortGuard.h"
 #endif
 
+#include "core/backends/hl2/Hl2EmergencyStop.h"
+
 #include <QApplication>
 #include <QSurfaceFormat>
 #include <memory>
@@ -207,6 +209,20 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 #endif
+
+    // Release the Hermes-Lite 2 if this process is killed or crashes.
+    //
+    // A signal tears down nothing — Hl2Backend's destructor never runs — and an
+    // HL2 that is never told to stop keeps streaming at a host that is gone,
+    // then stops answering discovery until it is physically power-cycled.
+    // Reproduced three times with a plain `kill` on a connected session.
+    //
+    // Installed HERE, after the macOS startup guard has restored SIGABRT: doing
+    // it earlier would have the guard overwrite the handler for that signal.
+    // No-op until a radio is actually connected, so it costs a disconnected run
+    // nothing. See Hl2EmergencyStop.h for why it acts inside the handler rather
+    // than deferring to the event loop.
+    AetherSDR::hl2::installEmergencyStopSignalHandlers();
 
     app.setApplicationName("AetherSDR");
     app.setApplicationVersion(AETHERSDR_VERSION);

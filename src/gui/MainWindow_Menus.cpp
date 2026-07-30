@@ -28,6 +28,7 @@
 #include "PersistentDialog.h"
 #include "RC28MappingDialog.h"
 #include "ShortcutDialog.h"
+#include "RadioHealthDialog.h"
 #include "SliceTroubleshootingDialog.h"
 #include "SpectrumWidget.h"
 #include "SupportDialog.h"
@@ -1177,6 +1178,17 @@ void MainWindow::buildMenuBar()
         trackPersistentDialog(dlg);
         dlg->show();
         dlg->raise();
+    });
+    // Before Slice Troubleshooting: this one is about the RADIO's own health
+    // registers, which is the first thing to check when the slice-level
+    // symptoms in that dialog turn out to have a hardware cause.
+    helpMenu->addAction("Radio Health...", this, [this]() {
+        auto* dlg = new RadioHealthDialog(&m_radioModel, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        trackPersistentDialog(dlg);
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         auto* dlg = new SliceTroubleshootingDialog(

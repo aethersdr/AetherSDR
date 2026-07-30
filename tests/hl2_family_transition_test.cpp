@@ -72,6 +72,52 @@ int main(int argc, char** argv)
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
 
+    // ── The normalized RX-audio bus ────────────────────────────────────────
+    //
+    // The CW decoder, the RTTY decoder and the QSO recorder's RX tap all ride
+    // rxDemodAudioReady. Two properties have to hold, and the second is the one
+    // that has actually broken before.
+    //
+    //   1. It is FED on a radio with no PanadapterStream. That is the whole
+    //      point: bound to the stream, these three were silently dead on an HL2.
+    //   2. EXACTLY ONE producer is connected. Connecting both is the double-feed
+    //      shape of #4490, where the sim's frames arrived over two routes and
+    //      the engine consumed at double rate. Here it would hand every decoder
+    //      each block twice — which a Morse decoder reads as doubled timing,
+    //      i.e. wrong text rather than no text.
+    //
+    // Re-entering the family swap is what makes (2) worth asserting: the seam
+    // relay has `this` on BOTH ends, so unlike a stream-bound connection Qt has
+    // nothing to drop for us when the backend is replaced.
+    {
+        int busBlocks = 0;
+        QObject::connect(&model, &RadioModel::rxDemodAudioReady,
+                         &model, [&busBlocks](const QByteArray&) { ++busBlocks; });
+
+        const QByteArray frame(256, '\0');
+        emit model.backendAudioFrameReady(frame);
+        check(busBlocks == 1,
+              "RX bus: a seam backend's audio reaches rxDemodAudioReady exactly once");
+
+        // On the Flex leg the seam relay must be GONE, not merely outnumbered.
+        // This is the state wireRxDemodAudioBus()'s disconnect exists to
+        // produce, and asserting it directly names the failure better than
+        // catching a doubled count later would. (PR #4537 review.)
+        model.connectToRadio(flexInfo());
+        busBlocks = 0;
+        emit model.backendAudioFrameReady(frame);
+        check(busBlocks == 0,
+              "RX bus: the seam relay is dropped when a Flex takes over");
+
+        // Back to HL2: re-enters wireRxDemodAudioBus() with the same endpoints
+        // on the seam relay, which is the case Qt cannot clean up for us.
+        model.connectToRadio(hl2Info());
+        busBlocks = 0;
+        emit model.backendAudioFrameReady(frame);
+        check(busBlocks == 1,
+              "RX bus: still exactly one producer after a family round-trip");
+    }
+
     // Keying a backend with no live link must not spuriously enter TX,
     // regardless of capability — connectToRadio() reached the post-swap state
     // against an unroutable address, so there is nothing to key.
@@ -89,24 +135,53 @@ int main(int argc, char** argv)
     model.rebootRadio();
     check(true, "F3: rebootRadio() on HL2 did not crash");
 
-    // WSPR beacon (#4435): the beacon rides a Flex `dax_tx` stream, which no
-    // other family provides — HL2 host-modulates and has no DAX. It borrows
-    // station state (`transmit dax`, the TX filter, DAX TX stream ownership)
-    // before it ever keys, so a refusal must leave none of that latched.
-    // `transmit dax` in particular is the one that bites: its own comment notes
-    // a stuck dax=1 "would silently kill the next mic voice TX on every platform
-    // where updateDaxTxMode() is compiled out".
-    //
-    // Note this is NOT the capabilities().canTransmit gate doing the work — HL2
-    // advertises canTransmit since transmit landed, so the gate passes here and
-    // the refusal comes from the absent DAX TX stream. The gate remains the
-    // fail-closed guard for any family that reports canTransmit=false.
-    check(!model.prepareWsprTransmit(),
-          "WSPR: prepareWsprTransmit() is refused on a family with no DAX TX");
-    check(!model.hasWsprTxStream(),
-          "WSPR: a refused prepare claims no TX audio stream");
+    // WSPR beacon (#4435): the beacon used to be refused outright on HL2,
+    // because it rides a Flex `dax_tx` stream that no other family provides.
+    // It now takes the host-modulated arm instead: the modulator is ours, the
+    // AudioEngine pump already reaches it through the m_hostModulation branch
+    // of feedDaxTxAudioInternal(), and there is no transport to create.
+    check(model.prepareWsprTransmit(),
+          "WSPR: prepareWsprTransmit() succeeds on a host-modulating backend");
+    check(model.hasWsprTxStream(),
+          "WSPR: the host-modulated arm reports a ready TX audio route");
+
+    // The point of the original refusal survives the change: the beacon must
+    // still not borrow Flex station state on a radio that has none. `transmit
+    // dax` is the one that bites — its own comment notes a stuck dax=1 "would
+    // silently kill the next mic voice TX on every platform where
+    // updateDaxTxMode() is compiled out". A host-modulating radio has no
+    // radio-side modulator to point at DAX in the first place.
     check(!model.transmitModel().daxOn(),
-          "WSPR: a refused prepare does not leave `transmit dax` latched");
+          "WSPR: the host-modulated arm does not latch `transmit dax`");
+
+    model.releaseWsprTransmit();
+    check(!model.hasWsprTxStream(),
+          "WSPR: release drops the host-modulated route claim");
+    check(!model.transmitModel().daxOn(),
+          "WSPR: release leaves `transmit dax` clear");
+
+    // Prepare/release is idempotent and re-armable — the dialog defers a frame
+    // to the next two-minute slot without re-preparing, but an operator who
+    // cancels and re-arms runs this pair again.
+    check(model.prepareWsprTransmit() && model.hasWsprTxStream(),
+          "WSPR: the host-modulated arm can be re-armed after a release");
+    model.releaseWsprTransmit();
+    check(!model.hasWsprTxStream(), "WSPR: second release also clears");
+
+    // An ARMED beacon must not carry its route claim onto another radio.
+    // connectToRadio() on a family switch runs dropAllSessionModelsForFamily-
+    // Switch() -> teardownBackend() -> setupBackend() and reaches neither
+    // releaseWsprTransmit() nor onDisconnected(), so the host-modulated latch
+    // used to survive — and hasWsprTxStream() would then tell the beacon dialog
+    // its route was ready on a FLEX, which keys the radio for a full 111.6 s
+    // frame with no dax_tx stream behind it. Unintended transmission, so it is
+    // asserted rather than reasoned about. (PR #4537 review, finding 2.)
+    check(model.prepareWsprTransmit(), "WSPR: armed on HL2 for the switch test");
+    check(model.hasWsprTxStream(), "WSPR: armed claim is live before the switch");
+    model.connectToRadio(flexInfo());
+    check(!model.hasWsprTxStream(),
+          "WSPR: an armed host-modulated claim does NOT survive onto a Flex");
+    model.connectToRadio(hl2Info());
 
     // ---- Round-trip back to Flex ----
     model.connectToRadio(flexInfo());
@@ -116,6 +191,11 @@ int main(int argc, char** argv)
           "round-trip: Flex regains canReboot after HL2 -> Flex");
     check(model.panStream() != nullptr,
           "round-trip: Flex owns a PanadapterStream again");
+    // A host-modulated claim must not survive into a family that DOES need a
+    // real dax_tx stream, or the dialog would arm against a stream that was
+    // never created and transmit a silent 111.6 s frame.
+    check(!model.hasWsprTxStream(),
+          "round-trip: no WSPR route is claimed on Flex before a prepare");
 
     // Flex -> HL2 -> same Flex: nothing from the HL2 session lingers as a
     // reclaim candidate (F1). No slices should have survived the switches.

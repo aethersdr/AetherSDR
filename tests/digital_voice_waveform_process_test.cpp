@@ -24,6 +24,35 @@ using AetherSDR::DigitalVoiceWaveformHistoryTracker;
 using AetherSDR::DigitalVoiceModeId;
 using AetherSDR::DigitalVoiceModeRegistry;
 
+namespace AetherSDR {
+
+class DigitalVoiceWaveformProcessTestAccess
+{
+public:
+    static void resetTelemetry(DigitalVoiceWaveformProcess& process)
+    {
+        process.resetTelemetry(false);
+    }
+
+    static void armRxStartupWatchdog(DigitalVoiceWaveformProcess& process)
+    {
+        process.m_rxStartupWatchdog.start();
+    }
+
+    static bool rxStartupWatchdogActive(const DigitalVoiceWaveformProcess& process)
+    {
+        return process.m_rxStartupWatchdog.isActive();
+    }
+
+    static void updateMetrics(DigitalVoiceWaveformProcess& process,
+                              DigitalVoiceWaveformMetrics metrics)
+    {
+        process.updateMetrics(metrics);
+    }
+};
+
+} // namespace AetherSDR
+
 namespace {
 
 int g_failed = 0;
@@ -49,6 +78,12 @@ int main(int argc, char** argv)
     report("stateName: failed",
            DigitalVoiceWaveformProcess::stateName(DigitalVoiceWaveformProcess::State::Failed)
                == QStringLiteral("Failed"));
+    report("healthName: missing waveform input",
+           DigitalVoiceWaveformProcess::healthName(DigitalVoiceWaveformHealth::NoInput)
+               == QStringLiteral("No waveform data"));
+    report("health classification: missing waveform input is degraded",
+           AetherSDR::isDegradedDigitalVoiceWaveformHealth(
+               DigitalVoiceWaveformHealth::NoInput));
 
     report("resolveExecutablePath: trims configured path",
            DigitalVoiceWaveformProcess::resolveExecutablePath(QStringLiteral("  /tmp/aether-dv-waveform  "))
@@ -349,6 +384,29 @@ int main(int argc, char** argv)
 
     DigitalVoiceWaveformProcess& process = DigitalVoiceWaveformProcess::instance();
     process.stop();
+    AetherSDR::DigitalVoiceWaveformProcessTestAccess::resetTelemetry(process);
+    AetherSDR::DigitalVoiceWaveformProcessTestAccess::armRxStartupWatchdog(process);
+    DigitalVoiceWaveformMetrics txFirstMetrics;
+    txFirstMetrics.direction = DigitalVoiceWaveformMetricDirection::Tx;
+    txFirstMetrics.txSampleRateHz = 24000.0;
+    AetherSDR::DigitalVoiceWaveformProcessTestAccess::updateMetrics(
+        process, txFirstMetrics);
+    report("RX startup watchdog: TX-first telemetry keeps watchdog armed",
+           AetherSDR::DigitalVoiceWaveformProcessTestAccess::
+               rxStartupWatchdogActive(process)
+               && !process.metrics().valid
+               && process.metrics().txValid);
+    DigitalVoiceWaveformMetrics firstRxMetrics;
+    firstRxMetrics.direction = DigitalVoiceWaveformMetricDirection::Rx;
+    firstRxMetrics.rxSampleRateHz = 24000.0;
+    AetherSDR::DigitalVoiceWaveformProcessTestAccess::updateMetrics(
+        process, firstRxMetrics);
+    report("RX startup watchdog: first RX telemetry disarms watchdog",
+           !AetherSDR::DigitalVoiceWaveformProcessTestAccess::
+               rxStartupWatchdogActive(process)
+               && process.metrics().valid);
+    AetherSDR::DigitalVoiceWaveformProcessTestAccess::resetTelemetry(process);
+
     const bool started = process.startForRadio(QHostAddress());
     report("startForRadio: null radio fails", !started);
     report("startForRadio: null radio sets failed state",

@@ -1076,6 +1076,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_qsoRecorder = new QsoRecorder(this);
     // During playback, block live RX audio from entering the buffer
     connect(m_qsoRecorder, &QsoRecorder::muteRxRequested, this, [this](bool mute) {
+        // Covers BOTH producers. The disconnect below is the Flex path and is
+        // left exactly as it was; the flag is what mutes a seam backend, whose
+        // audio reaches the engine through RadioModel::backendAudioFrameReady
+        // and so has no stream connection to drop. (PR #4537 review.)
+        m_rxMutedForPlayback = mute;
         if (mute) {
             disconnect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                        m_audio, &AudioEngine::feedAudioData);
@@ -1085,7 +1090,7 @@ MainWindow::MainWindow(QWidget* parent)
             // never had this connection — re-adding it here would resurrect the
             // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
             // Qt permits duplicates, so every unmute would stack another copy.
-            if (!backendOwnsRxAudio()) {
+            if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                         m_audio, &AudioEngine::feedAudioData,
                         Qt::UniqueConnection);
@@ -1175,6 +1180,7 @@ MainWindow::MainWindow(QWidget* parent)
     // the sink volume to 0 would mute our playback too.
     connect(m_finalMonitor, &ClientPuduMonitor::muteRxRequested,
             this, [this](bool mute) {
+        m_rxMutedForPlayback = mute;   // seam backends — see the recorder handler
         if (mute) {
             disconnect(m_radioModel.panStream(),
                        &PanadapterStream::audioDataReady,
@@ -1182,7 +1188,7 @@ MainWindow::MainWindow(QWidget* parent)
         } else {
             // Same rule as the QSO-recorder unmute above: never resurrect the
             // stream→sink feed for a backend that supplies its own seam audio.
-            if (!backendOwnsRxAudio()) {
+            if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(),
                         &PanadapterStream::audioDataReady,
                         m_audio, &AudioEngine::feedAudioData,
@@ -1359,11 +1365,15 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned by
     // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
-    // Every RX-audio sink for that signal — the QAudioSink feed, the QSO-recorder
-    // RX tap, and the CW/RTTY decoder feeds — is wired in one helper so a Flex-
-    // backend swap can rebind an identical set (the stream is destroyed/rebuilt
-    // on a family change; audioDataReady carries Flex RX audio itself).
+    // The QAudioSink feed is wired in one helper so a Flex-backend swap can
+    // rebind it (the stream is destroyed/rebuilt on a family change;
+    // audioDataReady carries Flex RX audio itself, so a missed rebind is
+    // silence rather than a degraded feature).
     wirePanStreamRxAudioSinks();
+    // The taps that listen alongside the speaker — QSO recorder RX, CW and RTTY
+    // — ride RadioModel's normalized bus instead, so they are wired ONCE here
+    // and are never part of the rebind. RadioModel outlives the swap.
+    wireRxDemodAudioSinks();
     // Separately, wire the backend-OWNED seam signals (audio + spectrum), which do
     // not flow through PanadapterStream: the demo/sim backend delivers RX audio and
     // its panadapter FFT directly over IRadioBackend (no VITA-49), in the same
@@ -1398,8 +1408,9 @@ MainWindow::MainWindow(QWidget* parent)
     wireKiwiSdr();
 
     // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
-    // RX (float32) comes from the panadapter stream (wired in
-    // wirePanStreamRxAudioSinks() above); TX (int16 post-limiter monitor) from
+    // RX (float32) comes from RadioModel's normalized RX-audio bus (wired in
+    // wireRxDemodAudioSinks() above), so it works on every family rather than
+    // only on one with a VITA-49 stream; TX (int16 post-limiter monitor) from
     // AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
@@ -1429,7 +1440,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in
-    // wirePanStreamRxAudioSinks() above (RX feed gated on
+    // wireRxDemodAudioSinks() above (RX feed gated on
     // CwDecodeSettings::rxEnabled(), #2417). Text/stats output is routed to the
     // pan owning the active slice via routeCwDecoderOutput(), which re-wires on
     // active slice change (#864).
@@ -1456,7 +1467,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
-    // RTTY decoder audio feed is wired in wirePanStreamRxAudioSinks() above,
+    // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
 
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
@@ -4083,8 +4094,14 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    m_connPanel->setMinimumSize(640, 580);
-    m_connPanel->resize(760, 660);
+    // Height floor comes from the panel itself — its "Connect by IP" page grew a
+    // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
+    // page (the Advanced disclosure fell outside the mode stack). Open at
+    // exactly that floor, not floor + slack: the panel reclaims height it set
+    // itself when a page shrinks, and it can only tell its own sizing from an
+    // operator's drag if the two agree to start with.
+    m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
+    m_connPanel->resize(760, m_connPanel->minimumHeight());
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -5137,6 +5154,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
         return;
     }
 
+    // A completed connect clears the auto-connect attempt count for that radio;
+    // a drop settles any attempt still recorded as in flight. Both go through
+    // one place so the count cannot leak across sessions.
+    noteAutoConnectFinished(connected);
+
     m_connPanel->setConnected(connected);
 
     // Demo mode: reveal the Demo Noise control tile only while connected to the
@@ -5165,6 +5187,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_discovery.setConnected(connected, remoteConnection);
 
     if (connected) {
+        m_terminalConnectionError.clear();
         m_suppressStartupPanLayoutRearrange = false;
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
@@ -5292,6 +5315,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 menu->setRadioCapabilities(caps);
                 menu->setDeclaredBands(declaredBands);
                 menu->setXvtrBands(xvtrBands);
+                applyTuningRangeToOverlayMenu(menu);
             }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
@@ -5455,7 +5479,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
 #ifdef HAVE_WEBSOCKETS
         QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->stopConnection(); });
 #endif
-        m_connStatusLabel->setText("Disconnected");
+        const bool terminalConnectionFailure = !m_terminalConnectionError.isEmpty();
+        m_connStatusLabel->setText(terminalConnectionFailure ? "Error" : "Disconnected");
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
         setStatusBarStationText(m_stationLabel, QStringLiteral("N0CALL"));
@@ -5483,7 +5508,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
         updateStatusBarMinimumWidth();
         m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
         m_txIndicator->setText("TX");
-        m_connPanel->setStatusText("Not connected");
+        m_connPanel->setStatusText(
+            terminalConnectionFailure
+                ? tr("Error: %1").arg(m_terminalConnectionError)
+                : tr("Not connected"));
 #ifdef HAVE_HIDAPI
         // Safety: if latched PTT was active when the radio dropped, the radio is
         // now TX-off regardless.  Reset the latch flag so it stays in sync with
@@ -5527,7 +5555,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
 
-        setPanadapterConnectionAnimation(!m_userDisconnected, "Reconnecting to radio…");
+        setPanadapterConnectionAnimation(
+            !m_userDisconnected && !terminalConnectionFailure,
+            "Reconnecting to radio…");
+
+        if (terminalConnectionFailure) {
+            showConnectionDialog();
+        }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
         if (!m_userDisconnected && !m_reconnectDlg) {
@@ -5606,6 +5640,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
 void MainWindow::onConnectionError(const QString& msg)
 {
+    // A failed auto-connect must count, or the retry is unbounded — see
+    // maybeAutoConnectToDiscoveredRadio(). Done here rather than in that slot
+    // because this is the only place a connect is known to have ended badly.
+    noteAutoConnectFinished(false);
     m_connPanel->setStatusText("Error: " + msg);
     m_connStatusLabel->setText("Error");
     statusBar()->showMessage("Connection error: " + msg, 5000);
@@ -5750,11 +5788,26 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
 
     // Demo/sim backend delivers RX audio directly over the seam (no VITA-49, no
     // PanadapterStream) — same 24 kHz stereo float32 format, so it feeds the
-    // identical AudioEngine path. Harmless for real backends: FlexBackend never
-    // emits audioFrameReady (its audio flows through PanadapterStream), so this
-    // connection simply stays idle unless a SimBackend is active.
-    connect(backend, &IRadioBackend::audioFrameReady,
-            m_audio, &AudioEngine::feedAudioData);
+    // identical AudioEngine path.
+    //
+    // SIM ONLY, and the cast is load-bearing. This was originally unconditional,
+    // on the reasoning that FlexBackend never emits audioFrameReady so the
+    // connection stays idle for "real backends". That holds for Flex and NOT for
+    // HL2: HL2 demodulates in-process and audioFrameReady is its ONLY audio
+    // route (Hl2Backend.cpp, emit audioFrameReady). It therefore arrived here
+    // AND via the RadioModel::backendAudioFrameReady relay in
+    // MainWindow_Session.cpp, whose gate — backendFeedsEngineDirectly() — excludes only
+    // the sim. Every HL2 frame was delivered twice and the engine consumed at
+    // double rate: measured 48043 Hz at the raw tap against a nominal 24000
+    // (ratio 2.002), audible as popping and crackling on every mode.
+    //
+    // Any future in-process backend needs the same treatment. The gate belongs
+    // on "does this backend own its RX audio", not on a list of families that
+    // happen not to emit the signal today.
+    if (dynamic_cast<SimBackend*>(backend) != nullptr) {
+        connect(backend, &IRadioBackend::audioFrameReady,
+                m_audio, &AudioEngine::feedAudioData);
+    }
 
     // The demo delivers native 128-sample frames, which the improved 1024/4 NR2
     // geometry (#4400) mangles (wobble + dead DSP/RADE); tell the engine to run
@@ -6034,6 +6087,28 @@ void MainWindow::applyMasterVolume(int pct)
 }
 
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
+QString MainWindow::rfGainSettingsKey(SpectrumWidget* sw) const
+{
+    if (!sw)
+        return QStringLiteral("DisplayRfGain");
+    const QString base = sw->settingsKey(QStringLiteral("DisplayRfGain"));
+    const QString family = m_radioModel.backendCapabilities().family;
+    if (family.isEmpty() || family == QLatin1String("flex"))
+        return base;                       // unchanged for Flex and when unknown
+    return base + QLatin1Char('_') + family;
+}
+
+void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
+{
+    if (!menu)
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    // Zero/zero when the backend reports no range, which the menu reads as
+    // "unconstrained" — so a Flex, and a disconnected session, both keep every
+    // band button live exactly as before.
+    menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
+}
+
 SliceModel* MainWindow::activeSlice() const
 {
     SliceModel* cached = nullptr;

@@ -22,6 +22,10 @@ struct KiwiSdrAntennaProfile {
     QString name;
     QString endpoint;
     bool autoConnect{false};
+    // Keep this receiver's audio audible while the radio transmits (the
+    // stream itself always keeps flowing during TX; this only opens the
+    // transmit gate at the audio mix). Default off: muted during TX.
+    bool keepAudioDuringTx{false};
     bool waterfallAutoScale{true};
     int waterfallMinDbm{-110};
     int waterfallMaxDbm{-10};

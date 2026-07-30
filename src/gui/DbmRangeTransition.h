@@ -170,6 +170,14 @@ inline Range manualRequestRange(float requestedMinDbm,
     return {dssFloorDbm, dssFloorDbm + dssSpanDb};
 }
 
+inline Range clippedFloorRecoveryRange(float currentMinDbm,
+                                       float currentMaxDbm,
+                                       float headroomStepDb = 6.0f)
+{
+    const float stepDb = std::max(0.0f, headroomStepDb);
+    return {currentMinDbm - stepDb, currentMaxDbm - stepDb};
+}
+
 struct Evaluation {
     bool useRebasedBins{false};
     bool newEncodingObserved{false};

@@ -66,9 +66,11 @@ public:
     void    cycleSqlModeExternal();
     // Programmatic slider drag from another UI surface.  Branches by mode
     // exactly like the in-applet slider does: Manual writes the current
-    // receive surface; Flex also persists m_sqlManualLevel, while Kiwi keeps
-    // its replacement-source level independent. Auto writes AppSettings
-    // AutoSqlMarginDb and emits autoSqlMarginDbChanged. Off is a no-op.
+    // receive surface; Flex persists the level on the attached SliceModel
+    // (per-slice, #3326) plus AppSettings as the seed for future new
+    // slices, while Kiwi keeps its replacement-source level independent.
+    // Auto writes AppSettings AutoSqlMarginDb and emits
+    // autoSqlMarginDbChanged. Off is a no-op.
     void    setSqlSliderValueExternal(int v);
     void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
     void cycleStepUp();
@@ -272,10 +274,14 @@ private:
     SqlMode      m_sqlMode{SqlMode::Off};
     SqlMode      m_flexSqlMode{SqlMode::Off};
     bool         m_savedSquelchOn{false};
-    // Last user-chosen Manual squelch level (0–100).  Auto mode overwrites
-    // the slice's squelchLevel with algorithm-suggested values every FFT
-    // tick, so we cache the manual value separately and restore it when
-    // the user comes back to Manual.  Seeded from the slice on first attach.
+    // Fallback only, for the rare case no slice is attached (#3326): Auto
+    // mode overwrites the slice's squelchLevel with algorithm-suggested
+    // values every FFT tick, so the manual value needs to be cached
+    // separately to restore when the user comes back to Manual — but that
+    // cache now lives per-slice on SliceModel::manualSquelchLevel(), seeded
+    // when a slice is first created (RadioModel.cpp) from the radio's own
+    // squelch_level when the status frame carries one, else from AppSettings,
+    // so switching the active slice doesn't pull in another slice's threshold.
     int          m_sqlManualLevel{20};
 
     void applySqlModeVisuals();

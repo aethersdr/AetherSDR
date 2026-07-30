@@ -255,6 +255,14 @@ void TransmitModel::setHostModulation(bool on)
     emit hostModulationChanged(on);
 }
 
+void TransmitModel::setHasTuner(bool present)
+{
+    if (m_hasTuner == present)
+        return;
+    m_hasTuner = present;
+    emit hasTunerChanged(present);
+}
+
 void TransmitModel::setRfPower(int power)
 {
     power = qBound(0, power, 100);
