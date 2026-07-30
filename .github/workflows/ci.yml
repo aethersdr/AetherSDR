@@ -267,10 +267,18 @@ jobs:
         # hours on the runner. timeout-minutes fails fast (with logs) if it ever
         # hangs again, instead of running to the 6-hour job limit.
         timeout-minutes: 45
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
       - name: Test ThumbDV portability paths
         run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure
+
+      # cross_needle_meter_test renders widgets; the offscreen platform makes
+      # its measurements deterministic (verified bit-identical across
+      # Windows/Linux x86_64/macOS arm64/Linux arm64 — see #4559).
+      - name: Test cross-needle meter geometry
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "cross_needle_meter_test" --output-on-failure
 
       - name: sccache stats
         if: always()
