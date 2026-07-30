@@ -973,6 +973,9 @@ private:
         quint64 dssMeshRowGenUploaded{~0ull};
 #endif
     };
+    // #4595: this type is materialized as a stack local by save/restore; keep
+    // large fixed buffers behind indirection so this can't silently regress.
+    static_assert(sizeof(WaterfallStreamState) < 16 * 1024);
     void clearCurrentWaterfallRows();
     void resetKiwiSdrWaterfallDisplayRange();
     void resetCurrentWaterfallRowsForSize(const QSize& waterfallSize,
