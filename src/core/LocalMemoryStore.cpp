@@ -101,21 +101,34 @@ LocalMemoryStore::ParseResult LocalMemoryStore::parse(const QByteArray& bytes)
     if (bytes.trimmed().isEmpty())
         return result;
 
+    // Every branch below that cannot make sense of the file marks it UNREADABLE,
+    // not merely errored. A caller may not overwrite what it could not read: the
+    // bytes are channels somebody saved, and replacing them with the empty bank
+    // this parse produced is data loss, not a lost field.
     QJsonParseError perr;
     const QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
     if (doc.isNull()) {
         result.errors << QString("Invalid JSON: %1").arg(perr.errorString());
+        result.unreadable = true;
         return result;
     }
     if (!doc.isObject()) {
         result.errors << QStringLiteral("Top-level JSON is not an object");
+        result.unreadable = true;
         return result;
     }
 
     const QJsonObject root = doc.object();
     const QString format = root.value("format").toString();
-    if (!format.isEmpty() && format != QLatin1String(kFormatId))
+    // A MISSING format id is tolerated — an early hand-written file, and the
+    // memories still parse. A PRESENT but foreign one is another application's
+    // file that happens to live at our path, so stop: reading its "memories"
+    // array and then saving our envelope over it would clobber it.
+    if (!format.isEmpty() && format != QLatin1String(kFormatId)) {
         result.errors << QString("Unexpected format \"%1\"").arg(format);
+        result.unreadable = true;
+        return result;
+    }
 
     result.version = root.value("version").toInt(0);
     if (result.version > kFormatVersion) {
@@ -125,6 +138,7 @@ LocalMemoryStore::ParseResult LocalMemoryStore::parse(const QByteArray& bytes)
         result.errors << QString("File version %1 is newer than supported version %2")
                              .arg(result.version)
                              .arg(kFormatVersion);
+        result.unreadable = true;
         return result;
     }
 

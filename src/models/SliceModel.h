@@ -138,6 +138,15 @@ public:
     bool    xitOn()       const { return m_xitOn; }
     int     xitFreq()     const { return m_xitFreq; }
     int     stepHz()      const { return m_stepHz; }
+    // HOST-BANK MEMORY RECALL ONLY — do not call this on a radio that owns its
+    // slots. Step size is radio-authoritative (AGENTS.md, Principle II): on a
+    // Flex it arrives as `slice` status and the client must never assert it, or
+    // the two fight on reconnect. On a backend with no command plane there is no
+    // radio opinion to defer to, the host bank owns the channel, and a recalled
+    // step would otherwise never take because the wire command that normally
+    // round-trips it is dropped. Named for its one caller so the exception stays
+    // visible; see RadioModel::recallLocalMemory().
+    void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
     int     rttyMark()        const { return m_rttyMark; }

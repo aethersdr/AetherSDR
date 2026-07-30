@@ -1512,6 +1512,15 @@ private:
     // own. It is always constructed but only read/written on that path, so a
     // Flex session never touches the file.
     LocalMemoryBank m_localMemories;
+    // Does the radio THIS SESSION belongs to own its memory slots? Latched on the
+    // connect edge and held across an unexpected drop, because isConnected()
+    // alone cannot tell "never connected" from "the link blipped and a reconnect
+    // is armed" — and during a blip the Memory dialog stays fully usable, so an
+    // Add would be answered by the host bank, reported as saved, then wiped by
+    // syncMemoryStoreForSession() on reconnect, leaving a phantom channel in
+    // memories.json that reappears on every later disconnect. Cleared only when
+    // the session really ends. See usesLocalMemoryBank().
+    bool        m_sessionRadioOwnsMemories{false};
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};

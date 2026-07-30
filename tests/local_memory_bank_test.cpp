@@ -172,8 +172,24 @@ int main(int argc, char** argv)
         bank.setFilePath(futurePath);
         bank.load();
         ok &= expect(bank.entries().isEmpty(), "a too-new bank reads as empty");
-        ok &= expect(!bank.isLoaded(), "a too-new bank is not marked loaded");
+        // The read WAS attempted (so nothing re-reads and thrashes m_entries);
+        // what it is not, is writable. These are two facts and used to be one
+        // flag, which is what let a create/set pair fail with "no memory in
+        // slot 0" on this fixture.
+        ok &= expect(bank.isLoaded(), "a too-new bank counts as read");
+        ok &= expect(!bank.isWritable(), "a too-new bank is not writable");
         ok &= expect(!bank.lastError().isEmpty(), "a too-new bank reports why");
+
+        // A create/set PAIR — the shape every Add and CSV-import row takes. The
+        // second command must not find an empty bank because the first
+        // command's load() re-ran and cleared it.
+        const auto created = bank.handleCommand("memory create");
+        ok &= expect(created.handled, "an unreadable bank still answers");
+        ok &= expect(created.code != 0, "create is refused, not silently accepted");
+        ok &= expect(created.body.contains("could not be read"),
+                     "the refusal explains that the file is unreadable");
+        ok &= expect(!created.body.contains("no memory in slot"),
+                     "the refusal is not the misleading empty-slot error");
 
         // An edit made against it must not be written back — that would replace
         // channels this build cannot represent with the empty bank it read.
@@ -198,33 +214,37 @@ int main(int argc, char** argv)
         bank.flush();
         ok &= expect(QFile::exists(noopPath), "the first record saved");
 
-        // Overwrite the file with a sentinel. A rewrite would destroy it —
-        // deterministic where comparing mtimes would depend on filesystem
-        // timestamp granularity.
-        {
-            QFile f(noopPath);
-            ok &= expect(f.open(QIODevice::WriteOnly | QIODevice::Truncate),
-                         "sentinel written over the bank file");
-            f.write("sentinel");
-        }
+        // Snapshot the file's CONTENT rather than overwriting it with a
+        // sentinel. The sentinel trick was an external write to the bank's own
+        // file, which the concurrent-writer guard in flush() now (correctly)
+        // refuses to clobber — so it would have measured that refusal instead of
+        // the no-op logic it is actually about. Content comparison tests the same
+        // property and stays independent of filesystem timestamp granularity,
+        // which was the original reason for avoiding mtimes.
+        auto contentOf = [&](const QString& p) {
+            QFile f(p);
+            return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray("<unreadable>");
+        };
+        const QByteArray afterFirstSave = contentOf(noopPath);
+        ok &= expect(afterFirstSave != "<unreadable>", "the saved bank is readable");
 
         // Re-asserting the same values (what the dialog does via
         // handleMemoryStatus after every successful write) must not dirty it.
         bank.record(0, entry);
         bank.flush();
-
-        QFile f(noopPath);
-        ok &= expect(f.open(QIODevice::ReadOnly), "the sentinel file is readable");
-        ok &= expect(f.readAll() == "sentinel",
+        ok &= expect(contentOf(noopPath) == afterFirstSave,
                      "re-recording identical values does not rewrite the file");
 
-        // A real change still saves.
+        // A real change still saves. The envelope carries a savedAt stamp, so a
+        // rewrite is visible even if the entry diff were somehow byte-identical.
         entry.freq = 21.075;
         bank.record(0, entry);
         bank.flush();
-        QFile changed(noopPath);
-        ok &= expect(changed.open(QIODevice::ReadOnly), "the rewritten file is readable");
-        ok &= expect(changed.readAll() != "sentinel", "a changed value does rewrite the file");
+        const QByteArray afterChange = contentOf(noopPath);
+        ok &= expect(afterChange != afterFirstSave, "a changed value does rewrite the file");
+        ok &= expect(afterChange.contains("21.075"), "the rewrite carries the new value");
+        ok &= expect(bank.lastError().isEmpty(),
+                     "a legitimate consecutive save is not mistaken for a foreign write");
     }
 
     // --- a CSV-import-shaped run of many records --------------------------
@@ -269,6 +289,110 @@ int main(int argc, char** argv)
         reopened.load();
         ok &= expect(reopened.entries().size() == kRecords,
                      "the whole bulk bank round-trips through the file");
+    }
+
+    // --- an UNPARSEABLE bank is never overwritten --------------------------
+    //
+    // The version guard covered the unlikely case. "We could not read this file
+    // at all" was unprotected: load() marked the bank writable anyway, so the
+    // next flush() replaced a damaged file with the empty bank parsed out of it.
+    {
+        struct Case { const char* what; QByteArray bytes; };
+        const QList<Case> cases = {
+            {"truncated JSON",
+             QByteArray(R"({"format":"aether.memories","version":1,"memories":[{"index":0,)")},
+            {"a JSON array at the root",
+             QByteArray(R"([{"index":0,"freq":7.2}])")},
+            {"a foreign format id",
+             QByteArray(R"({"format":"someone.else","version":1,
+                            "memories":[{"index":0,"freq":7.2,"name":"Theirs"}]})")},
+        };
+
+        for (int ci = 0; ci < cases.size(); ++ci) {
+            const Case& c = cases.at(ci);
+            const QString p = dir.path() + QString("/damaged-%1.json").arg(ci);
+            {
+                QFile f(p);
+                ok &= expect(f.open(QIODevice::WriteOnly), "damaged fixture written");
+                f.write(c.bytes);
+            }
+
+            LocalMemoryBank bank;
+            bank.setFilePath(p);
+            bank.load();
+            ok &= expect(!bank.isWritable(), c.what);
+            // The foreign-format case also must not ADOPT the memories it parsed
+            // out of somebody else's file.
+            ok &= expect(bank.entries().isEmpty(),
+                         "an unreadable bank exposes no channels");
+
+            bank.record(0, MemoryEntry{});
+            bank.flush();
+
+            QFile f(p);
+            ok &= expect(f.open(QIODevice::ReadOnly), "the damaged fixture still opens");
+            ok &= expect(f.readAll() == c.bytes,
+                         "a damaged bank is left byte-for-byte intact");
+        }
+    }
+
+    // --- a concurrent writer is detected, not clobbered --------------------
+    //
+    // The bank is replaced wholesale and read once per process, so two instances
+    // sharing a config dir used to silently discard each other's channels.
+    {
+        const QString p = dir.path() + "/shared.json";
+
+        LocalMemoryBank first;
+        first.setFilePath(p);
+        first.handleCommand("memory create");
+        first.flush();
+        ok &= expect(QFile::exists(p), "the first instance saved");
+
+        // A second process writes its own channels behind our back.
+        const QByteArray theirs = LocalMemoryStore::serialize(
+            [] {
+                QMap<int, MemoryEntry> m;
+                MemoryEntry e;
+                e.index = 5;
+                e.freq = 14.074;
+                e.name = "Theirs";
+                m.insert(5, e);
+                return m;
+            }(),
+            "2026-07-30T00:00:00Z");
+        {
+            QFile f(p);
+            ok &= expect(f.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                         "the other instance wrote the shared bank");
+            f.write(theirs);
+        }
+
+        // Our next edit must NOT replace their file.
+        first.record(1, MemoryEntry{});
+        first.flush();
+
+        QFile f(p);
+        ok &= expect(f.open(QIODevice::ReadOnly), "the shared bank still opens");
+        ok &= expect(f.readAll() == theirs,
+                     "a foreign write is not clobbered by our flush");
+        ok &= expect(first.lastError().contains("changed by another"),
+                     "the refusal names the concurrent-write reason");
+
+        // And our own save must re-baseline, or the very next flush would
+        // mistake our own mtime for somebody else's and refuse forever.
+        LocalMemoryBank fresh;
+        fresh.setFilePath(p);
+        fresh.load();
+        fresh.record(9, MemoryEntry{});
+        fresh.flush();
+        fresh.record(10, MemoryEntry{});
+        fresh.flush();
+        LocalMemoryBank reread;
+        reread.setFilePath(p);
+        reread.load();
+        ok &= expect(reread.entries().contains(9) && reread.entries().contains(10),
+                     "consecutive flushes both land after a clean load");
     }
 
     if (ok)

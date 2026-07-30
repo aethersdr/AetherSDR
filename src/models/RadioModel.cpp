@@ -5386,6 +5386,15 @@ void RadioModel::onDisconnected()
         qCDebug(lcProtocol) << "RadioModel: unexpected disconnect — reconnecting in 3s";
         m_reconnectTimer.start();
     }
+
+    // Release memory-slot ownership only when the session is really over. While
+    // a reconnect is armed the radio still owns its slots, so the host bank must
+    // not start answering writes that reconnect would discard — the phantom
+    // channel described on m_sessionRadioOwnsMemories. An intentional disconnect
+    // (or no address to return to) genuinely ends the session and hands the bank
+    // back, which is the same state the app starts in.
+    if (m_intentionalDisconnect || m_lastInfo.address.isNull())
+        m_sessionRadioOwnsMemories = false;
 }
 
 void RadioModel::onConnectionError(const QString& msg)
@@ -5917,8 +5926,16 @@ bool RadioModel::usesLocalMemoryBank() const
     // Memory dialog is fully usable right there, with Add, Import and Export
     // all live. Connecting to a radio that does own its slots hands ownership
     // back; see syncMemoryStoreForSession().
+    // Disconnected: the host bank owns the slots UNLESS this session's radio
+    // does and is expected back. Keying on isConnected() alone handed ownership
+    // to the bank during any link blip — and a Flex drop does not clear
+    // m_slices, so the Memory dialog's Add stayed live, was answered by the
+    // bank, reported success, and was then wiped by
+    // syncMemoryStoreForSession() on reconnect. The channel never reached the
+    // radio and left a stray slot behind that resurfaced on every future
+    // disconnect.
     if (!isConnected())
-        return true;
+        return !m_sessionRadioOwnsMemories;
     return !backendCapabilities().persistsMemories;
 }
 
@@ -5966,6 +5983,11 @@ std::optional<quint32> RadioModel::tryLocalMemoryCommand(
 
 void RadioModel::syncMemoryStoreForSession()
 {
+    // Latch who owns the slots for THIS session, on the connect edge, before the
+    // question is asked below. Held across an unexpected drop so a blip cannot
+    // silently move ownership to the host bank mid-session.
+    m_sessionRadioOwnsMemories = isConnected() && backendCapabilities().persistsMemories;
+
     if (usesLocalMemoryBank()) {
         publishLocalMemories();
         return;
@@ -6052,6 +6074,14 @@ void RadioModel::recallLocalMemory(int index)
         target->setFmToneValue(QString::number(memory.toneValue, 'f', 1));
     }
     target->setSquelch(memory.squelch, memory.squelchLevel);
+
+    // The tuning step, applied directly rather than commanded. On a Flex the
+    // panel's follow-up `slice set N step=` round-trips through the radio and
+    // comes back as status; on a host-bank backend that command has no command
+    // plane to travel on and is dropped, so nothing was setting the step and a
+    // recalled channel tuned in whatever increment happened to be current.
+    if (memory.step > 0)
+        target->applyRecalledStepHz(memory.step);
 
     if (memory.freq > 0.0)
         target->setFrequency(memory.freq);

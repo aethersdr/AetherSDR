@@ -5,6 +5,7 @@
 
 #include <optional>
 
+#include <QDateTime>
 #include <QMap>
 #include <QObject>
 #include <QString>
@@ -70,6 +71,10 @@ public:
     // cannot lose an unsaved edit made while disconnected).
     void load();
     bool isLoaded() const { return m_loaded; }
+    // False when the file could not be understood, so edits are refused and the
+    // file is never replaced. Distinct from isLoaded(), which only says the read
+    // was attempted — see load().
+    bool isWritable() const { return m_writable; }
 
     const QMap<int, MemoryEntry>& entries() const { return m_entries; }
 
@@ -101,13 +106,27 @@ signals:
 private:
     int allocateSlot() const;
     void scheduleSave();
+    // Concurrent-writer detection: snapshot the file's identity at load and
+    // after each save, and compare before the next save. Best-effort, not a
+    // lock — see flush().
+    void rememberFileState();
+    bool foreignWriteDetected() const;
 
     QString m_filePath;
     QMap<int, MemoryEntry> m_entries;
     QTimer m_saveTimer;
     QString m_lastError;
+    // The read has been attempted (latches; nothing re-reads).
     bool m_loaded{false};
+    // The file was understood, so replacing it wholesale is safe. False for a
+    // file this build cannot read — see load(), which explains why these must
+    // be two flags and not one.
+    bool m_writable{true};
     bool m_dirty{false};
+    // File identity as of the last read or our own last write.
+    bool m_seenExists{false};
+    QDateTime m_seenMtime;
+    qint64 m_seenSize{-1};
 };
 
 }  // namespace AetherSDR

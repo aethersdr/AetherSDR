@@ -42,8 +42,21 @@ public:
         QMap<int, MemoryEntry> memories;
         QStringList errors;
         int version{0};
+        // The file exists but could not be UNDERSTOOD: unparseable JSON, a
+        // non-object root, a foreign format id, or a version newer than this
+        // build. Distinct from `errors`, which also carries recoverable
+        // complaints (a skipped duplicate slot, an entry with no index) where
+        // everything else in the file was read correctly.
+        //
+        // This is the flag that decides whether overwriting is safe. Anything
+        // this build could not read is somebody's data it cannot represent, so
+        // saving over it would destroy channels rather than lose a field —
+        // which is the whole reason the version check exists (see above).
+        bool unreadable{false};
 
         bool ok() const { return errors.isEmpty(); }
+        // Safe to replace this file wholesale with what we parsed?
+        bool overwritable() const { return !unreadable; }
     };
 
     // Serialize to pretty-printed JSON bytes, ordered by slot index so the file

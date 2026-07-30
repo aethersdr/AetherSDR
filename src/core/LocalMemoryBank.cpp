@@ -5,6 +5,7 @@
 #include "core/backends/MemoryWireCodec.h"
 
 #include <QDateTime>
+#include <QFileInfo>
 
 namespace AetherSDR {
 
@@ -57,18 +58,32 @@ void LocalMemoryBank::load()
 
     const LocalMemoryStore::ParseResult parsed = LocalMemoryStore::load(m_filePath);
     m_entries = parsed.memories;
-    m_loaded = true;
     m_dirty = false;
+
+    // TWO facts, deliberately separate, because one flag could not carry both:
+    //
+    //   m_loaded   — the read has been ATTEMPTED. Latches true no matter how the
+    //                read went, so nothing re-reads.
+    //   m_writable — the file was UNDERSTOOD, so replacing it is safe.
+    //
+    // Using m_loaded for both was wrong in both directions. Leaving it true on a
+    // failed read made the bank writable, so the next flush() replaced a damaged
+    // file with the empty bank it had just parsed out of it. And clearing it to
+    // withhold write permission also cleared "already read", so handleCommand()'s
+    // load() re-ran on EVERY command and wiped m_entries between `memory create`
+    // and `memory set` — every Add failing with "There is no memory in slot N",
+    // and the reset m_dirty suppressing the warning that would have explained it.
+    m_loaded = true;
+    m_writable = parsed.overwritable();
+    // Baseline for the concurrent-writer check in flush().
+    rememberFileState();
 
     if (!parsed.ok()) {
         m_lastError = parsed.errors.join(QStringLiteral("; "));
         qCWarning(lcProtocol).noquote()
-            << "LocalMemoryBank: problems reading" << m_filePath << "—" << m_lastError;
-        // A version-too-new file parses to nothing. Do NOT let a later edit
-        // save over it: that would replace channels this build cannot read with
-        // the empty bank it read instead.
-        if (parsed.version > LocalMemoryStore::kFormatVersion)
-            m_loaded = false;
+            << "LocalMemoryBank: problems reading" << m_filePath << "—" << m_lastError
+            << (m_writable ? "(bank is still writable)"
+                           : "(bank is READ-ONLY; edits will be refused)");
         return;
     }
 
@@ -110,6 +125,16 @@ LocalMemoryBank::CommandResult LocalMemoryBank::handleCommand(const QString& com
         result.body = reason;
         return result;
     };
+
+    // Refuse every write up front when the file could not be read, and say why.
+    // Without this the command runs against an in-memory bank that flush() will
+    // then decline to persist, so the operator sees an Add "succeed" and vanish
+    // at restart. Naming the file is the point — the fix is theirs to make.
+    if (!m_writable) {
+        return reject(QString("The memory file at %1 could not be read, so it "
+                              "will not be overwritten: %2")
+                          .arg(m_filePath, m_lastError));
+    }
 
     // The index argument for every verb that takes one.
     auto slotArgument = [&tail](bool* ok) {
@@ -233,12 +258,33 @@ void LocalMemoryBank::flush()
     if (!m_dirty)
         return;
 
-    // Not loaded means load() refused to take ownership of the file (a version
-    // this build cannot read). Writing would destroy it.
-    if (!m_loaded) {
+    // Not writable means load() could not understand the file — a version this
+    // build cannot read, a foreign format id, or JSON it could not parse.
+    // Writing would destroy it.
+    if (!m_writable) {
         qCWarning(lcProtocol).noquote()
             << "LocalMemoryBank: refusing to overwrite an unreadable bank at" << m_filePath;
         return;
+    }
+
+    // Somebody else wrote the file since we read it.
+    //
+    // The bank is replaced WHOLESALE and read once per process, so a second
+    // instance sharing the same config dir (two AetherSDR windows, a test
+    // instance on the same $HOME) would have its channels silently discarded by
+    // whichever process saved last. Refusing is deliberately not a merge: which
+    // side wins per slot is a design decision, not something to infer here. This
+    // turns silent loss into a visible, recoverable error — the entries stay in
+    // memory and dirty, and the operator is told rather than finding out later.
+    if (foreignWriteDetected()) {
+        m_lastError = QString("The memory file at %1 was changed by another "
+                              "program or window since it was read. Nothing was "
+                              "saved, so neither copy is lost — reopen the memory "
+                              "panel to pick up the other changes.")
+                          .arg(m_filePath);
+        qCWarning(lcProtocol).noquote() << "LocalMemoryBank:" << m_lastError;
+        emit saveFailed(m_lastError);
+        return;   // stays dirty
     }
 
     QString error;
@@ -255,8 +301,38 @@ void LocalMemoryBank::flush()
 
     m_dirty = false;
     m_lastError.clear();
+    // Our own write moved the mtime; re-baseline or the NEXT flush would mistake
+    // it for someone else's.
+    rememberFileState();
     qCDebug(lcProtocol).noquote()
         << "LocalMemoryBank: saved" << m_entries.size() << "memories to" << m_filePath;
+}
+
+void LocalMemoryBank::rememberFileState()
+{
+    const QFileInfo info(m_filePath);
+    m_seenExists = info.exists();
+    m_seenMtime = m_seenExists ? info.lastModified() : QDateTime();
+    m_seenSize = m_seenExists ? info.size() : -1;
+}
+
+bool LocalMemoryBank::foreignWriteDetected() const
+{
+    const QFileInfo info(m_filePath);
+    // Appearing counts: we read "no file, empty bank", so a file that exists now
+    // holds channels somebody else created, and our empty-ish bank would erase
+    // them. Disappearing does not — a deleted bank is nothing to preserve, and
+    // refusing there would strand the operator's edits with nowhere to go.
+    if (!info.exists())
+        return false;
+    if (!m_seenExists)
+        return true;
+    // Size as well as mtime: a coarse filesystem timestamp can collide on two
+    // writes inside the same tick, and a channel edit almost always changes the
+    // length. Neither is a substitute for a lock, and this does not claim to be
+    // one — it catches the realistic case (a human editing in two windows),
+    // not a deliberate race.
+    return info.lastModified() != m_seenMtime || info.size() != m_seenSize;
 }
 
 }  // namespace AetherSDR
