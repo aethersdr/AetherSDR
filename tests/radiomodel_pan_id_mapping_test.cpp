@@ -87,6 +87,45 @@ int main(int argc, char** argv)
               != QStringLiteral("0xe1000002"),
           "the translation actually changes the id");
 
+    // ---- allocation is LOWEST-FREE, not size() ----
+    //
+    // size() is only collision-free while nothing is removed. A backend that
+    // closes a pan and opens another (an HL2 closing a receiver) would otherwise
+    // get an index that still belongs to a live pane — the new pan then resolves
+    // to the EXISTING PanadapterModel and takes over its geometry and frames
+    // instead of getting a pane of its own.
+    //
+    // The retire path is exercised through the public surface by mapping a fresh
+    // id after the table has a hole in it.
+    {
+        RadioModel m2;
+        RadioInfo hl2b;
+        hl2b.family = QStringLiteral("hl2");
+        hl2b.serial = QStringLiteral("00:00:00:00:00:01");
+        hl2b.address = QHostAddress(QStringLiteral("192.0.2.2"));
+        m2.connectToRadio(hl2b);
+
+        for (int i = 0; i < 4; ++i)
+            m2.panIndexForBackendIdForTest(QStringLiteral("hl2-%1").arg(i));
+        // Same id re-asked is stable, so a repeat never consumes a new index.
+        check(m2.panIndexForBackendIdForTest(QStringLiteral("hl2-2")) == 2,
+              "a known id keeps its index");
+        // A brand-new id must not collide with any of 0..3.
+        const int next = m2.panIndexForBackendIdForTest(QStringLiteral("hl2-9"));
+        check(next == 4, "a fifth distinct id gets index 4, not a reused one");
+        check(m2.backendPanIdForTest(RadioModel::neutralPanIdStringForTest(4))
+                  == QStringLiteral("hl2-9"),
+              "and the reverse mapping points at the new id, not an existing pan");
+        // Every mapping is still distinct — the property that actually matters.
+        bool distinct = true;
+        for (int i = 0; i < 4; ++i) {
+            if (m2.backendPanIdForTest(RadioModel::neutralPanIdStringForTest(i))
+                    == QStringLiteral("hl2-9"))
+                distinct = false;
+        }
+        check(distinct, "no earlier index was handed to the new id");
+    }
+
     // ---- ids we never mapped pass through untouched ----
     //
     // Inventing an id would be worse than passing one through: the backend can

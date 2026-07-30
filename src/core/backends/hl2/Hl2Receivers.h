@@ -84,7 +84,7 @@ public:
     // are filled in as the DSP opens, and diversity/PureSignal will break the
     // ddc<->ui correspondence later. Nothing may assume it holds.
     void reset(int count);
-    void clear() { m_rx.clear(); m_nextUiNumber = 0; }
+    void clear() { m_rx.clear(); }
 
     [[nodiscard]] int size() const noexcept { return static_cast<int>(m_rx.size()); }
     [[nodiscard]] bool empty() const noexcept { return m_rx.empty(); }
@@ -102,12 +102,14 @@ public:
     // Mutating access by DDC index, for filling in ids as resources open.
     [[nodiscard]] Hl2ReceiverIds* mutableByDdc(int ddcIndex);
 
-    // Append a receiver at the next DDC index, with a UI number that has never
-    // been used by this map. Returns the new record's DDC index.
+    // Append a receiver at the next DDC index, with the LOWEST UI number not
+    // currently in use. Returns the new record's DDC index.
     //
-    // The UI number is NOT size(): after removing the middle of three receivers
-    // the surviving UI numbers are {0, 2}, and reusing 2 would give two panes
-    // the same identity. It counts up from the highest ever issued instead.
+    // Lowest-free rather than size(): after removing the middle of three the
+    // surviving UI numbers are {0, 2}, so size() would be 2 and collide. And
+    // lowest-free rather than monotonic, because the UI number is the seam's
+    // slice id and that space is bounded by the radio's slice capacity — see
+    // append()'s definition for what monotonic cost.
     int append();
 
     // Remove the receiver at `ddcIndex`, RENUMBERING the DDC indices of those
@@ -124,9 +126,6 @@ public:
 
 private:
     std::vector<Hl2ReceiverIds> m_rx;
-    // Highest UI number ever issued, so append() never reuses one after a
-    // removal. Reset only by reset()/clear(), which start a new session.
-    int m_nextUiNumber = 0;
 };
 
 }  // namespace AetherSDR::hl2

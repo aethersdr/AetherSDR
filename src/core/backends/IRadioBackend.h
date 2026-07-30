@@ -353,6 +353,12 @@ signals:
     // the backend populates only the fields the wire reported, the model applies
     // exactly those. Replaces the prior stringly-keyed QVariantMap payload.
     void sliceChanged(int sliceId, const SliceDelta& delta);
+    // On a backend where a slice IS a receiver, closing the receiver has to
+    // retire BOTH this and panRemoved. Emitting only panRemoved left the
+    // SliceModel behind, still naming a pan id that no longer existed — and
+    // nothing looked broken until the next create, when the capacity guard
+    // compared a slice count that never fell against maxSlices() and reported
+    // "Slice capacity is full" on a radio with one receiver running.
     void sliceRemoved(int sliceId);
     void meterUpdate(const QString& meterId, double value);
 
@@ -419,6 +425,7 @@ signals:
     // the thing behind it has stopped — never optimistically, which would leave
     // a receiver streaming into a pane nobody is listening to.
     void panRemoved(const QString& panId);
+
 
     // The pan's front end is WIDE: the hardware band filter cannot serve every
     // active receiver at once, so it has been bypassed. On a Flex this is what

@@ -661,6 +661,22 @@ void RadioModel::setupBackend(const QString& family)
         }
     });
 
+    // The backend confirms a slice is GONE. Paired with panRemoved above,
+    // because on a backend where a slice IS a receiver, closing one retires
+    // both. Without this the SliceModel outlived its receiver and every later
+    // capacity check counted it.
+    connect(m_backend.get(), &IRadioBackend::sliceRemoved, this,
+            [this](int sliceId) {
+        SliceModel* s = slice(sliceId);
+        if (!s)
+            return;
+        m_slices.removeAll(s);
+        qCDebug(lcProtocol) << "RadioModel: backend slice removed" << sliceId;
+        emit sliceRemoved(sliceId);
+        emit slotOccupancyChanged(sliceId);
+        s->deleteLater();
+    });
+
     // The pan's front end is wide (its band filter had to be bypassed).
     connect(m_backend.get(), &IRadioBackend::panWideChanged, this,
             [this](const QString& panId, bool wide) {
@@ -6645,7 +6661,18 @@ int RadioModel::neutralPanIndexFor(const QString& backendPanId)
     const auto it = m_backendPanIndex.constFind(backendPanId);
     if (it != m_backendPanIndex.constEnd())
         return it.value();
-    const int assigned = m_backendPanIndex.size();
+    // LOWEST FREE index, not size().
+    //
+    // size() is only collision-free while nothing is ever removed. Closing one
+    // pan of four leaves size() == 3 while index 3 is still in use, so the next
+    // pan was handed an index that already belonged to a live pane: the new pan
+    // resolved to the EXISTING PanadapterModel, no pane was created, and the
+    // occupant's geometry and frames were quietly taken over. Observed as
+    // pans=3 slices=4 after closing the middle of four and reopening — a slice
+    // with no panadapter behind it.
+    int assigned = 0;
+    while (m_backendPanIdByIndex.contains(assigned))
+        ++assigned;
     m_backendPanIndex.insert(backendPanId, assigned);
     // Both directions are filled at the same moment, from the same allocation,
     // so the pair cannot drift. See backendPanIdFor().

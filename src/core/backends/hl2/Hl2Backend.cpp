@@ -781,6 +781,12 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     qCInfo(lcHl2) << "HL2: closed receiver — pan" << removedPanId << "(UI" << removedUi
                   << "); running" << m_rx.size() << "receiver(s)";
 
+    // BOTH, and in this order. On this backend a slice IS a receiver, so
+    // closing one retires the pan and the slice together. Emitting only
+    // panRemoved left the SliceModel behind naming a dead pan id, and the next
+    // create then failed the capacity guard against a slice count that never
+    // fell — "Slice capacity is full" with one receiver running.
+    emit sliceRemoved(removedUi);
     emit panRemoved(removedPanId);
     // Closing one can take the set back onto a single band.
     applyBandFilter("close receiver");

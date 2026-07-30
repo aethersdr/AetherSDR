@@ -1,5 +1,7 @@
 #include "core/backends/hl2/Hl2Receivers.h"
 
+#include <algorithm>
+
 namespace AetherSDR::hl2 {
 
 namespace {
@@ -36,7 +38,6 @@ int hl2RoleAfterRemove(int role, int removedDdc)
 void Hl2ReceiverMap::reset(int count)
 {
     m_rx.clear();
-    m_nextUiNumber = 0;   // a new session starts UI numbering over
     if (count < 0)
         count = 0;
     m_rx.reserve(static_cast<std::size_t>(count));
@@ -50,10 +51,6 @@ void Hl2ReceiverMap::reset(int count)
         // whole type exists to prevent.
         m_rx.push_back(std::move(ids));
     }
-    // Leave the counter past everything just issued, so a later append() cannot
-    // hand out a UI number that is already in use. Missing this made the first
-    // appended receiver collide with receiver 0.
-    m_nextUiNumber = count;
 }
 
 const Hl2ReceiverIds* Hl2ReceiverMap::byDdc(int ddcIndex) const
@@ -100,7 +97,28 @@ int Hl2ReceiverMap::append()
 {
     Hl2ReceiverIds ids;
     ids.ddcIndex = static_cast<int>(m_rx.size());   // contiguous, as the gateware needs
-    ids.uiNumber = m_nextUiNumber++;                // monotonic, never reused
+
+    // LOWEST FREE UI number, not a monotonic counter.
+    //
+    // This was monotonic, on the reasoning that reusing a retired number would
+    // give two panes the same identity. That reasoning was wrong: the retired
+    // pane does not exist, so there is nothing to collide with — and the cost of
+    // being wrong was real. The UI number IS the seam's slice id, and the slice
+    // id space is bounded by the radio's slice capacity. On a 4-receiver board,
+    // opening four and closing three left the counter at 4, so the next receiver
+    // asked for slice id 4 on a radio whose ids run 0..3 and the client refused
+    // it as over capacity.
+    //
+    // Reuse is also what a Flex does with its own slice ids, so this matches the
+    // behaviour every consumer above the seam was written against.
+    int candidate = 0;
+    while (std::any_of(m_rx.cbegin(), m_rx.cend(),
+                       [candidate](const Hl2ReceiverIds& r) {
+                           return r.uiNumber == candidate;
+                       })) {
+        ++candidate;
+    }
+    ids.uiNumber = candidate;
     ids.panId = hl2PanId(ids.uiNumber);
     // dspChannel and analyzerId stay -1 until the DSP actually opens.
     m_rx.push_back(std::move(ids));

@@ -7,6 +7,7 @@
 
 #include "core/backends/hl2/Hl2Receivers.h"
 
+#include <algorithm>
 #include <cstdio>
 
 using namespace AetherSDR::hl2;
@@ -137,14 +138,31 @@ int main()
         check(m.byUi(2)->panId == pan2, "its pan id is unchanged");
         check(m.byPanId(pan2)->ddcIndex == 1, "and resolves to its new DDC");
 
-        // Appending must not reuse the retired UI number, or two panes would
-        // share an identity and every pan-addressed update would be ambiguous.
+        // Appending REUSES the retired UI number — the lowest one free.
+        //
+        // This assertion previously demanded the opposite ("the new pane is 3,
+        // NOT the retired 1"), justified as avoiding two panes sharing an
+        // identity. That was wrong: the retired pane does not exist, so nothing
+        // collides. And the UI number IS the seam's slice id, whose space is
+        // bounded by the radio's slice capacity — a monotonic counter handed out
+        // slice id 4 on a 4-slice radio and the client refused it as over
+        // capacity, which is what "Slice capacity is full" looked like after
+        // closing three of four receivers.
         const int ddc = m.append();
         check(ddc == 2, "the new receiver takes the next free DDC index");
-        check(m.byDdc(2)->uiNumber == 3, "the new pane is 3, NOT the retired 1");
-        check(m.byUi(1) == nullptr, "UI 1 is still retired");
+        check(m.byDdc(2)->uiNumber == 1, "the new pane REUSES the retired UI 1");
+        check(m.byUi(1) != nullptr, "UI 1 is live again");
         check(m.byDdc(2)->dspChannel == -1, "a new receiver has no DSP channel yet");
-        check(m.byDdc(2)->panId == hl2PanId(3), "its pan id follows its UI number");
+        check(m.byDdc(2)->panId == hl2PanId(1), "its pan id follows its UI number");
+        // The live pane keeps its own number — reuse must not disturb it.
+        check(m.byUi(2)->ddcIndex == 1, "the surviving pane is still UI 2 on DDC 1");
+
+        // UI numbers must stay inside 0..size-1, which is what the slice-id
+        // space above the seam assumes.
+        int highest = 0;
+        for (const auto& r : m.all())
+            highest = std::max(highest, r.uiNumber);
+        check(highest < m.size(), "no UI number exceeds the receiver count");
 
         check(!m.remove(9), "removing an index that does not exist fails");
         check(m.size() == 3, "a failed remove changes nothing");
@@ -191,9 +209,8 @@ int main()
         m.reset(1);
         check(m.remove(0), "the only receiver can be removed from the map");
         check(m.empty(), "map is empty");
-        // reset() starts UI numbering over — a new session, not a continuation.
         m.reset(1);
-        check(m.byDdc(0)->uiNumber == 0, "reset restarts UI numbering at 0");
+        check(m.byDdc(0)->uiNumber == 0, "reset numbers from 0");
     }
 
     // ---- degenerate sizes ----
