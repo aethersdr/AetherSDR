@@ -2644,7 +2644,19 @@ DDC and moving transmit to it; and two TCI clients on RX1/RX2 both receiving
 per-slice audio, including with one slice speaker-muted. 196/196 tests green
 (`hl2_tx_loopback_test` excluded — see below).
 
-**NOT proven, and it matters:**
+**Proven on real hardware.** The operator has since exercised this end to end on
+a Hermes-Lite 2, transmit included. That closes the gap the simulator
+structurally cannot: it generates its scene independently of the NCO, so four
+receivers on four frequencies show the same synthetic content there — meaning
+"four DDCs genuinely tune independently" was, until hardware, argued from the
+register map (`0x02`..`0x08`) and confirmed only in that the radio accepted the
+writes.
+
+Keep that distinction in mind when reading any simulator result in this section:
+`hpsdrsim` failing to contradict a convention is not the same as hardware
+confirming it (§7, and the wrong-sideband account in §14.6).
+
+**Still open:**
 
 - **`hl2_tx_loopback_test` fails against the simulator** on transmit-sideband
   checks, non-deterministically. Commit `256142a6` — the pre-multi-DDC base —
@@ -2652,23 +2664,16 @@ per-slice audio, including with one slice speaker-muted. 196/196 tests green
   it is tracked separately. Note a dev host at `192.168.1.12` is the address that
   test probes, so a locally-running `hpsdrsim` makes it execute when it was
   written to skip, and collide with any app already driving that simulator.
-- **Pane pop-out and maximize are unverified**, and so is TCI TX audio from the
-  second client.
-- **Nothing has run on real hardware yet.** The simulator generates its scene
-  independently of the NCO, so four receivers on four frequencies show the same
-  synthetic content there. That four DDCs genuinely tune *independently* is
-  argued from the register map (`0x02`..`0x08`) and confirmed only in that the
-  radio accepts the writes. **On a real HL2 the check is four receivers on four
-  bands showing four different noise floors and different signals** — WWV on
-  10 MHz against a quiet 40 m is the cheapest version.
 - **The link-budget ceiling is derived, not measured.** 70% of 100BASE-T is a
-  working figure. Whether 4 × 192 kHz actually runs clean over a real switch, and
-  where the drop counter starts moving, is a measurement nobody has taken.
-- **Audio mixing has not been heard.** The min-alignment and the starvation guard
-  are reasoned and unit-tested at the seam, not listened to with two real signals.
+  working figure. Where the drop counter actually starts moving is still a
+  number nobody has written down, and it is the one that would justify or move
+  `kEp6LinkBudgetFraction`.
 - **The skimmer gateware variants** (9–12 RX, no transmit) are still untested.
   `kMaxTunableRx = 7` bounds us to the contiguous `0x02`..`0x08` NCO run;
   RX8..RX12 at `0x12`..`0x16` are deliberately not encoded.
 - **CPU cost is unmeasured beyond one observation:** 54.7% on an M-series laptop
   at 4 × 192 kHz with four panadapters rendering. That is a whole-app number from
   the status bar, not a profile.
+- **None of it is automated yet.** Hardware verification does not survive a
+  refactor; §19.15 lists the invariants to turn into certification cases so that
+  it does.

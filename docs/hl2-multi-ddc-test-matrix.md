@@ -12,6 +12,12 @@ Branch `feat/hl2-multi-rx`. Covers running up to four independent DDCs
 | **TODO** | Not verified by anyone yet — your pass is the first |
 | **HW** | Needs real hardware; the simulator cannot answer it |
 
+**The operator has since run this end to end on a real Hermes-Lite 2, transmit
+included.** The `HW` rows below are therefore covered — they are kept, with their
+marks, because they say *which* checks only hardware can answer, and that is what
+a re-test after any refactor needs to repeat. `TODO` rows remain genuinely
+unexercised by anyone.
+
 `hpsdrsim` is *necessary, never sufficient*. Its register decode is looser than
 real gateware, and it generates a synthetic scene rather than real RF — so
 anything about signal quality, band filtering in the antenna path, or transmit
