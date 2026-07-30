@@ -23,20 +23,37 @@ supplies the value the JSON would otherwise override) or when no theme file
 loads at all. Both are exactly the situations where nobody is looking.
 
 This is a stopgap. The real fix is to GENERATE the seed table from the resource
-at build time so the two cannot disagree; see the tracking issue. Until then
-this pins the current state and stops it widening.
+so the two cannot disagree; see the tracking issue. Until then this pins the
+current state and stops it widening.
 
-SCOPE — COLOUR TOKENS ONLY. The parser captures QString("#hex") inserts and
-nothing else. Seeds that are not hex colours never enter the comparison and
-can drift silently: the seven font.family.*, four font.size.*, five sizing.*
-values, and color.meter.bar.fillGradient (inserted via QVariant::fromValue(g),
-no literal at all, so it is invisible even to the completeness guard below).
-Three of those non-colour tokens exist on BOTH sides today (font.size.normal,
-sizing.panel.padding, sizing.panel.cornerRadius) and would drift exactly the
-way the colours did. If the parser is ever widened to cover them, switch the
-completeness guard from hex-literal equality to counting tokens.insert(
-occurrences — the two invariants are only correct one at a time (see the
-review reconciliation on PR #4570).
+SCOPE — COLOUR TOKENS ONLY. A seed enters the comparison when its value carries
+a hex colour literal, in ANY spelling (QString, QStringLiteral, QColor, or a
+bare string). Non-colour seeds are out of scope and can still drift silently:
+
+  * the nine numeric seeds that exist on BOTH sides today — font.size.{tiny,
+    small,normal,large} and sizing.{panel.padding,panel.spacing,
+    panel.cornerRadius,border.subtle,border.strong}. These would drift exactly
+    the way the colours did; widening the parser to cover them is worthwhile.
+  * the seven font.family.* seeds, which CANNOT be compared key-for-key: the
+    JSON stores them as compound objects ({family, size, color}, flattened here
+    to font.family.ui.family etc.) while the C++ side inserts a flat string, so
+    the keys never intersect. Covering these needs a shape-aware rule, not a
+    wider value pattern.
+  * color.meter.bar.fillGradient, inserted via QVariant::fromValue(g) with no
+    literal in the insert at all. Its five QColor("#…") gradient stops ARE
+    accounted for by the completeness guard (see cpp_tokens) — they are simply
+    not token seeds.
+
+HOW THIS RESISTS BEING FOOLED. A parser-based gate is only as good as its
+failure mode, so three invariants are enforced rather than assumed:
+
+  1. Comments are stripped before matching, so commented-out code can neither
+     inject a phantom divergence nor supply a value that masks a live one.
+  2. Every insert() call in the body must parse. The scan matches parens rather
+     than indentation, so reformatting cannot silently drop a token.
+  3. Every hex literal in the body must be accounted for — either inside a
+     parsed insert or outside every insert. A hex that belongs to neither means
+     the parser lost track, and that hard-fails instead of reporting clean.
 
 Usage:
     python tools/check_theme_seed.py            # report drift, exit 0
@@ -77,6 +94,11 @@ THEME_JSON = REPO / "resources" / "themes" / "default-dark.json"
 THEME_CPP = REPO / "src" / "core" / "ThemeManager.cpp"
 
 HEX = r"#[0-9a-fA-F]{3,8}"
+HEX_LITERAL = re.compile(rf'"({HEX})"')
+
+
+def fail(message: str) -> "NoReturn":  # noqa: F821 - str annotation, py3.8 safe
+    raise SystemExit(f"check_theme_seed: {message}")
 
 
 def normalise_hex(value: str) -> str:
@@ -95,6 +117,222 @@ def normalise_hex(value: str) -> str:
     if len(digits) == 8 and digits.startswith("ff"):
         digits = digits[2:]                        # opaque alpha adds nothing
     return "#" + digits
+
+
+def is_hex_colour(value) -> bool:
+    """True when a value is a hex colour literal (either side of the compare)."""
+    return isinstance(value, str) and re.fullmatch(HEX, value.strip()) is not None
+
+
+def strip_comments(source: str) -> str:
+    """Blank out // and /* */ comments, preserving offsets and line structure.
+
+    String- and char-literal aware, so a "//" inside a literal survives. Comment
+    bytes become spaces (newlines kept) so every span/offset in the caller stays
+    valid and reported line numbers do not shift.
+    """
+    out = list(source)
+    i, n = 0, len(source)
+    while i < n:
+        ch = source[i]
+        if ch in ('"', "'"):                       # skip over a literal
+            quote = ch
+            i += 1
+            while i < n:
+                if source[i] == "\\":
+                    i += 2
+                    continue
+                if source[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n:
+            if source[i + 1] == "/":
+                while i < n and source[i] != "\n":
+                    out[i] = " "
+                    i += 1
+                continue
+            if source[i + 1] == "*":
+                end = source.find("*/", i + 2)
+                end = n if end == -1 else end + 2
+                for j in range(i, end):
+                    if out[j] != "\n":
+                        out[j] = " "
+                i = end
+                continue
+        i += 1
+    return "".join(out)
+
+
+def seed_body(source: str) -> str:
+    """Extract seedBuiltinDefaults()'s body by brace matching, not by regex.
+
+    A trailing-brace regex breaks on any reformat; brace matching only breaks if
+    the function genuinely stops existing, which is worth a hard failure.
+    """
+    signature = re.search(r"void\s+ThemeManager::seedBuiltinDefaults\s*\(\s*\)",
+                          source)
+    if not signature:
+        fail("seedBuiltinDefaults() not found — has ThemeManager.cpp been "
+             "restructured? Refusing to report a clean run.")
+    start = source.find("{", signature.end())
+    if start == -1:
+        fail("seedBuiltinDefaults() has no body brace.")
+    depth = 0
+    for i in range(start, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:i + 1]
+    fail("seedBuiltinDefaults() body is unbalanced — refusing to guess.")
+
+
+def _split_args(text: str) -> list:
+    """Split a call's argument text on TOP-LEVEL commas only."""
+    args, depth, current, i = [], 0, [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch in ('"', "'"):
+            quote = ch
+            current.append(ch)
+            i += 1
+            while i < len(text):
+                current.append(text[i])
+                if text[i] == "\\":
+                    current.append(text[i + 1] if i + 1 < len(text) else "")
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    args.append("".join(current))
+    return args
+
+
+def _insert_calls(body: str) -> list:
+    """Every ...insert(...) call in `body`, paren-matched.
+
+    Returns (receiver, args_text, span_start, span_end). Indentation-independent
+    by construction, so reformatting cannot drop a token.
+    """
+    calls = []
+    for match in re.finditer(r"(\w+)\s*(?:->|\.)\s*insert\s*\(", body):
+        receiver = match.group(1)
+        depth, i, n = 0, match.end() - 1, len(body)
+        while i < n:
+            ch = body[i]
+            if ch in ('"', "'"):
+                quote = ch
+                i += 1
+                while i < n:
+                    if body[i] == "\\":
+                        i += 2
+                        continue
+                    if body[i] == quote:
+                        break
+                    i += 1
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    calls.append((receiver, body[match.end():i],
+                                  match.start(), i + 1))
+                    break
+            i += 1
+        else:
+            fail(f"unterminated insert() call near offset {match.start()} — "
+                 "refusing to report a clean run.")
+    return calls
+
+
+def cpp_tokens() -> dict:
+    """(scope, token) -> hex literal, as compiled into seedBuiltinDefaults()."""
+    body = seed_body(strip_comments(THEME_CPP.read_text(encoding="utf-8")))
+
+    # Scope for a given offset: m_tokens is always root; anything else belongs
+    # to the most recent scopeOrCreate(QStringLiteral("path")) above it. Reading
+    # the scope this way is immune to how the enclosing block is indented or
+    # braced — the failure the previous `\n    \}` terminator was prone to.
+    scope_marks = [(m.start(), m.group(1)) for m in re.finditer(
+        r'scopeOrCreate\s*\(\s*QStringLiteral\s*\(\s*"([^"]+)"\s*\)', body)]
+
+    def scope_at(offset: int, receiver: str) -> str:
+        if receiver == "m_tokens":
+            return "root"
+        current = "root"
+        for mark_at, path in scope_marks:
+            if mark_at < offset:
+                current = path
+            else:
+                break
+        return current
+
+    seeded, consumed_spans, seen_keys = {}, [], set()
+    for receiver, args_text, span_start, span_end in _insert_calls(body):
+        args = _split_args(args_text)
+        if len(args) < 2:
+            fail(f"insert() with {len(args)} argument(s) at offset {span_start} "
+                 "— parser is out of date with seedBuiltinDefaults().")
+        name = re.search(r'"([^"]+)"', args[0])
+        if not name:
+            fail(f"insert() at offset {span_start} has no literal token name — "
+                 "parser is out of date with seedBuiltinDefaults().")
+        consumed_spans.append((span_start, span_end))
+
+        # A colour seed is one whose VALUE carries a hex literal, whatever it is
+        # wrapped in. Matching the wrapper (the old QString("#…") pattern) made
+        # the completeness guard tautological: respelling a seed as
+        # QStringLiteral("#…") dropped it from both the capture and the expected
+        # count in lockstep, so real drift vanished silently.
+        value_hex = HEX_LITERAL.findall(args[1])
+        if not value_hex:
+            continue                               # non-colour seed, out of scope
+        if len(value_hex) > 1:
+            fail(f'token "{name.group(1)}" seeds {len(value_hex)} hex literals '
+                 "in one value — refusing to guess which is the colour.")
+        key = (scope_at(span_start, receiver), name.group(1))
+        if key in seen_keys:
+            fail(f"token {key[1]} is seeded twice in scope {key[0]} — the "
+                 "later insert silently wins; remove one.")
+        seen_keys.add(key)
+        seeded[key] = value_hex[0]
+
+    # INVARIANT: every hex literal in the body is either inside an insert we
+    # parsed, or outside every insert (the meter gradient's QColor stops, which
+    # are not token seeds). One that is inside an UNparsed insert means the scan
+    # lost a token, and that must hard-fail rather than report clean.
+    outside = list(body)
+    for start, end in consumed_spans:
+        for j in range(start, end):
+            outside[j] = " "
+    accounted = len(seeded) + sum(
+        1 for _ in HEX_LITERAL.finditer("".join(outside)))
+    total = len(HEX_LITERAL.findall(body))
+    if accounted != total:
+        fail(f"accounted for {accounted} of {total} hex literals in "
+             "seedBuiltinDefaults() — the parser is out of date. Refusing to "
+             "report a clean run.")
+
+    if not seeded:
+        fail("parsed 0 colour seeds — the parser is broken, not the theme.")
+    return seeded
 
 
 def flatten(node, prefix: str = "") -> dict:
@@ -134,45 +372,6 @@ def json_tokens() -> dict:
     return resolved
 
 
-def cpp_tokens() -> dict:
-    """(scope, token) -> literal hex, as compiled into seedBuiltinDefaults()."""
-    source = THEME_CPP.read_text(encoding="utf-8")
-    body = re.search(r"void ThemeManager::seedBuiltinDefaults\(\).*?\n\}\n",
-                     source, re.S)
-    if not body:
-        raise SystemExit("check_theme_seed: seedBuiltinDefaults() not found — "
-                         "has ThemeManager.cpp been restructured?")
-    body = body.group(0)
-
-    seeded = {}
-    # Root-level: m_tokens.insert("color.x", QString("#rrggbb"));
-    for match in re.finditer(
-            rf'm_tokens\.insert\(\s*"([^"]+)"\s*,\s*QString\("({HEX})"\)', body):
-        seeded[("root", match.group(1))] = match.group(2)
-
-    # Scoped: scopeOrCreate(QStringLiteral("applet/tx")); s->tokens.insert(...)
-    for block in re.finditer(
-            r'scopeOrCreate\(QStringLiteral\("([^"]+)"\)\);(.*?)\n    \}',
-            body, re.S):
-        scope = block.group(1)
-        for match in re.finditer(
-                rf'tokens\.insert\("([^"]+)",\s*QString\("({HEX})"\)',
-                block.group(2)):
-            seeded[(scope, match.group(1))] = match.group(2)
-
-    # A PARTIAL parse is the dangerous failure: renaming m_tokens or reindenting
-    # a scoped block drops tokens while `shared` stays non-zero, so main()'s
-    # zero-token guard never trips and the missing tokens surface as "stale"
-    # baseline entries. Every hex literal in the body must have been captured.
-    expected = len(re.findall(rf'QString\("{HEX}"\)', body))
-    if len(seeded) != expected:
-        raise SystemExit(f"check_theme_seed: captured {len(seeded)} of {expected} "
-                         "seeded colour literals — the parser is out of date with "
-                         "seedBuiltinDefaults(). Refusing to report a clean run.")
-
-    return seeded
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Detect drift between the compiled theme seed and the "
@@ -186,9 +385,8 @@ def main() -> int:
     shared = sorted(set(from_json) & set(from_cpp))
 
     if not shared:
-        raise SystemExit("check_theme_seed: parsed 0 shared tokens — the "
-                         "parser is broken, not the theme. Refusing to report "
-                         "a clean run.")
+        fail("parsed 0 shared tokens — the parser is broken, not the theme. "
+             "Refusing to report a clean run.")
 
     drift = [(scope, token, from_cpp[(scope, token)], from_json[(scope, token)])
              for scope, token in shared
@@ -199,14 +397,17 @@ def main() -> int:
     new = [d for d in drift if (d[0], d[1]) not in KNOWN_SEED_DRIFT]
     stale = sorted(KNOWN_SEED_DRIFT - {(d[0], d[1]) for d in drift})
 
-    # "colour" is load-bearing in these labels: non-colour seeds (fonts,
-    # sizing, the meter gradient) are out of scope — see the module docstring.
+    # Both "only in" counters are restricted to COLOUR tokens, so they describe
+    # the set this checker actually governs. Counting every flattened JSON key
+    # here overstated the gap: it swept in font.size.*, sizing.*, the
+    # font.family.* sub-keys and each waterfall colormap's type/angle/stops.
+    json_colours = {k for k, v in from_json.items() if is_hex_colour(v)}
     print("=== theme seed vs default-dark.json (colour tokens) ===")
-    print(f"  colour tokens compared     : {len(shared)}")
-    print(f"  colour seeds only in C++   : {len(set(from_cpp) - set(from_json))}")
-    print(f"  colours present only in JSON: {len(set(from_json) - set(from_cpp))}")
-    print(f"  drifted (known)            : {len(known)}")
-    print(f"  drifted (NEW)              : {len(new)}")
+    print(f"  colour tokens compared      : {len(shared)}")
+    print(f"  colour seeds only in C++    : {len(set(from_cpp) - json_colours)}")
+    print(f"  JSON colours with no seed   : {len(json_colours - set(from_cpp))}")
+    print(f"  drifted (known)             : {len(known)}")
+    print(f"  drifted (NEW)               : {len(new)}")
 
     for scope, token, cpp_value, json_value in known:
         print(f"  known  [{scope}] {token}: C++={cpp_value} JSON={json_value}")
