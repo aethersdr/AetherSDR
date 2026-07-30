@@ -63,9 +63,17 @@ SettingsDatabase::~SettingsDatabase()
 bool SettingsDatabase::exec(const char* sql)
 {
     char* errMsg = nullptr;
-    if (sqlite3_exec(m_db, sql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+    const int rc = sqlite3_exec(m_db, sql, nullptr, nullptr, &errMsg);
+    if (rc != SQLITE_OK) {
         m_lastError = QString::fromUtf8(errMsg ? errMsg : "unknown sqlite error");
         sqlite3_free(errMsg);
+        // Busy is contention, not corruption — open()'s callers must be able
+        // to tell them apart wherever in the open sequence the busy landed
+        // (under WAL a concurrent EXCLUSIVE first bites in createSchema's
+        // BEGIN IMMEDIATE, not the read probe).
+        if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
+            m_lastOpenBusy = true;
+        }
         qWarning() << "SettingsDatabase: exec failed:" << sql << "—" << m_lastError;
         return false;
     }
@@ -76,6 +84,7 @@ bool SettingsDatabase::open(const QString& path)
 {
     close();
     m_newerSchema = false;
+    m_lastOpenBusy = false;
 
     sqlite3* db = nullptr;
     const QByteArray utf8Path = path.toUtf8();
@@ -105,10 +114,17 @@ bool SettingsDatabase::open(const QString& path)
     // real query touches it — probe before trusting it.
     {
         Statement probe(m_db, "SELECT count(*) FROM sqlite_schema;");
-        if (!probe.valid() || sqlite3_step(probe.get()) != SQLITE_ROW) {
+        const int rc = probe.valid() ? sqlite3_step(probe.get()) : SQLITE_ERROR;
+        if (rc != SQLITE_ROW) {
             m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+            // SQLITE_BUSY past the timeout means another process holds the
+            // store — healthy, just contended. Report it distinctly so the
+            // caller fails the session instead of quarantining a live DB.
+            m_lastOpenBusy = (rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
             qWarning() << "SettingsDatabase:" << path
-                       << "is not a readable database —" << m_lastError;
+                       << (m_lastOpenBusy ? "is locked by another process —"
+                                          : "is not a readable database —")
+                       << m_lastError;
             close();
             return false;
         }
@@ -123,12 +139,28 @@ bool SettingsDatabase::open(const QString& path)
     }
 
     if (userVersion > kSchemaVersion) {
-        // Newer binary's database. Open succeeds so the caller can READ, but
-        // it must never write or "migrate" it downward.
+        // Newer binary's database: reopen READ-ONLY so the ENGINE enforces
+        // what the caller's read-only convention promises (PR #4612 review) —
+        // and close without a checkpoint, which would write the newer file.
         m_newerSchema = true;
+        sqlite3_close(m_db);
+        m_db = nullptr;
+        sqlite3* readOnlyDb = nullptr;
+        if (sqlite3_open_v2(utf8Path.constData(), &readOnlyDb,
+                            SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+            m_lastError = readOnlyDb
+                              ? QString::fromUtf8(sqlite3_errmsg(readOnlyDb))
+                              : QStringLiteral("out of memory");
+            sqlite3_close(readOnlyDb);
+            m_path.clear();
+            return false;
+        }
+        m_db = readOnlyDb;
+        m_readOnly = true;
+        sqlite3_busy_timeout(m_db, 5000);
         qWarning() << "SettingsDatabase: schema version" << userVersion
                    << "is newer than this binary's" << kSchemaVersion
-                   << "— opening read-only";
+                   << "— reopened read-only";
         return true;
     }
 
@@ -178,15 +210,20 @@ bool SettingsDatabase::createSchema()
 void SettingsDatabase::close()
 {
     if (m_db == nullptr) {
+        m_readOnly = false;
         return;
     }
     // Fold the WAL back into the main file so the on-disk .db is complete on
-    // its own — Reset Settings and backup tooling depend on this.
-    sqlite3_wal_checkpoint_v2(m_db, nullptr, SQLITE_CHECKPOINT_TRUNCATE,
-                              nullptr, nullptr);
+    // its own — Reset Settings and backup tooling depend on this. Never on a
+    // read-only handle: a newer binary's file is not ours to write.
+    if (!m_readOnly) {
+        sqlite3_wal_checkpoint_v2(m_db, nullptr, SQLITE_CHECKPOINT_TRUNCATE,
+                                  nullptr, nullptr);
+    }
     sqlite3_close(m_db);
     m_db = nullptr;
     m_path.clear();
+    m_readOnly = false;
 }
 
 bool SettingsDatabase::quickCheck()

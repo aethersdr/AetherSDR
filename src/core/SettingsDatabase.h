@@ -48,6 +48,11 @@ public:
     void close();                       // checkpoints WAL, then closes
     bool isOpen() const { return m_db != nullptr; }
     bool isNewerSchema() const { return m_newerSchema; }
+    // True when the last failed open() was a lock/busy condition rather than
+    // corruption — a busy database is HEALTHY and must never be quarantined
+    // (PR #4612 review: POSIX rename() succeeds on open files, so quarantining
+    // a busy store split-brains a concurrent instance's committed writes).
+    bool lastOpenWasBusy() const { return m_lastOpenBusy; }
     QString path() const { return m_path; }
     QString lastError() const { return m_lastError; }
 
@@ -105,6 +110,8 @@ private:
     QString m_path;
     QString m_lastError;
     bool m_newerSchema = false;
+    bool m_readOnly = false;
+    bool m_lastOpenBusy = false;
 };
 
 } // namespace AetherSDR

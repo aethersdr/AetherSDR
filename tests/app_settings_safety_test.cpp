@@ -13,6 +13,7 @@
 #include "core/AppSettings.h"
 #include "core/SettingsDatabase.h"
 #include "core/SettingsPaths.h"
+#include "core/SettingsSanitizer.h"
 #include "core/backends/hl2/Hl2Discovery.h"
 #include "gui/DisplaySettings.h"
 
@@ -122,11 +123,38 @@ void testSaveBeforeLoad()
 
 void testXmlImportParity()
 {
-    const QByteArray live = settingsDocument(50, QStringLiteral("original"));
+    // A fixture with a per-station section, so the import's station rows get
+    // the same verification as app rows (PR #4612 review, K5PTB finding 3).
+    QByteArray live;
+    {
+        QBuffer buffer(&live);
+        buffer.open(QIODevice::WriteOnly);
+        QXmlStreamWriter xml(&buffer);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement(QStringLiteral("Settings"));
+        for (int index = 0; index < 50; ++index) {
+            xml.writeTextElement(
+                QStringLiteral("Key%1").arg(index, 3, 10, QLatin1Char('0')),
+                QStringLiteral("original-%1").arg(index));
+        }
+        xml.writeTextElement(QStringLiteral("StationName"),
+                             QStringLiteral("TestShack"));
+        xml.writeStartElement(QStringLiteral("TestShack"));
+        xml.writeTextElement(QStringLiteral("MeterSel"), QStringLiteral("S-Meter"));
+        xml.writeEndElement();
+        xml.writeEndElement();
+        xml.writeEndDocument();
+    }
     expect(writeFile(xmlPath(), live), "import fixture is written");
 
     AppSettings& settings = AppSettings::instance();
     settings.load();
+
+    expect(settings.stationName() == QStringLiteral("TestShack")
+               && settings.stationValue(QStringLiteral("MeterSel")).toString()
+                      == QStringLiteral("S-Meter"),
+           "the station section imports and is readback-verified");
 
     expect(settings.value(QStringLiteral("Key049")).toString()
                == QStringLiteral("original-49"),
@@ -342,6 +370,27 @@ void testCredentialExodus()
     expect(readFile(xmlPath()) == doc,
            "the exodus never modifies the frozen XML (it keeps the user's "
            "only remaining plaintext copy)");
+
+    // The seam guard (PR #4612 review): a credential key can never be written
+    // into the store post-migration either — setValue diverts to the vault.
+    settings.setValue(QStringLiteral("MqttPass"), QStringLiteral("again"));
+    settings.save();
+    expect(!dbHas(QStringLiteral("MqttPass")),
+           "setValue on a credential key never reaches the database");
+    expect(settings.takeSessionCredential(QStringLiteral("mqtt_password"))
+               == QStringLiteral("again"),
+           "the diverted setValue lands in the session vault instead");
+    // A document that re-grows its credential field is stripped at the seam.
+    settings.setValue(
+        QStringLiteral("CopyAssist"),
+        QStringLiteral("{\"AsrLanguage\":\"en\",\"AsrRemoteApiKey\":\"sk-AGAIN\"}"));
+    settings.save();
+    QString doc2;
+    expect(dbRow(QStringLiteral("CopyAssist"), doc2)
+               && !doc2.contains(QStringLiteral("sk-AGAIN")),
+           "a credential field re-added to a document is stripped at the seam");
+    expect(SettingsSanitizer::isSecretKey(QStringLiteral("MqttPass")),
+           "the sanitizer redacts the exact exodus names (MqttPass drift hole)");
 }
 
 void testCorruptDbRestoresFromBackup()
@@ -397,6 +446,47 @@ void testCorruptDbReimportsFrozenXml()
     expect(dbRow(QStringLiteral("Key005"), value)
                && value == QStringLiteral("original-5"),
            "the re-import produces a fresh usable database");
+}
+
+// PR #4612 review (nigelfenton, demonstrated on Linux): a database held by
+// another process's EXCLUSIVE transaction must fail the session, NOT be
+// quarantined — POSIX rename() succeeds on open files, so quarantining a
+// healthy busy store would strand the other instance's committed writes.
+void testLockedDbFailsClosed()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("intact"));
+    settings.save();
+    settings.reset();
+
+    SettingsDatabase holder;
+    expect(holder.open(dbPath()), "a second connection opens the store");
+    expect(holder.beginExclusive(), "the second connection holds EXCLUSIVE");
+
+    settings.load();   // probe hits SQLITE_BUSY after the timeout
+    settings.setValue(QStringLiteral("MustNotSave"), QStringLiteral("x"));
+    settings.save();
+    holder.rollback();
+    holder.close();
+
+    expect(QFile::exists(dbPath()),
+           "a busy database is never quarantined");
+    const QDir quarantine(SettingsPaths::quarantineDir());
+    expect(quarantine.entryList(QDir::Files).isEmpty(),
+           "no quarantine entry is created for a busy store");
+    QString value;
+    expect(dbRow(QStringLiteral("Survivor"), value)
+               && value == QStringLiteral("intact"),
+           "the held store's data is untouched");
+    expect(!dbHas(QStringLiteral("MustNotSave")),
+           "the locked-out session cannot save");
+
+    settings.reset();
+    settings.load();
+    expect(settings.value(QStringLiteral("Survivor")).toString()
+               == QStringLiteral("intact"),
+           "the next launch recovers normally once the lock is gone");
 }
 
 void testNewerSchemaOpensReadOnly()
@@ -552,6 +642,8 @@ int main(int argc, char** argv)
         testCorruptDbRestoresFromBackup();
     } else if (scenario == QStringLiteral("corrupt-db-reimport-xml")) {
         testCorruptDbReimportsFrozenXml();
+    } else if (scenario == QStringLiteral("locked-db-fails-closed")) {
+        testLockedDbFailsClosed();
     } else if (scenario == QStringLiteral("newer-schema-readonly")) {
         testNewerSchemaOpensReadOnly();
     } else if (scenario == QStringLiteral("dirty-row-save")) {

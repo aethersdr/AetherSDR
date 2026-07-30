@@ -4,6 +4,7 @@
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
 #include "core/SettingsBootstrap.h"
+#include "core/SettingsCredentialPolicy.h"
 #include "core/SettingsDatabase.h"
 #include "core/SettingsPaths.h"
 #include "core/SettingsSanitizer.h"
@@ -168,6 +169,19 @@ static int runConfigCli(int argc, char* argv[])
     if (op == QStringLiteral("set") || op == QStringLiteral("unset")) {
         if (key.isEmpty() || (op == QStringLiteral("set") && args.size() < 5)) {
             return usage();
+        }
+        // The credential policy applies to the CLI too (PR #4612 review):
+        // creating a credential row would undo the exodus this store ships
+        // with. unset stays allowed — deleting a credential is always fine.
+        if (op == QStringLiteral("set")
+            && AetherSDR::SettingsSanitizer::isSecretKey(key)) {
+            std::fprintf(stderr,
+                         "refusing: '%s' is a credential-shaped key, and "
+                         "credentials are never stored in the settings "
+                         "database (RFC #4603). Use the app's own UI, which "
+                         "stores it in the OS keychain.\n",
+                         qPrintable(key));
+            return 1;
         }
         if (op == QStringLiteral("set")) {
             settings.setValue(key, args.value(4));

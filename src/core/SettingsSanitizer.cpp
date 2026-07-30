@@ -1,6 +1,7 @@
 #include "SettingsSanitizer.h"
 
 #include "AppSettings.h"
+#include "SettingsCredentialPolicy.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -50,9 +51,21 @@ QJsonValue redactJsonValue(const QJsonValue& value)
 
 bool isSecretKey(const QString& key)
 {
+    // Exact names first, derived from THE credential list — the shape regex
+    // alone missed "MqttPass", the literal legacy name the exodus list itself
+    // declared (PR #4612 review, K5PTB). Deriving from one table means a new
+    // credential added to the policy is redacted here for free.
+    if (SettingsCredentialPolicy::isFlatCredentialKey(key)) {
+        return true;
+    }
+    for (const auto& entry : SettingsCredentialPolicy::kDocFieldCredentials) {
+        if (key == QLatin1String(entry.field)) {
+            return true;
+        }
+    }
     static const QRegularExpression secretPattern(
         QStringLiteral("token|password|passphrase|secret|auth0|refresh|"
-                       "api_?key|credential"),
+                       "api_?key|credential|\\bpass\\b"),
         QRegularExpression::CaseInsensitiveOption);
     return secretPattern.match(key).hasMatch();
 }

@@ -2888,6 +2888,7 @@ foreach(APP_SETTINGS_SCENARIO
         credential-exodus
         corrupt-db-restore-backup
         corrupt-db-reimport-xml
+        locked-db-fails-closed
         newer-schema-readonly
         dirty-row-save
         display-slice-depth-default

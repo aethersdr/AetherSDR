@@ -1,5 +1,6 @@
 #include "AppSettings.h"
 #include "GuiClientIdentityPolicy.h"
+#include "SettingsCredentialPolicy.h"
 #include "SettingsDatabase.h"
 #include "SettingsPaths.h"
 
@@ -58,29 +59,9 @@ QString machineBinding()
 
 constexpr char kIdentityConfigKey[] = "GuiClientIdentity";
 
-// ── Credential exodus (RFC #4603 proposal E) ─────────────────────────────────
-// Secrets never enter the database. Known credential-bearing legacy keys are
-// diverted to the session vault (and on to the OS keychain) during the XML
-// import. Keychain service for all of them is "AetherSDR", matching
-// MqttSettings and AutomationBridgeSettings.
-struct CredentialExodusEntry {
-    const char* flatKey;      // legacy flat AppSettings key
-    const char* keychainKey;  // key within the "AetherSDR" keychain service
-};
-constexpr CredentialExodusEntry kCredentialExodus[] = {
-    {"AutomationBridgeToken", "automation_bridge_token"},
-    {"MqttPass",              "mqtt_password"},
-    {"AsrRemoteApiKey",       "asr_remote_api_key"},
-};
-// JSON-document fields holding credentials: {settings key, field, keychain key}.
-struct CredentialDocFieldEntry {
-    const char* docKey;
-    const char* field;
-    const char* keychainKey;
-};
-constexpr CredentialDocFieldEntry kCredentialDocFields[] = {
-    {"CopyAssist", "AsrRemoteApiKey", "asr_remote_api_key"},
-};
+// Credential exodus + seam guard (RFC #4603 proposal E): the known credential
+// names live in SettingsCredentialPolicy.h — ONE list shared with the
+// sanitizer and the --config CLI so the three cannot drift (PR #4612 review).
 
 QString fileSha256(const QString& path)
 {
@@ -228,12 +209,27 @@ void AppSettings::load()
         qWarning() << "AppSettings: settings database failed integrity check";
         opened = false;
     }
+    if (!opened && m_db->lastOpenWasBusy()) {
+        // A busy store is HEALTHY — another process (an import mid-EXCLUSIVE,
+        // a second instance) holds it. Never quarantine it: on POSIX,
+        // rename() succeeds on open files, so moving it aside would strand
+        // the other instance's committed writes in the quarantined inode
+        // (PR #4612 review — demonstrated, not theoretical). Fail this
+        // session; the next launch retries.
+        qWarning() << "AppSettings: settings database is locked by another"
+                      " process — read-only session, retry next launch";
+        return;
+    }
     if (!opened && QFile::exists(m_filePath)) {
-        // Confirmed unusable (does not open, or integrity failure) — locks and
-        // permission errors surface as open() failures on the *quarantined
-        // retry* too, so a healthy-but-busy database is not destroyed: the
-        // quarantine only moves files, and the move itself fails when another
-        // process holds them.
+        // Confirmed unusable (unreadable or failed integrity). Quarantine and
+        // restore are serialized under a lock file so two instances cannot
+        // both decide to "recover" — the second one fails its session instead.
+        QLockFile recoveryLock(m_filePath + QStringLiteral(".recovery.lock"));
+        if (!recoveryLock.tryLock(0)) {
+            qWarning() << "AppSettings: another instance is recovering the"
+                          " settings store — read-only session";
+            return;
+        }
         quarantineCorruptStore();
         const bool restored = restoreNewestVerifiedBackup();
         opened = m_db->open(m_filePath);
@@ -431,8 +427,8 @@ bool AppSettings::loadFromDatabase()
 
 void AppSettings::extractCredentials(QMap<QString, QString>& settings)
 {
-    for (const auto& entry : kCredentialExodus) {
-        const QString key = QString::fromLatin1(entry.flatKey);
+    for (const auto& entry : SettingsCredentialPolicy::kFlatCredentials) {
+        const QString key = QString::fromLatin1(entry.settingsKey);
         const auto it = settings.find(key);
         if (it != settings.end()) {
             if (!it.value().isEmpty()) {
@@ -444,7 +440,7 @@ void AppSettings::extractCredentials(QMap<QString, QString>& settings)
                      << "out of the settings store";
         }
     }
-    for (const auto& entry : kCredentialDocFields) {
+    for (const auto& entry : SettingsCredentialPolicy::kDocFieldCredentials) {
         const QString docKey = QString::fromLatin1(entry.docKey);
         const auto it = settings.find(docKey);
         if (it == settings.end()) {
@@ -567,6 +563,17 @@ bool AppSettings::importLegacyXml(QMap<QString, QString> settings,
                 ok = false;
                 break;
             }
+        }
+    }
+    // Station rows get the same treatment as app rows — symmetric readback
+    // verification, not just an unfailed upsert chain (PR #4612 review).
+    if (ok && !stationSettings.isEmpty()) {
+        QMap<QString, QString> stationReadBack;
+        ok = m_db->loadStationSettings(effectiveStation, stationReadBack)
+             && stationReadBack == stationSettings;
+        if (!ok) {
+            qWarning() << "AppSettings: station-settings import verification"
+                          " failed";
         }
     }
 
@@ -898,7 +905,44 @@ QVariant AppSettings::value(const QString& key, const QVariant& defaultValue) co
 
 void AppSettings::setValue(const QString& key, const QVariant& val)
 {
-    const QString str = val.toString();
+    QString str = val.toString();
+
+    // The credential seam (RFC #4603 proposal E, enforced HERE rather than by
+    // caller discipline — PR #4612 review): a known credential key never
+    // reaches the store. Divert to the session vault so a legacy caller keeps
+    // working this session; its feature owns moving it to the keychain.
+    if (SettingsCredentialPolicy::isFlatCredentialKey(key)) {
+        qWarning() << "AppSettings: refusing to store credential key" << key
+                   << "— diverted to the session vault (keychain is the"
+                      " persistent credential store)";
+        setSessionCredential(SettingsCredentialPolicy::keychainKeyForFlat(key),
+                             str);
+        return;
+    }
+    // A credential FIELD inside a feature document is stripped the same way.
+    if (SettingsCredentialPolicy::isCredentialDocKey(key)) {
+        for (const auto& entry : SettingsCredentialPolicy::kDocFieldCredentials) {
+            if (key != QLatin1String(entry.docKey)) {
+                continue;
+            }
+            QJsonObject obj = QJsonDocument::fromJson(str.toUtf8()).object();
+            const QString field = QString::fromLatin1(entry.field);
+            if (!obj.contains(field)) {
+                continue;
+            }
+            const QString secret = obj.value(field).toString();
+            if (!secret.isEmpty()) {
+                setSessionCredential(QString::fromLatin1(entry.keychainKey),
+                                     secret);
+            }
+            obj.remove(field);
+            str = QString::fromUtf8(
+                QJsonDocument(obj).toJson(QJsonDocument::Compact));
+            qWarning() << "AppSettings: stripped credential field" << key << '/'
+                       << field << "before storing the document";
+        }
+    }
+
     QWriteLocker locker(&m_lock);
     const auto it = m_settings.constFind(key);
     if (it != m_settings.constEnd() && it.value() == str) {
