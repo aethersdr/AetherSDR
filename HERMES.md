@@ -2392,6 +2392,10 @@ Marking every slice as the TX slice would be worse than marking none: RadioModel
 interlock would find one whichever pane was selected, and the operator could key
 from a receiver the TX NCO is not following.
 
+The operator can MOVE it (the VFO panel's TX indicator, `IRadioBackend::
+setTxSlice`), and the same singularity applies to the ACTIVE slice — see 19.13,
+where publishing either one unconditionally is what actually went wrong.
+
 ### 19.7 Host-side audio mixing
 
 A Flex sums its slices on-radio and sends one stream. An HL2 demodulates every
@@ -2625,13 +2629,31 @@ reachable by clicking the applet), and one for pane pop-out / maximize.
 ### 19.16 What is proven, and what is not
 
 **Proven against `hpsdrsim -hermeslite2 -P1`:** four receivers configured and
-streaming; four independent NCOs (7.200 / 7.150 / 7.100 / 7.050 MHz);
-four panadapters with their own spectrum and waterfall; `txSlice` on slice 0
-only; agree-or-bypass across the full round trip; RF gain consistent across all
-four pans. 193/193 tests green.
+streaming; four independent NCOs; four panadapters with their own spectrum and
+waterfall; agree-or-bypass across the full round trip; RF gain consistent across
+all four pans.
+
+Added since, all through the automation bridge: connect at one receiver with no
+settings file; the statusbar button and a real layout tile creating three more;
+the fourth add refused at the board's reported count; close, and close-the-last
+refused; open 4 / close 3 / reopen giving back id 1; close-the-middle then reopen
+filling the gap; `panCount == sliceCount` at every step; exactly one `txSlice`
+and one `active` slice; `slice tx` and `slice select` each clearing the previous
+holder; RF gain on one pan moving all pans; WSJT-X's TCI split creating a second
+DDC and moving transmit to it; and two TCI clients on RX1/RX2 both receiving
+per-slice audio, including with one slice speaker-muted. 196/196 tests green
+(`hl2_tx_loopback_test` excluded — see below).
 
 **NOT proven, and it matters:**
 
+- **`hl2_tx_loopback_test` fails against the simulator** on transmit-sideband
+  checks, non-deterministically. Commit `256142a6` — the pre-multi-DDC base —
+  fails identically, so it is pre-existing rather than caused by this work, and
+  it is tracked separately. Note a dev host at `192.168.1.12` is the address that
+  test probes, so a locally-running `hpsdrsim` makes it execute when it was
+  written to skip, and collide with any app already driving that simulator.
+- **Pane pop-out and maximize are unverified**, and so is TCI TX audio from the
+  second client.
 - **Nothing has run on real hardware yet.** The simulator generates its scene
   independently of the NCO, so four receivers on four frequencies show the same
   synthetic content there. That four DDCs genuinely tune *independently* is
