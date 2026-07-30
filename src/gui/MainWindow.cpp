@@ -8433,6 +8433,57 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
         return;
     }
 
+    // A backend that owns its own receivers creates them at the SEAM.
+    //
+    // The Flex wire text below goes nowhere on such a radio, and — the part that
+    // actually breaks this — its completion callback never runs either. The
+    // recursion is driven FROM that callback, so it stopped dead after the first
+    // iteration: no pans, no error, no log line past "creating N more".
+    //
+    // That is what made "Add Panadapter → pick a layout" silently do nothing on
+    // a Hermes-Lite 2 while the bridge's `pan create` worked, because that goes
+    // through RadioModel::createPanadapter() and this path talks to the wire
+    // directly.
+    //
+    // The seam create is synchronous, so there is no reply to wait for. Which
+    // pan is new is found by DIFFING rather than parsing a create reply: the
+    // backend numbers its own pans and skips retired numbers after a close.
+    if (!m_radioModel.usesFlexCommandPlane()) {
+        QSet<QString> before;
+        for (auto* p : m_panStack->allApplets())
+            before.insert(p->panId());
+        for (auto* p : m_radioModel.panadapters())
+            if (p) before.insert(p->panId());
+
+        m_radioModel.createPanadapter();
+
+        QString createdId;
+        for (auto* p : m_radioModel.panadapters()) {
+            if (p && !before.contains(p->panId())) {
+                createdId = p->panId();
+                break;
+            }
+        }
+        if (createdId.isEmpty()) {
+            // The backend refused — receiver count, or the link budget at this
+            // span. It has already logged which; surface it and stop rather than
+            // recursing against a limit that will refuse every remaining pan.
+            qWarning() << "applyPanLayout: backend declined pan"
+                       << (created + 1) << "of" << total;
+            showPanadapterSliceCapacityMessage();
+            return;
+        }
+        panIds->append(createdId);
+        qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
+                 << "id:" << createdId;
+        // Same inter-create delay as the Flex path. Adding a receiver restarts
+        // the EP6 stream, so back-to-back creates would stack restarts.
+        QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
+            createPansSequentially(layoutId, total, panIds, created + 1);
+        });
+        return;
+    }
+
     m_radioModel.sendCmdPublic(
         "display panafall create x=100 y=100",
         [this, panIds, layoutId, total, created](int code, const QString& body) {
