@@ -905,32 +905,57 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     if (numBins == 0 || binSize == 0 || totalBins == 0) return;
 
     const int binDataOffset = VITA49_HEADER_BYTES + FFT_SUBHEADER_BYTES;
-    int binDataBytes = numBins * binSize;
     const int available = totalBytes - binDataOffset - (hasTrailer ? 4 : 0);
-    if (available < binDataBytes) {
-        binDataBytes = available;
-        if (binDataBytes <= 0) return;
-    }
+    // FLEX FFT samples are uint16. A short datagram must not be read past its
+    // payload or counted as complete; wait for coverage of the missing bins.
+    if (binSize != sizeof(quint16)) return;
+    const int binsToRead = boundedVitaPayloadBinCount(
+        numBins, binSize, available);
+    if (binsToRead <= 0) return;
 
     const uchar* binData = raw + binDataOffset;
 
-    // Per-stream frame assembly
+    // Per-stream frame assembly.
     auto& frame = m_frames[streamId];
-    if (frameIndex != frame.frameIndex) {
+    const bool startsNewFrame =
+        frameIndex != frame.frameIndex || totalBins != frame.totalBins;
+    if (startsNewFrame) {
         if (frame.totalBins > 0 && !frame.isComplete())
             PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Panadapter);
         frame.reset(frameIndex, totalBins);
     }
 
-    if (startBin + numBins > static_cast<quint16>(frame.buf.size()))
+    if (static_cast<int>(startBin) + binsToRead > frame.buf.size())
+        return;
+    if (frame.isComplete())
+        return;
+    if (!frame.coverage.markRange(startBin, binsToRead))
         return;
 
-    for (quint16 i = 0; i < numBins; ++i)
+    for (int i = 0; i < binsToRead; ++i)
         frame.buf[startBin + i] = qFromBigEndian<quint16>(binData + i * 2);
 
-    frame.binsReceived += numBins;
-
     if (!frame.isComplete()) return;
+
+    // On an x_pixels grow, firmware 4.2.18 can complete one expanded frame
+    // with the old-width prefix followed by zero-filled new bins. Zero means
+    // max dBm in the radio's vertical pixel encoding. Reject that placeholder
+    // before it reaches FFT averaging or retained 3D history; the previous
+    // complete FFT remains live until the first valid expanded frame arrives.
+    const bool zeroFilledGrowth = hasZeroFilledFftGrowthSuffix(
+        frame.buf, frame.lastAcceptedTotalBins);
+    const FftGrowthSuffixAction growthAction =
+        frame.growthSuffixGuard.observe(zeroFilledGrowth, frame.totalBins);
+    if (growthAction == FftGrowthSuffixAction::Reject) {
+        return;
+    }
+    const int floorFilledSuffixStart =
+        growthAction == FftGrowthSuffixAction::EmitWithFloorSuffix
+        ? frame.lastAcceptedTotalBins
+        : -1;
+    if (growthAction == FftGrowthSuffixAction::Accept) {
+        frame.lastAcceptedTotalBins = frame.totalBins;
+    }
 
     // Convert to dBm using per-stream range
     QPair<float,float> dbmRange;
@@ -947,29 +972,23 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     const int   count = frame.buf.size();
     QVector<float> bins(count);
 
-    int effectiveYPixels = std::max(yPixVal, 2);
-    int rawMax = 0;
-    int overRangeCount = 0;
-    for (const quint16 rawBin : frame.buf) {
-        const int rawValue = static_cast<int>(rawBin);
-        rawMax = std::max(rawMax, rawValue);
-        if (rawValue >= effectiveYPixels) {
-            ++overRangeCount;
-        }
-    }
-    // A stale/tiny y_pixels status makes normal noise bins clamp to one flat
-    // floor while strong signals still poke through. If the frame itself shows
-    // that the radio is encoding against a taller pixel space, preserve the
-    // trace and let the normal dimension re-push/echo path catch up.
-    if (overRangeCount > std::max(8, count / 8)) {
-        effectiveYPixels = std::max(effectiveYPixels, rawMax + 1);
-    }
-
-    const float yPix = static_cast<float>(effectiveYPixels);
+    // The radio's configured y_pixels is the encoding scale. Values at or
+    // beyond y_pixels are bottom-clipped samples, not evidence that the frame
+    // silently switched to a taller scale. Inferring a different height from
+    // each frame makes a clipped floor look like valid, rescaled FFT data.
+    const float yPix = static_cast<float>(std::max(yPixVal, 2));
 
     for (int i = 0; i < count; ++i) {
-        const float pixel = std::clamp(
-            static_cast<float>(frame.buf[i]), 0.0f, yPix - 1.0f);
+        // If firmware repeats its resize placeholder, keep the panadapter live
+        // after a bounded wait without ever interpreting the zero-filled suffix
+        // as max dBm. A later populated growth frame is still detected against
+        // lastAcceptedTotalBins and replaces this floor extension normally.
+        const bool floorFillSuffix = floorFilledSuffixStart >= 0
+            && i >= floorFilledSuffixStart;
+        const float pixel = floorFillSuffix
+            ? yPix - 1.0f
+            : std::clamp(
+                static_cast<float>(frame.buf[i]), 0.0f, yPix - 1.0f);
         const float dbm = maxDbm - (pixel / (yPix - 1.0f)) * range;
         bins[i] = std::clamp(dbm, minDbm, maxDbm);
     }
@@ -1068,13 +1087,13 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     // refactor that breaks the wfFrame.buf.size() <-> wfFrame.totalBins
     // invariant.  GHSA-7gvg-x594-pprq.
     if (firstBinIndex + binsToRead > wfFrame.buf.size()) return;
+    if (wfFrame.isComplete()) return;
+    if (!wfFrame.coverage.markRange(firstBinIndex, binsToRead)) return;
 
     for (int i = 0; i < binsToRead; ++i) {
         const auto raw16 = static_cast<qint16>(qFromBigEndian<quint16>(tilePayload + i * 2));
         wfFrame.buf[firstBinIndex + i] = static_cast<float>(raw16) / 128.0f;
     }
-    wfFrame.binsReceived += binsToRead;
-
     // Only emit when the full frame is assembled
     if (!wfFrame.isComplete()) return;
 

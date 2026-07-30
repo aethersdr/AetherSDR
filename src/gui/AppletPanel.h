@@ -276,10 +276,20 @@ private:
         QString      tooltip; // hover description for the picker
         QPushButton* btn{nullptr};
         bool         hardwareAvailable{true};
+        // Whether this applet opens by default when Applet_<id> is UNSET.
+        //
+        // Recorded because the re-enable path has to answer "should this be
+        // open?" for an applet the operator has never touched, and the honest
+        // answer is the applet's own default — not a blanket yes. PROF, DAX and
+        // IQ are created closed; assuming otherwise force-opened all three on
+        // the first connect and then persisted that. See
+        // updateHardwareAvailability().
+        bool         defaultOn{true};
     };
 
     void registerBarButton(const QString& id, const QString& label,
-                           const QString& tooltip, QPushButton* btn);
+                           const QString& tooltip, QPushButton* btn,
+                           bool defaultOn = true);
     void applyBarLayout();
     void setDrawerOpen(bool open);
     void openFavoritesPicker();

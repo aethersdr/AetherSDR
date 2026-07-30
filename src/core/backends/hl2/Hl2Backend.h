@@ -38,6 +38,8 @@ public:
     ~Hl2Backend() override;
 
     RadioCapabilities capabilities() const override;
+    // Demodulates in-process (Hl2RxDsp); there is no VITA-49 stream at all.
+    bool ownsRxAudio() const override { return true; }
 
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;

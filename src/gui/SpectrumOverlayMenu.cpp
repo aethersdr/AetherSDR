@@ -2428,6 +2428,20 @@ void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
     }
 }
 
+void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)
+{
+    // The button lives in the menu row and the panel is a popup off it, so both
+    // have to go — hiding only the button would leave the panel reachable if it
+    // were already open when the capability changed.
+    if (m_menuBtns.size() > kBtnDax && m_menuBtns[kBtnDax]) {
+        m_menuBtns[kBtnDax]->setVisible(available);
+    }
+    if (!available && m_daxPanel) {
+        m_daxPanel->hide();
+        m_daxPanelVisible = false;
+    }
+}
+
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
 {
     syncWnbState(on, level, false);

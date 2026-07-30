@@ -38,6 +38,16 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+# Windows consoles commonly default to a legacy code page (cp1252), which cannot
+# encode the non-ASCII characters in this script's summary output — printing one
+# raised UnicodeEncodeError and killed the run *after* the CSV was written but
+# *before* the migration-target summary appeared.  Re-open stdout/stderr as UTF-8
+# and replace anything the terminal genuinely cannot render, so the tool prints a
+# useful (if occasionally substituted) summary everywhere instead of aborting.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, 'reconfigure'):
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+
 # Match QColor("#hex") and QColor(0xhex)
 QCOLOR_HEX_STR = re.compile(r'QColor\s*\(\s*"(#[0-9a-fA-F]{3,8})"\s*\)')
 QCOLOR_HEX_INT = re.compile(r'QColor\s*\(\s*0x([0-9a-fA-F]{6,8})\b')
@@ -238,7 +248,10 @@ def main() -> int:
 
     if not args.summary_only:
         out_path = Path(args.out)
-        with out_path.open('w', newline='') as fh:
+        # Explicit UTF-8: the default encoding is locale-dependent, so a source
+        # path containing a non-ASCII character would fail the write on a
+        # legacy-code-page Windows console.
+        with out_path.open('w', newline='', encoding='utf-8') as fh:
             w = csv.writer(fh)
             w.writerow(['colour', 'count', 'suggested_token',
                         'forms', 'sample_files', 'sample_lines'])

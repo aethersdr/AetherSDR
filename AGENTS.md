@@ -181,10 +181,29 @@ setup.
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.7.4** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **26.7.4.1**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
+
+The version is stated in **five** places, and a release is not prepped until
+all five agree. This list is spelled out because it was previously described as
+"both `CMakeLists.txt` and `README.md`" — and v26.7.4.1 duly shipped with the
+other three stale:
+
+| file | what to change |
+|---|---|
+| `CMakeLists.txt` | `project(AetherSDR VERSION …)` — the only one that reaches the binary |
+| `README.md` | the **Current version:** line |
+| `AGENTS.md` | this line |
+| `CHANGELOG.md` | a new section at the top, under `## [Unreleased]` |
+| `packaging/linux/io.github.aethersdr.aethersdr.metainfo.xml` | a new `<release …/>` entry — AppStream and Flathub read this, not the git tag |
+
+`ROADMAP.md`'s "Current cycle" heading names the release too.
+
+Leave every *historical* mention alone. "shipped v26.7.4" and "(v26.7.4)" are
+statements about when something landed and stay true forever, so a blanket
+find-and-replace across a version bump silently corrupts them.
 
 ---
 

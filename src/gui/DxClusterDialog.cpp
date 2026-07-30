@@ -1,5 +1,6 @@
 #include "DxClusterDialog.h"
 #include "DxClusterStartupCommandsDialog.h"
+#include "FlowLayout.h"
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
@@ -60,70 +61,9 @@ private:
     int m_resetValue{0};
 };
 
-// Left-to-right layout that wraps to a new row when it runs out of
-// horizontal space, rather than compressing children to illegibility
-// (#4157). Used for the Spot List band-filter checkboxes so the
-// checked state stays readable when SpotHub is narrow.
-class FlowLayout : public QLayout {
-public:
-    explicit FlowLayout(int margin, int hSpacing, int vSpacing)
-        : m_hSpace(hSpacing), m_vSpace(vSpacing) {
-        setContentsMargins(margin, margin, margin, margin);
-    }
-    ~FlowLayout() override {
-        while (QLayoutItem* item = takeAt(0))
-            delete item;
-    }
-
-    void addItem(QLayoutItem* item) override { m_items.append(item); }
-    Qt::Orientations expandingDirections() const override { return {}; }
-    bool hasHeightForWidth() const override { return true; }
-    int heightForWidth(int width) const override { return doLayout(QRect(0, 0, width, 0), true); }
-    int count() const override { return m_items.size(); }
-    QLayoutItem* itemAt(int index) const override { return m_items.value(index); }
-    QLayoutItem* takeAt(int index) override {
-        return (index >= 0 && index < m_items.size()) ? m_items.takeAt(index) : nullptr;
-    }
-    QSize sizeHint() const override { return minimumSize(); }
-    QSize minimumSize() const override {
-        QSize size;
-        for (QLayoutItem* item : m_items)
-            size = size.expandedTo(item->minimumSize());
-        const QMargins m = contentsMargins();
-        return size + QSize(m.left() + m.right(), m.top() + m.bottom());
-    }
-    void setGeometry(const QRect& rect) override {
-        QLayout::setGeometry(rect);
-        doLayout(rect, false);
-    }
-
-private:
-    int doLayout(const QRect& rect, bool testOnly) const {
-        const QMargins m = contentsMargins();
-        QRect effectiveRect = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom());
-        int x = effectiveRect.x();
-        int y = effectiveRect.y();
-        int lineHeight = 0;
-        for (QLayoutItem* item : m_items) {
-            int nextX = x + item->sizeHint().width() + m_hSpace;
-            if (nextX - m_hSpace > effectiveRect.right() && lineHeight > 0) {
-                x = effectiveRect.x();
-                y += lineHeight + m_vSpace;
-                nextX = x + item->sizeHint().width() + m_hSpace;
-                lineHeight = 0;
-            }
-            if (!testOnly)
-                item->setGeometry(QRect(QPoint(x, y), item->sizeHint()));
-            x = nextX;
-            lineHeight = qMax(lineHeight, item->sizeHint().height());
-        }
-        return y + lineHeight - rect.y() + m.bottom();
-    }
-
-    QList<QLayoutItem*> m_items;
-    int m_hSpace;
-    int m_vSpace;
-};
+// FlowLayout (the wrap-instead-of-compress layout born here for the Spot
+// List band filters, #4157) now lives in FlowLayout.h — promoted to a
+// shared class for #4518.
 
 // Keeps a QMenu open while its checkable actions are toggled, so several
 // columns can be shown/hidden in one pass instead of reopening the header
@@ -2116,13 +2056,35 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     // (which resets the model without touching this label). (#2022)
     auto updateCount = [this] {
         if (m_spotCountLabel)
-            m_spotCountLabel->setText(QString("%1 spots").arg(m_spotModel->rowCount()));
+            m_spotCountLabel->setText(QString("%1 spots%2").arg(m_spotModel->rowCount())
+                                       .arg(m_spotListFrozen ? " (frozen)" : ""));
     };
     connect(m_spotModel, &QAbstractTableModel::rowsInserted, this, updateCount);
     connect(m_spotModel, &QAbstractTableModel::rowsRemoved, this, updateCount);
     connect(m_spotModel, &QAbstractTableModel::modelReset, this, updateCount);
     bottomRow->addWidget(m_spotCountLabel);
     bottomRow->addStretch();
+
+    // Pause the list so a spot stays put to click while new spots keep
+    // arriving in the background (#4145). Unfreezing flushes whatever
+    // buffered in m_spotBatch immediately rather than waiting for the
+    // next 1 Hz tick.
+    auto* freezeBtn = new QPushButton("Freeze");
+    freezeBtn->setObjectName("spotListFreezeBtn");
+    freezeBtn->setCheckable(true);
+    freezeBtn->setFixedWidth(60);
+    freezeBtn->setStyleSheet(kSpotHubToggle);
+    freezeBtn->setToolTip("Pause the spot list so new spots stop shifting\n"
+                          "rows while you're clicking one. Spots keep\n"
+                          "arriving in the background and appear once\n"
+                          "unfrozen.");
+    connect(freezeBtn, &QPushButton::toggled, this, [this, updateCount](bool on) {
+        m_spotListFrozen = on;
+        updateCount();
+        if (!on)
+            flushSpotBatch();
+    });
+    bottomRow->addWidget(freezeBtn);
 
     auto* clearBtn = new QPushButton("Clear");
     clearBtn->setObjectName("spotListClearBtn");
@@ -2851,6 +2813,16 @@ void DxClusterDialog::setTotalSpots(int count)
 
 void DxClusterDialog::flushSpotBatch()
 {
+    if (m_spotListFrozen) {
+        // Still accumulating while frozen, but don't let a long freeze
+        // against a busy feed grow the buffer unbounded — cap it to the
+        // same limit the model enforces after a flush, keeping the
+        // newest entries (review note on #4145).
+        const int cap = m_spotModel->maxSpots();
+        if (m_spotBatch.size() > cap)
+            m_spotBatch.remove(0, m_spotBatch.size() - cap);
+        return;
+    }
     if (m_spotBatch.isEmpty()) return;
 
     auto isAtBottom = [](QAbstractScrollArea* w) {

@@ -1503,7 +1503,8 @@ void MainWindow::scheduleKiwiSdrUiSync(int flags)
     });
 }
 
-void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
+void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice,
+                                                           bool includeEnable)
 {
     if (!m_kiwiSdrManager || !m_audio || !slice) {
         return;
@@ -1518,13 +1519,43 @@ void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
     const float gainPercent = slice->audioGain();
     const bool muted = slice->audioMute();
     const int pan = slice->audioPan();
+    const bool keepDuringTx =
+        m_kiwiSdrManager->profile(profileId).keepAudioDuringTx;
     QMetaObject::invokeMethod(m_audio,
-                              [audio = m_audio, profileId, gainPercent, muted, pan]() {
-        audio->setKiwiSdrAudioSourceEnabled(profileId, true);
+                              [audio = m_audio, profileId, gainPercent, muted,
+                               pan, keepDuringTx, includeEnable]() {
+        if (includeEnable) {
+            audio->setKiwiSdrAudioSourceEnabled(profileId, true);
+        }
         audio->setKiwiSdrAudioSourceGain(profileId, gainPercent);
         audio->setKiwiSdrAudioSourceMuted(profileId, muted);
         audio->setKiwiSdrAudioSourcePan(profileId, pan);
+        audio->setKiwiSdrAudioSourceKeepDuringTx(profileId, keepDuringTx);
     }, Qt::QueuedConnection);
+}
+
+void MainWindow::refreshKiwiSdrVirtualAudioControls()
+{
+    if (!m_kiwiSdrManager) {
+        return;
+    }
+
+    const QVector<KiwiSdrAntennaProfile> profiles =
+        m_kiwiSdrManager->profiles();
+    for (const KiwiSdrAntennaProfile& profile : profiles) {
+        const int sliceId =
+            m_kiwiSdrManager->assignedSliceForProfile(profile.id);
+        if (sliceId < 0) {
+            continue;
+        }
+        if (SliceModel* slice = m_radioModel.slice(sliceId)) {
+            // Settings refresh only — never force-enable here, or a profile
+            // edit would re-enable engine sources KiwiSdrManager disabled
+            // for a disconnected stream.
+            updateKiwiSdrVirtualAudioControlsForSlice(slice,
+                                                      /*includeEnable=*/false);
+        }
+    }
 }
 
 void MainWindow::updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice)
@@ -1648,8 +1679,16 @@ bool MainWindow::kiwiSdrTransmitMuteRequired() const
     }
 
     const TransmitModel& tx = m_radioModel.transmitModel();
-    bool txActive = tx.isTransmitting() || tx.isTuning()
-        || m_radioModel.isRadioTransmitting();
+    // Follow the optimistic local unkey: after this client drops MOX the
+    // radio keeps reporting TRANSMITTING for the interlock round trip plus
+    // any hang timers, and that tail should not hold the Kiwi gate closed.
+    // The radio term still mutes for TX this client never keyed (VOX, CAT,
+    // other clients) — the latch masks it only during our own unkey tail.
+    // The latch clause lives in KiwiSdrTxMutePolicy.h so the unit test
+    // exercises the production predicate rather than a copy.
+    bool txActive = AetherSDR::kiwiSdrTxMuteRequiredForLatch(
+        m_kiwiSdrTxMuteLatch, tx.isTransmitting() || tx.isTuning(),
+        m_radioModel.isRadioTransmitting());
 #ifdef HAVE_RADE
     txActive = txActive || m_radeEooPending;
 #endif
@@ -1660,6 +1699,41 @@ void MainWindow::syncKiwiSdrTransmitMute()
 {
     if (!m_audio) {
         return;
+    }
+
+    const TransmitModel& tx = m_radioModel.transmitModel();
+    const bool wasMasked = m_kiwiSdrTxMuteLatch.radioTermMasked();
+    m_kiwiSdrTxMuteLatch.update(tx.isTransmitting() || tx.isTuning(),
+                                m_radioModel.isRadioTransmitting());
+    // The mask only ever covers our own unkey tail. When the interlock names
+    // another client as the transmitter, end the mask immediately instead of
+    // riding out the timeout below — the foreign TX must re-engage the mute
+    // now. Unreported ownership keeps txOwnedByUs() true, so the ambiguous
+    // case still falls back to the bounded timeout.
+    if (AetherSDR::kiwiSdrTxMaskProvablyForeign(
+            m_kiwiSdrTxMuteLatch, m_radioModel.isRadioTransmitting(),
+            m_radioModel.txOwnedByUs())) {
+        m_kiwiSdrTxMuteLatch.expire();
+    }
+    if (m_kiwiSdrTxMuteLatch.radioTermMasked() != wasMasked) {
+        if (m_kiwiSdrTxMaskWatchdog.onMaskChanged(
+                m_kiwiSdrTxMuteLatch.radioTermMasked())) {
+            // Bound the mask: an interlock still reporting TRANSMITTING this
+            // long after our local unkey is a foreign transmission (another
+            // client, CAT, VOX) that must re-engage the mute. 2500 ms covers
+            // the interlock round trip plus the radio's hang timers (CW
+            // break-in / tx_delay cap at 2000 ms).
+            constexpr int kKiwiSdrUnkeyMaskTimeoutMs = 2500;
+            QTimer::singleShot(kKiwiSdrUnkeyMaskTimeoutMs, this,
+                               [this, epoch = m_kiwiSdrTxMaskWatchdog.epoch]() {
+                if (!m_kiwiSdrTxMaskWatchdog.shouldExpire(
+                        epoch, m_kiwiSdrTxMuteLatch.radioTermMasked())) {
+                    return;
+                }
+                m_kiwiSdrTxMuteLatch.expire();
+                syncKiwiSdrTransmitMute();
+            });
+        }
     }
 
     const bool muted = kiwiSdrTransmitMuteRequired();
@@ -2024,6 +2098,9 @@ void MainWindow::wireKiwiSdr()
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
                 this, [this] {
+            // Profile edits can change keepAudioDuringTx; re-push the
+            // per-source audio controls so the engine gate follows.
+            refreshKiwiSdrVirtualAudioControls();
             scheduleKiwiSdrUiSync(KiwiSdrUiSyncWaterfallAvailability
                                   | KiwiSdrUiSyncAppletReceivers
                                   | KiwiSdrUiSyncPanadapterStates);

@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.7.4 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.7.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -2732,6 +2732,13 @@ target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
 
+add_executable(mac_cursor_compat_test
+    tests/mac_cursor_compat_test.cpp
+)
+target_include_directories(mac_cursor_compat_test PRIVATE src)
+target_link_libraries(mac_cursor_compat_test PRIVATE Qt6::Core)
+add_test(NAME mac_cursor_compat_test COMMAND mac_cursor_compat_test)
+
 add_executable(slice_model_letter_test
     tests/slice_model_letter_test.cpp
     src/models/SliceModel.cpp
@@ -2756,6 +2763,8 @@ add_executable(theme_manager_test
 target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
+set_tests_properties(theme_manager_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
@@ -2774,6 +2783,8 @@ target_include_directories(panadapter_message_overlay_test PRIVATE src)
 target_link_libraries(panadapter_message_overlay_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+set_tests_properties(panadapter_message_overlay_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
@@ -3666,6 +3677,23 @@ target_include_directories(gui_client_identity_policy_test PRIVATE src)
 target_link_libraries(gui_client_identity_policy_test PRIVATE Qt6::Core)
 add_test(NAME gui_client_identity_policy_test COMMAND gui_client_identity_policy_test)
 
+add_executable(gui_client_registration_state_test
+    tests/gui_client_registration_state_test.cpp
+)
+target_include_directories(gui_client_registration_state_test PRIVATE src)
+target_link_libraries(gui_client_registration_state_test PRIVATE Qt6::Core)
+add_test(NAME gui_client_registration_state_test COMMAND gui_client_registration_state_test)
+
+add_executable(gui_client_registration_recovery_test
+    tests/gui_client_registration_recovery_test.cpp
+)
+target_include_directories(gui_client_registration_recovery_test PRIVATE src tests)
+target_link_libraries(gui_client_registration_recovery_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test
+)
+add_test(NAME gui_client_registration_recovery_test
+         COMMAND gui_client_registration_recovery_test)
+
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp
 )
@@ -4426,6 +4454,8 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
+set_tests_properties(flex_control_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -4444,6 +4474,8 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+set_tests_properties(pan_layout_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_overlay_wheel_guard_test
     tests/spectrum_overlay_wheel_guard_test.cpp
@@ -4510,6 +4542,11 @@ target_include_directories(transmit_inhibit_policy_test PRIVATE src)
 target_link_libraries(transmit_inhibit_policy_test PRIVATE Qt6::Core)
 add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
+add_executable(kiwi_sdr_tx_mute_policy_test
+    tests/kiwi_sdr_tx_mute_policy_test.cpp
+)
+target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )

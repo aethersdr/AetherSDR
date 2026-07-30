@@ -2,6 +2,9 @@
 
 #include "core/RadioDiscovery.h"   // RadioInfo
 
+#include <array>
+#include <cstdint>
+
 #include <QHash>
 #include <QHostAddress>
 #include <QObject>
@@ -39,6 +42,13 @@ public:
     void sweepNow();
 
     [[nodiscard]] bool isRunning() const noexcept;
+
+    // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC, which
+    // IS RadioInfo::serial for this family. Shared so a directed (unicast)
+    // probe — ConnectionPanel's connect-by-IP path — produces byte-identical
+    // identity to a broadcast sweep. They must agree: the serial is the
+    // auto-reconnect key and the client-side nickname key.
+    static QString macToSerial(const std::array<std::uint8_t, 6>& mac);
 
     // AppSettings key for a user-assigned nickname for the HL2 with this serial
     // (the MAC string). An HL2 has no on-radio name store (unlike Flex's

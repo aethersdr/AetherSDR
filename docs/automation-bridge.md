@@ -1755,6 +1755,7 @@ connect hide
 connect local first
 connect local serial 1234-5678
 connect ip 10.0.0.25
+connect ip 192.168.1.21 hl2
 connect wait 30000
 disconnect
 ```
@@ -1765,10 +1766,22 @@ so `connect show` is safe when the dialog is already open. `connect local first`
 captures the first currently discovered local radio's serial before scheduling
 the request, so the response and deferred connect target stay consistent.
 `connect local serial <serial>` selects by discovery serial. `connect ip
-<host-or-ip>` uses the manual **Connect by IP** probe path; if the probe finds a
-radio, the panel emits its normal `connectRequested` signal and `MainWindow`
-performs the standard Multi-Flex/client-slot checks before `RadioModel`
-connects. `connect wait <timeout_ms>` holds that request's response until
+<host-or-ip> [flex|hl2]` uses the manual **Connect by IP** probe path; if the
+probe finds a radio, the panel emits its normal `connectRequested` signal and
+`MainWindow` performs the standard Multi-Flex/client-slot checks before
+`RadioModel` connects.
+
+The optional radio type selects which wire protocol to probe, matching the
+dialog's **Radio type** dropdown: `flex` opens the TCP/4992 command plane, `hl2`
+sends a directed HPSDR Protocol 1 discovery datagram to UDP/1024. The two are
+disjoint — a Hermes-Lite 2 never answers the Flex probe and vice versa — so an
+address is only reached with the right type. Omit it and the dialog's current
+selection is used, which keeps every existing `connect ip <addr>` script
+working; the response echoes `"family"` as the requested type or `"dialog"`.
+A directed HL2 probe is the only way to reach a Hermes-Lite 2 that discovery
+broadcasts cannot see (VPN, routed subnet), and it is bounded at ~600 ms.
+
+`connect wait <timeout_ms>` holds that request's response until
 `RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
 unattended "request then assert" flow.
 

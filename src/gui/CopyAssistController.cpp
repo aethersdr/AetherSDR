@@ -10,6 +10,7 @@
 #include "asr/RemoteAsrBackend.h"
 #include "asr/SherpaOnnxBackend.h"
 #include "asr/WhisperAsrBackend.h"
+#include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "gui/AsrAudioTap.h"
 
@@ -24,18 +25,24 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFutureWatcher>
 #include <QLineEdit>
 #include <QObject>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTextStream>
+#include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <algorithm>
+#include <exception>
 
 namespace {
 
 constexpr const char* kRemoteTierId = "remote";
 constexpr const char* kCustomTierId = "custom";
 constexpr const char* kSherpaTierId = "sherpa";
+constexpr int kGpuDiscoveryTimeoutMs = 30000;
 
 // Map a 1–100 "sensitivity" (higher = more sensitive) to the VAD's RMS energy
 // threshold (lower = more sensitive), spanning a practical HF-voice range.
@@ -128,8 +135,11 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
                                  tr("Sherpa: %1").arg(QDir(m_sherpaModelDir).dirName()));
     }
 
-    // Initial backend: remote if previously configured+enabled, else the
-    // GPU-class model when a GPU exists, else the platform default.
+    // Initial backend: remote if previously configured+enabled, otherwise use
+    // the platform default until the asynchronous GPU probe completes. On
+    // macOS the first ggml device query can compile the embedded Metal shader
+    // library and take many seconds, so it must never run in this GUI-thread
+    // constructor.
     const bool remoteConfigured =
         CopyAssistSettings::value(QStringLiteral("AsrRemoteEnabled"), QStringLiteral("False"))
                 .toString() == QStringLiteral("True")
@@ -139,8 +149,13 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_tierId = QString::fromLatin1(kRemoteTierId);
     } else {
         m_backend = AsrBackendKind::Whisper;
-        m_tierId = asrGpuAvailable() ? QStringLiteral("large-v3-turbo")
-                                     : AsrModelCatalog::defaultTierId();
+        m_tierId = AsrModelCatalog::defaultTierId();
+        m_useGpuDefaultIfAvailable = true;
+    }
+    const QString savedGpu =
+        CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QString()).toString();
+    if (!savedGpu.isEmpty()) {
+        m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice always wins
     }
     m_settings->setCurrentTier(m_tierId);
 
@@ -169,23 +184,6 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // The ⚙ glyph renders taller than the text buttons; pin the gear to the
     // Enabled button's height so the row stays flush.
     m_panel->settingsButton()->setFixedHeight(m_panel->enableButton()->sizeHint().height());
-
-    // Compute-device selector — shown whenever a GPU exists, so the user can pick
-    // a GPU (or several) or force CPU. Hidden on GPU-less hosts (always CPU).
-    const std::vector<AsrGpuDevice> gpus = asrGpuDevices();
-    if (!gpus.empty()) {
-        for (const AsrGpuDevice& g : gpus) {
-            m_settings->addGpuDevice(g.index, g.name);
-        }
-        m_settings->addGpuDevice(-1, tr("CPU")); // force-CPU option
-        int saved =
-            CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0")).toString().toInt();
-        if (saved != -1 && (saved < 0 || saved >= static_cast<int>(gpus.size()))) {
-            saved = 0;
-        }
-        m_settings->setCurrentGpu(saved);
-        m_settings->setGpuSelectorVisible(true);
-    }
 
     // Language selector — every language the whisper build supports.
     // Multilingual models honor it; English-only models ignore it. (The
@@ -227,12 +225,16 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_settings, &CopyAssistSettingsDialog::tierChanged, this, &CopyAssistController::onTierChanged);
     connect(m_settings, &CopyAssistSettingsDialog::gpuChanged, this, [this](int index) {
+        if (index == CopyAssistSettingsDialog::kGpuDiscoveryPending) {
+            return;
+        }
+        m_gpuDevice = index;
         saveInt("AsrGpuDevice", index);
         if (m_backend != AsrBackendKind::Remote) {
             m_tap->setEnabled(false);
             buildEngine(); // rebuild the local engine on the chosen GPU
             if (m_enabled) {
-                beginEnable();
+                requestEnable();
             }
         }
     });
@@ -243,7 +245,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         m_tap->setEnabled(false);
         buildEngine();
         if (m_enabled) {
-            beginEnable();
+            requestEnable();
         }
     });
 
@@ -394,6 +396,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
 
     buildEngine();
     m_constructed = true; // subsequent VAD toggles may download/rebuild
+    startGpuDiscovery();
 }
 
 CopyAssistController::~CopyAssistController() = default;
@@ -424,6 +427,104 @@ void CopyAssistController::setCurrentFrequency(double freqMhz)
     m_currentFreqMhz = freqMhz;
 }
 
+void CopyAssistController::startGpuDiscovery()
+{
+    // asrGpuDevices() initializes ggml's backend registry. With the embedded
+    // Metal source used by whisper.cpp that first call may synchronously invoke
+    // Apple's shader compiler for several seconds. Keep the panel immediately
+    // usable and deliver the result back on this controller's thread.
+    auto* watcher = new QFutureWatcher<std::vector<AsrGpuDevice>>(this);
+    connect(watcher, &QFutureWatcher<std::vector<AsrGpuDevice>>::finished,
+            this, [this, watcher] {
+                std::vector<AsrGpuDevice> devices;
+                try {
+                    devices = watcher->result();
+                } catch (const std::exception& error) {
+                    qCWarning(lcGui) << "ASR compute-device discovery failed:"
+                                     << error.what();
+                } catch (...) {
+                    qCWarning(lcGui) << "ASR compute-device discovery failed";
+                }
+                if (m_gpuDiscoveryPending) {
+                    applyGpuDevices(devices);
+                }
+                watcher->deleteLater();
+            });
+    watcher->setFuture(QtConcurrent::run([] { return asrGpuDevices(); }));
+
+    QTimer::singleShot(kGpuDiscoveryTimeoutMs, this, [this] {
+        if (!m_gpuDiscoveryPending) {
+            return;
+        }
+        qCWarning(lcGui) << "ASR compute-device discovery timed out after"
+                         << kGpuDiscoveryTimeoutMs << "ms; using CPU for this session";
+        applyGpuDevices({});
+    });
+}
+
+void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus)
+{
+    const int previousDevice = m_gpuDevice;
+    int resolvedDevice = previousDevice;
+    bool persistResolvedDevice = false;
+
+    // Adding or clearing combo items changes its current index. Suppress the
+    // dialog's outward gpuChanged/tierChanged signals while discovery state is
+    // applied so the controller, rather than incidental combo transitions,
+    // decides whether the engine needs rebuilding.
+    {
+        const QSignalBlocker blocker(m_settings);
+        m_settings->clearGpuDevices();
+
+        if (!gpus.empty()) {
+            for (const AsrGpuDevice& gpu : gpus) {
+                m_settings->addGpuDevice(gpu.index, gpu.name);
+            }
+            m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
+
+            if (resolvedDevice != -1
+                && (resolvedDevice < 0
+                    || resolvedDevice >= static_cast<int>(gpus.size()))) {
+                resolvedDevice = 0;
+                persistResolvedDevice = true;
+            }
+            m_settings->setCurrentGpu(resolvedDevice);
+            m_settings->setGpuSelectorVisible(true);
+            m_settings->setGpuSelectorEnabled(true);
+
+            // Preserve the existing GPU-host default, but only while the
+            // operator has not made an explicit model choice during the probe.
+            if (m_useGpuDefaultIfAvailable) {
+                m_tierId = QStringLiteral("large-v3-turbo");
+                m_settings->setCurrentTier(m_tierId);
+            }
+        } else {
+            // A failed, timed-out, or CPU-only probe must not trigger the same
+            // registry initialization again from Whisper's worker. Force CPU
+            // for this session, but keep the saved GPU preference so a later
+            // launch can retry discovery.
+            resolvedDevice = -1;
+            m_settings->setGpuSelectorEnabled(false);
+            m_settings->setGpuSelectorVisible(false);
+        }
+    }
+
+    m_gpuDevice = resolvedDevice;
+    if (persistResolvedDevice) {
+        saveInt("AsrGpuDevice", resolvedDevice);
+    }
+    if (resolvedDevice != previousDevice && m_backend == AsrBackendKind::Whisper) {
+        m_tap->setEnabled(false);
+        buildEngine();
+    }
+
+    m_gpuDiscoveryPending = false;
+    if (m_enableAfterGpuDiscovery && m_enabled) {
+        m_enableAfterGpuDiscovery = false;
+        requestEnable();
+    }
+}
+
 void CopyAssistController::buildEngine()
 {
     // Tear down any previous engine+tap (order: tap first — it references the
@@ -432,9 +533,6 @@ void CopyAssistController::buildEngine()
     m_tap = nullptr;
     delete m_asr;
 
-    const int gpuDevice =
-        CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QStringLiteral("0"))
-            .toString().toInt();
     const QString language =
         CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
             .toString();
@@ -461,7 +559,7 @@ void CopyAssistController::buildEngine()
         m_asr = new AsrEngine(remoteAsrBackendFactory(readRemoteConfig()), segConfig, this);
         break;
     case AsrBackendKind::Whisper:
-        m_asr = new AsrEngine(whisperAsrBackendFactory(language, gpuDevice),
+        m_asr = new AsrEngine(whisperAsrBackendFactory(language, m_gpuDevice),
                               segConfig, this);
         break;
     case AsrBackendKind::SherpaOnnx:
@@ -513,8 +611,9 @@ void CopyAssistController::onEnableToggled(bool on)
     m_enabled = on;
     if (on) {
         m_lastFreqMarkerKey.clear(); // force a fresh start marker for this session
-        beginEnable();
+        requestEnable();
     } else {
+        m_enableAfterGpuDiscovery = false;
         m_tap->setEnabled(false);
         m_panel->setBusy(false);
         m_panel->setStatus(tr("Disabled"));
@@ -526,6 +625,8 @@ void CopyAssistController::onTierChanged(const QString& tierId)
     if (tierId == m_tierId) {
         return;
     }
+    m_useGpuDefaultIfAvailable = false;
+    m_enableAfterGpuDiscovery = false;
 
     if (tierId == QString::fromLatin1(kRemoteTierId)) {
         if (!promptRemoteConfig()) {
@@ -561,7 +662,7 @@ void CopyAssistController::onTierChanged(const QString& tierId)
 
     if (m_enabled) {
         m_tap->setEnabled(false);
-        beginEnable();
+        requestEnable();
     }
 }
 
@@ -609,6 +710,23 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
         m_tap->setEnabled(false);
         buildEngine();
     }
+}
+
+void CopyAssistController::requestEnable()
+{
+    if (m_backend == AsrBackendKind::Whisper && m_gpuDiscoveryPending) {
+        // Preserve the original compute device and model even if the operator
+        // clicks Enable immediately. Discovery continues off the GUI thread
+        // and activation resumes as soon as it finishes.
+        m_enableAfterGpuDiscovery = true;
+        m_panel->setBusy(true);
+        m_panel->setStatus(tr("Detecting compute device…"));
+        return;
+    }
+
+    m_enableAfterGpuDiscovery = false;
+    m_useGpuDefaultIfAvailable = false;
+    beginEnable();
 }
 
 void CopyAssistController::beginEnable()
@@ -842,7 +960,7 @@ void CopyAssistController::rebuildEngine()
     m_tap->setEnabled(false);
     buildEngine();
     if (m_enabled) {
-        beginEnable();
+        requestEnable();
     }
 }
 

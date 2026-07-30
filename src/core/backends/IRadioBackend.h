@@ -68,6 +68,22 @@ public:
     // ---- identity & capability (feeds the protocol `welcome`, §4.1) ----
     virtual RadioCapabilities capabilities() const = 0;
 
+    // True when this backend delivers demodulated RX audio over the seam
+    // (audioFrameReady below) rather than through a Flex PanadapterStream.
+    //
+    // This is the gate the RX-audio wiring keys off, and it is deliberately a
+    // question about THIS backend rather than a list of family names. Every
+    // previous version of that decision was a `dynamic_cast<SimBackend*>` or an
+    // `m_family != "flex"`, and each one had to be found and updated when a
+    // backend was added — the double-feed buzz (#4490) is what happens when one
+    // is missed: the sim's frames arrived over both routes and the engine
+    // consumed at double rate, measured 48043 Hz against a nominal 24000.
+    //
+    // Note this is NOT "has no PanadapterStream". The sim has BOTH: a stream
+    // carrying the old shim's synthetic scene, and real demodulated audio over
+    // the seam. It answers true because the seam is the one that is real.
+    virtual bool ownsRxAudio() const { return false; }
+
     // ---- connection lifecycle ----
     virtual void connectRadio(const RadioConnectRequest& request) = 0;
     virtual void disconnectRadio() = 0;

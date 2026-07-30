@@ -39,7 +39,9 @@ void enableBroadcast(QUdpSocket& s) noexcept
 #endif
 }
 
-QString macToSerial(const std::array<std::uint8_t, 6>& mac)
+}  // namespace
+
+QString Hl2Discovery::macToSerial(const std::array<std::uint8_t, 6>& mac)
 {
     QStringList parts;
     parts.reserve(6);
@@ -47,8 +49,6 @@ QString macToSerial(const std::array<std::uint8_t, 6>& mac)
         parts << QStringLiteral("%1").arg(b, 2, 16, QLatin1Char('0')).toUpper();
     return parts.join(QLatin1Char(':'));
 }
-
-}  // namespace
 
 QString Hl2Discovery::nicknameSettingsKey(const QString& serial)
 {

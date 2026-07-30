@@ -1,12 +1,15 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
-#include "core/backends/hl2/Hl2Discovery.h"   // shared nickname settings helper
+#include "core/backends/hl2/Hl2Discovery.h"   // shared nickname + MAC->serial helpers
+#include "core/backends/hl2/MetisProtocol.h"  // discoveryRequest/parseDiscoveryReply, kMetisPort
 #include "core/backends/sim/SimBackend.h"
 #include "core/NetworkPathResolver.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
 
+#include <cstdint>
 #include <memory>
+#include <span>
 
 #include <QAbstractItemView>
 #include <QFormLayout>
@@ -20,7 +23,9 @@
 #include <QJsonObject>
 #include <QPainter>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QTcpSocket>
+#include <QHostInfo>
 #include <QUdpSocket>
 #include <QNetworkDatagram>
 #include <QDeadlineTimer>
@@ -39,6 +44,9 @@ constexpr int kSourceAddressRole = Qt::UserRole + 13;
 constexpr int kSourceStaleRole = Qt::UserRole + 14;
 constexpr int kMaxRecentManualIps = 3;
 constexpr const char* kRecentManualIpsKey = "RecentConnectByIpAddresses";
+// Last radio type chosen on the "Connect by IP" page. Defaults to flex so an
+// existing install keeps the behaviour it had before the selector existed.
+constexpr const char* kManualRadioFamilyKey = "ConnectByIpRadioFamily";
 
 const char* kHintLabelStyle =
     "QLabel { color: #8aa8c0; font-size: 11px; background: transparent; border: none; }";
@@ -126,6 +134,18 @@ void saveRoutedProfiles(const QJsonObject& profiles)
     settings.setValue("RoutedProfilesJson",
                       QString::fromUtf8(QJsonDocument(profiles).toJson(QJsonDocument::Compact)));
     settings.save();
+}
+
+// Radio family remembered for one manual address. Older profiles predate the
+// selector and carry no identity.family — treat those as flex, which is what
+// they were when they were written.
+QString familyFromProfile(const QJsonObject& profile)
+{
+    const QString family =
+        profile.value("identity").toObject().value("family").toString().trimmed().toLower();
+    return family == QLatin1String(ConnectionPanel::kFamilyHl2)
+        ? QString::fromLatin1(ConnectionPanel::kFamilyHl2)
+        : QString::fromLatin1(ConnectionPanel::kFamilyFlex);
 }
 
 RadioBindSettings bindSettingsFromProfile(const QJsonObject& profile)
@@ -526,17 +546,60 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* manualLayout = new QVBoxLayout(manualPage);
     manualLayout->setContentsMargins(0, 0, 0, 0);
     manualLayout->setSpacing(8);
-    manualLayout->addWidget(makeWrappedLabel(
-        "Use this path for VPN or other routed networks where discovery broadcasts cannot reach "
-        "the radio. Enter the radio IP address and AetherSDR will take care of the probe.",
-        kHintLabelStyle));
+    m_manualHintLabel = makeWrappedLabel(QString(), kHintLabelStyle);
+    manualLayout->addWidget(m_manualHintLabel);
 
     auto* manualGroup = new QGroupBox("Radio IP address", manualPage);
+    // Baseline floor for the collapsed page. The rows and the result line carry
+    // explicit minimums of their own, but a word-wrapped QLabel under-reports
+    // its height, so without this the surrounding layout can still hand the
+    // group less than it needs and Qt overlaps children rather than growing the
+    // dialog. refitToContent() covers the taller states (Advanced expanded).
+    manualGroup->setMinimumHeight(240);
     auto* manualGroupLayout = new QVBoxLayout(manualGroup);
-    manualGroupLayout->setSpacing(8);
-    auto* manualForm = new QFormLayout;
-    manualForm->setHorizontalSpacing(8);
-    manualForm->setVerticalSpacing(6);
+    manualGroupLayout->setContentsMargins(12, 14, 12, 12);
+    manualGroupLayout->setSpacing(12);
+    // Explicit label+field rows rather than a QFormLayout. A QFormLayout nested
+    // inside the group's QVBoxLayout squeezed both rows to a few pixels tall
+    // once the wrapped error message appeared below them, so the labels ended up
+    // overlapping the fields. Plain rows with a fixed-width label column give
+    // the two entries a stable height and keep the labels aligned.
+    auto* manualForm = new QVBoxLayout;
+    manualForm->setContentsMargins(0, 0, 0, 0);
+    manualForm->setSpacing(10);
+
+    constexpr int kManualLabelWidth = 96;
+    constexpr int kManualFieldHeight = 30;
+    const auto addManualRow = [&](const QString& labelText, QComboBox* field) {
+        auto* row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(12);
+        auto* label = new QLabel(labelText, manualGroup);
+        label->setMinimumWidth(kManualLabelWidth);
+        label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        field->setMinimumHeight(kManualFieldHeight);
+        field->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        row->addWidget(label);
+        row->addWidget(field, 1);
+        manualForm->addLayout(row);
+    };
+
+    // Radio type. A FlexRadio answers a TCP/4992 command-plane probe; a
+    // Hermes-Lite 2 answers an HPSDR Protocol 1 discovery datagram on UDP/1024
+    // and will never answer the Flex probe (and vice versa). Probing both in
+    // sequence made every Flex connect pay the HL2 timeout, so the operator
+    // tells us which wire protocol to speak.
+    m_manualRadioTypeCombo = new QComboBox(manualGroup);
+    m_manualRadioTypeCombo->setObjectName(QStringLiteral("connectionManualRadioType"));
+    m_manualRadioTypeCombo->setAccessibleName(tr("Radio type"));
+    m_manualRadioTypeCombo->setAccessibleDescription(
+        tr("Which radio family to look for at the address below"));
+    m_manualRadioTypeCombo->setStyleSheet(comboStyle);
+    m_manualRadioTypeCombo->addItem(tr("FlexRadio"), QString::fromLatin1(kFamilyFlex));
+    m_manualRadioTypeCombo->addItem(tr("Hermes-Lite 2"), QString::fromLatin1(kFamilyHl2));
+    addManualRow(QStringLiteral("Radio type:"), m_manualRadioTypeCombo);
+
     m_manualIpCombo = new QComboBox(manualGroup);
     m_manualIpCombo->setObjectName(QStringLiteral("connectionManualIpCombo"));
     m_manualIpCombo->setAccessibleName(tr("Radio IP address"));
@@ -553,10 +616,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         tr("IP address or host name for a routed or VPN radio connection"));
     m_manualIpEdit->setClearButtonEnabled(true);
     m_manualIpEdit->setPlaceholderText("Example: 10.0.0.25");
-    manualForm->addRow("Radio IP:", m_manualIpCombo);
+    m_manualIpEdit->setMinimumHeight(26);
+    addManualRow(QStringLiteral("Radio IP:"), m_manualIpCombo);
     manualGroupLayout->addLayout(manualForm);
 
     auto* manualActionRow = new QHBoxLayout;
+    manualActionRow->setSpacing(10);
     auto* manualDiagnosticsBtn = new QPushButton("Network Diagnostics", manualGroup);
     manualActionRow->addWidget(manualDiagnosticsBtn);
     manualActionRow->addStretch();
@@ -567,7 +632,15 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualGroupLayout->addLayout(manualActionRow);
 
     m_manualResultLabel = makeWrappedLabel(QString(), kHintLabelStyle);
-    m_manualResultLabel->setVisible(false);
+    // Always laid out, even when empty. A word-wrapped QLabel reports a
+    // one-line minimum height, so showing a message that wraps to two or three
+    // lines used to grow the page past the dialog height and Qt resolved the
+    // overflow by overlapping the rows above it — the "Radio type"/"Radio IP"
+    // labels ended up on top of their own entry fields. Reserving the space up
+    // front keeps the page height constant whether or not a message is showing.
+    m_manualResultLabel->setMinimumHeight(36);
+    m_manualResultLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    m_manualResultLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::MinimumExpanding);
     manualGroupLayout->addWidget(m_manualResultLabel);
 
     m_manualAdvancedToggle = new QToolButton(manualGroup);
@@ -687,6 +760,11 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     footerRow->addWidget(m_disconnectBtn, 0, Qt::AlignRight);
     root->addLayout(footerRow);
 
+    // Family first: applySavedSourceSelection() may override it with the
+    // per-address choice remembered for whichever recent IP we preselect.
+    setManualFamily(AppSettings::instance()
+                        .value(kManualRadioFamilyKey, QString::fromLatin1(kFamilyFlex))
+                        .toString());
     loadRecentManualIps();
     applySavedSourceSelection(m_manualIpEdit->text().trimmed());
 
@@ -739,6 +817,14 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
             this, &ConnectionPanel::onManualConnectClicked);
     connect(m_manualIpEdit, &QLineEdit::textChanged,
             this, &ConnectionPanel::onManualIpChanged);
+    connect(m_manualRadioTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int) {
+                auto& settings = AppSettings::instance();
+                settings.setValue(kManualRadioFamilyKey, currentManualFamily());
+                settings.save();
+                updateManualFamilyHints();
+                setManualMessage(QString());
+            });
     connect(m_manualAdvancedToggle, &QToolButton::toggled,
             this, &ConnectionPanel::onManualAdvancedToggled);
     connect(m_manualSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -768,6 +854,17 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         m_slUserLabel->setStyleSheet(kHintLabelStyle);
         updateSmartLinkUi();
     });
+
+    // The manual page is the tallest of the three: two label+field rows, the
+    // action row, a reserved result line, and the Advanced disclosure. A dialog
+    // restored at the old 660 px height clipped the bottom of that page, so
+    // hold a floor that fits it. Everything above the stack is fixed-height, so
+    // this is the page height plus the surrounding chrome.
+    // Derive the height floor from the built layout rather than hardcoding it:
+    // the manual page is the tallest of the three and it grew a Radio type row,
+    // and a stale pixel count here is exactly what let the rows overlap before.
+    // refitToContent() raises it again if the page later gets taller.
+    refitToContent();
 
     setConnected(false);
     setCurrentMode(LocalMode);
@@ -841,7 +938,9 @@ bool ConnectionPanel::automationConnectLocalSerial(const QString& serial, QStrin
     return false;
 }
 
-bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp, QString* error)
+bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
+                                            const QString& family,
+                                            QString* error)
 {
     const QString target = hostOrIp.trimmed();
     if (target.isEmpty()) {
@@ -853,9 +952,23 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp, QString* er
         return false;
     }
 
+    const QString wantedFamily = family.trimmed().toLower();
+    if (!wantedFamily.isEmpty()
+        && wantedFamily != QLatin1String(kFamilyFlex)
+        && wantedFamily != QLatin1String(kFamilyHl2)) {
+        setAutomationError(
+            error,
+            QStringLiteral("unknown radio family '%1' (use flex or hl2)").arg(family.trimmed()));
+        return false;
+    }
+
     setCurrentMode(ManualMode);
     m_manualIpCombo->setCurrentText(target);
     m_manualIpEdit->setText(target);
+    // After the address, so the per-address profile restore inside
+    // applySavedSourceSelection() cannot overwrite an explicit request.
+    if (!wantedFamily.isEmpty())
+        setManualFamily(wantedFamily);
     onManualConnectClicked();
     return true;
 }
@@ -936,14 +1049,17 @@ QString ConnectionPanel::formatWanRadioLabel(const WanRadioInfo& radio) const
 void ConnectionPanel::setManualMessage(const QString& text, bool error)
 {
     if (text.trimmed().isEmpty()) {
+        // Cleared, not hidden: the label keeps its reserved height so the rows
+        // above it do not shift (and overlap) when a message comes and goes.
         m_manualResultLabel->clear();
-        m_manualResultLabel->setVisible(false);
         return;
     }
 
     m_manualResultLabel->setText(text);
     m_manualResultLabel->setStyleSheet(error ? kErrorLabelStyle : kInfoLabelStyle);
     m_manualResultLabel->setVisible(true);
+    // A long message wraps to more lines than the reserved height covers.
+    refitToContent();
 }
 
 void ConnectionPanel::updateLocalPageState()
@@ -1058,20 +1174,23 @@ void ConnectionPanel::updateManualAdvancedVisibility()
         }
         m_manualAdvancedToggle->setArrowType(Qt::RightArrow);
         m_manualAdvancedWidget->setVisible(false);
-        return;
-    }
-
-    if (hasExplicitSelection || m_manualSourceWarningLabel->isVisible()) {
+    } else if (hasExplicitSelection || m_manualSourceWarningLabel->isVisible()) {
         const QSignalBlocker blocker(m_manualAdvancedToggle);
         m_manualAdvancedToggle->setChecked(true);
         m_manualAdvancedToggle->setArrowType(Qt::DownArrow);
         m_manualAdvancedWidget->setVisible(true);
-        return;
+    } else {
+        m_manualAdvancedWidget->setVisible(m_manualAdvancedToggle->isChecked());
+        m_manualAdvancedToggle->setArrowType(
+            m_manualAdvancedToggle->isChecked() ? Qt::DownArrow : Qt::RightArrow);
     }
 
-    m_manualAdvancedWidget->setVisible(m_manualAdvancedToggle->isChecked());
-    m_manualAdvancedToggle->setArrowType(
-        m_manualAdvancedToggle->isChecked() ? Qt::DownArrow : Qt::RightArrow);
+    // Expanding the Advanced section is the biggest single height change this
+    // page has, and it happens on its own whenever a saved source path goes
+    // stale — the exact VPN case this feature exists for. Without this the
+    // group is handed less room than it needs and the "Radio type"/"Radio IP"
+    // rows overlap their own labels.
+    refitToContent();
 }
 
 void ConnectionPanel::setCurrentMode(ConnectionMode mode)
@@ -1475,6 +1594,11 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip)
         return;
     }
 
+    // Restore the radio type this address was last reached with, so picking a
+    // recent HL2 address out of the dropdown does not silently probe it as a
+    // Flex (and time out on TCP/4992).
+    setManualFamily(familyFromProfile(profile));
+
     RadioBindSettings settings = bindSettingsFromProfile(profile);
     if (settings.mode == RadioBindMode::Explicit) {
         const auto resolved = NetworkPathResolver::resolveExplicitSelection(
@@ -1508,6 +1632,62 @@ RadioBindSettings ConnectionPanel::currentManualBindSettings(bool* staleSelectio
     if (staleSelection)
         *staleSelection = m_manualSourceCombo->itemData(index, kSourceStaleRole).toBool();
     return settings;
+}
+
+QString ConnectionPanel::currentManualFamily() const
+{
+    const QString family = m_manualRadioTypeCombo
+        ? m_manualRadioTypeCombo->currentData().toString()
+        : QString();
+    return family.isEmpty() ? QString::fromLatin1(kFamilyFlex) : family;
+}
+
+void ConnectionPanel::setManualFamily(const QString& family)
+{
+    if (!m_manualRadioTypeCombo)
+        return;
+
+    const QString wanted = family.trimmed().toLower() == QLatin1String(kFamilyHl2)
+        ? QString::fromLatin1(kFamilyHl2)
+        : QString::fromLatin1(kFamilyFlex);
+    const int index = m_manualRadioTypeCombo->findData(wanted);
+    if (index < 0 || index == m_manualRadioTypeCombo->currentIndex()) {
+        updateManualFamilyHints();
+        return;
+    }
+
+    m_manualRadioTypeCombo->setCurrentIndex(index);   // persists via currentIndexChanged
+    // Render the hint here too, rather than relying on currentIndexChanged.
+    //
+    // The constructor calls this BEFORE that signal is connected, so
+    // setCurrentIndex() fires into nothing and the hint paragraph — constructed
+    // empty — stayed blank with the Flex placeholder still showing. Only `hl2`
+    // reached this line at construction time: `flex` is already the current
+    // index and returns through the branch above, which is why the default
+    // looked correct and a saved HL2 did not. Idempotent, so the signal doing it
+    // again once connected is harmless. (PR #4528 review.)
+    updateManualFamilyHints();
+}
+
+void ConnectionPanel::updateManualFamilyHints()
+{
+    const bool hl2 = currentManualFamily() == QLatin1String(kFamilyHl2);
+    if (m_manualHintLabel) {
+        m_manualHintLabel->setText(
+            hl2
+                ? QStringLiteral(
+                      "Use this path when discovery broadcasts cannot reach the radio — a VPN, a "
+                      "routed subnet, or a switch that drops broadcasts. AetherSDR sends a "
+                      "Hermes-Lite 2 discovery request straight to the address you enter.")
+                : QStringLiteral(
+                      "Use this path for VPN or other routed networks where discovery broadcasts "
+                      "cannot reach the radio. Enter the radio IP address and AetherSDR will take "
+                      "care of the probe."));
+    }
+    if (m_manualIpEdit) {
+        m_manualIpEdit->setPlaceholderText(hl2 ? QStringLiteral("Example: 192.168.1.21")
+                                               : QStringLiteral("Example: 10.0.0.25"));
+    }
 }
 
 void ConnectionPanel::loadRecentManualIps()
@@ -1559,6 +1739,7 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
 
     QJsonObject identity;
     identity["target_address"] = targetIp;
+    identity["family"] = currentManualFamily();
     profile["identity"] = identity;
 
     QJsonObject bind;
@@ -1633,81 +1814,244 @@ void ConnectionPanel::probeRadio(const QString& ip)
     m_manualSourceWarningLabel->setVisible(false);
     updateManualAdvancedVisibility();
 
-    // aetherd Gap B (Step 2b): a Hermes-Lite 2 speaks HPSDR Protocol 1 on UDP 1024
-    // and will NEVER answer the Flex TCP/4992 probe below, so probe for it first.
-    // An 0xEFFE reply means HPSDR/HL2: emit an hl2-family RadioInfo and let
-    // RadioModel route the connect through the IRadioBackend seam. Short bounded
-    // wait (~600 ms) on a path that is already a modal "Checking..." step.
-    {
-        QUdpSocket hpsdr;
-        if (hpsdr.bind(QHostAddress(QHostAddress::AnyIPv4), 0)) {
-            QByteArray disc(63, '\0');
-            disc[0] = char(0xEF);
-            disc[1] = char(0xFE);
-            disc[2] = char(0x02);
-            hpsdr.writeDatagram(disc, QHostAddress(trimmedIp), 1024);
-            QDeadlineTimer deadline(600);
-            while (!deadline.hasExpired()) {
-                if (!hpsdr.waitForReadyRead(static_cast<int>(deadline.remainingTime())))
-                    break;
-                while (hpsdr.hasPendingDatagrams()) {
-                    const QByteArray d = hpsdr.receiveDatagram().data();
-                    // Reply layout: EF FE <st> MAC[6] gwver board. A bare 0xEFFE
-                    // is any openHPSDR radio (Hermes, Mercury, Red Pitaya, …);
-                    // only board id 0x06 at d[10] is a Hermes-Lite (2). Gate on
-                    // it so we don't drive a non-HL2 radio through the HL2 backend
-                    // — matching DiscoveryReply::isHermesLite2() (MetisProtocol.h)
-                    // that Hl2Discovery uses. size >= 11 keeps d.at(10) in bounds.
-                    if (d.size() < 11 || quint8(d.at(0)) != 0xEF
-                        || quint8(d.at(1)) != 0xFE || quint8(d.at(10)) != 0x06)
-                        continue;
-                    QStringList mac;
-                    for (int i = 3; i < 9; ++i)
-                        mac << QStringLiteral("%1").arg(quint8(d.at(i)), 2, 16, QLatin1Char('0')).toUpper();
-                    RadioInfo info;
-                    info.family   = QStringLiteral("hl2");
-                    info.address  = QHostAddress(trimmedIp);
-                    info.port     = 1024;                       // Metis, not Flex 4992
-                    info.model    = QStringLiteral("Hermes-Lite 2");
-                    info.name     = info.model;
-                    info.nickname = info.model;
-                    info.serial   = mac.join(QLatin1Char(':'));
-                    info.version  = QString::number(quint8(d.at(9)));
-                    // Status byte: 0x02 idle/available, 0x03 already streaming to
-                    // a client. Reflect it rather than hard-coding Available.
-                    const bool busy = quint8(d.at(2)) == 0x03;
-                    info.inUse    = busy;
-                    info.status   = busy ? QStringLiteral("In_Use")
-                                         : QStringLiteral("Available");
-                    m_manualConnectPending = false;
-                    m_manualConnectBtn->setText("Connect by IP");
-                    m_manualConnectBtn->setEnabled(true);
-                    updateActionState();
-                    if (busy) {
-                        // F5 (#4448): Protocol 1 is single-client. The radio is
-                        // already streaming to another client; fail closed rather
-                        // than wedging both. No takeover path exists yet.
-                        setManualMessage(QStringLiteral(
-                            "The Hermes-Lite 2 at %1 is already in use by another "
-                            "client and can't be shared.").arg(trimmedIp), true);
-                        return;
-                    }
-                    // Save the operator's low-bandwidth choice before connecting.
-                    // This branch returns early, so it used to skip the
-                    // saveLowBandwidthPreference() the Flex probe path performs —
-                    // which on the HL2 is the setting that caps the panadapter
-                    // span, and this is the one mode where the checkbox is
-                    // actually on screen. Ticking it did nothing. (#4470)
-                    saveLowBandwidthPreference(m_lowBwCheck->isChecked());
-                    setManualMessage(QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.")
-                                         .arg(trimmedIp), false);
-                    emit connectRequested(info);
-                    return;
-                }
+    // Probe exactly the family the operator selected. The two wire protocols
+    // are disjoint — a Hermes-Lite 2 speaks HPSDR Protocol 1 on UDP/1024 and
+    // never answers the Flex TCP/4992 command plane, and a Flex never answers a
+    // Metis discovery datagram — so there is nothing to gain from trying both,
+    // and trying HL2 first (as this used to) charged every Flex connect the HL2
+    // timeout before it started.
+    if (currentManualFamily() == QLatin1String(kFamilyHl2)) {
+        // Only a genuine timeout earns the "check the radio" message. A bind
+        // failure has already reported itself, and pointing the operator at the
+        // radio would be actively wrong. (PR #4528 review.)
+        const Hl2ProbeResult probe = probeHermesLite2(trimmedIp, bindSettings);
+        if (probe == Hl2ProbeResult::NoAnswer) {
+            resetManualConnectButton();
+            setManualMessage(
+                QStringLiteral("No Hermes-Lite 2 answered at %1. Check the address, and that the "
+                               "radio is powered, idle, and reachable on UDP port 1024.")
+                    .arg(trimmedIp),
+                true);
+        } else if (probe == Hl2ProbeResult::NotAttempted) {
+            resetManualConnectButton();
+        }
+        return;
+    }
+
+    probeFlexRadio(trimmedIp, bindSettings);
+}
+
+void ConnectionPanel::refitToContent()
+{
+    if (!layout())
+        return;
+
+    // minimumSize() is the layout's own answer to "how small can this get
+    // before children start overlapping", so it already accounts for whichever
+    // page is current and whether the Advanced section is expanded. Deriving
+    // the floor beats a hardcoded pixel count, which would go stale the moment
+    // the page gains a row or the operator runs a larger UI font.
+    layout()->activate();
+    const int needed = layout()->minimumSize().height();
+    if (needed <= 0)
+        return;
+
+    setMinimumHeight(needed);
+
+    // Grow whenever the current page needs it. Shrink only back to a height we
+    // set ourselves — otherwise collapsing the Advanced section would discard a
+    // size the operator chose by dragging the window. Without the shrink the
+    // dialog keeps the taller size and leaves a band of dead space.
+    const bool grow    = height() < needed;
+    const bool reclaim = height() > needed && height() == m_autoFitHeight;
+    if (grow || reclaim) {
+        resize(width(), needed);
+        m_autoFitHeight = needed;
+    }
+}
+
+void ConnectionPanel::resetManualConnectButton()
+{
+    m_manualConnectPending = false;
+    m_manualConnectBtn->setText(QStringLiteral("Connect by IP"));
+    m_manualConnectBtn->setEnabled(true);
+    updateActionState();
+}
+
+// Directed Metis discovery: the same EF FE 02 request Hl2Discovery broadcasts,
+// sent unicast to one host. This is the whole reason connect-by-IP works for an
+// HL2 on a routed/VPN path — the broadcast sweep never leaves the local subnet.
+// Bounded (~600 ms) blocking wait on a path that is already a modal
+// "Checking..." step, matching the Flex probe's synchronous feel.
+ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
+    const QString& ip, const RadioBindSettings& bindSettings)
+{
+    QUdpSocket hpsdr;
+    // Honour the Advanced source-path choice the same way the Flex probe does.
+    // On a VPN that exposes more than one adapter, letting the OS pick can send
+    // the request out the wrong interface and the reply never comes back.
+    const bool explicitBind = bindSettings.mode == RadioBindMode::Explicit
+                           && !bindSettings.bindAddress.isNull();
+    const bool bound = explicitBind
+        ? hpsdr.bind(bindSettings.bindAddress, 0)
+        : hpsdr.bind(QHostAddress(QHostAddress::AnyIPv4), 0);
+    if (!bound) {
+        // REPORT THE BIND FAILURE AS ITSELF, not as silence from the radio.
+        //
+        // Returning a bare false here made this indistinguishable from "nothing
+        // answered", and the caller renders that as "check the radio is powered,
+        // idle, and reachable" — sending the operator to power-cycle a radio
+        // that was never contacted. The Explicit path exists because a VPN can
+        // expose several adapters, so the likeliest cause of a bind failure is
+        // an Advanced source path naming an adapter that has since gone away:
+        // precisely the case where pointing at the radio is wrong.
+        //
+        // probeFlexRadio() already reports this properly; the two paths had
+        // drifted apart. (PR #4528 review.)
+        if (explicitBind) {
+            m_manualSourceWarningLabel->setText(
+                QStringLiteral("Failed to bind %1: %2")
+                    .arg(bindSettings.bindAddress.toString(), hpsdr.errorString()));
+            m_manualSourceWarningLabel->setVisible(true);
+            updateManualAdvancedVisibility();
+            setManualMessage(
+                QStringLiteral("AetherSDR could not use that VPN source path. "
+                               "Try Auto or choose another path."),
+                true);
+        } else {
+            setManualMessage(
+                QStringLiteral("Could not open a UDP socket to probe for a "
+                               "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
+                true);
+        }
+        return Hl2ProbeResult::NotAttempted;
+    }
+
+    // RESOLVE A NAME BEFORE PROBING IT.
+    //
+    // QHostAddress(ip) is null for anything that is not a literal address, and a
+    // writeDatagram() to a null destination sends nothing — so a hostname used to
+    // fail as a 600 ms silence and then get reported as "No Hermes-Lite 2 answered
+    // … check the radio is powered", blaming the radio for an input this path
+    // never tried to send to.
+    //
+    // Names have to work here because the Flex path accepts them (connectToHost()
+    // resolves internally) and docs/automation-bridge.md documents the verb as
+    // `connect ip <host-or-ip> [flex|hl2]`. QHostInfo::fromName() is synchronous,
+    // which suits a path that already blocks ~600 ms on the reply.
+    //
+    // IPv4 only, and not an arbitrary pick from the list: Metis is IPv4-only, so a
+    // AAAA-only name has nothing this protocol can talk to and should say so
+    // rather than fail as silence. (PR #4528 review.)
+    QHostAddress dest(ip);
+    if (dest.isNull()) {
+        const QHostInfo resolved = QHostInfo::fromName(ip);
+        for (const QHostAddress& a : resolved.addresses()) {
+            if (a.protocol() == QAbstractSocket::IPv4Protocol) {
+                dest = a;
+                break;
             }
+        }
+        if (dest.isNull()) {
+            setManualMessage(
+                resolved.error() != QHostInfo::NoError
+                    ? QStringLiteral("Could not resolve “%1”: %2")
+                          .arg(ip, resolved.errorString())
+                    : QStringLiteral("“%1” has no IPv4 address, and a Hermes-Lite 2 "
+                                     "is reachable over IPv4 only.").arg(ip),
+                true);
+            return Hl2ProbeResult::NotAttempted;
         }
     }
 
+    const auto request = hl2::discoveryRequest();
+    // A send that never left is not a radio that stayed silent. Without this the
+    // two are indistinguishable and both surface as "check the radio is powered".
+    if (hpsdr.writeDatagram(reinterpret_cast<const char*>(request.data()),
+                            qint64(request.size()),
+                            dest,
+                            hl2::kMetisPort) < 0) {
+        setManualMessage(
+            QStringLiteral("Could not send a discovery request to %1: %2")
+                .arg(dest.toString(), hpsdr.errorString()),
+            true);
+        return Hl2ProbeResult::NotAttempted;
+    }
+
+    QDeadlineTimer deadline(600);
+    while (!deadline.hasExpired()) {
+        if (!hpsdr.waitForReadyRead(static_cast<int>(deadline.remainingTime())))
+            break;
+        while (hpsdr.hasPendingDatagrams()) {
+            const QByteArray d = hpsdr.receiveDatagram().data();
+            const auto reply = hl2::parseDiscoveryReply(
+                std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(d.constData()), std::size_t(d.size())));
+            // A bare 0xEFFE reply is any openHPSDR board (Hermes, Mercury,
+            // Red Pitaya, …). Only board id 0x06 is a Hermes-Lite; gate on it
+            // so we never drive a foreign board through Hl2Backend. Same
+            // predicate Hl2Discovery applies to broadcast replies.
+            if (!reply || !reply->isHermesLite2())
+                continue;
+
+            RadioInfo info;
+            info.family   = QString::fromLatin1(kFamilyHl2);
+            info.address  = dest;
+            info.port     = hl2::kMetisPort;            // Metis, not Flex 4992
+            info.model    = QStringLiteral("Hermes-Lite 2");
+            info.name     = info.model;
+            info.serial   = hl2::Hl2Discovery::macToSerial(reply->mac);
+            // Same nickname the broadcast sweep shows for this MAC. An HL2 has no
+            // on-radio name store, so the operator's custom name lives client-side
+            // keyed by serial — and hard-coding the model here meant a radio named
+            // in Radio Setup showed that name when found locally and
+            // "Hermes-Lite 2" when reached over the VPN. Needs the serial first.
+            info.nickname = hl2::Hl2Discovery::effectiveNickname(info.serial, info.model);
+            info.version  = QString::number(reply->gatewareVersion);
+            // Streaming (status byte 0x03) means another client already owns
+            // the radio. Reflect it rather than hard-coding Available.
+            info.inUse    = reply->streaming;
+            info.status   = reply->streaming ? QStringLiteral("In_Use")
+                                             : QStringLiteral("Available");
+            // Reached over a routed path, not a discovery broadcast — the same
+            // flag the Flex manual probe sets, so MainWindow remembers the
+            // address and the UI treats the link as remote.
+            info.isRouted           = true;
+            info.bindSettings       = bindSettings;
+            info.sessionBindAddress = bindSettings.mode == RadioBindMode::Explicit
+                ? bindSettings.bindAddress
+                : QHostAddress();
+
+            resetManualConnectButton();
+
+            if (reply->streaming) {
+                // #4448: HPSDR Protocol 1 is single-client. Fail closed rather
+                // than wedging both clients; there is no takeover path.
+                setManualMessage(
+                    QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
+                                   "and can't be shared.").arg(ip),
+                    true);
+                return Hl2ProbeResult::Answered;
+            }
+
+            saveManualProfile(ip, bindSettings, info.sessionBindAddress);
+            rememberManualIp(ip);
+            // #4470: the low-bandwidth checkbox is what caps the HL2 panadapter
+            // span, and this page is the one place it is on screen. Save it
+            // before we hand off, or ticking it does nothing.
+            saveLowBandwidthPreference(m_lowBwCheck->isChecked());
+            setManualMessage(
+                QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
+            emit connectRequested(info);
+            return Hl2ProbeResult::Answered;
+        }
+    }
+
+    return Hl2ProbeResult::NoAnswer;
+}
+
+void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSettings& bindSettings)
+{
     auto* sock = new QTcpSocket(this);
     if (bindSettings.mode == RadioBindMode::Explicit
         && !sock->bind(bindSettings.bindAddress, 0)) {

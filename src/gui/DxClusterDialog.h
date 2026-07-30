@@ -49,6 +49,7 @@ public:
     void addSpots(const QVector<DxSpot>& spots);
     void clear();
     void setMaxSpots(int max) { m_maxSpots = max; }
+    int maxSpots() const { return m_maxSpots; }
     const DxSpot* spotAt(int row) const;
 
 private:
@@ -249,6 +250,9 @@ private:
     QTableView*            m_spotTable;
     BandFilterProxy*       m_proxyModel;
     QLabel*                m_spotCountLabel{nullptr};  // Spot List tab counter (#2022)
+    // While true, flushSpotBatch() leaves new spots buffered in m_spotBatch
+    // instead of inserting them, so the visible rows hold still (#4145).
+    bool                   m_spotListFrozen{false};
 
     // Display tab
     QLabel*            m_totalSpotsLabel{nullptr};

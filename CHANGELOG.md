@@ -8,6 +8,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.7.4.1] — 2026-07-27
+
+### Hotfix: TCI rig control restored for WSJT-X and control surfaces
+
+One fix on top of v26.7.4, no other changes.
+
+- **fix(tci): confirm the frequency a `vfo:` SET actually reached (#4500,
+  #4493)** — v26.7.4 lost all WSJT-X rig control over TCI. Band changes
+  failed, the reported dial frequency was wrong, and transmissions could go
+  out of band.
+
+  The v26.7.4 TCI refactor replaced the model-driven tune with a raw
+  `slice tune` written straight at the connection, then read the frequency
+  back out of `SliceModel` when the radio's command reply arrived. The raw
+  command bypasses `SliceModel`, so nothing updated the model — and the radio
+  does not answer `slice tune` with an `RF_frequency` status either. The
+  read-back could only ever observe the **pre-tune** value, so every `vfo:`
+  confirmation echoed the frequency the slice had already left.
+
+  WSJT-X's `do_frequency()` waits on that echo: it concluded the radio had not
+  moved and reported rig-control failure on every band change, while the radio
+  was in fact on the new band. Any client accumulating a relative change — a
+  Stream Deck tuning encoder, a band stepper — had its position reset by the
+  stale echo and oscillated around one frequency instead of walking.
+
+  A second short-circuit added in the same refactor confirmed from the model
+  *without commanding the radio* when the request matched what the model held.
+  Once model and radio had diverged, that silently dropped real tunes and
+  falsely acknowledged them.
+
+  Tuning now goes through `SliceModel::setFrequency()` / `tuneAndRecenter()`
+  again on every command plane. The setter *is* the command path — it emits
+  the byte-identical `slice tune` and additionally updates the model, honours a
+  locked slice, and routes through the TX-inhibit guard the raw command
+  bypassed. Confirmations now carry the frequency the radio actually reached.
+
+  Reported by @rah501xx and @milenjb.
+
 ## [v26.7.4] — 2026-07-26
 
 ### Demo mode · on-device speech-to-text · experimental Hermes-Lite 2

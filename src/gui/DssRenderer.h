@@ -30,7 +30,12 @@
 class DssRenderer
 {
 public:
-    static constexpr int kRows = 96;   // history depth (front → back)
+    static constexpr int kVisibleRows = 96;    // front → back display depth
+    // Outgoing rows kept during scroll. Must cover the largest row distance
+    // passed to SpectrumWidget::startWaterfallScrollAnimation(); the current
+    // Flex, Kiwi, and fallback producers append at most one row per update.
+    static constexpr int kTransitionRows = 8;
+    static constexpr int kRows = kVisibleRows + kTransitionRows;
     static constexpr int kCols = 768;  // resampled columns per row
 
     // Perspective geometry of the surface, shared by this CPU renderer and the
@@ -89,7 +94,16 @@ public:
 
     // Push one freshly-decoded FFT row (any bin count, dBm). Peak-preserving
     // downsample to kCols and store it as the newest (front) trace.
-    void pushRow(const QVector<float>& binsDbm);
+    void pushRow(const QVector<float>& binsDbm,
+                 double centerMhz = 0.0,
+                 double bandwidthMhz = 0.0);
+    void pushRowWithSupplemental(
+        const QVector<float>& binsDbm,
+        double centerMhz,
+        double bandwidthMhz,
+        const QVector<float>& supplementalBinsDbm,
+        double supplementalCenterMhz,
+        double supplementalBandwidthMhz);
     void setHistoryCapacityRows(int rows);
     int historyCapacityRows() const { return m_historyCapacityRows; }
     int historyRowCount() const { return m_historyRowCount; }
@@ -103,9 +117,14 @@ public:
     void rebuildVisibleFromHistory(int offsetRows,
                                    double centerMhz, double bandwidthMhz,
                                    float fallbackDbm);
+    // Remap the visible live viewport to a new frequency frame. Prefer an
+    // in-place refresh from retained, frame-stamped rows so ring topology and
+    // scroll phase remain intact; fall back to direct visible-ring reprojection
+    // when no matching retained history is available.
     void reprojectFrequencyFrame(double oldCenterMhz, double oldBandwidthMhz,
                                  double newCenterMhz, double newBandwidthMhz,
-                                 float fallbackDbm);
+                                 float fallbackDbm,
+                                 bool refreshFromRetainedHistory = false);
 
     // Return the cached surface sized to px. The plot region (everything above
     // the bottom scaleStripPx) is painted opaque over bgFill; the scale strip
@@ -139,8 +158,28 @@ public:
     int cols() const { return kCols; }
     int rows() const { return kRows; }
     int rowCount() const { return m_count; }     // valid rows (0..kRows)
+    int visibleRowCount() const
+    {
+        return std::min(m_count, kVisibleRows);
+    }
     int headRing() const { return m_head; }       // ring index of the newest row
     const float* rowDataRing(int ringIndex) const { return m_rows[ringIndex].data(); }
+    const quint8* rowCoverageRing(int ringIndex) const
+    {
+        return m_rowCoverage[ringIndex].data();
+    }
+    const float* rowSupplementalDataRing(int ringIndex) const
+    {
+        return m_rowSupplemental[ringIndex].data();
+    }
+    const quint8* rowSupplementalCoverageRing(int ringIndex) const
+    {
+        return m_rowSupplementalCoverage[ringIndex].data();
+    }
+    double rowCenterMhzAtAge(int age) const;
+    double rowBandwidthMhzAtAge(int age) const;
+    double rowSupplementalCenterMhzAtAge(int age) const;
+    double rowSupplementalBandwidthMhzAtAge(int age) const;
     RowStats rowStats(int age, float epsilonDb = 0.01f) const;
     quint64 rowGeneration() const { return m_rowGeneration; }
 
@@ -160,6 +199,25 @@ private:
 
     // Circular store: m_head indexes the newest row.
     std::array<std::array<float, kCols>, kRows> m_rows{};
+    // One byte per bin records whether that frequency existed in the captured
+    // row. Reprojection-created gaps remain drawable floor lines, but the
+    // marker lets both renderers keep their height/colour independent of later
+    // zoom and dBm-range changes.
+    std::array<std::array<quint8, kCols>, kRows> m_rowCoverage{};
+    // Native FLEX waterfall tiles cover more spectrum than the FFT viewport.
+    // Keep that calibrated overhang in separate channels so it can fill only
+    // frequencies the exact FFT row never captured; it must never resample or
+    // replace the working FFT trace.
+    std::array<std::array<float, kCols>, kRows> m_rowSupplemental{};
+    std::array<std::array<quint8, kCols>, kRows>
+        m_rowSupplementalCoverage{};
+    // Each live row keeps the frequency frame in which its bins were captured.
+    // The GPU maps rows independently during pan previews, allowing retained
+    // off-screen data and newly received radio coverage to coexist.
+    std::array<double, kRows> m_rowCenterMhz{};
+    std::array<double, kRows> m_rowBandwidthMhz{};
+    std::array<double, kRows> m_rowSupplementalCenterMhz{};
+    std::array<double, kRows> m_rowSupplementalBandwidthMhz{};
     int     m_head  = 0;         // index of the newest row
     int     m_count = 0;         // number of valid rows (0..kRows)
     bool    m_dirty = true;
@@ -171,6 +229,13 @@ private:
     std::array<float, kCols> m_rawPrev1{};
     std::array<float, kCols> m_rawPrev2{};
     int m_rawHistCount = 0;
+    // The calibrated native-tile overhang needs an independent copy of the
+    // same smoothing chain. Sharing FFT history would blend different
+    // frequency frames; storing it raw exaggerates isolated tile maxima until
+    // exact FFT coverage replaces them.
+    std::array<float, kCols> m_supplementalRawPrev1{};
+    std::array<float, kCols> m_supplementalRawPrev2{};
+    int m_supplementalRawHistCount = 0;
 
     // One-shot flags: after resetInputSmoothing() the next pushed row must not
     // blend against the retained row that preceded the reset (it was decoded
@@ -179,6 +244,7 @@ private:
     // own; the temporal IIR term against the previous smoothed row also carries
     // pre-reset data.
     bool m_skipLiveTemporalBlendOnce = false;
+    bool m_skipSupplementalTemporalBlendOnce = false;
     bool m_skipHistoryTemporalBlendOnce = false;
 
     // Retained scrollback store. This is intentionally separate from the
