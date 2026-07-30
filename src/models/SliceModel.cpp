@@ -601,6 +601,16 @@ void SliceModel::setSquelch(bool on, int level)
     emit squelchChanged(on, level);
 }
 
+void SliceModel::setManualSquelch(bool on, int level)
+{
+    setSquelch(on, level);
+    // Kiwi/external-receive slices already track their own level via
+    // m_externalReceiveSquelchLevel (setSquelch's early-return branch
+    // above) — nothing else to record here.
+    if (!m_externalReceiveAudioReplacement)
+        setManualSquelchLevel(level);
+}
+
 void SliceModel::setExternalReceiveAutoSquelch(bool on)
 {
     if (m_externalReceiveAutoSquelch == on) {
@@ -1352,8 +1362,17 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         if (d.squelchOn.has_value())
             m_squelchOn = *d.squelchOn;
-        if (d.squelchLevel.has_value())
+        if (d.squelchLevel.has_value()) {
             m_squelchLevel = *d.squelchLevel;
+            // A radio-echoed level reflects the operator's manual choice
+            // (their own edit, another Multi-Flex client, session restore)
+            // unless Auto is actively driving this slice — Auto recomputes
+            // and pushes a level every algorithm tick, and treating that
+            // echo as "manual" would silently overwrite the last threshold
+            // the operator actually chose by hand (#4592).
+            if (!m_autoSquelchActive)
+                setManualSquelchLevel(*d.squelchLevel);
+        }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
     if (d.ritOn.has_value() || d.ritFreq.has_value()) {

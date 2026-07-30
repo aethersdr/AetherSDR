@@ -133,6 +133,13 @@ public:
     // the active slice doesn't pull in another slice's threshold (#3326).
     int     manualSquelchLevel() const { return m_manualSquelchLevel; }
     void    setManualSquelchLevel(int level) { m_manualSquelchLevel = qBound(0, level, 100); }
+    // Whether Auto squelch currently owns this slice's level (driven by
+    // RxApplet::sqlAutoChanged). Gates applyChanges()'s radio-status-echo
+    // path so an Auto-computed level echoed back by the radio doesn't
+    // overwrite the operator's last manual choice (#4592) — the same
+    // silent-overwrite class #3326 fixed, reached via the status-echo path
+    // instead of a direct client write.
+    void    setAutoSquelchActive(bool active) { m_autoSquelchActive = active; }
     bool    ritOn()       const { return m_ritOn; }
     int     ritFreq()     const { return m_ritFreq; }
     bool    xitOn()       const { return m_xitOn; }
@@ -241,6 +248,14 @@ public:
     void setAgcThreshold(int value);
     void setAgcOffLevel(int value);
     void setSquelch(bool on, int level);
+    // For genuine operator-driven manual squelch input only (a VFO flag's
+    // own SQL controls, a controller-mapped squelch knob) — setSquelch()
+    // plus recording the level as the operator's manual choice, in one
+    // call so no caller can push a manual level and forget the second half
+    // (#4592). Algorithm-driven writes (Auto mode) must keep calling plain
+    // setSquelch() — routing them here would silently overwrite the
+    // operator's last manual choice with the auto-computed value.
+    void setManualSquelch(bool on, int level);
     void setRit(bool on, int hz);
     void setXit(bool on, int hz);
     void setDaxChannel(int ch);
@@ -474,6 +489,7 @@ private:
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
     int     m_manualSquelchLevel{20};
+    bool    m_autoSquelchActive{false};
     int     m_stepHz{100};
     QVector<int> m_stepList;
     bool    m_ritOn{false};

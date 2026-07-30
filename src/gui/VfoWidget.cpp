@@ -1769,8 +1769,8 @@ void VfoWidget::buildTabContent()
             } else if (m_slice && m_slice->externalReceiveReplacementActive()) {
                 cycleStandaloneSqlMode();
             } else if (!m_updatingFromModel && m_slice) {
-                m_slice->setSquelch(m_sqlBtn->isChecked(),
-                                    clampManualSqlLevel(m_sqlSlider->value()));
+                m_slice->setManualSquelch(m_sqlBtn->isChecked(),
+                                          clampManualSqlLevel(m_sqlSlider->value()));
             }
         });
         connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1788,8 +1788,8 @@ void VfoWidget::buildTabContent()
                        && standaloneSqlMode() == LocalSqlMode::Auto) {
                 setAutoSqlMarginDb(v);
             } else if (m_slice) {
-                m_slice->setSquelch(m_sqlBtn->isChecked(),
-                                    clampManualSqlLevel(v));
+                m_slice->setManualSquelch(m_sqlBtn->isChecked(),
+                                          clampManualSqlLevel(v));
             }
         });
         connect(m_agcCmb, &QComboBox::currentTextChanged, this, [this](const QString& text) {
