@@ -1696,6 +1696,9 @@ private:
     QTimer    m_reconnectTimer;
 
     // ── Network quality monitor ──
+    // Take a transport snapshot from the backend seam: feed the loss window,
+    // rescore the link, and beat the heartbeat if traffic actually arrived.
+    void applyBackendLinkStats(const IRadioBackend::LinkStats& stats);
     void startNetworkMonitor();
     void stopNetworkMonitor();
     void evaluateNetworkQuality();
@@ -1751,12 +1754,49 @@ private:
     qint64 m_lastThrottleEngageMs{0};   // QDateTime::currentMSecsSinceEpoch() at last engage
     bool   m_pendingThrottleLift{false}; // lift deferred by min-dwell; fired in evaluateNetworkQuality()
 
+    // ── Backend-reported transport (non-Flex families) ──
+    //
+    // The Flex path measures the network off m_connection (TCP ping RTT) and
+    // m_panStream (VITA-49 counters). A family that owns neither has both null,
+    // and every getter below used to answer a flat zero for it — so the whole
+    // network readout rendered "connected, 0 kbps, 0 packets" on a link that was
+    // working. This is the same data arriving from the other side of the seam.
+    //
+    // Populated ONLY from IRadioBackend::linkStatsUpdated, and only a backend
+    // that overrides linkStats() ever sends one. `reported` staying false is
+    // what keeps the Flex path bit-for-bit unchanged: every fallback below is
+    // gated on it, and the Flex sources are always consulted first.
+    IRadioBackend::LinkStats m_linkStats;
+
+    // True when the network figures come from the backend seam rather than from
+    // a Flex PanadapterStream. The single predicate every fallback branches on.
+    bool usesBackendLinkStats() const { return !m_panStream && m_linkStats.reported; }
+
     // Network diagnostics — byte counters for rate calculation
 
 public:
     // Network diagnostics getters
     int     lastPingRtt()      const { return m_lastPingRtt; }
     int     maxPingRtt()       const { return m_maxPingRtt; }
+
+    // Whether the current transport has a round trip to time at all.
+    //
+    // Not every link does. Protocol 1 is a one-way stream — EP2 out on a wall
+    // clock, EP6 back free-running, and nothing in either direction answering
+    // anything in the other — so there is no RTT to report and no honest way to
+    // fake one. Every RTT readout must ask this first: lastPingRtt() answers 0
+    // when nothing measured it, and 0 renders as "< 1 ms", which is a link
+    // quality claim the app never made a measurement to support.
+    bool    hasLinkRtt() const {
+        return !usesBackendLinkStats() || m_linkStats.rttMs >= 0;
+    }
+    // Whether per-stream (Audio / FFT / Waterfall / Meter / DAX) sequence
+    // counters exist. They are a property of the Flex VITA-49 multiplex, where
+    // each category is a separately-sequenced stream on one socket. A transport
+    // that carries everything in one stream has nothing to break down, and
+    // rendering five rows of "0 / 0 packets" for it invents a distinction the
+    // wire does not have.
+    bool    hasStreamCategoryStats() const { return m_panStream != nullptr; }
     bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     int     currentAdaptiveFpsCap() const;  // 0 = throttle inactive
     // Waterfall line-duration the adaptive throttle caps to for a given fps cap.

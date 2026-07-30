@@ -2755,3 +2755,138 @@ confirming it (§7, and the wrong-sideband account in §14.6).
 - **None of it is automated yet.** Hardware verification does not survive a
   refactor; §20.15 lists the invariants to turn into certification cases so that
   it does.
+
+## 21. The network readouts, on a radio with no command plane
+
+The heartbeat dot in the title bar sat amber for a whole HL2 session. The
+status-bar `Network:` field was blank. Opening Network Diagnostics on a radio
+that was streaming 12.8 Mbps flawlessly showed 0 kbps, 0 packets, 0 bytes, and
+`Off`.
+
+None of that was a bug in those readouts. Every one of them was reading the
+Flex stack directly.
+
+### 21.1 The shape of the problem
+
+Three widgets, one root cause:
+
+| Readout | Source it read | On an HL2 |
+|---|---|---|
+| Title-bar heartbeat | `RadioModel::pingReceived`, emitted from the TCP `ping` reply | never fires |
+| Status-bar `Network:` | `networkQualityChanged`, emitted from `evaluateNetworkQuality()` | early-returned on `!m_panStream` |
+| Diagnostics pane | `RadioModel` getters, each `m_panStream ? … : 0` | structural zero |
+
+`startNetworkMonitor()` is called from exactly one place — the Flex `client
+gui` reply handler. A family that reaches `onConnected()` through the
+`IRadioBackend` seam never runs it, so the ping timer never starts, the score
+is never computed, and `m_netState` stays `Off` for the life of the session.
+
+The fix is not to make HL2 answer pings. It has nothing to answer them with
+(§21.3). The fix is that **the counters have to come from whoever owns the
+socket**, which is the backend.
+
+### 21.2 `IRadioBackend::LinkStats` — the seam addition
+
+A neutral transport snapshot, published on a fixed cadence:
+
+```
+MetisClient::LinkCounters   (I/O thread, published ~1 Hz from the receive path)
+  → Hl2Backend              (mirrored onto the GUI thread, like m_drops already was)
+    → linkStatsUpdated()    (fixed 1 Hz timer — NOT the receive path)
+      → RadioModel          (feeds the SAME scorer the Flex path uses)
+```
+
+Three decisions in there are load-bearing:
+
+**`reported` defaults to false.** A backend that does not override
+`linkStats()` sends nothing, and every consumer keeps its existing source. That
+is what makes this additive — the Flex path never sees a `LinkStats` at all,
+and `usesBackendLinkStats()` is `!m_panStream && m_linkStats.reported`, so both
+halves must be true before any fallback engages.
+
+**The publish timer lives in `Hl2Backend`, not in `MetisClient`.** The tick has
+to keep coming *after the radio goes quiet*, because "nothing arrived this
+second" is the observation the heartbeat's alarm path is waiting for. A
+backend that emits only on receive can never report its own silence. So
+`MetisClient` publishes counters from the receive path (and stops when EP6
+stops), and `Hl2Backend`'s own timer turns the frozen counter into
+`alive = false`.
+
+**`alive` is a per-tick difference, not a cumulative total.** `rxPackets`
+alone cannot distinguish a dead link from reading the same counter twice.
+
+### 21.3 There is no RTT, and saying so is the whole point
+
+Protocol 1 is a one-way stream. EP2 goes out on a wall clock, EP6 comes back
+free-running, and **no frame in either direction answers a specific frame in
+the other**. There is no round trip to time.
+
+The trap is that `lastPingRtt()` answers `0` when nothing measured it, and
+`formatNetworkMs(0)` renders `< 1 ms`. Left alone, the diagnostics pane would
+have advertised the best latency the app can display, from a measurement that
+never happened — and the *chart* would have drawn a confident flat 0 ms trace
+under the real ones, which is more believable than the number.
+
+So `LinkStats::rttMs` is `-1` for "not measured", `RadioModel::hasLinkRtt()`
+is the predicate every RTT surface asks first, and there are four of them:
+the status-bar tooltip, the Connection Details rows, the Latency tile, and the
+latency *series* — which is omitted from the graph rather than zeroed.
+
+`hasStreamCategoryStats()` is the same idea for the per-stream Audio/FFT/
+Waterfall/Meter/DAX breakdown. That is a property of the VITA-49 multiplex,
+where each category is a separately-sequenced stream sharing one socket. A
+transport carrying everything in one stream has no such split, and five rows of
+`0 / 0 packets` read as five dead streams rather than as a distinction that
+does not apply.
+
+**The rule this generalises to:** when a readout is ported to a transport that
+cannot produce one of its figures, the figure must render as *absent*, not as
+zero. A measurement of nothing and the absence of a measurement are different
+claims about the link, and only one of them is true.
+
+### 21.4 What IS measurable, and how it is scored
+
+Delivery timing, and it is timed **once per socket wakeup, not once per
+datagram**. A wakeup drains everything queued behind it, so successive
+datagrams inside one drain are microseconds apart no matter how badly the link
+is behaving — per-datagram timing reports a rock-steady 0 ms straight through a
+stall that silenced the audio.
+
+From that: `meanGapMs` and `maxGapMs` over the publish window, and jitter as
+their difference — the *spread* of delivery. On a healthy link that is a
+fraction of a millisecond; a congested one stalls and resumes, which is exactly
+what the operator hears. Sequence gaps come from the EP6 counter that already
+existed.
+
+Those feed `evaluateNetworkQuality()` unchanged, so `Fair` means the same thing
+to the operator on either radio.
+
+### 21.5 A Flex bug the HL2 work exposed
+
+`stopNetworkMonitor()` set `m_netState = Off` and emitted nothing. The
+status-bar field is written *only* from `networkQualityChanged`, and every
+emitter of that signal hangs off the ping/transport path being torn down — so
+the last quality the link ever had stayed on screen after disconnect. A
+disconnected radio reading `Excellent`, until the next connection happened to
+overwrite it.
+
+Pre-existing on the Flex path, invisible there only because nobody looked at
+the field after disconnecting. It is fixed for both families in
+`stopNetworkMonitor()`.
+
+### 21.6 Verified on hardware
+
+Against the HL2 at 192.168.1.21, RX-only:
+
+- Heartbeat samples `#20c060` green at ~1 Hz with idle grey between — no amber.
+  (Sampled by grabbing the title bar 40× at 50 ms and reading the dot pixel;
+  the green flash is a 100 ms window in a 1 s beat, so a single screenshot
+  catches it about one time in ten.)
+- Status bar `Network: [Excellent]` while connected, `[Off]` after disconnect.
+- 353 544 EP6 packets, 0 sequence gaps, 12.8 Mbps RX / 3.2 Mbps TX, arrival gap
+  1 ms, RTT `not measured on this link` in all four places.
+
+`hl2_link_stats_test` covers the seam contract, including the silent-link case
+and the honesty invariant. Per §7 that is necessary and not sufficient — but
+the RTT and category predicates are decisions about what we *refuse* to claim,
+which is one of the few things a fixture can check honestly.

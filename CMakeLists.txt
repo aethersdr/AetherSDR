@@ -2712,6 +2712,14 @@ target_include_directories(hl2_backend_test PRIVATE src)
 target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
 
+# HL2 transport telemetry — the IRadioBackend::linkStats seam that feeds the
+# heartbeat indicator, the status-bar Network field and the diagnostics pane on
+# a family that owns no RadioConnection and no PanadapterStream.
+add_executable(hl2_link_stats_test tests/hl2_link_stats_test.cpp)
+target_include_directories(hl2_link_stats_test PRIVATE src tests)
+target_link_libraries(hl2_link_stats_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_link_stats_test COMMAND hl2_link_stats_test)
+
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
 # is what lets the weekly TSan job (.github/workflows/sanitizers.yml) exercise the

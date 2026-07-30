@@ -34,12 +34,15 @@ std::span<const std::uint8_t> asBytes(const QByteArray& d) noexcept
     return {reinterpret_cast<const std::uint8_t*>(d.constData()), static_cast<std::size_t>(d.size())};
 }
 
-// Send a fixed-size wire buffer.
+// Send a fixed-size wire buffer. Returns the bytes the socket accepted (<0 on
+// failure), so callers can meter what actually went out rather than what they
+// asked for.
 template <std::size_t N>
-void sendTo(QUdpSocket& s, const std::array<std::uint8_t, N>& buf,
-            const QHostAddress& host, quint16 port)
+qint64 sendTo(QUdpSocket& s, const std::array<std::uint8_t, N>& buf,
+              const QHostAddress& host, quint16 port)
 {
-    s.writeDatagram(reinterpret_cast<const char*>(buf.data()), static_cast<qint64>(N), host, port);
+    return s.writeDatagram(reinterpret_cast<const char*>(buf.data()),
+                           static_cast<qint64>(N), host, port);
 }
 
 // QUdpSocket does not enable SO_BROADCAST on its own; set it on the native
@@ -65,6 +68,8 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     // signal argument; without registration Qt drops the emission with only a
     // warning, and the meters would simply never move.
     qRegisterMetaType<AetherSDR::hl2::Hl2Telemetry>("AetherSDR::hl2::Hl2Telemetry");
+    qRegisterMetaType<AetherSDR::hl2::MetisClient::LinkCounters>(
+        "AetherSDR::hl2::MetisClient::LinkCounters");
 
     // Seed the C&C banks from the Params defaults rather than leaving them
     // zero-initialised until start().
@@ -132,7 +137,7 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
             return;   // the connect watchdog reports the failure
         }
         ++m_startAttempts;
-        sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
+        countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
     });
 
     m_connectWatchdog = new QTimer(this);
@@ -232,6 +237,20 @@ bool MetisClient::start(const Params& params)
     m_socket->setReadBufferSize(1 << 21);   // absorb the continuous EP6 torrent
     connect(m_socket, &QUdpSocket::readyRead, this, &MetisClient::onReadyRead);
 
+    // Counters belong to the SESSION, so they are zeroed here rather than in the
+    // constructor: a reconnect must not present the previous link's byte totals
+    // as this one's. The endpoint is captured now because it is only knowable
+    // after the bind, and it does not change for the life of the socket.
+    m_link = LinkCounters{};
+    m_link.localEndpoint = QStringLiteral("%1:%2")
+                               .arg(m_socket->localAddress().toString())
+                               .arg(m_socket->localPort());
+    m_linkWindowClock.restart();
+    m_sinceLastWakeup.invalidate();
+    m_linkWindowWakeups = 0;
+    m_linkWindowGapSumUs = 0;
+    m_linkWindowGapMaxUs = 0;
+
     // Order matters. Prime with real C&C frames FIRST so the DDC latches the
     // sample rate, NCO and receiver count, then start the stream, then prime
     // again so nothing is lost to the start transition. Starting before any C&C
@@ -248,7 +267,7 @@ bool MetisClient::start(const Params& params)
                      metisStop(m_watchdogEnabled));
 
     sendPrimingBurst(3);
-    sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
+    countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
     sendPrimingBurst(3);
 
     // NOT the RX sample rate: EP2 is the 48 kHz TX/audio stream (see the header).
@@ -313,7 +332,7 @@ void MetisClient::stop()
     if (m_watchdogTimer)   m_watchdogTimer->stop();
     if (m_connectWatchdog) m_connectWatchdog->stop();
     if (m_socket) {
-        sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port);
+        countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
         // Disarm only AFTER the normal stop has gone out, and before the
         // descriptor is closed. Disarming earlier would leave a window where a
         // signal arriving mid-teardown released nothing; later would leave a
@@ -407,7 +426,7 @@ void MetisClient::setReceiverCount(int count)
 
     // STOP first. Past this point the radio sends nothing, so there is no packet
     // that could be decoded against the wrong layout.
-    sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port);
+    countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
 
     m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
     m_ccRxFreq.clear();
@@ -454,7 +473,7 @@ void MetisClient::setReceiverCount(int count)
     m_expectedRxSeq = 0;
     m_sinceLastEp6.restart();
 
-    sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
+    countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
     sendPrimingBurst(3);
 
     // ARM THE RETRY, exactly as start() does. This start datagram is as losable
@@ -663,18 +682,72 @@ void MetisClient::sendControlPacket()
     // device leaves every receiver unassigned (and therefore emits all-zero IQ)
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
-    sendTo(*m_socket, buildNextControlPacket(), m_host, m_port);
+    countTx(sendTo(*m_socket, buildNextControlPacket(), m_host, m_port));
+}
+
+void MetisClient::countTx(qint64 bytesWritten) noexcept
+{
+    if (bytesWritten <= 0)
+        return;
+    m_link.txBytes += static_cast<quint64>(bytesWritten);
+    ++m_link.txPackets;
+}
+
+void MetisClient::accountReceiveWakeup()
+{
+    // Gap from the previous wakeup. The FIRST wakeup of a session has nothing
+    // to measure from, so it seeds the clock and contributes no sample —
+    // otherwise the interval since start() (which includes the priming bursts
+    // and the radio's own start latency) would land in the window as if it
+    // were a delivery stall.
+    if (m_sinceLastWakeup.isValid()) {
+        const qint64 gapUs = m_sinceLastWakeup.nsecsElapsed() / 1000;
+        ++m_linkWindowWakeups;
+        m_linkWindowGapSumUs += gapUs;
+        m_linkWindowGapMaxUs = std::max(m_linkWindowGapMaxUs, gapUs);
+    }
+    m_sinceLastWakeup.restart();
+
+    if (m_linkWindowClock.isValid() && m_linkWindowClock.elapsed() < kLinkPublishIntervalMs)
+        return;
+
+    // Round to the nearest millisecond rather than truncating: at 384 kHz the
+    // mean gap is a few hundred microseconds, and truncation would publish a
+    // flat 0 ms for every healthy link — indistinguishable from not measuring.
+    auto usToMs = [](qint64 us) { return static_cast<int>((us + 500) / 1000); };
+    m_link.meanGapMs = m_linkWindowWakeups > 0
+                           ? usToMs(m_linkWindowGapSumUs / m_linkWindowWakeups)
+                           : -1;
+    m_link.maxGapMs = m_linkWindowWakeups > 0 ? usToMs(m_linkWindowGapMaxUs) : -1;
+
+    emit linkCountersUpdated(m_link);
+
+    // The gap figures describe the window that just closed, so the window is
+    // reset here. The cumulative byte/packet totals are NOT — those are session
+    // figures and the consumer diffs them itself.
+    m_linkWindowClock.restart();
+    m_linkWindowWakeups = 0;
+    m_linkWindowGapSumUs = 0;
+    m_linkWindowGapMaxUs = 0;
 }
 
 void MetisClient::onReadyRead()
 {
+    accountReceiveWakeup();
+
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
         const auto bytes = asBytes(dg.data());
+        // Counted before the EP6 test: these bytes crossed the wire and were
+        // read off this socket whatever they turned out to be, and a receive
+        // total that silently omits traffic is worse than one that includes a
+        // stray discovery reply.
+        m_link.rxBytes += static_cast<quint64>(dg.data().size());
 
         const auto seq = ep6Seq(bytes);
         if (!seq)
             continue;   // not an EP6 packet (e.g. a stray discovery reply)
+        ++m_link.rxPackets;
 
         // Restarted on every packet: this is the one piece of state that says how
         // recently the stream produced anything, which both the silence watchdog
@@ -696,6 +769,7 @@ void MetisClient::onReadyRead()
             const std::uint32_t gap = *seq - m_expectedRxSeq;   // unsigned wrap
             if (gap < 0x80000000u) {                            // forward gap = real loss
                 m_drops += gap;
+                m_link.drops = m_drops;
                 emit dropsUpdated(m_drops);
             }
         }

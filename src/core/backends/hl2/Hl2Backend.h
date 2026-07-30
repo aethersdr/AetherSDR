@@ -89,8 +89,13 @@ public:
                          const QVariant& arg) override;
 
     HealthSnapshot healthSnapshot() const override;
+    LinkStats linkStats() const override;
 
 private:
+    // Publish linkStats() on the fixed cadence the seam promises. Driven by a
+    // timer here rather than by MetisClient's receive path so the tick survives
+    // the radio going silent — which is the case the heartbeat has to detect.
+    void publishLinkStats();
     // Re-select the companion filter board's band filter for the current slice
     // frequency. Idempotent and change-gated, so it is safe to call from every
     // path that can move the dial.
@@ -392,6 +397,19 @@ private:
     // MetisClient::droppedPackets(): that object lives on the I/O thread, and
     // healthSnapshot() is read from the GUI thread.
     quint64 m_drops = 0;
+    // Transport counters, mirrored onto THIS thread from
+    // MetisClient::linkCountersUpdated for the same reason m_drops is.
+    //
+    // Held as the SEAM's type rather than the client's: MetisClient is only
+    // forward-declared here, so a nested type of it cannot be a member, and
+    // translating at the receive lambda (where MetisClient.h is included) keeps
+    // the wire-shape-to-seam-shape mapping in exactly one place.
+    LinkStats m_link;
+    QTimer* m_linkStatsTimer = nullptr;
+    // rxPackets as of the PREVIOUS tick. The difference is the only thing that
+    // can answer "is the radio still sending", which a cumulative total cannot.
+    quint64 m_linkRxPacketsAtLastTick = 0;
+    static constexpr int kLinkStatsIntervalMs = 1000;
     bool m_adcOverload = false;
     bool m_keyed = false;
     bool m_tuning = false;

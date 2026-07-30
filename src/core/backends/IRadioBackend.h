@@ -320,6 +320,55 @@ public:
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
 
+    // The state of the TRANSPORT carrying this radio's streams, as opposed to
+    // the state of the radio itself (which is healthSnapshot's job).
+    //
+    // The network readouts — the title-bar heartbeat, the status-bar Network
+    // field, the whole Network Diagnostics dialog — were built against the Flex
+    // stack and read their numbers off a RadioConnection (TCP ping RTT) and a
+    // PanadapterStream (VITA-49 byte and sequence counters). A family that owns
+    // neither has both of those as nullptr, so every one of those surfaces read
+    // a hard zero: the heartbeat never left its pre-connect amber, and the
+    // diagnostics pane reported a connected radio pushing 0 kbps with 0 packets.
+    // Not degraded — structurally blank, on a link that was working fine.
+    //
+    // So the counters have to come from whoever owns the socket, which is the
+    // backend. This is the neutral shape of that, and it is deliberately about
+    // a TRANSPORT rather than about UDP or VITA-49: a backend gets to report
+    // the subset it can actually measure, and says so.
+    //
+    // `reported` false — the default, and what every backend that does not
+    // override this answers — means "I measure no transport", and the consumer
+    // keeps whatever source it was already using. That is what makes this
+    // additive: the Flex path never sees a LinkStats at all.
+    struct LinkStats {
+        // False: this backend measures nothing; ignore every field below.
+        bool reported = false;
+        // Traffic arrived from the radio since the PREVIOUS snapshot. This is
+        // the proof-of-life the heartbeat indicator runs on — a link that is
+        // bound and counting but has gone silent must read as dead, and a
+        // cumulative counter alone cannot say that.
+        bool alive = false;
+
+        qint64  rxBytes = 0;
+        qint64  txBytes = 0;
+        quint64 rxPackets = 0;         // cumulative, this session
+        quint64 rxPacketsLost = 0;     // cumulative sequence gaps, this session
+
+        // Negative means NOT MEASURED, which is not the same as zero and must
+        // not render as one. A stream-only transport has no request/response
+        // exchange to time, so its RTT is genuinely unknown — printing "< 1 ms"
+        // there would be the readout inventing a measurement it never took.
+        int rttMs    = -1;
+        int jitterMs = -1;
+        int gapMs    = -1;
+        int gapMaxMs = -1;
+
+        // "ip:port" of the local socket, empty when not bound.
+        QString localEndpoint;
+    };
+    virtual LinkStats linkStats() const { return {}; }
+
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
     // discover available namespaces via capabilities().extensionNamespaces.
@@ -339,6 +388,13 @@ signals:
     void disconnected();
     void connectionError(const QString& reason);
     void capabilitiesChanged();
+
+    // A fresh transport snapshot. Emitted on a FIXED cadence while connected,
+    // not when traffic arrives — the tick has to keep coming after the radio
+    // goes quiet, because "nothing arrived this second" is the observation the
+    // heartbeat's alarm path is waiting for. A backend that emits only on
+    // receive can never report its own silence.
+    void linkStatsUpdated(const IRadioBackend::LinkStats& stats);
 
     // ---- vendor-extension replies UP (correlate to invokeExtension) ----
     // The async result of an invokeExtension() call, keyed by the caller's
@@ -527,3 +583,10 @@ signals:
 };
 
 }  // namespace AetherSDR
+
+// linkStatsUpdated is direct-connected today (Hl2Backend's cadence timer lives
+// on the same thread as its consumer), but a backend whose socket owner emits
+// it from a worker thread would need the queued path — which silently drops the
+// signal unless the type is registered. Declared here so that stays a
+// non-event.
+Q_DECLARE_METATYPE(AetherSDR::IRadioBackend::LinkStats)

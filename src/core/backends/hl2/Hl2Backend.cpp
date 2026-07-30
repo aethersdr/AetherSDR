@@ -305,6 +305,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // Link lifecycle: first EP6 -> connected; stop -> disconnected.
     connect(m_metis, &MetisClient::linkUp, this, [this] {
         m_connected = true;
+        // Started here rather than in connectRadio(): before the first EP6 there
+        // is no link to describe, and ticking through the connect attempt would
+        // publish a "reported" snapshot of zeros that reads as a dead link
+        // rather than as one that has not come up yet.
+        m_link = LinkStats{};
+        m_linkRxPacketsAtLastTick = 0;
+        m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
         // RadioModel::onConnected() stages every existing model as "previous
@@ -347,6 +354,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
             m_connected = false;
+            m_linkStatsTimer->stop();
             emit disconnected();
         }
     });
@@ -361,6 +369,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // destructor also guards against.
         QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
         m_connected = false;
+        m_linkStatsTimer->stop();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -382,6 +391,64 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // without touching an object that lives on the I/O thread.
     connect(m_metis, &MetisClient::dropsUpdated, this,
             [this](quint64 drops) { m_drops = drops; });
+    // Same mirror, for the transport counters linkStats() reports. The wire
+    // shape is translated to the seam shape HERE, so linkStats() is a plain
+    // read of a value that already lives on the reader's thread.
+    connect(m_metis, &MetisClient::linkCountersUpdated, this,
+            [this](const MetisClient::LinkCounters& c) {
+        // `reported` and `alive` are deliberately NOT set here — they are
+        // statements about the connection and the tick, not about the counters,
+        // and both publishers below own them.
+        m_link.rxBytes = static_cast<qint64>(c.rxBytes);
+        m_link.txBytes = static_cast<qint64>(c.txBytes);
+        m_link.rxPackets = c.rxPackets;
+        m_link.rxPacketsLost = c.drops;
+        // Protocol 1 is a one-way stream with no request/response exchange: EP2
+        // goes out on a wall clock and EP6 comes back free-running, and no frame
+        // in either direction answers a specific frame in the other. There is
+        // therefore no round trip to time, and -1 says exactly that rather than
+        // presenting a 0 that every readout formats as "< 1 ms".
+        m_link.rttMs = -1;
+        m_link.gapMs = c.meanGapMs;
+        m_link.gapMaxMs = c.maxGapMs;
+        // Jitter as the SPREAD of delivery within the window. On a stream with
+        // no round trip this is the honest latency-variation figure: a healthy
+        // link delivers on a metronome and reads a fraction of a millisecond,
+        // while a congested one stalls and resumes — which is precisely what the
+        // operator hears. Undefined until a window has closed with samples in it.
+        m_link.jitterMs = (c.maxGapMs >= 0 && c.meanGapMs >= 0)
+                              ? c.maxGapMs - c.meanGapMs
+                              : -1;
+        m_link.localEndpoint = c.localEndpoint;
+    });
+
+    m_linkStatsTimer = new QTimer(this);
+    m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
+    connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
+}
+
+void Hl2Backend::publishLinkStats()
+{
+    LinkStats s = m_link;
+    // The link is REPORTED from the moment we are connected, even before the
+    // first counter snapshot has crossed from the I/O thread. Otherwise the
+    // consumer's first tick sees reported=false, keeps its Flex sources, and
+    // renders the blank readout this whole path exists to fix.
+    s.reported = true;
+    // Fresh packets since the last tick — the transport-level proof of life the
+    // heartbeat runs on. Computed here rather than in linkStats() because the
+    // comparison CONSUMES the previous value, and linkStats() is a const getter
+    // any caller may poll at any rate.
+    s.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
+    m_linkRxPacketsAtLastTick = m_link.rxPackets;
+    emit linkStatsUpdated(s);
+}
+
+IRadioBackend::LinkStats Hl2Backend::linkStats() const
+{
+    LinkStats s = m_link;
+    s.reported = m_connected;
+    return s;
 }
 
 Hl2Backend::Receiver* Hl2Backend::rx(int ddc)

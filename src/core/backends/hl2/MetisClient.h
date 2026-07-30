@@ -69,6 +69,30 @@ public:
         QHostAddress address;
     };
 
+    // Transport counters for the network readouts. Everything here is measured
+    // on THIS socket, which is why it lives at this level and not above it:
+    // nothing further up the stack ever sees a datagram.
+    //
+    // The gap figures are timed once per SOCKET WAKEUP, not once per datagram,
+    // and that distinction is the whole reason they are usable. A wakeup drains
+    // every datagram queued behind it, so successive datagrams inside one drain
+    // are microseconds apart no matter how badly the link is behaving — timing
+    // those would report a rock-steady 0 ms through a stall that silenced the
+    // audio. Wakeup-to-wakeup is when packets actually reached us.
+    struct LinkCounters {
+        quint64 rxBytes = 0;
+        quint64 txBytes = 0;
+        quint64 rxPackets = 0;      // EP6 datagrams accepted
+        quint64 txPackets = 0;      // datagrams sent (EP2 + start/stop)
+        quint64 drops = 0;          // cumulative EP6 sequence gaps
+        // Over the publish window only, so a stall that has ended stops being
+        // reported as if it were still happening. Negative = nothing measured.
+        int meanGapMs = -1;
+        int maxGapMs = -1;
+        QString localEndpoint;      // "ip:port" of our bound socket
+    };
+    [[nodiscard]] const LinkCounters& linkCounters() const noexcept { return m_link; }
+
     // Blocking discovery broadcast; returns HPSDR/HL2 replies (deduped by MAC)
     // seen within timeoutMs. Safe to call before start().
     QList<Discovered> discover(int timeoutMs = 2000,
@@ -218,6 +242,14 @@ signals:
     // this object reuses, so a receiver must copy anything it keeps.
     void iqBlocksReady(const std::vector<std::vector<std::complex<float>>>& blocks);
     void dropsUpdated(quint64 drops);                             // cumulative EP6 gaps
+    // Transport counters, published about once a second from the receive path.
+    // Rate-limited for the same reason telemetryUpdated is: this would otherwise
+    // cross to the GUI thread thousands of times a second to move a byte count.
+    //
+    // It stops arriving when EP6 stops, and that is load-bearing — the consumer
+    // reads the absence as the link having gone quiet. Do NOT "fix" this by
+    // driving it from a timer here.
+    void linkCountersUpdated(const AetherSDR::hl2::MetisClient::LinkCounters& c);
     // Radio telemetry decoded from the EP6 C&C bytes: forward/reverse power,
     // temperature, TX FIFO depth, ADC overload, PTT. Free-running, so it
     // arrives without us issuing a request.
@@ -233,6 +265,12 @@ private slots:
 
 private:
     void sendControlPacket();           // one round-robin EP2 C&C packet
+    // Accumulate one socket wakeup into the gap window and publish the counters
+    // if the window has elapsed.
+    void accountReceiveWakeup();
+    // Meter one outgoing datagram. Takes the socket's return value, so a write
+    // the kernel refused is not counted as traffic that left the host.
+    void countTx(qint64 bytesWritten) noexcept;
     // Send countPerBank C&C frames, pause, then countPerBank more. Run BEFORE
     // metis-start so the DDC latches sample rate / NCO / receiver count from a
     // real C&C frame; a stream started before any C&C has landed emits ADC-idle
@@ -323,6 +361,15 @@ private:
     // publishTelemetry() does not flood the GUI thread. (#4449 review)
     QElapsedTimer m_telemetryEmitClock;
     static constexpr qint64 kTelemetryMinIntervalMs = 100;
+
+    // ---- transport counters (see LinkCounters) ----
+    LinkCounters  m_link;
+    QElapsedTimer m_linkWindowClock;    // time since the last publish
+    QElapsedTimer m_sinceLastWakeup;    // socket wakeup spacing
+    int           m_linkWindowWakeups = 0;
+    qint64        m_linkWindowGapSumUs = 0;
+    qint64        m_linkWindowGapMaxUs = 0;
+    static constexpr qint64 kLinkPublishIntervalMs = 1000;
 };
 
 }  // namespace AetherSDR::hl2
@@ -332,3 +379,5 @@ private:
 // deliberately Qt-free so the wire primitives unit-test without linking Qt,
 // and hl2_metis_protocol_test does exactly that.
 Q_DECLARE_METATYPE(AetherSDR::hl2::Hl2Telemetry)
+// Same reason: LinkCounters crosses the I/O thread to the GUI thread queued.
+Q_DECLARE_METATYPE(AetherSDR::hl2::MetisClient::LinkCounters)

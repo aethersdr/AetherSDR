@@ -101,6 +101,27 @@ int main(int argc, char** argv)
           "decoded block carries 126 IQ samples");
     check(client.droppedPackets() == 0, "no drops on an ordered loopback stream");
 
+    // ---- transport counters (the network readouts' only source on this family) ----
+    //
+    // Published on a ~1 s window, so this spins past one boundary rather than
+    // reading the accessor: the SIGNAL is what Hl2Backend mirrors, and a counter
+    // that increments without ever being published reaches no readout.
+    QSignalSpy linkSpy(&client, &MetisClient::linkCountersUpdated);
+    spin(1200);
+    check(linkSpy.count() >= 1, "linkCountersUpdated published on its window");
+    const MetisClient::LinkCounters& lc = client.linkCounters();
+    check(lc.rxPackets > 0, "EP6 packets counted");
+    check(lc.rxBytes >= lc.rxPackets * kUsbPacketSize, "received bytes counted");
+    // EP2 is paced off a wall clock, so it flows regardless of what comes back.
+    check(lc.txPackets > 0 && lc.txBytes > 0, "sent datagrams counted");
+    check(lc.drops == 0, "ordered loopback stream loses nothing");
+    check(!lc.localEndpoint.isEmpty(), "bound local endpoint captured");
+    // Timed once per socket wakeup, not once per datagram: successive datagrams
+    // inside one drain are microseconds apart no matter how the link behaves, so
+    // per-datagram timing would report a steady 0 ms straight through a stall.
+    check(lc.meanGapMs >= 0 && lc.maxGapMs >= lc.meanGapMs,
+          "inter-arrival gap measured, maximum not below the mean");
+
     // ---- live control does not disrupt the stream ----
     const int before = iqCount;
     client.setRxFrequencyHz(14'100'000);

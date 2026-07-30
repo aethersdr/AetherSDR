@@ -102,6 +102,29 @@ pattern in the Flex column: five fields across this table and the one above are
 left at their defaults, and every one of them is correct only by accident or
 inert only by luck. That is the trap in rule 1 above, sitting in the tree.
 
+## Not a capability field, but the same contract
+
+`IRadioBackend::linkStats()` / `linkStatsUpdated()` — the transport counters
+behind the title-bar heartbeat, the status-bar `Network:` field and the whole
+Network Diagnostics pane. Not in `RadioCapabilities` because it carries live
+values rather than a yes/no, but it follows rule 1 in the same shape and belongs
+on the same checklist when you add a backend.
+
+| | Flex | HL2 | Sim |
+|---|:--:|:--:|:--:|
+| overrides `linkStats()` | ❌ | ✅ | ❌ |
+
+`LinkStats::reported` defaults to **false**, and that default is the compatible
+one for once: a backend that says nothing leaves every consumer on the source it
+already had (the Flex `RadioConnection` + `PanadapterStream`). A backend that
+owns its own socket must override it, or its operator gets a connected radio
+reporting 0 kbps.
+
+Within the struct, individual figures a transport cannot measure are `-1`, not
+`0` — `RadioModel::hasLinkRtt()` and `hasStreamCategoryStats()` are the
+predicates the readouts ask before printing. See [`HERMES.md`](../../HERMES.md)
+§21.3 for why a zero there is a claim the app cannot support.
+
 ## Where the values come from
 
 - **FlexBackend** seeds `maxSlices`, `maxPanadapters` and `hasExtendedDsp` from
