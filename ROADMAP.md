@@ -24,7 +24,9 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   models directly, and that remains correct until it lands.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
-  Mechanical migration tooling is the prerequisite work.
+  The storage layer moved to SQLite (RFC #4603); new radio-scoped
+  configuration lands as versioned feature documents in `radio_settings`,
+  and legacy flat keys migrate feature-by-feature.
 - **TX DSP chain visual rebuild** — stage-per-applet chain with the
   visual `CHAIN` widget as the primary entry point.
 - **Flathub submission** — the AppStream metainfo and manpage landed in

@@ -85,7 +85,10 @@ changes.
 - **GUI → Model**: GUI widgets call model setters. Use `QSignalBlocker` or
   `m_updatingFromModel` guards to prevent echo loops.
 - **Settings**: Use `AppSettings`, **never** `QSettings`. Keys are PascalCase.
-  Booleans are `"True"` / `"False"` strings.
+  Booleans are `"True"` / `"False"` strings. The store is SQLite
+  (`AetherSDR.db`, RFC #4603) — never include `sqlite3.h` outside
+  `SettingsDatabase.cpp`, and **never put a credential in the settings
+  store**: QtKeychain only (see AGENTS.md "Settings Persistence").
 - **Radio-authoritative**: Never persist or override settings the radio manages
   (frequency, mode, filter, step size, AGC, squelch, DSP flags, antennas, TX
   power, panadapter *count* and per-pan state — including FFT

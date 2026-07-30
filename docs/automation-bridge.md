@@ -166,7 +166,8 @@ that should have changed → `grab_widget` for a visual check.
 **Access token.** Enabling the bridge in Radio Setup → Network mints a
 random token (stored in your OS secret store via QtKeychain — macOS
 Keychain / Windows Credential Manager / libsecret-KWallet, never in the
-plaintext settings file). Copy it into your assistant's MCP config as the
+settings store — RFC #4603 bans credentials from it outright). Copy it
+into your assistant's MCP config as the
 `AETHER_MCP_TOKEN` environment variable; the bridge then rejects every
 verb except `ping` without a matching token. Headless/CI can supply the
 token via `AETHER_MCP_TOKEN` directly, which overrides the keychain.

@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Client settings store moved to SQLite (RFC #4603, phase 1)
+
+- **Settings now live in a SQLite database** (`AetherSDR.db` in the config
+  folder) instead of the XML file. The switch is automatic and verified on
+  first launch; your old `AetherSDR.settings` stays in place untouched, so
+  rolling back to an older release keeps the settings you had at upgrade
+  time (changes made after the upgrade stay with the new version).
+- **Safer storage**: transactional saves (no more full-file rewrites),
+  startup integrity checks, automatic verified backups, and quarantine +
+  restore if the store is ever damaged — with a notice telling you which
+  backup was used. Reset Settings now writes a final backup before wiping.
+- **Credentials are never stored in settings anymore.** The MQTT password,
+  automation-bridge token, and remote-ASR API key move to your OS keychain
+  automatically during the upgrade.
+- **New `--config` command line**: `aethersdr --config list|get|set|unset|
+  export|path` inspects or repairs settings without starting the GUI —
+  the escape hatch when a broken stored value prevents startup.
+- Fixes a latent threading race in the settings core (#4602).
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

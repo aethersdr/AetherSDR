@@ -515,8 +515,9 @@ document why.
 ### Settings Persistence (AppSettings — NOT QSettings)
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
-settings are stored via `AppSettings` (`src/core/AppSettings.h`), which writes
-an XML file at `~/.config/AetherSDR/AetherSDR.settings`. Key names use
+settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
+persists to a **SQLite database** at `~/.config/AetherSDR/AetherSDR.db`
+(RFC #4603; design doc: `docs/settings-store-sqlite-design.md`). Key names use
 PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
 values are stored as `"True"` / `"False"` strings.
 
@@ -524,7 +525,25 @@ values are stored as `"True"` / `"False"` strings.
 auto& s = AppSettings::instance();
 s.setValue("MyFeatureEnabled", "True");
 bool on = s.value("MyFeatureEnabled", "False").toString() == "True";
+s.save();   // commits the dirty rows in one transaction (cheap; still required)
 ```
+
+Rules that come with the store:
+
+- **Never include `sqlite3.h` outside `src/core/SettingsDatabase.cpp`** — the
+  engine is a single-point seam (see `third_party/sqlite/README.md`).
+- **Credentials never go in the settings store.** QtKeychain (service
+  `"AetherSDR"`) is the only persistent credential store; without keychain
+  support a credential is session-only via
+  `AppSettings::setSessionCredential()`. Follow the patterns in
+  `MqttSettings`/`AutomationBridgeSettings`/`CopyAssistSettings`.
+- The legacy XML file (`AetherSDR.settings`) is a **frozen snapshot** from the
+  one-time import — never write to it, never delete it outside Reset Settings.
+- Pre-`QApplication` code reads via `SettingsBootstrap::readValue()` and paths
+  come from `SettingsPaths` — never hand-build a config path.
+- The `AetherSDR --config <list|get|set|unset|export|path>` CLI inspects and
+  repairs the store without starting the GUI (the recovery path when a stored
+  value breaks startup).
 
 ### Settings Migration
 
@@ -540,7 +559,9 @@ if (s.contains("OldKey") && !s.contains("NewKey")) {
 }
 ```
 
-Run once at app or feature startup, not on every access.
+Run once at app or feature startup, not on every access. (The XML→SQLite store
+migration itself is automatic inside `AppSettings::load()` — feature code never
+touches it.)
 
 ### Radio-Authoritative Settings Policy
 
