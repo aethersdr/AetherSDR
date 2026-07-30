@@ -4720,12 +4720,23 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             // registration state and re-arm automatic reconnect (#4560).
             // RadioConnection preserves protocol-line order, so a preceding
             // fatal M-message has already reached the state when R is handled.
+            //
+            // What the old singleShot(0) covered and this does not: an M that
+            // arrived AFTER the R would have been queued ahead of the timer and
+            // picked up as detail. Now it is not, so that case degrades to the
+            // generic no-detail text below. That is the trade — a correct
+            // terminal transition beats a better string, and the #4481 capture
+            // shows MF3000001 arriving BEFORE the R, whose body already carried
+            // the reason anyway.
             const GuiClientRegistrationState::Result result =
                 m_guiClientRegistrationState.complete(code, body);
             handleGuiClientRegistrationFailure(result);
             return;
         }
 
+        // code == 0: commit the Registered phase and clear any stashed detail.
+        // The result is unconditionally ContinueHandshake, so there is nothing
+        // to branch on — the return is dropped deliberately, not overlooked.
         m_guiClientRegistrationState.complete(code, body);
 
         if (!body.trimmed().isEmpty()
