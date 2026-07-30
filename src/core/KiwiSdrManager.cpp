@@ -440,7 +440,7 @@ void KiwiSdrManager::connectProfile(const QString& id)
         m_clientHasTrackedSlice.insert(id, false);
         invokeClient(id, [](KiwiSdrClient* client) {
             client->setTrackedSlice(-1, 0.0, QString(), 0, 0, QString(),
-                                    QString());
+                                    QString(), 0);
         });
         emit profileNeedsInitialTracking(id);
     }
@@ -521,7 +521,8 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
                                           double centerMhz,
                                           double bandwidthMhz,
                                           int lineDurationMs,
-                                          const QString& bandName)
+                                          const QString& bandName,
+                                          int cwPitchHz)
 {
     if (!hasProfile(id) || sliceId < 0 || frequencyMhz <= 0.0) {
         return;
@@ -532,10 +533,10 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
         m_clientHasTrackedSlice.insert(id, true);
         invokeClient(id, [sliceId, frequencyMhz, mode, filterLowHz,
                           filterHighHz, panId, lineDurationMs,
-                          centerMhz, bandwidthMhz, bandName](
+                          centerMhz, bandwidthMhz, bandName, cwPitchHz](
                              KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                                    filterHighHz, panId, bandName);
+                                    filterHighHz, panId, bandName, cwPitchHz);
             client->setWaterfallLineDurationMs(lineDurationMs);
             if (!panId.isEmpty() && centerMhz > 0.0 && bandwidthMhz > 0.0) {
                 client->setWaterfallView(panId, centerMhz, bandwidthMhz);
@@ -549,7 +550,8 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
                                           const QString& mode,
                                           int filterLowHz, int filterHighHz,
                                           const QString& panId,
-                                          const QString& bandName)
+                                          const QString& bandName,
+                                          int cwPitchHz)
 {
     if (sliceId < 0 || !hasProfile(profileId)) {
         clearSliceAssignment(sliceId);
@@ -597,10 +599,11 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
         const bool connected =
             KiwiSdrClient::stateHasReceiveAudio(state(profileId));
         invokeClient(profileId, [sliceId, frequencyMhz, mode, filterLowHz,
-                                 filterHighHz, panId, bandName, connected](
+                                 filterHighHz, panId, bandName, connected,
+                                 cwPitchHz](
                                     KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                                    filterHighHz, panId, bandName);
+                                    filterHighHz, panId, bandName, cwPitchHz);
             client->setAudioActive(connected);
         });
     }
@@ -639,7 +642,8 @@ void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,
                                          const QString& mode,
                                          int filterLowHz, int filterHighHz,
                                          const QString& panId,
-                                         const QString& bandName)
+                                         const QString& bandName,
+                                         int cwPitchHz)
 {
     const QString profileId = m_sliceAssignments.value(sliceId);
     if (profileId.isEmpty()) {
@@ -650,10 +654,10 @@ void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,
         m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
         invokeClient(profileId, [sliceId, frequencyMhz, mode,
                                  filterLowHz, filterHighHz, panId,
-                                 bandName](
+                                 bandName, cwPitchHz](
                                     KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                                    filterHighHz, panId, bandName);
+                                    filterHighHz, panId, bandName, cwPitchHz);
         });
     }
 }

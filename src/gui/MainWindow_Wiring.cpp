@@ -4917,6 +4917,25 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
         updateKiwiSdrVirtualTrackingForSlice(s);
     });
+    // Re-send the tracked-slice command when the radio's CW pitch changes so
+    // an already-active KiwiSDR CW session's BFO offset stays in sync (#4423)
+    // instead of going stale until the next frequency/mode/filter edit.
+    // cwPitchChanged (not phoneStateChanged) so this doesn't re-run on every
+    // unrelated VOX/mic/dexp status update for every wired slice.
+    // Context is `s` (not `this`) so Qt disconnects when the slice dies —
+    // slices come and go far more often than MainWindow does (band changes,
+    // stale-slice pruning); that was a real UAF fixed earlier on this PR.
+    // But that leaves the captured `this` untracked by Qt's own lifetime
+    // handling, so guard it separately with a QPointer (same idiom as
+    // AetherDspWidget::onDspToggled) for the rare case MainWindow is torn
+    // down while the slice and TransmitModel are still alive.
+    QPointer<MainWindow> self(this);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged,
+            s, [self, s](int) {
+        if (self) {
+            self->updateKiwiSdrVirtualTrackingForSlice(s);
+        }
+    });
     connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
         updateAetherDspModePolicy();
