@@ -14,6 +14,7 @@
 #include "core/backends/MeterDef.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -85,6 +86,16 @@ public:
     virtual bool ownsRxAudio() const { return false; }
 
     // ---- connection lifecycle ----
+    // Typed restore handoff (RFC #4603 proposal B): called by RadioModel
+    // BEFORE connectRadio(), and only when this backend's declared
+    // clientSettingsDomains is non-empty. The backend stashes what it wants
+    // and applies it during connect/initial-push, validating its own
+    // extension document at this boundary (Principle VII). Default no-op —
+    // a radio-authoritative backend (Flex) never sees restored state.
+    virtual void applyRestoredState(const RestoredRadioState& state)
+    {
+        Q_UNUSED(state);
+    }
     virtual void connectRadio(const RadioConnectRequest& request) = 0;
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;

@@ -9,6 +9,7 @@
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
 #include "core/AppSettings.h"
+#include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceModeRegistry.h"
 #include "core/DigitalVoiceWaveformProcess.h"
@@ -417,6 +418,28 @@ QJsonObject clientInfoToJson(quint32 handle,
 // family string to its IRadioBackend. "flex" (the default, and any unrecognized
 // value) preserves the historical hard-wired FlexBackend; "hl2" selects the
 // Hermes-Lite 2 backend. A fuller step-3 registry supersedes this later.
+
+// RFC #4603 proposal B: hand the remembered operating state to a backend
+// whose declared ClientSettingsDomains make the client its memory. Called
+// immediately before connectRadio(); a backend with an empty declaration
+// (Flex, Sim) never sees restored state — the radio-authoritative policy
+// (Constitution II/III) is structurally untouched.
+void RadioModel::handRestoredStateToBackend(const QString& serial)
+{
+    if (!m_backend) {
+        return;
+    }
+    const RadioCapabilities caps = m_backend->capabilities();
+    if (!RadioStateMemory::shouldEngage(caps)) {
+        return;
+    }
+    const RestoredRadioState state =
+        RadioStateMemory::load(RadioSettingsScope(m_family, serial), caps);
+    if (!state.isEmpty()) {
+        m_backend->applyRestoredState(state);
+    }
+}
+
 std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
 {
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
@@ -1445,6 +1468,7 @@ RadioModel::RadioModel(QObject* parent)
                 req.host   = m_lastInfo.address.toString();
                 req.port   = m_lastInfo.port;
                 req.serial = m_lastInfo.serial;
+                handRestoredStateToBackend(req.serial);
                 m_backend->connectRadio(req);
             }
         } else {
@@ -2453,6 +2477,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.host   = info.address.toString();
         req.port   = info.port;
         req.serial = info.serial;
+        handRestoredStateToBackend(req.serial);
         m_backend->connectRadio(req);
     }
 }

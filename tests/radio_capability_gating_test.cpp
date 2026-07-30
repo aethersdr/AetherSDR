@@ -146,6 +146,13 @@ int main(int argc, char** argv)
         // the base one is true — which is exactly why they cannot be merged.
         check(caps.hasRadioSideDsp && !caps.hasExtendedDsp,
               "hasRadioSideDsp and hasExtendedDsp are independent");
+        // RFC #4603: the Flex persists its own operating state — an EMPTY
+        // domain declaration is the load-bearing value here. If this ever
+        // becomes non-empty, RadioStateMemory would start re-asserting
+        // radio-owned state on connect (the #2465/#4126/#4261 bug class).
+        check(caps.clientSettingsDomains
+                  == RadioCapabilities::ClientSettingsDomains{},
+              "Flex declares clientSettingsDomains EMPTY (radio-authoritative)");
     }
 
     // ---- HL2 declares none of them ---------------------------------------
@@ -175,6 +182,18 @@ int main(int argc, char** argv)
         // not the stack.
         check(!caps.hasSupplyVoltageTelemetry,
               "HL2 declares hasSupplyVoltageTelemetry=false (PATEMP, no +13.8A)");
+        // RFC #4603: the HL2 persists nothing on-radio — the client is its
+        // memory for exactly these declared domains (per-band drive/LNA maps
+        // ride the extension document, RFC PR 3).
+        using Domain = RadioCapabilities::ClientSettingsDomain;
+        check(caps.clientSettingsDomains.testFlag(Domain::Tuning)
+                  && caps.clientSettingsDomains.testFlag(Domain::Passband)
+                  && caps.clientSettingsDomains.testFlag(Domain::SpanRate)
+                  && caps.clientSettingsDomains.testFlag(Domain::RfGain)
+                  && caps.clientSettingsDomains.testFlag(Domain::TxSetpoints),
+              "HL2 declares the five client-owned settings domains");
+        check(!caps.clientSettingsDomains.testFlag(Domain::Memories),
+              "HL2 does not declare Memories (the #4590 bank folds in later)");
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -216,6 +235,10 @@ int main(int argc, char** argv)
         check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
         check(!caps.hasSupplyVoltageTelemetry,
               "Sim declares hasSupplyVoltageTelemetry=false");
+        check(caps.clientSettingsDomains
+                  == RadioCapabilities::ClientSettingsDomains{},
+              "Sim declares clientSettingsDomains EMPTY (synthetic scene "
+              "regenerates; nothing to remember)");
 
         // The surfaces the GUI drives off those flags, evaluated the way the
         // GUI evaluates them. A CONNECTED radio that says no means hidden.

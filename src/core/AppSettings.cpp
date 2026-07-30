@@ -978,6 +978,86 @@ QStringList AppSettings::stationKeysForDiagnostics() const
     return m_stationSettings.keys();
 }
 
+// ─── Radio-scoped feature documents (RFC #4603) ──────────────────────────────
+
+QJsonObject AppSettings::radioFeature(const QString& family,
+                                      const QString& radioId,
+                                      const QString& feature,
+                                      int* schemaVersionOut) const
+{
+    if (schemaVersionOut != nullptr) {
+        *schemaVersionOut = 0;
+    }
+    auto* self = const_cast<AppSettings*>(this);
+    QMutexLocker ioLocker(&self->m_saveMutex);
+    if (!m_db || !m_db->isOpen()) {
+        return {};
+    }
+    int version = 0;
+    QString value;
+    // Exact radio first, then the family-wide default row.
+    if (!self->m_db->readRadioFeature(family, radioId, feature, version, value)
+        && !(radioId.isEmpty()
+             || self->m_db->readRadioFeature(family, QString(), feature, version,
+                                             value))) {
+        return {};
+    }
+    if (value.isEmpty()) {
+        return {};
+    }
+    if (schemaVersionOut != nullptr) {
+        *schemaVersionOut = version;
+    }
+    return QJsonDocument::fromJson(value.toUtf8()).object();
+}
+
+bool AppSettings::setRadioFeature(const QString& family, const QString& radioId,
+                                  const QString& feature, int schemaVersion,
+                                  const QJsonObject& doc)
+{
+    if (family.isEmpty() || feature.isEmpty()) {
+        qWarning() << "AppSettings: refusing radio feature write without a"
+                      " family and feature name";
+        return false;
+    }
+    QMutexLocker ioLocker(&m_saveMutex);
+    {
+        QReadLocker locker(&m_lock);
+        if (m_loadState != LoadState::ReadyToSave) {
+            qWarning() << "AppSettings: refusing radio feature write —"
+                          " store not writable";
+            return false;
+        }
+    }
+    const QString value = QString::fromUtf8(
+        QJsonDocument(doc).toJson(QJsonDocument::Compact));
+    if (!m_db->begin()) {
+        return false;
+    }
+    if (!m_db->upsertRadioFeature(family, radioId, feature, schemaVersion, value)
+        || !m_db->commit()) {
+        m_db->rollback();
+        qWarning() << "AppSettings: radio feature write failed:"
+                   << m_db->lastError();
+        return false;
+    }
+    return true;
+}
+
+bool AppSettings::removeRadioFeature(const QString& family,
+                                     const QString& radioId,
+                                     const QString& feature)
+{
+    QMutexLocker ioLocker(&m_saveMutex);
+    {
+        QReadLocker locker(&m_lock);
+        if (m_loadState != LoadState::ReadyToSave) {
+            return false;
+        }
+    }
+    return m_db->removeRadioFeature(family, radioId, feature);
+}
+
 // ─── Per-station accessors ────────────────────────────────────────────────────
 
 QVariant AppSettings::stationValue(const QString& key, const QVariant& defaultValue) const

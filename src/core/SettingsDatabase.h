@@ -81,6 +81,17 @@ public:
     bool readApp(const QString& key, QString& value);
     qint64 appCount();
 
+    // radio_settings — one versioned feature document per (family, radio, feature)
+    // (RFC #4603 proposal A; radio_id "" = family-wide default row) -----------
+    bool upsertRadioFeature(const QString& family, const QString& radioId,
+                            const QString& feature, int schemaVersion,
+                            const QString& value);
+    bool readRadioFeature(const QString& family, const QString& radioId,
+                          const QString& feature, int& schemaVersion,
+                          QString& value);
+    bool removeRadioFeature(const QString& family, const QString& radioId,
+                            const QString& feature);
+
     // Transactions -----------------------------------------------------------
     bool beginExclusive();   // BEGIN EXCLUSIVE — blocks concurrent writers
     bool begin();            // BEGIN IMMEDIATE

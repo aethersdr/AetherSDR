@@ -424,6 +424,76 @@ qint64 SettingsDatabase::appCount()
     return sqlite3_column_int64(stmt.get(), 0);
 }
 
+bool SettingsDatabase::upsertRadioFeature(const QString& family,
+                                          const QString& radioId,
+                                          const QString& feature,
+                                          int schemaVersion,
+                                          const QString& value)
+{
+    Statement stmt(m_db,
+        "INSERT INTO radio_settings (family, radio_id, feature, schema_version, value) "
+        "VALUES (?1, ?2, ?3, ?4, ?5) "
+        "ON CONFLICT(family, radio_id, feature) DO UPDATE SET "
+        "schema_version = excluded.schema_version, value = excluded.value;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, family);
+    bindText(stmt.get(), 2, radioId);
+    bindText(stmt.get(), 3, feature);
+    sqlite3_bind_int(stmt.get(), 4, schemaVersion);
+    bindText(stmt.get(), 5, value);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
+bool SettingsDatabase::readRadioFeature(const QString& family,
+                                        const QString& radioId,
+                                        const QString& feature,
+                                        int& schemaVersion, QString& value)
+{
+    Statement stmt(m_db,
+        "SELECT schema_version, value FROM radio_settings "
+        "WHERE family = ?1 AND radio_id = ?2 AND feature = ?3;");
+    if (!stmt.valid()) {
+        return false;
+    }
+    bindText(stmt.get(), 1, family);
+    bindText(stmt.get(), 2, radioId);
+    bindText(stmt.get(), 3, feature);
+    if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
+        return false;
+    }
+    schemaVersion = sqlite3_column_int(stmt.get(), 0);
+    value = columnText(stmt.get(), 1);
+    return true;
+}
+
+bool SettingsDatabase::removeRadioFeature(const QString& family,
+                                          const QString& radioId,
+                                          const QString& feature)
+{
+    Statement stmt(m_db,
+        "DELETE FROM radio_settings "
+        "WHERE family = ?1 AND radio_id = ?2 AND feature = ?3;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    bindText(stmt.get(), 1, family);
+    bindText(stmt.get(), 2, radioId);
+    bindText(stmt.get(), 3, feature);
+    if (sqlite3_step(stmt.get()) != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
 bool SettingsDatabase::beginExclusive() { return exec("BEGIN EXCLUSIVE;"); }
 bool SettingsDatabase::begin()          { return exec("BEGIN IMMEDIATE;"); }
 bool SettingsDatabase::commit()         { return exec("COMMIT;"); }

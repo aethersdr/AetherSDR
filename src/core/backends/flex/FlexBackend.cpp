@@ -188,6 +188,11 @@ RadioCapabilities FlexBackend::capabilities() const
     // the client must NOT keep a local bank for a Flex — two stores that both
     // believe they are authoritative would fight over slot indices.
     caps.persistsMemories = true;
+    // The radio persists its own operating state (frequency, mode, filters,
+    // power) and restores it via GUIClientID session restore — the client must
+    // never re-assert any of it (Constitution II/III; the #2465/#4126/#4261
+    // bug class). Declared empty EXPLICITLY per the ADDING-A-FIELD contract.
+    caps.clientSettingsDomains = {};
     // The "+13.8A" meter carries the PA supply rail (measurement point A,
     // before the fuse), which the status bar renders under the PA temperature.
     caps.hasSupplyVoltageTelemetry = true;

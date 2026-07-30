@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFlags>
 #include <QString>
 #include <QVector>
 #include <QVariantMap>
@@ -76,6 +77,33 @@ struct RadioCapabilities {
     // being written into a radio that silently drops them. A backend only sets
     // this true when it can prove the radio gives the slots back.
     bool persistsMemories = false;
+
+    // Domains of OPERATING STATE this client persists and restores because the
+    // radio cannot (RFC #4603 proposal B). Constitution Principle III assigns
+    // persistence authority per value, not per family — so this is a typed set,
+    // not a boolean: a family may persist some domains on-radio and rely on the
+    // client for others (cf. persistsMemories above, the pattern this follows).
+    //
+    // EMPTY IS THE LOAD-BEARING DEFAULT: a backend that declares nothing gets
+    // NOTHING restored. For a radio that persists its own state (Flex), that is
+    // exactly the Constitution II/III rule — the client must never re-assert
+    // radio-owned values (#2465/#4126/#4261). A backend only declares a domain
+    // when the radio genuinely has no memory of it, making the client the
+    // radio's memory (HL2: "the radio reports no VFO, so the app is
+    // authoritative and must push").
+    //
+    // Restore NEVER keys transmit (Principle VI): TxSetpoints covers setpoint
+    // values (drive levels) only — the TX gate is untouched by any of this.
+    enum class ClientSettingsDomain : quint32 {
+        Tuning      = 1u << 0,  // RF frequency + demod mode
+        Passband    = 1u << 1,  // filter low/high edges
+        SpanRate    = 1u << 2,  // span / IQ sample rate
+        RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
+        TxSetpoints = 1u << 4,  // TX drive setpoints (per band); never keying
+        Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
+    };
+    Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
+    ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
@@ -179,5 +207,7 @@ struct RadioCapabilities {
     // invokeExtension(ns, …).
     QVector<QString> extensionNamespaces;
 };
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(RadioCapabilities::ClientSettingsDomains)
 
 }  // namespace AetherSDR

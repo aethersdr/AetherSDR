@@ -553,6 +553,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
     ${AETHER_SETTINGS_SOURCES}
+    src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -4249,6 +4250,15 @@ add_executable(radio_capability_gating_test tests/radio_capability_gating_test.c
 target_include_directories(radio_capability_gating_test PRIVATE src)
 target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
+
+# RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
+# capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
+# load AND store, per-radio isolation, family-wide fallback, schema tolerance.
+add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
+target_include_directories(radio_state_memory_test PRIVATE src tests)
+target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(radio_state_memory_test PROPERTIES AUTOMOC ON)
+add_test(NAME radio_state_memory_test COMMAND radio_state_memory_test)
 
 # TCI signaling on a backend with neither a Flex command plane nor a DAX data
 # plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of

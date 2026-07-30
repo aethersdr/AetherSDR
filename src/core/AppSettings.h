@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QMap>
 #include <QMutex>
 #include <QReadWriteLock>
@@ -54,6 +55,23 @@ public:
     // Per-station settings (rows in station_settings keyed by station name).
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
     void setStationValue(const QString& key, const QVariant& val);
+
+    // ── Radio-scoped feature documents (RFC #4603 proposals A/B) ─────────────
+    // One versioned JSON document per (family, radio, feature) — Constitution
+    // Principle V: one feature-owned object, one owner, one migration point.
+    // Reads and writes go straight to the database under the I/O mutex (no
+    // cache): documents are read at connect time and written debounced, and
+    // a whole-document write IS the atomic feature update (rfoust review).
+    // Read fallback: exact radio → family-wide (radioId "") → empty object.
+    // schemaVersionOut receives the stored document version (0 when absent).
+    QJsonObject radioFeature(const QString& family, const QString& radioId,
+                             const QString& feature,
+                             int* schemaVersionOut = nullptr) const;
+    bool setRadioFeature(const QString& family, const QString& radioId,
+                         const QString& feature, int schemaVersion,
+                         const QJsonObject& doc);
+    bool removeRadioFeature(const QString& family, const QString& radioId,
+                            const QString& feature);
 
     // Station name (defaults to "AetherSDR").
     QString stationName() const;

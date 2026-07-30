@@ -1179,6 +1179,16 @@ RadioCapabilities Hl2Backend::capabilities() const
     // from this radio, the supply rail is not reported at all. Only the volts
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
+    // The HL2 persists NOTHING across power cycles — "the radio reports no
+    // VFO, so the app is authoritative and must push" (pushInitialState).
+    // These are the domains the client owns as the radio's memory
+    // (RFC #4603): consumed by RadioStateMemory, wired per-domain in the
+    // RFC's PR 3 (per-band drive/LNA maps per nigelfenton's review).
+    c.clientSettingsDomains = RadioCapabilities::ClientSettingsDomain::Tuning
+                            | RadioCapabilities::ClientSettingsDomain::Passband
+                            | RadioCapabilities::ClientSettingsDomain::SpanRate
+                            | RadioCapabilities::ClientSettingsDomain::RfGain
+                            | RadioCapabilities::ClientSettingsDomain::TxSetpoints;
     // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
     return c;
 }

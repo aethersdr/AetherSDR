@@ -2,6 +2,7 @@
 
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
+#include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
@@ -1023,6 +1024,14 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "kiwi", ...).
     QString family() const { return m_family; }
+
+    // The (family, radio) handle into the radio-scoped feature-document store
+    // (RFC #4603). Identity is the family's canonical serial (Flex serial /
+    // HL2 MAC); an unconnected model yields a family-wide scope.
+    RadioSettingsScope settingsScope() const
+    {
+        return RadioSettingsScope(m_family, serial());
+    }
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend
@@ -1210,6 +1219,7 @@ private:
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
+    void handRestoredStateToBackend(const QString& serial);  // RFC #4603
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
