@@ -115,8 +115,13 @@ def sample_window(tx, dur=1.4, settle=0.2):
             m = tx.meters()
             if m.get("fwdPowerAgeMs", 1e9) < FRESH_MS and m.get("fwdPower", 0) > 0.3:
                 fwd.append(m["fwdPower"])
-            if m.get("swrAgeMs", 1e9) < FRESH_MS:
-                swr.append(m.get("swr", 0))
+            # swr is null when no live sample exists, and swrAgeMs is -1
+            # when no sample EVER arrived -- both mean "no data", not 0.0,
+            # and -1 must not pass a < FRESH_MS check (#4536).
+            swr_age = m.get("swrAgeMs", 1e9)
+            swr_val = m.get("swr")
+            if 0 <= swr_age < FRESH_MS and swr_val is not None:
+                swr.append(swr_val)
             temp.append(m.get("paTemp", 0)); volts.append(m.get("supplyVolts", 0))
             alc.append(m.get("swAlc", -150))
             pv, pa, prel = Tx.meter_from_all(m, "PACURRENT")

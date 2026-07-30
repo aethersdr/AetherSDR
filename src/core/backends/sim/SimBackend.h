@@ -45,6 +45,9 @@ public:
 
     // ---- IRadioBackend ----
     RadioCapabilities capabilities() const override;
+    // Real demodulated demo audio rides the seam; the PanadapterStream this
+    // backend also vends still carries the old shim's synthetic scene.
+    bool ownsRxAudio() const override { return true; }
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;

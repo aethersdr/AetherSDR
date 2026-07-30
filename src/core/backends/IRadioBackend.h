@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QMap>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -67,6 +68,22 @@ public:
     // ---- identity & capability (feeds the protocol `welcome`, §4.1) ----
     virtual RadioCapabilities capabilities() const = 0;
 
+    // True when this backend delivers demodulated RX audio over the seam
+    // (audioFrameReady below) rather than through a Flex PanadapterStream.
+    //
+    // This is the gate the RX-audio wiring keys off, and it is deliberately a
+    // question about THIS backend rather than a list of family names. Every
+    // previous version of that decision was a `dynamic_cast<SimBackend*>` or an
+    // `m_family != "flex"`, and each one had to be found and updated when a
+    // backend was added — the double-feed buzz (#4490) is what happens when one
+    // is missed: the sim's frames arrived over both routes and the engine
+    // consumed at double rate, measured 48043 Hz against a nominal 24000.
+    //
+    // Note this is NOT "has no PanadapterStream". The sim has BOTH: a stream
+    // carrying the old shim's synthetic scene, and real demodulated audio over
+    // the seam. It answers true because the seam is the one that is real.
+    virtual bool ownsRxAudio() const { return false; }
+
     // ---- connection lifecycle ----
     virtual void connectRadio(const RadioConnectRequest& request) = 0;
     virtual void disconnectRadio() = 0;
@@ -118,6 +135,29 @@ public:
         Q_UNUSED(hz);
     }
 
+    // Receive RF gain for a panadapter, in dB.
+    //
+    // The sibling of setPanCenter/setPanBandwidth, and it exists for the same
+    // reason: a backend whose gain lives in a hardware register (the HL2's
+    // AD9866 LNA, 0x0a) cannot be driven by "display pan set … rfgain=" wire
+    // text, so the ANT panel's RF Gain slider reached nothing and the operator
+    // had to RECONNECT to change gain — on a direct-sampling receiver, where a
+    // strong band clips the converter and there is no AGC in front of it.
+    //
+    // gainDb is the operator's value in the range the backend itself advertised
+    // via panRfGainInfoChanged. A backend clamps rather than refuses: the
+    // control is continuous, and a silently ignored end-of-travel is worse than
+    // a value that stops moving. What the hardware took comes back on
+    // panRfGainChanged.
+    //
+    // Default no-op: a Flex radio takes rfgain as wire text, so FlexBackend has
+    // nothing to do here.
+    virtual void setPanRfGain(const QString& panId, int gainDb)
+    {
+        Q_UNUSED(panId);
+        Q_UNUSED(gainDb);
+    }
+
     // How often the operator wants panadapter frames, in frames per second.
     //
     // For a backend that streams cooked spectra there is no radio-side display
@@ -142,11 +182,22 @@ public:
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key) = 0;
 
-    // Tune carrier on/off.
+    // Tune carrier on/off, at the operator's TUNE power (percent, 0..100).
     //
     // Flex takes "transmit tune N" as a text command, so FlexBackend has nothing
     // to do here. A backend that generates its own carrier implements it.
-    virtual void setTune(bool on) { Q_UNUSED(on); }
+    //
+    // tunePowerPercent is passed because a host-modulated backend has no other
+    // route to it: it raises its own carrier and sets its own drive, so without
+    // the value here it can only transmit at whatever setTxPower() last pushed —
+    // the RF Power slider. That made TUNE key at FULL power for anyone running
+    // RF 100 / Tune 10, which is the opposite of what the control is for.
+    // Defaulted so existing implementations stay source-compatible.
+    virtual void setTune(bool on, int tunePowerPercent = -1)
+    {
+        Q_UNUSED(on);
+        Q_UNUSED(tunePowerPercent);
+    }
 
     // Transmit power as a percentage, 0..100.
     //
@@ -170,6 +221,38 @@ public:
         Q_UNUSED(int16Stereo);
         Q_UNUSED(sampleRateHz);
     }
+
+    // ---- diagnostics ----
+    //
+    // A snapshot of whatever health/status registers this backend can report:
+    // converter overload, transmit FIFO depth, thermal, firmware revision, link
+    // counters. Purely for display — nothing in the app makes a decision from
+    // it, which is why it is a plain map rather than a typed delta.
+    //
+    // SYNCHRONOUS, and that is not a shortcut. Every value here is already
+    // cached in the backend from telemetry the radio sends unprompted, so there
+    // is no wire round-trip to await. Making it async would mean a dialog that
+    // renders empty and fills in later, for data that is sitting in memory.
+    // A backend whose values live on a worker thread must cache them on this
+    // one (see Hl2Backend) rather than reaching across.
+    //
+    // Two parallel outputs so the dialog does not have to know the vocabulary:
+    // `values` is the data, and `order` lists the keys in the sequence they
+    // should be displayed, so a backend controls its own grouping. Keys absent
+    // from `values` are rendered as "not reported" rather than as zero — on a
+    // health readout the difference between "0" and "we never heard" is the
+    // whole point.
+    struct HealthSnapshot {
+        QVariantMap values;
+        QStringList order;
+        // Section headings, keyed by the value-key they precede.
+        QMap<QString, QString> sections;
+        // Human-readable labels, keyed by value-key. A key with no label is
+        // displayed under its own name.
+        QMap<QString, QString> labels;
+        [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
+    };
+    virtual HealthSnapshot healthSnapshot() const { return {}; }
 
     // ---- vendor extensions (namespaced, capability-advertised) ----
     // Vendor-specific verbs that are NOT part of the core profile. Clients
@@ -295,6 +378,19 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+
+    // The RF-gain range and step this pan actually offers, in dB.
+    //
+    // Reported by the backend for the same reason the span limits are: only the
+    // backend knows. Flex learns it by asking the radio ("display pan
+    // rfgain_info"), which is a Flex command and answers nothing on any other
+    // family — so without this an HL2 kept the model's Flex-shaped -8..+32 in
+    // 8 dB steps while its AD9866 LNA actually spans -12..+48 in 1 dB steps,
+    // and two thirds of the available gain was unreachable from the slider.
+    //
+    // A backend that doesn't know simply never emits this and the model keeps
+    // its existing defaults, so this is additive for Flex.
+    void panRfGainInfoChanged(const QString& panId, int low, int high, int step);
 
     // Panadapter antenna selection (universal). Two signals because the wire may
     // report the selected RX antenna and the available list independently.

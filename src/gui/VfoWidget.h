@@ -573,6 +573,12 @@ public:
     void setDiversityAllowed(bool allowed);
     void setSmartSdrPlus(bool has);
     void setHasExtendedDsp(bool has);
+    // Whether the RADIO owns its noise reduction / blanking / auto-notch
+    // (RadioCapabilities::hasRadioSideDsp). False hides NR, NB, ANF, NRL,
+    // ANFL and ANFT — controls that on a host-demodulating backend would
+    // toggle firmware that is not there. The client-side modules in the
+    // AetherDSP applet are untouched.
+    void setHasRadioSideDsp(bool has);
 
     // Reflect whether any client-side AetherDSP NR module (NR2 / NR4 / MNR /
     // BNR / DFNR / RN2) is active by accenting the ADSP launcher, so the cue is
@@ -651,6 +657,11 @@ private:
     // (NRS/RNN/NRF) — one place so setSlice/syncFromSlice/setHasExtendedDsp
     // can't drift on the mode gate. Caller must hold a valid m_slice. (#2177)
     void updateExtendedDspVisibility();
+    // The ONE owner of the radio-side DSP buttons' visibility: ANDs each
+    // button's cached mode eligibility with m_hasRadioSideDsp. Both mode
+    // recompute sites and setHasRadioSideDsp() route through here, so no
+    // caller drives these setVisible() directly and none can race another.
+    void applyRadioSideDspVisibility();
     // RTTY Mark/Shift (shown only in RTTY mode)
     QWidget* m_rttyContainer{nullptr};
     // DIG offset (shown only in DIGL/DIGU mode)
@@ -694,6 +705,28 @@ private:
     QPushButton* m_zeroBeatBtn{nullptr};
     bool         m_hasSmartSdrPlus{false};
     bool         m_hasExtendedDsp{false};
+    // Whether the RADIO runs its own NR/NB/ANF (RadioCapabilities::
+    // hasRadioSideDsp). Defaults TRUE so a widget built before any backend has
+    // reported stays in its pre-existing state rather than briefly hiding
+    // controls that do exist.
+    bool         m_hasRadioSideDsp{true};
+    // Mode eligibility for each radio-side DSP button, cached by the two places
+    // that recompute it (the slice modeChanged handler and syncFromSlice) so
+    // applyRadioSideDspVisibility() can AND it with the capability WITHOUT
+    // re-deriving mode.
+    //
+    // Re-deriving would force a choice between those two sites' rules, and they
+    // differ: the modeChanged handler hides ANF/ANFL/ANFT for FreeDV modes
+    // (its isVoice carries a !isFdv term), syncFromSlice does not. That is a
+    // pre-existing difference — the same class of drift #2177 found on DFM — and
+    // resolving it is not this change's job. Caching keeps each site's answer
+    // exactly as it was.
+    bool         m_nrModeOk{true};
+    bool         m_nbModeOk{true};
+    bool         m_anfModeOk{true};
+    bool         m_nrlModeOk{true};
+    bool         m_anflModeOk{true};
+    bool         m_anftModeOk{true};
     // RIT/XIT tab
     QPushButton* m_ritBtn{nullptr};
     QPushButton* m_xitBtn{nullptr};

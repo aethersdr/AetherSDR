@@ -585,6 +585,7 @@ public slots:
     void setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on);
     void setKiwiSdrAudioSourceGain(const QString& sourceId, float gainPercent);
     void setKiwiSdrAudioSourceMuted(const QString& sourceId, bool muted);
+    void setKiwiSdrAudioSourceKeepDuringTx(const QString& sourceId, bool keep);
     void setKiwiSdrAudioSourcePan(const QString& sourceId, int pan);
     void setKiwiSdrAudioTransmitMuted(bool muted);
     void removeKiwiSdrAudioSource(const QString& sourceId);
@@ -718,6 +719,12 @@ private:
         int presentationDelayMs{0};
         bool enabled{false};
         bool muted{false};
+        // Transmit gating is presentation-only for managed Kiwi sources:
+        // the feed, jitter buffer, and DSP keep running through TX, and
+        // only the final mix contribution is ramped to zero. With
+        // keepAudioDuringTx set the source stays audible during TX.
+        bool keepAudioDuringTx{false};
+        float txGateGain{1.0f};
         bool prebuffering{false};
         bool dspInitializationPending{false};
     };
@@ -768,7 +775,8 @@ private:
     ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
                                                    bool create);
     bool kiwiSdrAudioActive() const;
-    bool externalKiwiSourceAudible(const ExternalRxAudioSourceState& source) const;
+    bool externalKiwiSourceProcessing(
+        const ExternalRxAudioSourceState& source) const;
     bool anyExternalKiwiAudioEnabled() const;
     bool anyExternalKiwiBufferQueued() const;
     qsizetype externalKiwiOutputBufferBytes() const;
@@ -1209,6 +1217,12 @@ private:
     std::mutex m_dspInitializationTasksMutex;
     bool m_dspInitializationStopping{false};
     std::atomic<bool> m_kiwiSdrAudioTransmitMuted{false};
+    // Audio-thread-only. TX mix gate for the delayed-Flex presentation path
+    // (mirrors ExternalRxAudioSourceState::txGateGain): with a Receive Sync
+    // delay applied, the presentation buffer holds pre-key-down RX audio
+    // that must ramp out of the mix at key-down instead of playing through
+    // the start of the transmission.
+    float             m_flexTxGateGain{1.0f};
     std::atomic<int>  m_flexReceivePresentationDelayMs{0};
     std::atomic<int>  m_kiwiReceivePresentationDelayMs{0};
     QString           m_externalKiwiReceivePresentationDelaySourceId;
@@ -1244,6 +1258,7 @@ private:
     QVector<AutomationAudioCaptureChunk> m_automationCaptureChunks;
     static constexpr int   kKiwiSdrJitterTargetMs = 360;
     static constexpr int   kKiwiSdrBufferCapMs = 1000;
+    static constexpr int   kKiwiSdrTxGateRampMs = 8;
     void resetRxChainStateForSourceSwitch();
     std::unique_ptr<Resampler> m_kiwiSdrRxResampler;
     std::unique_ptr<Resampler> m_kiwiSdrRxResamplerR;

@@ -126,6 +126,13 @@ public:
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
                                               : m_squelchLevel; }
+    // Last manual-mode threshold the operator chose for THIS slice,
+    // independent of squelchLevel() (which Auto mode also overwrites with
+    // its own computed threshold each update). RxApplet restores Manual
+    // mode's slider from this when it reattaches to a slice, so switching
+    // the active slice doesn't pull in another slice's threshold (#3326).
+    int     manualSquelchLevel() const { return m_manualSquelchLevel; }
+    void    setManualSquelchLevel(int level) { m_manualSquelchLevel = qBound(0, level, 100); }
     bool    ritOn()       const { return m_ritOn; }
     int     ritFreq()     const { return m_ritFreq; }
     bool    xitOn()       const { return m_xitOn; }
@@ -466,6 +473,7 @@ private:
     int     m_agcOffLevel{10};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
+    int     m_manualSquelchLevel{20};
     int     m_stepHz{100};
     QVector<int> m_stepList;
     bool    m_ritOn{false};

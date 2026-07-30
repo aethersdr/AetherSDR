@@ -111,6 +111,7 @@
 #include "AmpApplet.h"
 #include "MeterApplet.h"
 #include "HealthApplet.h"
+#include "GpsLocationDialog.h"   // applyCapabilitiesToUi() closes it when hasGpsLocation goes false
 #include "PersistentDialog.h"
 #include "ProfileManagerDialog.h"
 #include "ProfileImportExportDialog.h"
@@ -1076,6 +1077,11 @@ MainWindow::MainWindow(QWidget* parent)
     m_qsoRecorder = new QsoRecorder(this);
     // During playback, block live RX audio from entering the buffer
     connect(m_qsoRecorder, &QsoRecorder::muteRxRequested, this, [this](bool mute) {
+        // Covers BOTH producers. The disconnect below is the Flex path and is
+        // left exactly as it was; the flag is what mutes a seam backend, whose
+        // audio reaches the engine through RadioModel::backendAudioFrameReady
+        // and so has no stream connection to drop. (PR #4537 review.)
+        m_rxMutedForPlayback = mute;
         if (mute) {
             disconnect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                        m_audio, &AudioEngine::feedAudioData);
@@ -1085,7 +1091,7 @@ MainWindow::MainWindow(QWidget* parent)
             // never had this connection — re-adding it here would resurrect the
             // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
             // Qt permits duplicates, so every unmute would stack another copy.
-            if (!backendOwnsRxAudio()) {
+            if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
                         m_audio, &AudioEngine::feedAudioData,
                         Qt::UniqueConnection);
@@ -1175,6 +1181,7 @@ MainWindow::MainWindow(QWidget* parent)
     // the sink volume to 0 would mute our playback too.
     connect(m_finalMonitor, &ClientPuduMonitor::muteRxRequested,
             this, [this](bool mute) {
+        m_rxMutedForPlayback = mute;   // seam backends — see the recorder handler
         if (mute) {
             disconnect(m_radioModel.panStream(),
                        &PanadapterStream::audioDataReady,
@@ -1182,7 +1189,7 @@ MainWindow::MainWindow(QWidget* parent)
         } else {
             // Same rule as the QSO-recorder unmute above: never resurrect the
             // stream→sink feed for a backend that supplies its own seam audio.
-            if (!backendOwnsRxAudio()) {
+            if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(),
                         &PanadapterStream::audioDataReady,
                         m_audio, &AudioEngine::feedAudioData,
@@ -1359,11 +1366,15 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned by
     // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
-    // Every RX-audio sink for that signal — the QAudioSink feed, the QSO-recorder
-    // RX tap, and the CW/RTTY decoder feeds — is wired in one helper so a Flex-
-    // backend swap can rebind an identical set (the stream is destroyed/rebuilt
-    // on a family change; audioDataReady carries Flex RX audio itself).
+    // The QAudioSink feed is wired in one helper so a Flex-backend swap can
+    // rebind it (the stream is destroyed/rebuilt on a family change;
+    // audioDataReady carries Flex RX audio itself, so a missed rebind is
+    // silence rather than a degraded feature).
     wirePanStreamRxAudioSinks();
+    // The taps that listen alongside the speaker — QSO recorder RX, CW and RTTY
+    // — ride RadioModel's normalized bus instead, so they are wired ONCE here
+    // and are never part of the rebind. RadioModel outlives the swap.
+    wireRxDemodAudioSinks();
     // Separately, wire the backend-OWNED seam signals (audio + spectrum), which do
     // not flow through PanadapterStream: the demo/sim backend delivers RX audio and
     // its panadapter FFT directly over IRadioBackend (no VITA-49), in the same
@@ -1398,8 +1409,9 @@ MainWindow::MainWindow(QWidget* parent)
     wireKiwiSdr();
 
     // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
-    // RX (float32) comes from the panadapter stream (wired in
-    // wirePanStreamRxAudioSinks() above); TX (int16 post-limiter monitor) from
+    // RX (float32) comes from RadioModel's normalized RX-audio bus (wired in
+    // wireRxDemodAudioSinks() above), so it works on every family rather than
+    // only on one with a VITA-49 stream; TX (int16 post-limiter monitor) from
     // AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
@@ -1429,7 +1441,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in
-    // wirePanStreamRxAudioSinks() above (RX feed gated on
+    // wireRxDemodAudioSinks() above (RX feed gated on
     // CwDecodeSettings::rxEnabled(), #2417). Text/stats output is routed to the
     // pan owning the active slice via routeCwDecoderOutput(), which re-wires on
     // active slice change (#864).
@@ -1456,7 +1468,7 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
-    // RTTY decoder audio feed is wired in wirePanStreamRxAudioSinks() above,
+    // RTTY decoder audio feed is wired in wireRxDemodAudioSinks() above,
     // gated on the decoder being running.
 
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
@@ -4083,8 +4095,14 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    m_connPanel->setMinimumSize(640, 580);
-    m_connPanel->resize(760, 660);
+    // Height floor comes from the panel itself — its "Connect by IP" page grew a
+    // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
+    // page (the Advanced disclosure fell outside the mode stack). Open at
+    // exactly that floor, not floor + slack: the panel reclaims height it set
+    // itself when a page shrinks, and it can only tell its own sizing from an
+    // operator's drag if the two agree to start with.
+    m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
+    m_connPanel->resize(760, m_connPanel->minimumHeight());
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -4684,8 +4702,9 @@ void MainWindow::buildUI()
     gpsVbox->addWidget(m_gpsLabel);
     gpsVbox->addWidget(m_gpsStatusLabel);
     hbox->addWidget(gpsStack);
+    m_gpsStatusButton = gpsStack;
 
-    addSep();
+    m_gpsSeparator = addSep();
 
     // CPU (top) + Memory (bottom) stacked
     {
@@ -5137,6 +5156,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
         return;
     }
 
+    // A completed connect clears the auto-connect attempt count for that radio;
+    // a drop settles any attempt still recorded as in flight. Both go through
+    // one place so the count cannot leak across sessions.
+    noteAutoConnectFinished(connected);
+
     m_connPanel->setConnected(connected);
 
     // Demo mode: reveal the Demo Noise control tile only while connected to the
@@ -5293,6 +5317,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 menu->setRadioCapabilities(caps);
                 menu->setDeclaredBands(declaredBands);
                 menu->setXvtrBands(xvtrBands);
+                applyTuningRangeToOverlayMenu(menu);
+                applyRadioSideDspToOverlayMenu(menu);
             }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
@@ -5617,6 +5643,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
 void MainWindow::onConnectionError(const QString& msg)
 {
+    // A failed auto-connect must count, or the retry is unbounded — see
+    // maybeAutoConnectToDiscoveredRadio(). Done here rather than in that slot
+    // because this is the only place a connect is known to have ended badly.
+    noteAutoConnectFinished(false);
     m_connPanel->setStatusText("Error: " + msg);
     m_connStatusLabel->setText("Error");
     statusBar()->showMessage("Connection error: " + msg, 5000);
@@ -5769,7 +5799,7 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // HL2: HL2 demodulates in-process and audioFrameReady is its ONLY audio
     // route (Hl2Backend.cpp, emit audioFrameReady). It therefore arrived here
     // AND via the RadioModel::backendAudioFrameReady relay in
-    // MainWindow_Session.cpp, whose gate — backendOwnsRxAudio() — excludes only
+    // MainWindow_Session.cpp, whose gate — backendFeedsEngineDirectly() — excludes only
     // the sim. Every HL2 frame was delivered twice and the engine consumed at
     // double rate: measured 48043 Hz at the raw tap against a nominal 24000
     // (ratio 2.002), audible as popping and crackling on every mode.
@@ -6060,6 +6090,194 @@ void MainWindow::applyMasterVolume(int pct)
 }
 
 // onSliceAdded() / onSliceRemoved() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
+QString MainWindow::rfGainSettingsKey(SpectrumWidget* sw) const
+{
+    if (!sw)
+        return QStringLiteral("DisplayRfGain");
+    const QString base = sw->settingsKey(QStringLiteral("DisplayRfGain"));
+    const QString family = m_radioModel.backendCapabilities().family;
+    if (family.isEmpty() || family == QLatin1String("flex"))
+        return base;                       // unchanged for Flex and when unknown
+    return base + QLatin1Char('_') + family;
+}
+
+void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
+{
+    if (!menu)
+        return;
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    // Zero/zero when the backend reports no range, which the menu reads as
+    // "unconstrained" — so a Flex, and a disconnected session, both keep every
+    // band button live exactly as before.
+    menu->setTuningRangeMhz(caps.tuningMinHz / 1.0e6, caps.tuningMaxHz / 1.0e6);
+}
+
+void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps)
+{
+    // See the header for why every flag is `!connected || caps.x` and why each
+    // surface gets exactly one owning call.
+
+    // ── Profiles: the PROF applet, the Profiles menu, and both dialogs ──────
+    const bool profiles = !connected || caps.hasProfiles;
+    if (m_appletPanel) {
+        m_appletPanel->setProfilesVisible(profiles);
+    }
+    if (m_profilesMenu) {
+        // Hide the whole menu, not just its two dialog entries: the rest of it
+        // is the radio's global-profile list, which on a radio without profiles
+        // is permanently empty. A "Profiles" menu containing nothing but two
+        // dialogs that can only report emptiness is worse than no menu.
+        m_profilesMenu->menuAction()->setVisible(profiles);
+    }
+    // Close a dialog already open when the capability goes away — leaving the
+    // Profile Manager on screen listing a store the connected radio does not
+    // have is the same lie the menu entry would be.
+    if (!profiles) {
+        if (m_profileManagerDialog) {
+            m_profileManagerDialog->close();
+        }
+        if (m_profileImportExportDialog) {
+            m_profileImportExportDialog->close();
+        }
+    }
+
+    // ── DAX: the DAX and DAX-IQ applets, and the autostart toggle ──────────
+    //
+    // VISIBILITY ONLY. startDax()'s null-check on panStream() is a separate
+    // crash guard and stays exactly where it is — the two are not merged. This
+    // stops the operator being offered the controls; that stops a session that
+    // somehow reaches the bridge anyway from segfaulting on a null stream.
+    const bool dax = !connected || caps.hasDaxStreams;
+    if (m_appletPanel) {
+        m_appletPanel->setDaxStreamsVisible(dax);
+    }
+    if (m_autoDaxAction) {
+        m_autoDaxAction->setVisible(dax);
+    }
+
+    // ── Extended DSP: the NRS / RNN / NRF buttons in every slice VFO ────────
+    //
+    // Read through hasExtendedDspFilters() rather than off caps directly. That
+    // accessor already applies the permissive rule for this flag in the form it
+    // needs: disconnected, it answers from the model-name table, so unplugging
+    // restores the filters a saved session's radio model implies instead of
+    // blanking them. Taking caps.hasExtendedDsp here would force false on the
+    // disconnect edge, because the struct is default-constructed with no
+    // backend.
+    //
+    // The existing pushes at slice creation and on infoChanged stay — they
+    // cover a VFO built after this ran. This one covers the reverse: a backend
+    // revising the capability while the VFOs already exist.
+    const bool extendedDsp = m_radioModel.hasExtendedDspFilters();
+
+    // ── Radio-side DSP: NR / NB / ANF / NRL / ANFL / ANFT in every slice VFO ──
+    //
+    // Both accessors apply their own permissive rule for the disconnected case,
+    // which is why neither reads off `caps` here.
+    const bool radioSideDsp = m_radioModel.hasRadioSideDsp();
+
+    if (m_panStack) {
+        for (auto* applet : m_panStack->allApplets()) {
+            auto* sw = applet->spectrumWidget();
+            if (!sw) {
+                continue;
+            }
+            for (auto* vfo : sw->findChildren<VfoWidget*>()) {
+                vfo->setHasExtendedDsp(extendedDsp);
+                vfo->setHasRadioSideDsp(radioSideDsp);
+            }
+            // WNB lives in the pan's overlay menu, not the VFO.
+            applyRadioSideDspToOverlayMenu(sw->overlayMenu());
+        }
+    }
+
+    // ── APD: one owning method in TxApplet ANDs this with apdConfigurable ────
+    //
+    // NOT a replacement for apdConfigurable, which stays the authority on
+    // whether a Flex reports the predistorter as configurable. This is the
+    // second input: apdConfigurable only ever arrives from Flex status, so on a
+    // backend that never sends it the row's state would otherwise depend on
+    // session history rather than on the connected radio.
+    if (m_appletPanel && m_appletPanel->txApplet()) {
+        m_appletPanel->txApplet()->setRadioSideDspAvailable(radioSideDsp);
+    }
+
+    // ── The radio's 8-band hardware EQ ──────────────────────────────────────
+    //
+    // Same capability, same reasoning: EqualizerModel emits `eq RXsc`/`eq TXsc`,
+    // which reach nothing without a Flex command plane. The Aetherial RX/TX EQ
+    // tiles are untouched — on a radio with no hardware EQ they are the only
+    // equalizer the operator has.
+    if (m_appletPanel) {
+        m_appletPanel->setHardwareEqVisible(radioSideDsp);
+    }
+
+    // ── Flex platform features that are not DSP ─────────────────────────────
+    if (m_waveformsAction) {
+        m_waveformsAction->setVisible(!connected || caps.hasWaveforms);
+    }
+    if (m_multiFlexAction) {
+        m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+
+    // ── GPS: the status-bar position readout and the dialog it opens ────────
+    //
+    // Measured on a live Hermes-Lite 2 before this gate existed: the button sat
+    // `visible:true, enabled:true` reading **"[Waiting]"** indefinitely, because
+    // that radio has no GNSS receiver and so never sends a `gps` status at all.
+    // A control that can only ever say "waiting" is worse than an absent one —
+    // it reads as a fix that has not arrived yet rather than a receiver that
+    // does not exist.
+    //
+    // NB this stack carries the 10 MHz reference readout as well as the
+    // satellite count, so hiding it removes both. That is right for a radio
+    // declaring no position source — the reference lock is a GPSDO/external-10M
+    // concept and the same stack's tooltip already read "Actual: Unknown /
+    // Lock: Unlocked" on the HL2 — but it is a second surface, so it is called
+    // out here rather than left for a reviewer to find.
+    //
+    // Hidden WITH its trailing separator, or the divider is left stranded
+    // between the neighbouring telemetry stacks.
+    //
+    // The dialog is closed rather than merely unreachable, for the same reason
+    // the Profile Manager is above: a live GPS dashboard left on screen against
+    // a radio that has no receiver reports "Waiting for a valid GPS fix"
+    // forever, which reads as a broken fix rather than an absent one.
+    const bool gps = !connected || caps.hasGpsLocation;
+    if (m_gpsStatusButton) {
+        m_gpsStatusButton->setVisible(gps);
+    }
+    if (m_gpsSeparator) {
+        m_gpsSeparator->setVisible(gps);
+    }
+    if (!gps && m_gpsLocationDialog) {
+        m_gpsLocationDialog->close();  // QPointer — guarded above
+    }
+    // Recompute the status bar's floor, because these two widgets are ~90 px of
+    // it. Every other status-bar visibility site in this file pairs the two, and
+    // omitting it here happens to work only by connection order: on the connect
+    // and disconnect edges onConnectionStateChanged() recomputes AFTER this runs,
+    // because wireRadioModel() binds it before setupBackend() binds
+    // publishCapabilities. A mid-session capability revision — which
+    // capabilitiesChanged now delivers, and which is the whole point of routing
+    // through publishCapabilities() — has no such recompute behind it, and leaves
+    // the container's minimumSizeHint above the window minimum (a clipped status
+    // bar at narrow widths) or below it (a window that cannot be narrowed).
+    updateStatusBarMinimumWidth();
+
+}
+
+void MainWindow::applyRadioSideDspToOverlayMenu(SpectrumOverlayMenu* menu) const
+{
+    if (!menu) {
+        return;
+    }
+    menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
+    // The per-pan DAX button and panel, which the capability gate previously
+    // missed — so an HL2 kept IQ Ch / DAX Ch selectors that reach nothing.
+    menu->setDaxStreamsAvailable(m_radioModel.hasDaxStreams());
+}
+
 SliceModel* MainWindow::activeSlice() const
 {
     SliceModel* cached = nullptr;

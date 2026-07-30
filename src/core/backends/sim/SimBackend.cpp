@@ -294,6 +294,14 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasTuner = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
+    // The simulator has no profile store to list, load or save into.
+    caps.hasProfiles = false;
+    // Synthetic audio only; nothing to route to a virtual device.
+    caps.hasDaxStreams = false;
+    caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
+    caps.hasWaveforms = false;
+    caps.hasMultiClientSessions = false;
+    caps.hasGpsLocation = false;         // synthetic radio has no position source
     return caps;
 }
 

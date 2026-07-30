@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QString>
 
+#include <optional>
+
 // MeterDef moved to the core backend layer (aetherd RFC 2.3 / #4070) so the
 // vendor-neutral IRadioBackend can carry it on meterDefined() without a
 // model dependency. Re-exported here for the model's existing users.
@@ -86,8 +88,35 @@ public:
     float reflectedPower() const { return m_reflectedPower; }
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }
 
+    // How long after the last TX meter sample a TX-derived reading still counts
+    // as live. Matches the window AutomationServer already uses to publish
+    // `txMetersFresh` alongside these values, so the flag and the values it
+    // describes cannot disagree. (RigctlProtocol uses a tighter 1500 ms and
+    // additionally requires an active transmit — a stricter gate, not a
+    // conflicting one.)
+    static constexpr qint64 kTxMeterStaleMs = 2000;
+
     // Convenience: SWR.
+    // ⚠ May be a stale reading from a previous transmit. Callers that display
+    // it must gate on swrIfLive(); `allMeters()` and `metersForSource()`
+    // already gate their SWR entry the same way.
     float swr() const { return m_swr; }
+    // SWR when the SWR SAMPLE ITSELF is live, std::nullopt when it is not.
+    // Judged by SWR's own timestamp, not the aggregate TX stamp: a radio that
+    // keeps streaming power but stops streaming SWR must not report a
+    // minutes-old ratio as current (#4533; #4536 review). This is the one
+    // definition of "no valid SWR" — the signals' swrValid flag, both
+    // snapshot arrays and the bridge scalar all derive from the same
+    // timestamp and constant.
+    std::optional<float> swrIfLive() const;
+    // THE one liveness predicate behind swrIfLive(), the signals' swrValid
+    // flag and both snapshot arrays. SWR is live when its own sample is
+    // within swrMaxAgeMs AND, on a backend that actually publishes forward
+    // power, that power is fresh and above the qualifying floor. A backend
+    // that has never published FWDPWR (the HL2 — uncalibrated counts, its
+    // SWR stream is already power-gated at the source) is judged on the SWR
+    // sample alone, by construction rather than by exception.
+    bool swrSampleLive(qint64 nowMs, qint64 swrMaxAgeMs) const;
     float tgxlSwr() const { return m_tgxlSwr; }
 
     // Timestamp of the last TX meter sample (milliseconds since epoch).
@@ -99,6 +128,14 @@ public:
     qint64 tgxlSwrUpdatedAtMs() const { return m_lastTgxlSwrUpdateMs; }
     bool hasRecentTxMeters(qint64 maxAgeMs) const;
     bool hasRecentReflectedPower(qint64 maxAgeMs) const;
+
+    // Test seam: age the TX-meter timestamp so staleness behaviour can be
+    // exercised without sleeping through the real window.
+    void setLastTxMeterUpdateMsForTest(qint64 ms) { m_lastTxMeterUpdateMs = ms; }
+    // SWR is gated on ITS OWN timestamp (#4536), so staleness tests must age
+    // this one; ageing only the aggregate stamp exercises nothing the SWR
+    // gate reads.
+    void setLastSwrUpdateMsForTest(qint64 ms) { m_lastSwrUpdateMs = ms; }
 
     // Convenience: mic peak level (dBFS) and radio-provided compression (dB).
     float micPeak()  const { return m_micPeak; }
@@ -134,15 +171,27 @@ signals:
     void escLevelChanged(int sliceIndex, float dbm);
 
     // Emitted when TX meters change (power, SWR).
-    void txMetersChanged(float fwdPower, float swr);
+    //
+    // THE SWR-ABSENT CONTRACT (one definition for every surface — #4536):
+    // swrValid=false means "no current SWR measurement exists". The float
+    // carried alongside is 0.0f and MUST NOT be interpreted — not clamped to
+    // 1.0, not treated as the radio's <1.0 over-range sentinel, not rendered.
+    // Absence is a distinct state, exactly as the snapshot path reports
+    // has_value=false / value=null / age=-1. Whose timestamp governs: SWR'S
+    // OWN (swrUpdatedAtMs()), not FWDPWR's and not the aggregate TX stamp — a
+    // reading is absent when the SWR sample itself is old, regardless of what
+    // other meters are doing.
+    void txMetersChanged(float fwdPower, float swr, bool swrValid);
 
     // Independent directional-coupler readings for a physical cross-needle
     // display. Forward power is the raw FWDPWR sample so both movements receive
     // one layer of identical GUI ballistics. reflectedPowerMeasured is false
     // when REFPWR is unavailable/stale and the consumer must derive it from SWR.
+    // swrValid: see txMetersChanged — same contract, same timestamp.
     void directionalPowerMetersChanged(float forwardPower,
                                        float reflectedPower,
                                        float swr,
+                                       bool swrValid,
                                        bool reflectedPowerMeasured);
 
     // Emitted on every FWDPWR sample with the raw pre-smoothed value (watts).

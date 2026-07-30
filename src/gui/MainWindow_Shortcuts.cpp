@@ -746,7 +746,7 @@ void MainWindow::registerShortcutActions()
             menu->setRfGain(next);
 
         auto& settings = AppSettings::instance();
-        settings.setValue(sw->settingsKey("DisplayRfGain"), QString::number(next));
+        settings.setValue(rfGainSettingsKey(sw), QString::number(next));
         settings.save();
     };
 

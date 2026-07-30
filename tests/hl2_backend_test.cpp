@@ -21,6 +21,7 @@
 #include <QHostAddress>
 #include <QNetworkDatagram>
 #include <QScopeGuard>
+#include <QStringList>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QUdpSocket>
@@ -58,6 +59,27 @@ static void spin(int ms)
     QEventLoop loop;
     QTimer::singleShot(ms, &loop, &QEventLoop::quit);
     loop.exec();
+}
+
+// Decode the TX drive level out of an EP2 packet, if this one happens to be
+// carrying the drive C&C bank (the round robin rotates through several).
+// Returns -1 when the packet carries some other bank.
+//
+// Same decode as hl2_tx_gate_test: C0 sits at SYNC(3) into each 512-byte frame,
+// the MOX bit is masked off the address, and the drive byte is C1 at +4.
+static int ep2DriveLevel(const QByteArray& dg)
+{
+    if (dg.size() < static_cast<int>(hl2::kUsbPacketSize))
+        return -1;
+    const auto* b = reinterpret_cast<const std::uint8_t*>(dg.constData());
+    if (b[0] != 0xEF || b[1] != 0xFE || b[2] != 0x01 || b[3] != 0x02)
+        return -1;   // not EP2
+    const std::size_t frameStarts[2] = {8, 8 + hl2::kFrameSize};
+    for (const std::size_t fs : frameStarts) {
+        if ((b[fs + 3] & ~hl2::kC0MoxBit) == hl2::kC0TxDrive)
+            return b[fs + 4];
+    }
+    return -1;
 }
 
 int main(int argc, char** argv)
@@ -156,8 +178,29 @@ int main(int argc, char** argv)
     qsizetype lastSpecBytes = 0;
     QObject::connect(&backend, &IRadioBackend::spectrumFrameReady, &backend,
                      [&](int, const QByteArray& ba) { ++specCount; lastSpecBytes = ba.size(); });
+    // The passband the FIRST slice report carries, and the order in which the pan
+    // is announced versus described. Both are connect-time-only facts, so they
+    // have to be captured from before connectRadio().
+    int firstFilterLow = -1, firstFilterHigh = -1;
+    QStringList panEventOrder;
     QObject::connect(&backend, &IRadioBackend::sliceChanged, &backend,
-                     [&](int, const SliceDelta&) { ++sliceCount; });
+                     [&](int, const SliceDelta& d) {
+                         if (sliceCount == 0) {
+                             if (d.filterLow)  firstFilterLow  = *d.filterLow;
+                             if (d.filterHigh) firstFilterHigh = *d.filterHigh;
+                         }
+                         ++sliceCount;
+                     });
+    QObject::connect(&backend, &IRadioBackend::panCenterBandwidthChanged, &backend,
+                     [&](const QString&, double, double) {
+                         if (!panEventOrder.contains(QStringLiteral("geometry")))
+                             panEventOrder << QStringLiteral("geometry");
+                     });
+    QObject::connect(&backend, &IRadioBackend::panBandwidthLimitsChanged, &backend,
+                     [&](const QString&, double, double) {
+                         if (!panEventOrder.contains(QStringLiteral("limits")))
+                             panEventOrder << QStringLiteral("limits");
+                     });
 
     // ---- connect ----
     RadioConnectRequest req;
@@ -231,6 +274,28 @@ int main(int argc, char** argv)
                   && qFuzzyCompare(limitsSpy.first().at(2).toDouble(), 0.384),
               "reported limits are the real rate range, 48 kHz .. 384 kHz");
     }
+
+    // ---- the pan is ANNOUNCED before it is DESCRIBED ----
+    //
+    // RadioModel materialises the HL2's PanadapterModel from
+    // panCenterBandwidthChanged; its panBandwidthLimitsChanged handler is
+    // `if (!pan) return;` with no materialisation. onConnected() clears
+    // m_panadapters and m_activePanId synchronously inside emit connected(), so
+    // limits reported before the geometry are dropped for the whole session and
+    // nothing re-emits them — leaving the 5.4 MHz FlexLib fallback and the
+    // black-bar over-zoom. Ordering is the invariant, so assert the ordering.
+    check(panEventOrder == QStringList({QStringLiteral("geometry"),
+                                        QStringLiteral("limits")}),
+          "pan geometry is reported BEFORE the pan's zoom limits");
+
+    // ---- a fresh connect derives the passband from the MODE ----
+    //
+    // The member defaults are 150..3000, which is DIGU's passband and no other
+    // mode's. Publishing them verbatim on a default-USB connect told the UI
+    // DIGU's filter while the mode indicator read USB, and the radio was the
+    // side that was right. USB is 100..2900.
+    check(firstFilterLow == 100 && firstFilterHigh == 2900,
+          "first slice report carries USB's passband (100..2900), not the 150..3000 defaults");
 
     // ---- a span request snaps to a rate the DDC can actually run ----
     //
@@ -475,6 +540,103 @@ int main(int argc, char** argv)
     // Already down via the watchdog; disconnectRadio() must not double-report.
     check(disconnectedSpy.count() == 1, "disconnect does not re-emit disconnected()");
     check(!backend.isConnected(), "isConnected() false after disconnect");
+
+    // ---- #4549: TUNE keys at TUNE power, and ANY unkey restores RF power ----
+    //
+    // The tune carrier's amplitude is a fixed full-scale constant, so the drive
+    // register is the only thing that sets tune power. Read it off the WIRE
+    // rather than from a flag: the register is what the radio actually obeys.
+    //
+    // This runs against its own UNCAPPED fake radio, not the shared one above.
+    // EP2 is paced only while the link is alive, and the shared radio stops
+    // answering after kCap frames so the silence-watchdog assertions can fire —
+    // which starves the very stream these checks read. Its own radio also keeps
+    // the drive traffic out of the earlier assertions.
+    //
+    // Sampling rule: the drive bank is a ONE-SHOT (MetisClient::setTxDriveLevel
+    // pushes onto m_oneShot; the steady round robin carries freq/gain/ADC only),
+    // so each call puts exactly one drive packet into a FIFO. Every check clears
+    // lastDrive and THEN acts and spins, so it reads a settled queue.
+    if (caps.canTransmit) {
+        QUdpSocket tuneRadio;
+        check(tuneRadio.bind(QHostAddress::LocalHost, 0), "#4549: tune fake radio binds");
+        std::uint32_t tuneSeq = 0;
+        int lastDrive = -1;
+        QObject::connect(&tuneRadio, &QUdpSocket::readyRead, &tuneRadio, [&] {
+            while (tuneRadio.hasPendingDatagrams()) {
+                const QNetworkDatagram dg = tuneRadio.receiveDatagram();
+                const int drive = ep2DriveLevel(dg.data());
+                if (drive >= 0)
+                    lastDrive = drive;
+                // Always answer: EP2 keeps flowing only while the link is up.
+                tuneRadio.writeDatagram(fakeEp6(tuneSeq++), dg.senderAddress(), dg.senderPort());
+            }
+        });
+
+        Hl2Backend tuner;
+        RadioConnectRequest tuneReq;
+        tuneReq.host = QStringLiteral("127.0.0.1");
+        tuneReq.port = tuneRadio.localPort();
+        tuner.connectRadio(tuneReq);
+        spin(300);
+        check(tuner.isConnected(), "#4549: tune backend connects");
+
+        const auto driveFor = [](int percent) { return percent * hl2::kTxDriveMax / 100; };
+        // Settle on a known RF power, distinguishable from tune power.
+        lastDrive = -1;
+        tuner.setTxPower(100);
+        spin(200);
+        check(lastDrive == driveFor(100),
+              "#4549: RF power 100 reaches the drive register");
+
+        // TUNE at 10% must DROP the drive, not inherit the RF slider. Before the
+        // fix the register still held 255 and the tune went out at FULL power.
+        lastDrive = -1;
+        tuner.setTune(true, 10);
+        spin(200);
+        check(lastDrive == driveFor(10),
+              "#4549: TUNE drives at TUNE power, not the RF Power slider");
+
+        // The unkey that does NOT go through setTune(): the automation TX
+        // watchdog and the key verb (RadioModel.cpp:2696) and the MOX/PTT
+        // coordinator (RadioModel.cpp:674) all call setKeying(false) directly.
+        // That clears m_tuning, so restoring in setTune()'s release branch left
+        // these paths at TUNE power with setTxPower() no longer holding off —
+        // the radio stayed at 10% until the slider next moved, and the next
+        // voice transmission went out at tune power.
+        lastDrive = -1;
+        tuner.setKeying(false);
+        spin(200);
+        check(lastDrive == driveFor(100),
+              "#4549: an unkey that BYPASSES setTune() still restores RF power");
+
+        // The ordinary path — releasing the TUNE toggle — restores too.
+        tuner.setTune(true, 10);
+        spin(200);
+        lastDrive = -1;
+        tuner.setTune(false, 10);
+        spin(200);
+        check(lastDrive == driveFor(100),
+              "#4549: releasing TUNE restores RF power");
+
+        // A power change made mid-tune is the operator's intent for after the
+        // carrier drops: remembered, but not applied while the carrier is up.
+        tuner.setTune(true, 10);
+        spin(200);
+        lastDrive = -1;
+        tuner.setTxPower(40);
+        spin(200);
+        check(lastDrive == -1,
+              "#4549: a mid-tune power change does not disturb the tune carrier");
+        lastDrive = -1;
+        tuner.setTune(false, 10);
+        spin(200);
+        check(lastDrive == driveFor(40),
+              "#4549: the unkey restores the power set DURING the tune");
+
+        tuner.disconnectRadio();
+        spin(50);
+    }
 
     // ---- F4 (#4448): a connect to a radio that never answers must surface a
     // connectionError (from MetisClient::connectFailed), not wedge silently. ----

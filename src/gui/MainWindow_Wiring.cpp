@@ -1466,9 +1466,10 @@ void MainWindow::wireVfoTelemetry(VfoWidget* vfo, SliceModel* s)
         vfo->setTxCompression(compPeak);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            vfo, [vfo](float fwd, float swr) {
+            vfo, [vfo](float fwd, float swr, bool swrValid) {
         vfo->setTxPower(fwd);
-        vfo->setTxSwr(swr);
+        // Absent SWR keeps the widget's idle value rather than a stale ratio.
+        vfo->setTxSwr(swrValid ? swr : 0.0f);
     });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             vfo, &VfoWidget::setTransmitting);
@@ -1529,6 +1530,7 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             const QString& sub = m_radioModel.licenseSubscription();
             targetVfo->setSmartSdrPlus(sub.contains("SmartSDR+"));
             targetVfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
+            targetVfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
             wireVfoTelemetry(targetVfo, s);
@@ -2032,6 +2034,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Set extended DSP flag before wireVfoWidget so the mode-change lambda
         // in setSlice() gates NRL/NRS/RNN/NRF visibility correctly (#2177)
         vfo->setHasExtendedDsp(m_radioModel.hasExtendedDspFilters());
+        vfo->setHasRadioSideDsp(m_radioModel.hasRadioSideDsp());
 
         wireVfoWidget(vfo, s);
 
@@ -3154,6 +3157,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
     menu->setDeclaredBands(m_radioModel.declaredBands());
+    applyTuningRangeToOverlayMenu(menu);
+    applyRadioSideDspToOverlayMenu(menu);
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
     connect(&m_radioModel, &RadioModel::antListChanged,
@@ -4477,6 +4482,67 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // current slice/pan state untouched. Guessing is worse than failing
         // visibly because a wrong tune destroys the very band-stack state this
         // path exists to preserve.
+        // ── Radios with no band stack of their own ────────────────────────
+        //
+        // Everything below this branch is Flex band-stack machinery: it resolves
+        // a protocol band key and sends "display pan set … band=", and the radio
+        // restores frequency, mode, filters and antenna from state IT owns. A
+        // Hermes-Lite 2 owns none of that — it has no VFO to read back and no
+        // stack to restore — so that command reached nothing and the band
+        // buttons did precisely nothing on this family.
+        //
+        // Here the APP is authoritative, so the freqMhz/mode the button carries
+        // are used directly. That is the exact opposite of the rule stated above
+        // for Flex, and deliberately so: those arguments are "static UI
+        // defaults" only when something better exists, and on this family
+        // nothing does. Tuning to band centre in the band's usual mode is what
+        // every radio without a stack does.
+        if (!m_radioModel.usesFlexCommandPlane()) {
+            const RadioCapabilities caps = m_radioModel.backendCapabilities();
+            const double hz = freqMhz * 1.0e6;
+            // Refuse rather than tune somewhere the receiver cannot hear. Only
+            // when the backend actually reported a range — a backend that
+            // reports none keeps the previous unconditional behaviour.
+            if (caps.tuningMaxHz > caps.tuningMinHz
+                && (hz < caps.tuningMinHz || hz > caps.tuningMaxHz)) {
+                const QString reason =
+                    tr("%1 is outside this radio's tuning range (%2–%3 MHz)")
+                        .arg(bandName)
+                        .arg(caps.tuningMinHz / 1.0e6, 0, 'f', 3)
+                        .arg(caps.tuningMaxHz / 1.0e6, 0, 'f', 3);
+                qCWarning(lcProtocol).noquote() << "MainWindow: " << reason;
+                statusBar()->showMessage(reason, 5000);
+                return;
+            }
+
+            SliceModel* s = activeSlice();
+            if (!s) {
+                statusBar()->showMessage(tr("No active slice to tune"), 4000);
+                return;
+            }
+            clearSwrSweepForBandChange(s->sliceId(), applet->panId(), bandName);
+            m_bandSettings.setCurrentBand(bandName);
+            // MODE FIRST, then frequency. The backend adopts a mode-appropriate
+            // passband on a mode CHANGE (Hl2Backend::setSliceMode), and the
+            // frequency move is what re-selects the companion filter board — so
+            // this order leaves both the passband and the band filter settled
+            // for the band being arrived at, not the one being left.
+            if (!mode.isEmpty())
+                s->setMode(mode);
+            s->setFrequency(freqMhz);
+            // Centre the window on the new band. Without this the panadapter
+            // keeps the old band's NCO until the tune happens to fall outside
+            // the usable passband, so a band change could leave the trace
+            // centred a whole band away from the slice that just moved.
+            m_radioModel.requestPanCenter(applet->panId(), freqMhz);
+            qCDebug(lcProtocol).noquote().nospace()
+                << "MainWindow: band switch (no radio band stack) band=" << bandName
+                << " pan=" << applet->panId()
+                << " freq_mhz=" << QString::number(freqMhz, 'f', 6)
+                << " mode=" << mode;
+            return;
+        }
+
         const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
         QString stackKey = stackKeyHint;
         QString unsupportedBandReason;
@@ -4600,11 +4666,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::rfGainChanged,
             this, [this, sw, applet](int gain) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 rfgain=%2").arg(applet->panId()).arg(gain));
+        // Through the model, not raw wire text. RadioModel::setPanRfGain routes
+        // a non-Flex backend's gain through the seam (the HL2 keeps it in an
+        // AD9866 register, not in a "display pan set" command), and emitting the
+        // Flex string here bypassed that entirely — the slider moved, the value
+        // persisted, and nothing reached the radio.
+        m_radioModel.setPanRfGainFor(applet->panId(), gain);
         sw->setRfGain(gain);
         auto& s = AppSettings::instance();
-        s.setValue(sw->settingsKey("DisplayRfGain"), QString::number(gain));
+        s.setValue(rfGainSettingsKey(sw), QString::number(gain));
         s.save();
     });
     connect(menu, &SpectrumOverlayMenu::loopAToggled,
@@ -4847,6 +4917,25 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
         updateKiwiSdrVirtualTrackingForSlice(s);
+    });
+    // Re-send the tracked-slice command when the radio's CW pitch changes so
+    // an already-active KiwiSDR CW session's BFO offset stays in sync (#4423)
+    // instead of going stale until the next frequency/mode/filter edit.
+    // cwPitchChanged (not phoneStateChanged) so this doesn't re-run on every
+    // unrelated VOX/mic/dexp status update for every wired slice.
+    // Context is `s` (not `this`) so Qt disconnects when the slice dies —
+    // slices come and go far more often than MainWindow does (band changes,
+    // stale-slice pruning); that was a real UAF fixed earlier on this PR.
+    // But that leaves the captured `this` untracked by Qt's own lifetime
+    // handling, so guard it separately with a QPointer (same idiom as
+    // AetherDspWidget::onDspToggled) for the rare case MainWindow is torn
+    // down while the slice and TransmitModel are still alive.
+    QPointer<MainWindow> self(this);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwPitchChanged,
+            s, [self, s](int) {
+        if (self) {
+            self->updateKiwiSdrVirtualTrackingForSlice(s);
+        }
     });
     connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
@@ -5214,11 +5303,16 @@ void MainWindow::wireMeters()
     // exciter sample here to stop the alternating-writer pulse where exciter
     // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            this, [this](float fwd, float swr) {
+            this, [this](float fwd, float swr, bool swrValid) {
         if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate())
             return;
+        // Absent SWR is forwarded as 1.0: RadioSwrValidityFilter downstream
+        // reads <1.0 WITH forward power as the radio's over-range sentinel
+        // and would peg the S-meter full-scale on a matched antenna (#4536
+        // review, blocker 2). 1.0 is the meter's rest position.
         m_appletPanel->setStandardRadioMeterTxValues(
-            fwd, m_radioModel.meterModel().fwdPowerInstant(), swr);
+            fwd, m_radioModel.meterModel().fwdPowerInstant(),
+            swrValid ? swr : 1.0f);
 #ifdef HAVE_HIDAPI
         m_tmate2TxWatts = fwd;
         if (m_radioModel.transmitModel().isTransmitting()) {
@@ -5230,13 +5324,15 @@ void MainWindow::wireMeters()
     connect(&m_radioModel.meterModel(),
             &MeterModel::directionalPowerMetersChanged,
             this, [this](float fwd, float reflected, float swr,
-                         bool reflectedPowerMeasured) {
+                         bool swrValid, bool reflectedPowerMeasured) {
         if (m_radioModel.amplifier().present()
             && m_radioModel.amplifier().operate()) {
             return;
         }
+        // The cross-needle already clamps sub-1.0 values to 1.0 (its rest
+        // position); absent maps there explicitly rather than by accident.
         m_appletPanel->setCrossNeedleDirectionalValues(
-            fwd, reflected, swr, reflectedPowerMeasured);
+            fwd, reflected, swrValid ? swr : 1.0f, reflectedPowerMeasured);
     });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);

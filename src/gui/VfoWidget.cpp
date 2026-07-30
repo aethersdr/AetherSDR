@@ -3156,6 +3156,41 @@ void VfoWidget::updateExtendedDspVisibility()
     m_nrfBtn->setVisible(!isFm && m_hasExtendedDsp);
 }
 
+// The one owner of the radio-side DSP buttons' visibility. Each button is its
+// cached mode eligibility ANDed with the capability, so the two mode recompute
+// sites and setHasRadioSideDsp() cannot disagree about who won.
+//
+// Note the asymmetry with updateExtendedDspVisibility() above: that one derives
+// mode itself, which is safe because its three callers agreed on the rule once
+// #2177 unified them. These six do NOT have an agreed rule — see the comment on
+// m_*ModeOk in the header — so mode stays where it is computed and only the
+// capability is applied here.
+void VfoWidget::applyRadioSideDspVisibility()
+{
+    m_nrBtn->setVisible(m_nrModeOk && m_hasRadioSideDsp);
+    m_nbBtn->setVisible(m_nbModeOk && m_hasRadioSideDsp);
+    m_anfBtn->setVisible(m_anfModeOk && m_hasRadioSideDsp);
+    m_nrlBtn->setVisible(m_nrlModeOk && m_hasRadioSideDsp);
+    m_anflBtn->setVisible(m_anflModeOk && m_hasRadioSideDsp);
+    m_anftBtn->setVisible(m_anftModeOk && m_hasRadioSideDsp);
+}
+
+void VfoWidget::setHasRadioSideDsp(bool has)
+{
+    if (m_hasRadioSideDsp == has)
+        return;
+    m_hasRadioSideDsp = has;
+    // Same late-arrival hazard setHasExtendedDsp() documents below: the backend's
+    // capability can land AFTER the slice's initial DSP layout, and without a
+    // refresh here the flag would flip while the buttons kept their old state
+    // until the next mode change. Before a slice exists the two mode recompute
+    // sites read the flag on their own.
+    if (!m_slice)
+        return;
+    applyRadioSideDspVisibility();
+    relayoutDspGrid();
+}
+
 void VfoWidget::setHasExtendedDsp(bool has)
 {
     if (m_hasExtendedDsp == has)
@@ -4310,14 +4345,18 @@ void VfoWidget::setSlice(SliceModel* slice)
         }
         syncSqlVisuals();
         m_apfBtn->setVisible(isCw);
-        m_anfBtn->setVisible(isVoice);
-        m_anflBtn->setVisible(isVoice);
-        m_anftBtn->setVisible(isVoice);
+        // Mode eligibility only — applyRadioSideDspVisibility() ANDs the radio's
+        // hasRadioSideDsp capability in. The rule here is unchanged, INCLUDING
+        // isVoice's !isFdv term, which syncFromSlice() does not carry.
+        m_anfModeOk  = isVoice;
+        m_anflModeOk = isVoice;
+        m_anftModeOk = isVoice;
         // Hide all DSP buttons in FM mode
-        m_nrBtn->setVisible(!isFm);
-        m_nbBtn->setVisible(!isFm);
+        m_nrModeOk = !isFm;
+        m_nbModeOk = !isFm;
         // NRL is available on 6000-series too (#2177)
-        m_nrlBtn->setVisible(!isFm);
+        m_nrlModeOk = !isFm;
+        applyRadioSideDspVisibility();
         // 8000-series-only firmware DSP filters — shared rule (#2177)
         updateExtendedDspVisibility();
         updateDspTabAccent();
@@ -4864,13 +4903,16 @@ void VfoWidget::syncFromSlice()
     bool hasToneControls = hasFmToneControls(m_slice->mode());
     m_tabBtns[1]->setText(isFm ? "OPT" : "DSP");
     m_apfBtn->setVisible(isCw);
-    m_anfBtn->setVisible(!isRtty && !isCw && !isDig && !isFm);
-    m_anflBtn->setVisible(!isRtty && !isCw && !isDig && !isFm);
-    m_anftBtn->setVisible(!isRtty && !isCw && !isDig && !isFm);
-    m_nrBtn->setVisible(!isFm);
-    m_nbBtn->setVisible(!isFm);
+    // Mode eligibility only — see the note at the modeChanged handler. This
+    // site's ANF rule has no !isFdv term and keeps not having one.
+    m_anfModeOk  = !isRtty && !isCw && !isDig && !isFm;
+    m_anflModeOk = !isRtty && !isCw && !isDig && !isFm;
+    m_anftModeOk = !isRtty && !isCw && !isDig && !isFm;
+    m_nrModeOk = !isFm;
+    m_nbModeOk = !isFm;
     // NRL is available on 6000-series too (#2177)
-    m_nrlBtn->setVisible(!isFm);
+    m_nrlModeOk = !isFm;
+    applyRadioSideDspVisibility();
     // 8000-series-only firmware DSP filters — shared rule (#2177)
     updateExtendedDspVisibility();
     m_apfContainer->setVisible(isCw);

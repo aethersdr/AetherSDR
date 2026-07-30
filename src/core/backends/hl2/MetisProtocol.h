@@ -127,12 +127,70 @@ inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets t
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
 
+// ---- Companion filter board (J16 open-collector outputs) ----
+//
+// The HL2 has NO switchable filters of its own. What it has is seven
+// open-collector outputs in the config register at 0x00[23:17], which the
+// GATEWARE forwards as one byte to I2C address 0x20 — bits [6:0] from those
+// outputs, bit [7] from the RX-antenna bit at 0x00[13]. Nothing here writes
+// I2C: setting the config bits IS the whole mechanism (HL2 wiki, Protocol.md
+// "Filter Board"; oracle §8).
+//
+// The N2ADR companion board decodes bits 6:0 ONE-HOT into six low-pass filters
+// and one AM-broadcast-blocking high-pass. Values below are Quisk's
+// Hermes_BandDict verbatim (quisk_conf_defaults.py) — the reference client, and
+// tier 3 on the source-precedence ladder. They are reproduced rather than
+// re-derived because the grouping (60 and 40 share a filter; 17 and 15 share
+// one) is a property of that board, not something inferable from the band plan.
+//
+// A board that is absent simply has nothing listening on the I2C bus, so
+// writing these is inert on a bare HL2 — which is why this is safe to drive
+// unconditionally rather than behind a "do you have the filter board" setting.
+inline constexpr std::uint8_t kOcLpf160   = 0x01;   // 160 m low-pass
+inline constexpr std::uint8_t kOcLpf80    = 0x02;   // 80 m
+inline constexpr std::uint8_t kOcLpf60_40 = 0x04;   // 60 m + 40 m share one
+inline constexpr std::uint8_t kOcLpf30_20 = 0x08;   // 30 m + 20 m
+inline constexpr std::uint8_t kOcLpf17_15 = 0x10;   // 17 m + 15 m
+inline constexpr std::uint8_t kOcLpf12_10 = 0x20;   // 12 m + 10 m
+inline constexpr std::uint8_t kOcHpfAmBc  = 0x40;   // AM broadcast blocking HPF
+inline constexpr std::uint8_t kOcNone     = 0x00;   // every relay released
+
+// The open-collector byte for a receive/transmit frequency in Hz.
+//
+// Chosen by FREQUENCY rather than by a band name, because this has to answer
+// for the whole tuning range, not only the ten HF amateur bands: the operator
+// can park on 9 MHz shortwave or 500 kHz, and "no band matched" must still give
+// a defined filter state rather than leaving whatever the last band selected.
+//
+// Every amateur band lands on the same value Quisk's table gives it — that is
+// the check that the range boundaries are right, not an accident of rounding.
+//
+// Two deliberate departures from "always engage the HPF":
+//   - Below 1.6 MHz the AM-blocking HPF would remove exactly what is being
+//     listened to, so nothing is engaged.
+//   - On 160 m the HPF stays OUT. The HL2's own switching supply couples spurs
+//     into the filter board's 160 m and HPF inductors (HL2 wiki, Options.md),
+//     and Quisk's default omits it there for that reason.
+//   - Above 30 MHz the board has no filter at all (6 m and up), so
+//     everything is released rather than engaging a low-pass that would
+//     attenuate the very signal being received.
+std::uint8_t ocFilterByteForHz(double hz) noexcept;
+
+// Human-readable name of an open-collector filter selection, for logging.
+const char* ocFilterName(std::uint8_t oc) noexcept;
+
 // A 5-byte Command & Control payload: C0 (register address) + C1..C4 (data).
 using Cc = std::array<std::uint8_t, 5>;
 
-// Config register: sample rate + receiver count. Also carries the Mercury and
-// duplex bits for openHPSDR compatibility; both are ignored by the HL2 gateware.
-Cc ccConfig(SampleRate rate, int numRx = 1) noexcept;
+// Config register: sample rate + receiver count + the J16 open-collector filter
+// byte. Also carries the Mercury and duplex bits for openHPSDR compatibility;
+// both are ignored by the HL2 gateware.
+//
+// ocFilterByte is the value from ocFilterByteForHz(); only bits [6:0] are used
+// (they land in DATA[23:17]). Bit 7 is the RX-antenna bit and lives elsewhere in
+// the register, so it is masked off here rather than silently switching antennas
+// on a caller who passed a full I2C byte.
+Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone) noexcept;
 // RX1 NCO frequency in Hz (32-bit big-endian across C1..C4).
 Cc ccRx1Freq(std::uint32_t hz) noexcept;
 // AD9866 LNA gain in dB, clamped to [-12, +48]; C4 = 0x40 | (dB + 12).

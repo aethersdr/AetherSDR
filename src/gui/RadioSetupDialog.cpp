@@ -1086,6 +1086,14 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         m_callsignEdit = new QLineEdit(m_model->callsign());
         m_callsignEdit->setStyleSheet(kEditStyle);
+        // Named for the screen reader and for the automation bridge, which
+        // resolves controls by objectName / class / accessibleName. Both of
+        // these fields were anonymous QLineEdits among many, so neither could
+        // be driven in a test nor announced to a screen reader.
+        m_callsignEdit->setAccessibleName(tr("Station callsign"));
+        m_callsignEdit->setAccessibleDescription(
+            tr("Your callsign, used for PSK Reporter, WSPR and spotting"));
+        m_nicknameEdit->setAccessibleName(tr("Radio nickname"));
         grid->addWidget(makeInfoField(QStringLiteral("Callsign:"), m_callsignEdit),
                         1, 0);
 
@@ -1108,7 +1116,36 @@ QWidget* RadioSetupDialog::buildRadioTab()
             }
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
-            m_model->sendCommand("radio callsign " + m_callsignEdit->text());
+            // Persist client-side on EVERY family, then additionally write the
+            // radio's own copy when there is one to write.
+            //
+            // This used to be the sendCommand alone. On anything but a Flex that
+            // is text nobody is listening for: the edit was accepted, went
+            // nowhere, and the field read back blank on reopen — while PSK
+            // Reporter, the WSPR beacon and QRZ own-callsign lookup all behaved
+            // as if the station had no identity. See RadioModel::callsign().
+            //
+            // Order matters. setStationCallsign() emits callsignChanged, and
+            // RadioModel::callsign() prefers the radio's value, so on a Flex the
+            // signal must not fire before the radio has been told — otherwise a
+            // corrected callsign would publish the OLD radio value and listeners
+            // would restart against it. Send first, persist second.
+            const QString entered = m_callsignEdit->text().trimmed().toUpper();
+            // Empty is "no change", never "erase". Before the station-callsign
+            // setting existed, blanking this field sent `radio callsign ` with
+            // an empty argument and was otherwise harmless; now it would ALSO
+            // wipe a persisted setting that PSK Reporter, the WSPR beacon and
+            // QRZ lookup all read. A silent wipe of persisted state is not an
+            // acceptable cost for a stray keystroke. (PR #4537 review.)
+            if (entered.isEmpty()) {
+                m_callsignEdit->setText(m_model->callsign());
+                return;
+            }
+            if (m_model->usesFlexCommandPlane()) {
+                m_model->sendCommand("radio callsign " + entered);
+            }
+            m_model->setStationCallsign(entered);
+            m_callsignEdit->setText(entered);
         });
 
         connect(m_model, &RadioModel::infoChanged, this, [this] {
@@ -4067,6 +4104,22 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     + kCheckBoxIndicator);
                 rowLayout->addWidget(autoCheck, 4, 0, 1, 2, Qt::AlignLeft);
 
+                auto* keepTxAudioCheck = new QCheckBox;
+                keepTxAudioCheck->setText("Keep audio during TX");
+                keepTxAudioCheck->setChecked(profile.keepAudioDuringTx);
+                keepTxAudioCheck->setAccessibleName(
+                    "Keep KiwiSDR audio during transmit");
+                keepTxAudioCheck->setToolTip(
+                    "Keep playing this receiver's audio while transmitting.\n"
+                    "Off: its audio is silenced during TX and resumes "
+                    "immediately at unkey.");
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    keepTxAudioCheck,
+                    "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+                    + kCheckBoxIndicator);
+                rowLayout->addWidget(keepTxAudioCheck, 5, 0, 1, 2,
+                                     Qt::AlignLeft);
+
                 const bool activeSession =
                     kiwiState == KiwiSdrClient::State::Connecting
                     || kiwiState == KiwiSdrClient::State::Waiting
@@ -4088,7 +4141,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 kiwiRowsLayout->addWidget(rowFrame);
 
                 auto updateProfile = [this, profile, nameEdit, endpointEdit,
-                                      autoCheck] {
+                                      autoCheck, keepTxAudioCheck] {
                     const QString name = nameEdit->text().trimmed();
                     const QString endpoint =
                         KiwiSdrClient::normalizeEndpoint(endpointEdit->text());
@@ -4110,6 +4163,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     updated.name = name;
                     updated.endpoint = endpoint;
                     updated.autoConnect = autoCheck->isChecked();
+                    updated.keepAudioDuringTx = keepTxAudioCheck->isChecked();
                     m_kiwiSdrManager->updateProfile(updated);
                 };
                 connect(nameEdit, &QLineEdit::editingFinished,
@@ -4126,6 +4180,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                         profile.id, passwordEdit->text());
                 });
                 connect(autoCheck, &QCheckBox::toggled,
+                        this, [updateProfile](bool) { updateProfile(); });
+                connect(keepTxAudioCheck, &QCheckBox::toggled,
                         this, [updateProfile](bool) { updateProfile(); });
                 connect(connectButton, &QPushButton::clicked,
                         this, [this, profile, activeSession] {

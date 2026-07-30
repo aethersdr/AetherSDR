@@ -22,6 +22,13 @@ namespace AetherSDR {
 // this is the radio's *reported* self-description produced by a backend and
 // surfaced to clients. A FlexBackend may seed this FROM ModelCapabilities, but
 // the two are distinct concepts (derived-from-name vs reported-by-backend).
+//
+// ADDING A FIELD: every field below defaults to false/0/empty, so a backend
+// that omits one silently declares the feature ABSENT — set it explicitly in
+// FlexBackend, Hl2Backend AND SimBackend. Then record it in
+// docs/architecture/radio-capabilities-map.md, which maps every field to the
+// code that reads it (and lists the ones nothing reads yet). A capability no
+// consumer reads looks identical, from here, to one that works.
 struct RadioCapabilities {
     // Identity
     QString family;   // backend id: "flex", "kiwi", … (stable, lowercase)
@@ -31,6 +38,19 @@ struct RadioCapabilities {
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
+
+    // The frequency range the receiver can actually be tuned to, in Hz.
+    //
+    // Both zero means "not reported" — clients then keep whatever range they
+    // previously assumed, so this is additive for a backend that never sets it.
+    //
+    // This exists because the band buttons had no way to be honest. They are a
+    // fixed grid from 2200 m to 2 m, and every one of them was live on every
+    // radio: pressing 6 m on a direct-sampling HF receiver tuned it somewhere
+    // it cannot hear, and the operator got a dead band rather than a control
+    // that told them it was not available.
+    double tuningMinHz = 0.0;
+    double tuningMaxHz = 0.0;
 
     // Transmit — the load-bearing capability for TX safety (RFC §6). A backend
     // that cannot key sets canTransmit=false; the engine guard then denies any
@@ -51,6 +71,74 @@ struct RadioCapabilities {
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
+
+    // The RADIO stores named configuration profiles (global / TX / mic) that a
+    // client can list, load and save. The seam already carries ProfileDelta and
+    // profileChanged in both directions; this is the flag that says whether the
+    // radio has any such thing to carry. A backend whose hardware has no
+    // on-radio profile store reports false and every profile surface — the PROF
+    // applet, the Profile Manager, import/export, the Profiles menu — goes away,
+    // rather than offering an empty list the operator cannot populate.
+    bool hasProfiles = false;
+
+    // The radio can deliver per-slice receive audio and per-panadapter IQ as
+    // separate streams, which this host routes to virtual audio devices for
+    // external decoders (WSJT-X, fldigi, CW Skimmer).
+    //
+    // Named for the CONCEPT, not the brand: "DAX" is FlexRadio's name for it,
+    // but nothing about routing RX audio to a virtual device is inherently
+    // Flex-specific, and a future backend that grows the ability should be able
+    // to say so without the field reading as a vendor special case.
+    //
+    // UI VISIBILITY ONLY. The runtime guard that stops a non-Flex session
+    // reaching the bridge is a separate null-check on panStream() in
+    // MainWindow::startDax() — a crash guard, deliberately not merged with this.
+    bool hasDaxStreams = false;
+
+    // Audio DSP runs INSIDE the radio, driven by command-plane verbs, rather than
+    // on this host. True for a Flex, whose firmware owns NR/NB/ANF/NRL/ANFL/ANFT,
+    // the APD predistorter, the wideband noise blanker and the 8-band hardware
+    // equalizer; false for a direct-sampling backend like the HL2, where the host
+    // runs every one of those it has.
+    //
+    // The test for "does this belong here" is whether the control's only effect is
+    // to emit a verb the radio's firmware executes. The hardware EQ qualifies:
+    // EqualizerModel emits `eq RXsc`/`eq TXsc`, which reach nothing on a backend
+    // with no Flex command plane — the widget moves, the setting persists, and the
+    // audio is unchanged (HERMES §17's failure shape).
+    //
+    // NOT about the client-side equivalents — the AetherDSP noise modules
+    // (NR2/NR4/MNR/BNR/DFNR/RN2) and the Aetherial RX/TX EQ. Those run in this
+    // application, work on any family, and must never be gated on this. On a
+    // radio reporting false they are the ONLY audio DSP the operator has, so
+    // hiding them would leave nothing.
+    //
+    // Distinct from hasExtendedDsp, which is a narrower statement about the
+    // extra 8000-series firmware filters (NRS/RNN/NRF) on a radio that already
+    // has the base set. A radio with hasRadioSideDsp=false has neither.
+    bool hasRadioSideDsp = false;
+
+    // The radio accepts installable waveform/mode plugins (SmartSDR waveforms),
+    // so a client can offer to manage them.
+    bool hasWaveforms = false;
+
+    // Several GUI clients can hold independent sessions on the radio at once,
+    // each with its own slices and audio streams (SmartSDR multiFLEX). A backend
+    // that serves exactly one client reports false and the multi-client
+    // configuration UI goes away.
+    bool hasMultiClientSessions = false;
+
+    // The RADIO reports its own position/time from an on-board GNSS receiver, so
+    // a client can offer a live GPS readout and the station-location dashboard
+    // it feeds.
+    //
+    // This is about the radio as a POSITION SOURCE, not about the client knowing
+    // where the station is. A grid square the operator typed into settings is
+    // not this capability, and must never be gated on it — a radio with
+    // hasGpsLocation=false still has a station location, it just cannot tell you
+    // what it is. That distinction is why the flag is named for the receiver
+    // rather than for the dashboard it happens to drive today.
+    bool hasGpsLocation = false;
 
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile

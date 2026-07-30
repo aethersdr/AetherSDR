@@ -156,9 +156,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::radioTransmittingChanged, this,
             &TciServer::onRadioTransmittingChanged);
         connect(&m_model->meterModel(), &MeterModel::txMetersChanged,
-                this, [this](float fwd, float swr) {
+                this, [this](float fwd, float swr, bool swrValid) {
             m_cachedFwdPower = fwd;
-            m_cachedSwr = swr;
+            // TCI's wire format has no absent marker; 1.0 is what this cache
+            // held before any SWR arrived, so absence maps back to it rather
+            // than to 0.0 (which is out of the meter's domain).
+            m_cachedSwr = swrValid ? swr : 1.0f;
         });
         connect(&m_model->meterModel(), &MeterModel::micMetersChanged,
                 this, [this](float micLevel, float, float, float) {

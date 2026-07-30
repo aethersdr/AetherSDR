@@ -529,6 +529,7 @@ set(CORE_SOURCES
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2EmergencyStop.cpp # release the radio from a signal handler
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
@@ -930,6 +931,7 @@ set(GUI_SOURCES
     src/gui/TitleBar.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
+    src/gui/RadioHealthDialog.cpp
     src/gui/KeyboardMapWidget.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/MultiFlexDialog.cpp
@@ -2623,6 +2625,29 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 live band-filter probe — REQUIRES REAL HARDWARE, so deliberately NOT
+# registered with add_test(). Build it and run it by hand against a radio:
+#   cmake --build build --target hl2_live_band_filter_probe
+#   ./build/hl2_live_band_filter_probe 192.168.1.21
+add_executable(hl2_live_band_filter_probe EXCLUDE_FROM_ALL
+    tests/hl2_live_band_filter_probe.cpp)
+target_include_directories(hl2_live_band_filter_probe PRIVATE src)
+target_link_libraries(hl2_live_band_filter_probe PRIVATE aethercore Qt6::Core Qt6::Network)
+
+# A killed AetherSDR must still release the radio. A child process runs a real
+# MetisClient against a fake radio; the Python driver kills it and requires a
+# metis-stop datagram to arrive. End-to-end on purpose — see the .py header.
+add_executable(hl2_signal_stop_child tests/hl2_signal_stop_child.cpp)
+target_include_directories(hl2_signal_stop_child PRIVATE src)
+target_link_libraries(hl2_signal_stop_child PRIVATE aethercore Qt6::Core Qt6::Network)
+find_package(Python3 COMPONENTS Interpreter)
+if(NOT WIN32 AND Python3_Interpreter_FOUND)
+    add_test(NAME hl2_signal_stop_test
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/hl2_signal_stop_test.py
+                     $<TARGET_FILE:hl2_signal_stop_child>)
+endif()
+
 # HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
 add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
 target_include_directories(hl2_metis_client_test PRIVATE src)
@@ -4121,6 +4146,15 @@ target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
 
+# Capability-gated UI surfaces (hasProfiles / hasDaxStreams / hasExtendedDsp):
+# every backend declares each flag explicitly, the RadioModel relay fires on
+# both connection edges, and the `!connected || caps.hasX` rule the GUI applies
+# restores the permissive value on disconnect.
+add_executable(radio_capability_gating_test tests/radio_capability_gating_test.cpp)
+target_include_directories(radio_capability_gating_test PRIVATE src)
+target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
+
 # TCI signaling on a backend with neither a Flex command plane nor a DAX data
 # plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of
 # the file compiles wherever HAVE_WEBSOCKETS is set for aethercore.
@@ -4508,6 +4542,11 @@ target_include_directories(transmit_inhibit_policy_test PRIVATE src)
 target_link_libraries(transmit_inhibit_policy_test PRIVATE Qt6::Core)
 add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
+add_executable(kiwi_sdr_tx_mute_policy_test
+    tests/kiwi_sdr_tx_mute_policy_test.cpp
+)
+target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )

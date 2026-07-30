@@ -52,6 +52,11 @@ public:
         // a board for more receivers than it has is a configuration the
         // gateware cannot honour, and it does not report the refusal.
         int boardMaxRx = 0;
+        // J16 open-collector filter selection (MetisProtocol kOc* bits). Rides
+        // the config register, so it is part of the same Params the config
+        // register is rebuilt from — see setSampleRate() for why a field that
+        // shares a register with another has to be carried, not re-defaulted.
+        std::uint8_t ocFilterByte = kOcNone;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -80,6 +85,18 @@ public:
     Q_INVOKABLE void setRxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setSampleRate(SampleRate rate);
     Q_INVOKABLE void setLnaGainDb(int db);
+    // Select the companion filter board's band filter (MetisProtocol kOc* bits).
+    //
+    // Latched into the config register and sent on the next round, and ALSO
+    // pushed as a one-shot so the relays move with the band change rather than
+    // up to three EP2 frames later. Filter switching that lags the retune is
+    // the failure mode that matters on transmit.
+    // Takes int, not uint8_t: this crosses threads via
+    // QMetaObject::invokeMethod, which matches Q_ARG against the type name moc
+    // recorded from this declaration, and `std::uint8_t` does not normalize to
+    // the same string as `unsigned char`.
+    Q_INVOKABLE void setBandFilter(int ocFilterByte);
+    [[nodiscard]] std::uint8_t bandFilter() const noexcept { return m_params.ocFilterByte; }
     // Queue a one-shot filter-pipeline reset (MetisProtocol kC0Sync) to be sent
     // on the next EP2 frame, ahead of the round robin.
     Q_INVOKABLE void requestPipelineReset();

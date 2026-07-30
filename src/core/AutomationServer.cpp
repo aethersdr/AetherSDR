@@ -1900,7 +1900,12 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
          age(m->reflectedPowerUpdatedAtMs())},
         {QStringLiteral("reflectedPowerMeasured"),
          m->hasRecentReflectedPower(500)},
-        {QStringLiteral("swr"),             m->swr()},
+        // Null rather than a stale ratio, matching the SWR entry in `all` and
+        // the fwdPower/reflectedPower pair above — a client reading this scalar
+        // must not get a different answer from the one reading the array
+        // (#4533). swrAgeMs is still reported so a consumer can see WHY.
+        {QStringLiteral("swr"),
+         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          m->paTemp()},             // °C
         {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
@@ -1912,7 +1917,10 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
         {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
         {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
-        {QStringLiteral("txMetersFresh"),   m->hasRecentTxMeters(2000)},
+        // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
+        // SWR is live" cannot drift apart as two different literals.
+        {QStringLiteral("txMetersFresh"),
+         m->hasRecentTxMeters(MeterModel::kTxMeterStaleMs)},
         {QStringLiteral("txMetersAgeMs"),   age(m->txMetersUpdatedAtMs())},
         {QStringLiteral("all"),             all},                     // every meter + age_ms + reliability
     };
@@ -5189,18 +5197,36 @@ QJsonObject AutomationServer::doConnect(const QString& action,
     }
 
     if (a == QLatin1String("ip")) {
-        const QString target = arg.trimmed();
-        if (target.isEmpty()) {
+        // connect ip <host-or-ip> [flex|hl2]
+        // The optional family picks which wire protocol to probe. Omitted keeps
+        // whatever the connect dialog's radio-type selector is set to, so every
+        // pre-existing `connect ip <addr>` script keeps working.
+        static const QRegularExpression ipTokenSep(QStringLiteral("\\s+"));
+        const QStringList ipTokens = arg.trimmed().split(ipTokenSep,
+                                                         Qt::SkipEmptyParts);
+        if (ipTokens.isEmpty()) {
             return err(QStringLiteral("connect ip requires a host or IP address"));
+        }
+        const QString target = ipTokens.first();
+        QString family;
+        if (ipTokens.size() > 1) {
+            family = ipTokens.at(1).toLower();
+            if (family != QLatin1String("flex") && family != QLatin1String("hl2")) {
+                return err(QStringLiteral("connect ip radio type must be flex or hl2, got '%1'")
+                               .arg(ipTokens.at(1)));
+            }
+        }
+        if (ipTokens.size() > 2) {
+            return err(QStringLiteral("connect ip takes at most <host-or-ip> [flex|hl2]"));
         }
 
         QPointer<QObject> guard(conn->asQObject());
-        QTimer::singleShot(0, qApp, [guard, conn, target] {
+        QTimer::singleShot(0, qApp, [guard, conn, target, family] {
             if (!guard) {
                 return;
             }
             QString error;
-            if (!conn->automationConnectByIp(target, &error)) {
+            if (!conn->automationConnectByIp(target, family, &error)) {
                 qCWarning(lcAutomation).noquote()
                     << "connect ip failed after scheduling:" << error;
             }
@@ -5209,6 +5235,7 @@ QJsonObject AutomationServer::doConnect(const QString& action,
             {QStringLiteral("ok"), true},
             {QStringLiteral("connect"), QStringLiteral("ip")},
             {QStringLiteral("target"), target},
+            {QStringLiteral("family"), family.isEmpty() ? QStringLiteral("dialog") : family},
             {QStringLiteral("requested"), true},
             {QStringLiteral("deferred"), true},
         };
