@@ -2804,8 +2804,9 @@ void MainWindow::wireExternalControllers()
                     m_dialActiveMidiGates.insert(id);
                     p->setter(p->rangeMax);
                 } else if (action == 0) {
-                    m_dialActiveMidiGates.remove(id);
-                    p->setter(p->rangeMin);
+                    if (m_dialActiveMidiGates.remove(id)) {
+                        p->setter(p->rangeMin);
+                    }
                 }
             }
         }
