@@ -547,6 +547,46 @@ void testStaleTxMetersDoNotSuppressReceiveMeters()
 // exactly when it is needed and the reader would take the held wattage for a
 // live one. Both derive from hasRecentTxMeters(kTxMeterStaleMs); this pins that
 // they cannot disagree. (#4533 review)
+// Suppression must not LATCH. After a stale window, the next SWR sample has to
+// restore liveness — that is the property an operator depends on the first time
+// they key up following a long receive period, and it is the one direction the
+// other tests never exercise: they start fresh and go stale, never the reverse.
+//
+// Without this, a regression that suppressed SWR permanently once it had aged
+// out would still pass every other case here. (#4536 review)
+void testSwrRecoversAfterAFreshSampleFollowsAStaleWindow()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.updateValues({10}, {rawDb(2.88f)});
+    const bool liveBefore = model.swrIfLive().has_value();
+
+    // Age it past the window, the way a long receive period would.
+    model.setLastTxMeterUpdateMsForTest(
+        QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    model.setLastSwrUpdateMsForTest(
+        QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    const bool suppressedWhileStale = !model.swrIfLive().has_value();
+    const QJsonObject staleEntry = meterNamed(model.allMeters(), QStringLiteral("SWR"));
+    const bool arrayAbsentWhileStale =
+        !staleEntry.value(QStringLiteral("has_value")).toBool();
+
+    // Key up again: one fresh sample, nothing else changed.
+    model.updateValues({10}, {rawDb(1.42f)});
+
+    const auto recovered = model.swrIfLive();
+    const QJsonObject liveEntry = meterNamed(model.allMeters(), QStringLiteral("SWR"));
+
+    report("MeterModel restores SWR liveness when a fresh sample follows a stale window",
+           liveBefore && suppressedWhileStale && arrayAbsentWhileStale
+               && recovered.has_value() && nearlyEqual(*recovered, 1.42f)
+               && liveEntry.value(QStringLiteral("has_value")).toBool()
+               && nearlyEqual(
+                      static_cast<float>(liveEntry.value(QStringLiteral("value")).toDouble()),
+                      1.42f));
+}
+
 void testSwrLivenessAgreesWithTxMeterFreshness()
 {
     MeterModel model;
@@ -595,6 +635,7 @@ int main(int argc, char** argv)
     testSwrWithoutForwardPowerBackendIsValid();
     testStaleSwrIsAlsoSuppressedInMetersForSource();
     testStaleTxMetersDoNotSuppressReceiveMeters();
+    testSwrRecoversAfterAFreshSampleFollowsAStaleWindow();
     testSwrLivenessAgreesWithTxMeterFreshness();
 
     return g_failed == 0 ? 0 : 1;
