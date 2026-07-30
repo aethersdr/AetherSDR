@@ -943,7 +943,7 @@ private:
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
-        // Heap-indirected (#4423): DssRenderer embeds four fixed-size
+        // Heap-indirected (#4595): DssRenderer embeds four fixed-size
         // std::array<std::array<...>> row buffers (~800KB total). Storing it
         // by value here meant every stack-local WaterfallStreamState — e.g.
         // restoreCurrentWaterfallStreamState()'s `restored` / `updated` —

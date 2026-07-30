@@ -6174,7 +6174,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
     updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
     updated.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
-    updated.dss = std::make_shared<DssRenderer>(std::move(m_dss));
+    *updated.dss = std::move(m_dss);
     updated.kiwiDisplayFloorDbm = m_kiwiSdrDisplayFloorDbm;
     updated.kiwiDisplayCeilDbm = m_kiwiSdrDisplayCeilDbm;
     updated.kiwiDisplayRangeValid = m_kiwiSdrDisplayRangeValid;
