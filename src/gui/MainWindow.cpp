@@ -4096,9 +4096,12 @@ void MainWindow::buildUI()
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     // Height floor comes from the panel itself — its "Connect by IP" page grew a
     // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
-    // page (the Advanced disclosure fell outside the mode stack).
+    // page (the Advanced disclosure fell outside the mode stack). Open at
+    // exactly that floor, not floor + slack: the panel reclaims height it set
+    // itself when a page shrinks, and it can only tell its own sizing from an
+    // operator's drag if the two agree to start with.
     m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
-    m_connPanel->resize(760, m_connPanel->minimumHeight() + 20);
+    m_connPanel->resize(760, m_connPanel->minimumHeight());
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -5151,6 +5154,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
         return;
     }
 
+    // A completed connect clears the auto-connect attempt count for that radio;
+    // a drop settles any attempt still recorded as in flight. Both go through
+    // one place so the count cannot leak across sessions.
+    noteAutoConnectFinished(connected);
+
     m_connPanel->setConnected(connected);
 
     // Demo mode: reveal the Demo Noise control tile only while connected to the
@@ -5632,6 +5640,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
 void MainWindow::onConnectionError(const QString& msg)
 {
+    // A failed auto-connect must count, or the retry is unbounded — see
+    // maybeAutoConnectToDiscoveredRadio(). Done here rather than in that slot
+    // because this is the only place a connect is known to have ended badly.
+    noteAutoConnectFinished(false);
     m_connPanel->setStatusText("Error: " + msg);
     m_connStatusLabel->setText("Error");
     statusBar()->showMessage("Connection error: " + msg, 5000);

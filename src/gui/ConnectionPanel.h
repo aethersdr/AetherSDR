@@ -128,12 +128,25 @@ private:
     QString currentManualFamily() const;
     void setManualFamily(const QString& family);
     void updateManualFamilyHints();
-    // Directed (unicast) Metis discovery against one host. Returns true when an
-    // HL2 answered and the connect/refusal has been reported; false means no
-    // Hermes-Lite 2 replied and the caller owns the error message.
-    bool probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
+    // Directed (unicast) Metis discovery against one host.
+    //
+    // Three outcomes, not two: "nothing answered" and "we never got to ask" need
+    // different messages, and collapsing them into a bool sent the operator to
+    // power-cycle a radio that was never contacted. Only NoAnswer leaves the
+    // error message to the caller — the other two have already reported.
+    enum class Hl2ProbeResult {
+        Answered,      // an HL2 replied; connect or refusal already reported
+        NoAnswer,      // nothing replied within the deadline; caller owns the message
+        NotAttempted,  // never got to ask — bind, resolve or send failed; reported here
+    };
+    Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
     void resetManualConnectButton();
+    // Grow the dialog when the current page needs more room than it has. The
+    // manual page's height is not constant — the Advanced source-path section
+    // expands, and the result line wraps — and a dialog that cannot grow makes
+    // Qt overlap the rows instead. Cheap and idempotent; safe to call often.
+    void refitToContent();
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp);
@@ -189,6 +202,9 @@ private:
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
     bool         m_manualConnectPending{false};
+    // Last height refitToContent() set, so it can tell its own sizing from a
+    // height the operator dragged to and only reclaim the former.
+    int          m_autoFitHeight{0};
 
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry
