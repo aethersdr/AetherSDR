@@ -2271,12 +2271,12 @@ running across a real over before deciding it needs a hold-off.
 
 ---
 
-## 19. Four receivers
+## 20. Four receivers
 
 The backend ran one DDC. It now runs up to four, each with its own NCO, WDSP
 channel, spectrum, slice and panadapter. Closes backlog items 7 and 20.
 
-### 19.1 One ADC, four receivers — the distinction that shapes everything
+### 20.1 One ADC, four receivers — the distinction that shapes everything
 
 The HL2 has a single AD9866. "Four receivers" means four DDCs behind one
 converter, so the split between what is per-receiver and what is shared is not
@@ -2292,7 +2292,7 @@ a style choice — it is the hardware:
 Anything shared that gets stored per receiver gives four receivers four
 opinions about one register, and the last writer wins silently.
 
-### 19.2 The EP6 payload geometry is not a constant
+### 20.2 The EP6 payload geometry is not a constant
 
 The payload is a sequence of ROUNDS: one sample from every active receiver plus
 a 2-byte mic word, so a round is `6N + 2` bytes and the per-packet sample count
@@ -2323,13 +2323,13 @@ of 8 bytes whatever N is. It was sharing the EP6 constants; they are now
 separate (`kTxSampleBytes`, `kTxSamplesPerPacket`) so adding receivers cannot
 reshape the transmit packet or move its pacing.
 
-### 19.3 The receiver count field is FOUR bits
+### 20.3 The receiver count field is FOUR bits
 
 `0x00[6:3]`, `0000`=1 to `1011`=12. The encoder masked with `0x07`, which capped
 the encodable count at 8 and would have wrapped 9..12 into 1..4 — a request for
 nine receivers configuring the radio for one. Latent while only one ran.
 
-### 19.4 The link budget is a real limit, not a footnote
+### 20.4 The link budget is a real limit, not a footnote
 
 Both axes cost bandwidth: more receivers shrink the per-receiver payload of a
 fixed-size packet, so the radio sends more packets. Sustained EP6 wire rate,
@@ -2349,7 +2349,7 @@ and 3 at 384 kHz, at a 70% budget. The reported zoom LIMITS shrink with the
 receiver count, so the operator cannot reach a span that would then be refused —
 a refused control reads as broken, an absent one reads as a limit.
 
-### 19.5 Agree-or-bypass on the shared filter board
+### 20.5 Agree-or-bypass on the shared filter board
 
 One relay bank, four receivers, four possible opinions.
 
@@ -2381,7 +2381,7 @@ band filter: 0x44 (HPF + 60/40m LPF) for 7.200000 MHz — was 0x00, trigger=tune
 bypassed bank because another receiver was parked elsewhere would put harmonics
 on the air, and no receive-side convenience justifies that.
 
-### 19.6 Transmit stays singular
+### 20.6 Transmit stays singular
 
 One transmitter, however many receivers. Exactly one slice reports
 `txSlice=true`, and the TX NCO, mode and passband follow *that* receiver.
@@ -2393,10 +2393,10 @@ interlock would find one whichever pane was selected, and the operator could key
 from a receiver the TX NCO is not following.
 
 The operator can MOVE it (the VFO panel's TX indicator, `IRadioBackend::
-setTxSlice`), and the same singularity applies to the ACTIVE slice — see 19.13,
+setTxSlice`), and the same singularity applies to the ACTIVE slice — see 20.13,
 where publishing either one unconditionally is what actually went wrong.
 
-### 19.7 Host-side audio mixing
+### 20.7 Host-side audio mixing
 
 A Flex sums its slices on-radio and sends one stream. An HL2 demodulates every
 receiver on this host, so the sum is ours.
@@ -2410,7 +2410,7 @@ strictly worse than the fault it reacts to.
 Clamped, not scaled by 1/N. Dividing would make every slice quieter the moment a
 second one is opened, which an operator reads as the radio going deaf.
 
-### 19.8 Ordering: DSP chains are built BEFORE start()
+### 20.8 Ordering: DSP chains are built BEFORE start()
 
 Opening a WDSP channel costs ~17 s on a first run (FFTW wisdom) and runs on the
 I/O thread — **the thread that paces EP2**. Configuring after `start()` stalls
@@ -2427,7 +2427,7 @@ the radio must not disagree about how many receivers exist, because the EP6
 payload carries no receiver-count field and a mismatch reinterprets every round
 with no error anywhere.
 
-### 19.9 Seam gap this exposed: pan-id namespaces
+### 20.9 Seam gap this exposed: pan-id namespaces
 
 `RadioModel` materialised exactly one panadapter for a non-Flex backend —
 `ensureOwnedPanadapter(neutralPanIdString(0))`, hardcoded in three places — and
@@ -2443,7 +2443,7 @@ Backend pan ids are now translated through a first-seen-order allocator and stay
 OPAQUE in both directions — `RadioModel` does not parse a family's naming scheme,
 and a backend does not learn about the `0xE1000000` stream-id space.
 
-### 19.10 The dynamic lifecycle: receivers come and go while the radio runs
+### 20.10 The dynamic lifecycle: receivers come and go while the radio runs
 
 The count was fixed at connect, from a persisted setting. It is now the
 operator's, at runtime: "Add Panadapter" and the pane close button. Connect
@@ -2468,7 +2468,7 @@ Two things must be re-asserted after a removal, because nothing reads them back:
   and the NCO registers are addressed by that slot.
 - **Transmit ownership**, if it lived on the closed receiver.
 
-### 19.11 Identifier allocation after a removal — the same bug three times
+### 20.11 Identifier allocation after a removal — the same bug three times
 
 This is the most transferable lesson in the section. Three separate allocators
 picked *the next* identifier instead of *the lowest free* one, which is only
@@ -2498,7 +2498,7 @@ streams `numRx` contiguous receivers and the index is the slot in the EP6
 round), while UI numbers and pan ids must NOT be. `hl2RoleAfterRemove()` states
 the three-case rule once — below the removed index, above it, or on it.
 
-### 19.12 A closing receiver retires its slice AND its pan
+### 20.12 A closing receiver retires its slice AND its pan
 
 `removePanadapter` emitted only `panRemoved`. The `SliceModel` outlived its
 receiver, still naming a pan id that no longer existed, and `slices().size()`
@@ -2508,10 +2508,10 @@ On a backend where a slice IS a receiver, both go. `IRadioBackend::sliceRemoved`
 already existed for the Flex path; it simply had no HL2 emitter.
 
 **Invariant worth asserting directly: pan count and slice count move in
-lockstep on this backend.** Every bug in 19.11 and 19.12 shows up as those two
+lockstep on this backend.** Every bug in 20.11 and 20.12 shows up as those two
 numbers disagreeing.
 
-### 19.13 Exactly one: the singular roles
+### 20.13 Exactly one: the singular roles
 
 Two roles are singular, and publishing them unconditionally was correct while
 there was one slice and wrong at two.
@@ -2531,7 +2531,7 @@ republish BOTH the old and the new slice. Keep them separate: listening on one
 slice while transmitting on another is routine, so selecting a pane must not
 drag transmit with it.
 
-### 19.14 The recurring failure shape: Flex wire text on a seam backend
+### 20.14 The recurring failure shape: Flex wire text on a seam backend
 
 Every remaining multi-DDC defect this session had the same shape, and it is
 worth naming because it will recur for every feature added from here.
@@ -2569,7 +2569,7 @@ Two authority bugs of the same family: `maxPanadapters()` and `maxSlices()` read
 a board reporting four. `TciServer`'s own comment had recorded the consequence
 and it was still true.
 
-### 19.15 Certification targets — invariants, and the bridge verbs that check them
+### 20.15 Certification targets — invariants, and the bridge verbs that check them
 
 Written as propositions rather than steps, because each one is a defect this
 session actually produced. All are reachable from the automation bridge with a
@@ -2580,7 +2580,7 @@ simulator; none needs hardware.
 1. Connect yields exactly one receiver, with no settings file.
    `get radio` → `panCount == 1 && sliceCount == 1`
 2. `panCount == sliceCount` after EVERY create and remove. The single most
-   productive assertion in this section — 19.11 and 19.12 all violate it.
+   productive assertion in this section — 20.11 and 20.12 all violate it.
 3. Adds are refused at the board's reported count, not a model-string default.
    `pan create` × N → the (N+1)th returns `ok:false`, and the limit in the
    message equals discovery byte `0x13`.
@@ -2626,7 +2626,7 @@ create|remove|rfgain`, `slice select|tx`, `tune`, `get radio|slices|pans|slice`,
 real certification cases: a verb for per-slice mute/gain/balance (today only
 reachable by clicking the applet), and one for pane pop-out / maximize.
 
-### 19.16 What is proven, and what is not
+### 20.16 What is proven, and what is not
 
 **Proven against `hpsdrsim -hermeslite2 -P1`:** four receivers configured and
 streaming; four independent NCOs; four panadapters with their own spectrum and
@@ -2675,5 +2675,5 @@ confirming it (§7, and the wrong-sideband account in §14.6).
   at 4 × 192 kHz with four panadapters rendering. That is a whole-app number from
   the status bar, not a profile.
 - **None of it is automated yet.** Hardware verification does not survive a
-  refactor; §19.15 lists the invariants to turn into certification cases so that
+  refactor; §20.15 lists the invariants to turn into certification cases so that
   it does.
