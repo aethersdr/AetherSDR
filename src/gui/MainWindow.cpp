@@ -6253,6 +6253,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (!gps && m_gpsLocationDialog) {
         m_gpsLocationDialog->close();  // QPointer — guarded above
     }
+    // Recompute the status bar's floor, because these two widgets are ~90 px of
+    // it. Every other status-bar visibility site in this file pairs the two, and
+    // omitting it here happens to work only by connection order: on the connect
+    // and disconnect edges onConnectionStateChanged() recomputes AFTER this runs,
+    // because wireRadioModel() binds it before setupBackend() binds
+    // publishCapabilities. A mid-session capability revision — which
+    // capabilitiesChanged now delivers, and which is the whole point of routing
+    // through publishCapabilities() — has no such recompute behind it, and leaves
+    // the container's minimumSizeHint above the window minimum (a clipped status
+    // bar at narrow widths) or below it (a window that cannot be narrowed).
+    updateStatusBarMinimumWidth();
 
 }
 
