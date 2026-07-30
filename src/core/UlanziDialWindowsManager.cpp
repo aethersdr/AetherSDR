@@ -274,9 +274,9 @@ void UlanziDialWindowsManager::emitKeyTransition(int linuxKey, int value)
         if (!m_ctrlDown) {
             if (m_lastNonModKey != -1) {
                 emit buttonEvent(chordSignature(m_lastNonModKey, m_prevsongAlongsideCtrl), 0);
-                m_lastNonModKey = -1;
-                m_prevsongAlongsideCtrl = false;
             }
+            m_lastNonModKey = -1;
+            m_prevsongAlongsideCtrl = false;
         }
         return;
     }

@@ -59,10 +59,19 @@ public:
     // device event maps to.  Returns empty string if no pill claims it.
     static QString pillForSignature(const QString& signature);
 
-    // AppSettings key for the user-chosen action on a given pill.  Used
-    // both by the dialog (to load/save the combo selection) and by
-    // MainWindow's dispatcher (to look up what to do on press).
+    // AppSettings root key for all Ulanzi Dial mappings ("UlanziDialMappings").
+    static QString rootSettingsKey();
+
+    // Legacy per-pill AppSettings key (e.g. "UlanziDial_action_top_left").
+    // Retained for backward-compatibility lookup during JSON migration.
     static QString actionSettingsKey(const QString& pillId);
+
+    // Returns the active action ID for a pill (checking JSON config, legacy keys,
+    // and falling back to defaultActionForPill).
+    static QString actionForPill(const QString& pillId);
+
+    // Binds an action ID to a pill in AppSettings JSON and persists immediately.
+    static void setActionForPill(const QString& pillId, const QString& actionId);
 
     // Built-in default action for a pill (e.g. "shortcut:mox_toggle"),
     // used by MainWindow's dispatcher as the AppSettings fallback so

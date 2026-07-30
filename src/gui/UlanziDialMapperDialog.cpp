@@ -13,6 +13,8 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
@@ -452,9 +454,45 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
     // the dial body so the spatial mapping is conveyed by adjacency.
 }
 
+QString UlanziDialMapperDialog::rootSettingsKey()
+{
+    return QStringLiteral("UlanziDialMappings");
+}
+
 QString UlanziDialMapperDialog::actionSettingsKey(const QString& pillId)
 {
     return QStringLiteral("UlanziDial_action_%1").arg(pillId);
+}
+
+QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
+{
+    auto& s = AppSettings::instance();
+    const QByteArray raw = s.value(rootSettingsKey(), QStringLiteral("{}")).toString().toUtf8();
+    const QJsonObject obj = QJsonDocument::fromJson(raw).object();
+    if (obj.contains(pillId)) {
+        return obj.value(pillId).toString();
+    }
+    // Backward compatibility for legacy flat keys
+    const QString legacyNew = actionSettingsKey(pillId);
+    if (s.contains(legacyNew)) {
+        return s.value(legacyNew).toString();
+    }
+    const QString legacyOld = QStringLiteral("UlanziDial/action/%1").arg(pillId);
+    if (s.contains(legacyOld)) {
+        return s.value(legacyOld).toString();
+    }
+    return defaultActionForPill(pillId);
+}
+
+void UlanziDialMapperDialog::setActionForPill(const QString& pillId, const QString& actionId)
+{
+    auto& s = AppSettings::instance();
+    const QByteArray raw = s.value(rootSettingsKey(), QStringLiteral("{}")).toString().toUtf8();
+    QJsonObject obj = QJsonDocument::fromJson(raw).object();
+    obj.insert(pillId, actionId);
+    s.setValue(rootSettingsKey(),
+               QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
 }
 
 QString UlanziDialMapperDialog::defaultActionForPill(const QString& pillId)
@@ -479,12 +517,9 @@ QString UlanziDialMapperDialog::pillForSignature(const QString& signature)
 void UlanziDialMapperDialog::loadActions()
 {
     m_isLoading = true;
-    auto& s = AppSettings::instance();
     for (int i = 0; i < m_pills.size(); ++i) {
         if (!m_pills[i].combo) continue;
-        const QString actionId =
-            s.value(actionSettingsKey(m_pills[i].id),
-                    m_pills[i].defaultAction).toString();
+        const QString actionId = actionForPill(m_pills[i].id);
         const int idx = m_pills[i].combo->findData(actionId);
         if (idx >= 0) m_pills[i].combo->setCurrentIndex(idx);
     }
@@ -498,8 +533,7 @@ void UlanziDialMapperDialog::saveAction(int pillIndex)
     const Pill& p = m_pills[pillIndex];
     if (!p.combo) return;
     const QString actionId = p.combo->currentData().toString();
-    AppSettings::instance().setValue(actionSettingsKey(p.id), actionId);
-    AppSettings::instance().save();
+    setActionForPill(p.id, actionId);
 }
 
 void UlanziDialMapperDialog::refreshPillLabel(int /*pillIndex*/)

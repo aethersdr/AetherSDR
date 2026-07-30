@@ -2733,9 +2733,7 @@ void MainWindow::wireExternalControllers()
         // Read the user-bound action; fall back to the built-in default
         // for this pill so first-launch bindings work without the user
         // having opened the mapper dialog at all.
-        const QString actionId = AppSettings::instance().value(
-            UlanziDialMapperDialog::actionSettingsKey(pillId),
-            UlanziDialMapperDialog::defaultActionForPill(pillId)).toString();
+        const QString actionId = UlanziDialMapperDialog::actionForPill(pillId);
         // Action IDs are prefix-tagged to disambiguate registries:
         //   "None"         — intentionally unassigned
         //   "shortcut:ID"  — invoke ShortcutManager handler
