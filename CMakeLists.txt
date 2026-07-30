@@ -4424,6 +4424,24 @@ if(UNIX)
 endif()
 set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
 
+# Support & Diagnostics category toggle must enable Info alongside Debug
+# (#4419): most categories declare a QtWarningMsg threshold, and the filter
+# rules previously re-enabled .debug only, leaving every qCInfo on those
+# categories unreachable.
+add_executable(log_manager_filter_rules_test
+    tests/log_manager_filter_rules_test.cpp
+    src/core/LogManager.cpp
+    src/core/AppSettings.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(log_manager_filter_rules_test PRIVATE src)
+target_link_libraries(log_manager_filter_rules_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(log_manager_filter_rules_test PRIVATE pthread)
+endif()
+set_target_properties(log_manager_filter_rules_test PROPERTIES AUTOMOC ON)
+add_test(NAME log_manager_filter_rules_test COMMAND log_manager_filter_rules_test)
+
 # Pre-filled GitHub issue body + redaction-at-render guarantee (#3705).
 # IssueReport.cpp depends only on redactPii (AsyncLogWriter.cpp) — no
 # RadioModel — so the redaction contract is unit-testable in isolation.
