@@ -2,6 +2,7 @@
 
 #include "UlanziDialMapperDialog.h"
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 #include "core/ShortcutManager.h"
 #ifdef HAVE_MIDI
 #include "core/MidiControlManager.h"
@@ -468,9 +469,13 @@ QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
 {
     auto& s = AppSettings::instance();
     const QByteArray raw = s.value(rootSettingsKey(), QStringLiteral("{}")).toString().toUtf8();
-    const QJsonObject obj = QJsonDocument::fromJson(raw).object();
-    if (obj.contains(pillId)) {
-        return obj.value(pillId).toString();
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
+    if (err.error == QJsonParseError::NoError && doc.isObject()) {
+        const QJsonObject obj = doc.object();
+        if (obj.contains(pillId)) {
+            return obj.value(pillId).toString();
+        }
     }
     // Backward compatibility for legacy flat keys
     const QString legacyNew = actionSettingsKey(pillId);
@@ -488,7 +493,15 @@ void UlanziDialMapperDialog::setActionForPill(const QString& pillId, const QStri
 {
     auto& s = AppSettings::instance();
     const QByteArray raw = s.value(rootSettingsKey(), QStringLiteral("{}")).toString().toUtf8();
-    QJsonObject obj = QJsonDocument::fromJson(raw).object();
+    QJsonParseError err;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
+    QJsonObject obj;
+    if (err.error == QJsonParseError::NoError && doc.isObject()) {
+        obj = doc.object();
+    } else if (!raw.isEmpty() && raw != "{}") {
+        qCWarning(lcDevices) << "Ulanzi Dial: corrupted settings JSON under" << rootSettingsKey()
+                             << err.errorString() << "— resetting mappings object";
+    }
     obj.insert(pillId, actionId);
     s.setValue(rootSettingsKey(),
                QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
