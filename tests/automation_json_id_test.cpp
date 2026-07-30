@@ -184,10 +184,52 @@ int main(int argc, char** argv)
     expectTuneValueRejected(QStringLiteral("500000"),
                             "#4550: 500 kHz expressed in Hz is refused too");
 
+    // Non-finite input. QString::toDouble() happily parses "nan" and "inf",
+    // and NaN in particular fails EVERY comparison (NaN <= 0 and NaN > ceiling
+    // are both false), so without an explicit isfinite check it sailed through
+    // both guards and reached the radio. These must be refused by the
+    // positive-finite check — with its message, not a bogus unit diagnosis —
+    // and must never reach the handler.
+    auto expectNonFiniteRejected = [&](const QString& value, const char* description) {
+        const int callsBefore = handlerCalls;
+        const QJsonObject response = client.request(tuneValueRequest(value));
+        const QString error = response.value(QStringLiteral("error")).toString();
+        check(!response.value(QStringLiteral("ok")).toBool()
+                  && error == QStringLiteral("tune requires a positive finite frequency in MHz")
+                  && handlerCalls == callsBefore,
+              description);
+    };
+    expectNonFiniteRejected(QStringLiteral("nan"), "nan is refused, never tuned");
+    expectNonFiniteRejected(QStringLiteral("NaN"), "NaN is refused, never tuned");
+    expectNonFiniteRejected(QStringLiteral("inf"), "inf is refused by the finite check");
+    expectNonFiniteRejected(QStringLiteral("-inf"), "-inf is refused by the finite check");
+
+    // The ambiguous window (ceiling..300 GHz): could be an Hz mistake OR a real
+    // millimetre-wave MHz value (122.25 GHz allocation). Refused, but the
+    // message must present both readings instead of confidently asserting the
+    // wrong one ("did you mean 0.122250?" to a 122 GHz transverter user).
+    {
+        const int callsBefore = handlerCalls;
+        const QJsonObject response =
+            client.request(tuneValueRequest(QStringLiteral("122250")));
+        const QString error = response.value(QStringLiteral("error")).toString();
+        check(!response.value(QStringLiteral("ok")).toBool()
+                  && !error.contains(QStringLiteral("did you mean"))
+                  && error.contains(QStringLiteral("millimetre-wave"))
+                  && handlerCalls == callsBefore,
+              "122.25 GHz in MHz is refused without misdiagnosing it as Hz");
+    }
+
     // The ceiling must not refuse anything real. 10368.1 is the 3cm calling
     // frequency, the top of the band table, and it has to keep working.
     expectAccepted(tuneValueRequest(QStringLiteral("10368.1")), -1,
                    "#4550: the top of the band table still tunes");
+    // kHz-for-MHz (14200 = 20m in kHz, or 14.2 GHz in MHz) deliberately passes:
+    // the value is indistinguishable from a legitimate transverter request in
+    // the headroom the ceiling protects. Pinned as a DECISION, not an omission
+    // — if this ever starts rejecting, the transverter range broke.
+    expectAccepted(tuneValueRequest(QStringLiteral("14200")), -1,
+                   "kHz-for-MHz passes: indistinguishable from a 14.2 GHz request");
 
     server.stop();
     return failures == 0 ? 0 : 1;

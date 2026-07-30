@@ -55,6 +55,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -6102,8 +6103,12 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
         return err(QStringLiteral("no radio model available"));
     bool okF = false;
     const double mhz = value.toDouble(&okF);
-    if (!okF || mhz <= 0)
-        return err(QStringLiteral("tune requires a positive frequency in MHz"));
+    // toDouble() accepts "nan" and "inf". NaN in particular sails past every
+    // range check below (NaN <= 0 and NaN > ceiling are both false), so
+    // non-finite input must be refused here, by name, where the message is
+    // about the value itself rather than a unit mistake it isn't.
+    if (!okF || !std::isfinite(mhz) || mhz <= 0)
+        return err(QStringLiteral("tune requires a positive finite frequency in MHz"));
     // Hz passed to an MHz verb. A value above anything AE can tune is a unit
     // mistake rather than an ambitious request, and saying so beats silently
     // doing nothing. It is NOT auto-converted: guessing the caller's intent
@@ -6116,13 +6121,35 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     // the ones a 1 THz threshold let through, such as `tune 500000` for 500 kHz,
     // which would otherwise fall past the guard and land back in the silent
     // no-op this refusal exists to prevent.
+    //
+    // kHz-for-MHz (e.g. `tune 14200` for 20m) deliberately PASSES: that value
+    // is indistinguishable from a legitimate microwave request (14.2 GHz is
+    // inside the transverter headroom this ceiling exists to protect), and
+    // refusing the range would break real 24/47/76 GHz operation. A band-table
+    // lookup was considered and rejected for the same reason — XVTR RF
+    // frequency is user-configurable beyond the table. Decided, not overlooked.
     constexpr double kMaxTunableMhz = 105'000.0;
-    if (mhz > kMaxTunableMhz)
+    if (mhz > kMaxTunableMhz) {
+        // Above the ceiling but below 300 GHz is genuinely ambiguous: it reads
+        // as an Hz-for-MHz mistake OR as a real millimetre-wave allocation
+        // entered correctly in MHz (122.25 / 134 / 241 GHz). Refuse either way,
+        // but present both readings — telling someone dialling a 122 GHz
+        // transverter "did you mean 0.122250?" would be confidently wrong,
+        // which is the failure mode this guard's messaging exists to avoid.
+        if (mhz <= 300'000.0)
+            return err(QStringLiteral("tune takes MHz — got ")
+                       + QString::number(mhz, 'f', 0)
+                       + QStringLiteral(", above the 105000 MHz ceiling. If that was "
+                                        "Hz, resend as ")
+                       + QString::number(mhz / 1.0e6, 'f', 6)
+                       + QStringLiteral("; if it is a millimetre-wave frequency in "
+                                        "MHz, it is beyond what AE can tune"));
         return err(QStringLiteral("tune takes MHz, not Hz — got ")
                    + QString::number(mhz, 'f', 0)
                    + QStringLiteral(" (did you mean ")
                    + QString::number(mhz / 1.0e6, 'f', 6)
                    + QStringLiteral("?)"));
+    }
 
     int sliceId = -1;  // -1 = active slice
     if (!id.isEmpty()) {
@@ -6168,9 +6195,9 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     // asynchronously, in applyStatus(). An echo is at least honest about being
     // an acknowledgement rather than a confirmation. Closing the gap properly
     // means waiting on that status update — a different change, and one that
-    // has to be made in MainWindow::automationTune (MainWindow.cpp:6355), which
-    // is the path the shipping app actually takes (see the m_tuneHandler
-    // dispatch above).
+    // has to be made in MainWindow::automationTune (the handler installed by
+    // MainWindow_Session.cpp), which is the path the shipping app actually
+    // takes (see the m_tuneHandler dispatch above).
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
                        {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
 }
