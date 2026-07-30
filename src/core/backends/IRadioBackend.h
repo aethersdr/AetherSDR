@@ -289,6 +289,27 @@ public:
     // implements it.
     virtual void setTxPower(int percent) { Q_UNUSED(percent); }
 
+    // Transmit audio passband, in Hz above the carrier — the Phone applet's TX
+    // low-cut and high-cut.
+    //
+    // Same division as setTxPower: a Flex takes this as `transmit set
+    // filter_low=/filter_high=` from TransmitModel, so FlexBackend has nothing
+    // to do here; a backend that owns its own modulator implements it.
+    //
+    // ALWAYS POSITIVE AUDIO Hz, on both sidebands. The sideband is not chosen by
+    // the sign of this passband — a host modulator picks it in the modulator
+    // itself — so LSB takes exactly the same numbers as USB. Reflecting these
+    // for LSB would transmit on the wrong sideband.
+    //
+    // Once called, the operator's passband OWNS the modulator: a backend must
+    // not let a per-mode default overwrite it on the next mode change, or the
+    // control works until the operator touches anything else.
+    virtual void setTxFilter(int lowHz, int highHz)
+    {
+        Q_UNUSED(lowHz);
+        Q_UNUSED(highHz);
+    }
+
     // Processed transmit audio, int16 interleaved stereo at sampleRateHz.
     //
     // For backends that modulate on the host (HL2). A Flex radio does its own

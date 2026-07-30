@@ -474,6 +474,20 @@ private:
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
+    // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
+    // the client-side compressor on a backend that modulates on this host, and
+    // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
+    // MainWindow_DspApplets.cpp.
+    void wireHostModulatedVoiceChain();
+    // True when the connected radio modulates on this host, so the Flex command
+    // plane is not where the TX audio chain lives. Same capability pair
+    // MainWindow_Session.cpp tests before opening the mic.
+    bool hostModulatesTxAudio() const;
+    // Push the operator's PROC state onto the shared client compressor.
+    void applySpeechProcessorToClientComp();
+    // Push the 8-band graphic EQ onto the shared ClientEq. transmit selects the
+    // TX or RX instance.
+    void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
@@ -1491,6 +1505,14 @@ private:
     };
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
+    // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
+    // its enable state back onto PROC. ClientComp has no change notification.
+    QTimer m_hostVoiceChainTimer;
+    // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
+    // only written when the operator actually changed the level (they overwrite
+    // the Aetherial strip's compressor settings, which share the object).
+    bool m_lastAppliedProcEnable{false};
+    int  m_lastAppliedProcLevel{-1};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)

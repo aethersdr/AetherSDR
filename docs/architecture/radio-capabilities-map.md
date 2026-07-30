@@ -45,7 +45,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
-| `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row, the 8-band hardware EQ applet |
+| `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
@@ -64,13 +64,33 @@ play, scattered lambdas are how two callers end up both driving one widget's
 
 The host-side equivalents are *not* gated on it, and must not be: the AetherDSP
 noise modules (NR2/NR4/MNR/BNR/DFNR/RN2) and the Aetherial RX/TX EQ tiles
-(`ceq` / `ceq-rx`, distinct from the `EQ` applet). On a radio reporting
-`hasRadioSideDsp = false` those are the **only** audio DSP the operator has —
-an HL2 uses the Aetherial EQ in place of the radio's hardware EQ — so gating
-them would leave nothing at all.
+(`ceq` / `ceq-rx`). On a radio reporting `hasRadioSideDsp = false` those are the
+**only** audio DSP the operator has, so gating them would leave nothing at all.
 
 The test for whether a control belongs behind this flag is whether its only
 effect is to emit a verb the radio's firmware executes.
+
+**The `EQ` applet used to be behind this flag and no longer is.** It looked like
+it belonged: `EqualizerModel` emits `eq RXsc` / `eq TXsc`, which reach nothing
+without a Flex command plane, so the applet passed the test above. But the test
+asks about the CONTROL, and the conclusion was drawn about the COMMANDS. The
+equalizer those eight sliders ask for exists on every family — `ClientEq` is
+already in both audio paths — so `MainWindow::wireHostModulatedVoiceChain()`
+maps the octave bands onto it for any backend without a Flex command plane, and
+the applet is now unconditionally visible. Hiding it was removing a working
+control rather than an empty one.
+
+The same correction applies to the other Flex-shaped voice controls, none of
+which are capability-gated: PROC and its NOR/DX/DX+ level drive `ClientComp`,
+and the Phone applet's TX low-cut/high-cut reaches a host modulator through
+`IRadioBackend::setTxFilter`.
+
+Two consequences worth knowing. The graphic EQ and the compressor write into the
+**same** `ClientEq`/`ClientComp` objects the Aetherial strip edits, so the two
+surfaces are two views of one object — moving a graphic-EQ slider replaces the
+strip's band layout in slots 0..7, and toggling the strip's compressor lights
+PROC. And on Flex both mappings are skipped, so one slider movement never
+equalizes or compresses twice.
 
 ## Declared, but the consumer bypasses the seam
 

@@ -1348,6 +1348,15 @@ RadioModel::RadioModel(QObject* parent)
             panId);
     });
 
+    // The TX passband reaches a host-modulating backend through the seam, not
+    // through the Flex verb next to it. Operator intent only — see the signal's
+    // note — so this cannot echo radio state back as a command.
+    connect(&m_transmitModel, &TransmitModel::txFilterCommandIssued, this,
+            [this](int lowHz, int highHz) {
+        if (m_backend && !usesFlexCommandPlane())
+            m_backend->setTxFilter(lowHz, highHz);
+    });
+
     // Forward transmit model commands to the radio
     connect(&m_transmitModel, &TransmitModel::commandReady, this, [this](const QString& cmd){
         const QString trimmed = cmd.trimmed();

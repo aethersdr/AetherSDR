@@ -1,4 +1,5 @@
 #include "models/TransmitModel.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/ClientQuindarTone.h"
 
 #include <QCoreApplication>
@@ -198,6 +199,55 @@ int main(int argc, char** argv)
                      "transmit set filter_low=1200 filter_high=1800",
                  }),
                  "paired TX filter update is sent atomically");
+
+    // ── TX passband: optimistic adoption + the operator-intent signal ───────
+    //
+    // Both halves matter on a radio that modulates on this host. There is no
+    // status echo there, so a setter that only emitted the Flex verb would leave
+    // the model — and therefore the Phone applet's sliders — showing the old
+    // passband while the modulator kept its mode default. And the backend needs
+    // an intent signal it can bind to that applyStatus() never emits, or radio
+    // state would be echoed back as a fresh command.
+    {
+        QList<QPair<int, int>> intents;
+        QObject::connect(&tx, &TransmitModel::txFilterCommandIssued,
+                         [&intents](int lo, int hi) { intents.append({lo, hi}); });
+        commands.clear();
+        tx.setTxFilter(100, 4000);
+        ok &= expect(tx.txFilterLow() == 100 && tx.txFilterHigh() == 4000,
+                     "setTxFilter adopts the passband without waiting for a status echo");
+        ok &= expect(intents == QList<QPair<int, int>>({{100, 4000}}),
+                     "setTxFilter announces operator intent for the seam");
+
+        // The single-edge setters have to carry the other edge through, or
+        // dragging one slider resets the other to whatever it was constructed
+        // with.
+        intents.clear();
+        tx.setTxFilterLow(200);
+        ok &= expect(tx.txFilterLow() == 200 && tx.txFilterHigh() == 4000,
+                     "setTxFilterLow preserves the high cut");
+        tx.setTxFilterHigh(3500);
+        ok &= expect(tx.txFilterLow() == 200 && tx.txFilterHigh() == 3500,
+                     "setTxFilterHigh preserves the low cut");
+
+        // eSSB has to survive the bounds. 100..6000 is a real setting, not an
+        // edge case, and a clamp at 3 kHz would silently make the control a lie.
+        tx.setTxFilter(100, 6000);
+        ok &= expect(tx.txFilterLow() == 100 && tx.txFilterHigh() == 6000,
+                     "an eSSB passband is not clamped away");
+
+        // Radio status must NOT look like operator intent — otherwise a Flex's
+        // own echo would be sent straight back out as a command.
+        intents.clear();
+        TransmitDelta echo;
+        echo.txFilterLow = 300;
+        echo.txFilterHigh = 2700;
+        tx.applyChanges(echo);
+        ok &= expect(tx.txFilterLow() == 300 && tx.txFilterHigh() == 2700,
+                     "radio status still updates the passband");
+        ok &= expect(intents.isEmpty(),
+                     "applying radio status does not emit operator intent");
+    }
 
     ClientQuindarTone quindar;
     quindar.prepare(24000.0);

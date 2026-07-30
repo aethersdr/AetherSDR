@@ -1885,6 +1885,11 @@ MainWindow::MainWindow(QWidget* parent)
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
     wireDspApplets();
 
+    // PROC / NOR / DX / DX+ -> the client compressor, on a radio that modulates
+    // on this host. After wireDspApplets(), which is what gives the applet panel
+    // the AudioEngine this reaches back through.
+    wireHostModulatedVoiceChain();
+
 
     // ── Antenna Genius / ShackSwitch applets ────────────────────────────────
     // Both share AntennaGeniusModel (ShackSwitch speaks the AG protocol).
@@ -6389,14 +6394,23 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         m_appletPanel->txApplet()->setRadioSideDspAvailable(radioSideDsp);
     }
 
-    // ── The radio's 8-band hardware EQ ──────────────────────────────────────
+    // ── The 8-band graphic EQ ───────────────────────────────────────────────
     //
-    // Same capability, same reasoning: EqualizerModel emits `eq RXsc`/`eq TXsc`,
-    // which reach nothing without a Flex command plane. The Aetherial RX/TX EQ
-    // tiles are untouched — on a radio with no hardware EQ they are the only
-    // equalizer the operator has.
+    // NO LONGER GATED on hasRadioSideDsp. It used to be, on the reasoning that
+    // EqualizerModel emits `eq RXsc`/`eq TXsc` and those reach nothing without a
+    // Flex command plane — which was true of the COMMANDS but is the wrong
+    // conclusion about the CONTROL. The equalizer the sliders are asking for
+    // exists on every family: ClientEq is already in both audio paths, and
+    // wireHostModulatedVoiceChain() maps the eight octave bands onto it for any
+    // backend without a Flex command plane. Hiding the applet removed a working
+    // control rather than an empty one.
+    //
+    // Still visible-only. The Flex-verb emission in EqualizerModel is unchanged
+    // and still goes nowhere on those backends; what makes the sliders act is
+    // the ClientEq mapping, and applyGraphicEqToClientEq() excludes Flex so the
+    // two never both apply.
     if (m_appletPanel) {
-        m_appletPanel->setHardwareEqVisible(radioSideDsp);
+        m_appletPanel->setHardwareEqVisible(true);
     }
 
     // ── PA supply voltage: the lower row of the status bar's PA stack ───────

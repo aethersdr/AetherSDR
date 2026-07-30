@@ -13,6 +13,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <deque>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -81,6 +82,7 @@ public:
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
+    void setTxFilter(int lowHz, int highHz) override;
     // No default argument here on purpose: defaults on virtuals bind statically,
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
@@ -431,6 +433,24 @@ private:
     // internal application must neither bootstrap the operator baseline nor
     // record into the per-band map — only OPERATOR intent does that.
     bool m_applyingBandMemory = false;
+
+    // The operator's TX passband, once they have set one, and the flag that says
+    // they have.
+    //
+    // The flag is the load-bearing half. defaultTxPassbandForMode() is re-pushed
+    // on every mode set and every transmit-slice move — deliberately, so a fresh
+    // session is sideband- and mode-correct from the first key — and it has no
+    // way to tell "nobody has chosen" from "the operator chose 300..2700". Without
+    // this, an eSSB passband survives until the next mode change and is then
+    // silently replaced by the voice default, which looks like the control
+    // working and then randomly forgetting.
+    bool m_txFilterFromOperator = false;
+    int m_txFilterLowHz = 300;
+    int m_txFilterHighHz = 2700;
+
+    // The passband to push at the modulator for `mode`: the operator's if they
+    // have chosen one, otherwise that mode's default.
+    std::pair<int, int> effectiveTxPassband(const QString& mode) const;
     // Tune-carrier amplitude, full scale into the modulator. Actual radiated
     // power is governed by the TX drive register, which is where an operator
     // sets it; scaling here as well would make the power control non-linear for

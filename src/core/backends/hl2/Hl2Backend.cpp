@@ -394,6 +394,16 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     });
     connect(m_txDsp, &Hl2TxDsp::micPeak, this,
             [this](float dbfs) { emit meterUpdate(QStringLiteral("TX:MICPEAK"), dbfs); });
+    // The post-ALC transmit peak — the level the modulator is actually handing
+    // to the wire.
+    //
+    // MeterModel's TX:ALC is a LEVEL in dBFS, not a gain, which is why this is
+    // fed from alcPeak() and not from the alcGain() signal sitting next to it.
+    // alcGain answers "how hard is the ALC working"; the gauge asks "how close
+    // to full modulation am I", and on a chain whose ALC targets 0.85 those two
+    // move in opposite directions.
+    connect(m_txDsp, &Hl2TxDsp::alcPeak, this,
+            [this](float dbfs) { emit meterUpdate(QStringLiteral("TX:ALC"), dbfs); });
 
     connect(m_metis, &MetisClient::telemetryUpdated, this,
             [this](const Hl2Telemetry& t) { publishTelemetry(t); });
@@ -1521,7 +1531,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // or DIGL would otherwise transmit on the upper sideband until the operator
     // happened to change mode.
     {
-        const auto [txLo, txHi] = defaultTxPassbandForMode(txMode);
+        const auto [txLo, txHi] = effectiveTxPassband(txMode);
         tc.filterLowHz  = txLo;
         tc.filterHighHz = txHi;
     }
@@ -1722,7 +1732,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
     if (m_txDsp && ddc == m_txDdc) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, wdsp));
-        const auto [txLo, txHi] = defaultTxPassbandForMode(mode);
+        const auto [txLo, txHi] = effectiveTxPassband(mode);
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(txLo)),
             Q_ARG(double, static_cast<double>(txHi)));
@@ -1873,7 +1883,7 @@ void Hl2Backend::setTxSlice(int sliceId)
     if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(r->mode)));
-        const auto [txLo, txHi] = defaultTxPassbandForMode(r->mode);
+        const auto [txLo, txHi] = effectiveTxPassband(r->mode);
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(txLo)),
             Q_ARG(double, static_cast<double>(txHi)));
@@ -2372,6 +2382,64 @@ void Hl2Backend::applyDrive(int percent)
     }
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     setTxDriveLevel(clamped * kTxDriveMax / 100);
+}
+
+std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
+{
+    // SSB VOICE ONLY, even though the operator's setting is remembered globally.
+    //
+    // The control this comes from is the PHONE applet's TX low-cut/high-cut, and
+    // it means "shape my voice". Letting it reach CW would set the keying
+    // envelope's bandwidth from a voice slider — an operator who widened to
+    // 100..4000 for eSSB would transmit CW four times wider than the 300..900
+    // the mode wants, and nothing in the phone applet would suggest why. AM/FM
+    // are excluded for the same reason, and the digital modes because their
+    // 150..3000 is chosen to match what the far-end decoder expects rather than
+    // what sounds good.
+    const QString u = mode.toUpper();
+    const bool ssbVoice = u == QLatin1String("USB") || u == QLatin1String("LSB");
+    if (m_txFilterFromOperator && ssbVoice)
+        return {m_txFilterLowHz, m_txFilterHighHz};
+    return defaultTxPassbandForMode(mode);
+}
+
+// The Phone applet's TX low-cut / high-cut.
+//
+// eSSB works here and needs nothing special: the modulator's bandpass is
+// designed per call (Hl2TxDsp::setFilter re-runs designFilters), the audio
+// arriving from AudioEngine is 24 kHz so anything below ~11 kHz is
+// representable, and the 255-tap Blackman prototype keeps a usable skirt across
+// that range. The upper bound below is the modulator's, not the operator's
+// taste: what belongs on the air is a band-plan question this layer has no
+// business deciding.
+void Hl2Backend::setTxFilter(int lowHz, int highHz)
+{
+    // Nyquist of the TX AUDIO rate, not of the 48 kHz EP2 rate. The modulator
+    // interpolates, so the ceiling is set by what the input can carry.
+    const int maxHz = m_txDsp ? (24000 / 2) : 12000;
+    lowHz = std::clamp(lowHz, 0, maxHz - 50);
+    highHz = std::clamp(highHz, lowHz + 50, maxHz);
+
+    m_txFilterFromOperator = true;
+    m_txFilterLowHz = lowHz;
+    m_txFilterHighHz = highHz;
+
+    qCInfo(lcHl2) << "HL2: TX passband set to" << lowHz << ".." << highHz << "Hz"
+                  << "(operator override; mode defaults no longer apply)";
+
+    // Push through effectiveTxPassband() rather than the raw values, so a change
+    // made while the transmitter is in CW is REMEMBERED but not applied — it
+    // takes effect when the operator returns to SSB. Pushing lowHz/highHz
+    // directly here would bypass the mode rule that every other call site
+    // honours, and the setting would apply immediately in CW and then correct
+    // itself on the next mode change.
+    const Receiver* txRx = rx(m_txDdc);
+    const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
+    const auto [applyLo, applyHi] = effectiveTxPassband(txMode);
+    if (m_txDsp)
+        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
+            Q_ARG(double, static_cast<double>(applyLo)),
+            Q_ARG(double, static_cast<double>(applyHi)));
 }
 
 void Hl2Backend::setTxPower(int percent)
@@ -2970,6 +3038,23 @@ void Hl2Backend::defineMeters()
         0.0, 100.0,    QStringLiteral("PA temperature"));
     def(6, QStringLiteral("TX"),  QStringLiteral("MICPEAK"), QStringLiteral("dBFS"),
         -100.0, 0.0,   QStringLiteral("Microphone peak"));
+    // The post-ALC transmit level. Named ALC because that is the name MeterModel
+    // binds to its swAlc() accessor, which is what the Phone/CW applet's ALC
+    // gauges read — the meter is defined by what consumes it, not by which stage
+    // happens to produce it.
+    def(7, QStringLiteral("TX"),  QStringLiteral("ALC"),     QStringLiteral("dBFS"),
+        -100.0, 0.0,   QStringLiteral("Post-ALC transmit peak"));
+    // Speech-processor gain reduction, as a POSITIVE amount of compression in
+    // dB — the sign convention MeterModel's COMPPEAK path already expects, and
+    // the opposite of ClientComp::gainReductionDb()'s own (which is <= 0).
+    //
+    // sourceIndex is left at its default 0, which is below MeterModel's
+    // kMinTxWaveformSourceIndex of 8, so this lands in the by-slice map under
+    // the implicit slice rather than the explicit TX-waveform map. That is the
+    // right bucket for a radio with one transmitter: the Flex form of this meter
+    // is per-waveform-slice, and there is no such thing here.
+    def(8, QStringLiteral("TX"),  QStringLiteral("COMPPEAK"), QStringLiteral("dB"),
+        0.0, 25.0,     QStringLiteral("Speech processor compression"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

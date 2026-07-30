@@ -42,6 +42,8 @@
 #include "core/AetherDspModePolicy.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ClientComp.h"
+#include "core/ClientEq.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -631,6 +633,216 @@ void MainWindow::wireDspApplets()
                 break;
         }
     });
+}
+
+// ── The speech processor on a host-modulating backend ───────────────────────
+//
+// PROC and its NOR/DX/DX+ level are Flex-shaped controls: TransmitModel turns
+// them into `transmit set speech_processor_enable=` / `_level=`, which reach
+// nothing on a radio with no Flex command plane. On a backend that modulates
+// here, the compressor those controls are asking for is the one already running
+// in AudioEngine's TX chain — the mic path applies it before the audio ever
+// reaches submitTxAudio — so this binds the controls to it rather than adding a
+// second compressor behind the same button.
+//
+// IT IS THE SAME ClientComp THE AETHERIAL STRIP EDITS, deliberately. That means
+// the two surfaces are two views of one object: moving the PROC slider rewrites
+// the strip's threshold/ratio/makeup, and toggling the compressor in the strip
+// lights PROC. Chosen over a private second instance so an operator cannot end
+// up with two compressors in series without either UI admitting it. The cost is
+// that the level presets below overwrite whatever the strip was set to, which
+// is why they are applied only on a level CHANGE or an off->on transition and
+// not on every state push.
+
+bool MainWindow::hostModulatesTxAudio() const
+{
+    // The same capability pair MainWindow_Session.cpp tests before opening the
+    // mic: a backend host-modulates only if it says so AND may transmit.
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    return caps.hostModulates && caps.canTransmit;
+}
+
+void MainWindow::applySpeechProcessorToClientComp()
+{
+    if (!m_audio || !hostModulatesTxAudio())
+        return;
+    ClientComp* comp = m_audio->clientCompTx();
+    if (!comp)
+        return;
+
+    const auto& tx = m_radioModel.transmitModel();
+    const bool on = tx.speechProcessorEnable();
+    const int level = qBound(0, tx.speechProcessorLevel(), 2);
+
+    // Only rewrite the compressor's shape when the operator actually chose a
+    // different level, or switched PROC on. Pushing the preset on every state
+    // change would stomp the strip's settings whenever anything else in
+    // TransmitModel emitted micStateChanged.
+    const bool levelChanged = level != m_lastAppliedProcLevel;
+    const bool switchedOn = on && !m_lastAppliedProcEnable;
+    if (on && (levelChanged || switchedOn)) {
+        // NOR / DX / DX+. Progressively lower thresholds and higher ratios, with
+        // makeup chosen to keep the average level rising with the setting rather
+        // than merely squashing peaks — "more processing" has to sound louder or
+        // the control reads as broken.
+        //
+        // Deliberately gentler than a Flex's own speech processor: this stage
+        // feeds the modulator's ALC, which applies its own makeup gain on top
+        // (Hl2TxDsp::Config). Matching Flex numbers here would compress twice.
+        struct Preset { float thresholdDb; float ratio; float makeupDb; };
+        static constexpr Preset kPresets[3] = {
+            { -18.0f, 2.5f,  4.0f },   // NOR
+            { -24.0f, 4.0f,  8.0f },   // DX
+            { -30.0f, 6.0f, 12.0f },   // DX+
+        };
+        const Preset& p = kPresets[level];
+        comp->setThresholdDb(p.thresholdDb);
+        comp->setRatio(p.ratio);
+        comp->setMakeupDb(p.makeupDb);
+        // Fast enough to catch a syllable, slow enough not to pump on speech.
+        comp->setAttackMs(5.0f);
+        comp->setReleaseMs(120.0f);
+        comp->setKneeDb(6.0f);
+    }
+    if (comp->isEnabled() != on)
+        comp->setEnabled(on);
+
+    m_lastAppliedProcEnable = on;
+    m_lastAppliedProcLevel = level;
+
+    // The strip's own compressor tile reads its checked state from the engine,
+    // so it has to be told the object underneath it changed.
+    if (m_appletPanel && m_appletPanel->clientCompTxApplet())
+        m_appletPanel->clientCompTxApplet()->refreshEnableFromEngine();
+}
+
+// ── The 8-band graphic EQ on a host-modulating backend ──────────────────────
+//
+// EqualizerModel emits `eq TXsc 63Hz=…` / `eq RXsc …`, which a radio with no
+// Flex command plane never receives. The equalizer those sliders are asking for
+// is ClientEq, already in both audio paths — TX through
+// AudioEngine::applyClientTxDspInt16, RX through processMixedRxAudioData.
+//
+// THE OCTAVE BANDS OCCUPY ClientEq SLOTS 0..7, which are the same slots the
+// Aetherial strip's editor uses, because these are the same ClientEq objects the
+// strip edits. Writing them replaces whatever layout the strip had there —
+// including its high-pass and shelves — with eight fixed peaking filters. That
+// is inherent in the two surfaces sharing one equalizer, and it is why this only
+// writes on an actual EQ-applet change rather than continuously: an operator who
+// never touches the graphic EQ keeps the strip's layout untouched.
+//
+// Q of 1.4 is one octave between -3 dB points, which matches the 63/125/250/…
+// octave spacing. A higher Q leaves gaps between the bands where the response
+// returns to flat; a lower one makes adjacent sliders fight.
+void MainWindow::applyGraphicEqToClientEq(bool transmit)
+{
+    // Flex is excluded: there the sliders reach the radio's own 8-band hardware
+    // EQ through the command plane, and mapping them onto ClientEq as well would
+    // equalize twice for one slider movement.
+    if (!m_audio || m_radioModel.usesFlexCommandPlane())
+        return;
+    ClientEq* eq = transmit ? m_audio->clientEqTx() : m_audio->clientEqRx();
+    if (!eq)
+        return;
+
+    const auto& model = m_radioModel.equalizerModel();
+    const bool enabled = transmit ? model.txEnabled() : model.rxEnabled();
+
+    // Centres in Hz, matching EqualizerModel::Band order exactly. Kept here as
+    // numbers rather than parsed from bandKey() so a protocol-string change
+    // cannot silently retune the filters.
+    static constexpr float kCentresHz[EqualizerModel::BandCount] = {
+        63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f
+    };
+
+    for (int i = 0; i < EqualizerModel::BandCount; ++i) {
+        const auto band = static_cast<EqualizerModel::Band>(i);
+        const int gainDb = transmit ? model.txBand(band) : model.rxBand(band);
+        ClientEq::BandParams p;
+        p.freqHz = kCentresHz[i];
+        p.gainDb = static_cast<float>(gainDb);
+        p.q = 1.4f;
+        p.type = ClientEq::FilterType::Peak;
+        // A 0 dB band still runs, and must: leaving it disabled would make the
+        // slider's return to centre a different operation from never having
+        // moved it, and the two have to sound identical.
+        p.enabled = true;
+        eq->setBand(i, p);
+    }
+    if (eq->activeBandCount() < EqualizerModel::BandCount)
+        eq->setActiveBandCount(EqualizerModel::BandCount);
+    eq->setEnabled(enabled);
+
+    // The strip's own EQ tile reads its checked state from the engine.
+    if (m_appletPanel) {
+        auto* tile = transmit ? m_appletPanel->clientEqTxApplet()
+                              : m_appletPanel->clientEqRxApplet();
+        if (tile)
+            tile->refreshEnableFromEngine();
+    }
+}
+
+void MainWindow::wireHostModulatedVoiceChain()
+{
+    // The graphic EQ. Bound on BOTH state signals rather than on a capability
+    // check at wiring time, because the capability is not known until a backend
+    // attaches; applyGraphicEqToClientEq() re-checks on every call.
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::txStateChanged,
+            this, [this] { applyGraphicEqToClientEq(true); });
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
+            this, [this] { applyGraphicEqToClientEq(false); });
+
+    // Operator -> DSP. micStateChanged is the notification TransmitModel already
+    // emits for PROC (its setters update optimistically because a Flex never
+    // echoes these two in incremental status), so no new signal is needed.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
+            this, &MainWindow::applySpeechProcessorToClientComp);
+
+    // Re-push on connect. The capability is not known until a backend attaches,
+    // so a PROC state restored from settings before that would have been
+    // dropped by the hostModulatesTxAudio() guard above.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        if (!connected)
+            return;
+        // Force the preset to be re-applied rather than trusting the cache from
+        // a previous session's radio.
+        m_lastAppliedProcLevel = -1;
+        m_lastAppliedProcEnable = false;
+        applySpeechProcessorToClientComp();
+    });
+
+    // DSP -> meter, and DSP -> operator.
+    //
+    // ClientComp has no change notification — every other consumer polls it on a
+    // timer (ClientCompApplet::tickMeter) — so this does too, at the same 20 Hz
+    // the compression gauge is fed at elsewhere.
+    m_hostVoiceChainTimer.setInterval(50);
+    connect(&m_hostVoiceChainTimer, &QTimer::timeout, this, [this] {
+        if (!m_audio || !hostModulatesTxAudio())
+            return;
+        ClientComp* comp = m_audio->clientCompTx();
+        if (!comp)
+            return;
+
+        // TX:COMPPEAK wants a POSITIVE amount of compression in dB;
+        // ClientComp reports gain reduction as a value <= 0. Negate, do not
+        // abs(): a positive gainReductionDb would be a bug upstream and
+        // abs() would render it as heavy compression.
+        const float reduction = comp->isEnabled() ? -comp->gainReductionDb() : 0.0f;
+        m_radioModel.meterModel().updateValueByName(
+            QStringLiteral("TX"), QStringLiteral("COMPPEAK"),
+            qBound(0.0f, reduction, 25.0f));
+
+        // Mirror the strip back onto PROC, so toggling the compressor there
+        // does not leave the button lying. applySpeechProcessorState() does not
+        // emit commandReady, so this cannot loop back out as a command; it does
+        // emit micStateChanged, which re-enters applySpeechProcessorToClientComp
+        // once and settles because the value now matches.
+        m_radioModel.transmitModel().applySpeechProcessorState(
+            comp->isEnabled(), m_radioModel.transmitModel().speechProcessorLevel());
+    });
+    m_hostVoiceChainTimer.start();
 }
 
 } // namespace AetherSDR
