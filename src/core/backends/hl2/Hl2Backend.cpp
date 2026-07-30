@@ -292,10 +292,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // receiver does not add a connection that could be missed on a rebuild.
     connect(m_metis, &MetisClient::iqBlocksReady, this,
             [this](const std::vector<std::vector<std::complex<float>>>& blocks) {
-        const std::size_t n = std::min(blocks.size(), m_rx.size());
+        // m_ioDsps, NOT m_rx. This lambda is a DirectConnection from a signal
+        // emitted by m_metis, which lives on the I/O thread — so this body runs
+        // THERE, and m_rx belongs to the GUI thread. See publishIoDsps().
+        const std::size_t n = std::min(blocks.size(), m_ioDsps.size());
         for (std::size_t i = 0; i < n; ++i) {
-            if (m_rx[i].dsp)
-                m_rx[i].dsp->processIqBlock(blocks[i]);
+            if (m_ioDsps[i])
+                m_ioDsps[i]->processIqBlock(blocks[i]);
         }
     }, Qt::DirectConnection);
 
@@ -455,6 +458,10 @@ void Hl2Backend::buildReceivers(int count)
                              << QString::fromStdString(err);
         }
     }
+    // The set is final; hand the sample path its copy. Once per rebuild rather
+    // than once per receiver: an intermediate list would describe a set that
+    // never actually ran.
+    publishIoDsps();
     qCInfo(lcHl2) << "HL2: running" << count << "receiver(s)";
 }
 
@@ -467,8 +474,12 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         return false;
     }
 
-    r->dsp = new Hl2RxDsp(nullptr);   // no parent: moveToThread refuses one
-    r->dsp->moveToThread(m_ioThread);
+    // Created and wired HERE, recorded in m_rx at the END of this function, and
+    // not handed to the sample path at all — the CALLER does that with
+    // publishIoDsps(), once it has configured the chain. So a receiver is never
+    // fed before its WDSP channel exists.
+    auto* dsp = new Hl2RxDsp(nullptr);   // no parent: moveToThread refuses one
+    dsp->moveToThread(m_ioThread);
 
     // CAPTURE THE UI NUMBER, NOT THE DDC INDEX.
     //
@@ -483,7 +494,7 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     // it at signal time survives any renumbering with no rewiring at all.
     const int ui = ids->uiNumber;
 
-    connect(r->dsp, &Hl2RxDsp::spectrumReady, this,
+    connect(dsp, &Hl2RxDsp::spectrumReady, this,
             [this, ui](const std::vector<float>& bins) {
         if (!m_ids.byUi(ui))
             return;
@@ -506,7 +517,7 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         emit spectrumFrameReady(ui, floatBytes(dbm));
     });
 
-    connect(r->dsp, &Hl2RxDsp::audioReady, this,
+    connect(dsp, &Hl2RxDsp::audioReady, this,
             [this, ui](const std::vector<float>& pcm) {
         const auto* ids = m_ids.byUi(ui);
         if (!ids)
@@ -524,7 +535,7 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         mixReceiverAudio(ids->ddcIndex, pcm);
     });
 
-    connect(r->dsp, &Hl2RxDsp::meterUpdate, this,
+    connect(dsp, &Hl2RxDsp::meterUpdate, this,
             [this, ui](float dbfs) {
         const auto* ids = m_ids.byUi(ui);
         Receiver* r = ids ? rx(ids->ddcIndex) : nullptr;
@@ -554,6 +565,10 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         r->sMeterClock.restart();
         emit meterUpdate(sliceMeterName(ui), r->sMeterDbm);
     });
+
+    // Recorded, not published. m_rx is this thread's, so this is a plain store;
+    // the sample path sees nothing until the caller calls publishIoDsps().
+    r->dsp = dsp;
     return true;
 }
 
@@ -592,36 +607,45 @@ bool Hl2Backend::createPanadapter()
     }
 
     const int ddc = m_ids.append();
-    m_rx.emplace_back();
-    Receiver& r = m_rx.back();
+
+    // Build the new receiver's state outside m_rx, then append it. Derived from
+    // the EXISTING receivers, which is why it is assembled before the push rather
+    // than patched up after it.
+    //
     // Inherit the first receiver's settings, not construction defaults: a new
     // pane opening on 10 MHz USB when the operator is working 40 m would look
     // like the radio changed band on its own. Same reasoning as at connect.
-    if (m_rx.size() > 1) {
+    Receiver seed;
+    if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
-        r.sliceFreqHz = first.sliceFreqHz;
-        r.ncoHz = first.ncoHz;
-        r.mode = first.mode;
-        r.filterLowHz = first.filterLowHz;
-        r.filterHighHz = first.filterHighHz;
-        r.agcMode = first.agcMode;
-        r.agcThresholdDb = first.agcThresholdDb;
+        seed.sliceFreqHz = first.sliceFreqHz;
+        seed.ncoHz = first.ncoHz;
+        seed.mode = first.mode;
+        seed.filterLowHz = first.filterLowHz;
+        seed.filterHighHz = first.filterHighHz;
+        seed.agcMode = first.agcMode;
+        seed.agcThresholdDb = first.agcThresholdDb;
     }
+    m_rx.push_back(seed);
 
-    // The WIRE FIRST, so the radio is already streaming the new layout before
-    // the DSP that consumes it exists. The reverse order would leave a
-    // configured chain briefly reading a payload with one fewer receiver in it.
+    // The WIRE FIRST, so the radio is already streaming the new layout before the
+    // DSP that consumes it exists. The reverse order would leave a configured
+    // chain briefly reading a payload with one fewer receiver in it. The extra
+    // slot the radio now sends goes nowhere until publishIoDsps() below — the
+    // fan-out is still working from a list one shorter and clamps to it.
     // This restarts the EP6 stream — see MetisClient::setReceiverCount.
     if (m_metis) {
         QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::BlockingQueuedConnection,
             Q_ARG(int, static_cast<int>(m_rx.size())));
     }
 
+    Receiver& r = m_rx.back();
+
     std::string err;
     if (!openReceiverDsp(ddc, &err)) {
         qCWarning(lcHl2) << "HL2: receiver" << ddc << "could not be created —"
                          << QString::fromStdString(err);
-        m_rx.pop_back();
+        m_rx.pop_back();   // never published, so nothing to withdraw
         m_ids.remove(ddc);
         if (m_metis) {
             QMetaObject::invokeMethod(m_metis, "setReceiverCount", Qt::QueuedConnection,
@@ -648,6 +672,8 @@ bool Hl2Backend::createPanadapter()
                          << QString::fromStdString(err);
         dsp->disconnect(this);
         dsp->deleteLater();
+        // Safe to destroy without withdrawing it first: this chain was never
+        // published, so the fan-out has never held a pointer to it.
         m_rx.pop_back();
         m_ids.remove(ddc);
         if (m_metis) {
@@ -676,6 +702,11 @@ bool Hl2Backend::createPanadapter()
     }
     QMetaObject::invokeMethod(r.dsp, "setShift", Qt::QueuedConnection,
         Q_ARG(double, r.sliceFreqHz - r.ncoHz));
+
+    // AND ONLY NOW does the sample path learn about it. Last, after the chain is
+    // configured, tuned and shifted — so the first block it is ever handed lands
+    // in a receiver that is fully set up, rather than one still being assembled.
+    publishIoDsps();
 
     const auto* ids = m_ids.byDdc(ddc);
     qCInfo(lcHl2) << "HL2: added receiver — DDC" << ddc << "pan" << (ids ? ids->panId : QString())
@@ -761,13 +792,22 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // Tear the DSP down BEFORE the wire shrinks, so nothing is left consuming a
     // slot the radio has stopped sending. The reverse order feeds the surviving
     // receivers' samples into a chain that thinks it is still receiver N.
-    Receiver& r = m_rx[static_cast<std::size_t>(ddc)];
-    if (r.dsp) {
-        r.dsp->disconnect(this);
-        r.dsp->deleteLater();
-        r.dsp = nullptr;
-    }
+    //
+    // WITHDRAW, THEN DESTROY, and never the other way round. publishIoDsps()
+    // blocks until the I/O thread has taken the shortened list, so by the time the
+    // destruction below is posted the fan-out has already stopped feeding this
+    // chain. Destroying first would leave the I/O thread holding a pointer to an
+    // object queued for deletion, with a real-time path dereferencing it.
+    Hl2RxDsp* doomed = m_rx[static_cast<std::size_t>(ddc)].dsp;
+    m_rx[static_cast<std::size_t>(ddc)].dsp = nullptr;
     m_rx.erase(m_rx.begin() + ddc);
+    publishIoDsps();
+    if (doomed) {
+        // deleteLater() posts the destruction to the I/O thread's event loop,
+        // which is the only thread allowed to close the WDSP channel this owns.
+        doomed->disconnect(this);
+        doomed->deleteLater();
+    }
     m_ids.remove(ddc);        // renumbers DDC indices; UI numbers are untouched
     m_mixPending.clear();     // the per-receiver queues describe the old set
     m_mixAccum.clear();
@@ -856,8 +896,28 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
             ++contributors;
     if (contributors <= 1 && r->audioGain == 1.0f
         && r->audioPanPercent == kAudioPanCentre) {
-        emit audioFrameReady(floatBytes(pcm));
+        // The queue was empty before the insert above, so it holds exactly the
+        // block we were handed: emit that directly. This is the steady state and
+        // the reason the fast path exists — no copy, no clamp.
+        if (q.size() == pcm.size()) {
+            emit audioFrameReady(floatBytes(pcm));
+            q.clear();
+            return;
+        }
+        // THE EDGE INTO THIS PATH. The queue is not empty, which means the
+        // min()-aligned drain below ran while a second receiver was contributing
+        // and left residue in this one — the deeper of two queues always keeps
+        // some — and then that receiver was muted, which clears only ITS queue.
+        // Emitting `pcm` here and clearing would discard the residue: a short gap
+        // in the audio at the instant the operator mutes a slice, which reads as
+        // the mute glitching the wrong receiver. So flatten the whole queue.
+        //
+        // Whole stereo frames either way: every insert adds an interleaved block
+        // and every drain takes an even count, so the residue cannot be odd and
+        // cannot swap the channels of what follows it.
+        m_mixAccum.assign(q.cbegin(), q.cend());
         q.clear();
+        emit audioFrameReady(floatBytes(m_mixAccum));
         return;
     }
 
@@ -937,21 +997,30 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
 
 void Hl2Backend::releaseReceiverDsps()
 {
+    // WITHDRAW EVERY CHAIN FIRST, then destroy them — same order, and same reason,
+    // as removePanadapter(). Collect and null the pointers, publish the now-empty
+    // list (blocking, so the I/O thread has stopped feeding them when it returns),
+    // and only then post the destruction.
+    std::vector<Hl2RxDsp*> doomed;
+    doomed.reserve(m_rx.size());
     for (Receiver& r : m_rx) {
         if (!r.dsp)
             continue;
+        doomed.push_back(r.dsp);
+        r.dsp = nullptr;
+    }
+    publishIoDsps();
+    for (Hl2RxDsp* d : doomed) {
         // The DSP lives on the I/O thread and owns a WDSP channel plus an FFTW
         // plan. deleteLater() posts the destruction to that thread's event loop,
         // which is the only thread allowed to close the channel -- destroying it
         // from here would release a WDSP channel id from the wrong thread while
         // processIqBlock could still be running.
         //
-        // Disconnected FIRST: the fan-out in the constructor reads m_rx[i].dsp,
-        // and a block already in flight must not reach an object queued for
-        // destruction.
-        r.dsp->disconnect(this);
-        r.dsp->deleteLater();
-        r.dsp = nullptr;
+        // Disconnected as well, so its own outputs stop arriving; the withdrawal
+        // above is what stops the fan-out reaching it.
+        d->disconnect(this);
+        d->deleteLater();
     }
     // The mix buffers describe the set that just went away.
     m_mixAccum.clear();
@@ -968,9 +1037,32 @@ void Hl2Backend::releaseReceiverDsps()
 
 void Hl2Backend::tearDownReceivers()
 {
-    releaseReceiverDsps();
+    releaseReceiverDsps();   // already withdrew every chain from the sample path
     m_rx.clear();
+    publishIoDsps();         // and now the list is empty, not merely all-null
     m_ids.clear();
+}
+
+void Hl2Backend::publishIoDsps()
+{
+    std::vector<Hl2RxDsp*> next;
+    next.reserve(m_rx.size());
+    for (const Receiver& r : m_rx)
+        next.push_back(r.dsp);
+
+    // m_metis is the handle onto the I/O thread's event loop — it is the object
+    // that lives there (m_ioThread itself does not; a QThread has the affinity of
+    // the thread that CREATED it, which is this one).
+    if (m_metis && m_ioThread && m_ioThread->isRunning()
+        && QThread::currentThread() != m_ioThread) {
+        QMetaObject::invokeMethod(m_metis, [this, next] { m_ioDsps = next; },
+                                  Qt::BlockingQueuedConnection);
+        return;
+    }
+    // No I/O thread to hand it to: before it starts, after it is joined, or when
+    // already on it. Nothing is reading m_ioDsps in any of those, and a blocking
+    // invoke into a dead event loop — or into one's own — hangs forever.
+    m_ioDsps = next;
 }
 
 Hl2Backend::~Hl2Backend()
@@ -994,6 +1086,7 @@ Hl2Backend::~Hl2Backend()
     for (Receiver& r : m_rx)
         delete r.dsp;
     m_rx.clear();
+    m_ioDsps.clear();   // the thread that read this is joined; plain clear is safe
     m_ids.clear();
     delete m_txDsp;
     delete m_metis;

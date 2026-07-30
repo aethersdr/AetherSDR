@@ -252,6 +252,12 @@ private:
     static constexpr int kEp2AudioRateHz     = 48000;
     static constexpr int kStartRetryMs       = 300;
     static constexpr int kMaxStartAttempts   = 5;
+    // "EP6 is flowing" for the start-retry's purposes: a packet within this long.
+    // Sits far ABOVE the slowest EP6 interpacket gap (2.6 ms, at 48 kHz with one
+    // receiver) and far BELOW kStartRetryMs, so a running stream and a stopped one
+    // are both unambiguous at every retry tick. See the retry timer's lambda for
+    // why the test has to be recency rather than "has a packet ever arrived".
+    static constexpr int kEp6FlowingWithinMs = 100;
     static constexpr int kEp2PacerTickMs     = 2;
     static constexpr int kEp2MaxBurstPerTick = 16;
     static constexpr int kWatchdogTickMs     = 25;

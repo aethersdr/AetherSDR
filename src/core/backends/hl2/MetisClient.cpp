@@ -101,12 +101,31 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     // metis-start is a single UDP datagram and can simply be lost. Re-send it
     // until EP6 flows or the attempt budget is spent; C&C keeps flowing from the
     // pacer meanwhile, so a retry only needs to repeat the start itself.
+    //
+    // TWO PATHS ARM THIS: start() at connect, and setReceiverCount() when the
+    // payload layout changes. The restart path is why the gate below is a RECENCY
+    // test rather than "has a packet ever arrived".
+    //
+    // Neither m_linkUp nor m_haveRxSeq can answer for it. A restart deliberately
+    // leaves m_linkUp true — clearing it would make the resumed stream re-emit
+    // linkUp(), and Hl2Backend republishes its entire initial state on that, over
+    // the operator's live panes. And packets the radio put on the wire BEFORE the
+    // stop keep arriving for a round trip afterwards, so m_haveRxSeq goes true
+    // from a straggler while the start is lost and the radio is silent. Both gates
+    // read "the start landed" off evidence that predates the start.
+    //
+    // m_sinceLastEp6 has no such ambiguity and nothing to tune: a stream that is
+    // running reads near zero, one that has stopped reads a full tick or more.
     m_startRetryTimer = new QTimer(this);
     m_startRetryTimer->setInterval(kStartRetryMs);
     connect(m_startRetryTimer, &QTimer::timeout, this, [this] {
-        if (m_linkUp || !m_running || !m_socket) {
+        if (!m_running || !m_socket) {
             m_startRetryTimer->stop();
             return;
+        }
+        if (m_sinceLastEp6.isValid() && m_sinceLastEp6.elapsed() < kEp6FlowingWithinMs) {
+            m_startRetryTimer->stop();
+            return;   // EP6 is arriving; whichever start we sent got through
         }
         if (m_startAttempts >= kMaxStartAttempts) {
             m_startRetryTimer->stop();
@@ -398,15 +417,35 @@ void MetisClient::setReceiverCount(int count)
                                      : m_params.rxFrequencyHz;
         m_ccRxFreq.push_back(ccRxFreq(i, hz));
     }
-    // The decode buffers describe the OLD layout; drop them so the first packet
-    // after the restart sizes them from the new m_ccRxFreq.
-    m_blocks.clear();
-
     // Re-prime with the new config bank before starting, so the very first
     // packet the radio sends is already in the new layout.
     sendPrimingBurst(3);
-    sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
-    sendPrimingBurst(3);
+
+    // DISCARD WHAT IS ALREADY IN THE SOCKET.
+    //
+    // The stop above tells the RADIO to stop. It says nothing about the packets the
+    // radio had ALREADY put on the wire, which arrived while sendPrimingBurst sat
+    // in its msleeps with no event loop running to drain them. Those packets are in
+    // the OLD layout, and the comment above — "past this point the radio sends
+    // nothing" — is true of the radio and not of this socket. Decoding them against
+    // the new m_ccRxFreq misreads every round in them, and the payload carries no
+    // receiver-count field, so nothing downstream could report it.
+    //
+    // This is best-effort by nature: it cannot catch a packet still in flight. That
+    // is why the retry below tests how RECENTLY EP6 arrived rather than whether it
+    // ever did — a straggler must not be mistaken for a reply to the start.
+    int stalePackets = 0;
+    while (m_socket->hasPendingDatagrams()) {
+        m_socket->receiveDatagram();
+        ++stalePackets;
+    }
+    if (stalePackets > 0)
+        qInfo() << "MetisClient: discarded" << stalePackets
+                << "EP6 packet(s) buffered in the old layout across the restart";
+
+    // The decode buffers describe the OLD layout; drop them so the first packet
+    // after the restart sizes them from the new m_ccRxFreq.
+    m_blocks.clear();
 
     // Sequence tracking restarts with the stream. Without this the first packet
     // after the restart counts as a gap of tens of thousands of "dropped"
@@ -414,6 +453,29 @@ void MetisClient::setReceiverCount(int count)
     m_haveRxSeq = false;
     m_expectedRxSeq = 0;
     m_sinceLastEp6.restart();
+
+    sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port);
+    sendPrimingBurst(3);
+
+    // ARM THE RETRY, exactly as start() does. This start datagram is as losable
+    // as the one at connect, and without a retry a single dropped packet stopped
+    // the stream for good: the radio sends nothing, nothing re-asks it to, and
+    // kSilenceTimeoutMs (2000 ms) later the EP6 watchdog reports link loss. The
+    // operator's session died from having clicked "Add Panadapter".
+    //
+    // The budget fits inside that window on purpose. From here the timer fires at
+    // 300 ms intervals and m_startAttempts reaches kMaxStartAttempts (5) on the
+    // tick at 1500 ms, so the last re-send goes out at 1200 ms — comfortably
+    // before the 2000 ms silence timeout gives up. Raising kStartRetryMs or
+    // kMaxStartAttempts far enough to push 4 * kStartRetryMs past
+    // kSilenceTimeoutMs would make the watchdog fire while a retry was still
+    // pending, and the retry would be dead code.
+    //
+    // NOT the connect watchdog: connectFailed() is a connect-time signal and the
+    // link here is already up. A restart that never recovers surfaces as link
+    // loss through onWatchdogTick(), which is the truthful description of it.
+    m_startAttempts = 1;
+    m_startRetryTimer->start(kStartRetryMs);
 }
 
 void MetisClient::setLnaGainDb(int db)
@@ -614,11 +676,18 @@ void MetisClient::onReadyRead()
         if (!seq)
             continue;   // not an EP6 packet (e.g. a stray discovery reply)
 
+        // Restarted on every packet: this is the one piece of state that says how
+        // recently the stream produced anything, which both the silence watchdog
+        // and the start-retry read.
         m_sinceLastEp6.restart();
         if (!m_linkUp) {
             m_linkUp = true;
             if (m_connectWatchdog)
                 m_connectWatchdog->stop();   // first EP6 — the link is alive
+            // Only sound for the CONNECT path, where the socket is fresh and there
+            // are no stragglers to mistake for a reply. A receiver-count restart
+            // never reaches here (it leaves m_linkUp true on purpose) and disarms
+            // its retry through the timer's own recency test instead.
             if (m_startRetryTimer)
                 m_startRetryTimer->stop();
             emit linkUp();

@@ -172,9 +172,24 @@ private:
         double sMeterDbm = 0.0;
         bool   haveSMeter = false;
     };
+    // GUI THREAD ONLY. Nothing below the seam may touch this — see m_ioDsps for
+    // what the sample path reads instead, and publishIoDsps() for why.
     std::vector<Receiver> m_rx;
 
+    // I/O THREAD ONLY: the chains the EP6 fan-out feeds, indexed by DDC.
+    //
+    // A separate list rather than reaching into m_rx, and the separation is the
+    // point. The fan-out used to iterate m_rx directly, which put a GUI-thread
+    // container on the sample path: createPanadapter()'s push_back reallocates and
+    // removePanadapter()'s erase shifts, either of which can pull the storage out
+    // from under a fan-out halfway through it. Rebuilt by publishIoDsps() whenever
+    // the receiver set changes — never per packet.
+    std::vector<Hl2RxDsp*> m_ioDsps;
+
     // The four index spaces, never derived from one another. See Hl2Receivers.h.
+    // GUI thread only, like m_rx: nothing below the seam reads it, and the
+    // per-receiver signal handlers that resolve through it are queued onto this
+    // thread.
     Hl2ReceiverMap m_ids;
 
     // The receiver that owns transmit, and whose slice is the TX slice. The HL2
@@ -222,6 +237,28 @@ private:
     // two have different lifetimes — see buildReceivers().
     void releaseReceiverDsps();
     void tearDownReceivers();
+
+    // Hand the I/O thread a fresh copy of the chains to feed. Call after ANY
+    // change to the receiver set — one added, one closed, one's DSP replaced.
+    //
+    // WHY A COPY RATHER THAN SYNCHRONISED ACCESS TO m_rx. Locking m_rx would leave
+    // the sharing in place: every present and future reader on either thread would
+    // have to know about it, the lock would sit on the per-packet sample path, and
+    // taking it in createPanadapter() — which already makes a
+    // BlockingQueuedConnection call into the I/O thread — is a deadlock rather
+    // than a race. Ordering the two through Qt's event loop instead works, but the
+    // happens-before edge lives inside an uninstrumented QtCore, so
+    // ThreadSanitizer cannot see it and the weekly sanitizer job could never
+    // confirm the fix — it would report the synchronised access as a race forever.
+    //
+    // Copying removes the sharing outright. m_rx is GUI-thread-only, m_ioDsps is
+    // I/O-thread-only, neither thread touches the other's, so there is nothing to
+    // order and nothing for a sanitizer to report. The cost is a handful of
+    // pointers copied when the operator adds or closes a receiver.
+    //
+    // BLOCKS until the I/O thread has taken the new list, because callers destroy
+    // chains that were in the old one the moment this returns.
+    void publishIoDsps();
 
     // Sum one receiver's demodulated audio into the host mix. The HL2 has no
     // on-radio mixer -- a Flex sums its slices and sends one stream -- so with

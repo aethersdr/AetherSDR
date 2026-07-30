@@ -2655,6 +2655,14 @@ target_include_directories(hl2_metis_client_test PRIVATE src)
 target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
 
+# HL2 receiver-count restart — a fake radio that "loses" a metis-start, proving
+# the restart retries it and that the recovery is not mistaken for a reconnect.
+add_executable(hl2_receiver_count_restart_test tests/hl2_receiver_count_restart_test.cpp)
+target_include_directories(hl2_receiver_count_restart_test PRIVATE src)
+target_link_libraries(hl2_receiver_count_restart_test
+    PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_receiver_count_restart_test COMMAND hl2_receiver_count_restart_test)
+
 # HL2 per-receiver index-space map — standalone, needs only QtCore for QString.
 add_executable(hl2_receivers_test
     tests/hl2_receivers_test.cpp
@@ -2700,6 +2708,15 @@ add_executable(hl2_backend_test tests/hl2_backend_test.cpp)
 target_include_directories(hl2_backend_test PRIVATE src)
 target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
+
+# HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
+# test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
+# is what lets the weekly TSan job (.github/workflows/sanitizers.yml) see the race
+# Hl2Backend::fenceIo() exists to close.
+add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
+target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
+target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
 
 add_executable(client_eq_test
     tests/client_eq_test.cpp

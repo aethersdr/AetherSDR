@@ -2613,9 +2613,26 @@ simulator; none needs hardware.
 15. Four receivers refuse 384 kHz; three accept it. The reported zoom limits
     shrink with the receiver count, so a refused span is unreachable from the UI.
 
+**Surviving the restart** — every create and remove restarts the EP6 stream
+(`MetisClient::setReceiverCount`), which is the least obvious thing in this
+section and the easiest to regress.
+
+16. Adding or closing a receiver does NOT drop the link. `get radio` reports
+    connected throughout, and `get_log` shows no `linkDown`. The stream restart
+    re-sends metis-start, that datagram is as losable as the one at connect, and
+    without a retry one lost packet ends the session ~2 s later on the silence
+    watchdog. Covered in-tree by `hl2_receiver_count_restart_test`.
+17. A restart is not a reconnect. Exactly one `connected()` per session — a
+    spurious one makes RadioModel stage every pane as previous-session leftovers
+    and rebuild the operator's layout mid-click.
+18. After ~10 add/close cycles, every surviving receiver still produces spectrum
+    and audio. Renumbering is what breaks here: closing the middle of three
+    renumbers every DDC after it, and a chain wired to an index rather than a
+    stable id goes quiet with nothing logged.
+
 **Both paths, every time**
 
-16. For each control, exercise the GUI widget AND the bridge verb. The layout
+19. For each control, exercise the GUI widget AND the bridge verb. The layout
     dialog is modal — a synthetic click needs a settle delay before the tile
     click, or the second click lands on whatever is behind the dialog and the
     button looks dead.
@@ -2624,7 +2641,68 @@ simulator; none needs hardware.
 create|remove|rfgain`, `slice select|tx`, `tune`, `get radio|slices|pans|slice`,
 `invoke`, `clickAt`, `dumpTree`, `get_log`. Gaps worth adding when these become
 real certification cases: a verb for per-slice mute/gain/balance (today only
-reachable by clicking the applet), and one for pane pop-out / maximize.
+reachable by clicking the applet); one for pane pop-out / maximize; and a
+`capture_audio` window straddling a slice mute, which is the only way to check
+the mixer's continuity claim (§20.7) from outside — the drain leaves residue in
+the deeper queue, and the single-contributor fast path has to emit it rather than
+discard it, which no in-tree test currently observes.
+
+### 20.15.1 Two concurrency traps the receiver set introduced
+
+Both were found in review of this work, not on the air. Both are the kind that a
+passing test suite says nothing about, so they are recorded as shapes to look for
+rather than as fixed bugs.
+
+**The sample path must not read a GUI-thread container.** The EP6 fan-out started
+as a loop over `m_rx`, dereferencing `m_rx[i].dsp` for every arriving packet on
+the I/O thread. That is fine with a fixed receiver set and wrong the moment one
+can be added or closed: `createPanadapter()`'s `push_back` reallocates and
+`removePanadapter()`'s `erase` shifts, either of which can free or move the
+storage under a fan-out that is halfway through it — a use-after-free on the
+real-time audio path, reachable by clicking "Add Panadapter" while the radio
+streams.
+
+The fix that looks obvious is to synchronise the access. Do not: the I/O thread
+is reached from `createPanadapter()` by a `Qt::BlockingQueuedConnection`, so a
+lock the I/O thread also wants is a deadlock rather than a race. Ordering the two
+through the event loop instead does work — one event loop never runs two
+callbacks at once — but it leaves the sharing in place for every future reader to
+rediscover, and see the next paragraph for why it cannot be verified.
+
+What is in the tree is neither: the I/O thread gets its **own** list
+(`m_ioDsps`), rebuilt by `publishIoDsps()` only when the receiver set changes.
+`m_rx` is GUI-thread-only, `m_ioDsps` is I/O-thread-only, and there is no shared
+state left to order. The ordering rule that remains is a lifetime one — withdraw
+a chain from the published list *before* destroying it, never after — and
+`publishIoDsps()` blocks for exactly that reason.
+
+**ThreadSanitizer cannot see through Qt.** QtCore ships uninstrumented, so the
+happens-before edge a `Qt::BlockingQueuedConnection` establishes (a `QSemaphore`
+inside QtCore) is invisible to TSan. Every blocking invoke therefore reports the
+callee's read of the caller's captures as a data race, with `QtCore` frames
+printed as `<null>`. This is pre-existing and abundant, not new:
+`hl2_backend_test`, which predates the multi-receiver work, reports 57 races
+under `-fsanitize=thread`, 32 of them in the queued-functor dispatcher.
+
+Two consequences worth carrying forward:
+
+- **A Qt-synchronised fix is unfalsifiable here.** The event-loop-ordering
+  approach above was implemented first and TSan reported the receiver vector as
+  raced *because of the fence* — the fence had moved a same-thread write onto
+  another thread, and TSan could not see the semaphore ordering them. Preferring
+  "no sharing" over "synchronised sharing" is what made the result checkable.
+- **Read the differential, never the count.** The useful measurement was
+  `grep -c 'vector<...::Receiver'` over the TSan log across the two designs: 8
+  frames naming the receiver vector before, 0 after, with the pre-existing
+  blocking-invoke reports unchanged either side. The absolute count is dominated
+  by the Qt artifact and says nothing.
+
+`tests/hl2_receiver_churn_test.cpp` exists to give this a place to be seen: it
+is the only test that adds and closes receivers against a live EP6 stream, which
+is the contended window. It passes on a plain build regardless of the fix, and
+that is worth being blunt about — a use-after-free on a four-element vector
+usually reads memory the allocator handed straight back. Its value is under a
+sanitizer, and it reports 30 of the pre-existing Qt artifacts when run there.
 
 ### 20.16 What is proven, and what is not
 
