@@ -57,7 +57,18 @@ ParsedMessage CommandParser::parseLine(const QString& rawLine)
         msg.type = MessageType::Response;
         const QStringList parts = body.split('|');
         if (parts.size() >= 1) msg.sequence   = parts[0].toUInt();
-        if (parts.size() >= 2) msg.resultCode = parts[1].toInt(nullptr, 16);
+        if (parts.size() >= 2) {
+            // SmartSDR result codes are unsigned 32-bit values. Fatal codes
+            // such as F3000001 have the high bit set; QString::toInt() rejects
+            // them as overflow and returns zero, which would turn a fatal
+            // rejection into an apparent success. Preserve the protocol bit
+            // pattern in the legacy int callback type.
+            bool ok = false;
+            const quint32 resultCode = parts[1].toUInt(&ok, 16);
+            if (ok) {
+                msg.resultCode = static_cast<int>(resultCode);
+            }
+        }
         if (parts.size() >= 3) {
             msg.object = parts[2];
             msg.kvs    = parseKVs(parts[2]);

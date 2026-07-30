@@ -24,6 +24,8 @@ namespace AetherSDR {
 class CopyAssistSettingsDialog : public PersistentDialog {
     Q_OBJECT
 public:
+    static constexpr int kGpuDiscoveryPending = -2;
+
     explicit CopyAssistSettingsDialog(QWidget* parent = nullptr);
 
     // Model tier selector (id + human label).
@@ -32,11 +34,13 @@ public:
     void setTierLabel(const QString& id, const QString& label);
     QString currentTier() const;
 
-    // Compute-device selector — shown only when the controller finds a GPU.
+    // Compute-device selector — disabled during discovery and hidden on CPU-only hosts.
     void addGpuDevice(int index, const QString& name);
+    void clearGpuDevices();
     void setCurrentGpu(int index);
     int currentGpu() const;
     void setGpuSelectorVisible(bool on);
+    void setGpuSelectorEnabled(bool on);
 
     // Transcription-language selector (code + human label, e.g. "en"/"English").
     // The controller populates it from the whisper backend's supported list;

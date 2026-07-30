@@ -729,6 +729,9 @@ private:
     // discovery object only is what left HL2 owners hand-picking their radio at
     // every launch.
     void maybeAutoConnectToDiscoveredRadio(const RadioInfo& info);
+    // Settle the bookkeeping for an auto-connect that has reached a terminal
+    // state. A no-op when the connect in question was a manual one.
+    void noteAutoConnectFinished(bool ok);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
@@ -1249,7 +1252,18 @@ private:
     bool m_hasPaTempTelemetry{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
+    //
+    // The slot is driven by radioUpdated as well as radioDiscovered, and
+    // radioUpdated repeats. Neither of these is bookkeeping for its own sake:
+    // without the in-flight serial the slot re-enters its own handshake, and
+    // without the attempt count a radio that never completes one re-triggers it
+    // forever.
+    QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
+    QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
+    QString m_terminalConnectionError; // preserved until the next explicit connect
     QPointer<class ThemeEditorDialog> m_themeEditorDialog; // Phase 5 — lazy, modeless
     void cancelTransmitFromIndicator();
     void beginProfileLoadRadioStateWriteHold(const QString& profileType, const QString& profileName);
