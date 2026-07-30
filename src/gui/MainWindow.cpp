@@ -111,6 +111,7 @@
 #include "AmpApplet.h"
 #include "MeterApplet.h"
 #include "HealthApplet.h"
+#include "GpsLocationDialog.h"   // applyCapabilitiesToUi() closes it when hasGpsLocation goes false
 #include "PersistentDialog.h"
 #include "ProfileManagerDialog.h"
 #include "ProfileImportExportDialog.h"
@@ -4701,8 +4702,9 @@ void MainWindow::buildUI()
     gpsVbox->addWidget(m_gpsLabel);
     gpsVbox->addWidget(m_gpsStatusLabel);
     hbox->addWidget(gpsStack);
+    m_gpsStatusButton = gpsStack;
 
-    addSep();
+    m_gpsSeparator = addSep();
 
     // CPU (top) + Memory (bottom) stacked
     {
@@ -6217,6 +6219,52 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
+
+    // ── GPS: the status-bar position readout and the dialog it opens ────────
+    //
+    // Measured on a live Hermes-Lite 2 before this gate existed: the button sat
+    // `visible:true, enabled:true` reading **"[Waiting]"** indefinitely, because
+    // that radio has no GNSS receiver and so never sends a `gps` status at all.
+    // A control that can only ever say "waiting" is worse than an absent one —
+    // it reads as a fix that has not arrived yet rather than a receiver that
+    // does not exist.
+    //
+    // NB this stack carries the 10 MHz reference readout as well as the
+    // satellite count, so hiding it removes both. That is right for a radio
+    // declaring no position source — the reference lock is a GPSDO/external-10M
+    // concept and the same stack's tooltip already read "Actual: Unknown /
+    // Lock: Unlocked" on the HL2 — but it is a second surface, so it is called
+    // out here rather than left for a reviewer to find.
+    //
+    // Hidden WITH its trailing separator, or the divider is left stranded
+    // between the neighbouring telemetry stacks.
+    //
+    // The dialog is closed rather than merely unreachable, for the same reason
+    // the Profile Manager is above: a live GPS dashboard left on screen against
+    // a radio that has no receiver reports "Waiting for a valid GPS fix"
+    // forever, which reads as a broken fix rather than an absent one.
+    const bool gps = !connected || caps.hasGpsLocation;
+    if (m_gpsStatusButton) {
+        m_gpsStatusButton->setVisible(gps);
+    }
+    if (m_gpsSeparator) {
+        m_gpsSeparator->setVisible(gps);
+    }
+    if (!gps && m_gpsLocationDialog) {
+        m_gpsLocationDialog->close();  // QPointer — guarded above
+    }
+    // Recompute the status bar's floor, because these two widgets are ~90 px of
+    // it. Every other status-bar visibility site in this file pairs the two, and
+    // omitting it here happens to work only by connection order: on the connect
+    // and disconnect edges onConnectionStateChanged() recomputes AFTER this runs,
+    // because wireRadioModel() binds it before setupBackend() binds
+    // publishCapabilities. A mid-session capability revision — which
+    // capabilitiesChanged now delivers, and which is the whole point of routing
+    // through publishCapabilities() — has no such recompute behind it, and leaves
+    // the container's minimumSizeHint above the window minimum (a clipped status
+    // bar at narrow widths) or below it (a window that cannot be narrowed).
+    updateStatusBarMinimumWidth();
+
 }
 
 void MainWindow::applyRadioSideDspToOverlayMenu(SpectrumOverlayMenu* menu) const

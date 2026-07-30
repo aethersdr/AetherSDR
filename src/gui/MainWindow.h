@@ -89,6 +89,7 @@
 
 class QAbstractSlider;
 class QMediaDevices;
+class QPushButton;
 class QShowEvent;
 class QSystemTrayIcon;
 
@@ -1258,6 +1259,13 @@ private:
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;
+    // GPS/station-location status-bar button and the separator that follows it.
+    // Both are held so applyCapabilitiesToUi() can hide them together on a radio
+    // with no position source — hiding the button alone would leave its " · "
+    // divider stranded between the neighbours (same reason m_tgxlSeparator is
+    // held below).
+    QPushButton* m_gpsStatusButton{nullptr};
+    QLabel*  m_gpsSeparator{nullptr};
     QLabel*  m_tgxlSeparator{nullptr};
     QWidget* m_tgxlContainer{nullptr};
     QLabel*  m_tgxlIndicator{nullptr};   // top row: "TUN"

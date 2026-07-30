@@ -125,6 +125,8 @@ int main(int argc, char** argv)
               "Flex declares hasWaveforms (installable SmartSDR waveforms)");
         check(caps.hasMultiClientSessions,
               "Flex declares hasMultiClientSessions (multiFLEX)");
+        check(caps.hasGpsLocation,
+              "Flex declares hasGpsLocation (GPSDO / on-board GNSS)");
         // The two DSP flags are independent statements, not synonyms: the base
         // set and the extra 8000-series filters. A default Flex model string is
         // unknown to the platform table, so the narrower one is false here while
@@ -153,6 +155,8 @@ int main(int argc, char** argv)
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "HL2 declares hasMultiClientSessions=false (one client owns it)");
+        check(!caps.hasGpsLocation,
+              "HL2 declares hasGpsLocation=false (no GNSS receiver on the board)");
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------
@@ -191,6 +195,7 @@ int main(int argc, char** argv)
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
+        check(!caps.hasGpsLocation, "Sim declares hasGpsLocation=false");
 
         // The surfaces the GUI drives off those flags, evaluated the way the
         // GUI evaluates them. A CONNECTED radio that says no means hidden.
@@ -202,6 +207,8 @@ int main(int argc, char** argv)
               "connected + hasWaveforms=false hides File > Waveforms");
         check(!uiWouldShow(model.isConnected(), caps.hasMultiClientSessions),
               "connected + hasMultiClientSessions=false hides Settings > multiFLEX");
+        check(!uiWouldShow(model.isConnected(), caps.hasGpsLocation),
+              "connected + hasGpsLocation=false hides the GPS stack and its separator");
 
         // hasRadioSideDsp reaches the UI through its own accessor, which applies
         // the permissive rule itself (there is no model-name table to fall back
@@ -248,6 +255,11 @@ int main(int argc, char** argv)
               "disconnected: File > Waveforms is restored");
         check(uiWouldShow(model.isConnected(), caps.hasMultiClientSessions),
               "disconnected: Settings > multiFLEX is restored");
+        // The GPS button is the ONLY entry point to the location dialog, so a
+        // gate that failed to reopen would strand the feature entirely after
+        // unplugging a radio that happened to lack GNSS.
+        check(uiWouldShow(model.isConnected(), caps.hasGpsLocation),
+              "disconnected: the GPS stack is restored");
         check(model.hasRadioSideDsp(),
               "disconnected: hasRadioSideDsp() goes permissive, radio DSP back");
     }
@@ -269,6 +281,11 @@ int main(int argc, char** argv)
               "round-trip: Flex regains hasWaveforms after sim -> Flex");
         check(caps.hasMultiClientSessions,
               "round-trip: Flex regains hasMultiClientSessions after sim -> Flex");
+        // The one that would catch a cached flag: the sim declares
+        // hasGpsLocation=false, so a stale value here hides the GPS stack on a
+        // Flex that has a GPSDO.
+        check(caps.hasGpsLocation,
+              "round-trip: Flex regains hasGpsLocation after sim -> Flex");
     }
 
     // ---- Flex extended DSP is unchanged by the reconciliation -------------

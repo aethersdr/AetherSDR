@@ -158,6 +158,31 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasRadioSideDsp = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
+    // GPSDO / on-board GNSS, reported through the `gps` status.
+    //
+    // TRUE for every Flex, and deliberately COARSER than
+    // RadioModel::hasGpsHardware(). The two answer different questions and both
+    // are needed:
+    //
+    //   - this flag: "can a radio of this family have GPS at all" — a family
+    //     fact, which is what the capability seam is for and all a backend can
+    //     honestly assert before any status has arrived;
+    //   - hasGpsHardware(): "does THIS unit have it" — model name (8400/8600/
+    //     AU-) OR a live `gps` status that is not "Not Present".
+    //
+    // Do not narrow this to the model-name test to match. That clause is one
+    // half of an OR: a FLEX-6700 with an optional GPSDO installed answers true
+    // through the STATUS clause, and a model-name test here would hide GPS on
+    // exactly those radios — a regression in the opposite direction from the one
+    // it would appear to fix.
+    //
+    // Consequence, and it is pre-existing rather than introduced by the
+    // capability gate: a GPSDO-less 6000-series still shows the GPS button
+    // reading [Waiting] forever, because this flag alone gates it. Fixing that
+    // means the gate consulting both — see the follow-up issue; it is not a
+    // one-line change, because the gate's test helper mirrors
+    // `!connected || declared` exactly.
+    caps.hasGpsLocation = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and

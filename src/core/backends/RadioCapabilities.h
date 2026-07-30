@@ -128,6 +128,18 @@ struct RadioCapabilities {
     // configuration UI goes away.
     bool hasMultiClientSessions = false;
 
+    // The RADIO reports its own position/time from an on-board GNSS receiver, so
+    // a client can offer a live GPS readout and the station-location dashboard
+    // it feeds.
+    //
+    // This is about the radio as a POSITION SOURCE, not about the client knowing
+    // where the station is. A grid square the operator typed into settings is
+    // not this capability, and must never be gated on it — a radio with
+    // hasGpsLocation=false still has a station location, it just cannot tell you
+    // what it is. That distinction is why the flag is named for the receiver
+    // rather than for the dashboard it happens to drive today.
+    bool hasGpsLocation = false;
+
     // Vendor-specific capabilities, keyed by extension namespace. Clients that
     // don't understand a namespace ignore it; a backend never puts core-profile
     // fields here. Example: {"flex": {"multiFlex": true, "guiClientId": "…"}}.
