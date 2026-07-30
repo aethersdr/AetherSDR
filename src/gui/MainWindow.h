@@ -1098,6 +1098,7 @@ private:
 #endif
     QTimer                     m_dialCoalesceTimer;
     int                        m_dialPendingSteps{0};
+    QSet<QString>              m_dialActiveMidiGates;
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};
     QTimer               m_midiTuneIdleTimer;

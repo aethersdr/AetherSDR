@@ -2800,7 +2800,13 @@ void MainWindow::wireExternalControllers()
                 p->setter(p->rangeMax);
             } else if (p->type == MidiParamType::Gate) {
                 if (action != 1 && action != 0) return;
-                p->setter(action == 1 ? p->rangeMax : p->rangeMin);
+                if (action == 1) {
+                    m_dialActiveMidiGates.insert(id);
+                    p->setter(p->rangeMax);
+                } else if (action == 0) {
+                    m_dialActiveMidiGates.remove(id);
+                    p->setter(p->rangeMin);
+                }
             }
         }
 #endif
@@ -2813,6 +2819,15 @@ void MainWindow::wireExternalControllers()
             this, [this](bool connected, const QString& name) {
         qDebug() << "Ulanzi Dial:" << (connected ? "connected" : "disconnected") << name;
         if (!connected) {
+#ifdef HAVE_MIDI
+            for (const QString& id : m_dialActiveMidiGates) {
+                const auto* p = m_midiControl ? m_midiControl->findParam(id) : nullptr;
+                if (p && p->setter) {
+                    p->setter(p->rangeMin);
+                }
+            }
+            m_dialActiveMidiGates.clear();
+#endif
             failSafeMomentaryKeyingToRx("ulanzi disconnect");
         }
     });
