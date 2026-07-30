@@ -2711,8 +2711,11 @@ add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
 
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
-# is what lets the weekly TSan job (.github/workflows/sanitizers.yml) see the race
-# Hl2Backend::fenceIo() exists to close.
+# is what lets the weekly TSan job (.github/workflows/sanitizers.yml) exercise the
+# ordering that keeps them apart: Hl2Backend::publishIoDsps() hands the sample
+# path its own copy (m_ioDsps) and blocks until the I/O thread has taken it, so
+# the reshape never mutates a container a fan-out is walking. (There is no
+# fenceIo() — an earlier draft named one and this comment outlived it.)
 add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
 target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
 target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

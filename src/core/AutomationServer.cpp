@@ -2853,8 +2853,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doTestTone(a.action, a.value);
             });
 
+        // parseActionRest, not parseActionValue: `pan rfgain <panId> <dB>` needs
+        // BOTH remaining tokens. parseActionValue keeps only the first, so the dB
+        // was dropped and the two-argument form could never work — doPan()'s
+        // rfgain branch already splits the joined value and handles both shapes,
+        // so the handler was right and only the parser choice was wrong.
         add("pan", {}, "pan <create|add|remove|close|center|rfgain> [value]",
-            parseActionValue,
+            parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty())
                     return err(QStringLiteral(

@@ -798,16 +798,30 @@ bool Hl2Backend::removePanadapter(const QString& panId)
     // destruction below is posted the fan-out has already stopped feeding this
     // chain. Destroying first would leave the I/O thread holding a pointer to an
     // object queued for deletion, with a real-time path dereferencing it.
+    // WITHDRAW EVERYTHING, not just the doomed chain, and hold that across the
+    // receiver-count change.
+    //
+    // Publishing the SHORTENED list here was wrong in the window that follows:
+    // erase() shifts the survivors down, but the wire is still sending the old
+    // number of slots, so the fan-out mapped slot k to the chain that had just
+    // moved into index k. Every receiver above the closed one was fed the slot
+    // below it — including the closed receiver's own IQ, landing in whichever
+    // chain shifted into its place. That is precisely the misfeed the comment
+    // above says this ordering exists to avoid.
+    //
+    // The compaction of m_ioDsps and the wire's setReceiverCount cannot be made
+    // atomic with respect to each other, so no shortened list is safe to publish
+    // between them. The empty list is, because it is correct whatever arrives.
     Hl2RxDsp* doomed = m_rx[static_cast<std::size_t>(ddc)].dsp;
     m_rx[static_cast<std::size_t>(ddc)].dsp = nullptr;
-    m_rx.erase(m_rx.begin() + ddc);
-    publishIoDsps();
+    withdrawIoDsps();
     if (doomed) {
         // deleteLater() posts the destruction to the I/O thread's event loop,
         // which is the only thread allowed to close the WDSP channel this owns.
         doomed->disconnect(this);
         doomed->deleteLater();
     }
+    m_rx.erase(m_rx.begin() + ddc);
     m_ids.remove(ddc);        // renumbers DDC indices; UI numbers are untouched
     m_mixPending.clear();     // the per-receiver queues describe the old set
     m_mixAccum.clear();
@@ -828,6 +842,12 @@ bool Hl2Backend::removePanadapter(const QString& panId)
             }
         }
     }
+
+    // Feed the survivors again. Unconditional and AFTER the block above: only
+    // now does a shortened list describe what the wire is sending. Outside the
+    // if(m_metis), because a withdrawal that is never undone is permanent
+    // silence, and "no wire" must not be the one path that never recovers.
+    publishIoDsps();
 
     qCInfo(lcHl2) << "HL2: closed receiver — pan" << removedPanId << "(UI" << removedUi
                   << "); running" << m_rx.size() << "receiver(s)";
@@ -1043,13 +1063,22 @@ void Hl2Backend::tearDownReceivers()
     m_ids.clear();
 }
 
+void Hl2Backend::withdrawIoDsps()
+{
+    publishIoDspList({});
+}
+
 void Hl2Backend::publishIoDsps()
 {
     std::vector<Hl2RxDsp*> next;
     next.reserve(m_rx.size());
     for (const Receiver& r : m_rx)
         next.push_back(r.dsp);
+    publishIoDspList(std::move(next));
+}
 
+void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
+{
     // m_metis is the handle onto the I/O thread's event loop — it is the object
     // that lives there (m_ioThread itself does not; a QThread has the affinity of
     // the thread that CREATED it, which is this one).
@@ -1350,10 +1379,40 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
             qCWarning(lcHl2) << "HL2: receiver" << i << "DSP failed —"
                              << QString::fromStdString(err)
                              << "; running" << i << "receiver(s)";
-            for (int k = i; k < actualNumRx; ++k)
-                delete m_rx[static_cast<std::size_t>(k)].dsp;
+            // WITHDRAW, THEN DESTROY — the same order as removePanadapter() and
+            // releaseReceiverDsps(), and for the same reason. buildReceivers()
+            // has already published all `actualNumRx` chains to the sample path,
+            // so a raw delete here left m_ioDsps holding freed pointers; the wire
+            // then started with the untrimmed numRx and the first EP6 packet
+            // called processIqBlock() on them, on the I/O thread.
+            //
+            // deleteLater(), not delete: an Hl2RxDsp owns a WDSP channel and an
+            // FFTW plan and lives on the I/O thread, which is the only thread
+            // allowed to close them. Every other teardown in this file does this;
+            // the one raw delete that remains (in the destructor) is justified
+            // there by the thread already being joined.
+            std::vector<Hl2RxDsp*> doomed;
+            for (int k = i; k < actualNumRx; ++k) {
+                if (Hl2RxDsp* d = m_rx[static_cast<std::size_t>(k)].dsp) {
+                    doomed.push_back(d);
+                    m_rx[static_cast<std::size_t>(k)].dsp = nullptr;
+                }
+            }
             m_rx.resize(static_cast<std::size_t>(i));
-            m_ids.reset(i);
+            publishIoDsps();
+            for (Hl2RxDsp* d : doomed) {
+                d->disconnect(this);
+                d->deleteLater();
+            }
+            // The wire must carry the TRIMMED count. Leaving mp.numRx at the
+            // requested value made the radio send slots nothing was listening
+            // on, and made blocks.size() disagree with the fan-out list.
+            mp.numRx = i;
+            // truncate(), NOT reset(i): the receivers that DID open have their
+            // dspChannel and analyzerId recorded already, and reset() would put
+            // them back to -1 — losing exactly the ids that cannot be re-derived
+            // from the index.
+            m_ids.truncate(i);
             break;
         }
         // The WDSP channel id is knowable only NOW, and it is whatever the
@@ -2082,8 +2141,21 @@ void Hl2Backend::setKeying(bool key)
         // voice transmission would have gone out at 10%.
         const bool wasTuning = m_tuning;
         m_tuning = false;
-        if (wasTuning)
+        if (wasTuning) {
             setTxPower(m_rfPowerPercent);
+            // AND re-decide the filter, because the call above ran while
+            // m_tuning was still set.
+            //
+            // applyBandFilter() branches on (m_keyed || m_tuning): with receivers
+            // spanning bands it forces the TX receiver's filter while either is
+            // true, and bypasses otherwise. On a tune-initiated unkey m_keyed is
+            // already false but m_tuning was not, so the earlier call took the
+            // forced branch and left the bank on the TX receiver's filter with
+            // the other receivers attenuated. Nothing re-ran it: the early-out on
+            // `oc == m_ocFilterByte` means the stuck value looks current, so it
+            // survives until someone happens to retune.
+            applyBandFilter("tune-end");
+        }
     }
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setMox", Qt::QueuedConnection,

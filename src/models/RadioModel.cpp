@@ -642,9 +642,12 @@ void RadioModel::setupBackend(const QString& family)
         if (!pan)
             return;
         const QString modelPanId = pan->panId();
-        // Retire the id translation for this pan. The index is NOT reused —
-        // neutralPanIndexFor() counts up — so a later pan cannot inherit the
-        // stream ids of the one just closed and start painting into its pane.
+        // Retire the id translation for this pan. The index IS reused —
+        // neutralPanIndexFor() hands out the lowest free one, deliberately, and
+        // says why. What makes that safe is the cleanup below: freeing the index
+        // also drops the center, bandwidth and waterfall-row state recorded
+        // against it, so the pan that inherits the number cannot inherit the
+        // previous occupant's geometry and start painting with it.
         if (const int idx = m_backendPanIndex.take(backendPanId); true) {
             m_backendPanIdByIndex.remove(idx);
             m_backendPanCenterMhz.remove(idx);

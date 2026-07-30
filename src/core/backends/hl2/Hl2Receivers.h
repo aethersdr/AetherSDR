@@ -84,6 +84,12 @@ public:
     // are filled in as the DSP opens, and diversity/PureSignal will break the
     // ddc<->ui correspondence later. Nothing may assume it holds.
     void reset(int count);
+    // Drop everything from `count` upward, KEEPING the survivors as they are.
+    // reset(count) is not a substitute: it rebuilds from scratch, so every
+    // surviving receiver's dspChannel and analyzerId go back to -1 — the ids
+    // that are only knowable once the DSP has opened, and that this type exists
+    // to stop anyone deriving from the index instead.
+    void truncate(int count);
     void clear() { m_rx.clear(); }
 
     [[nodiscard]] int size() const noexcept { return static_cast<int>(m_rx.size()); }

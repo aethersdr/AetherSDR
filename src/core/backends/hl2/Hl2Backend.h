@@ -260,6 +260,24 @@ private:
     // chains that were in the old one the moment this returns.
     void publishIoDsps();
 
+    // Withdraw EVERY chain from the sample path and block until the I/O thread
+    // has taken the empty list. Use this whenever the receiver SET is about to
+    // change shape — a close, or a trim after a failed open — because publishing
+    // a shortened list while the wire is still sending the old slot count leaves
+    // the fan-out mapping slot k to whichever chain moved into index k, which is
+    // a live receiver being fed another receiver's IQ.
+    //
+    // Publishing empty is not just a null-safety measure: it is the only state
+    // that is correct no matter what the wire sends next, which is what makes it
+    // safe to hold across the receiver-count change. A few milliseconds of
+    // silence on the survivors is the cost, and it is the right trade against
+    // misfed IQ.
+    void withdrawIoDsps();
+
+    // Shared tail of the two above. Takes the list by value so the copy handed
+    // to the I/O thread can never alias m_rx.
+    void publishIoDspList(std::vector<Hl2RxDsp*> next);
+
     // Sum one receiver's demodulated audio into the host mix. The HL2 has no
     // on-radio mixer -- a Flex sums its slices and sends one stream -- so with
     // more than one slice open this is where they become one.
@@ -275,7 +293,9 @@ private:
     std::vector<std::deque<float>> m_mixPending;
     std::vector<float> m_mixAccum;
     // How far ahead the other receivers may get before a starved one is mixed as
-    // silence. 24 kHz audio, so this is ~85 ms -- long enough to absorb normal
+    // silence. Counted in SAMPLES of an interleaved L,R stream at 24 kHz, so
+    // 2048 samples is 1024 frames -- ~43 ms, not the ~85 ms a mono reading of
+    // the same number would suggest -- long enough to absorb normal
     // WDSP worker jitter, short enough that a genuinely stalled receiver does
     // not hold the speaker silent for a noticeable time.
     static constexpr std::size_t kMixStarvationSamples = 2048;

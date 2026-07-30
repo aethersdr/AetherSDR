@@ -35,6 +35,15 @@ int hl2RoleAfterRemove(int role, int removedDdc)
     return role > removedDdc ? role - 1 : role;
 }
 
+void Hl2ReceiverMap::truncate(int count)
+{
+    if (count < 0)
+        count = 0;
+    if (static_cast<std::size_t>(count) >= m_rx.size())
+        return;
+    m_rx.erase(m_rx.begin() + count, m_rx.end());
+}
+
 void Hl2ReceiverMap::reset(int count)
 {
     m_rx.clear();
