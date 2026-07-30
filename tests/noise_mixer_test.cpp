@@ -190,7 +190,7 @@ void testCwKeysDecodableMorse()
     QVector<double> env;
     for (int i = 0; i + blk <= audio.size(); i += blk) {
         double acc = 0.0;
-        for (int j = 0; j < blk; ++j) acc += audio[i + j] * audio[i + j];
+        for (int j = 0; j < blk; ++j) acc += static_cast<double>(audio[i + j]) * audio[i + j];
         env.append(std::sqrt(acc / blk));
     }
     double emax = 0.0;
