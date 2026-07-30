@@ -92,11 +92,11 @@ public:
     // the message completes it holds silence until stop(), preventing mic
     // leakage during the queued unkey edge.
     //
-    // The float overload is what the DAX pump uses; the int16 one exists for
-    // callers already working in the radio-native integer route. Both drive
-    // the same generator, so neither can drift from the other.
+    // Float is the only output form. An int16 overload existed alongside this
+    // one and had no caller left once the DAX pump stopped quantizing; keeping
+    // it would have meant the beacon's tests covering pre-roll, completion and
+    // tail silence all ran against a path that never ships.
     void process(float* interleaved, int frames, int channels) noexcept;
-    void process(int16_t* interleaved, int frames, int channels) noexcept;
 
 private:
     void beginPendingTransmission() noexcept;

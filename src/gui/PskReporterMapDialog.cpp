@@ -817,9 +817,19 @@ bool PskReporterMapDialog::applyBeaconBand()
 // move the slice in that window — another client, a band button, a profile
 // load — and until now nothing looked again.
 //
-// So this runs immediately before requestPttOn(). The generated one-second
-// pre-roll is silence, which gives the radio the whole of it to apply what we
-// just sent before the first symbol goes out.
+// So this runs immediately before requestPttOn(), and the generated lead-in is
+// silence, so the radio has that lead-in to apply what we just sent before the
+// first symbol goes out.
+//
+// How much lead-in that is depends on how late the tick was: a full second on
+// time, and NOTHING once we are a second or more past the boundary, where
+// updateBeaconState() drops the pre-roll to zero and skips into the frame
+// instead. That is the weakest case and it is deliberate — a late tick means
+// the GUI thread was stalled, which is when a stale channel is most likely,
+// but padding the lead-in to buy settling time would put the lateness straight
+// back into DT, which is the thing the slot-referenced lead-in exists to
+// remove. Losing a couple of hundred ms of the first sync symbol to a mode
+// that lands late costs less than a frame that reports a second of DT.
 bool PskReporterMapDialog::reassertBeaconChannel(QString* reason)
 {
     const auto fail = [reason](const QString& text) {
@@ -835,6 +845,16 @@ bool PskReporterMapDialog::reassertBeaconChannel(QString* reason)
     }
     if (slice->isLocked()) {
         return fail(tr("TX slice was locked"));
+    }
+    // Never write station TX state under a live carrier. applyBeaconBand()
+    // refuses on exactly this at arm time and the same has to hold here,
+    // because the transmitter can be taken by MOX, DAX, TCI or a tune in the
+    // up-to-120 s between the two. Writing `transmit set filter_low/high`
+    // mid-over reshapes the operator's voice to a 600 Hz passband in the
+    // middle of a word.
+    TransmitModel& tx = m_radioModel->transmitModel();
+    if (tx.isTransmitting() || tx.isTuning()) {
+        return fail(tr("transmitter is in use"));
     }
 
     // A dial that moved is the one thing NOT to paper over. Re-tuning here
@@ -854,7 +874,7 @@ bool PskReporterMapDialog::reassertBeaconChannel(QString* reason)
     }
     slice->setMode(QStringLiteral("DIGU"));
     slice->setFilterWidth(1200, 1800);
-    m_radioModel->transmitModel().setTxFilter(1200, 1800);
+    tx.setTxFilter(1200, 1800);
     return true;
 }
 
@@ -1080,6 +1100,25 @@ void PskReporterMapDialog::updateBeaconState()
             return;
         }
         deferBeaconToNextSlot(tr("Re-armed · waiting for WSPR TX audio stream"));
+        return;
+    }
+
+    // The transmitter can be taken between arming and the slot — MOX for a
+    // quick voice contact, DAX, TCI, a tune. That is transient and the
+    // operator has not withdrawn anything, so roll to the next slot rather
+    // than discard the arming; the bounded deferral count still stops a
+    // transmitter wedged on from leaving the beacon armed forever.
+    //
+    // Checked here as well as inside reassertBeaconChannel() because only this
+    // caller knows a busy transmitter is worth waiting out, where a slice that
+    // moved band is not.
+    if (m_radioModel->transmitModel().isTransmitting()
+        || m_radioModel->transmitModel().isTuning()) {
+        if (m_beaconDeferrals >= kBeaconMaxDeferrals) {
+            stopBeacon(tr("Stopped: transmitter is in use"));
+            return;
+        }
+        deferBeaconToNextSlot(tr("Re-armed · transmitter is in use"));
         return;
     }
 

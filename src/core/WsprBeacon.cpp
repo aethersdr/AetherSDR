@@ -333,20 +333,4 @@ void WsprBeacon::process(float* interleaved, int frames, int channels) noexcept
     }
 }
 
-void WsprBeacon::process(int16_t* interleaved, int frames, int channels) noexcept
-{
-    if (interleaved == nullptr || frames <= 0 || channels < 1 || channels > 2
-        || !beginProcess()) {
-        return;
-    }
-    for (int frame = 0; frame < frames; ++frame) {
-        const int16_t sample = static_cast<int16_t>(std::clamp(
-            nextFrameSample() * 32767.0f, -32768.0f, 32767.0f));
-        interleaved[frame * channels] = sample;
-        if (channels == 2) {
-            interleaved[frame * channels + 1] = sample;
-        }
-    }
-}
-
 } // namespace AetherSDR

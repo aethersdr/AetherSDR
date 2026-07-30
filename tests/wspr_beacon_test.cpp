@@ -106,20 +106,20 @@ void testSampleTimingAndTailSilence()
     beacon.prepare(WsprBeacon::kSampleRate);
     beacon.start(encoded.symbols, 1500.0, -20.0f, 10);
 
-    std::vector<int16_t> pcm(20, 1234);
+    std::vector<float> pcm(20, 1234.0f);
     beacon.process(pcm.data(), 10, 2);
     check(beacon.currentSymbol() == -1, "pre-roll remains before first symbol");
-    for (const int16_t sample : pcm) {
-        check(sample == 0, "pre-roll replaces microphone with silence");
+    for (const float sample : pcm) {
+        check(sample == 0.0f, "pre-roll replaces microphone with silence");
     }
 
-    pcm.assign(2, 0);
+    pcm.assign(2, 0.0f);
     beacon.process(pcm.data(), 1, 2);
     check(beacon.currentSymbol() == 0, "first symbol starts after exact pre-roll");
 
     constexpr int remainingFrames =
         WsprBeacon::kSymbolCount * WsprBeacon::kFramesPerSymbol - 1;
-    std::vector<int16_t> block(4096 * 2);
+    std::vector<float> block(4096 * 2);
     int remaining = remainingFrames;
     while (remaining > 0) {
         const int frames = std::min(remaining, 4096);
@@ -129,10 +129,10 @@ void testSampleTimingAndTailSilence()
     check(beacon.isComplete(), "message completes after exactly 162 symbols");
     check(beacon.isActive(), "source stays active until explicit stop");
 
-    block.assign(64, 1234);
+    block.assign(64, 1234.0f);
     beacon.process(block.data(), 32, 2);
-    for (const int16_t sample : block) {
-        check(sample == 0, "completed source holds silence until unkey");
+    for (const float sample : block) {
+        check(sample == 0.0f, "completed source holds silence until unkey");
     }
     beacon.stop();
     check(!beacon.isActive(), "explicit stop disables source");
@@ -149,7 +149,7 @@ void testTwentyOneSecondsDoesNotComplete()
 
     int64_t remaining =
         WsprBeacon::framesForElapsedNanoseconds(21000000000LL);
-    std::vector<int16_t> block(4096 * 2);
+    std::vector<float> block(4096 * 2);
     while (remaining > 0) {
         const int frames = static_cast<int>(
             std::min<int64_t>(remaining, 4096));
@@ -342,32 +342,6 @@ void testLateStartSkipsIntoTheFrame()
           "a skipped start is still ramped, not keyed at full amplitude");
 }
 
-// The two process() overloads drive one generator, so they cannot drift.
-void testFloatAndIntegerPathsAgree()
-{
-    constexpr int kFrames = 4096;
-    const WsprBeacon::Symbols symbols = uniformSymbols(2);
-    const std::vector<float> asFloat =
-        generate(symbols, 1500.0, -20.0f, kFrames);
-
-    WsprBeacon beacon;
-    beacon.prepare(WsprBeacon::kSampleRate);
-    beacon.start(symbols, 1500.0, -20.0f, 0);
-    std::vector<int16_t> asInt(kFrames, 0);
-    beacon.process(asInt.data(), kFrames, 1);
-
-    int mismatches = 0;
-    for (int i = 0; i < kFrames; ++i) {
-        const int expected = static_cast<int>(asFloat[static_cast<size_t>(i)]
-                                              * 32767.0f);
-        if (std::abs(expected - asInt[static_cast<size_t>(i)]) > 1) {
-            ++mismatches;
-        }
-    }
-    check(mismatches == 0,
-          "int16 and float outputs agree to within one quantization step");
-}
-
 } // namespace
 
 int main(int argc, char** argv)
@@ -380,7 +354,6 @@ int main(int argc, char** argv)
     testToneConventionMatchesWsjtx();
     testFrameEndsAreTapered();
     testLateStartSkipsIntoTheFrame();
-    testFloatAndIntegerPathsAgree();
     testIndependentDaxPump();
     if (failures == 0) {
         std::puts("WSPR beacon tests passed");
