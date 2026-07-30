@@ -2878,14 +2878,18 @@ target_include_directories(app_settings_safety_test PRIVATE src)
 target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core Qt6::Network)
 foreach(APP_SETTINGS_SCENARIO
         save-before-load
-        load-then-save
+        xml-import-parity
         first-run
-        count-guard
-        backup-recovery
-        missing-live-temp
-        missing-live-backup
-        missing-live-corrupt
-        failed-load
+        xml-import-tmp-promotion
+        xml-import-bak-fallback
+        xml-artifacts-unusable
+        no-reimport
+        xml-changed-notice
+        credential-exodus
+        corrupt-db-restore-backup
+        corrupt-db-reimport-xml
+        newer-schema-readonly
+        dirty-row-save
         display-slice-depth-default
         nickname-key-roundtrip)
     add_test(
