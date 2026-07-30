@@ -172,6 +172,12 @@ void LogManager::applyFilterRules()
             // never once appeared in a log file. Neither had the 16 qCInfo
             // calls on lcDax. Two dozen categories are declared QtWarningMsg,
             // so this was most of the codebase's INFO logging.
+            //
+            // Note the asymmetry: no blanket "aether.*.info=false" is emitted
+            // above — it would newly silence the QtDebugMsg/QtInfoMsg-declared
+            // categories (aether.kiwisdr, aether.connection, aether.hl2, …)
+            // whose Info is visible today. For those, this toggle governs
+            // Debug only; their Info stays on regardless.
             rules << QString("%1.info=true").arg(c.id);
         }
     }
