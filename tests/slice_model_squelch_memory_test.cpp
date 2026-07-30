@@ -88,6 +88,17 @@ int main(int argc, char** argv)
 
         s.setAutoSquelchActive(false);  // RxApplet transitions back to Manual
         EXPECT_EQ(s.manualSquelchLevel(), 45);  // still the value to restore
+
+        // Clearing the flag must genuinely re-enable echo-driven updates,
+        // not just leave the old value sitting there unchanged — otherwise
+        // a slice stuck with the flag never cleared (the bug review found
+        // in RxApplet::disconnectSlice(), which now clears it) would look
+        // identical to this test up to this point. A fresh echo at a new
+        // level proves the gate is actually open again.
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.squelchOn = true; d.squelchLevel = 60;
+        }));
+        EXPECT_EQ(s.manualSquelchLevel(), 60);
     }
 
     // ── A genuine echo while NOT in Auto (the operator's own edit reaching

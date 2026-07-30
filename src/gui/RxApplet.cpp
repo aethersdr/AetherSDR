@@ -2450,6 +2450,13 @@ void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
     m_savedSquelchOn = false;
+    // Nothing is driving Auto for this slice once it's no longer attached
+    // (review on #4592) — leaving the flag set would permanently deafen a
+    // later-reclaimed or reattached slice to genuine manual echoes, the
+    // same silent-overwrite class in the opposite direction. Clearing it
+    // matches SliceModel's own class default (false), the safe assumption
+    // when no UI is actively tracking this slice's SQL mode.
+    s->setAutoSquelchActive(false);
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
