@@ -477,14 +477,10 @@ QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
             return obj.value(pillId).toString();
         }
     }
-    // Backward compatibility for legacy flat keys
-    const QString legacyNew = actionSettingsKey(pillId);
-    if (s.contains(legacyNew)) {
-        return s.value(legacyNew).toString();
-    }
-    const QString legacyOld = QStringLiteral("UlanziDial/action/%1").arg(pillId);
-    if (s.contains(legacyOld)) {
-        return s.value(legacyOld).toString();
+    // Backward compatibility for legacy flat key
+    const QString legacyKey = actionSettingsKey(pillId);
+    if (s.contains(legacyKey)) {
+        return s.value(legacyKey).toString();
     }
     return defaultActionForPill(pillId);
 }
