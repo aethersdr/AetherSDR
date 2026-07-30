@@ -26,6 +26,13 @@ std::optional<int> hl2PanNumber(const QString& panId)
     return n;
 }
 
+int hl2RoleAfterRemove(int role, int removedDdc)
+{
+    if (role == removedDdc)
+        return -1;          // gone; the caller picks a new home
+    return role > removedDdc ? role - 1 : role;
+}
+
 void Hl2ReceiverMap::reset(int count)
 {
     m_rx.clear();

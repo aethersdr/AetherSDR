@@ -704,15 +704,44 @@ bool Hl2Backend::removePanadapter(const QString& panId)
         qCWarning(lcHl2) << "HL2: refusing to close the last receiver";
         return false;
     }
+    // ---- the two roles that point AT a DDC index have to survive the removal ----
+    //
+    // Both are stored as DDC indices, and removal RENUMBERS every index after
+    // the closed one (Hl2ReceiverMap::remove, because the gateware needs them
+    // contiguous). So there are two distinct cases and only handling the first
+    // is a silent misdirection:
+    //
+    //   the role was ON the closing receiver   -> move it somewhere that exists
+    //   the role was AFTER the closing one     -> its index just shifted down
+    //
+    // Miss the second and, closing DDC 0 of three, transmit "on DDC 2" ends up
+    // naming a receiver that is now something else — and nothing reads a TX NCO
+    // back to contradict it.
     if (ddc == m_txDdc) {
         // Transmit has to live SOMEWHERE. Move it to the first surviving
         // receiver rather than leaving m_txDdc pointing at a receiver that no
         // longer exists — which would make txSlice() null and every later key
         // attempt die in the interlock with no explanation.
-        const int fallback = (ddc == 0) ? 1 : 0;
-        qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc << "to" << fallback
-                      << "— its receiver is closing";
-        m_txDdc = fallback;
+        //
+        // DDC 0 in POST-removal numbering, which always exists because closing
+        // the last receiver is refused above. An earlier version picked
+        // `ddc == 0 ? 1 : 0` in PRE-removal numbering — and old DDC 1 becomes
+        // DDC 0 the moment the map renumbers, so closing the transmitting
+        // receiver 0 left m_txDdc naming a receiver one past where transmit
+        // actually went.
+        qCInfo(lcHl2) << "HL2: transmit moves from DDC" << ddc
+                      << "to 0 — its receiver is closing";
+        m_txDdc = 0;
+    } else {
+        m_txDdc = hl2RoleAfterRemove(m_txDdc, ddc);
+    }
+
+    if (ddc == m_activeDdc) {
+        // Same for the active slice, and for the same reason: the client's
+        // shared controls act on it, so it cannot point at a closed receiver.
+        m_activeDdc = 0;
+    } else {
+        m_activeDdc = hl2RoleAfterRemove(m_activeDdc, ddc);
     }
 
     const QString removedPanId = ids->panId;
@@ -1523,6 +1552,32 @@ void Hl2Backend::setSliceAudioPan(int sliceId, int panPercent)
     if (!r)
         return;
     r->audioPanPercent = std::clamp(panPercent, 0, 100);
+}
+
+void Hl2Backend::setActiveSlice(int sliceId)
+{
+    const int ddc = ddcForSlice(sliceId);
+    if (!rx(ddc)) {
+        qCWarning(lcHl2) << "HL2: cannot activate slice" << sliceId << "— no such receiver";
+        return;
+    }
+    if (ddc == m_activeDdc) {
+        // Confirm rather than return silently, for the same reason setTxSlice
+        // does: the asker may believe otherwise, and an unanswered request
+        // leaves that disagreement standing.
+        emitSliceState(ddc);
+        return;
+    }
+
+    const int previous = m_activeDdc;
+    m_activeDdc = ddc;
+
+    // BOTH slices, old and new. Publishing only the new one would leave two
+    // slices claiming to be active, which is the bug this exists to fix — the
+    // client would keep resolving to whichever it looked at first, and the RX
+    // Controls applet would stay pointed at a receiver the operator had left.
+    emitSliceState(previous);
+    emitSliceState(ddc);
 }
 
 void Hl2Backend::setTxSlice(int sliceId)
@@ -2680,7 +2735,18 @@ void Hl2Backend::emitSliceState(int ddc)
     // selected, and the operator could key from a receiver whose frequency the
     // transmit NCO is not following.
     d.txSlice = (ddc == m_txDdc);
-    d.active = true;
+    // EXACTLY ONE slice is active, for the same reason exactly one is the TX
+    // slice. This was an unconditional `true`, correct while there was only ever
+    // one slice to be active and wrong the moment there were two: every slice
+    // then claimed it, and anything resolving "the active slice" got whichever
+    // one it happened to look at first.
+    //
+    // What that looked like: tuning across a panadapter moved the right DDC and
+    // its VFO flag showed the right frequency, while the RX Controls applet —
+    // which follows the ACTIVE slice — stayed pointed at a different receiver.
+    // Two slices claiming to be active is indistinguishable from none, and the
+    // applet had no way to tell which pane the operator was working on.
+    d.active = (ddc == m_activeDdc);
     emit sliceChanged(ids->uiNumber, d);
 }
 

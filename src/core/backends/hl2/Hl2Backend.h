@@ -57,6 +57,7 @@ public:
     void setSliceAudioGain(int sliceId, int gainPercent) override;
     void setSliceAudioPan(int sliceId, int panPercent) override;
     void setTxSlice(int sliceId) override;
+    void setActiveSlice(int sliceId) override;
     void setPanCenter(const QString& panId, double hz) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanRfGain(const QString& panId, int gainDb) override;
@@ -180,6 +181,18 @@ private:
     // has one transmitter however many receivers it runs, so this is a CHOICE
     // among the receivers rather than a property each of them has.
     int m_txDdc = 0;
+
+    // The receiver the operator is working on. Separate from m_txDdc: you listen
+    // on one slice while transmitting on another all the time, and conflating
+    // them would drag transmit around every time the operator clicked a pane.
+    //
+    // Radio-side this means nothing — the HL2 has no notion of a selected
+    // receiver. It exists because the CLIENT does: the RX Controls applet, the
+    // band buttons, the mode buttons and the meters all act on "the active
+    // slice", and on a Flex the radio arbitrates that with `slice set N
+    // active=1` and echoes the deselection back. Nothing echoes here, so this
+    // is the only thing that can make the answer single-valued.
+    int m_activeDdc = 0;
 
     [[nodiscard]] Receiver* rx(int ddc);
     [[nodiscard]] const Receiver* rx(int ddc) const;

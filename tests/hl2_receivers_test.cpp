@@ -150,6 +150,41 @@ int main()
         check(m.size() == 3, "a failed remove changes nothing");
     }
 
+    // ---- a stored ROLE index survives the renumber ----
+    //
+    // Transmit ownership and the active slice are remembered as "the receiver at
+    // DDC n". remove() renumbers, so those stored indices must move with it, and
+    // the case that bites is the middle one below: closing DDC 0 of three with
+    // transmit on DDC 2 leaves transmit naming index 2, which is now a DIFFERENT
+    // receiver — and nothing reads a TX NCO back to contradict it.
+    {
+        // Role BEFORE the removal: untouched.
+        check(hl2RoleAfterRemove(0, 1) == 0, "a role below the removed index is unchanged");
+        check(hl2RoleAfterRemove(1, 2) == 1, "role 1, removed 2 -> still 1");
+
+        // Role AFTER the removal: shifts down by one.
+        check(hl2RoleAfterRemove(2, 0) == 1, "role 2, removed 0 -> 1 (the renumber)");
+        check(hl2RoleAfterRemove(3, 1) == 2, "role 3, removed 1 -> 2");
+        check(hl2RoleAfterRemove(1, 0) == 0, "role 1, removed 0 -> 0");
+
+        // Role ON the removed receiver: gone. -1 rather than a guess, so the
+        // caller has to choose a new home explicitly.
+        check(hl2RoleAfterRemove(2, 2) == -1, "a role on the removed receiver reports gone");
+        check(hl2RoleAfterRemove(0, 0) == -1, "including receiver 0");
+
+        // Cross-check the rule against the map actually renumbering: put a role
+        // on the LAST of three, close the first, and the role must name the same
+        // receiver afterwards.
+        Hl2ReceiverMap m;
+        m.reset(3);
+        const int roleUi = m.byDdc(2)->uiNumber;      // identity of the role's receiver
+        const int role = hl2RoleAfterRemove(2, 0);
+        check(m.remove(0), "close DDC 0 of three");
+        check(m.byDdc(role) != nullptr, "the shifted role index still resolves");
+        check(m.byDdc(role)->uiNumber == roleUi,
+              "and resolves to the SAME receiver it named before the removal");
+    }
+
     // ---- removing the last receiver leaves an empty map ----
     {
         Hl2ReceiverMap m;

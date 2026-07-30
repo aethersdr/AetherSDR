@@ -207,6 +207,17 @@ public:
     // somewhere, and it is cleared only by another slice taking it.
     virtual void setTxSlice(int sliceId) { Q_UNUSED(sliceId); }
 
+    // Make this the ACTIVE slice — the one the client's shared controls act on.
+    // Distinct from setTxSlice: listening on one slice while transmitting on
+    // another is normal, so selecting a pane must not drag transmit with it.
+    //
+    // A Flex arbitrates this itself (`slice set N active=1`) and echoes the
+    // deselection of the previous slice back, so this default is never reached
+    // there. A backend with no such echo has to clear the old one itself, or
+    // every slice ever selected stays active and "the active slice" stops being
+    // a single answer.
+    virtual void setActiveSlice(int sliceId) { Q_UNUSED(sliceId); }
+
     // ---- panadapter lifecycle ----
     //
     // Bring up / tear down a panadapter (and, on a backend where a pan IS a

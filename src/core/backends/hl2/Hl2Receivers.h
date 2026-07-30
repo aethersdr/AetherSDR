@@ -59,6 +59,24 @@ QString hl2PanId(int uiNumber);
 // would point every unrecognised control at the first receiver.
 std::optional<int> hl2PanNumber(const QString& panId);
 
+// Where a stored DDC-index ROLE ends up after remove(removedDdc).
+//
+// Some things are remembered as "the receiver at DDC n" rather than by identity
+// — which receiver owns transmit, which one the client's shared controls act on.
+// remove() renumbers every index after the closed one, so those stored indices
+// have to move with it. There are three cases and skipping the middle one is a
+// SILENT misdirection:
+//
+//   role  <  removed   unchanged
+//   role  >  removed   shifts down by one
+//   role  == removed   the receiver is GONE; the caller must choose a new home,
+//                      so this returns -1 rather than inventing one
+//
+// Closing DDC 0 of three with transmit on DDC 2 is the case that bites: without
+// the shift, transmit still names index 2, which is now a different receiver —
+// and nothing reads a TX NCO back to contradict it.
+int hl2RoleAfterRemove(int role, int removedDdc);
+
 class Hl2ReceiverMap {
 public:
     // Build `count` receivers with contiguous DDC and UI indices. That identity

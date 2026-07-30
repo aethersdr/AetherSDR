@@ -312,6 +312,11 @@ signals:
     // Operator asked for THIS slice to own transmit. A radio with one
     // transmitter and several receivers has to move it rather than set a flag.
     void txSliceCommandIssued();
+    // Operator selected THIS slice as the one the shared controls act on.
+    // Separate from activeChanged, which also fires when radio status is
+    // applied — driving a command off that would echo the radio's own state
+    // back as a request (Principle II).
+    void activeSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
     void filterChanged(int low, int high);

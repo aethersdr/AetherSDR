@@ -696,6 +696,10 @@ void SliceModel::setActive(bool on)
             emit activeChanged(true);
         }
         sendCommand(QString("slice set %1 active=1").arg(m_id));
+        // For a backend that never sees the wire text above. It also has to
+        // CLEAR the previously active slice, which on a Flex arrives as a status
+        // echo and here has no other way of happening.
+        emit activeSliceCommandIssued();
     }
 }
 

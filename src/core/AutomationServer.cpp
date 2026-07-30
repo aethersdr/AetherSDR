@@ -5687,11 +5687,22 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
     if (action == QLatin1String("select")) {
         bool okId = false;
         const int id = arg.toInt(&okId);
-        if (!okId || !radio->slice(id))
+        SliceModel* s = okId ? radio->slice(id) : nullptr;
+        if (!s)
             return err(QStringLiteral("slice select requires a valid slice id"));
-        radio->sendCommand(QStringLiteral("slice set %1 active=1").arg(id));
+        // Through the SliceModel setter, not raw wire text. This used to send
+        // `slice set N active=1` straight at the connection, which is Flex text
+        // a seam backend never sees — so on a Hermes-Lite 2 the verb reported ok
+        // and selected nothing. setActive() emits the identical command for a
+        // Flex AND the operator-issued signal a seam backend needs, so this is
+        // strictly the same behaviour there and correct behaviour here.
+        //
+        // Same reasoning as `slice tx` immediately below, which already routes
+        // through the model for exactly this reason.
+        s->setActive(true);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("select")},
-                           {QStringLiteral("id"), id}};
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("active"), s->isActive()}};
     }
     if (action == QLatin1String("tx")) {
         // Make slice <id> the TX slice — the literal external-split transition

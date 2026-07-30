@@ -6585,6 +6585,14 @@ void RadioModel::wireSliceAudioIntentsToBackend(SliceModel* s)
             [this, s]() {
         if (m_backend) m_backend->setTxSlice(s->sliceId());
     });
+    // Selecting a slice. Distinct from taking transmit: the operator listens on
+    // one slice while transmitting on another routinely, so this must not drag
+    // transmit with it. The backend clears the previously active slice, which on
+    // a Flex arrives as a status echo and here has no other way of happening.
+    connect(s, &SliceModel::activeSliceCommandIssued, this,
+            [this, s]() {
+        if (m_backend) m_backend->setActiveSlice(s->sliceId());
+    });
 }
 
 QString RadioModel::neutralPanIdStringForTest(int panIdx)
