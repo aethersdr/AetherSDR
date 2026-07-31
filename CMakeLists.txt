@@ -850,6 +850,7 @@ set(GUI_SOURCES
     src/gui/PersistentDialog.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/ProfileManagerDialog.cpp
+    src/gui/SettingsBrowserDialog.cpp
     src/gui/ProfileImportExportDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
@@ -2893,7 +2894,8 @@ foreach(APP_SETTINGS_SCENARIO
         newer-schema-readonly
         dirty-row-save
         display-slice-depth-default
-        nickname-key-roundtrip)
+        nickname-key-roundtrip
+        browser-api)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})

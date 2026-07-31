@@ -22,6 +22,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonObject>
 #include <QMap>
 #include <QStandardPaths>
 #include <QXmlStreamWriter>
@@ -521,6 +522,9 @@ void testNewerSchemaOpensReadOnly()
     expect(dbRow(QStringLiteral("FromTheFuture"), value)
                && value == QStringLiteral("yes"),
            "a newer-schema database is never written by an older binary");
+    expect(!settings.storeWritable(),
+           "storeWritable() reports the read-only session, so the Settings "
+           "Browser disables its edit affordances");
 }
 
 void testDirtyRowSaves()
@@ -631,6 +635,78 @@ void testNicknameKeySurvivesDisk()
            "a cleared nickname stays cleared");
 }
 
+// The AppSettings surface the Settings Browser rides on (RFC #4603 PR 5):
+// station-row deletion, the structured radio_settings enumeration, and the
+// writability probe. Exercised through reset()+load() round-trips so every
+// claim is about the persisted file, not the in-memory cache.
+void testBrowserApi()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    expect(settings.storeWritable(),
+           "a freshly loaded healthy store reports writable");
+
+    // removeStationValue: the deletion must reach the station_settings rows.
+    settings.setStationValue(QStringLiteral("BrowserKeep"), QStringLiteral("k"));
+    settings.setStationValue(QStringLiteral("BrowserDrop"), QStringLiteral("d"));
+    settings.save();
+    settings.removeStationValue(QStringLiteral("BrowserDrop"));
+    settings.save();
+    settings.reset();
+    settings.load();
+    expect(settings.stationValue(QStringLiteral("BrowserKeep")).toString()
+               == QStringLiteral("k"),
+           "an untouched station sibling survives the removal save");
+    expect(settings.stationValue(QStringLiteral("BrowserDrop"),
+                                 QStringLiteral("<absent>"))
+                   .toString()
+               == QStringLiteral("<absent>"),
+           "a removed station key is deleted from the persisted rows");
+
+    // Structured enumeration: coordinates come back as data, and the
+    // family-wide row keeps its "" radioId (the display layer, not the API,
+    // owns the "(family-wide)" label).
+    settings.setRadioFeature(QStringLiteral("hl2"),
+                             QStringLiteral("AA:BB:CC:DD:EE:22"),
+                             QStringLiteral("BrowserProbe"), 3,
+                             QJsonObject{{QStringLiteral("x"), 1}});
+    settings.setRadioFeature(QStringLiteral("hl2"), QString(),
+                             QStringLiteral("BrowserProbe"), 3,
+                             QJsonObject{{QStringLiteral("x"), 2}});
+    bool exactSeen = false;
+    bool familySeen = false;
+    const auto entries = settings.radioFeatureEntriesForDiagnostics();
+    for (const auto& entry : entries) {
+        if (entry.family != QStringLiteral("hl2")
+            || entry.feature != QStringLiteral("BrowserProbe")) {
+            continue;
+        }
+        if (entry.radioId == QStringLiteral("AA:BB:CC:DD:EE:22")) {
+            exactSeen = entry.schemaVersion == 3
+                        && entry.value.contains(QStringLiteral("\"x\""));
+        } else if (entry.radioId.isEmpty()) {
+            familySeen = true;
+        }
+    }
+    expect(exactSeen,
+           "the structured enumeration returns the per-radio row with its "
+           "schema version and document");
+    expect(familySeen,
+           "the family-wide default row enumerates with an empty radioId");
+
+    // The formatted diagnostics view is derived from the same enumeration.
+    bool formattedSeen = false;
+    const auto formatted = settings.radioFeaturesForDiagnostics();
+    for (const auto& pair : formatted) {
+        if (pair.first == QStringLiteral("hl2/AA:BB:CC:DD:EE:22/BrowserProbe@v3")) {
+            formattedSeen = true;
+        }
+    }
+    expect(formattedSeen,
+           "the display-string diagnostics stay in lockstep with the "
+           "structured enumeration");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -680,6 +756,8 @@ int main(int argc, char** argv)
         testThreeDSliceDepthDefaultAndOptIn();
     } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
         testNicknameKeySurvivesDisk();
+    } else if (scenario == QStringLiteral("browser-api")) {
+        testBrowserApi();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return 2;

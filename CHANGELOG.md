@@ -25,6 +25,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **New `--config` command line**: `aethersdr --config list|get|set|unset|
   export|path` inspects or repairs settings without starting the GUI —
   the escape hatch when a broken stored value prevents startup.
+- **New Settings Browser** (Settings ▸ Settings Browser…): browse and edit
+  the whole settings store — app keys, the station section, and each
+  radio's stored feature documents — with live filtering, guarded
+  editing (True/False picker, JSON validation, confirmations), and a
+  sanitized diagnostic export. Credential-shaped values are masked and
+  read-only; a store from a newer version browses read-only.
 - Fixes a latent threading race in the settings core (#4602).
 
 ## [v26.7.4.1] — 2026-07-27

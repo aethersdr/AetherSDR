@@ -56,6 +56,7 @@ public:
     // Per-station settings (rows in station_settings keyed by station name).
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
     void setStationValue(const QString& key, const QVariant& val);
+    void removeStationValue(const QString& key);
 
     // ── Radio-scoped feature documents (RFC #4603 proposals A/B) ─────────────
     // One versioned JSON document per (family, radio, feature) — Constitution
@@ -93,6 +94,23 @@ public:
     // for the sanitizer's dump — the third table is part of "the whole store"
     // (PR #4614 review).
     QList<QPair<QString, QString>> radioFeaturesForDiagnostics() const;
+    // The same enumeration, structured — for the Settings Browser (RFC #4603
+    // proposal D), which needs the scope coordinates as data, not a display
+    // string. Same diagnostics-only contract as the accessors above.
+    struct RadioFeatureEntry {
+        QString family;
+        QString radioId;        // "" = family-wide default row
+        QString feature;
+        int schemaVersion = 0;
+        QString value;          // the JSON document, as stored
+    };
+    QList<RadioFeatureEntry> radioFeatureEntriesForDiagnostics() const;
+
+    // True when the store accepts writes this session (loaded, not the
+    // newer-schema read-only mode, not failed). The Settings Browser uses
+    // this to disable its edit affordances instead of letting writes fail
+    // one save() at a time.
+    bool storeWritable() const;
 
     // Path of the settings database (the store this class persists to).
     QString filePath() const { return m_filePath; }
