@@ -3309,6 +3309,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     m_tgxlConn.disconnect();
     m_pgxlConn.disconnect();
 
+    // Same event-loop reasoning: the operating-state capture flush normally
+    // rides the queued backend disconnected() signal, which never lands
+    // during close (two queued hops through the HL2 I/O thread). Flush
+    // explicitly while the scope still resolves to the connected radio, so
+    // the last tune/drive edit before quit is remembered (RFC #4603 PR 3;
+    // PR #4619 review).
+    m_radioModel.flushPendingOperatingState();
+
     // Same reason as the TGXL/PGXL sockets above: the D-STAR helper is stopped
     // by the queued RadioModel::connectionStateChanged(false) handler, which
     // does not run during close (the event loop isn't pumped here). Without an

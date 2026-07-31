@@ -1025,6 +1025,13 @@ public:
     // Backend family currently in use ("flex", "hl2", "kiwi", ...).
     QString family() const { return m_family; }
 
+    // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
+    // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit
+    // tears down without pumping the event loop, so the queued
+    // disconnect→flush path never runs there (PR #4619 review — same class
+    // as the explicit TGXL/D-STAR teardown in closeEvent).
+    void flushPendingOperatingState();
+
     // The (family, radio) handle into the radio-scoped feature-document store
     // (RFC #4603). Identity is the family's canonical serial (Flex serial /
     // HL2 MAC); an unconnected model yields a family-wide scope.
@@ -1221,7 +1228,6 @@ private:
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend(const QString& serial);  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
-    void flushPendingOperatingState();                       // RFC #4603 PR 3
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these

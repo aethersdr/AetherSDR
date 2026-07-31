@@ -1267,6 +1267,23 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
                              m_lnaDbByBand.value(m_currentBandKey, m_lnaDefaultDb),
                              kLnaGainMaxDb);
     }
+    // Seed the DRIVE from the start band's memory and echo it upward NOW —
+    // before linkUp — so TransmitModel carries the restored value when its
+    // connect-time push fires (PR #4619 bench, nigelfenton: the push arrived
+    // as apparent operator intent at the model default of 100 and overwrote
+    // the stored per-band drive on every reconnect; Ozy311 traced the same
+    // seam). With the model seeded, that push becomes a value-identical echo
+    // — which setTxPower() now recognizes and declines to record.
+    if (m_haveRestoredState) {
+        const int drive =
+            m_driveByBand.value(m_currentBandKey, m_driveDefaultPercent);
+        if (drive >= 0) {
+            m_rfPowerPercent = drive;
+            TransmitDelta delta;
+            delta.rfPower = drive;
+            emit transmitChanged(delta);
+        }
+    }
 
     // ---- how many receivers ----
     //
@@ -2360,12 +2377,18 @@ void Hl2Backend::setTxPower(int percent)
     // unkey can put this back. Recorded BEFORE the transmit gate and even while
     // tuning: a power change made mid-tune, or while TX is blocked, is still
     // what the operator wants once the carrier drops or the gate opens.
-    m_rfPowerPercent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
-    // OPERATOR intent only: when band-memory/restore code applies a drive
-    // through this same seam, it must neither claim the band nor set the
-    // baseline — otherwise the conservative first-visit 0 would become the
-    // "operator's" baseline (found by the unvisited-band pinning test).
-    if (!m_applyingBandMemory) {
+    const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+    // OPERATOR intent only — and only on CHANGE: internal band-memory applies
+    // (m_applyingBandMemory) and value-identical echoes (RadioModel's
+    // connect-time power push re-asserting what we just seeded) must neither
+    // claim the band nor set the baseline. Without the change-gate, the
+    // connect push at the model default bootstrapped defaultPercent=100 and
+    // rewrote the start band's stored drive on every reconnect
+    // (PR #4619 bench + review).
+    const bool operatorChange = !m_applyingBandMemory
+                                && clamped != m_rfPowerPercent;
+    m_rfPowerPercent = clamped;
+    if (operatorChange) {
         // The operator's drive belongs to the band they set it on.
         if (!m_currentBandKey.isEmpty())
             m_driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
@@ -2556,13 +2579,17 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_lnaGainDb = 20;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
+    m_sampleRateHz = 48000;       // construction default — radio B must not
+                                  // inherit radio A's span (PR #4619 review)
     m_currentBandKey.clear();
 
     RestoredRadioState valid;
     if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)
         valid.rfFrequencyHz = state.rfFrequencyHz;
     if (isKnownModeString(state.mode))
-        valid.mode = state.mode;
+        valid.mode = state.mode.toUpper();   // canonical casing — a "cw" from a
+                                             // hand-edited document must not
+                                             // round-trip into the UI
     // A passband is kept only as a sane pair; mode+passband are applied
     // together in pushInitialState() (the #4484 reconciliation).
     if (state.filterLowHz < state.filterHighHz

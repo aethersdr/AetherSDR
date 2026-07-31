@@ -240,8 +240,9 @@ int main(int argc, char** argv)
                        .toObject()
                        .contains(QStringLiteral("defaultPercent")),
               "radio A's drive baseline does not survive the swap");
-        check(snap.sampleRateHz != 192'000 || snap.sampleRateHz == 48'000,
-              "radio A's restored rate does not leak into radio B's snapshot");
+        check(snap.sampleRateHz == 48'000,
+              "radio A's restored rate resets to the construction default — "
+              "radio B never inherits A's span (PR #4619 review)");
     }
 
     // ---- a corrupt mode string is dropped at the boundary -----------------
@@ -259,6 +260,90 @@ int main(int argc, char** argv)
         backend.applyRestoredState(genuine);
         // (Applied at pushInitialState on hardware; boundary acceptance is
         // what's provable here: it survived validation into the stash.)
+    }
+
+    // ---- the connect-time power push is an echo, not an overwrite ---------
+    // (PR #4619 bench, nigelfenton; Ozy311 finding 1): connectRadio seeds the
+    // drive from the start band's memory and echoes it upward, so
+    // RadioModel's connect push arrives value-identical — and setTxPower's
+    // change-gate declines to record it. The stored map must survive.
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState remembered;
+        remembered.rfFrequencyHz = 7'100'000.0;   // 40m
+        remembered.extensionSchemaVersion = 1;
+        remembered.extension = QJsonObject{
+            {QStringLiteral("txSetpoints"),
+             QJsonObject{{QStringLiteral("defaultPercent"), 100},
+                         {QStringLiteral("driveByBand"),
+                          QJsonObject{{QStringLiteral("40m"), 12}}}}}};
+        backend.applyRestoredState(remembered);
+
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("00:1C:C0:A2:13:DD");
+        backend.connectRadio(req);
+
+        // The seed itself: the snapshot's current-band stamp is 12, and the
+        // upward echo carried it (TransmitModel gets seeded pre-push).
+        check(backend.currentOperatingState()
+                      .extension.value(QStringLiteral("txSetpoints"))
+                      .toObject()
+                      .value(QStringLiteral("driveByBand"))
+                      .toObject()
+                      .value(QStringLiteral("40m"))
+                      .toInt()
+                  == 12,
+              "connect seeds the drive from the start band's memory");
+
+        // RadioModel's push, replayed exactly: same value, operator path.
+        backend.setTxPower(12);
+        const QJsonObject after =
+            backend.currentOperatingState()
+                .extension.value(QStringLiteral("txSetpoints"))
+                .toObject();
+        check(after.value(QStringLiteral("driveByBand"))
+                      .toObject()
+                      .value(QStringLiteral("40m"))
+                      .toInt()
+                  == 12,
+              "the value-identical connect push does not overwrite the map");
+        check(after.value(QStringLiteral("defaultPercent")).toInt() == 100,
+              "the echo does not re-bootstrap the baseline");
+
+        // A REAL operator change still records.
+        backend.setTxPower(25);
+        check(backend.currentOperatingState()
+                      .extension.value(QStringLiteral("txSetpoints"))
+                      .toObject()
+                      .value(QStringLiteral("driveByBand"))
+                      .toObject()
+                      .value(QStringLiteral("40m"))
+                      .toInt()
+                  == 25,
+              "a genuine operator change still records into the band");
+        backend.disconnectRadio();
+    }
+
+    // ---- a virgin connect echo never claims the baseline ------------------
+    // (Ozy311: the model-default push at 100 made the 'deliberate 0' for
+    // unvisited bands unreachable in the real app.)
+    {
+        hl2::Hl2Backend backend;
+        backend.applyRestoredState(RestoredRadioState{});
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+        backend.setTxPower(100);   // the model-default connect push, verbatim
+        check(!backend.currentOperatingState()
+                   .extension.value(QStringLiteral("txSetpoints"))
+                   .toObject()
+                   .contains(QStringLiteral("defaultPercent")),
+              "a virgin connect's default-100 push never claims the baseline");
+        backend.disconnectRadio();
     }
 
     // ---- an explicit param still beats restored state ---------------------
