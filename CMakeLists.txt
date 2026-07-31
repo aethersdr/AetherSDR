@@ -1514,7 +1514,8 @@ if (ENABLE_ASR)
     endif()
 
     # One name for "the whisper we link", resolved once above, so aetherasr and the
-    # two whisper-linked tests below can't drift apart on the system/vendored split.
+    # three whisper-linked tests below can't drift apart on the system/vendored
+    # split. (asr_whisper_smoke_test, asr_whisper_backend_test, asr_gpu_probe_test.)
     if (USE_SYSTEM_LIBWHISPER)
         set(_asr_whisper_link PkgConfig::whisper ${_asr_ggml_target})
     else()
