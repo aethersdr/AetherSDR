@@ -111,6 +111,45 @@ public:
             && server.effectiveTrx(nullptr, 3) == 3;
     }
 
+    // The #4547 / #4567 seam. sliceForTrx() resolves through the stable trx
+    // map; the PTT path must resolve through the SAME map, not TciProtocol's
+    // positional statics. If it did not, a band-stack recreate would key
+    // whichever slice happened to sit at the requested index while every other
+    // command followed the binding — and nothing would catch it: the #4547
+    // tests build no map, the #4567 tests never key.
+    static bool pttResolvesThroughTheStableMap()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        model.automationApplySliceFixture(1, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        SliceModel* s1 = model.slice(1);
+        if (!s0 || !s1) return false;
+
+        // Bind so the map deliberately DISAGREES with list position: slice id 1
+        // holds receiver 0. That is the state a mid-session recreate produces,
+        // and it is the only state in which a positional resolver is visibly
+        // wrong. (Clear first — the sliceAdded handler already bound these in
+        // creation order.)
+        server.m_trxMap.clear();
+        if (server.m_trxMap.acquire(1) != 0 || server.m_trxMap.acquire(0) != 1) {
+            return false;
+        }
+
+        // Receiver 0 is slice id 1, even though slices()[0] is slice id 0.
+        return server.sliceForTrxStrict(0) == s1
+            && server.sliceForTrxStrict(1) == s0
+            // Guard: if this ever equals the positional answer the seam has
+            // regressed, whatever the first two assertions happen to say.
+            && server.sliceForTrxStrict(0) != s0
+            // And the strict variant still agrees with the lax one wherever
+            // the lax one is not guessing.
+            && server.sliceForTrxStrict(0) == server.sliceForTrx(0);
+    }
+
     static bool routeFailureIsObservable()
     {
         RadioModel model;
@@ -840,6 +879,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::routeFailureIsObservable();
     const bool pttBindsReceiver
         = AetherSDR::TciServerReviewTest::pttBindsToTheDeclaredAudioReceiver();
+    const bool pttUsesStableMap
+        = AetherSDR::TciServerReviewTest::pttResolvesThroughTheStableMap();
     const bool powerRateLimits
         = AetherSDR::TciServerReviewTest::powerBroadcastRateLimits();
     const bool trxCacheHolds
@@ -877,6 +918,8 @@ int main(int argc, char** argv)
                 observableFailure ? "PASS" : "FAIL");
     std::printf("%s  PTT binds to the declared audio receiver (#4547)\n",
                 pttBindsReceiver ? "PASS" : "FAIL");
+    std::printf("%s  PTT resolves through the stable trx map (#4547/#4567)\n",
+                pttUsesStableMap ? "PASS" : "FAIL");
     std::printf("%s  drive: rate-limits and de-dups\n",
                 powerRateLimits ? "PASS" : "FAIL");
     std::printf("%s  drive: trx survives a TX-flag clear\n",
@@ -908,6 +951,7 @@ int main(int argc, char** argv)
                 vfoAcksNoOp ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure && pttBindsReceiver
+        && pttUsesStableMap
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate

@@ -1169,26 +1169,12 @@ SliceModel* TciServer::sliceForTrx(int trx) const
 
 SliceModel* TciServer::sliceForTrxStrict(int trx) const
 {
-    // REBASE HAZARD — must be rewired when PR #4577 (TciTrxMap, #4567) lands.
-    //
-    // #4577 repoints sliceForTrx() above at `m_trxMap.sliceForTrx(m_model, trx)`
-    // so receiver numbers survive a band-stack recreate. This function would
-    // keep resolving positionally, making PTT the ONE path that ignores the
-    // stable binding: after a recreate every other command follows the map
-    // while keying follows list position, so a band change keys the wrong
-    // slice — #4567 reintroduced on the transmit path, the single path where
-    // being wrong puts RF on the air.
-    //
-    // It fails silently. Both test suites pass: #4547's never build a trx map,
-    // #4577's never key. Nothing covers the seam.
-    //
-    // The fix is small, because TciTrxMap::sliceForTrx() is already fail-closed
-    // for a BOUND trx (it returns nullptr in the settle window rather than
-    // answering positionally). Only the unbound fallback differs. Add
-    // TciTrxMap::sliceForTrxStrict() — identical, but falling through to
-    // resolveSliceForTrxStrict() instead of resolveSliceForTrx() — and call it
-    // here.
-    return TciProtocol::resolveSliceForTrxStrict(m_model, trx);
+    // Goes through the SAME trx map as sliceForTrx() above (#4567), not
+    // TciProtocol's positional statics. If PTT resolved positionally while
+    // every other command followed the stable binding, a band-stack recreate
+    // would key whichever slice happened to sit at the requested index — on
+    // the one path where being wrong puts RF on the wrong band and antenna.
+    return m_trxMap.sliceForTrxStrict(m_model, trx);
 }
 
 int TciServer::effectiveTrx(QWebSocket* client, int requestedTrx) const
@@ -1208,7 +1194,22 @@ int TciServer::effectiveTrx(QWebSocket* client, int requestedTrx) const
     // slice is addressed, never the wire shape.
     for (const auto& cs : m_clients) {
         if (cs.socket == client) {
-            return cs.audioReceiver >= 0 ? cs.audioReceiver : requestedTrx;
+            if (cs.audioReceiver < 0) {
+                return requestedTrx;
+            }
+            // Log only the divergence. Agreement is the common case and would
+            // be one line per key; a redirect is the whole mechanism, and it is
+            // otherwise invisible — the reply still echoes the requested trx, so
+            // a session transcript cannot show which slice was really addressed.
+            if (cs.audioReceiver != requestedTrx) {
+                qCDebug(lcCat) << "TCI: PTT bound to declared receiver"
+                               << cs.audioReceiver << "over requested trx"
+                               << requestedTrx
+                               << "peer=" << (cs.socket
+                                     ? cs.socket->peerAddress().toString()
+                                     : QStringLiteral("<gone>"));
+            }
+            return cs.audioReceiver;
         }
     }
     return requestedTrx;
@@ -1932,6 +1933,18 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
             return;
         }
         if (!socket || !selected || !self->m_model) {
+            // A refused promote used to be near-unreachable: resolvePttSlice()
+            // returned the slice that already held TX, so promoteTxSlice took
+            // its isTxSlice() early return. Honouring the requested slice
+            // (#4547) means real promotions are now attempted, so this path is
+            // live on both planes — a Flex `slice set N tx=1` rejection, and an
+            // HL2 transmitter move the backend declines. Report the actual
+            // false state rather than going silent; silence is what WSJT-X
+            // surfaces as "TCI failed to set ptt" with no cause.
+            if (socket) {
+                self->replyText(socket,
+                    QStringLiteral("trx:%1,false;").arg(request.trx));
+            }
             self->finishRouteTransition(transitionGeneration);
             return;
         }
