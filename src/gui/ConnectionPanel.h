@@ -8,6 +8,7 @@
 #include <QMargins>
 #include <QPoint>
 #include <QRect>
+#include <QSize>
 #include <QListWidget>
 #include <QPushButton>
 #include <QLabel>
@@ -21,6 +22,7 @@
 
 class QVBoxLayout;
 class QScreen;
+class QScrollArea;
 
 namespace AetherSDR {
 
@@ -38,7 +40,14 @@ public:
 
     void setFramelessMode(bool on);
     void fitToScreen(QScreen* preferredScreen = nullptr);
+    // Fit, then pull the frame back inside the work area without otherwise
+    // moving the window. The placement-preserving counterpart to
+    // MainWindow::showConnectionDialog(), for the show paths this class owns
+    // (the frameless toggle, the automation bridge) and for the screen/DPI/font
+    // changes that can invalidate a fit made earlier (#4515).
+    void fitAndClampToScreen(QScreen* preferredScreen = nullptr);
     QMargins screenFitFrameMargins() const;
+    QSize screenFitFrameSize() const;
     QPoint constrainedFrameTopLeft(const QPoint& preferredFrameTopLeft,
                                    const QRect& availableGeometry) const;
     void setConnected(bool connected);
@@ -63,7 +72,11 @@ public:
     void automationSetDialogVisible(bool visible) override
     {
         if (visible) {
-            fitToScreen();
+            // Same fit-and-place contract MainWindow::showConnectionDialog()
+            // applies, minus the re-centring: an agent-driven show must not
+            // yank a window the operator positioned, only pull it back inside
+            // the work area if it no longer fits there.
+            fitAndClampToScreen();
             show();
             raise();
             activateWindow();
@@ -156,11 +169,17 @@ private:
     Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
     void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
     void resetManualConnectButton();
-    // Grow the dialog when the current page needs more room than it has. The
-    // manual page's height is not constant — the Advanced source-path section
-    // expands, and the result line wraps — and a dialog that cannot grow makes
-    // Qt overlap the rows instead. Cheap and idempotent; safe to call often.
+    // Re-activate the body layout after a page change. The overlap this used to
+    // guard against — the Advanced section expanding, or the result line
+    // wrapping, while the dialog could not grow — is now structurally
+    // impossible: the body lives in a QScrollArea, which never hands its widget
+    // less than qSmartMinSize(). Cheap and idempotent; safe to call often.
     void refitToContent();
+    // Height the body would like if the screen allows it. The panel's own
+    // sizeHint() cannot answer this — QScrollArea caps its hint by design, so
+    // it under-reports the body it is scrolling.
+    int preferredClientHeight() const;
+    QScreen* screenFitTarget(QScreen* preferredScreen) const;
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp);
@@ -171,6 +190,13 @@ private:
 
     QWidget*     m_titleBar{nullptr};
     QVBoxLayout* m_rootLayout{nullptr};
+    QScrollArea* m_bodyScroll{nullptr};
+    QWidget*     m_bodyContent{nullptr};
+    // Last height fitToScreen() chose, so it can tell its own sizing from a
+    // height the operator dragged to. It grows the dialog back toward the
+    // body's preferred height only from the former — a size the operator
+    // picked is theirs to keep, even if that means the body scrolls.
+    int          m_autoFitHeight{kPreferredHeight};
 
     QButtonGroup* m_modeButtons{nullptr};
     QStackedWidget* m_modeStack{nullptr};

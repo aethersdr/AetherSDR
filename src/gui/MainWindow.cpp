@@ -165,7 +165,6 @@
 #include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
-#include <QStyle>
 #include <QTimer>
 #include <QDateTime>
 #include <QPropertyAnimation>
@@ -3710,11 +3709,12 @@ void MainWindow::showConnectionDialog()
         screen = QApplication::primaryScreen();
 
     m_connPanel->fitToScreen(screen);
-    const QSize dlgSize = m_connPanel->size();
-    const QMargins frameMargins = m_connPanel->screenFitFrameMargins();
-    const QSize frameSize(
-        dlgSize.width() + frameMargins.left() + frameMargins.right(),
-        dlgSize.height() + frameMargins.top() + frameMargins.bottom());
+    // Frame coordinates throughout: QWidget::move() positions a top-level
+    // widget by its frame top-left, so anchoring on the client rect would leave
+    // the window a title bar lower than intended. screenFitFrameSize() is the
+    // same arithmetic constrainedFrameTopLeft() clamps with — one source, so
+    // the anchor and the clamp cannot drift apart.
+    const QSize frameSize = m_connPanel->screenFitFrameSize();
     QPoint frameTopLeft(labelCenter.x() - frameSize.width() / 2,
                         statusBarTop.y() - frameSize.height() - 8);
 
@@ -3723,7 +3723,6 @@ void MainWindow::showConnectionDialog()
             frameTopLeft, screen->availableGeometry());
     }
 
-    // QWidget::move() positions a top-level widget by its frame top-left.
     m_connPanel->move(frameTopLeft);
     m_connPanel->show();
     m_connPanel->raise();
@@ -4224,12 +4223,10 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    // The body scrolls when its content exceeds the available height; the
-    // footer remains outside that viewport and therefore always reachable.
-    m_connPanel->setMinimumSize(ConnectionPanel::kSafeMinimumWidth,
-                                ConnectionPanel::kSafeMinimumHeight);
-    m_connPanel->resize(ConnectionPanel::kPreferredWidth,
-                        ConnectionPanel::kPreferredHeight);
+    // Sizing belongs to the panel now. It sets these same two values in its own
+    // constructor and then adjusts them per screen in fitToScreen(), which
+    // every show path here runs first — a hardcoded pair at this level went
+    // stale the moment the panel gained a row, and that is what #4515 was.
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
