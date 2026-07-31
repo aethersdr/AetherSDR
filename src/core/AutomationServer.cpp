@@ -58,6 +58,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 
 // Best-effort value extraction for common control types.
@@ -1136,6 +1137,99 @@ QJsonObject err(const QString& msg)
 QString formatMhz(double mhz)
 {
     return QString::number(mhz, 'g', 15);
+}
+
+// The tunable range shared by every verb documented in MHz.
+//
+// FLOOR — below anything a supported radio tunes. Matches the floor typed
+// frequency entry already applies to the same value (VfoWidget.cpp /
+// RxApplet.cpp, `freqMhz >= 0.001`), so the bridge and the VFO field agree on
+// what is too small rather than the bridge passing values the GUI would refuse.
+// This is NOT a unit guard and does not pretend to be one: GHz-for-MHz on HF
+// (`0.0142` meaning 14.2 MHz) lands at 14.2 kHz, a plausible VLF frequency
+// rather than a diagnosable mistake. What it stops is nonsense (`1e-300`)
+// reaching setFrequency() and the radio.
+//
+// CEILING — Hz passed to an MHz verb. A value above anything AetherSDR can tune
+// is a unit mistake rather than an ambitious request, and saying so beats
+// silently doing nothing: the radio ignores an out-of-band target, the verb
+// reports ok:true, and the caller goes on to key on the previous band. (#4550)
+// It is NOT auto-converted — guessing the caller's intent would make 14200000
+// mean 14.2 MHz here and something else in every other frequency verb.
+//
+// The ceiling is 10x the top of the band table (BandDefs.h — 3cm ends at
+// 10500), so it clears any real transverter setup with an order of magnitude to
+// spare while still catching the whole family of Hz-for-MHz mistakes —
+// including the ones a 1 THz threshold let through, such as `500000` for
+// 500 kHz, which would otherwise fall past the guard and land back in the
+// silent no-op this refusal exists to prevent.
+//
+// It is deliberately LOOSER than the 50000.0 MHz cap typed frequency entry
+// applies on XVTR (VfoWidget.cpp / RxApplet.cpp): the GUI cap is a limit on
+// what a human can dial, while this one only has to be high enough that no real
+// request trips it. Neither is "the" tuning limit — if one ever becomes the
+// authority, the other should be derived from it rather than re-guessed.
+//
+// kHz-for-MHz (e.g. `14200` for 20m) deliberately PASSES: that value is
+// indistinguishable from a legitimate microwave request (14.2 GHz sits inside
+// the transverter headroom this ceiling exists to protect), and refusing the
+// range would break real 24/47/76 GHz operation. A band-table lookup was
+// considered and rejected for the same reason — XVTR RF frequency is
+// user-configurable beyond the table. Decided, not overlooked.
+constexpr double kMinTunableMhz = 0.001;
+constexpr double kMaxTunableMhz = 105'000.0;
+
+// Top of the radio spectrum. Between kMaxTunableMhz and here an over-ceiling
+// value is genuinely ambiguous rather than obviously Hz — see below.
+constexpr double kSpectrumTopMhz = 300'000.0;
+
+// Validate the frequency argument of a verb documented in MHz.
+//
+// Returns the refusal to hand straight back to the caller, or std::nullopt when
+// `value` is a plausible request — in which case `mhz` holds the parsed
+// frequency. `verb` names the caller so every message is actionable.
+//
+// ONE definition, used by every MHz-taking verb. Three of them need this rule —
+// `tune`, `targettune` and `pan center` — and three copies of a threshold is how
+// they drift apart. Parsing lives in here too, so no verb can reintroduce the
+// non-finite hole by hand: QString::toDouble() accepts "nan" and "inf", and NaN
+// in particular sails past every range check below (NaN <= 0, NaN < floor and
+// NaN > ceiling are all false), so it has to be refused by name, before any
+// comparison is reached, with a message about the value itself rather than a
+// unit mistake it isn't.
+std::optional<QJsonObject> refuseUntunableMhz(const QString& verb,
+                                              const QString& value, double& mhz)
+{
+    bool parsed = false;
+    mhz = value.toDouble(&parsed);
+    if (!parsed || !std::isfinite(mhz) || mhz <= 0)
+        return err(verb
+                   + QStringLiteral(" requires a positive finite frequency in MHz"));
+    if (mhz < kMinTunableMhz)
+        return err(verb + QStringLiteral(" requires at least ")
+                   + formatMhz(kMinTunableMhz) + QStringLiteral(" MHz — got ")
+                   + formatMhz(mhz));
+    if (mhz > kMaxTunableMhz) {
+        // Above the ceiling but below the top of the spectrum is genuinely
+        // ambiguous: it reads as an Hz-for-MHz mistake OR as a real millimetre-
+        // wave allocation entered correctly in MHz (122.25 / 134 / 241 GHz).
+        // Refuse either way, but present both readings — telling someone
+        // dialling a 122 GHz transverter "did you mean 0.122250?" would be
+        // confidently wrong, which is the failure mode this messaging exists to
+        // avoid.
+        if (mhz <= kSpectrumTopMhz)
+            return err(verb + QStringLiteral(" takes MHz — got ") + formatMhz(mhz)
+                       + QStringLiteral(", above the ") + formatMhz(kMaxTunableMhz)
+                       + QStringLiteral(" MHz ceiling. If that was Hz, resend as ")
+                       + QString::number(mhz / 1.0e6, 'f', 6)
+                       + QStringLiteral("; if it is a millimetre-wave frequency in "
+                                        "MHz, it is beyond what AetherSDR can tune"));
+        return err(verb + QStringLiteral(" takes MHz, not Hz — got ") + formatMhz(mhz)
+                   + QStringLiteral(" (did you mean ")
+                   + QString::number(mhz / 1.0e6, 'f', 6)
+                   + QStringLiteral("?)"));
+    }
+    return std::nullopt;
 }
 
 QJsonObject deferredResponse()
@@ -6158,73 +6252,10 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
-    bool okF = false;
-    const double mhz = value.toDouble(&okF);
-    // toDouble() accepts "nan" and "inf". NaN in particular sails past every
-    // range check below (NaN <= 0 and NaN > ceiling are both false), so
-    // non-finite input must be refused here, by name, where the message is
-    // about the value itself rather than a unit mistake it isn't.
-    if (!okF || !std::isfinite(mhz) || mhz <= 0)
-        return err(QStringLiteral("tune requires a positive finite frequency in MHz"));
-    // Below anything a supported radio tunes. Matches the floor typed frequency
-    // entry already applies to the same value (VfoWidget.cpp / RxApplet.cpp,
-    // `freqMhz >= 0.001`), so the bridge and the VFO field agree on what is too
-    // small rather than the bridge passing values the GUI would refuse.
-    //
-    // This is NOT a unit guard and does not pretend to be one: GHz-for-MHz on HF
-    // (`tune 0.0142` meaning 14.2 MHz) lands at 14.2 kHz, which is a plausible
-    // VLF frequency, not a diagnosable mistake. What it does stop is nonsense
-    // (`tune 1e-300`) reaching setFrequency() and the radio.
-    constexpr double kMinTunableMhz = 0.001;
-    if (mhz < kMinTunableMhz)
-        return err(QStringLiteral("tune requires at least ")
-                   + formatMhz(kMinTunableMhz) + QStringLiteral(" MHz — got ")
-                   + formatMhz(mhz));
-    // Hz passed to an MHz verb. A value above anything AetherSDR can tune is a
-    // unit mistake rather than an ambitious request, and saying so beats
-    // silently doing nothing. It is NOT auto-converted: guessing the caller's
-    // intent would make 14200000 mean 14.2 MHz here and something else in every
-    // other frequency verb.
-    //
-    // The ceiling is 10x the top of the band table (3cm ends at 10.5 GHz), so it
-    // clears any real transverter setup with an order of magnitude to spare
-    // while still catching the whole family of Hz-for-MHz mistakes — including
-    // the ones a 1 THz threshold let through, such as `tune 500000` for 500 kHz,
-    // which would otherwise fall past the guard and land back in the silent
-    // no-op this refusal exists to prevent.
-    //
-    // It is deliberately LOOSER than the 50000.0 MHz cap typed frequency entry
-    // applies on XVTR (VfoWidget.cpp / RxApplet.cpp): the GUI cap is a limit on
-    // what a human can dial, while this one only has to be high enough that no
-    // real request trips it. Neither is "the" tuning limit — if one ever becomes
-    // the authority, the other should be derived from it rather than re-guessed.
-    //
-    // kHz-for-MHz (e.g. `tune 14200` for 20m) deliberately PASSES: that value
-    // is indistinguishable from a legitimate microwave request (14.2 GHz is
-    // inside the transverter headroom this ceiling exists to protect), and
-    // refusing the range would break real 24 and 47 GHz operation. A band-table
-    // lookup was considered and rejected for the same reason — XVTR RF
-    // frequency is user-configurable beyond the table. Decided, not overlooked.
-    constexpr double kMaxTunableMhz = 105'000.0;
-    if (mhz > kMaxTunableMhz) {
-        // Above the ceiling but below 300 GHz is genuinely ambiguous: it reads
-        // as an Hz-for-MHz mistake OR as a real millimetre-wave allocation
-        // entered correctly in MHz (122.25 / 134 / 241 GHz). Refuse either way,
-        // but present both readings — telling someone dialling a 122 GHz
-        // transverter "did you mean 0.122250?" would be confidently wrong,
-        // which is the failure mode this guard's messaging exists to avoid.
-        if (mhz <= 300'000.0)
-            return err(QStringLiteral("tune takes MHz — got ") + formatMhz(mhz)
-                       + QStringLiteral(", above the ") + formatMhz(kMaxTunableMhz)
-                       + QStringLiteral(" MHz ceiling. If that was Hz, resend as ")
-                       + QString::number(mhz / 1.0e6, 'f', 6)
-                       + QStringLiteral("; if it is a millimetre-wave frequency in "
-                                        "MHz, it is beyond what AetherSDR can tune"));
-        return err(QStringLiteral("tune takes MHz, not Hz — got ") + formatMhz(mhz)
-                   + QStringLiteral(" (did you mean ")
-                   + QString::number(mhz / 1.0e6, 'f', 6)
-                   + QStringLiteral("?)"));
-    }
+    // Parse and range-check the value — see refuseUntunableMhz().
+    double mhz = 0.0;
+    if (const auto refusal = refuseUntunableMhz(QStringLiteral("tune"), value, mhz))
+        return *refusal;
 
     int sliceId = -1;  // -1 = active slice
     if (!id.isEmpty()) {
@@ -6321,12 +6352,13 @@ QJsonObject AutomationServer::doSimFault(const QString& fault, const QString& ar
 
 QJsonObject AutomationServer::doTargetTune(const QString& value)
 {
-    bool okFrequency = false;
-    const double mhz = value.toDouble(&okFrequency);
-    if (!okFrequency || mhz <= 0.0) {
-        return err(QStringLiteral(
-            "targettune requires a positive frequency in MHz"));
-    }
+    // Validated BEFORE the handler dispatch, so the guard applies on the path
+    // the shipping app takes: MainWindow_Session.cpp installs the targettune
+    // handler unconditionally at session setup (right beside setTuneHandler),
+    // so a guard below the dispatch would be dead code in the shipping app.
+    double mhz = 0.0;
+    if (const auto refusal = refuseUntunableMhz(QStringLiteral("targettune"), value, mhz))
+        return *refusal;
     if (!m_targetTuneHandler) {
         return err(QStringLiteral("target tune handler is unavailable"));
     }
@@ -8028,9 +8060,14 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
     }
 
     if (action == QLatin1String("center")) {
-        bool okF = false; const double mhz = arg.toDouble(&okF);
-        if (!okF || mhz <= 0)
-            return err(QStringLiteral("pan center requires a positive frequency in MHz"));
+        // Same contract as `tune` — see refuseUntunableMhz(). It matters more
+        // here: RadioModel::setPanCenter() clamps only the LOW edge, so an
+        // out-of-range centre is optimistically stored and advertised over TCI
+        // (`dds:`) even though the radio rejects it — the same silent no-op as
+        // #4550, one verb over.
+        double mhz = 0.0;
+        if (const auto refusal = refuseUntunableMhz(QStringLiteral("pan center"), arg, mhz))
+            return *refusal;
         radio->setPanCenter(mhz);
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("center")},
                            {QStringLiteral("centerMhz"), mhz}, {QStringLiteral("requested"), true}};
