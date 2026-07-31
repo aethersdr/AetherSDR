@@ -13,16 +13,24 @@ from the same fix (#4535, PR #4553):
    lets the runtime compile it on first use. The new option compiles the merged
    source to a `.metallib` at build time (`xcrun metal | metallib`) and embeds
    that binary instead. The `XC_FLAGS` block was hoisted out of the `else()`
-   branch so both build-time compile paths share it; a configure-time
-   `xcrun -sdk macosx metal --version` probe makes a missing offline Metal
-   toolchain fatal under `REQUIRE_ASR_GPU` and a warning-plus-source-embed
-   fallback otherwise.
+   branch so both build-time compile paths share it.
+
+   Deliberately *not* here: whether the offline toolchain is required, what
+   happens when it is missing, which deployment target and which shader language
+   version to build for. Those are AetherSDR release policy and live in the
+   top-level `CMakeLists.txt`; this file only consumes
+   `GGML_METAL_EMBED_LIBRARY_COMPILED`, `GGML_METAL_MACOSX_VERSION_MIN`,
+   `GGML_METAL_STD` and `GGML_METAL_EMBED_LIBRARY_NO_BF16`.
 2. `ggml/src/ggml-metal/ggml-metal-device.m`: loads that embedded binary via
    `dispatch_data_create` + `newLibraryWithData:` (a no-op destructor block
-   suppresses the copy — the payload is static `__DATA`), and clamps
-   `props.has_tensor` to `false`, since the prebuilt library is compiled without
-   the tensor API. The clamp also skips upstream's tensor dummy-kernel probes,
-   which are a second runtime-compile site.
+   suppresses the copy — the payload is static `__DATA`), and clamps the device
+   props to the kernels the prebuilt library actually contains:
+   `props.has_tensor` is always cleared (the tensor API is not compiled in, and
+   clearing it also skips upstream's tensor dummy-kernel probes, which are a
+   second runtime-compile site), and `props.has_bfloat` is cleared under
+   `GGML_METAL_EMBED_LIBRARY_NO_BF16` — set when the deployment target keeps the
+   library below Metal 3.1, where `ggml-metal.metal` drops every bf16 kernel
+   while the runtime device query would still answer `true`.
 
 Both exist so Apple's **runtime** shader compiler (`newLibraryWithSource`) is
 never invoked. It re-compiles on every cold-cache launch, and on Intel-GPU Macs

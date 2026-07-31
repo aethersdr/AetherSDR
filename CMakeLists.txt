@@ -1264,24 +1264,76 @@ if (ENABLE_ASR)
     # which newer Xcode ships as a separate downloadable component — so keep it
     # opt-out: a host without the component can still build with
     # -DENABLE_ASR_METAL_PRECOMPILE=OFF (source embed + runtime compile).
+    #
+    # The whole decision lives here rather than in the vendored ggml CMakeLists:
+    # which toolchain is required, what happens when it is missing, and which OS
+    # the kernels are built for are all AetherSDR release policy. The vendored
+    # file only consumes the result.
     option(ENABLE_ASR_METAL_PRECOMPILE
         "Compile the ASR Metal kernels at build time (needs the offline Metal toolchain)" ON)
+    set(_asr_metal_precompile OFF)
     if (_asr_metal AND ENABLE_ASR_METAL_PRECOMPILE)
-        set(GGML_METAL_EMBED_LIBRARY_COMPILED ON CACHE BOOL "" FORCE)
-        # Pin the shader language so the kernel set inside the embedded library
-        # is a property of this file, not of the build host's default Metal std:
-        # the bf16 kernels compile only at >= metal3.1, while props.has_bfloat
-        # is a runtime device query — a host defaulting lower would embed a
-        # library missing kernels the device then asks for. metal3.1 == macOS 14,
-        # which is the Apple Silicon DMG's deployment target (macos-dmg.yml).
-        # The Intel DMG targets 13.0 and also builds this backend, so it embeds
-        # a library its own OS floor could not load — harmless, because Intel
-        # Macs never load it at all (ASR is CPU-gated there, #4535), and no
-        # -mmacosx-version-min is passed to the Metal compiler, so the build
-        # itself does not object.
-        set(GGML_METAL_STD "metal3.1" CACHE STRING "" FORCE)
-    else()
-        set(GGML_METAL_EMBED_LIBRARY_COMPILED OFF CACHE BOOL "" FORCE)
+        # Probe the offline compiler at configure time so a missing toolchain is
+        # caught here rather than as a mid-build pipe error. Fatal only under
+        # REQUIRE_ASR_GPU (the fail-rather-than-ship-degraded flag); otherwise
+        # warn — never silently — and fall back to the source embed.
+        execute_process(COMMAND xcrun -sdk macosx metal --version
+                        RESULT_VARIABLE _asr_metal_cc_rc
+                        OUTPUT_QUIET ERROR_QUIET)
+        if (_asr_metal_cc_rc EQUAL 0)
+            set(_asr_metal_precompile ON)
+        elseif (REQUIRE_ASR_GPU)
+            message(FATAL_ERROR "ENABLE_ASR_METAL_PRECOMPILE is ON but the offline Metal "
+                "compiler is not runnable ('xcrun -sdk macosx metal --version' failed). "
+                "Install it with: xcodebuild -downloadComponent MetalToolchain, or "
+                "configure with -DENABLE_ASR_METAL_PRECOMPILE=OFF to embed shader source "
+                "and compile at runtime instead.")
+        else()
+            message(WARNING "The offline Metal compiler is not runnable "
+                "('xcrun -sdk macosx metal --version' failed) — embedding shader source "
+                "and compiling it at runtime instead of embedding a compiled .metallib. "
+                "This build carries the #4535 runtime-compile hazard, so ASR stays "
+                "CPU-only on Intel-GPU Macs (see asrMetalUsableHost() in "
+                "src/asr/WhisperAsrBackend.cpp). Install the toolchain with: "
+                "xcodebuild -downloadComponent MetalToolchain")
+        endif()
+    endif()
+    set(GGML_METAL_EMBED_LIBRARY_COMPILED ${_asr_metal_precompile} CACHE BOOL "" FORCE)
+    if (_asr_metal_precompile)
+        # The kernels are frozen at build time now, so both halves of "which OS
+        # can load this library" have to be pinned here. The runtime compile used
+        # to answer both by construction, because it ran on the target machine.
+        #
+        # 1. Deployment target. Without -mmacosx-version-min the offline compiler
+        #    targets the build host's SDK default, which would make the shipped
+        #    binary's Metal floor a property of the CI runner image rather than of
+        #    the release (macos-dmg.yml builds at 14.0 / 13.0). The vendored
+        #    CMakeLists appends the flag when this is set. FORCEd both ways, so a
+        #    reconfigure with a different deployment target cannot inherit the
+        #    previous one out of the cache.
+        if (CMAKE_OSX_DEPLOYMENT_TARGET)
+            set(GGML_METAL_MACOSX_VERSION_MIN "${CMAKE_OSX_DEPLOYMENT_TARGET}" CACHE STRING "" FORCE)
+        else()
+            set(GGML_METAL_MACOSX_VERSION_MIN "" CACHE STRING "" FORCE)
+        endif()
+        # 2. Shader language. bf16 kernels need >= metal3.1 (== macOS 14) — below
+        #    that ggml-metal.metal drops them itself — while props.has_bfloat stays
+        #    a runtime device query, so a library built below 3.1 would be missing
+        #    kernels the device then asks for. Pin 3.1 wherever the deployment
+        #    target allows it; where it does not (the Intel DMG's 13.0) build 3.0
+        #    and have the runtime clamp has_bfloat to match, the same way it
+        #    already clamps has_tensor. This is not a preference: asking for 3.1
+        #    against a 13.0 deployment target is a hard compile error.
+        if (CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+            set(GGML_METAL_STD "metal3.0" CACHE STRING "" FORCE)
+            set(GGML_METAL_EMBED_LIBRARY_NO_BF16 ON CACHE BOOL "" FORCE)
+            message(STATUS "ASR: Metal kernels precompiled for macOS ${CMAKE_OSX_DEPLOYMENT_TARGET} "
+                "(metal3.0, no bf16 — props.has_bfloat clamped to match)")
+        else()
+            set(GGML_METAL_STD "metal3.1" CACHE STRING "" FORCE)
+            set(GGML_METAL_EMBED_LIBRARY_NO_BF16 OFF CACHE BOOL "" FORCE)
+            message(STATUS "ASR: Metal kernels precompiled at build time (metal3.1, bf16)")
+        endif()
     endif()
 
     # Every other non-CPU backend OFF (their source dirs are not vendored):
@@ -1380,6 +1432,9 @@ if (ENABLE_ASR)
     target_compile_definitions(aetherasr PUBLIC AETHER_ASR_ENABLED=1)
     if (_asr_vulkan OR _asr_metal)
         target_compile_definitions(aetherasr PRIVATE AETHER_ASR_GPU=1)
+    endif()
+    if (_asr_metal_precompile)
+        target_compile_definitions(aetherasr PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
     endif()
     set_target_properties(aetherasr PROPERTIES AUTOMOC ON)
 
@@ -3533,10 +3588,14 @@ if (ENABLE_ASR)
     target_include_directories(asr_whisper_backend_test PRIVATE src)
     target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core whisper)
     add_test(NAME asr_whisper_backend_test COMMAND asr_whisper_backend_test)
+    if (_asr_metal_precompile)
+        target_compile_definitions(asr_whisper_backend_test PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
+    endif()
 
-    # GPU probe must return promptly and honor the Intel-Mac CPU-only gate
-    # (#4535: the probe used to run Apple's runtime shader compiler on the
-    # calling thread, which can live-lock on Intel-GPU Macs).
+    # GPU probe must return promptly, and must keep Metal off Intel Macs on the
+    # source-embed fallback build (#4535: the probe used to run Apple's runtime
+    # shader compiler on the calling thread, which can live-lock there). The
+    # define has to match aetherasr's or the test asserts the wrong branch.
     add_executable(asr_gpu_probe_test
         tests/asr_gpu_probe_test.cpp
         src/asr/WhisperAsrBackend.cpp
@@ -3545,6 +3604,9 @@ if (ENABLE_ASR)
     target_link_libraries(asr_gpu_probe_test PRIVATE Qt6::Core whisper)
     add_test(NAME asr_gpu_probe_test COMMAND asr_gpu_probe_test)
     set_tests_properties(asr_gpu_probe_test PROPERTIES TIMEOUT 180)
+    if (_asr_metal_precompile)
+        target_compile_definitions(asr_gpu_probe_test PRIVATE AETHER_ASR_METAL_PRECOMPILED=1)
+    endif()
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
     add_executable(asr_remote_backend_test

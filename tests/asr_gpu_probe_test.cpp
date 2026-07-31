@@ -3,18 +3,22 @@
 // On the original bug, the first ggml touch compiled the embedded Metal shader
 // SOURCE on the calling thread via Apple's runtime compiler — which can
 // live-lock on Intel-GPU Macs (measured: no completion in 75 minutes). The fix
-// embeds a precompiled .metallib (loaded with newLibraryWithData, no runtime
-// compiler) and gates Metal to Apple Silicon at the probe level, so this test
-// asserts both halves:
-//   1. macOS, non-Apple-Silicon, no override: asrGpuDevices() is empty and
-//      answers without touching ggml at all (sub-second).
-//   2. AETHER_ASR_FORCE_METAL=1 (or any non-mac / Apple Silicon host): the
-//      real ggml enumeration runs — registry init, Metal device init, embedded
-//      metallib load — and returns. On the pre-fix build this is the call that
-//      never came back.
-// Case order matters: the gated case must run before the forced one, because
-// the forced probe initializes the process-wide ggml registry — exactly what
-// the gate exists to prevent.
+// embeds a precompiled .metallib, loaded with newLibraryWithData, so that
+// compiler is never invoked. What this test asserts depends on which build it
+// is compiled into, because the two builds have different hazards:
+//
+//   Precompiled build (AETHER_ASR_METAL_PRECOMPILED — the default, and what
+//   every release ships): there is no host gate, so every Mac enumerates. The
+//   assertion is that enumeration — registry init, Metal device init, embedded
+//   metallib load — returns, and returns promptly. That is the call that never
+//   came back on the pre-fix build.
+//
+//   Source-embed fallback build: Apple's runtime compiler is reachable again,
+//   so asrMetalUsableHost() keeps Intel Macs from enumerating Metal at all. The
+//   assertion is that the gate answers empty, and answers before any ggml work
+//   (sub-second). Case order matters here: the gated case must run before the
+//   AETHER_ASR_FORCE_METAL one, because the forced probe initializes the
+//   process-wide ggml registry — exactly what the gate exists to prevent.
 //
 // A detached watchdog turns a regression into a fast, labeled failure instead
 // of a ctest timeout.
@@ -89,10 +93,29 @@ int main()
     const std::vector<AsrGpuDevice> gated = asrGpuDevices();
     const qint64 gatedMs = timer.elapsed();
 
+#ifdef AETHER_ASR_METAL_PRECOMPILED
+    // No host gate on this build: the runtime shader compiler is unreachable, so
+    // an Intel Mac enumerates like any other and ggml's own per-op capability
+    // checks decide what runs. The #4535 assertion is that it comes back fast.
+    // 30 s is far above any healthy first touch (68 ms on CI's Apple Silicon,
+    // 730 ms on the reporter's Intel MBP) and far below the live-lock, which
+    // never returns at all.
+    if (gatedMs > 30000) {
+        std::fprintf(stderr, "[FAIL] enumeration took %lld ms on a precompiled "
+                             "build - nothing on this path should be compiling "
+                             "shaders (#4535)\n",
+                     static_cast<long long>(gatedMs));
+        return 1;
+    }
+    std::printf("[ok] precompiled build, no host gate: %zu device(s) in %lld ms%s\n",
+                gated.size(), static_cast<long long>(gatedMs),
+                hostIsAppleSilicon() ? " (Apple Silicon)" : " (Intel)");
+#else
     if (!hostIsAppleSilicon()) {
         if (!gated.empty()) {
-            std::fprintf(stderr, "[FAIL] Intel Mac was offered %zu Metal "
-                                 "device(s) without AETHER_ASR_FORCE_METAL\n",
+            std::fprintf(stderr, "[FAIL] Intel Mac was offered %zu Metal device(s) "
+                                 "on a source-embed build without "
+                                 "AETHER_ASR_FORCE_METAL\n",
                          gated.size());
             return 1;
         }
@@ -102,12 +125,13 @@ int main()
                          static_cast<long long>(gatedMs));
             return 1;
         }
-        std::printf("[ok] Intel Mac gate: no Metal offered, answered in "
-                    "%lld ms\n", static_cast<long long>(gatedMs));
+        std::printf("[ok] Intel Mac gate (source-embed build): no Metal offered, "
+                    "answered in %lld ms\n", static_cast<long long>(gatedMs));
     } else {
         std::printf("[ok] Apple Silicon: %zu device(s) in %lld ms\n",
                     gated.size(), static_cast<long long>(gatedMs));
     }
+#endif
 
     qputenv("AETHER_ASR_FORCE_METAL", "1");
 #endif
@@ -122,6 +146,11 @@ int main()
         std::printf("     device %d: %s\n", d.index, qPrintable(d.name));
     }
 
+#ifdef Q_OS_MACOS
+    // Everything below is about the embedded-metallib load path, which only
+    // exists on macOS — on Linux/Windows the probe above (Vulkan or CPU) is the
+    // whole test.
+    //
     // A probe that enumerates no GPU never reaches newLibraryWithData, so on a
     // host with no Metal device this test says nothing about the load path it
     // exists to guard. CI sets AETHER_ASR_EXPECT_PRECOMPILED=1 to turn that
@@ -160,6 +189,7 @@ int main()
         std::printf("[note] precompiled metallib not reported - build may have "
                     "fallen back to source embed\n");
     }
+#endif // Q_OS_MACOS
 
     return 0;
 }

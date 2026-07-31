@@ -742,6 +742,15 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             // skip the dummy-kernel probes below (they would invoke the runtime
             // shader compiler this build exists to avoid)
             dev->props.has_tensor = false;
+
+#if GGML_METAL_EMBED_LIBRARY_NO_BF16
+            // same reasoning for bfloat: this library was compiled below Metal
+            // 3.1 (the deployment target does not reach macOS 14), so
+            // ggml-metal.metal dropped every bf16 kernel. has_bfloat is a
+            // runtime device query, and a Metal3-class GPU answers true — which
+            // would have ggml ask for kernels that are not in the library.
+            dev->props.has_bfloat = false;
+#endif
 #endif
 
             // note: disable the tensor API by default for old chips because with the current implementation it is not useful

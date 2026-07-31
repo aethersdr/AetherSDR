@@ -29,17 +29,28 @@ int chooseThreadCount()
     return std::clamp(hw, 1, 4);
 }
 
-// On Macs, ASR offers the GPU only on Apple Silicon. Intel Macs keep every
-// Metal device off the table: their GPUs sit below the family gates the
-// heavy kernels need (has_simdgroup_reduction/mm require Apple7/Metal3, see
-// ggml-metal-device.m), so whisper would fall back to CPU per-op anyway —
-// and never enumerating Metal also keeps the class of Intel-only runtime
-// compiler failures (#4535) unreachable. Checked via hardware sysctl rather
-// than build arch so an x86_64 build under Rosetta still sees the real GPU.
-// AETHER_ASR_FORCE_METAL=1 overrides, for diagnostics.
+// Whether this host may enumerate Metal at all.
+//
+// The hazard being avoided is #4535: Apple's *runtime* shader compiler
+// (newLibraryWithSource) can live-lock on Intel-GPU Macs — measured at no
+// completion in 75 minutes on a Radeon Pro 560X — and ggml reaches it from
+// plain device enumeration. So on a build that embeds the shader SOURCE, Intel
+// Macs must not enumerate Metal: the first ggml touch would hang the caller.
+//
+// A build that embeds a precompiled .metallib (AETHER_ASR_METAL_PRECOMPILED,
+// the default and what every release ships) cannot reach that compiler at all,
+// so the gate is not needed and is not applied — an Intel Mac gets whatever
+// Metal device ggml enumerates, and ggml's own per-op capability checks decide
+// what actually runs on it. Keeping the gate on that build would withdraw the
+// GPU from Metal3-class AMD hardware (Vega II, W5700X, 5700XT) purely on
+// vendor, which is a policy nobody measured.
+//
+// Checked via hardware sysctl rather than build arch so an x86_64 build under
+// Rosetta still sees the real GPU. AETHER_ASR_FORCE_METAL=1 overrides, for
+// diagnostics.
 bool asrMetalUsableHost()
 {
-#ifdef Q_OS_MACOS
+#if defined(Q_OS_MACOS) && !defined(AETHER_ASR_METAL_PRECOMPILED)
     int isArm64 = 0;
     size_t size = sizeof(isArm64);
     if (sysctlbyname("hw.optional.arm64", &isArm64, &size, nullptr, 0) != 0) {
@@ -61,7 +72,9 @@ bool asrMetalUsableHost()
         return true;
     }
     static const bool logged = [] {
-        qCInfo(lcAsrWhisper) << "Intel Mac - ASR is CPU-only (Metal not offered)";
+        qCInfo(lcAsrWhisper) << "Intel Mac on a source-embed build - ASR is CPU-only "
+                                "(Metal not offered; rebuild with the offline Metal "
+                                "toolchain to enable it)";
         return true;
     }();
     Q_UNUSED(logged)

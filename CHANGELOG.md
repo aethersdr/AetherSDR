@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: Copy Assist no longer freezes the app on first use.** Turning on ASR
+  could hang the entire interface — on one Intel MacBook Pro for over 75 minutes,
+  with a force-quit as the only way out. The speech-recognition engine was asking
+  macOS to compile its GPU shaders the first time it looked for a graphics card,
+  and on some Intel Macs Apple's shader compiler never finishes. Those shaders are
+  now compiled when AetherSDR is built, so nothing is compiled on your machine and
+  the panel opens immediately. Apple Silicon Macs also stop paying a several-second
+  delay the first time ASR touches the GPU each cold start. ([#4535](https://github.com/aethersdr/AetherSDR/issues/4535))
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

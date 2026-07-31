@@ -60,7 +60,13 @@ the same convention as `third_party/wdsp` and `third_party/smartsdr-dsp`:
 - `ggml/src/ggml-metal/CMakeLists.txt` — build-time kernel compilation
   (`GGML_METAL_EMBED_LIBRARY_COMPILED`). PR #4553, fixes #4535.
 - `ggml/src/ggml-metal/ggml-metal-device.m` — loads the embedded compiled
-  metallib and clamps `props.has_tensor`. PR #4553.
+  metallib and clamps `props.has_tensor` / `props.has_bfloat` to the kernels it
+  actually contains. PR #4553.
+
+Both are kept as thin as possible: the *policy* around them — required
+toolchain, missing-toolchain behaviour, deployment target, shader language
+version — lives in the top-level `CMakeLists.txt` and reaches the vendored tree
+only as `GGML_METAL_*` variables, so a refresh has less to re-apply.
 
 They must be re-applied after any refresh; the re-vendoring recipe below
 otherwise silently reverts them and reintroduces #4535.
