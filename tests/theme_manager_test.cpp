@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QStringList>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -952,6 +953,121 @@ int main(int argc, char** argv)
                              QStringLiteral("color.slider.foreground"))
                     .name().toLower(),
                   QString("#123456"));
+    }
+
+    {
+        // (4) A radial gradient stored as a PRIMITIVE keeps its centre and
+        // radius too.
+        //
+        // The primitives palette had its own hand-rolled gradient writer that
+        // emitted type/angle/stops only — no centre, no radius, for either
+        // gradient type. Same loss as the scope-level one a tier down, and one
+        // the reader cannot recover from: there is no centerX in the file to
+        // fall back to either. Both tiers now share gradientToJson().
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        QTemporaryDir pdir;
+        EXPECT_TRUE(pdir.isValid());
+        const QString ppath = pdir.filePath(QStringLiteral("prim-radial.json"));
+        QFile pf(ppath);
+        EXPECT_TRUE(pf.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        pf.write(R"({
+          "schemaVersion": 2, "name": "Primitive Radial",
+          "primitives": {
+            "gradient.spot": { "type": "radial-gradient", "angle": 0,
+              "center": [0.3, 0.7], "radius": 0.9,
+              "stops": [ {"at":0.0,"color":"#112233"}, {"at":1.0,"color":"#445566"} ] }
+          },
+          "scopes": { "root": { "tokens": {
+            "color.test.spot": "{gradient.spot}"
+          } } } })");
+        pf.close();
+
+        QString pErr;
+        EXPECT_EQ(tm.importThemeFromFile(ppath, &pErr), QString("Primitive Radial"));
+        EXPECT_TRUE(qFuzzyCompare(tm.gradient("color.test.spot").center.x(), 0.3));
+
+        // Re-save through the writer and reload: centre and radius must still
+        // be there. Before the shared writer both reverted to the {0.5, 0.5}
+        // / 0.5 defaults on exactly this hop.
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Primitive Radial Saved"));
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("Primitive Radial Saved"));
+
+        const ThemeGradient rt = tm.gradient("color.test.spot");
+        EXPECT_EQ(rt.type, ThemeGradient::Radial);
+        EXPECT_TRUE(qFuzzyCompare(rt.center.x(), 0.3));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.center.y(), 0.7));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.radius,     0.9));   // was 0.5 before the fix
+    }
+
+    {
+        // (5) cssFragment() warns for an unknown token — once per theme.
+        //
+        // The warning IS the fix, so the warning is what has to be pinned.
+        // LogManager installs a message handler, so it never reaches stderr;
+        // capture it directly.
+        static QStringList s_captured;
+        static QtMessageHandler s_prev = nullptr;
+        s_captured.clear();
+        s_prev = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+                // Match the probe token itself, not merely "unknown token": a
+                // theme switch reapplies every tracked stylesheet, so a
+                // pre-existing template typo would otherwise inflate the count.
+                if (type == QtWarningMsg
+                    && msg.contains("color.definitely.not.a.token"))
+                    s_captured << msg;
+                if (s_prev) s_prev(type, ctx, msg);
+            });
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.cssFragment("color.definitely.not.a.token").isEmpty());
+        EXPECT_EQ(s_captured.size(), 1);
+
+        // Warned once — resolveFor() runs on every tracked-stylesheet reapply,
+        // so an unguarded warning would flood the log.
+        for (int i = 0; i < 5; ++i) tm.cssFragment("color.definitely.not.a.token");
+        EXPECT_EQ(s_captured.size(), 1);
+
+        // ...but once per THEME, not once per process: switching themes must
+        // re-arm it, or a token only the incoming theme is missing goes
+        // unreported because some earlier theme already burned the one warning.
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        tm.cssFragment("color.definitely.not.a.token");
+        EXPECT_EQ(s_captured.size(), 2);
+
+        qInstallMessageHandler(s_prev);
+    }
+
+    {
+        // (6) Importing a file this build just wrote must not warn that the
+        // file comes from a newer build. The guard tested schemaVersion > 1
+        // while both write paths emit 2, so every ordinary save/export round
+        // trip tripped it — and a warning that fires on the common case
+        // trains operators to ignore the real one.
+        static QStringList s_verWarnings;
+        static QtMessageHandler s_verPrev = nullptr;
+        s_verWarnings.clear();
+        s_verPrev = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+                if (type == QtWarningMsg && msg.contains("newer than this build"))
+                    s_verWarnings << msg;
+                if (s_verPrev) s_verPrev(type, ctx, msg);
+            });
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Version Guard Fork"));
+        QTemporaryDir vdir;
+        EXPECT_TRUE(vdir.isValid());
+        const QString vout = vdir.filePath(QStringLiteral("version-guard.json"));
+        QString vErr;
+        EXPECT_TRUE(tm.exportThemeToFile(tm.activeTheme(), vout, &vErr));
+
+        QString vImpErr;
+        EXPECT_TRUE(!tm.importThemeFromFile(vout, &vImpErr).isEmpty());
+        EXPECT_EQ(s_verWarnings.size(), 0);
+
+        qInstallMessageHandler(s_verPrev);
     }
 
     // Restore Default Dark for any future test additions below.

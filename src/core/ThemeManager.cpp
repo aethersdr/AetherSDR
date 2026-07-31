@@ -106,6 +106,44 @@ QString colorHexToCssFragment(const QString& hex)
         .arg(c.alphaF(), 0, 'f', 3);
 }
 
+// The single writer for the gradient JSON shape, and the exact inverse of
+// parseGradient() above.  Both storage tiers route through here — semantic
+// tokens via scopeToJson(), the primitives palette via themeDocumentJson() —
+// because they used to hold one hand-rolled copy each and the copies drifted.
+// The palette's copy emitted type/angle/stops only, so a radial gradient
+// stored as a primitive lost its centre AND radius on every save: the same
+// defect as the scope-level one, a tier down, and one parseGradient()'s
+// centerX/centerY recovery cannot help with because there is no centerX in
+// the file to recover from either.  One writer means the next shape fix can
+// only ever need applying once.
+QJsonObject gradientToJson(const ThemeGradient& g)
+{
+    QJsonObject gj;
+    gj.insert("type", g.type == ThemeGradient::Radial
+                        ? QStringLiteral("radial-gradient")
+                        : QStringLiteral("linear-gradient"));
+    gj.insert("angle", g.angle);
+    if (g.type == ThemeGradient::Radial) {
+        // "center" as a [x, y] ARRAY — the shape the reader parses and this
+        // file's own format comment documents.  This used to write
+        // centerX/centerY as two scalars, which the reader never looks for,
+        // so a radial gradient came back at the {0.5, 0.5} default.
+        // `radius` round-tripped fine, which made the loss look like a
+        // half-working feature rather than a format mismatch.
+        gj.insert("center", QJsonArray{g.center.x(), g.center.y()});
+        gj.insert("radius", g.radius);
+    }
+    QJsonArray stops;
+    for (const auto& s : g.stops) {
+        QJsonObject sj;
+        sj.insert("at",    s.at);
+        sj.insert("color", colorToTokenString(s.color));
+        stops.append(sj);
+    }
+    gj.insert("stops", stops);
+    return gj;
+}
+
 // Recursively walk a JSON object, emitting `category.subkey...leaf = value`
 // pairs into `out`.  Schema lets users group tokens under "color", "font",
 // "sizing" without having to repeat the prefix at every leaf.
@@ -1112,32 +1150,7 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
             else if (ut == QMetaType::Double)  leaf = v.toDouble();
             else if (ut == QMetaType::Bool)    leaf = v.toBool();
             else if (ut == gradMetaId) {
-                const ThemeGradient g = v.value<ThemeGradient>();
-                QJsonObject gj;
-                gj.insert("type", g.type == ThemeGradient::Radial
-                                    ? QStringLiteral("radial-gradient")
-                                    : QStringLiteral("linear-gradient"));
-                gj.insert("angle", g.angle);
-                if (g.type == ThemeGradient::Radial) {
-                    // "center" as a [x, y] ARRAY — the shape the reader
-                    // parses and this file's own format comment documents.
-                    // This used to write centerX/centerY as two scalars, which
-                    // the reader never looks for, so a radial gradient came
-                    // back at the {0.5, 0.5} default. `radius` round-tripped
-                    // fine, which made the loss look like a half-working
-                    // feature rather than a format mismatch.
-                    gj.insert("center", QJsonArray{g.center.x(), g.center.y()});
-                    gj.insert("radius",  g.radius);
-                }
-                QJsonArray stops;
-                for (const auto& s : g.stops) {
-                    QJsonObject sj;
-                    sj.insert("at",    s.at);
-                    sj.insert("color", colorToTokenString(s.color));
-                    stops.append(sj);
-                }
-                gj.insert("stops", stops);
-                leaf = gj;
+                leaf = gradientToJson(v.value<ThemeGradient>());
             }
             else if (ut == fontMetaId) {
                 const ThemeFont f = v.value<ThemeFont>();
@@ -1189,23 +1202,10 @@ QJsonObject ThemeManager::themeDocumentJson(const QString& themeName,
         else if (ut == QMetaType::Double)  primitives.insert(it.key(), v.toDouble());
         else if (ut == QMetaType::Bool)    primitives.insert(it.key(), v.toBool());
         else if (ut == gradMetaId) {
-            // Same gradient JSON shape as scope-level tokens; the loader
-            // recognises both ambient locations.
-            const ThemeGradient g = v.value<ThemeGradient>();
-            QJsonObject gj;
-            gj.insert("type", g.type == ThemeGradient::Radial
-                                ? QStringLiteral("radial-gradient")
-                                : QStringLiteral("linear-gradient"));
-            gj.insert("angle", g.angle);
-            QJsonArray stops;
-            for (const auto& s : g.stops) {
-                QJsonObject sj;
-                sj.insert("at",    s.at);
-                sj.insert("color", colorToTokenString(s.color));
-                stops.append(sj);
-            }
-            gj.insert("stops", stops);
-            primitives.insert(it.key(), gj);
+            // Literally the same writer the scope tokens use — this used to
+            // be a separate copy that omitted `center` and `radius`, so a
+            // radial gradient in the palette round-tripped to the defaults.
+            primitives.insert(it.key(), gradientToJson(v.value<ThemeGradient>()));
         }
     }
 
