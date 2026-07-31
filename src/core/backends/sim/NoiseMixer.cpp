@@ -195,6 +195,12 @@ void NoiseMixer::genCw(const ChannelState& c, float* out)
         return s;
     }();
     const int nSpans = static_cast<int>(sched.spans.size());
+    // Tone phase advances by dphi per sample (radians accumulator, birdie
+    // contract): a pitch change slides the frequency from the current phase
+    // instead of teleporting to sin(2π·hz·t_absolute) — which clicked mid-dah,
+    // the exact artifact the raised-cosine edges below exist to prevent.
+    // m_cwPhase remains the keying-schedule clock only. (#4618)
+    const double dphi = kTwoPi * hz / kSampleRate;
     for (int i = 0; i < kFrameLen; ++i) {
         const double tt = static_cast<double>(m_cwPhase + i) / kSampleRate;
         const double pos = std::fmod(tt, sched.total * dit);
@@ -210,8 +216,10 @@ void NoiseMixer::genCw(const ChannelState& c, float* out)
             if (into < edge)      key = 0.5 - 0.5 * std::cos((kTwoPi / 2.0) * into / edge);
             else if (left < edge) key = 0.5 - 0.5 * std::cos((kTwoPi / 2.0) * left / edge);
         }
-        out[i] = static_cast<float>(key * std::sin(kTwoPi * hz * tt));
+        out[i] = static_cast<float>(key * std::sin(m_cwPhaseRad));
+        m_cwPhaseRad += dphi;
     }
+    if (m_cwPhaseRad > kTwoPi) m_cwPhaseRad = std::fmod(m_cwPhaseRad, kTwoPi);
     m_cwPhase += kFrameLen;
 }
 
