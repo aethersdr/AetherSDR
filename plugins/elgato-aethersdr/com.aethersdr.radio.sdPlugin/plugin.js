@@ -134,6 +134,31 @@ function targetSlice() {
     return slice(targetTrx());
 }
 
+// Everything that has to happen when the targeted slice changes, wherever the
+// change came from.
+//
+// The operator-driven path (the Slice Target key) always did this. The
+// radio-driven one — `active_slice` with Slice Target = ACTIVE, or `tx_enable`
+// with TX — did not, and the two consequences were both dead ends rather than
+// glitches:
+//
+//   * rx_volume is in neither the init burst nor any seed, so with nothing
+//     re-requesting it, SLICE VOL+/- on the newly focused slice showed "—" and
+//     stayed dead indefinitely.
+//   * the dials kept rendering the previous slice's values — the VFO encoder
+//     showing the old frequency and, when the new slice's vfo was unknown,
+//     silently refusing rotation without ever painting the "—" that explains
+//     why.
+//
+// Coalescing is requestState()'s job, so calling it per target move is cheap.
+function retargetTo(previousTrx) {
+    if (targetTrx() === previousTrx) return;
+    bandCursor = null;          // the new target sits on its own band
+    requestState();             // seed what this slice has never reported
+    refreshKeypads();
+    for (const d of DIALS) d.updateAll();
+}
+
 // ── TCI Client ──────────────────────────────────────────────────────────────
 let tciWs = null;
 let tciReconnectTimer = null;
@@ -164,8 +189,14 @@ function tciConnected() {
     return !!tciWs && tciWs.readyState === WebSocket.OPEN;
 }
 
+// Returns whether the command actually went out. Callers that flip local state
+// optimistically MUST check it: a dropped send with the flag flipped anyway left
+// the key lying about the radio — TUNE painting "TUNE ON" with no carrier, and
+// needing two presses after reconnect to get back in step.
 function tciSend(cmd) {
-    if (tciConnected()) tciWs.send(cmd);
+    if (!tciConnected()) return false;
+    tciWs.send(cmd);
+    return true;
 }
 
 // Ask the radio for everything the keys display, rather than trusting whatever
@@ -256,9 +287,30 @@ function parseTci(msg) {
                     // echo has to go through its guard or the write below
                     // would clobber a spin in progress anyway.
                     known.add("vfo:" + trx);
-                    if (trx === targetTrx()) vfoDial.acceptEcho(hz);
-                    else slice(trx).frequency = hz;
-                    if (Date.now() >= bandCursorGuardUntil) bandCursor = null;
+                    // Inside the band-change window the FREQUENCY is guarded
+                    // too, not just the cursor. Per the note above BANDS, the
+                    // server keeps reporting the pre-change frequency for a
+                    // moment after a band change — the guard stopped that from
+                    // dragging bandCursor back, but nothing stopped it landing
+                    // on slice.frequency, so a Tune Up pressed right after a
+                    // Band Up stepped from the OLD band and pulled the radio
+                    // back to it.
+                    //
+                    // Rather than ignore the whole window, take the echo that
+                    // actually CONFIRMS the band we commanded, and let it end
+                    // the window early. A stale echo names the old band and is
+                    // dropped; the real one arrives and is applied at once, so
+                    // this costs no responsiveness in the normal case.
+                    let accept = true;
+                    if (Date.now() < bandCursorGuardUntil) {
+                        accept = bandCursor !== null && closestBandIndex(hz) === bandCursor;
+                        if (accept) bandCursorGuardUntil = 0;   // confirmed
+                    }
+                    if (accept) {
+                        if (trx === targetTrx()) vfoDial.acceptEcho(hz);
+                        else slice(trx).frequency = hz;
+                        if (Date.now() >= bandCursorGuardUntil) bandCursor = null;
+                    }
                 }
                 break;
             }
@@ -276,12 +328,20 @@ function parseTci(msg) {
             // true edge is authoritative.
             case "tx_enable": {
                 const trx = trxOf(p[0]);
-                if (p.length >= 2 && p[1] === "true" && trx !== null) radio.txTrx = trx;
+                if (p.length >= 2 && p[1] === "true" && trx !== null) {
+                    const before = targetTrx();
+                    radio.txTrx = trx;
+                    retargetTo(before);
+                }
                 break;
             }
             case "active_slice": {
                 const trx = trxOf(p[0]);
-                if (trx !== null) radio.activeTrx = trx;
+                if (trx !== null) {
+                    const before = targetTrx();
+                    radio.activeTrx = trx;
+                    retargetTo(before);
+                }
                 break;
             }
             // One PA, so transmit state is radio-global regardless of the trx
@@ -303,7 +363,15 @@ function parseTci(msg) {
             case "volume": {
                 const db = parseInt(p[0], 10);
                 if (p.length >= 1 && Number.isFinite(db)) {
-                    radio.volume = volumePercentFromDb(db);
+                    // Do NOT write radio.volume here. It is this dial's
+                    // getValue/setValue, so assigning it directly applies the
+                    // echo before acceptEcho() can decline it — which made the
+                    // mid-spin guard inert and let the value snap back, the
+                    // exact stall the guard exists to stop. Only the dial may
+                    // write the field it owns. (Same for drive/tune_drive
+                    // below; `vfo` already routed correctly, which is why the
+                    // bug survived: the one dial the tests covered was fine.)
+                    const pct = volumePercentFromDb(db);
                     known.add("volume");
                     // Mute All is a plugin-side notion — TCI has no master-mute
                     // verb, so it drives master volume to the silence floor and
@@ -313,8 +381,11 @@ function parseTci(msg) {
                     // stale. Clearing the flag here stops a later unmute from
                     // writing that stale value back over what the radio now
                     // reports.
-                    if (radio.masterMuted && radio.volume > 0) radio.masterMuted = false;
-                    volumeDial.acceptEcho(radio.volume);
+                    // Judged on the RADIO's reported level, not the dial's:
+                    // this is about whether audio actually came back, which is
+                    // true regardless of whether a spin is in progress.
+                    if (radio.masterMuted && pct > 0) radio.masterMuted = false;
+                    volumeDial.acceptEcho(pct);
                 }
                 break;
             }
@@ -323,8 +394,8 @@ function parseTci(msg) {
             case "drive": {
                 const w = parseInt(p[p.length - 1], 10);
                 if (Number.isFinite(w)) {
-                    radio.rfPower = w;
                     known.add("drive");
+                    // The dial owns radio.rfPower — see the note under `volume`.
                     rfPowerDial.acceptEcho(w);
                 }
                 break;
@@ -332,8 +403,8 @@ function parseTci(msg) {
             case "tune_drive": {
                 const w = parseInt(p[p.length - 1], 10);
                 if (Number.isFinite(w)) {
-                    radio.tunePower = w;
                     known.add("tune_drive");
+                    // The dial owns radio.tunePower — see the note under `volume`.
                     tunePowerDial.acceptEcho(w);
                 }
                 break;
@@ -693,8 +764,8 @@ const volumeDial = createDial({
         const trx = targetTrx();
         if (!needs(`muted:${trx}`)) return;
         const s = slice(trx);
-        s.muted = !s.muted;
-        tciSend(`mute:${trx},${s.muted};`);
+        const next = !s.muted;
+        if (tciSend(`mute:${trx},${next};`)) s.muted = next;
     },
     getValue: () => radio.volume,
     setValue: (v) => { radio.volume = v; },
@@ -732,7 +803,10 @@ const actionHandlers = {
     // broadcast at all, so radio.tuning could never leave its initial false
     // and every press re-sent `tune:...,true` — TUNE would start but never
     // stop. Lead with the local flag; the trx: handler above resyncs it.
-    "com.aethersdr.radio.tune-toggle": { keyDown: () => { radio.tuning = !radio.tuning; tciSend(`tune:0,${radio.tuning};`); refreshKeypads(); } },
+    // Commit the optimistic flip only if the command actually went out — see
+    // tciSend(). With TCI down this used to paint "TUNE ON" over a radio that
+    // was never told, and took two presses after reconnect to resync.
+    "com.aethersdr.radio.tune-toggle": { keyDown: () => { const next = !radio.tuning; if (tciSend(`tune:0,${next};`)) radio.tuning = next; refreshKeypads(); } },
     // drive/tune_drive are radio-global (one PA) and AetherSDR backs them with
     // TransmitModel, so they address the TX slice rather than the target.
     // Cycling steps from the current level, so both need the radio's value
@@ -742,7 +816,7 @@ const actionHandlers = {
     "com.aethersdr.radio.rf-power":    { keyDown: () => { if (!needs("drive")) return; radio.rfPower = nextInCycle(POWER_LEVELS, radio.rfPower); tciSend(`drive:${radio.txTrx},${radio.rfPower};`); rfPowerDial.updateAll(); refreshKeypads(); } },
     "com.aethersdr.radio.tune-power":  { keyDown: () => { if (!needs("tune_drive")) return; radio.tunePower = nextInCycle(TUNE_LEVELS, radio.tunePower); tciSend(`tune_drive:${radio.txTrx},${radio.tunePower};`); tunePowerDial.updateAll(); refreshKeypads(); } },
     // Audio — master fader is radio-global, slice volume/mute are per-slice.
-    "com.aethersdr.radio.mute-toggle":  { keyDown: () => { const trx = targetTrx(); if (!needs(`muted:${trx}`)) return; const s = slice(trx); s.muted = !s.muted; tciSend(`mute:${trx},${s.muted};`); } },
+    "com.aethersdr.radio.mute-toggle":  { keyDown: () => { const trx = targetTrx(); if (!needs(`muted:${trx}`)) return; const s = slice(trx); const next = !s.muted; if (tciSend(`mute:${trx},${next};`)) s.muted = next; } },
     "com.aethersdr.radio.volume-up":    { keyDown: () => { if (!needs("volume")) return; tciSend(volumeSetCommand(VOLUME_LEVELS[Math.min(closestIndex(VOLUME_LEVELS, radio.volume) + 1, VOLUME_LEVELS.length - 1)])); } },
     "com.aethersdr.radio.volume-down":  { keyDown: () => { if (!needs("volume")) return; tciSend(volumeSetCommand(VOLUME_LEVELS[Math.max(closestIndex(VOLUME_LEVELS, radio.volume) - 1, 0)])); } },
     // There is no global-mute verb in TCI — `mute` and `rx_mute` both write
@@ -751,17 +825,28 @@ const actionHandlers = {
     // restoring the previous level on the way back.
     "com.aethersdr.radio.mute-all": {
         keyDown: () => {
-            radio.masterMuted = !radio.masterMuted;
-            if (radio.masterMuted) {
-                radio.volumeBeforeMute = radio.volume;
-                tciSend(volumeSetCommand(0));
+            // Gated like every other volume action. Without this, a mute
+            // followed by an unmute before the init burst arrived commanded
+            // master volume to radio.volume's FABRICATED default of 50% — the
+            // one thing the `needs()` gate exists to prevent, and this was the
+            // only volume key not behind it.
+            if (!needs("volume")) return;
+            // Commit only on a successful send, like the other toggles: a key
+            // reading UNMUTE ALL over a radio still at full volume is worse
+            // than one that did not appear to respond.
+            if (!radio.masterMuted) {
+                const before = radio.volume;
+                if (tciSend(volumeSetCommand(0))) {
+                    radio.volumeBeforeMute = before;
+                    radio.masterMuted = true;
+                }
             } else {
                 // No `|| 50` fallback: 0 is a legitimate level, and the field
                 // is seeded at 50 and only ever assigned from radio.volume, so
                 // a falsy-coalesce could not protect against undefined — it
                 // could only turn a genuine silence into a jump to half volume
                 // on a key labelled UNMUTE.
-                tciSend(volumeSetCommand(radio.volumeBeforeMute));
+                if (tciSend(volumeSetCommand(radio.volumeBeforeMute))) radio.masterMuted = false;
             }
             refreshKeypads();
         },
@@ -782,12 +867,15 @@ const actionHandlers = {
     // Target selector
     "com.aethersdr.radio.slice-target": {
         keyDown: () => {
+            const before = targetTrx();
             targetModeIndex = (targetModeIndex + 1) % TARGET_MODES.length;
-            bandCursor = null;  // the new target sits on its own band
             sdSend({ event: "setGlobalSettings", context: sdUUID, payload: { targetMode: TARGET_MODES[targetModeIndex].id } });
+            // Same work as a radio-driven move, via the same helper, so the two
+            // paths cannot drift apart again. Cycling back to the same trx (one
+            // slice open, so TX and ACTIVE resolve alike) legitimately does
+            // nothing but relabel the key, which refreshKeypads() below covers.
+            retargetTo(before);
             refreshKeypads();
-            for (const d of DIALS) d.updateAll();
-            requestState();  // the newly targeted slice may not have been read yet
         },
     },
     "com.aethersdr.radio.tci-status": { keyDown: () => refreshKeypads() },

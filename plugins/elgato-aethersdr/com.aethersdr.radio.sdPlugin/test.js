@@ -114,6 +114,10 @@ async function withPlugin(body, { silent = false } = {}) {
             toDeck({ event: "dialRotate", action: uuid(a), context: ctx, payload: { ticks } }),
         pushDial: (a, ctx = a) => toDeck({ event: "dialDown", action: uuid(a), context: ctx }),
         fromRadio: (line) => radioWs && radioWs.send(line),
+        // Drop the TCI link itself, so tciSend() has nowhere to write. Distinct
+        // from `silent`, where the socket stays UP and the server simply does
+        // not answer — a command still goes out in that case.
+        dropTci: () => radioWs && radioWs.close(),
         settle: (ms = 250) => sleep(ms),
     };
 
@@ -499,6 +503,120 @@ test("a dial ignores echoes mid-spin, then accepts them once settled", async () 
         await p.settle(250);
         assert.equal(p.feedback.get("vfo-tune").value, "21.074",
             "the dial ignored a radio change after the guard expired");
+    });
+});
+
+// The echo guard was only ever exercised on the VFO dial, and the VFO dial was
+// the only one it worked on: the other three had their backing field written
+// DIRECTLY by parseTci before acceptEcho() could decline the value, so the
+// guard was inert exactly where nobody was looking.
+// `spun` is the value after FIVE +1 ticks with the guard working — i.e. the
+// ticks accumulated. Asserting merely "it moved" is not enough to catch the
+// bug: with the echo clobbering the backing field, every rotate still steps one
+// notch up from the value the echo just wrote, so the dial appears to respond
+// while never getting past the first step.
+for (const d of [
+    // 1 W per tick from the fixture's 37 W. Broken: stuck at 38 W.
+    { action: "rf-power-dial",   stale: () => `drive:0,${RADIO.drive};`,
+      spun: "42 W",  settled: "drive:0,88;",      settledShown: "88 W" },
+    // 1 W per tick from 7 W. Broken: stuck at 8 W.
+    { action: "tune-power-dial", stale: () => `tune_drive:0,${RADIO.tuneDrive};`,
+      spun: "12 W",  settled: "tune_drive:0,44;", settledShown: "44 W" },
+    // Volume steps across VOLUME_LEVELS by index; -6 dB is the fixture's 50%
+    // (index 7), so +5 clamps to the top. Broken: stuck at 63%.
+    { action: "volume-dial",     stale: () => `volume:${RADIO.volumeDb};`,
+      spun: "100%", settled: "volume:0;",        settledShown: "100%" },
+]) {
+    test(`the ${d.action} ignores echoes mid-spin, then accepts them once settled`, async () => {
+        await withPlugin(async (p) => {
+            p.appear(d.action);
+            await p.settle(400);
+
+            for (let i = 0; i < 5; i++) {
+                p.rotate(d.action, 1);
+                p.fromRadio(d.stale());
+                await p.settle(8);
+            }
+            await p.settle(200);
+            assert.equal(p.feedback.get(d.action).value, d.spun,
+                `${d.action} lost ticks to the stale echo mid-spin`);
+
+            await p.settle(600);
+            p.fromRadio(d.settled);
+            await p.settle(250);
+            assert.equal(p.feedback.get(d.action).value, d.settledShown,
+                `${d.action} ignored a radio change after the guard expired`);
+        });
+    });
+}
+
+// ── Target changes driven by the radio ──────────────────────────────────────
+
+test("a radio-driven target change re-seeds and repaints the new slice", async () => {
+    await withPlugin(async (p) => {
+        p.appear("slice-target");
+        p.appear("slice-volume-up");
+        p.appear("vfo-tune");
+        await p.settle(400);
+
+        // TARGET_MODES[0] is the fixed TRX0, which never follows the radio.
+        // Step to "Slice TX" so the target tracks tx_enable.
+        p.press("slice-target");
+        await p.settle(300);
+
+        // Slice 0 is the TX slice from the burst. Move TX to slice 1, which the
+        // plugin has never read anything about.
+        p.sent.length = 0;
+        p.fromRadio("tx_enable:1,true;");
+        await p.settle(400);
+
+        // rx_volume is in neither the init burst nor any seed, so without a
+        // re-request SLICE VOL+/- shows "—" and stays dead forever.
+        assert.ok(p.sent.join(" ").includes("rx_volume:1"),
+            "the newly targeted slice was never asked for its rx_volume");
+        assert.ok(p.sent.join(" ").includes("vfo:1"),
+            "the newly targeted slice was never asked for its frequency");
+
+        // And the dial must not keep rendering the old slice's frequency.
+        p.fromRadio("vfo:1,0,21300000;");
+        await p.settle(300);
+        assert.equal(p.feedback.get("vfo-tune").value, "21.300",
+            "the VFO dial kept showing the previous slice's frequency");
+    });
+});
+
+// ── Gating and dropped sends ────────────────────────────────────────────────
+
+test("mute-all commands nothing before the radio has reported its volume", async () => {
+    await withPlugin(async (p) => {
+        p.appear("mute-all");
+        await p.settle(300);
+        p.sent.length = 0;
+        p.press("mute-all");
+        await p.settle(150);
+        p.press("mute-all");
+        await p.settle(200);
+        // Un-gated, the unmute wrote radio.volume's fabricated 50% default.
+        assert.equal(cmds(p.sent, "volume").length, 0,
+            "mute-all commanded a volume the radio never reported");
+    }, { silent: true });
+});
+
+test("an optimistic toggle does not flip when the send is dropped", async () => {
+    await withPlugin(async (p) => {
+        p.appear("tune-toggle");
+        await p.settle(400);
+        const before = p.titles.get("tune-toggle");
+
+        // Take the link down. tciSend() now has nowhere to write and reports
+        // failure, so the flag must not move.
+        p.dropTci();
+        await p.settle(300);
+
+        p.press("tune-toggle");
+        await p.settle(250);
+        assert.equal(p.titles.get("tune-toggle"), before,
+            "TUNE painted itself on over a radio that was never told");
     });
 });
 
