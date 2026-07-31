@@ -240,32 +240,43 @@ test("manifest Description states no action count", () => {
 
 // ── Transmit safety ─────────────────────────────────────────────────────────
 
-test("PTT, MOX and TUNE address the TX slice, never the selected target", async () => {
+// PTT/MOX/TUNE always send trx:0, whatever the TX slice and whatever the
+// selected target. The server discards the requested trx
+// (TciRoutingState::resolvePttSlice returns the live TX slice, or a cached
+// route), and only the requested != live branch refreshes that cache — so
+// sending the TX trx would suppress the refresh and let a stale route from
+// another client pick the slice. Pinned until #4547 lands.
+test("PTT, MOX and TUNE always send trx:0, whatever the TX slice or target", async () => {
     await withPlugin(async (p) => {
-        // Transmit moves to slice 1; GUI focus goes to slice 2.
+        // Transmit moves to slice 1; GUI focus goes to slice 2. If the trx
+        // tracked the radio these would be the values that leaked into the send.
         p.fromRadio("tx_enable:0,false;");
         p.fromRadio("tx_enable:1,true;");
         p.fromRadio("active_slice:2,C;");
         await p.settle();
 
-        for (const a of ["ptt", "mox-toggle", "tune-toggle"]) p.appear(a);
+        for (const a of ["ptt", "mox-toggle", "tune-toggle", "slice-target"]) p.appear(a);
         await p.settle();
 
-        // Target left on its TRX0 default — the dangerous case, since a naive
-        // implementation would key slice 0 and TciProtocol::cmdTrx would then
-        // reassign transmit to it, moving TX to another band and antenna.
-        const before = p.sent.length;
-        p.press("ptt"); p.release("ptt");
-        p.press("mox-toggle");
-        p.press("tune-toggle");
-        await p.settle();
-        const after = p.sent.slice(before);
+        // Every target mode, including the two that do follow the radio.
+        for (const _ of [0, 1, 2]) {                // TRX0 -> TX -> ACTIVE
+            const before = p.sent.length;
+            p.press("ptt"); p.release("ptt");
+            p.press("mox-toggle");
+            p.press("tune-toggle");
+            await p.settle();
+            const after = p.sent.slice(before);
 
-        for (const c of cmds(after, "trx"))
-            assert.match(c, /^trx:1,/, `PTT/MOX addressed the wrong slice: ${c}`);
-        for (const c of cmds(after, "tune"))
-            assert.match(c, /^tune:1,/, `TUNE addressed the wrong slice: ${c}`);
-        assert.ok(cmds(after, "trx").length > 0, "no trx command was sent at all");
+            for (const c of cmds(after, "trx"))
+                assert.match(c, /^trx:0,/, `PTT/MOX did not send trx:0: ${c}`);
+            for (const c of cmds(after, "tune"))
+                assert.match(c, /^tune:0,/, `TUNE did not send trx 0: ${c}`);
+            assert.ok(cmds(after, "trx").length > 0, "no trx command was sent at all");
+            assert.ok(cmds(after, "tune").length > 0, "no tune command was sent at all");
+
+            p.press("slice-target");
+            await p.settle();
+        }
     });
 });
 

@@ -707,22 +707,32 @@ const volumeDial = createDial({
 const DIALS = [vfoDial, rfPowerDial, tunePowerDial, volumeDial];
 function dialFor(action) { return DIALS.find(d => d.uuid === action); }
 
-// Slice-scoped sends resolve their trx through targetTrx(). PTT/MOX/TUNE
-// deliberately do NOT: TciProtocol::cmdTrx reassigns the TX slice before
-// keying, so keying a slice that does not already hold TX would silently move
-// TX to another band/antenna. Pinning them to radio.txTrx makes the request an
-// always-safe no-op reassignment — and is strictly safer than the hardcoded
-// `trx:0` this replaces, which moved TX to slice 0 whenever TX lived anywhere
-// else.
+// Slice-scoped sends resolve their trx through targetTrx(). PTT and MOX
+// deliberately do NOT — but not because the trx picks the slice. It doesn't:
+// the server discards it. `trx:` is recorded as a TrxRequest and resolved by
+// TciRoutingState::resolvePttSlice, which returns the *live* TX slice whenever
+// the requested one differs from it, and otherwise falls through to a
+// server-wide cached route (`m_txSliceId`, torn down only when the last TCI
+// client disconnects).
+//
+// That first branch is also the only thing that refreshes the cache. Sending
+// the TX trx makes requested == live on every press, so it never fires and a
+// route left stale by another client — WSJT-X negotiating split, then the
+// operator moving TX in the GUI — decides where we key. Sending 0 keeps the
+// refresh alive for every configuration except TX-on-the-first-slice, so it is
+// the narrower hole, not a safe one. See #4547; revisit when that lands.
 const actionHandlers = {
     // TX
-    "com.aethersdr.radio.ptt":         { keyDown: () => tciSend(`trx:${radio.txTrx},true;`), keyUp: () => tciSend(`trx:${radio.txTrx},false;`) },
-    "com.aethersdr.radio.mox-toggle":  { keyDown: () => tciSend(`trx:${radio.txTrx},${!radio.transmitting};`) },
+    "com.aethersdr.radio.ptt":         { keyDown: () => tciSend("trx:0,true;"), keyUp: () => tciSend("trx:0,false;") },
+    "com.aethersdr.radio.mox-toggle":  { keyDown: () => tciSend(`trx:0,${!radio.transmitting};`) },
+    // TUNE takes a trx but TciProtocol::cmdTune discards it (`(void)trx;`), so
+    // the value is cosmetic — 0 to match the pair above.
+    //
     // cmdTune SET produces no notification and TciServer emits no `tune:`
     // broadcast at all, so radio.tuning could never leave its initial false
     // and every press re-sent `tune:...,true` — TUNE would start but never
     // stop. Lead with the local flag; the trx: handler above resyncs it.
-    "com.aethersdr.radio.tune-toggle": { keyDown: () => { radio.tuning = !radio.tuning; tciSend(`tune:${radio.txTrx},${radio.tuning};`); refreshKeypads(); } },
+    "com.aethersdr.radio.tune-toggle": { keyDown: () => { radio.tuning = !radio.tuning; tciSend(`tune:0,${radio.tuning};`); refreshKeypads(); } },
     // drive/tune_drive are radio-global (one PA) and AetherSDR backs them with
     // TransmitModel, so they address the TX slice rather than the target.
     // Cycling steps from the current level, so both need the radio's value

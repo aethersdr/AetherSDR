@@ -497,8 +497,6 @@ No build step, npm, or command line is required just to use the plugin.
 
 #### What it controls
 
-The official Elgato plugin currently provides actions across areas such as:
-
 Actions are grouped into categories in the Stream Deck action list, in this
 order:
 
@@ -534,10 +532,10 @@ out of date as soon as you added a slice, and would then quietly act on the
 first slice instead of the one you picked. **TX** and **ACTIVE** are always
 reported as they change, so they cannot go stale.
 
-**PTT, MOX and TUNE deliberately ignore this setting** and always act on the
-slice that already holds transmit. Keying a slice that does not hold transmit
-would move transmit to it, which could put you on another band or antenna
-mid-transmission.
+**PTT, MOX and TUNE deliberately ignore this setting.** They always key
+whichever slice already holds transmit, because AetherSDR decides that itself —
+a control surface cannot choose the slice it transmits on, by design, so that a
+button press can never move you to another band or antenna mid-transmission.
 
 #### Dials
 
