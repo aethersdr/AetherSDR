@@ -46,7 +46,7 @@ public:
     void setBandPlanManager(BandPlanManager* bandPlan);
 
 public slots:
-    void updateMeters(float fwdPower, float swr);
+    void updateMeters(float fwdPower, float swr, bool swrValid);
     // Capture raw pre-smoothed FWDPWR for PEP peak-hold tick. (#2561)
     void updatePeakPower(float fwdPowerInstant);
     // Reset the peak-hold tick when TX ends so a held peak does not linger
@@ -58,6 +58,14 @@ private:
     void buildUI();
     void syncFromModel();
     void syncAtuIndicators();
+    // Single owner of the ATU/MEM enabled state.
+    //
+    // Two independent reasons exist to grey these out — the radio has no tuner
+    // at all, and a TunerGenius XL is in Operate — and they arrive from
+    // different models at different times. Before this they each called
+    // setEnabled() directly, so whichever fired last won and a TGXL state change
+    // could re-enable an ATU button on a radio that has no ATU.
+    void updateAtuAvailability();
     // Right-click menu on the ATU button — exposes Pre-tune Bands and
     // Clear ATU Memories. Pre-tune is grayed when MEM is off. (#2624)
     void showAtuContextMenu(const QPoint& pos);
@@ -80,6 +88,12 @@ private:
     // current TX frequency still matches the freq we tuned at.  Any freq
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
+
+    // Inputs to updateAtuAvailability(). Both default to the permissive value
+    // so an applet built before either model has reported looks exactly as it
+    // did before this gate existed.
+    bool m_radioHasTuner{true};
+    bool m_tgxlOperate{false};
 
     // Gauges (HGauge*)
     QWidget* m_fwdGauge{nullptr};
@@ -110,8 +124,40 @@ private:
     QPushButton* m_apdBtn{nullptr};
     QWidget*     m_apdRow{nullptr};
 public:
-    void setApdVisible(bool v) { if (m_apdRow) m_apdRow->setVisible(v); }
+    // The APD row has TWO inputs and therefore ONE owner, for the same reason
+    // the ATU button does: two callers each doing setVisible() means whichever
+    // fires last wins.
+    //
+    //   apdConfigurable   the connected Flex reports `apd configurable=1`
+    //   hasRadioSideDsp   the radio runs its own DSP at all
+    //
+    // Both are needed. apdConfigurable alone was already correct in practice on
+    // an HL2 — nothing sets it — but only because the row's state carried over
+    // from a previous session: it arrives ONLY in Flex TransmitDelta status, so a
+    // backend that never sends it leaves the value to history, and m_apdRow is
+    // constructed visible. The capability makes it deterministic.
+    void setApdVisible(bool v)
+    {
+        m_apdConfigurable = v;
+        updateApdVisibility();
+    }
+    void setRadioSideDspAvailable(bool v)
+    {
+        m_radioHasSideDsp = v;
+        updateApdVisibility();
+    }
 private:
+    void updateApdVisibility()
+    {
+        if (m_apdRow) {
+            m_apdRow->setVisible(m_apdConfigurable && m_radioHasSideDsp);
+        }
+    }
+    bool m_apdConfigurable{false};
+    // Defaults TRUE so a widget built before any backend reports keeps its
+    // pre-existing state; apdConfigurable's own false default is what actually
+    // holds the row closed until a Flex says otherwise.
+    bool m_radioHasSideDsp{true};
 
     bool m_updatingFromModel{false};
 

@@ -133,6 +133,30 @@ Explicit pan/zoom interactions do not use `applyTuneRequest(...)`. They continue
 
 Those signals now route through a small explicit pan/zoom path in `MainWindow` so combined center+bandwidth changes can be sent as one coherent radio command while preserving current user-driven semantics.
 
+### KiwiSDR display write modes
+
+While a KiwiSDR virtual antenna owns a pan's display, the radio-side pan
+geometry is deliberately frozen: the explicit pan/zoom path is gated off the
+radio and `PanadapterModel` (#3825/#4081), so the widget's view is
+client-owned and the model keeps the kiwi-assignment center/bandwidth. Every
+tune-driven recenter therefore picks a write mode through
+`src/gui/PanRecenterPolicy.h`:
+
+- flex-display pan → write through radio+model (`requestPanCenter`, the
+  flows described in this document);
+- kiwi-display pan → recenter the `SpectrumWidget` alone, paired with the
+  widget's live bandwidth — a center-only model write would re-broadcast the
+  frozen bandwidth via `infoChanged` and snap the operator's zoom back;
+- kiwi-display pan during an edge-pan slice drag → no write at all (the
+  widget already advanced its own view).
+
+When a pan *leaves* kiwi display (source toggle or antenna cleared),
+`reconcileFlexPanGeometryAfterKiwiDisplay(...)` asks the radio to adopt the
+widget's current view one-shot, so the flex display returns showing the span
+the operator is actually looking at. Radio-side recenters that exist for the
+radio's sake (WFM DAX-IQ centering, ATU pre-tune save/restore) stay outside
+the policy.
+
 ## Intent Semantics
 
 ### 1. `IncrementalTune`

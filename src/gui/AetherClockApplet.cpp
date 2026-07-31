@@ -1170,7 +1170,10 @@ void AetherClockApplet::refreshDaxUi()
 
     // A running bound slice with no DAX channel is the no-audio condition that
     // drives the warning banner.
-    const bool noDaxWhileRunning = running && bound && bound->daxChannel() == 0;
+    // Gated on the DAX surface being applicable at all: on a seam-native radio
+    // a zero daxChannel() is the normal, correct state and audio is flowing.
+    const bool noDaxWhileRunning =
+        m_daxControlsVisible && running && bound && bound->daxChannel() == 0;
 
     // Warning banner toggles height, so re-run the geometry path (mirroring
     // setSettingsExpanded) only when its visibility actually flips.
@@ -1182,6 +1185,17 @@ void AetherClockApplet::refreshDaxUi()
         if (auto* p = parentWidget())
             p->updateGeometry();
     }
+}
+
+void AetherClockApplet::setDaxControlsVisible(bool visible)
+{
+    if (m_daxControlsVisible == visible) return;
+    m_daxControlsVisible = visible;
+    if (m_daxCombo) m_daxCombo->setVisible(visible);
+    // The banner is owned by refreshDaxUi() (it re-runs the geometry path when
+    // visibility flips), so re-run that rather than setting it here — a direct
+    // setVisible() would be overwritten on the next refresh.
+    refreshDaxUi();
 }
 
 void AetherClockApplet::updateDecodeAnchor()

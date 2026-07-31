@@ -106,6 +106,11 @@ public:
     int wnbLevel() const { return m_wnbLevel; }
     bool wnbUpdating() const { return m_wnbUpdating; }
     bool wideActive() const { return m_wideActive; }
+    // Set the WIDE state from a backend that computes it itself rather than
+    // parsing it out of a Flex `display pan` status. Change-gated, like the
+    // status path — the signal drives a repaint, and a backend that recomputes
+    // this on every band decision would otherwise emit it continuously.
+    void setWide(bool wide);
     bool loopA() const { return m_loopA; }
     bool loopB() const { return m_loopB; }
     int fps() const { return m_fps; }

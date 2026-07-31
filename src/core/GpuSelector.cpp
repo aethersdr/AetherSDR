@@ -1,12 +1,12 @@
 #include "GpuSelector.h"
 
 #include "AppSettings.h"
+#include "SettingsBootstrap.h"
 
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QXmlStreamReader>
 
 #if defined(Q_OS_LINUX)
 #include <QFileInfo>
@@ -153,46 +153,21 @@ QString readSavedId()
     return o.value(QStringLiteral("gpu")).toString(QString::fromLatin1(GpuSelector::kAutoId));
 }
 
-// The AppSettings file path, reproduced by hand — applyAtStartup() runs before
-// QApplication, where QStandardPaths is unavailable and AppSettings must not be
-// constructed.  Mirrors main.cpp's UiScale bootstrap and AppSettings's own
-// GenericConfigLocation layout.
-QString settingsFilePath()
-{
-#if defined(Q_OS_MAC)
-    return QDir::homePath() + QStringLiteral("/Library/Preferences/AetherSDR/AetherSDR.settings");
-#elif defined(Q_OS_WIN)
-    return QDir::fromNativeSeparators(qEnvironmentVariable("LOCALAPPDATA"))
-           + QStringLiteral("/AetherSDR/AetherSDR.settings");
-#else
-    return QDir::homePath() + QStringLiteral("/.config/AetherSDR/AetherSDR.settings");
-#endif
-}
-
-// Startup read: parse the persisted "Graphics" → "gpu" id straight from the
-// settings XML.  Constructing AppSettings::instance() this early would run its
-// migrateSettingsPath() before setApplicationName(), computing the wrong
-// AppConfigLocation path and permanently skipping the old→new migration for
-// upgrading users.  Reading the file by hand (like the UiScale bootstrap) avoids
-// touching the singleton at all.
+// Startup read: parse the persisted "Graphics" → "gpu" id via the
+// pre-QApplication bootstrap reader (SQLite read-only, legacy-XML fallback —
+// RFC #4603). Constructing AppSettings::instance() this early would run its
+// load() sequencing (path migration, XML import) outside the ordinary startup
+// flow, so it stays untouched here.
 QString readSavedIdFromFile()
 {
     const QString fallback = QString::fromLatin1(GpuSelector::kAutoId);
-    QFile f(settingsFilePath());
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    const QString json =
+        SettingsBootstrap::readValue(QStringLiteral("Graphics"));
+    if (json.isEmpty()) {
         return fallback;
     }
-    QXmlStreamReader xml(&f);
-    while (!xml.atEnd()) {
-        if (xml.readNext() == QXmlStreamReader::StartElement
-                && xml.name() == QLatin1String("Graphics")) {
-            // readElementText() unescapes the XML entities, yielding the raw JSON.
-            const QJsonObject o =
-                QJsonDocument::fromJson(xml.readElementText().toUtf8()).object();
-            return o.value(QStringLiteral("gpu")).toString(fallback);
-        }
-    }
-    return fallback;
+    const QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+    return o.value(QStringLiteral("gpu")).toString(fallback);
 }
 
 } // namespace

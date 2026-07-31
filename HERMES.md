@@ -209,6 +209,10 @@ the modes.
 
 Each of these is "a Flex assumption that a DSP-owning backend violates".
 
+**Gaps 16–19 are in §18.6**, kept there because they share one root cause (RX
+audio features bind to a transport rather than to the radio) and reading them
+apart from that audit loses the point.
+
 | # | Gap | Symptom | Fix |
 |---|---|---|---|
 | 1 | `RadioModel::m_panStream` only assigned in the Flex `dynamic_cast` branch (`RadioModel.cpp:443`) | `startDax()` deref'd null → **SIGSEGV 3 s after every connect** | Guard at `startDax()` entry (`e556ad01`) |
@@ -220,7 +224,7 @@ Each of these is "a Flex assumption that a DSP-owning backend violates".
 | 7 | No pan-geometry down-verb on `IRadioBackend` | Zoom/pan can't reach the backend; waterfall and pan disagree | *Open* — structural |
 | 8 | Slice frequency **is** pan center (`Hl2Backend.cpp:165`) | Click-to-tune recenters the world instead of landing | *Open* — needs slice-offset-within-passband |
 | 9 | Same null-deref shape in the RADE path (`MainWindow_DigitalModes.cpp:461`) | Will crash HL2 whenever RADE starts | *Open* |
-| 10 | `AETHER_AUTOMATION_NO_AUTOCONNECT` appears not to suppress autoconnect on the HL2 path | Test instance grabs a radio | *Open* |
+| 10 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` appears not to suppress autoconnect~~ | Test instance grabs a radio | **Not a bug — the variable does not exist.** Removed application-wide by #4421/#4401; autoconnect is `AutoConnectToLastRadio` alone (`MainWindow.cpp`). Use the isolated profile in §10 |
 | 11 | `SpectrumWidget` **drops** inbound pan geometry during a gesture, assuming another status is coming | View parks at the old centre while slice/pan/waterfall move — measured **permanently 6.3 kHz** out after one drag-tune | `3d52d07d` |
 
 | 12 | Slice frequency WAS the DDC NCO, so the pan centre tracked every tune | Display re-centred on every click; a slice offset from centre was unrepresentable | `a1cbe154` |
@@ -420,10 +424,41 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build
 cd /Users/patj/aether/tools-external/pihpsdr && ./hpsdrsim -hermeslite2 -P1
 
 # App with bridge, without grabbing a live radio
-AETHER_AUTOMATION=1 AETHER_AUTOMATION_NO_AUTOCONNECT=1 \
-AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
+# App with bridge, on an ISOLATED settings profile so it cannot grab a radio
+# and cannot touch the operator's real configuration.
+#
+# AETHER_AUTOMATION_NO_AUTOCONNECT DOES NOT EXIST -- it was removed
+# application-wide (#4421/#4401) and nothing reads it. Autoconnect is governed
+# by AutoConnectToLastRadio alone, so the way to not grab a radio is a profile
+# that has never connected to one.
+export T=/tmp/aether-hl2-test
+mkdir -p $T/Library/Preferences/AetherSDR
+cat > $T/Library/Preferences/AetherSDR/AetherSDR.settings <<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<Settings>
+  <AutoConnectToLastRadio>False</AutoConnectToLastRadio>
+  <Hl2>{&quot;receiverCount&quot;:4,&quot;spanMhz&quot;:0.192}</Hl2>
+</Settings>
+XML
+HOME=$T CFFIXED_USER_HOME=$T XDG_CONFIG_HOME=$T/.config \
+QT_LOGGING_RULES="aether.hl2*=true" \
+AETHER_AUTOMATION=1 AETHER_AUTOMATION_SOCKET=aethersdr-hl2 \
 ./build/AetherSDR.app/Contents/MacOS/AetherSDR
 ```
+
+- The settings store is **XML**, not JSON, and a malformed file is refused with
+  `AppSettings: cannot load ... Start tag expected.` followed by
+  `refusing to save before a successful load` -- the app then runs on defaults,
+  which looks like the settings simply not taking effect.
+- `QT_LOGGING_RULES="aether.hl2*=true"` is needed to see the band-filter and
+  receiver-count lines; they are `qCInfo` on a category that is off by default.
+- Connecting by IP needs the radio TYPE picked as well as the address:
+  `connectionManualModeButton` -> `connectionManualRadioType` ->
+  `connectionManualIp` -> `connectionManualConnectButton`. The bridge's
+  `connect ip` verb alone leaves the dialog waiting.
+- `hpsdrsim` serves ONE client. A leftover app instance still holds it and the
+  next connect times out with nothing in the log to say why -- check
+  `pgrep -f MacOS/AetherSDR` before blaming the change.
 
 - Launch the app as the **foreground process of a backgrounded shell**;
   launching it with `&` inside a foreground command gets it killed with the
@@ -509,7 +544,7 @@ always "a later refinement"; the watchdog turns it into a correctness issue.
 | RQST/ACK state machine (§5) | Gate for everything below it. Single outstanding request, no transaction id, echo-matched. Do NOT model as RPC |
 | ADC overload bit + clip counter (§6) | Addendum 2 §A3: the CORRECT driver for any gain decision. Audio level in one slice says nothing about what saturates a converter seeing 0–38.4 MHz |
 | Discovery telemetry (§1) | Temperature, power, clip count, PTT are pollable WITHOUT a stream — cheapest possible first increment, and a diagnostic when the stream itself is broken |
-| Receiver count at discovery `0x13` | We hardcode `maxSlices = 1`. Standard gateware is 4; skimmer variants 9–12 with NO transmit |
+| ~~Receiver count at discovery `0x13`~~ | **DONE — §19.** Read and clamped against; skimmer variants 9–12 with NO transmit are still untested |
 | TX FIFO depth (§6) | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift |
 | Wideband bandscope (§7) | Unimplemented by piHPSDR (dead code) and declined by SDR Console. A differentiation opportunity, with the 4-vs-32 packets-per-block trap already documented |
 
@@ -698,13 +733,13 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| 7 | Read receiver count from discovery `0x13` | O §1 | We hardcode `maxSlices=1`. Standard gateware is 4; skimmer variants 9–12 with no TX | S |
+| 7 | ~~Read receiver count from discovery `0x13`~~ | O §1 | **DONE — §19.** `maxSlices`/`maxPanadapters` report the RUNNING count: requested, clamped by discovery `0x13`, clamped again by the link budget | S |
 | ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
 | 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
 | 10 | RADE null-deref at `MainWindow_DigitalModes.cpp:461` | ours, gap 9 | Same shape as the DAX crash; will kill HL2 the moment RADE starts | XS |
-| 11 | `AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured on the HL2 path | ours, gap 10 | Test instances grab a live radio | S |
+| 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
 | 12 | One dB-reference object per slice (LNA + calibration + AGC threshold) | A2 §A3 | Every LNA change shifts the absolute reference; the trace jumps and users read it as a real event | S |
-| 12a | Seam verb for RF/LNA gain | §15.7 | `lnaGainDb` is connect-time only. An operator on a strong band cannot back it off without reconnecting, and audio clips hard (peak 5.5 against full scale 1.0) with no recovery | S |
+| ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
 | 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
 
 ### Tier 3 — absent subsystems, in dependency order
@@ -717,11 +752,26 @@ Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 | 16 | Pair WDSP `RXA_ADC_PK` with the hardware clip indicator | A3 §7 | Post-DDC slice vs pre-DDC full spectrum. They disagree by design; A3 calls this the most useful diagnostic pairing on the HL2 | S |
 | 17 | TX IQ FIFO depth + servo | O §6, A1 §B3 | "The most important number in the protocol." TX pacing must servo against it, not a host timer — clock domains drift | M |
 | 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
-| 19 | Filter board (I2C `0x20`), PA bias, config EEPROM | O §8 | Band filtering, and the AM-broadcast HPF matters more here than on radios with better dynamic range | M |
-| 20 | Multi-slice: index-space mapping object | A3 §3 | `{ddcIndex, dspChannel, analyzerId, uiNumber}` — never derive arithmetically. Trivial now at one slice, which is when to build it | S |
+| ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
+| 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
 | 22 | Hardware-managed T/R LNA gain (`0x0e[15]`) | A2 §A2 | Quisk uses it; lower latency than any host round trip; PureSignal needs an unclipped feedback path | S |
 | 23 | PureSignal | O §11, A1 §B6 | Needs everything above. Consumes 4 RX (2 feedback), halving the slice budget | L |
+
+### Tier 5 — the RX audio bus (added after the §18 audit)
+
+Everything here is one root cause: features bind to a *transport*, not to the
+radio. See §18 for the full audit and the proposed seam.
+
+| # | Item | Source | Why it matters | Effort |
+|---|---|---|---|---|
+| 24 | RADE / DAX-bridge bare `panStream()` deref | §18.3, gap 18 | **SIGSEGV on mode change**, same shape as gap 1. Do this before any of the below | XS |
+| ~~25~~ | ~~WSPR beacon on a host-modulating backend~~ **DONE** | §18.4 | The audio route already existed (#4471); only the DAX-borrow guard was in the way. First external-oracle TX instrument we have | — |
+| ~~26~~ | ~~Unified RX-audio seam~~ **PARTLY DONE** | §18.5, §18.8 | `rxDemodAudioReady` landed with CW, RTTY and the QSO recorder RX tap as its consumers. The `sliceId` argument and a `Wideband` tap are still open — nothing needs them yet | S |
+| 27 | AetherClock off DAX-channel identity onto slice identity | §18.6, gap 17 | WWV/WWVB decode. Depends on 26 | S |
+| 28 | `hasDaxAudio` / `hasDaxIq` / tap kinds / `rxAudioSampleRateHz` capabilities | §18.5 | Lets features decline honestly instead of binding to nothing. Depends on 26 | S |
+| 29 | Retire the `kiwi : "flex"` source-tag ternary | §18.2, gap 19 | Blocks a third concurrent family; `AsrTapPolicy` cannot disambiguate. Fold into 26 | XS |
+| 30 | Measure whether TCI's post-AGC feed costs WSJT-X decodes | §18.5 | Decides whether a `Wideband` tap is worth building at all. **Measure before building** | S |
 
 ### Tier 4 — deliberate divergences, do NOT "fix" by reflex
 
@@ -1153,6 +1203,16 @@ EF FE 02 + 60 zero bytes  ->  udp/1024
    no reply at all         WEDGED — power cycle required
 ```
 
+That same exchange, sent **unicast to one host** instead of to the broadcast
+address, is what the connect dialog's **Connect by IP** page does when its
+*Radio type* is set to `Hermes-Lite 2` (`ConnectionPanel::probeHermesLite2`,
+sharing `discoveryRequest()` / `parseDiscoveryReply()` with the broadcast
+sweep). It is the only way to reach a board across a VPN or a routed subnet,
+where the broadcast never leaves the local segment. Note the failure modes are
+NOT distinguishable from the UI: an unreachable address, a wedged board, and a
+board that is not an HL2 all look like "no reply". Fall back to the raw probe
+above before concluding anything.
+
 **Always disconnect through the normal path before terminating**, including in
 automation. Verified both ways here: a bridge `disconnect` then exit leaves the
 board reporting `0x02` idle, while a bare `SIGTERM` leaves it silent.
@@ -1392,3 +1452,1306 @@ reports — so plain CW fell through to the USB fallback and was demodulated as
 SSB. `NFM` was missing for the same reason. **Any mode name that appears in the
 TCI `modulations_list` needs a mapping, or it silently becomes USB.** `RTTY`
 still has this gap.
+
+---
+
+## 17. Band switching, the companion filter board, and RF gain
+
+Three controls that all looked wired and were not. Each failed in the same
+shape: the GUI drove a **Flex command plane** that this radio does not have, so
+the widget moved, the setting persisted, and nothing reached the hardware.
+
+### 17.1 Band buttons — the app is the band stack
+
+The Band sub-panel resolved a Flex band-stack key and sent
+`display pan set <pan> band=<key>`. On a Flex the RADIO owns the stack and
+restores frequency, mode, filters and antenna from it. **The HL2 owns none of
+that** — it has no VFO to read back — so the command reached nothing.
+
+`MainWindow_Wiring.cpp` now branches on `usesFlexCommandPlane()`: for a
+non-Flex backend the app is authoritative and tunes the slice to the band's
+default frequency and mode directly. Note this is the *exact opposite* of the
+rule stated for Flex three lines above it, where using the button's `freqMhz`
+is explicitly called out as wrong (#1876). Both are right — the argument is a
+"static UI default" only when something better exists.
+
+`RadioCapabilities::tuningMinHz/tuningMaxHz` was added so the grid can be
+honest: the HL2 reports 0.1–38.4 MHz (the AD9866's first Nyquist zone), and
+band buttons outside it are disabled with a tooltip rather than tuning the
+receiver somewhere it cannot hear.
+
+### 17.2 The J16 filter byte rides the CONFIG register
+
+**The HL2 has no switchable filters of its own.** It has seven open-collector
+outputs at `0x00[23:17]`, which the *gateware* forwards as one byte to I2C
+address `0x20`. Nothing in this codebase writes I2C — setting the config bits
+IS the whole mechanism (oracle §8).
+
+Two things make this the riskiest change in the area:
+
+1. **It shares a register with the sample rate and the receiver count.** A bit
+   in the wrong place lands in `[25:24]` or `[6:3]`, and the failure is a radio
+   that still streams, still looks correctly framed, and delivers samples at the
+   wrong rate or from an unassigned receiver.
+2. **The field is shifted.** `DATA[16]` is not part of it, so the byte goes in
+   as `C2 = (oc & 0x7F) << 1`. Unshifted, every selection is one relay too low —
+   80 m would engage the 160 m low-pass.
+
+Anything that rebuilds `m_ccConfig` must carry the filter byte through.
+`setSampleRate()` already had this bug once for the receiver count; the comment
+there now covers both.
+
+The one-hot mapping is **Quisk's `Hermes_BandDict` verbatim**, not re-derived:
+the grouping (60+40 share a filter, 17+15 share one) is a property of the N2ADR
+board. Our contribution is the frequency *ranges*, and the unit test checks
+those by asserting every amateur band lands on Quisk's answer.
+
+Two deliberate departures from "always engage the HPF":
+- Below 1.6 MHz nothing is engaged — the AM-blocking HPF would remove exactly
+  what is being listened to.
+- On 160 m the HPF stays out. The HL2's own switching supply couples spurs into
+  the filter board's 160 m and HPF inductors (wiki, `Options.md`).
+
+**Selection is logged at INFO on `aether.hl2`, not debug.** There is no
+readback anywhere in the protocol — the gateware writes to I2C and nothing
+answers — so that log line is the only evidence of what the relays were told to
+do, and a support log captured after the fact has to already contain it.
+
+### 17.3 Verifying something with no readback
+
+`tests/hl2_live_band_filter_probe.cpp` (hardware-only, `EXCLUDE_FROM_ALL`) is
+the answer to "the unit test shares our reading of the register map, so what
+would catch a convention error?"
+
+- **Sample rate as the independent check.** EP6 carries 126 samples per packet,
+  so 48 kHz is 381 packets/second. Measured across all nine filter selections
+  it stayed within 1.002× — a bit leaking into `DATA[25:24]` would have halved
+  or doubled it. Non-zero IQ rules out an unassigned receiver.
+- **Physics as the proof the relay moved.** Park on 0.6 MHz, A/B the AM-blocking
+  HPF, and measure. On this radio the AM band dropped **22–24 dB** when the HPF
+  was engaged. That is not the radio agreeing with our register map; that is the
+  antenna path changing. It also confirms an N2ADR board is fitted — the writes
+  are inert and harmless on a bare HL2.
+- Same method for RF gain: a commanded 10 → 30 dB step moved the raw wire noise
+  floor **19.8 dB**, measured before any of our DSP or dB referencing runs.
+
+### 17.4 RF gain was connect-time only
+
+`lnaGainDb` was applied once in `connectRadio()`. `IRadioBackend::setPanRfGain`
+(default no-op, so Flex is unaffected) now carries the ANT panel's slider to
+`MetisClient::setLnaGainDb` at any time, and `panRfGainInfoChanged` reports the
+AD9866's real geometry — **−12…+48 dB in 1 dB steps**, against the model's
+Flex-shaped default of −8…+32 in 8s, which had made two thirds of the available
+gain unreachable.
+
+`Hl2DbReference` is moved in the same call, so the trace and the S-meter do not
+slide when gain changes — an operator backing off 10 dB on a strong band would
+otherwise watch the noise floor drop 10 dB and read it as the band going quiet.
+
+**The persisted key is now family-scoped** (`DisplayRfGain_hl2`). It was shared,
+which was harmless while the HL2 ignored the value and stopped being harmless
+the moment the slider reached the register: a gain last set on a Flex was
+restored onto the HL2 as an LNA gain the operator never chose for that radio.
+Observed live — a Flex-era `16` was pushed at connect.
+
+### 17.5 Directional power is UNCALIBRATED and says so
+
+Forward/reverse counts go through Quisk's `power_meter_std_calibrations
+['HL2FilterE3']` curve. That is a *reference* curve for an N2ADR rev E3 board,
+**not a calibration of this radio** — the coupler, toroid and detector diode all
+vary between boards (oracle §6). The meters are labelled "(uncalibrated)" in
+their own `MeterDef` descriptions, because the number itself looks exactly like
+a calibrated one. Raw counts continue to be logged; a per-unit calibration
+replaces the table and nothing else.
+
+SWR remains the one directional quantity that is meaningful without
+calibration — it is a ratio from the same converter, so the unknown scale
+cancels.
+
+### 17.6 Meter pacing
+
+WDSP hands us a signal-strength reading per demodulated block — ~47/s at 24 kHz
+output, scaling with the span — and every one crossed to the GUI thread. Two
+separate mechanisms fix that and they are not interchangeable: an EMA smooths
+*every* sample so the published value represents the whole interval, and a
+100 ms gate decides how often one is published. Dropping samples without
+smoothing would alias.
+
+100 ms is the cadence `MetisClient` already paces telemetry at, and the
+attack/decay constants (0.5/0.15) are the ones `MeterModel` uses for Flex
+forward power — reused so meters behave the same across families.
+
+---
+
+## 18. Voice and data features: the three RX audio buses
+
+Bringing up receive audio made the HL2 *audible*. It did not make the platform's
+decoders work, and the reason is structural rather than per-feature.
+
+There are **three** RX audio buses in this app. They carry the identical payload
+— 24 kHz interleaved stereo float32 — and differ only in which wire they arrive
+on:
+
+| Bus | Signal | Producer | HL2 |
+|---|---|---|---|
+| **A** — Flex VITA slice audio | `PanadapterStream::audioDataReady` | Flex; also the sim's legacy shim | ❌ `panStream()` is null |
+| **B** — Flex DAX channel audio | `PanadapterStream::daxAudioReady` | Flex only | ❌ same |
+| **C** — backend seam | `IRadioBackend::audioFrameReady` → `RadioModel::backendAudioFrameReady` | HL2, sim | ✅ |
+
+Every consumer is hard-wired to exactly one bus at `connect()` time. Speaker
+audio and TCI were each ported to bus C individually, as separate patches
+(`MainWindow_Session.cpp`, the `wireDiscovery` relay and the
+`backendAudioFrameReady → onDaxAudioReady(1, …)` bridge). Nothing else was, so
+everything else on bus A or B binds to a null stream and silently does nothing.
+
+**This is gap-class 15 in §6's terms, and it is the single largest one left.**
+It is not a bug in any feature; it is a bug in how features find audio.
+
+### 18.1 What actually works, and what is dead
+
+Audited on `feat/hl2-connect-by-ip`:
+
+| Feature | Bus | HL2 |
+|---|---|---|
+| Speaker, NR2/NR4/MNR/RN2/DFNR, channel strip | C | ✅ |
+| Copy Assist / ASR | engine post-DSP (`receivePresentationPostDspAudioReady`) | ✅ |
+| AX.25 / APRS / KISS TNC / PMS mailbox | engine tap (`tncRxAudioReady`) | ✅ |
+| WSJT-X and any TCI client | C (bridged, PR #4471) | ✅ |
+| WFM demod, SignalClassifier, VoiceSignalDetector | engine-side | ✅ |
+| **CW decoder (RX)** | **bus** | ✅ **as of §18.8** |
+| **RTTY decoder** | **bus** | ✅ **as of §18.8** |
+| **QSO recorder (RX half)** | **bus** | ✅ **as of §18.8** |
+| **AetherClock (WWV/WWVB)** | B + a DAX channel hold | ❌ dead |
+| **WSPR beacon** | Flex `dax_tx` | ✅ **as of §18.4** |
+| **RADE / FreeDV** | B | ❌ unavailable — now **declines** instead of crashing, §18.3 |
+| **DAX bridge / virtual audio device** | B | ❌ unavailable — already declined cleanly, §18.3 |
+| **DAX-IQ applet** | `iqDataReady` | ❌ dead — the HL2 has raw IQ, just not on that wire |
+| Digital Voice waveforms | radio-side firmware | N/A — a Flex feature, correctly absent |
+
+The three that already work do so because they tap **AudioEngine**, downstream
+of `feedAudioData()`, rather than a transport. That is the whole lesson: the
+features wired to the engine are family-agnostic by construction, and the
+features wired to a stream are family-locked by construction. Nobody chose
+this — bus A and bus C simply happened to be the same object on a Flex.
+
+### 18.2 The `"flex"` string that is really an enum
+
+`AudioEngine.cpp` tags presentation audio with a hardcoded ternary:
+
+```cpp
+source == RxDspSource::KiwiSdr ? QStringLiteral("kiwi") : QStringLiteral("flex")
+```
+
+HL2 audio is therefore labelled `"flex"` in `AsrTapPolicy`'s source lock, in
+`captureAutomationAudio`, and in the presentation-sync path. It is harmless
+*today* precisely because it is a binary and the wrong answer is the only other
+answer. It stops being harmless the moment a third family runs concurrently —
+`AsrTapPolicy` would lock onto "flex" and be unable to tell two radios apart.
+
+Fix it when the bus is unified, not before; changing the string alone would
+break the Kiwi source lock's persisted expectations for no gain.
+
+### 18.3 One live crash — RADE (fixed)
+
+**Corrected.** An earlier revision of this section claimed RADE *and* the DAX
+bridge both crashed. Only RADE did, and the correction is worth keeping because
+the mistake was made by grepping for `panStream()` derefs and never checking
+which ones already sat behind a guard.
+
+- **RADE** — `activateRADE()` ran from its first line to a bare
+  `connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady, …)` with
+  no null check anywhere in between. Selecting RADE on an HL2 was a **SIGSEGV**,
+  the same null-deref shape as §6 gap 1. **Fixed** on `feat/rx-audio-bus`.
+- **DAX bridge** — already safe. `startDax()` guards on `panStream()` before
+  touching anything and the `connect` further down is *inside* that guarded
+  region; `stopDax()` early-returns on `!m_daxBridge`, which can only be
+  non-null if the guard passed.
+
+**Where the RADE guard goes matters more than that it exists.** Guarding the
+`connect` alone would have been wrong: everything between the top of
+`activateRADE()` and that line mutates real station state — it moves the
+TX-slice badge, installs a PTT-off hook on `TransmitModel`, calls
+`setRadeMode()` and opens mic capture. That would leave a radio half in RADE
+mode with no receive path and an intercepted unkey, which is **worse than the
+crash**, because it looks like it worked. The guard goes before the first
+mutation.
+
+**What it resets matters too.** RADE is selected by a toggle
+(`RxApplet`/`VfoWidget::radeActivated`), not by the slice mode — it runs on an
+ordinary DIGU/DIGL slice. The decline therefore leaves the operator's mode alone
+and resets the toggle, using the same three setters `deactivateRADE()` uses, so
+a decline and a teardown leave the UI identical. An earlier draft of this fix
+reverted the slice to USB, which would have fought the operator's own DIGU
+selection for no reason.
+
+**Generalised:** a null guard added at the crash site is usually in the wrong
+place. The right place is before the first irreversible side effect, and the
+decline has to undo whatever the UI already drew.
+
+### 18.4 WSPR TX: the first host-modulated transmit feature
+
+Landed on `feat/hl2-wspr-tx`. Worth reading as a template, because the surprise
+was how little was needed.
+
+`RadioModel::prepareWsprTransmit()` refused outright on any non-Flex family,
+with a well-reasoned comment: `ensureDaxTxStream()` returns true optimistically
+on a pending `stream create` reply, so a family whose command sink drops that
+text would "succeed" with a stream that never arrives and leave `transmit dax`
+latched for minutes. Correct — for a family that needs the stream.
+
+A host-modulating backend needs no stream at all. The audio route **already
+existed**, built for TCI in #4471:
+
+```
+pumpWsprBeacon() → feedDaxTxAudioInternal() → m_hostModulation branch
+  → txFinalMonitorPcmReady → RadioModel::submitTxAudio() → Hl2Backend
+```
+
+So the entire change is an early arm in `prepareWsprTransmit()` that latches a
+flag and returns true, the matching release, and teaching `hasWsprTxStream()`
+that "the route is ready" and "a dax_tx stream exists" are different claims.
+
+**Three things that looked like blockers and were not:**
+
+- **Mic collision.** Two producers into one modulator would have put shack
+  ambience on the frame — the HL2 has no radio-side mic mute to hide behind, so
+  `transmit dax` (which is what protects the Flex) buys nothing here. But
+  `AudioEngine::startWsprPump()` already calls `setDaxTxMode(true)`, and
+  `onTxAudioReady()` early-returns on `m_daxTxMode` *before* it emits
+  `txFinalMonitorPcmReady`. The suppression is local and family-independent.
+  It was written for Windows/Linux-without-PipeWire and turns out to be exactly
+  the mechanism a host-modulating backend needs.
+- **Interlock timeout.** The dialog refuses if the radio's TX timeout is under
+  120 s, with a Flex-specific instruction. `TransmitModel::m_interlockTimeout`
+  defaults to `0`, HL2 never sets it, and `isInterlockTimeoutSufficient(0)` is
+  true. No change.
+- **Keying.** `requestPttOn(PttSource::Wspr)` reaches `moxCommandIssued` →
+  `m_backend->setKeying(on)` on any non-Flex family. Already wired.
+
+**One thing that is genuinely degraded, deliberately:** `tx.setTxFilter(1200,
+1800)` is Flex station state. The HL2 derives its TX passband from the mode
+instead — DIGU gives 150…3000 Hz. The WSPR tone is a single ~6 Hz-wide 4-FSK
+carrier at 1400–1600 Hz, comfortably inside that, so the request is *advisory*
+rather than dropped-and-wrong. Documented at the call site so the next reader
+does not "fix" it.
+
+**Why this feature is worth more than its size.** §14.6 is the wrong-sideband
+bug that no internal check could find, because every internal check shared the
+convention. A WSPR frame decoded by a stranger's receiver and reported to
+wsprnet.org is an oracle **completely outside our system**: it independently
+confirms transmit sideband, frequency accuracy, and that real RF left the
+socket. It is the cheapest external validation instrument the HL2 has, and it
+costs one 111.6-second transmission.
+
+**It paid off on the first frame.** KI6BCJ/DM06, 40 m, 2026-07-28 00:42:00 UTC,
+`rfPower=100` into a real antenna, reported 37 dBm:
+
+- **21 stations decoded it**, from 284 km (AK6RI-1, CM87xi) out to 2080 km
+  (VE6PDQ, DO34lr). Best SNR +1 dB.
+- **Sideband confirmed correct, from outside.** Dial 7.038600 plus the 1500 Hz
+  audio offset lands at **7.040100** on USB; an inverted sideband would have
+  put it at 7.037100. Reported receive frequencies span **7040098–7040113**,
+  centred on 7040100. Twenty-one independent receivers agreeing on the upper
+  sideband is the check §14.6 could not construct internally.
+- **Drift 0 on every single spot** — the TX NCO is stable across the frame.
+
+Instrument readings during the frame, for future comparison: FWDPWR 35.5 dBm
+(~3.5 W), MICPEAK **−20 dBFS** — exactly the `beacon->start(…, -20.0f, …)`
+level, which is what proves the WSPR generator and not the microphone was
+feeding the modulator. PA temperature rose 43.6 → 47.4 °C over the frame and
+was still decelerating at unkey.
+
+**Two things to know before repeating it:**
+
+- **SWR was 3.3** (1.05 W reflected of 3.5 W forward) on 7.0386. Per §17.5 the
+  SWR ratio is the one directional quantity that is trustworthy *without*
+  calibration, so that number is real — the antenna is not resonant at the
+  bottom of 40 m. It completed safely, but 111.6 s of continuous duty into
+  3.3:1 is not a thing to make routine. Check SWR at the WSPR dial frequency
+  before arming, not at the band's phone segment.
+- **`transmit dax` reads 1 afterwards, and that is not a leak.**
+  `applyBeaconBand()` sets the slice to DIGU, and the #2273 rule maps any
+  digital mode to `dax=1` on macOS/PipeWire. The beacon deliberately leaves the
+  slice on the WSPR channel in DIGU, so the two agree, and it clears when the
+  operator leaves DIGU. Worth knowing because it *looks* exactly like the
+  latched-dax failure the Flex arm's save/restore exists to prevent — and note
+  that on the FLEX path `applyBeaconBand()` runs BEFORE `prepareWsprTransmit()`,
+  so `m_wsprTxPreviousDax` is saved as `true` after the mode change already
+  flipped it, and the restore hands back `true`. Same visible end state, but
+  reached by a path that genuinely is a save/restore no-op. Untangling that is
+  a Flex-side cleanup, not an HL2 one.
+
+**And one UX defect the on-air test surfaced**, fixed in the same branch:
+selecting a WSPR band updated the status label and *nothing else*. The dial
+stayed where it was while the label advertised a different frequency, and the
+whole band change — NCO, filter relays, TX oscillator — then happened in the
+last seconds before 111.6 s of RF. Selecting a band now tunes the receiver, so
+the operator can look at the sub-band and its SWR before committing. Mode,
+slice passband and station TX filter are still deferred to arm time, because
+those are the parts that disturb a listening setup and get restored after.
+
+### 18.5 The systemic fix, and why not to patch site-by-site
+
+Patching each dead site to *also* subscribe to `backendAudioFrameReady` takes an
+afternoon and is the wrong move. It would be the fourth repetition of a pattern
+that has already shipped two bugs — the double-feed buzz (`MainWindow.cpp`, the
+sim's frames arriving on both bus A and bus C, measured 48043 Hz against a
+nominal 24000) and the TCI silence that made WSJT-X track frequency perfectly
+and decode nothing. The existing comment already says where this goes:
+
+> *"Any future in-process backend needs the same treatment. The gate belongs on
+> 'does this backend own its RX audio', not on a list of families that happen
+> not to emit the signal today."*
+
+**Proposal — one bus, owned by `RadioModel`:**
+
+```
+RadioModel::rxAudioReady(RxAudioTap tap, int sliceId, QByteArray pcm, int rateHz)
+```
+
+- **`tap`** replaces the bus distinction with the distinction that actually
+  matters: `Demod` (what the operator hears, post-AGC, post-passband) versus
+  `Wideband`/`Modem` (filter-flat, pre-AGC — what a decoder wants). Today this
+  is invisible because bus B happens to be pre-AGC on a Flex; on the HL2,
+  WSJT-X over TCI is currently being fed **post-AGC, post-passband** audio from
+  `Hl2RxDsp`. It decodes, but a modem on AGC'd audio is a known-marginal
+  arrangement and nothing in the code admits it.
+- **`sliceId`** replaces the DAX channel number as the routing key. Flex maps
+  slice → DAX channel internally and keeps its hold registry; HL2 maps slice →
+  its single DDC. Consumers never learn which.
+- Flex adapts `PanadapterStream` into it, HL2 adapts `audioFrameReady`, the sim
+  picks **one** and stops emitting the other (which also fixes the sim feeding
+  its decoders the shim's synthetic scene while the speaker plays the real demo
+  audio — two audio realities in one session, live on `main` today).
+- `wirePanStreamRxAudioSinks()`, `wireBackendSeam()` and
+  `rewirePanStreamAfterBackendSwap()` collapse into one rebind.
+
+**The TX mirror.** `prepareWsprTransmit`'s old guard was one instance of a
+shape; AX.25 TX has the same DAX-borrow dance, and so does RADE. The rule that
+falls out of §18.4:
+
+> **Anything reaching for `ensureDaxTxStream()` should branch on
+> `hostModulates`, not on backend type.** One helper —
+> `acquireTxAudioPath(reason)` returning a token that restores whatever it
+> borrowed — covers WSPR, AX.25, RADE and TCI on every family.
+
+**Capabilities that do not exist yet.** `RadioCapabilities` is the right
+structure; four facts are missing, and adding them is what stops the next
+backend from re-running this audit:
+
+| Field | Why |
+|---|---|
+| `hasDaxAudio` / `hasDaxIq` | The honest name for what bus B *is*. RADE and the DAX bridge should decline on this, not crash on a null stream (§18.3) |
+| available tap kinds | Whether a `Wideband` feed exists at all, or only `Demod` |
+| `providesRadioSideWaveforms` | Digital Voice waveform install is Flex firmware; nothing should offer it elsewhere |
+| `rxAudioSampleRateHz` | HL2 is 24 kHz by the deliberate divergence in §13 Tier 4. A future backend may not be, and `DEFAULT_SAMPLE_RATE` is assumed widely |
+
+### 18.6 New seam gaps for §6's checklist
+
+| # | Gap | Symptom | Fix |
+|---|---|---|---|
+| ~~16~~ | ~~CW/RTTY decoders and the QSO recorder's RX tap bind to bus A inside `wirePanStreamRxAudioSinks()`~~ **DONE** | Decoders were silently dead; no error, no log line, the toggle worked and nothing decoded | `rxDemodAudioReady`, §18.8 |
+| 17 | `AetherClockEngine` binds to bus B **and** to a DAX channel-hold registry, keyed on a channel number a single-DDC radio does not have | WWV/WWVB never decodes; the DAX-hold provider correctly no-ops, which hides it | *Open* — needs slice-identity routing, not channel-identity |
+| 18 | RADE and the DAX bridge dereference `panStream()` bare | **SIGSEGV on mode change** — same shape as gap 1 | *Open* — do this first |
+| 19 | Presentation audio source tag is a hardcoded `kiwi : "flex"` ternary | Third concurrent family is unaddressable; `AsrTapPolicy` cannot tell two radios apart | *Open* — fold into §18.5 |
+
+**The generalised rule, for the next backend:**
+
+> **For every consumer of receive audio, ask which of the three buses it
+> subscribed to — and whether that was a decision or an accident of the Flex
+> being both.** Add it to the Phase-0 reference diff.
+
+### 18.6.1 The same shape again: station identity stored on the radio
+
+Found while making WSPR usable, and worth its own entry because it is the audio
+lesson with a different noun. Three facts about the OPERATOR were read from the
+RADIO, so on a radio that stores none of them the app behaved as though the
+station had no identity:
+
+| Fact | Was read from | On HL2 |
+|---|---|---|
+| Callsign | `RadioInfo::callsign`, the Flex `info` reply, `radio callsign <x>` | Empty forever. Radio Setup accepted an edit, sent Flex text nobody listened for, read back blank |
+| Grid locator | `RadioModel::gpsGrid()` — a 6000-series GPSDO reading | Empty. The WSPR grid field had no persistence of its own, so it was retyped every session |
+| Map home position | GPSDO lat/lon, then GPSDO grid | Neither exists, so `updateHomeFromRadio()` returned having set nothing |
+
+The third is the one that shows how quietly this fails. PSK Reporter drew every
+received spot correctly — each carries its own coordinates — and drew **no
+paths**, because the map had no origin to draw them from. Nothing errored. The
+operator sees a working map that is simply missing the lines.
+
+Fixed by making each fall back to a client-side value:
+
+- `RadioModel::callsign()` falls back to a station-wide `StationCallsign`
+  setting. **Station-wide, not per-serial** — unlike the nickname
+  (`Hl2Discovery::nicknameSettingsKey`), which really is a property of one
+  radio. A callsign belongs to the operator and is the same on every radio they
+  own. Radio's value still wins when present, so a Flex is unchanged.
+- The WSPR grid persists as `beaconGrid`, alongside the power and tone settings
+  that already did.
+- `updateHomeFromRadio()` gains the operator's grid as a third source after the
+  two GPSDO ones. A 4-character square is ~70 x 100 km: coarse for a fix,
+  entirely adequate for drawing a path across a continent.
+
+**The generalised rule:**
+
+> **Anything the app knows about the OPERATOR — callsign, grid, location,
+> licence class — must have a client-side home. A radio may report it and its
+> value may win, but the radio cannot be the only place it lives.** The failure
+> is silent by nature: identity is used to *decorate* and to *query*, so its
+> absence looks like "no results" rather than an error.
+
+Same discipline as the audio buses. Ask whether reading it from the radio was a
+decision, or an accident of the Flex being the only radio there was.
+
+### 18.7 Suggested order
+
+1. **Gap 18** — the RADE/DAX-bridge null-deref. A crash outranks a feature.
+2. ~~**WSPR TX**~~ — done, §18.4. Smallest diff, real operator value, and it
+   forced the `hostModulates` TX branch into existence where it was easy to
+   reason about.
+3. **The unified bus** (§18.5), with CW + RTTY + the QSO recorder as its first
+   three consumers — *as* the port, not as three more one-off connects.
+4. **AetherClock** — the slice-identity work. WWV on a direct-sampling front end
+   is a genuinely good demonstration, and 10 MHz WWV was already the proof
+   signal for #4528's panadapter.
+5. **Tap kinds** (`Wideband`) — only once there is a second consumer that wants
+   one, and once someone has measured whether the AGC'd TCI feed is costing
+   WSJT-X decodes.
+
+### 18.8 The bus, as built
+
+`rxDemodAudioReady` landed on `feat/rx-audio-bus`. Smaller than §18.5 proposed,
+and deliberately so — it carries the taps and leaves the speaker alone.
+
+**What it is.** One signal on `RadioModel`, 24 kHz interleaved stereo float32 —
+byte-identical to what both producers already emitted. Exactly one producer is
+bound at a time, chosen in `wireRxDemodAudioBus()`:
+
+| Family | Producer |
+|---|---|
+| Flex | `PanadapterStream::audioDataReady` (an *additional* subscriber; the existing speaker connection is untouched) |
+| HL2, sim | `IRadioBackend::audioFrameReady`, via `backendAudioFrameReady` |
+
+**The predicate the bus keys off now lives on the backend.**
+`IRadioBackend::ownsRxAudio()` is self-declared rather than inferred from a
+family name or a `dynamic_cast`, so a backend added later cannot be missed by
+the bus wiring.
+
+It does **not** replace the existing casts, and an earlier draft of this section
+claimed it did. `MainWindow::backendFeedsEngineDirectly()` (was
+`backendOwnsRxAudio()`) is still a `dynamic_cast<SimBackend*>`, and it gates the
+two SPEAKER-path sites — which are the two that actually produced #4490's
+double-feed. The new virtual buys its "can't be missed" property for the tap bus
+only.
+
+**The two are deliberately not merged, and the MainWindow one was renamed to
+stop anyone merging them.** They read alike and disagree about the HL2:
+
+| Predicate | Asks | HL2 | sim | Flex |
+|---|---|---|---|---|
+| `IRadioBackend::ownsRxAudio()` | "audio arrives over the seam" | **true** | true | false |
+| `MainWindow::backendFeedsEngineDirectly()` | "backend already feeds AudioEngine, so no relay" | **false** | true | false |
+
+An HL2 owns its RX audio *and* needs the relay: `wireBackendSeam()` connects
+`audioFrameReady → feedAudioData` for the sim only, so HL2 audio reaches the
+engine via `RadioModel::backendAudioFrameReady`. Delegating the MainWindow
+helper to `backend()->ownsRxAudio()` would therefore make the relay's early
+return swallow every HL2 frame and **silence the speaker on the radio this whole
+section exists to support**.
+
+It is **not** "has no PanadapterStream". The sim has both — a stream carrying
+the old shim's synthetic scene, and real demodulated audio over the seam — and
+answers `true` because the seam is the real one. That silently fixed a live
+defect: in demo mode the decoders were being fed the synthetic scene while the
+speaker played the demo's actual audio. **Two audio realities in one session**,
+and nothing in the code admitted it.
+
+**What was deliberately NOT touched.** `AudioEngine::feedAudioData` keeps its
+existing per-family wiring on every family. Nothing audible changes anywhere.
+The Flex path gains one extra subscriber to a signal it already emits, and that
+is the entire blast radius — which is the shape to copy for the remaining §18
+items, not a one-off concession.
+
+**Consumers bind once and never rebind.** They hang off `RadioModel`, which
+outlives the backend swap that destroys and rebuilds a `PanadapterStream`. That
+retires the rebind fragility `wirePanStreamRxAudioSinks()`'s own comment warns
+about, for these three sinks.
+
+**The invariant worth testing is "exactly one producer", not "audio arrives".**
+Two producers is not a dead feature, it is a *wrong* one: every decoder sees
+each block twice, which a Morse decoder reads as doubled timing — wrong text
+rather than no text. `hl2_family_transition_test` asserts it across a family
+round-trip, which is the case Qt cannot clean up for us: the seam relay has
+`this` on both ends, so unlike a stream-bound connection there is nothing for Qt
+to drop when the backend is replaced. The assertion was confirmed to have teeth
+by removing the `disconnect` and watching that check — and only that check —
+fail.
+
+**Measured on hardware** (HL2 at 192.168.1.21, 21.067 MHz): the QSO recorder
+captured 21.6 s of real RX audio — peak 20504, RMS 136.5, 87.5 % non-zero —
+where the same recording was silence before. CW decode confirmed on live signals
+by the operator.
+
+**Recorder RX/TX mixing is safe, and the Flex-shaped premise happens to hold
+for a different reason.** `QsoRecorder`'s header states *"while transmitting,
+the radio mutes the RX stream"* — a Flex fact about the wire. An earlier draft
+of this section asserted the HL2 keeps demodulating through transmit and so
+violates that premise. It does not: `Hl2Backend` drops the frame outright while
+keyed —
+
+```cpp
+connect(m_dsp, &Hl2RxDsp::audioReady, this, [this](const std::vector<float>& pcm) {
+    if (m_keyed) return;
+    emit audioFrameReady(floatBytes(pcm));
+});
+```
+
+— and `Hl2RxDsp::setAudioMuted` stops the pipeline filling in the first place.
+So `rxDemodAudioReady` goes silent for the duration of a transmission. **The HL2
+mutes at the backend rather than at the radio; same observable behaviour,
+different side of the wire.**
+
+The conclusion is unchanged, and it is worth keeping the reason straight: the
+`m_transmitting` gate in `QsoRecorder` is still the actual mechanism, and it is
+still a hard mutual exclusion, so the recorder would be correct even if a future
+backend *did* keep feeding through transmit. This also disposes of a review
+finding that the CW/RTTY decoders would transcribe the operator's own sending —
+they receive nothing to transcribe.
+
+**Still open, narrowed:** only the UNKEY edge — whether `m_keyed` clears before
+the last leakage-contaminated block drains out of `Hl2RxDsp`. The key-down edge
+and the body of the transmission are both covered by the gate above.
+
+---
+
+## 19. Hiding Flex-only UI without asking "is this a Flex"
+
+§17 fixed three controls that *looked* wired and were not. This is the other
+half of the same problem: controls that are wired correctly, work perfectly on
+a Flex, and should not be on screen at all on an HL2. The PROF applet listed a
+profile store that does not exist. DAX offered to route streams this radio
+never sends. Both were reachable, both were honest-looking, and both were lies.
+
+> Field-by-field reference — what every backend declares and where each value
+> is read — lives in `docs/architecture/radio-capabilities-map.md`. This
+> section is the narrative; that table is the one to keep current.
+
+### 19.1 The rule, and why the obvious fix is the wrong one
+
+The obvious fix is `if (family == "flex")`, or a `dynamic_cast<FlexBackend*>`.
+`RadioCapabilities`' own header comment forbids exactly that — it is the
+structural replacement for the model-impersonation anti-pattern (RFC §1) — and
+the reason is not stylistic. A family test encodes *today's* device list at
+every call site. Add a fourth backend and you have to find them all, and the
+ones you miss fail silently in the direction of showing a control that cannot
+work.
+
+So: gate on a **declared capability, named for the concept**. `hasDaxStreams`,
+not `hasDax` — routing receive audio to a virtual device is not inherently a
+FlexRadio idea, and a backend that grows the ability should be able to say so
+without the field reading as a vendor special case.
+
+The chain is the one `hasTuner` → ATU dimming established in §17:
+
+```
+RadioCapabilities field                      backend declares it
+  → RadioModel pushes / relays it            one fan-out point
+    → model or signal carries it             GUI never sees a backend
+      → ONE widget method owns the state     no second caller
+```
+
+### 19.2 Four traps, three of which have already bitten
+
+**Fields default to `false`, so every backend must set every field
+explicitly.** This is the one that nearly shipped a Flex regression when
+`hasTuner` was added — FlexBackend escaped only because it happened to set
+`hasTuner = true` by hand. A backend that omits a field does not inherit a
+sensible default; it silently loses the feature. The test asserts Flex reports
+`true` for each flag *for this reason*, not as a tautology.
+
+**The model-side flag defaults to `true`.** `TransmitModel::m_hasTuner{true}`
+is the pattern. A widget constructed before any backend has reported must stay
+in its pre-existing state rather than briefly hide a control that does exist.
+
+**Restore the permissive value on disconnect** — `!connected || caps.hasX`,
+every time. With no radio attached there is nothing to be honest *about*, and a
+PROF applet that stays gone after unplugging reads as a fault, not as an
+accurate report about a radio that is no longer there.
+
+**A widget with two visibility inputs needs ONE method that ANDs them.** The
+ATU has two (no tuner, and TGXL-in-Operate). Two callers each doing
+`setVisible()` means whichever fires last wins — that was a real bug, not a
+hypothetical. `MainWindow::applyCapabilitiesToUi()` exists so this stays true
+as flags accumulate: one slot, one owning call per surface, no per-flag
+connect-time lambdas.
+
+### 19.3 `capabilitiesChanged` was a signal nobody relayed
+
+`IRadioBackend::capabilitiesChanged` existed from the start and RadioModel
+never forwarded it, so `connectionStateChanged` was the only hook. That was
+survivable with one flag and stops being survivable at three.
+`RadioModel::publishCapabilities()` is now the single fan-out — model-side
+pushes, then `RadioModel::capabilitiesChanged(connected, caps)` — and both the
+connection edges and a mid-session revision by the backend take the same path.
+
+Note the connect edge legitimately publishes **twice** on the demo backend:
+`SimBackend::connectRadio()` emits `capabilitiesChanged` itself, and the
+`connected` edge follows. Every consumer is idempotent `setVisible`, so this is
+harmless — but a consumer that toggles rather than sets would break here.
+
+### 19.4 The DAX crash guard and the DAX capability are NOT the same test
+
+`MainWindow::startDax()` null-checks `panStream()` before building the bridge.
+That is a **crash guard**: auto-starting DAX against an HL2 segfaulted ~3 s
+after connect, from the auto-start timer in `onConnectionStateChanged`, because
+DAX rides `PanadapterStream`'s VITA-49 audio and RadioModel leaves that null for
+every non-Flex family.
+
+`hasDaxStreams` is **UI visibility only**. It is deliberately not merged with
+the null check, and the two must not be collapsed into one test. One stops the
+operator being offered a control that cannot work; the other stops a session
+that reaches the bridge anyway — through automation, a stale setting, a future
+code path — from dereferencing a null stream. Fold them together and the crash
+path is guarded only by whatever the UI happened to hide.
+
+### 19.5 The extended-DSP bug was plumbing, not policy
+
+`RadioCapabilities::hasExtendedDsp` existed *and* FlexBackend populated it.
+Nothing read it. All three GUI call sites went through
+`RadioModel::hasExtendedDspFilters()`, which called `capabilitiesFor(m_model)`
+— the model-**name** table — and bypassed the seam entirely. A non-Flex backend
+declaring the capability honestly had no way to be heard.
+
+The accessor now reads the backend when connected and keeps the name table as
+the disconnected/unknown fallback. **Flex behaviour is unchanged, and provably
+so rather than approximately:** FlexBackend computes `caps.hasExtendedDsp` as
+`capabilitiesFor(model).hasExtendedDsp()`, and the model string it uses is the
+same `m_model`, handed over by the `setModelProvider` lambda in
+`setupBackend()`. Same table, same key, same answer — only the route changes.
+The test asserts the two routes agree across an extended-DSP platform, the "S"
+server variants the old substring form used to miss, and plain 6000-series
+radios, plus that the table distinguishes them at all so the agreement is not
+two constant falses agreeing.
+
+### 19.6 APD needed nothing, and that is worth recording
+
+`apdConfigurable` was checked and left alone. It rides `TransmitDelta`, which
+only `FlexBackend` ever populates (from `apd configurable=1` status), it
+defaults `false`, and `TransmitModel::resetState()` clears it on disconnect —
+so a Flex → HL2 transition in one session cannot strand it visible. Adding a
+capability for it would have been duplicate machinery for a path that already
+behaved. **Verify before you add a flag**; a second source of truth for the
+same fact is how the two-callers-one-widget bug gets built.
+
+### 19.7 Radio-side DSP, and why it is not one flag
+
+The second round covered five more surfaces: NR/NB/ANF/NRL/ANFL/ANFT in the
+slice VFO, the APD row, the WNB row in the ANT panel, `File ▸ Waveforms`, and
+`Settings ▸ multiFLEX`. The obvious move is one flag called `hasFlexDsp`. Two
+reasons it is three flags instead:
+
+- **The name.** A field in this struct is what a *future* backend implements. A
+  non-Flex radio with firmware NR should not have to set something called
+  `hasFlexDsp` to say so, and §19.1 forbids the vendor name anyway.
+- **The grouping.** Waveforms is plugin management and multiFLEX is session
+  multiplicity. Neither is DSP. One flag covering all five would under-describe
+  what it does at three of its five call sites.
+
+So: `hasRadioSideDsp`, `hasWaveforms`, `hasMultiClientSessions`.
+
+**`hasRadioSideDsp` is not `hasExtendedDsp`.** The latter is narrower — the extra
+8000-series firmware filters (NRS/RNN/NRF) on a radio that already has the base
+set. A radio with `hasRadioSideDsp=false` has neither. The test asserts they are
+independent (Flex reports base-true, extended-false for an unknown model string)
+so a later change cannot quietly collapse them.
+
+Neither flag says anything about the **client-side** modules — NR2, NR4, MNR,
+BNR, DFNR, RN2, and the Aetherial RX/TX EQ. Those run on this host, work on any
+family, and stay available on the HL2. The proof is visual: on an HL2 the VFO's
+DSP tab keeps `ADSP` and `AetherVoice` and loses every radio-side toggle, and the
+`VUDU` container keeps its Aetherial EQ tiles while the `EQ` applet goes away.
+
+**The radio's 8-band hardware EQ rides this flag too.** `EqualizerModel` emits
+`eq RXsc` / `eq TXsc` — command-plane verbs, so on an HL2 the sliders moved, the
+setting persisted, and the audio never changed. §17's failure shape exactly. The
+`EQ` applet is hidden; the Aetherial EQ is what an HL2 uses instead, which is
+also why gating the two together would have been the worst possible outcome:
+the operator would lose every equalizer they have.
+
+That is the general test for this flag — **does the control's only effect is to
+emit a verb the radio's firmware executes?** If the work happens in this
+application, it is not behind `hasRadioSideDsp`.
+
+### 19.8 Two setVisible sites that disagreed, and the fix that does NOT unify them
+
+The six VFO buttons had **two independent `setVisible()` sites** — the slice
+`modeChanged` handler and `syncFromSlice()` — which is §19.2's last trap in the
+wild. The fix is one owner, `applyRadioSideDspVisibility()`.
+
+The interesting part is what it does *not* do. `updateExtendedDspVisibility()`
+(the #2177 precedent three lines away) derives mode itself, which is safe because
+its callers were unified once and agreed afterwards. These six have **no agreed
+rule**: the `modeChanged` handler's `isVoice` carries a `!isFdv` term, so
+ANF/ANFL/ANFT hide for FreeDV on that path; `syncFromSlice`'s ANF expression does
+not, so they stay. Same class of drift #2177 found on DFM, still live.
+
+Deriving mode in the new owner would have silently picked a winner. Instead each
+site caches its own answer into `m_*ModeOk` and the owner only ANDs the
+capability. Behaviour preserved exactly, including the inconsistency — resolving
+*that* is a separate change with its own decision to make.
+
+**The WNB row was a bare layout.** Hiding `m_wnbBtn` alone would have left its
+level slider and readout floating with nothing to label them, so the row is now
+wrapped in a container and hidden as a unit. It is seeded at all four
+overlay-menu build sites, because those menus are created lazily as pans appear —
+the same reason `applyTuningRangeToOverlayMenu()` is called from four places.
+
+### 19.9 APD gets a second input, not a second truth
+
+`apdConfigurable` stays the authority on whether a Flex reports the predistorter
+configurable. `hasRadioSideDsp` is ANDed with it in one `updateApdVisibility()`.
+
+This looks like it contradicts §19.6, which said APD needed nothing. It does not,
+and the difference is worth stating: §19.6's check was that APD is never wrongly
+*shown* on an HL2, and that held. What did not hold is *why* it held. `m_apdRow`
+is constructed **visible**, and `apdConfigurable` arrives only in Flex
+`TransmitDelta` status — so on a backend that never sends it, the row's state
+comes from whatever the previous session left behind, not from the connected
+radio. Correct by history is not correct.
+
+Two inputs, one method, per §19.2. Note the consequence for testing: on HL2
+hardware APD is hidden in **both** the connected and disconnected states, because
+`apdConfigurable` is false either way. There is no A/B to photograph — the unit
+test carries that one.
+
+**Be honest about what the capability buys here: today, nothing observable.**
+Under the AND, `apdConfigurable=false` already hides the row in every reachable
+state, and no backend reports `apd configurable=1` while declaring
+`hasRadioSideDsp=false` — that combination would be self-contradictory. So the
+second input is an assertion against a future backend, not a fix for a live bug.
+Recording that is the point: a capability wired in "for symmetry" that changes no
+behaviour is worth *saying so* rather than letting a reader assume it closed
+something.
+
+What WAS a live bug, found by asking that question: `m_apdRow` is a QWidget and so
+constructed **visible**, and neither input had fired at startup — nothing called
+`updateApdVisibility()` until a connect edge or an `apdStateChanged`. A cold
+launch therefore showed a live-looking APD button and Active/Cal/Avail indicators
+with no radio at all, and cold start disagreed with post-disconnect, where
+`resetState()` clears `apdConfigurable` and the row correctly goes away. One
+`updateApdVisibility()` call at the end of the row's construction fixes it.
+
+The general lesson: **the default visibility of a widget is a decision, and a
+`QWidget` gives you `true` whether you meant it or not.** Every gated surface in
+this section needs a defined state at t=0, not just a rule for what happens when
+a signal arrives.
+
+### 19.10 Testing the capability, not the family
+
+`tests/radio_capability_gating_test.cpp` asserts capabilities only — never
+`caps.family`, never a backend type. A test that asserted the family would pass
+just as happily against the anti-pattern it exists to prevent.
+
+The connected-backend half runs against SimBackend over the **synthetic demo
+connection** (RFC #4288): a demo `RadioInfo` takes `RadioConnection`'s
+no-socket path, so `isConnected()` genuinely becomes true with no hardware.
+That matters — the `!connected ||` half of the permissive rule is only
+meaningful if some case actually reaches the connected branch.
+
+One trap in writing it, worth repeating for anything driving the seam from a
+test: **do not wait on `isConnected()`.** The connection object lives on a
+worker thread and reaches `Connected` before its queued signal has crossed to
+the model's thread, so a `while (!isConnected())` pump exits *before* the
+emission under test and the assertion fails against working code. Wait on the
+signal.
+**Still open on this path:** whether the HL2's in-process RX pipeline flushes a
+few blocks of transmitter leakage into the start of each RX segment after unkey
+— the same class as the Flex waterfall-freeze window. Measure with a recording
+running across a real over before deciding it needs a hold-off.
+
+---
+
+## 20. Four receivers
+
+The backend ran one DDC. It now runs up to four, each with its own NCO, WDSP
+channel, spectrum, slice and panadapter. Closes backlog items 7 and 20.
+
+### 20.1 One ADC, four receivers — the distinction that shapes everything
+
+The HL2 has a single AD9866. "Four receivers" means four DDCs behind one
+converter, so the split between what is per-receiver and what is shared is not
+a style choice — it is the hardware:
+
+| Per receiver | Shared, because there is one ADC |
+|---|---|
+| NCO (`0x02`..`0x08`), slice frequency | Sample rate `0x00[25:24]` — one field, so one span for every pan |
+| Mode, passband, AGC | LNA gain `0x0a[5:0]`, and the dBm reference it drives |
+| Spectrum, S-meter ballistics, pan frame rate | Companion filter board (J16 open-collector) |
+| Demodulated audio | The transmitter, and therefore the TX slice |
+
+Anything shared that gets stored per receiver gives four receivers four
+opinions about one register, and the last writer wins silently.
+
+### 20.2 The EP6 payload geometry is not a constant
+
+The payload is a sequence of ROUNDS: one sample from every active receiver plus
+a 2-byte mic word, so a round is `6N + 2` bytes and the per-packet sample count
+**falls** as receivers are added.
+
+At one receiver a round is 8 bytes and 504 divides exactly — which is why
+`kRxSampleBytes = 8` and `kSamplesPerPacket = 126` survived as constants for the
+whole single-receiver bring-up. Neither is true at two.
+
+Rounds never straddle a 512-byte frame. The gateware emits whole rounds while
+another fits and then ZERO-PADS the rest (`usopenhpsdr1.v`, `MIC0 ->
+(byte_no[8:0] > round_bytes) ? RXDATA2 : PAD`). So rounds-per-frame is a floor
+division and the tail bytes are not samples:
+
+| N | round bytes | rounds/frame | payload used | padding | samples/RX/packet |
+|---|---|---|---|---|---|
+| 1 | 8 | 63 | 504 | 0 | 126 |
+| 2 | 14 | 36 | 504 | 0 | 72 |
+| 3 | 20 | 25 | 500 | 4 | 50 |
+| 4 | 26 | 19 | 494 | 10 | 38 |
+
+Decoding the pad as samples injects a burst of digital silence into every
+receiver, every packet. `hpsdrsim` computes `n = 504 / size` the same way from an
+independent codebase, which is what makes it evidence rather than an echo.
+
+**EP2 is a different, receiver-count-INDEPENDENT layout** — a fixed 126 samples
+of 8 bytes whatever N is. It was sharing the EP6 constants; they are now
+separate (`kTxSampleBytes`, `kTxSamplesPerPacket`) so adding receivers cannot
+reshape the transmit packet or move its pacing.
+
+### 20.3 The receiver count field is FOUR bits
+
+`0x00[6:3]`, `0000`=1 to `1011`=12. The encoder masked with `0x07`, which capped
+the encodable count at 8 and would have wrapped 9..12 into 1..4 — a request for
+nine receivers configuring the radio for one. Latent while only one ran.
+
+### 20.4 The link budget is a real limit, not a footnote
+
+Both axes cost bandwidth: more receivers shrink the per-receiver payload of a
+fixed-size packet, so the radio sends more packets. Sustained EP6 wire rate,
+Mbit/s, including UDP/IP/Ethernet headers and the inter-frame gap:
+
+|  | 1 RX | 2 RX | 3 RX | 4 RX |
+|---|---|---|---|---|
+| 48 k | 3.3 | 5.9 | 8.4 | 11.1 |
+| 96 k | 6.7 | 11.7 | 16.9 | 22.2 |
+| 192 k | 13.4 | 23.4 | 33.7 | 44.4 |
+| 384 k | 26.8 | 46.8 | 67.5 | **88.8** |
+
+**The HL2's ethernet is 100BASE-T.** Four receivers at 384 kHz does not fail
+cleanly — the link drops packets, and a dropped EP6 packet is a simultaneous gap
+in *every* panadapter. `maxReceiversAtRate()` admits 4 receivers through 192 kHz
+and 3 at 384 kHz, at a 70% budget. The reported zoom LIMITS shrink with the
+receiver count, so the operator cannot reach a span that would then be refused —
+a refused control reads as broken, an absent one reads as a limit.
+
+### 20.5 Agree-or-bypass on the shared filter board
+
+One relay bank, four receivers, four possible opinions.
+
+If every active receiver wants the same filter, engage it. If they disagree,
+release every relay rather than pick a winner. Picking a winner is the tempting
+alternative and it is worse: a low-pass chosen for 40 m *attenuates* a receiver
+on 15 m, so three panadapters would show a level that is an artefact of the
+fourth receiver's tuning. Bypass is honest — every receiver sees the same front
+end, and a level comparison between panes means something.
+
+**What it costs, stated plainly:** bypass drops the AM-broadcast HPF, which
+matters more here than on radios with better dynamic range (oracle §8). Near a
+broadcast transmitter, spanning bands can raise the noise floor on every
+receiver. The log line names the spanning frequencies and says the HPF is out,
+because "why did my noise floor rise when I opened a second receiver" is
+otherwise an unanswerable support question.
+
+Measured on the simulator, the full round trip:
+
+```
+band filter: 0x48 (HPF + 30/20m LPF) for 10.000000 MHz, trigger=connect
+band filter: 0x00 (none (bypass)) for receivers spanning bands
+             (7.200, 10.000, 10.000, 10.000 MHz) — BYPASSED, AM-broadcast HPF
+             is out — was 0x48, trigger=tune
+band filter: 0x44 (HPF + 60/40m LPF) for 7.200000 MHz — was 0x00, trigger=tune
+```
+
+**While KEYED the transmit receiver's filter wins outright.** Radiating through a
+bypassed bank because another receiver was parked elsewhere would put harmonics
+on the air, and no receive-side convenience justifies that.
+
+### 20.6 Transmit stays singular
+
+One transmitter, however many receivers. Exactly one slice reports
+`txSlice=true`, and the TX NCO, mode and passband follow *that* receiver.
+Tuning receiver 3 must not drag the transmit frequency; putting it into CW to
+chase beacons must not switch the transmitter out of SSB.
+
+Marking every slice as the TX slice would be worse than marking none: RadioModel's
+interlock would find one whichever pane was selected, and the operator could key
+from a receiver the TX NCO is not following.
+
+The operator can MOVE it (the VFO panel's TX indicator, `IRadioBackend::
+setTxSlice`), and the same singularity applies to the ACTIVE slice — see 20.13,
+where publishing either one unconditionally is what actually went wrong.
+
+### 20.7 Host-side audio mixing
+
+A Flex sums its slices on-radio and sends one stream. An HL2 demodulates every
+receiver on this host, so the sum is ours.
+
+Receivers share an input clock (one EP6 packet feeds them all) but WDSP's worker
+is asynchronous, so blocks are mixed `min()`-aligned rather than smeared. A
+**starvation guard** mixes a stalled receiver as silence past ~85 ms: without it
+one stalled DSP holds `min()` at zero and the whole radio goes silent, which is
+strictly worse than the fault it reacts to.
+
+Clamped, not scaled by 1/N. Dividing would make every slice quieter the moment a
+second one is opened, which an operator reads as the radio going deaf.
+
+### 20.8 Ordering: DSP chains are built BEFORE start()
+
+Opening a WDSP channel costs ~17 s on a first run (FFTW wisdom) and runs on the
+I/O thread — **the thread that paces EP2**. Configuring after `start()` stalls
+the pacer for all of it, and the gateware watchdog halts the stream when EP2
+stops arriving; it also stalls the EP6 reader, so the connect watchdog can time
+out against a radio that is answering perfectly well.
+
+This was caught by `hl2_backend_test`, which stopped seeing `connected()` at all.
+It is the same lesson as §15.4 from the other direction: EP2 is not best-effort.
+
+The count therefore comes from a **static** `MetisClient::effectiveNumRx(Params)`
+— the same clamp the running client applies to the same struct. The demux and
+the radio must not disagree about how many receivers exist, because the EP6
+payload carries no receiver-count field and a mismatch reinterprets every round
+with no error anywhere.
+
+### 20.9 Seam gap this exposed: pan-id namespaces
+
+`RadioModel` materialised exactly one panadapter for a non-Flex backend —
+`ensureOwnedPanadapter(neutralPanIdString(0))`, hardcoded in three places — and
+kept the backend pan geometry in two scalars.
+
+Worse, every *other* backend pan signal resolved the raw backend pan id through
+`resolvePan()`, whose fallback is the ACTIVE pan. With one pan that looked
+correct, because the only pan was the active one. With four, every pan-addressed
+update landed on whichever pane happened to be selected: **RF gain reported 20 dB
+on one pan and 0 on the other three, from a single radio-wide LNA.**
+
+Backend pan ids are now translated through a first-seen-order allocator and stay
+OPAQUE in both directions — `RadioModel` does not parse a family's naming scheme,
+and a backend does not learn about the `0xE1000000` stream-id space.
+
+### 20.10 The dynamic lifecycle: receivers come and go while the radio runs
+
+The count was fixed at connect, from a persisted setting. It is now the
+operator's, at runtime: "Add Panadapter" and the pane close button. Connect
+always comes up with ONE receiver.
+
+Retiring the persisted count mattered for a reason beyond tidiness: it made
+connect the only place the count could change, and a saved 4 was re-imposed on
+every connect even at a span that could not carry it.
+
+Changing the count RESTARTS the EP6 stream, deliberately. The count changes the
+payload layout (`6N+2` bytes per round) and the packet carries no
+receiver-count field and no marker for the packet where the change took effect.
+Re-sending the config bank alone leaves a window of milliseconds in which the
+radio has switched layouts and the host has not, and every round in that window
+is misread on EVERY receiver with nothing reporting an error. `metis-stop` /
+reconfigure / `metis-start` makes it a hard edge; the brief audio gap is what
+adding a receiver looks like.
+
+Two things must be re-asserted after a removal, because nothing reads them back:
+
+- **Every surviving receiver's NCO.** They may have moved down a hardware slot
+  and the NCO registers are addressed by that slot.
+- **Transmit ownership**, if it lived on the closed receiver.
+
+### 20.11 Identifier allocation after a removal — the same bug three times
+
+This is the most transferable lesson in the section. Three separate allocators
+picked *the next* identifier instead of *the lowest free* one, which is only
+equivalent while nothing is ever removed. Each failed differently and none
+failed loudly.
+
+| Allocator | Wrong rule | What it produced |
+|---|---|---|
+| Receiver UI number (= seam slice id) | monotonic counter | after 4 open / 3 closed, asked for slice id 4 on a radio whose ids run 0..3 → *"Slice capacity is full"* |
+| Neutral pan index in `RadioModel` | `m_backendPanIndex.size()` | closing 1 of 4 leaves size 3 while index 3 is live → new pan resolved to an EXISTING `PanadapterModel`, no pane created, occupant's frames taken over (`pans=3 slices=4`) |
+| TX / active-slice role indices | kept the stored DDC index | `remove()` renumbers, so closing DDC 0 of three left transmit naming index 2 — now a different receiver |
+
+The UI-number case is worth dwelling on because the wrong choice was
+*deliberate*. The reasoning was "reusing a retired number would give two panes
+the same identity" — which is false, because the retired pane does not exist.
+The cost of that reasoning was real: the UI number IS the seam's slice id, and
+that space is bounded by the radio's slice capacity. Reuse is also what a Flex
+does with its own slice ids, so it matches what every consumer above the seam
+was written against.
+
+**The rule:** an id space with a bounded range and a remove operation must
+allocate lowest-free. `size()` and `++counter` are both wrong, in opposite
+directions.
+
+Related and separate: DDC indices MUST be renumbered on removal (the gateware
+streams `numRx` contiguous receivers and the index is the slot in the EP6
+round), while UI numbers and pan ids must NOT be. `hl2RoleAfterRemove()` states
+the three-case rule once — below the removed index, above it, or on it.
+
+### 20.12 A closing receiver retires its slice AND its pan
+
+`removePanadapter` emitted only `panRemoved`. The `SliceModel` outlived its
+receiver, still naming a pan id that no longer existed, and `slices().size()`
+never fell — so the next create failed a capacity guard against a stale count.
+
+On a backend where a slice IS a receiver, both go. `IRadioBackend::sliceRemoved`
+already existed for the Flex path; it simply had no HL2 emitter.
+
+**Invariant worth asserting directly: pan count and slice count move in
+lockstep on this backend.** Every bug in 20.11 and 20.12 shows up as those two
+numbers disagreeing.
+
+### 20.13 Exactly one: the singular roles
+
+Two roles are singular, and publishing them unconditionally was correct while
+there was one slice and wrong at two.
+
+- **`txSlice`** — one transmitter. Marking every slice as the TX slice is worse
+  than marking none: the interlock finds one whichever pane is selected, and the
+  operator can key from a receiver the TX NCO is not following.
+- **`active`** — one selected slice. `d.active = true` was unconditional, so
+  every slice claimed it. Two slices claiming to be active is
+  indistinguishable from none: tuning across a panadapter moved the right DDC
+  and showed the right frequency on its VFO flag, while the RX Controls applet
+  stayed pointed at a different receiver.
+
+A Flex arbitrates both on the radio and ECHOES the deselection back. Nothing
+echoes here, so the backend has to clear the previous holder itself and
+republish BOTH the old and the new slice. Keep them separate: listening on one
+slice while transmitting on another is routine, so selecting a pane must not
+drag transmit with it.
+
+### 20.14 The recurring failure shape: Flex wire text on a seam backend
+
+Every remaining multi-DDC defect this session had the same shape, and it is
+worth naming because it will recur for every feature added from here.
+
+A control is implemented as Flex wire text (`slice set N active=1`,
+`display panafall create`, `slice set N audio_mute=1`). On a host-demodulating
+backend that text goes nowhere. The control reports success, the model updates,
+and nothing happens to the radio.
+
+The variant that hurts most is **wire text with a completion callback**:
+
+```
+createPansSequentially()  -->  sendCmdPublic("display panafall create", cb)
+                                   cb never runs on a seam backend
+                                   ...so the recursion driving it stops dead
+```
+
+That is why "Add Panadapter → pick a layout" created nothing on an HL2 while
+the bridge's `pan create` worked throughout — the verb goes through
+`RadioModel::createPanadapter()`, the dialog talked to the connection directly.
+One entry point was wired to the seam and the other was not.
+
+Found this way, all fixed the same way (route through the seam / the
+`SliceModel` setter): per-slice mute, level, balance; TX-slice selection;
+active-slice selection; pan creation from the layout dialog; the bridge's
+`slice select`; both TCI guards.
+
+**When adding any control, the question is not "does it work?" but "which of the
+two paths did I test?"** A passing bridge verb proves nothing about the button,
+and vice versa.
+
+Two authority bugs of the same family: `maxPanadapters()` and `maxSlices()` read
+`capabilitiesFor(m_model)`, a FlexLib platform table keyed by model string.
+"Hermes-Lite 2" fell through to a 2-pan default and refused a third receiver on
+a board reporting four. `TciServer`'s own comment had recorded the consequence
+and it was still true.
+
+### 20.15 Certification targets — invariants, and the bridge verbs that check them
+
+Written as propositions rather than steps, because each one is a defect this
+session actually produced. All are reachable from the automation bridge with a
+simulator; none needs hardware.
+
+**Lifecycle and counting**
+
+1. Connect yields exactly one receiver, with no settings file.
+   `get radio` → `panCount == 1 && sliceCount == 1`
+2. `panCount == sliceCount` after EVERY create and remove. The single most
+   productive assertion in this section — 20.11 and 20.12 all violate it.
+3. Adds are refused at the board's reported count, not a model-string default.
+   `pan create` × N → the (N+1)th returns `ok:false`, and the limit in the
+   message equals discovery byte `0x13`.
+4. Closing the last receiver is refused.
+5. Freed ids are reused: open 4, close 3, reopen → slice id 1, not 4.
+6. Closing the MIDDLE of four then reopening fills the gap, and the survivors
+   keep their own numbers. This is the case that caught two separate bugs.
+7. Add/close repeated ~10× leaks no WDSP channel (the pool is 32, shared with
+   transmit).
+
+**Singular roles**
+
+8. Exactly one slice has `txSlice: true`; exactly one has `active: true`.
+   `get slices` → both counts are 1, at every point in a lifecycle sequence.
+9. `slice tx N` moves transmit and CLEARS the previous holder.
+10. `slice select N` sets active and clears the previous holder.
+11. Closing the receiver that owns transmit moves transmit to a survivor,
+    and `get slice tx` still resolves.
+
+**Shared hardware**
+
+12. `pan rfgain <panId> <dB>` changes RF gain on EVERY pan, not the addressed
+    one. One AD9866.
+13. Receivers on one band → filter engaged, `wide: false` on all pans.
+    Receivers spanning bands → `wide: true` on all pans, filter bypassed.
+14. Span is radio-wide: a zoom on one pan reports the same `bandwidthMhz` on all.
+
+**Link budget**
+
+15. Four receivers refuse 384 kHz; three accept it. The reported zoom limits
+    shrink with the receiver count, so a refused span is unreachable from the UI.
+
+**Surviving the restart** — every create and remove restarts the EP6 stream
+(`MetisClient::setReceiverCount`), which is the least obvious thing in this
+section and the easiest to regress.
+
+16. Adding or closing a receiver does NOT drop the link. `get radio` reports
+    connected throughout, and `get_log` shows no `linkDown`. The stream restart
+    re-sends metis-start, that datagram is as losable as the one at connect, and
+    without a retry one lost packet ends the session ~2 s later on the silence
+    watchdog. Covered in-tree by `hl2_receiver_count_restart_test`.
+17. A restart is not a reconnect. Exactly one `connected()` per session — a
+    spurious one makes RadioModel stage every pane as previous-session leftovers
+    and rebuild the operator's layout mid-click.
+18. After ~10 add/close cycles, every surviving receiver still produces spectrum
+    and audio. Renumbering is what breaks here: closing the middle of three
+    renumbers every DDC after it, and a chain wired to an index rather than a
+    stable id goes quiet with nothing logged.
+
+**Both paths, every time**
+
+19. For each control, exercise the GUI widget AND the bridge verb. The layout
+    dialog is modal — a synthetic click needs a settle delay before the tile
+    click, or the second click lands on whatever is behind the dialog and the
+    button looks dead.
+
+**Bridge verbs currently sufficient for the above:** `connect`, `pan
+create|remove|rfgain`, `slice select|tx`, `tune`, `get radio|slices|pans|slice`,
+`invoke`, `clickAt`, `dumpTree`, `get_log`. Gaps worth adding when these become
+real certification cases: a verb for per-slice mute/gain/balance (today only
+reachable by clicking the applet); one for pane pop-out / maximize; and a
+`capture_audio` window straddling a slice mute, which is the only way to check
+the mixer's continuity claim (§20.7) from outside — the drain leaves residue in
+the deeper queue, and the single-contributor fast path has to emit it rather than
+discard it, which no in-tree test currently observes.
+
+### 20.15.1 Two concurrency traps the receiver set introduced
+
+Both were found in review of this work, not on the air. Both are the kind that a
+passing test suite says nothing about, so they are recorded as shapes to look for
+rather than as fixed bugs.
+
+**The sample path must not read a GUI-thread container.** The EP6 fan-out started
+as a loop over `m_rx`, dereferencing `m_rx[i].dsp` for every arriving packet on
+the I/O thread. That is fine with a fixed receiver set and wrong the moment one
+can be added or closed: `createPanadapter()`'s `push_back` reallocates and
+`removePanadapter()`'s `erase` shifts, either of which can free or move the
+storage under a fan-out that is halfway through it — a use-after-free on the
+real-time audio path, reachable by clicking "Add Panadapter" while the radio
+streams.
+
+The fix that looks obvious is to synchronise the access. Do not: the I/O thread
+is reached from `createPanadapter()` by a `Qt::BlockingQueuedConnection`, so a
+lock the I/O thread also wants is a deadlock rather than a race. Ordering the two
+through the event loop instead does work — one event loop never runs two
+callbacks at once — but it leaves the sharing in place for every future reader to
+rediscover, and see the next paragraph for why it cannot be verified.
+
+What is in the tree is neither: the I/O thread gets its **own** list
+(`m_ioDsps`), rebuilt by `publishIoDsps()` only when the receiver set changes.
+`m_rx` is GUI-thread-only, `m_ioDsps` is I/O-thread-only, and there is no shared
+state left to order. The ordering rule that remains is a lifetime one — withdraw
+a chain from the published list *before* destroying it, never after — and
+`publishIoDsps()` blocks for exactly that reason.
+
+**ThreadSanitizer cannot see through Qt.** QtCore ships uninstrumented, so the
+happens-before edge a `Qt::BlockingQueuedConnection` establishes (a `QSemaphore`
+inside QtCore) is invisible to TSan. Every blocking invoke therefore reports the
+callee's read of the caller's captures as a data race, with `QtCore` frames
+printed as `<null>`. This is pre-existing and abundant, not new:
+`hl2_backend_test`, which predates the multi-receiver work, reports 57 races
+under `-fsanitize=thread`, 32 of them in the queued-functor dispatcher.
+
+Two consequences worth carrying forward:
+
+- **A Qt-synchronised fix is unfalsifiable here.** The event-loop-ordering
+  approach above was implemented first and TSan reported the receiver vector as
+  raced *because of the fence* — the fence had moved a same-thread write onto
+  another thread, and TSan could not see the semaphore ordering them. Preferring
+  "no sharing" over "synchronised sharing" is what made the result checkable.
+- **Read the differential, never the count.** The useful measurement was
+  `grep -c 'vector<...::Receiver'` over the TSan log across the two designs: 8
+  frames naming the receiver vector before, 0 after, with the pre-existing
+  blocking-invoke reports unchanged either side. The absolute count is dominated
+  by the Qt artifact and says nothing.
+
+`tests/hl2_receiver_churn_test.cpp` exists to give this a place to be seen: it
+is the only test that adds and closes receivers against a live EP6 stream, which
+is the contended window. It passes on a plain build regardless of the fix, and
+that is worth being blunt about — a use-after-free on a four-element vector
+usually reads memory the allocator handed straight back. Its value is under a
+sanitizer, and it reports 30 of the pre-existing Qt artifacts when run there.
+
+### 20.16 What is proven, and what is not
+
+**Proven against `hpsdrsim -hermeslite2 -P1`:** four receivers configured and
+streaming; four independent NCOs; four panadapters with their own spectrum and
+waterfall; agree-or-bypass across the full round trip; RF gain consistent across
+all four pans.
+
+Added since, all through the automation bridge: connect at one receiver with no
+settings file; the statusbar button and a real layout tile creating three more;
+the fourth add refused at the board's reported count; close, and close-the-last
+refused; open 4 / close 3 / reopen giving back id 1; close-the-middle then reopen
+filling the gap; `panCount == sliceCount` at every step; exactly one `txSlice`
+and one `active` slice; `slice tx` and `slice select` each clearing the previous
+holder; RF gain on one pan moving all pans; WSJT-X's TCI split creating a second
+DDC and moving transmit to it; and two TCI clients on RX1/RX2 both receiving
+per-slice audio, including with one slice speaker-muted. 196/196 tests green
+(`hl2_tx_loopback_test` excluded — see below).
+
+**Proven on real hardware.** The operator has since exercised this end to end on
+a Hermes-Lite 2, transmit included. That closes the gap the simulator
+structurally cannot: it generates its scene independently of the NCO, so four
+receivers on four frequencies show the same synthetic content there — meaning
+"four DDCs genuinely tune independently" was, until hardware, argued from the
+register map (`0x02`..`0x08`) and confirmed only in that the radio accepted the
+writes.
+
+Keep that distinction in mind when reading any simulator result in this section:
+`hpsdrsim` failing to contradict a convention is not the same as hardware
+confirming it (§7, and the wrong-sideband account in §14.6).
+
+**Still open:**
+
+- **`hl2_tx_loopback_test` fails against the simulator** on transmit-sideband
+  checks, non-deterministically. Commit `256142a6` — the pre-multi-DDC base —
+  fails identically, so it is pre-existing rather than caused by this work, and
+  it is tracked separately. Note a dev host at `192.168.1.12` is the address that
+  test probes, so a locally-running `hpsdrsim` makes it execute when it was
+  written to skip, and collide with any app already driving that simulator.
+- **The link-budget ceiling is derived, not measured.** 70% of 100BASE-T is a
+  working figure. Where the drop counter actually starts moving is still a
+  number nobody has written down, and it is the one that would justify or move
+  `kEp6LinkBudgetFraction`.
+- **The skimmer gateware variants** (9–12 RX, no transmit) are still untested.
+  `kMaxTunableRx = 7` bounds us to the contiguous `0x02`..`0x08` NCO run;
+  RX8..RX12 at `0x12`..`0x16` are deliberately not encoded.
+- **CPU cost is unmeasured beyond one observation:** 54.7% on an M-series laptop
+  at 4 × 192 kHz with four panadapters rendering. That is a whole-app number from
+  the status bar, not a profile.
+- **None of it is automated yet.** Hardware verification does not survive a
+  refactor; §20.15 lists the invariants to turn into certification cases so that
+  it does.

@@ -170,6 +170,28 @@ public:
     // Show/hide the ShackSwitch applet based on device presence.
     void setShackSwitchVisible(bool visible);
 
+    // Show/hide the PROF button and applet based on whether the connected radio
+    // has an on-radio profile store (RadioCapabilities::hasProfiles).
+    //
+    // Unlike TUN/AMP/AG these are NOT markHardwareConditional() at
+    // construction: PROF and DAX have always been in defaultButtonOrder() and
+    // users have them in saved layouts, so the button starts available and only
+    // a connected radio that reports the capability false takes it away. A
+    // disconnected session keeps both, which is what the operator saw before.
+    void setProfilesVisible(bool visible);
+
+    // Show/hide the DAX and DAX-IQ buttons and applets based on whether the
+    // connected radio produces per-slice audio / per-pan IQ streams
+    // (RadioCapabilities::hasDaxStreams). Same not-markHardwareConditional
+    // reasoning as setProfilesVisible above.
+    void setDaxStreamsVisible(bool visible);
+
+    // Show/hide the EQ button and applet — the radio's own 8-band hardware
+    // equalizer (RadioCapabilities::hasRadioSideDsp). Deliberately does NOT
+    // touch the Aetherial RX/TX EQ tiles ("ceq" / "ceq-rx"), which are
+    // host-side and are what a radio without a hardware EQ uses instead.
+    void setHardwareEqVisible(bool visible);
+
     // Reset applet order to default
     void resetOrder();
 
@@ -254,10 +276,20 @@ private:
         QString      tooltip; // hover description for the picker
         QPushButton* btn{nullptr};
         bool         hardwareAvailable{true};
+        // Whether this applet opens by default when Applet_<id> is UNSET.
+        //
+        // Recorded because the re-enable path has to answer "should this be
+        // open?" for an applet the operator has never touched, and the honest
+        // answer is the applet's own default — not a blanket yes. PROF, DAX and
+        // IQ are created closed; assuming otherwise force-opened all three on
+        // the first connect and then persisted that. See
+        // updateHardwareAvailability().
+        bool         defaultOn{true};
     };
 
     void registerBarButton(const QString& id, const QString& label,
-                           const QString& tooltip, QPushButton* btn);
+                           const QString& tooltip, QPushButton* btn,
+                           bool defaultOn = true);
     void applyBarLayout();
     void setDrawerOpen(bool open);
     void openFavoritesPicker();
@@ -268,6 +300,12 @@ private:
     void updateHardwareAvailability(const QString& id,
                                     const QString& appletKey,
                                     bool hardwareVisible);
+    // updateHardwareAvailability() plus the container hide it deliberately
+    // omits, with the operator's persisted open/closed preference preserved
+    // across the round trip. Backs the capability-driven setXVisible() methods.
+    void applyCapabilityVisibility(const QString& id,
+                                   const QString& appletKey,
+                                   bool available);
     void markHardwareConditional(const QString& id);
     void persistVuMeterSettings() const;
     void showStandardMeterContextMenu(QWidget* source, const QPoint& position);

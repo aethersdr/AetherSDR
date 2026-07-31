@@ -1,5 +1,6 @@
 #include "DemoApplet.h"
 
+#include "FlowLayout.h"
 #include "core/backends/sim/NoiseMixer.h"
 
 #include <QGridLayout>
@@ -56,8 +57,12 @@ void DemoApplet::buildUI()
     root->addWidget(title);
 
     // ── scene presets ──────────────────────────────────────────────────────
-    auto* presetRow = new QHBoxLayout();
-    presetRow->setSpacing(4);
+    // FlowLayout, not QHBoxLayout: six labeled buttons need ~450 px but the
+    // docked applet rail hands us ~246 with no horizontal overflow allowed,
+    // so a box layout compresses the buttons past their hint and clips the
+    // centred labels at both ends (#4518). Wrapping keeps every label whole
+    // at any width.
+    auto* presetRow = new FlowLayout(0, 4, 4);
     for (const QString& p : NoiseMixer::allPresetNames()) {
         auto* b = new QPushButton(p, this);
         b->setStyleSheet(QStringLiteral(
@@ -70,7 +75,6 @@ void DemoApplet::buildUI()
         });
         presetRow->addWidget(b);
     }
-    presetRow->addStretch();
     root->addLayout(presetRow);
 
     // ── per-channel rows: toggle | level slider | optional knob ────────────
@@ -153,8 +157,8 @@ void DemoApplet::buildUI()
         {"Malformed",   "malformed",  ""},
         {"Clear",       "clear",      ""},
     };
-    auto* faultRow = new QHBoxLayout();
-    faultRow->setSpacing(4);
+    // Same wrap-instead-of-compress treatment as the preset strip (#4518).
+    auto* faultRow = new FlowLayout(0, 4, 4);
     for (const FaultBtn& fb : kFaultBtns) {
         auto* b = new QPushButton(QString::fromLatin1(fb.label), this);
         const bool isClear = QLatin1String(fb.fault) == QLatin1String("clear");
@@ -175,7 +179,6 @@ void DemoApplet::buildUI()
         });
         faultRow->addWidget(b);
     }
-    faultRow->addStretch();
     root->addLayout(faultRow);
 
     root->addStretch();

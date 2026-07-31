@@ -24,6 +24,12 @@ struct MemoryEntry {
     int     rttyShift{170};
     int     diglOffset{2210};
     int     diguOffset{1500};
+
+    // Field-wise equality. The local memory bank uses it to skip re-saving a
+    // slot that did not actually change — the memory dialog re-asserts the
+    // kv-set it just sent, so without this a single edit writes the bank file
+    // twice.
+    bool operator==(const MemoryEntry&) const = default;
 };
 
 } // namespace AetherSDR

@@ -5,6 +5,7 @@ layout(location = 0) out vec4 fragColor;
 
 layout(binding = 1) uniform sampler2D tex;
 layout(binding = 2) uniform sampler2D rowFrequencyFrame;
+layout(binding = 3) uniform sampler2D supplementalTex;
 
 layout(std140, binding = 0) uniform Uniforms {
     float rowOffset;
@@ -20,16 +21,24 @@ layout(std140, binding = 0) uniform Uniforms {
 vec4 sampleWaterfallRow(float rowIndex, float unit)
 {
     float rowY = fract((rowIndex + 0.5) * unit);
-    vec2 rowFrame = texture(rowFrequencyFrame, vec2(0.5, rowY)).rg;
+    vec4 rowFrame = texture(rowFrequencyFrame, vec2(0.5, rowY));
     if (rowFrame.y <= 0.0) {
         return vec4(0.0, 0.0, 0.0, 1.0);
     }
     float sourceU = 0.5 + (targetCenterOffsetMhz - rowFrame.x) / rowFrame.y
         + (v_uv.x - 0.5) * targetBandwidthMhz / rowFrame.y;
-    if (sourceU < 0.0 || sourceU > 1.0) {
-        return vec4(0.0, 0.0, 0.0, 1.0);
+    if (sourceU >= 0.0 && sourceU <= 1.0) {
+        return texture(tex, vec2(sourceU, rowY));
     }
-    return texture(tex, vec2(sourceU, rowY));
+    if (rowFrame.w > 0.0) {
+        float supplementalU =
+            0.5 + (targetCenterOffsetMhz - rowFrame.z) / rowFrame.w
+            + (v_uv.x - 0.5) * targetBandwidthMhz / rowFrame.w;
+        if (supplementalU >= 0.0 && supplementalU <= 1.0) {
+            return texture(supplementalTex, vec2(supplementalU, rowY));
+        }
+    }
+    return vec4(0.0, 0.0, 0.0, 1.0);
 }
 
 void main()

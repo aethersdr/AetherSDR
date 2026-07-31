@@ -59,6 +59,17 @@ struct RadioInfo {
     QString model;
     QString serial;
     QString version;
+    // What the radio calls its version, when a bare number would not be
+    // self-describing. The HL2 reports a gateware revision ("75"), which says
+    // nothing on its own; a Flex reports a software version ("4.2.20.41343"),
+    // which does. Empty means "render the version alone", so every existing
+    // backend is unchanged by omitting it.
+    //
+    // DISPLAY ONLY, and deliberately a separate field rather than a prefix
+    // baked into `version`: that value is also served over rigctl
+    // (RigctlProtocol) and the automation bridge, where clients parse it as a
+    // version token.
+    QString versionLabel;
     QString nickname;
     QString callsign;
     QHostAddress address;

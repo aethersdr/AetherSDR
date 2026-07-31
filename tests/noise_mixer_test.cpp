@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <map>
 
 using AetherSDR::NoiseMixer;
 using Channel = NoiseMixer::Channel;
@@ -171,6 +172,67 @@ void testNoiseBlankerKnocksDownImpulses()
     report("noise blanker knocks down impulse peaks", on < off * 0.6);
 }
 
+// The CW channel must key REAL Morse (the voice channel's analogue: genuine
+// content a decoder can read). This test does NOT mirror genCw's schedule —
+// it envelope-detects the audio, classifies mark/space runs by duration, and
+// decodes them through its own independent Morse table. It fails on the old
+// gap-less keying (one fused 9-dit tone) and passes only if the audio reads
+// the intended id — repeating "L" with word gaps between repeats.
+void testCwKeysDecodableMorse()
+{
+    NoiseMixer mx;
+    mx.setEnabled(Channel::Cw, true);
+
+    // ~20 s of audio (>2 full message cycles), envelope in 1 ms blocks.
+    QVector<float> audio;
+    for (int f = 0; f < 3750; ++f) audio += mx.mixFrame();
+    const int blk = NoiseMixer::kSampleRate / 1000;
+    QVector<double> env;
+    for (int i = 0; i + blk <= audio.size(); i += blk) {
+        double acc = 0.0;
+        for (int j = 0; j < blk; ++j) acc += static_cast<double>(audio[i + j]) * audio[i + j];
+        env.append(std::sqrt(acc / blk));
+    }
+    double emax = 0.0;
+    for (double e : env) emax = std::max(emax, e);
+    const double thresh = emax * 0.5;
+
+    // Mark/space run lengths in ms.
+    struct Run { bool on; int ms; };
+    QVector<Run> runs;
+    for (double e : env) {
+        const bool on = e > thresh;
+        if (!runs.isEmpty() && runs.last().on == on) ++runs.last().ms;
+        else runs.append({on, 1});
+    }
+    if (runs.size() > 2) { runs.removeFirst(); runs.removeLast(); }  // partial edges
+
+    // Independent decode: dit at 18 WPM = 66.7 ms; mark <2 dits = dit; space
+    // >=5 dits = word gap, >=2 = char gap.
+    const double dit = 1200.0 / 18.0;
+    QString text, sym;
+    auto flush = [&](bool word) {
+        static const std::map<QString, QChar> kMorse = {
+            {".-", 'A'}, {"-.-.", 'C'}, {"-..", 'D'}, {".", 'E'},
+            {"....", 'H'}, {".-..", 'L'}, {"--.-", 'Q'}, {".-.", 'R'},
+            {"-", 'T'}};
+        if (!sym.isEmpty()) {
+            const auto it = kMorse.find(sym);
+            text += (it != kMorse.end()) ? it->second : QChar('?');
+            sym.clear();
+        }
+        if (word && !text.isEmpty() && !text.endsWith(' ')) text += ' ';
+    };
+    for (const Run& r : runs) {
+        if (r.on) sym += (r.ms < 2.0 * dit) ? '.' : '-';
+        else if (r.ms >= 5.0 * dit) flush(true);
+        else if (r.ms >= 2.0 * dit) flush(false);
+    }
+    flush(false);
+    report("cw channel decodes as repeating \"L\" id",
+           text.contains(QStringLiteral("L L L")));
+}
+
 void testLevelScalesNoiseHeight()
 {
     auto top = [](double lvl) {
@@ -197,6 +259,7 @@ int main(int argc, char** argv)
     testLevelScalesNoiseHeight();
     testNoiseBlankerKnocksDownImpulses();
     testVoiceChannelSafeWithoutClip();
+    testCwKeysDecodableMorse();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES ABOVE");
     return g_failed == 0 ? 0 : 1;
 }

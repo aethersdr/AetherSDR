@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <functional>
+#include <memory>
 #include <QHash>
 #include <QWidget>
 #include <QPushButton>
@@ -739,6 +740,9 @@ signals:
     // Emitted when the user adjusts the dBm scale (drag or arrows).
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
     void dbmRangeDragFinished(float minDbm, float maxDbm);
+    // The radio FFT encoder is pinned to its lower endpoint. Request more
+    // radio-side headroom without moving the client-side 3D presentation.
+    void radioDbmHeadroomRecoveryRequested(float headroomDb);
     void noiseFloorPositionResolved(int pos);
     void dssFloorDepthResolved(int dB);
     void waterfallLineDurationChangeRequested(int ms);
@@ -912,18 +916,51 @@ private:
     void schedulePanDragSettleUpdate();
     void scheduleFrequencyRangeSettleUpdate(double centerMhz, double bandwidthMhz);
     void finishFrequencyRangeSettleUpdate();
+    // Deep-copies its DssRenderer on copy but stays a cheap pointer move on
+    // move, so WaterfallStreamState keeps the value semantics QHash's
+    // copy-on-write detach expects: relocating entries on rehash never
+    // aliases two profile states onto one DssRenderer the way a bare
+    // shared_ptr<DssRenderer> would. Const accessors also restore the const
+    // propagation a raw shared_ptr member loses through
+    // `const WaterfallStreamState&`.
+    class DeepCopyDssPtr {
+    public:
+        DeepCopyDssPtr() : m_ptr(std::make_shared<DssRenderer>()) {}
+        DeepCopyDssPtr(const DeepCopyDssPtr& other)
+            : m_ptr(std::make_shared<DssRenderer>(*other.m_ptr)) {}
+        DeepCopyDssPtr(DeepCopyDssPtr&&) noexcept = default;
+        DeepCopyDssPtr& operator=(const DeepCopyDssPtr& other) {
+            m_ptr = std::make_shared<DssRenderer>(*other.m_ptr);
+            return *this;
+        }
+        DeepCopyDssPtr& operator=(DeepCopyDssPtr&&) noexcept = default;
+
+        DssRenderer& operator*() { return *m_ptr; }
+        const DssRenderer& operator*() const { return *m_ptr; }
+        DssRenderer* operator->() { return m_ptr.get(); }
+        const DssRenderer* operator->() const { return m_ptr.get(); }
+
+    private:
+        std::shared_ptr<DssRenderer> m_ptr;
+    };
     struct WaterfallStreamState {
         QImage waterfall;
+        QImage waterfallSupplemental;
         int wfWriteRow{0};
         QVector<double> visibleRowCenterMhz;
         QVector<double> visibleRowBwMhz;
+        QVector<double> visibleSupplementalCenterMhz;
+        QVector<double> visibleSupplementalBwMhz;
         WaterfallHistoryBuffer waterfallHistory;
+        WaterfallHistoryBuffer waterfallSupplementalHistory;
         QVector<qint64> historyTimestamps;
         int historyWriteRow{0};
         int historyRowCount{0};
         int historyOffsetRows{0};
         QVector<double> historyRowCenterMhz;
         QVector<double> historyRowBwMhz;
+        QVector<double> historySupplementalCenterMhz;
+        QVector<double> historySupplementalBwMhz;
         bool live{true};
         int rowsSinceRateChange{0};
         QVector<quint8> prevTileLevels;
@@ -933,7 +970,21 @@ private:
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
-        DssRenderer dss;
+        // Heap-indirected (#4595): DssRenderer embeds four fixed-size
+        // std::array<std::array<...>> row buffers (~800KB total). Storing it
+        // by value here meant every stack-local WaterfallStreamState — e.g.
+        // restoreCurrentWaterfallStreamState()'s `restored` / `updated` —
+        // materialized a full ~800KB copy on the stack just to move-construct
+        // it, which could exhaust a thread's stack on its own. DeepCopyDssPtr
+        // (not a bare shared_ptr) because m_kiwiProfileWaterfallStates is a
+        // QHash<QString, WaterfallStreamState>, and QHash's internal
+        // rehash/detach needs the value type to stay copy-constructible; every
+        // real use in this file is std::move(), so the only implicit copy is
+        // QHash relocating entries on rehash, which now deep-copies the
+        // renderer exactly as a by-value DssRenderer member would have —
+        // no aliasing between profile states. Always non-null: default-
+        // constructed here and on every reset via `= WaterfallStreamState{}`.
+        DeepCopyDssPtr dss;
         float kiwiDisplayFloorDbm{-110.0f};
         float kiwiDisplayCeilDbm{-10.0f};
         bool kiwiDisplayRangeValid{false};
@@ -950,6 +1001,9 @@ private:
         quint64 dssMeshRowGenUploaded{~0ull};
 #endif
     };
+    // #4595: this type is materialized as a stack local by save/restore; keep
+    // large fixed buffers behind indirection so this can't silently regress.
+    static_assert(sizeof(WaterfallStreamState) < 16 * 1024);
     void clearCurrentWaterfallRows();
     void resetKiwiSdrWaterfallDisplayRange();
     void resetCurrentWaterfallRowsForSize(const QSize& waterfallSize,
@@ -961,20 +1015,36 @@ private:
     const WaterfallStreamState* activeKiwiWaterfallStateConst() const;
     bool beginWaterfallStreamWrite(bool kiwiStream);
     void endWaterfallStreamWrite(bool kiwiStream, bool visibleStream);
-    void appendHistoryRow(const quint8* intensityData, qint64 timestampMs,
-                          double frameCenterMhz = -1.0,
-                          double frameBandwidthMhz = -1.0);
+    void appendHistoryRow(
+        const quint8* intensityData,
+        qint64 timestampMs,
+        double frameCenterMhz = -1.0,
+        double frameBandwidthMhz = -1.0,
+        const quint8* supplementalIntensityData = nullptr,
+        double supplementalCenterMhz = -1.0,
+        double supplementalBandwidthMhz = -1.0);
     void appendDssHistoryRow(const QVector<float>& binsDbm,
                              double frameCenterMhz = -1.0,
                              double frameBandwidthMhz = -1.0);
     void appendDssWaterfallRow(const QVector<float>& binsDbm,
                                double frameCenterMhz = -1.0,
                                double frameBandwidthMhz = -1.0,
-                               bool updateLiveSurface = true);
+                               bool updateLiveSurface = true,
+                               const QVector<float>& supplementalBinsDbm = {},
+                               double supplementalCenterMhz = -1.0,
+                               double supplementalBandwidthMhz = -1.0);
     void appendLatestDssWaterfallRow(double frameCenterMhz = -1.0,
                                      double frameBandwidthMhz = -1.0);
+    QVector<float> buildNativeDssSupplementalRow(
+        const QVector<float>& tileIntensity,
+        double tileLowMhz,
+        double tileHighMhz) const;
     void pushDssLiveRow(DssRenderer& dss, const QVector<float>& binsDbm,
-                        bool hiddenStream);
+                        bool hiddenStream, double frameCenterMhz,
+                        double frameBandwidthMhz,
+                        const QVector<float>& supplementalBinsDbm = {},
+                        double supplementalCenterMhz = -1.0,
+                        double supplementalBandwidthMhz = -1.0);
     void retainDssHistoryRow(DssRenderer& dss, const QVector<float>& binsDbm,
                              double centerMhz, double bandwidthMhz,
                              float fallbackDbm);
@@ -990,10 +1060,14 @@ private:
     // startScrollAnimation: begin the one-row scroll interpolation. Multi-row
     // callers (updateWaterfallRow) pass false and issue a single start() for the
     // whole tile instead of restarting the clock once per appended row.
-    void appendVisibleRow(const QRgb* rowData,
-                          double frameCenterMhz = -1.0,
-                          double frameBandwidthMhz = -1.0,
-                          bool startScrollAnimation = true);
+    void appendVisibleRow(
+        const QRgb* rowData,
+        double frameCenterMhz = -1.0,
+        double frameBandwidthMhz = -1.0,
+        bool startScrollAnimation = true,
+        const QRgb* supplementalRowData = nullptr,
+        double supplementalCenterMhz = -1.0,
+        double supplementalBandwidthMhz = -1.0);
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
@@ -1041,6 +1115,8 @@ private:
     void armNoiseFloorFastLock(int freshFrames, int snapFrames);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
+    bool flexInputFloorLooksClipped() const;
+    bool requestFlexRadioHeadroom(qint64 nowMs);
     void beginDbmRangeTransition(float oldMinDbm, float oldMaxDbm,
                                  float newMinDbm, float newMaxDbm);
     void clearDbmReleaseRebase();
@@ -1330,6 +1406,7 @@ private:
     // ~100-300 ms to switch bandwidth; frames before this still carry the
     // pre-zoom encoding.
     qint64 m_dssZoomFloorSyncNotBeforeMs{0};
+    qint64 m_lastDssRadioHeadroomRequestMs{0};
     // The radio can briefly deliver FFT packets encoded with the old y_pixels
     // after acknowledging a new height. Keep those rows out of retained 3D
     // history; the live 2D trace and waterfall continue normally.
@@ -1353,6 +1430,10 @@ private:
 
     // Scrolling waterfall image (Format_RGB32)
     QImage m_waterfall;
+    // Same ring topology as m_waterfall. Native FLEX tiles are rasterized over
+    // their full (wider) frequency frame here; the primary viewport row wins
+    // wherever it has coverage.
+    QImage m_waterfallSupplemental;
     int    m_wfWriteRow{0};  // ring buffer: next row to write (newest at top)
     // A received row appears immediately, then the viewport advances it by one
     // row over the observed row interval. This changes display position only;
@@ -1365,7 +1446,10 @@ private:
     // flattening the entire live texture into one pan/zoom frame.
     QVector<double> m_wfVisibleRowCenterMhz;
     QVector<double> m_wfVisibleRowBwMhz;
+    QVector<double> m_wfVisibleSupplementalCenterMhz;
+    QVector<double> m_wfVisibleSupplementalBwMhz;
     WaterfallHistoryBuffer m_waterfallHistory;
+    WaterfallHistoryBuffer m_waterfallSupplementalHistory;
     QTimer* m_resizeBufferSettleTimer{nullptr};
     quint64 m_resizeEventCount{0};
     quint64 m_resizeBufferCommitCount{0};
@@ -1386,6 +1470,8 @@ private:
     // image. rebuildWaterfallViewport remaps and colorizes only visible rows.
     QVector<double> m_wfHistoryRowCenterMhz;
     QVector<double> m_wfHistoryRowBwMhz;
+    QVector<double> m_wfHistorySupplementalCenterMhz;
+    QVector<double> m_wfHistorySupplementalBwMhz;
     bool   m_wfLive{true};
     bool   m_draggingTimeScale{false};
     bool   m_draggingTimeScaleRate{false};
@@ -1750,7 +1836,8 @@ private:
     QRhiBuffer* m_wfVbo{nullptr};
     QRhiBuffer* m_wfUbo{nullptr};
     QRhiTexture* m_wfGpuTex{nullptr};
-    QRhiTexture* m_wfFrameTex{nullptr};     // 1 x rows RGBA32F: center offset + bandwidth
+    QRhiTexture* m_wfSupplementalGpuTex{nullptr};
+    QRhiTexture* m_wfFrameTex{nullptr}; // RGBA32F: primary center/bw + supplemental center/bw
     QRhiSampler* m_wfSampler{nullptr};
     QRhiSampler* m_wfFrameSampler{nullptr};
     int m_wfGpuTexW{0};
@@ -1809,21 +1896,28 @@ private:
     int m_dssTexH{0};
 
     // 3DSS GPU height-map mesh (preferred path). The DssRenderer ring store
-    // feeds a ring-buffered R16F height texture; a static perspective grid samples
-    // it in dss_mesh.vert. Geometry never rebuilds, so pan/zoom are free. Falls
-    // back to the cached-image quad above when the pipeline can't be created.
+    // feeds a ring-buffered RGBA16F dBm + frequency-coverage texture; a static
+    // perspective grid samples it in dss_mesh.vert. Geometry never rebuilds,
+    // so pan/zoom are free. Falls back to the cached-image quad above when the
+    // pipeline can't be created.
     QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // Triangles, opaque
-    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // Lines, alpha (outline)
+    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // AA ribbon triangles
     QRhiShaderResourceBindings* m_dssMeshSrb{nullptr};
     QRhiBuffer* m_dssMeshVbo{nullptr};       // batched curtain triangles, static
-    QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge line segments, static
+    QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge ribbons, static
     QRhiBuffer* m_dssMeshUbo{nullptr};       // dynamic uniforms
     // std140 UBO float count — must match dss_mesh.{vert,frag}'s U block AND the
     // ubo writer in renderGpuFrame(): five scalar vec4 groups + bgFill, eight
-    // slice band descriptors, eight slice styles, and shadow metadata.
-    static constexpr int kDssMeshUboFloats = 92;
+    // slice band descriptors, eight slice styles, shadow metadata, and one
+    // frequency-frame vec4 for every live-ring age.
+    static constexpr int kDssMeshUboFloats =
+        92 + DssRenderer::kRows * 4;
+    static_assert(
+        DssRenderer::kRows == 104,
+        "dss_mesh.{vert,frag} declare rowFrames[104] and clamp frame ages "
+        "at 103; update both shaders with DssRenderer::kRows");
     static constexpr int kDssMeshShadowSlices = 8;
-    QRhiTexture* m_dssHeightTex{nullptr};    // R16F ring heightmap (cols x rows)
+    QRhiTexture* m_dssHeightTex{nullptr};    // RGBA16F dBm + coverage ring
     QRhiTexture* m_dssPaletteTex{nullptr};   // 256x1 RGBA8 floor->peak LUT
     QRhiSampler* m_dssHeightSampler{nullptr};
     QRhiSampler* m_dssPaletteSampler{nullptr};

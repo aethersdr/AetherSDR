@@ -2,6 +2,9 @@
 
 #include "core/RadioDiscovery.h"   // RadioInfo
 
+#include <array>
+#include <cstdint>
+
 #include <QHash>
 #include <QHostAddress>
 #include <QObject>
@@ -40,16 +43,34 @@ public:
 
     [[nodiscard]] bool isRunning() const noexcept;
 
+    // Canonical "AA:BB:CC:DD:EE:FF" rendering of a discovery reply's MAC, which
+    // IS RadioInfo::serial for this family. Shared so a directed (unicast)
+    // probe — ConnectionPanel's connect-by-IP path — produces byte-identical
+    // identity to a broadcast sweep. They must agree: the serial is the
+    // auto-reconnect key and the client-side nickname key.
+    static QString macToSerial(const std::array<std::uint8_t, 6>& mac);
+
     // AppSettings key for a user-assigned nickname for the HL2 with this serial
     // (the MAC string). An HL2 has no on-radio name store (unlike Flex's
     // "radio name" command), so the operator's custom name is persisted
     // client-side, keyed by the radio's stable MAC, and read back here at
     // discovery time. Shared with RadioSetupDialog so both sides agree on the key.
+    // LEGACY key builder — kept only for the one-shot migration below and its
+    // regression test. New storage is the (family, serial, "Identity") feature
+    // document in radio_settings (RFC #4603 PR 3), where the raw MAC is a
+    // legal identity and no sanitizing is needed.
     static QString nicknameSettingsKey(const QString& serial);
-    // The nickname to show for this serial: the saved custom name, or a default
-    // when none is set. Centralises the "custom or fall back" rule.
-    static QString effectiveNickname(const QString& serial,
+    // The nickname to show for this radio: the saved custom name, or a default
+    // when none is set. Centralises the "custom or fall back" rule, and
+    // performs the one-shot legacy-flat-key -> feature-document migration.
+    // `family` is the radio's family string (empty is normalized to "hl2",
+    // the only family that ever produced legacy keys).
+    static QString effectiveNickname(const QString& family, const QString& serial,
                                      const QString& fallback);
+    // Store (or clear, with an empty name) the client-side nickname.
+    static void setNickname(const QString& family, const QString& serial,
+                            const QString& name);
+    static bool hasCustomNickname(const QString& family, const QString& serial);
     // True when this radio stores its own name (FlexRadio's "radio name"
     // command), so the client must NOT keep a second copy. False for every
     // family without an on-radio store — HL2, the sim, any future backend —

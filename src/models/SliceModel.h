@@ -126,11 +126,27 @@ public:
     int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveSquelchLevel
                                               : m_squelchLevel; }
+    // Last manual-mode threshold the operator chose for THIS slice,
+    // independent of squelchLevel() (which Auto mode also overwrites with
+    // its own computed threshold each update). RxApplet restores Manual
+    // mode's slider from this when it reattaches to a slice, so switching
+    // the active slice doesn't pull in another slice's threshold (#3326).
+    int     manualSquelchLevel() const { return m_manualSquelchLevel; }
+    void    setManualSquelchLevel(int level) { m_manualSquelchLevel = qBound(0, level, 100); }
     bool    ritOn()       const { return m_ritOn; }
     int     ritFreq()     const { return m_ritFreq; }
     bool    xitOn()       const { return m_xitOn; }
     int     xitFreq()     const { return m_xitFreq; }
     int     stepHz()      const { return m_stepHz; }
+    // HOST-BANK MEMORY RECALL ONLY — do not call this on a radio that owns its
+    // slots. Step size is radio-authoritative (AGENTS.md, Principle II): on a
+    // Flex it arrives as `slice` status and the client must never assert it, or
+    // the two fight on reconnect. On a backend with no command plane there is no
+    // radio opinion to defer to, the host bank owns the channel, and a recalled
+    // step would otherwise never take because the wire command that normally
+    // round-trips it is dropped. Named for its one caller so the exception stays
+    // visible; see RadioModel::recallLocalMemory().
+    void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
     int     rttyMark()        const { return m_rttyMark; }
@@ -289,6 +305,27 @@ signals:
     // setAgcThreshold(), and always carries BOTH values because a backend
     // configuring a DSP AGC needs the pair to act on either.
     void agcCommandIssued(const QString& mode, int thresholdDb);
+    // Operator-issued per-slice AUDIO changes, same discipline as the three
+    // above: audioMuteChanged/audioGainChanged/audioPanChanged also fire when
+    // radio status is applied, so driving a command off those would echo the
+    // radio's own state back as a request (Principle II).
+    //
+    // These exist because a Flex mixes its slices ON THE RADIO and these
+    // controls are wire commands to it, while a host-mixing backend (HL2)
+    // demodulates every receiver here and has to apply them in its own mixer.
+    // Without them the operator's mute moved the model and the fader, and the
+    // audio kept playing.
+    void audioMuteCommandIssued(bool mute);
+    void audioGainCommandIssued(int gainPercent);
+    void audioPanCommandIssued(int panPercent);      // 0=left, 50=centre, 100=right
+    // Operator asked for THIS slice to own transmit. A radio with one
+    // transmitter and several receivers has to move it rather than set a flag.
+    void txSliceCommandIssued();
+    // Operator selected THIS slice as the one the shared controls act on.
+    // Separate from activeChanged, which also fires when radio status is
+    // applied — driving a command off that would echo the radio's own state
+    // back as a request (Principle II).
+    void activeSliceCommandIssued();
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
     void filterChanged(int low, int high);
@@ -466,6 +503,7 @@ private:
     int     m_agcOffLevel{10};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
+    int     m_manualSquelchLevel{20};
     int     m_stepHz{100};
     QVector<int> m_stepList;
     bool    m_ritOn{false};

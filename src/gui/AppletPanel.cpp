@@ -557,7 +557,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
             const QString visible = buttonText.isEmpty() ? id : buttonText;
             btn = new QPushButton(visible, m_drawer);
             btn->setCheckable(true);
-            registerBarButton(id, visible, label, btn);
+            registerBarButton(id, visible, label, btn, defaultOn);
         }
 
         const QString key = QStringLiteral("Applet_%1").arg(id);
@@ -1213,6 +1213,28 @@ void AppletPanel::setAppletVisible(const QString& id, bool visible)
     for (const auto& entry : m_appletOrder) {
         if (entry.id != id) continue;
         if (auto* c = qobject_cast<ContainerWidget*>(entry.widget)) {
+            // A POPPED-OUT TILE HIDES ITS WINDOW, NOT ITS CONTENT.
+            //
+            // The bar-button toggled handler already special-cases this; this
+            // path did not, and the asymmetry left a floating applet broken for
+            // good. Hiding via setContainerVisible(false) hid the ContainerWidget
+            // INSIDE a still-open FloatingContainerWindow, and the re-enable path
+            // goes back through the toggled handler, which takes its floating
+            // branch and calls window()->setVisible(true) — never
+            // setContainerVisible(true). So the window came back empty and stayed
+            // that way. (#4508 review.)
+            if (c->isFloating()) {
+                if (auto* w = c->window())
+                    w->setVisible(visible);
+                // Keep the container itself shown: it is the window's content,
+                // and the window is what visibility means for a floating tile.
+                c->setContainerVisible(true);
+                if (entry.btn) {
+                    QSignalBlocker b(entry.btn);
+                    entry.btn->setChecked(visible);
+                }
+                return;
+            }
             c->setContainerVisible(visible);
         } else if (entry.widget) {
             entry.widget->setVisible(visible);
@@ -1372,8 +1394,21 @@ void AppletPanel::updateHardwareAvailability(const QString& id,
                 m_buttonOrder.append(id);
                 saveButtonLayout();
             }
+            // Default to THIS applet's own default when Applet_<id> is unset,
+            // not to a blanket "True".
+            //
+            // Applet construction reads the key with the right per-applet
+            // default but never WRITES it — only the toggle handlers do — so for
+            // an operator who has never opened PROF, DAX or IQ the key is
+            // absent. Defaulting that to on, and then calling setChecked(true)
+            // UNBLOCKED (unlike the else branch below, which blocks), fired
+            // toggled, opened all three tiles on the first connect, and
+            // persisted "True". EQ escaped only because its default is already
+            // on, which is why this went unnoticed. (#4508 review.)
             const bool savedOn =
-                AppSettings::instance().value(appletKey, "True").toString() == "True";
+                AppSettings::instance()
+                    .value(appletKey, bb.defaultOn ? "True" : "False")
+                    .toString() == "True";
             if (savedOn && !bb.btn->isChecked()) bb.btn->setChecked(true);
         } else {
             // Preserve the saved checked state (so a later reconnect
@@ -1386,6 +1421,77 @@ void AppletPanel::updateHardwareAvailability(const QString& id,
         }
         return;
     }
+}
+
+void AppletPanel::applyCapabilityVisibility(const QString& id,
+                                            const QString& appletKey,
+                                            bool available)
+{
+    // updateHardwareAvailability() alone is not enough for a capability-driven
+    // applet. It unchecks the bar button with the signal BLOCKED — deliberately,
+    // so Applet_<id> keeps the operator's preference for the next reconnect —
+    // and the blocked signal means the toggled handler never runs and the
+    // container the button owns is never hidden. For TUN/AMP that gap is
+    // invisible because those applets default closed and their hardware rarely
+    // disappears mid-session. For PROF and DAX, which the operator routinely has
+    // open, the tile would stay on screen after its button vanished.
+    //
+    // So hide the container explicitly. That fires
+    // ContainerWidget::visibilityChanged, whose handler persists
+    // Applet_<id>=False — which would erase the very preference the blocked
+    // signal exists to protect. Capture the stored value first and put it back.
+    auto& s = AppSettings::instance();
+    const bool hadKey = s.contains(appletKey);
+    const QVariant saved = hadKey ? s.value(appletKey) : QVariant{};
+
+    updateHardwareAvailability(id, appletKey, available);
+    if (!available) {
+        setAppletVisible(id, false);
+        if (hadKey) {
+            s.setValue(appletKey, saved);
+        } else {
+            // No stored preference before this call, so leave none behind: a
+            // fabricated "False" would read as an explicit operator choice and
+            // keep the applet closed after reconnecting to a radio that has it.
+            s.remove(appletKey);
+        }
+        s.save();
+    }
+    applyBarLayout();
+}
+
+void AppletPanel::setProfilesVisible(bool visible)
+{
+    applyCapabilityVisibility(QStringLiteral("PROF"),
+                              QStringLiteral("Applet_PROF"), visible);
+}
+
+void AppletPanel::setDaxStreamsVisible(bool visible)
+{
+    // Both tiles are the same capability: "DAX" is per-slice receive audio,
+    // "IQ" is per-panadapter IQ, and a radio produces both stream kinds or
+    // neither.
+    applyCapabilityVisibility(QStringLiteral("DAX"),
+                              QStringLiteral("Applet_DAX"), visible);
+    applyCapabilityVisibility(QStringLiteral("IQ"),
+                              QStringLiteral("Applet_IQ"), visible);
+    // The AetherClock applet is NOT a DAX tile — it stays visible on every
+    // radio — but its DAX chooser and no-DAX banner are the same capability.
+    // Forwarded directly rather than through applyCapabilityVisibility, which
+    // persists an Applet_* preference and hides a whole tile.
+    if (m_aetherClockApplet)
+        m_aetherClockApplet->setDaxControlsVisible(visible);
+}
+
+void AppletPanel::setHardwareEqVisible(bool visible)
+{
+    // Note this applet defaults OPEN (makeEntry's defaultOn=true), unlike PROF
+    // and DAX. That makes the preference round-trip in
+    // applyCapabilityVisibility() load-bearing rather than merely tidy: hiding
+    // the container would otherwise persist Applet_EQ=False, and the operator
+    // would reconnect a Flex to find the EQ closed for the first time ever.
+    applyCapabilityVisibility(QStringLiteral("EQ"),
+                              QStringLiteral("Applet_EQ"), visible);
 }
 
 void AppletPanel::setTunerVisible(bool visible)
@@ -1566,7 +1672,8 @@ void AppletPanel::setScrollHandleActive(bool active)
 // ── Button-bar (active + drawer + hidden) ──────────────────────────────────
 
 void AppletPanel::registerBarButton(const QString& id, const QString& label,
-                                    const QString& tooltip, QPushButton* btn)
+                                    const QString& tooltip, QPushButton* btn,
+                                    bool defaultOn)
 {
     if (!btn) return;
     btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -1574,7 +1681,8 @@ void AppletPanel::registerBarButton(const QString& id, const QString& label,
     btn->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(btn, &QWidget::customContextMenuRequested, this,
             [this](const QPoint&) { openFavoritesPicker(); });
-    m_barButtons.append(BarButton{id, label, tooltip, btn, /*hardwareAvailable=*/true});
+    m_barButtons.append(BarButton{id, label, tooltip, btn,
+                                  /*hardwareAvailable=*/true, defaultOn});
 }
 
 QStringList AppletPanel::defaultButtonOrder() const

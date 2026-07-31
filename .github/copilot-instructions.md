@@ -26,6 +26,8 @@ priority must-knows that fit in Copilot's chat context window.
 4. **Use `AppSettings`, NOT `QSettings`.** Persist as **nested JSON
    under one root key** per feature (Principle V). Example: a feature
    stores `{"enabled": true, "mode": "auto"}` under `AppSettings["MyFeature"]`,
+   backed by the SQLite store (RFC #4603). Credentials go to QtKeychain,
+   never the settings store.
    not `MyFeatureEnabled` + `MyFeatureMode` as flat keys.
 
 5. **All meter UI uses `MeterSmoother`** (AGENTS.md convention). Do not

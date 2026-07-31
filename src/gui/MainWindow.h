@@ -15,10 +15,12 @@
 #include "models/SliceLinkPolicy.h"
 #include "core/AppSettings.h"
 #include "core/AetherDspModePolicy.h"
+#include "core/KiwiSdrTxMutePolicy.h"  // optimistic-unkey Kiwi mute latch
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
@@ -88,6 +90,7 @@
 
 class QAbstractSlider;
 class QMediaDevices;
+class QPushButton;
 class QShowEvent;
 class QSystemTrayIcon;
 
@@ -98,6 +101,8 @@ class QSystemTrayIcon;
 
 namespace AetherSDR {
 
+enum class RadioSliceSelectionSource;
+
 class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
@@ -107,6 +112,7 @@ class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
 class SpectrumWidget;
+class SpectrumOverlayMenu;
 class IRadioBackend;
 class PanadapterApplet;
 class PanadapterStack;
@@ -343,6 +349,43 @@ private:
                                            bool resetOutput,
                                            bool reinitializePcInput);
     SliceModel* activeSlice() const;
+
+    // Push the connected backend's reported tuning range into one overlay
+    // menu's band panel, so bands the radio cannot reach are disabled rather
+    // than tuning it somewhere it hears nothing. A backend that reports no
+    // range leaves every band enabled (the Flex behaviour).
+    void applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const;
+
+    // The one place a declared RadioCapabilities flag turns into UI visibility.
+    //
+    // Bound to RadioModel::capabilitiesChanged, so it runs on every connect and
+    // disconnect edge and on any mid-session revision. Each surface gets exactly
+    // one owning call here rather than its own connect-time lambda: with several
+    // flags in play, scattered lambdas are how two callers end up both driving
+    // one widget's setVisible() and whichever fires last wins.
+    //
+    // Every flag reads `!connected || caps.x`. With no radio attached there is
+    // nothing to be honest about, and a control that stays hidden after
+    // unplugging reads as a fault rather than as an accurate report.
+    void applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps);
+
+    // Push radio-side-DSP availability into one overlay menu's WNB row. Separate
+    // from applyCapabilitiesToUi() because overlay menus are also built lazily
+    // as pans appear, and those sites must seed a new menu with the current
+    // value — the same reason applyTuningRangeToOverlayMenu() exists.
+    void applyRadioSideDspToOverlayMenu(SpectrumOverlayMenu* menu) const;
+
+    // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
+    //
+    // RF gain is the one "display" setting that is really a hardware register,
+    // and its range is family-specific: a Flex's is -8..+32 in 8 dB steps, the
+    // HL2's AD9866 LNA is -12..+48 in 1 dB steps. Sharing one key meant a value
+    // last set on a Flex was restored onto an HL2 as an LNA gain the operator
+    // never chose for that radio — harmless while the HL2 ignored it, real now
+    // that the slider reaches the register.
+    //
+    // Flex keeps the unsuffixed key so existing settings survive untouched.
+    QString rfGainSettingsKey(SpectrumWidget* sw) const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
     BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,
@@ -366,6 +409,11 @@ private:
                                                 TuneIntent intent, const char* source,
                                                 double leftFlagEdgeOffsetMhz = 0.0,
                                                 double rightFlagEdgeOffsetMhz = 0.0);
+    // Write step for revealFrequencyIfNeeded's recenters: flex-display pans
+    // write through radio+model, kiwi-display pans recenter the widget alone
+    // (their radio geometry is frozen) — see PanRecenterPolicy.h.
+    void applyTuneCenteringWrite(PanadapterModel* pan, SpectrumWidget* sw,
+                                 double newCenterMhz);
     void logTunePolicyDecision(const char* source, TuneIntent intent,
                                double oldFreqMhz, double newFreqMhz,
                                const TuneCenteringResult& result) const;
@@ -378,6 +426,9 @@ private:
     SpectrumWidget* spectrum() const;
     void setActiveSlice(int sliceId);
     void setActiveSliceInternal(int sliceId, bool revealOffscreen);
+    void selectSliceFromRadioState(
+        SliceModel* slice,
+        RadioSliceSelectionSource source);
     void queueActiveSliceForSpectrumTarget(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
@@ -404,12 +455,19 @@ private:
     // Every stream-bound sink lives in one of these; a new one added here is
     // automatically re-bound after a Flex->HL2->Flex swap.
     void wirePanStreamRxAudioSinks();         // MainWindow_Session.cpp
+    void wireRxDemodAudioSinks();             // MainWindow_Session.cpp
     // True when the connected backend supplies RX audio over the IRadioBackend
     // seam rather than through PanadapterStream — i.e. the demo (RFC #4288
     // Route A), which is the one backend that owns BOTH. Every site that wires
     // PanadapterStream::audioDataReady → AudioEngine::feedAudioData must consult
     // this, or the two sources sum at the sink (wobble + distortion).
-    bool backendOwnsRxAudio();                // MainWindow_Session.cpp
+    bool backendFeedsEngineDirectly();        // MainWindow_Session.cpp
+    // Live RX is muted while the QSO recorder or the PUDU monitor plays audio
+    // back through the same sink. The Flex path achieves that by disconnecting
+    // PanadapterStream::audioDataReady; a seam backend has no such connection
+    // to drop, so its relay consults this instead. See the muteRxRequested
+    // handlers in MainWindow.cpp. (PR #4537 review.)
+    bool m_rxMutedForPlayback{false};
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
@@ -427,6 +485,7 @@ private:
     void restoreKiwiSdrSliceMute();
     bool kiwiSdrTransmitMuteRequired() const;
     void syncKiwiSdrTransmitMute();
+    void refreshKiwiSdrVirtualAudioControls();
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     // Worker for the above. selectSlice=false suppresses the active-slice steal
     // for automatic re-arms (band-recall finish, #4158 recreation re-bind).
@@ -438,7 +497,8 @@ private:
     bool finishPreparedKiwiSdrBandRecallForSlice(SliceModel* slice);
     void finishPreparedKiwiSdrBandRecallForPan(const QString& panId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
-    void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
+    void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice,
+                                                   bool includeEnable = true);
     void updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice);
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
@@ -527,6 +587,17 @@ private:
                                         const QString& profileId);
     void syncKiwiSdrDiversityEscControls();
     void syncKiwiSdrPanadapterUiState(const QString& panId);
+    // One-shot radio-geometry adoption of the widget's view when a pan stops
+    // displaying a kiwi source (the radio pan stayed frozen while recenters
+    // were widget-local — see PanRecenterPolicy.h).
+    void reconcileFlexPanGeometryAfterKiwiDisplay(const QString& panId,
+                                                  SpectrumWidget* spectrum);
+    // Re-run a leave-kiwi reconcile that deferred because a gesture was live at
+    // the toggle. Called when a gesture settles, so the pan doesn't stay on the
+    // frozen kiwi-assignment span until an unrelated gesture happens to correct
+    // it.
+    void retryDeferredKiwiLeaveReconcile(const QString& panId);
+    void retryAllDeferredKiwiLeaveReconcile();
     void syncKiwiSdrPanadapterUiStates();
     enum KiwiSdrUiSyncFlag {
         KiwiSdrUiSyncAppletReceivers = 0x01,
@@ -709,6 +780,16 @@ private:
     void showMultiFlexDialog();
     void handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName);
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
+    // Startup/reconnect autoconnect: called for every discovered radio, from EVERY
+    // discovery source (Flex RadioDiscovery *and* hl2::Hl2Discovery). Connects when
+    // the radio is the saved LastConnectedRadioSerial and the operator has left
+    // "AutoConnectToLastRadio" on. Family-agnostic on purpose — wiring it to one
+    // discovery object only is what left HL2 owners hand-picking their radio at
+    // every launch.
+    void maybeAutoConnectToDiscoveredRadio(const RadioInfo& info);
+    // Settle the bookkeeping for an auto-connect that has reached a terminal
+    // state. A no-op when the connect in question was a manual one.
+    void noteAutoConnectFinished(bool ok);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
     bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
@@ -1057,6 +1138,8 @@ private:
     bool             m_kiwiSdrAudioMuteApplied{false};
     bool             m_kiwiSdrAudioMuteChanging{false};
     bool             m_kiwiSdrAudioTransmitMuted{false};
+    AetherSDR::KiwiSdrTxMuteLatch m_kiwiSdrTxMuteLatch;
+    AetherSDR::KiwiSdrTxMaskWatchdog m_kiwiSdrTxMaskWatchdog;
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
     struct KiwiSdrBandRecallPreparation {
@@ -1079,6 +1162,15 @@ private:
     QHash<QString, quint64> m_bandRecallGenerationByPan;
     quint64              m_bandRecallGeneration{0};
     static constexpr int kBandRecallRecreateGraceMs = 1500;
+    // Upper bound on the extended slice-selection window. The base window is
+    // the grace period above; reconstruction evidence pushes it out, but never
+    // past this, so a chatty session can't hold selection suppressed.
+    static constexpr int kBandRecallSelectionGuardMaxMs = 4000;
+    // When radio-driven active-slice selection is synchronization-only. Not
+    // m_bandRecallGenerationByPan: this window must not open when the band
+    // write is dropped, and must outlast a slow rebuild. See the header.
+    BandRecallSelectionGuard m_bandRecallSelection{
+        kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1154,6 +1246,15 @@ private:
     // Menus
     QMenu*           m_profilesMenu{nullptr};
     QAction*         m_txBandAction{nullptr};
+    // Settings ▸ "Autostart DAX with AetherSDR". Held so
+    // applyCapabilitiesToUi() can hide it on a radio with no DAX streams.
+    // Null on platforms without a DAX bridge, where the entry is never created.
+    QAction*         m_autoDaxAction{nullptr};
+    // File ▸ Waveforms... and Settings ▸ multiFLEX... — held so
+    // applyCapabilitiesToUi() can hide them on a radio with no installable
+    // waveforms / no multi-client sessions.
+    QAction*         m_waveformsAction{nullptr};
+    QAction*         m_multiFlexAction{nullptr};
 
     // Audio stream re-creation flag (after profile load)
     bool             m_needAudioStream{false};
@@ -1195,6 +1296,13 @@ private:
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;
+    // GPS/station-location status-bar button and the separator that follows it.
+    // Both are held so applyCapabilitiesToUi() can hide them together on a radio
+    // with no position source — hiding the button alone would leave its " · "
+    // divider stranded between the neighbours (same reason m_tgxlSeparator is
+    // held below).
+    QPushButton* m_gpsStatusButton{nullptr};
+    QLabel*  m_gpsSeparator{nullptr};
     QLabel*  m_tgxlSeparator{nullptr};
     QWidget* m_tgxlContainer{nullptr};
     QLabel*  m_tgxlIndicator{nullptr};   // top row: "TUN"
@@ -1220,6 +1328,13 @@ private:
     // Guard: set true while updating controls from the model so shared tune
     // helpers do not echo model-driven changes back to the radio.
     bool m_updatingFromModel{false};
+    // The slice whose optimistic activeChanged(true) edge we are inside of.
+    // SliceModel::setActive() emits that edge synchronously, before the wire
+    // write (#3854), so the activeChanged handler re-enters on our own local
+    // selection. Identifying it by slice id — rather than by "the id already
+    // equals m_activeSliceId" — keeps a genuinely radio-originated
+    // re-activation of the already-selected slice a real selection event.
+    int  m_optimisticActiveEdgeSliceId{-1};
     bool m_shuttingDown{false};
     bool m_panadapterUiPreparedForShutdown{false};
     void preparePanadapterUiForShutdown();
@@ -1229,7 +1344,18 @@ private:
     bool m_hasPaTempTelemetry{false};
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
+    // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
+    //
+    // The slot is driven by radioUpdated as well as radioDiscovered, and
+    // radioUpdated repeats. Neither of these is bookkeeping for its own sake:
+    // without the in-flight serial the slot re-enters its own handshake, and
+    // without the attempt count a radio that never completes one re-triggers it
+    // forever.
+    QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
+    QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
+    QString m_terminalConnectionError; // preserved until the next explicit connect
     QPointer<class ThemeEditorDialog> m_themeEditorDialog; // Phase 5 — lazy, modeless
     void cancelTransmitFromIndicator();
     void beginProfileLoadRadioStateWriteHold(const QString& profileType, const QString& profileName);
@@ -1379,6 +1505,7 @@ private:
     AetherClockEngine* m_clockEngine{nullptr};
     AetherClockModel* m_clockModel{nullptr};
     QMetaObject::Connection m_clockDaxConn;  // daxAudioReady feed — live only while the engine runs
+    QMetaObject::Connection m_clockSliceAudioConn;  // seam per-slice audio feed — same lifetime
     void setupAetherClock();
 
 #ifdef HAVE_RADE
@@ -1425,6 +1552,10 @@ private:
     bool m_sliceDragInProgress{false};
     int m_sliceDragTargetSliceId{-1};
     double m_sliceDragTargetMhz{0.0};
+    // Pans whose leave-kiwi geometry reconcile deferred behind a live gesture
+    // and must be retried when the gesture settles (see
+    // reconcileFlexPanGeometryAfterKiwiDisplay / retryDeferredKiwiLeaveReconcile).
+    QSet<QString> m_kiwiLeaveReconcilePending;
     qint64 m_sliceDragEchoHoldUntilMs{0};
     int centerLockSliceForPan(const QString& panId) const;
     bool centerLockActiveForSlice(const SliceModel* slice) const;

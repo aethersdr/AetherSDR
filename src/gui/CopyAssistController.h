@@ -3,6 +3,8 @@
 #include <QObject>
 #include <QString>
 
+#include <vector>
+
 namespace AetherSDR {
 
 class AudioEngine;
@@ -12,6 +14,7 @@ class PersistentDialog;
 class AsrEngine;
 class AsrModelManager;
 class AsrAudioTap;
+struct AsrGpuDevice;
 struct AsrModelTier;
 
 // Which IAsrBackend the engine is currently built around. Selects the factory in
@@ -54,8 +57,11 @@ private slots:
     void onTierChanged(const QString& tierId);
 
 private:
+    void startGpuDiscovery();
+    void applyGpuDevices(const std::vector<AsrGpuDevice>& gpus);
     void buildEngine();  // (re)create the engine+tap for the current backend
     void applyTuning();  // push saved VAD tuning into the engine
+    void requestEnable(); // defer local Whisper until async GPU discovery finishes
     void beginEnable();
     void requestModel(const QString& tierId);
     bool promptRemoteConfig();  // edit + persist the remote endpoint; true if accepted
@@ -90,6 +96,10 @@ private:
     AsrModelManager* m_speakerModels = nullptr; // manager for the speaker-embedding model
     AsrAudioTap* m_tap = nullptr;
     bool m_constructed = false; // true after the initial buildEngine (guards restore)
+    bool m_useGpuDefaultIfAvailable = false; // cleared by any explicit tier choice
+    bool m_gpuDiscoveryPending = true;
+    bool m_enableAfterGpuDiscovery = false;
+    int m_gpuDevice = 0; // resolved default or explicit setting; -1 forces CPU
     QString m_tierId;
     QString m_customModelPath; // user-picked local model (for the "Custom model…" tier)
     QString m_sherpaModelDir;  // user-picked sherpa-onnx model directory

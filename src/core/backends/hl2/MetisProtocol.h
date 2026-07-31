@@ -46,9 +46,116 @@ inline constexpr int kFullScale = (1 << 23) - 1;
 // each 512-byte frame: 7F 7F 7F | C0 C1 C2 C3 C4 | 504 payload bytes
 inline constexpr std::size_t kUsbPacketSize = 1032;
 inline constexpr std::size_t kFrameSize = 512;
-inline constexpr std::size_t kFramePayload = 504;     // 63 RX samples * 8 bytes
-inline constexpr std::size_t kRxSampleBytes = 8;      // I[3] Q[3] mic[2], 24-bit BE
-inline constexpr int kSamplesPerPacket = 126;         // 63 per frame * 2 frames
+inline constexpr std::size_t kFramePayload = 504;
+
+// ---- EP6 (radio->host) payload geometry ----
+//
+// The payload is a sequence of ROUNDS. One round carries a sample from EVERY
+// active receiver followed by a single 2-byte mic/VNA word:
+//
+//     [ I(3) Q(3) ] x numRx | mic(2)
+//
+// so a round is 6*numRx + 2 bytes and the per-packet sample count is NOT a
+// constant — it falls as receivers are added. At one receiver a round is 8
+// bytes and 504/8 divides exactly, which is why a single-RX implementation can
+// get away with treating 8 and 126 as constants. It stops being true at two.
+//
+// A round NEVER straddles a 512-byte frame: the gateware emits whole rounds
+// while at least one more fits and ZERO-PADS the remainder of the frame
+// (usopenhpsdr1.v, MIC0 -> `(byte_no[8:0] > round_bytes) ? RXDATA2 : PAD`).
+// So rounds-per-frame is a floor division and the tail bytes are not samples.
+// At numRx=4 that is 19 rounds (494 bytes) with 10 bytes of padding.
+inline constexpr std::size_t kRxIqBytes   = 6;   // 24-bit BE I + 24-bit BE Q
+inline constexpr std::size_t kRoundMicBytes = 2; // mic / VNA word closing a round
+
+// Highest receiver count this protocol layer will encode. The gateware field is
+// 4 bits (0x00[6:3], 0000=1 .. 1011=12); the shipping hl2b5up_main variant is
+// built with NR=4 and reports that at discovery byte 0x13. Never assume this
+// number — clamp against what the board reported (MetisClient::Params).
+inline constexpr int kMaxReceivers = 12;
+
+constexpr std::size_t ep6RoundBytes(int numRx) noexcept
+{
+    if (numRx < 1) numRx = 1;
+    return static_cast<std::size_t>(numRx) * kRxIqBytes + kRoundMicBytes;
+}
+
+constexpr int ep6RoundsPerFrame(int numRx) noexcept
+{
+    return static_cast<int>(kFramePayload / ep6RoundBytes(numRx));
+}
+
+// Samples PER RECEIVER in one EP6 packet (two frames).
+constexpr int ep6SamplesPerPacket(int numRx) noexcept
+{
+    return 2 * ep6RoundsPerFrame(numRx);
+}
+
+// Sustained EP6 packet rate, in packets/second, for a sample rate and receiver
+// count. Rises with BOTH: adding receivers shrinks the per-receiver payload of
+// a fixed-size packet, so the radio sends more of them.
+constexpr double ep6PacketsPerSecond(int sampleRateHz, int numRx) noexcept
+{
+    const int perPacket = ep6SamplesPerPacket(numRx);
+    return perPacket > 0 ? static_cast<double>(sampleRateHz) / perPacket : 0.0;
+}
+
+// Sustained EP6 wire rate in bits/second, including UDP (8), IPv4 (20) and
+// Ethernet (14 + 4 FCS) headers plus the 20-byte preamble/inter-frame gap — the
+// bits that actually have to fit down the link, not just the payload.
+//
+// THE HL2's ETHERNET IS 100BASE-T. This is the number that decides whether a
+// (rate, receiver-count) pair is physically deliverable: four receivers at
+// 384 kHz is ~86 Mbit/s, which is not a safety margin below 100. The link does
+// not refuse — it drops, and dropped EP6 packets are gaps in every panadapter
+// at once. See Hl2Backend for the policy that acts on this.
+constexpr double ep6BitsPerSecond(int sampleRateHz, int numRx) noexcept
+{
+    constexpr double kWireBytesPerPacket = kUsbPacketSize + 8 + 20 + 18 + 20;
+    return ep6PacketsPerSecond(sampleRateHz, numRx) * kWireBytesPerPacket * 8.0;
+}
+
+// The share of the HL2's 100BASE-T link we are willing to fill with EP6.
+//
+// 70% is a working headroom figure, not a measurement: the remaining 30% covers
+// our own EP2 stream back to the radio, ARP/discovery, whatever else shares the
+// operator's switch, and the burstiness a fixed average hides. Exceeding it does
+// not fail cleanly — the link drops packets, and a dropped EP6 packet is a
+// simultaneous gap in EVERY receiver.
+//
+// The measured products (Mbit/s, wire rate) this admits and refuses:
+//
+//            1 RX    2 RX    3 RX    4 RX
+//    48 k     3.3     5.9     8.4    11.1
+//    96 k     6.7    11.7    16.9    22.2
+//   192 k    13.4    23.4    33.7    44.4
+//   384 k    26.8    46.8    67.5    88.8  <- 4 RX at 384 k is refused
+inline constexpr double kEp6LinkBitsPerSecond = 100.0e6;
+inline constexpr double kEp6LinkBudgetFraction = 0.70;
+
+// The most receivers that (rate, receiver-count) budget admits at `sampleRateHz`,
+// at least 1. A caller that wants more must slow down first.
+constexpr int maxReceiversAtRate(int sampleRateHz, int hardMax = kMaxReceivers) noexcept
+{
+    constexpr double budget = kEp6LinkBitsPerSecond * kEp6LinkBudgetFraction;
+    int best = 1;
+    for (int n = 1; n <= hardMax; ++n) {
+        if (ep6BitsPerSecond(sampleRateHz, n) <= budget)
+            best = n;
+    }
+    return best;
+}
+
+// The single-receiver EP6 block, 126 samples. Named rather than spelled 126 so
+// the places that are genuinely single-receiver (the bring-up DSP tests) say so,
+// instead of sharing a constant with code that must scale.
+inline constexpr int kEp6BlockSamples = ep6SamplesPerPacket(1);
+
+// EP2 (host->radio) is a different and receiver-count-INDEPENDENT layout: a
+// fixed 8 bytes of [audio/EADDR(4) | I(2) | Q(2)] per transmit sample, always
+// 63 per frame. Kept separate from the EP6 geometry above precisely so that
+// adding receivers cannot silently reshape the transmit packet.
+inline constexpr std::size_t kTxSampleBytes = 8;
 
 // C0 register-address bytes (address << 1). Bit 0 is MOX, not part of the
 // address, so every constant here is even and keying is applied separately with
@@ -127,13 +234,76 @@ inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets t
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
 
+// ---- Companion filter board (J16 open-collector outputs) ----
+//
+// The HL2 has NO switchable filters of its own. What it has is seven
+// open-collector outputs in the config register at 0x00[23:17], which the
+// GATEWARE forwards as one byte to I2C address 0x20 — bits [6:0] from those
+// outputs, bit [7] from the RX-antenna bit at 0x00[13]. Nothing here writes
+// I2C: setting the config bits IS the whole mechanism (HL2 wiki, Protocol.md
+// "Filter Board"; oracle §8).
+//
+// The N2ADR companion board decodes bits 6:0 ONE-HOT into six low-pass filters
+// and one AM-broadcast-blocking high-pass. Values below are Quisk's
+// Hermes_BandDict verbatim (quisk_conf_defaults.py) — the reference client, and
+// tier 3 on the source-precedence ladder. They are reproduced rather than
+// re-derived because the grouping (60 and 40 share a filter; 17 and 15 share
+// one) is a property of that board, not something inferable from the band plan.
+//
+// A board that is absent simply has nothing listening on the I2C bus, so
+// writing these is inert on a bare HL2 — which is why this is safe to drive
+// unconditionally rather than behind a "do you have the filter board" setting.
+inline constexpr std::uint8_t kOcLpf160   = 0x01;   // 160 m low-pass
+inline constexpr std::uint8_t kOcLpf80    = 0x02;   // 80 m
+inline constexpr std::uint8_t kOcLpf60_40 = 0x04;   // 60 m + 40 m share one
+inline constexpr std::uint8_t kOcLpf30_20 = 0x08;   // 30 m + 20 m
+inline constexpr std::uint8_t kOcLpf17_15 = 0x10;   // 17 m + 15 m
+inline constexpr std::uint8_t kOcLpf12_10 = 0x20;   // 12 m + 10 m
+inline constexpr std::uint8_t kOcHpfAmBc  = 0x40;   // AM broadcast blocking HPF
+inline constexpr std::uint8_t kOcNone     = 0x00;   // every relay released
+
+// The open-collector byte for a receive/transmit frequency in Hz.
+//
+// Chosen by FREQUENCY rather than by a band name, because this has to answer
+// for the whole tuning range, not only the ten HF amateur bands: the operator
+// can park on 9 MHz shortwave or 500 kHz, and "no band matched" must still give
+// a defined filter state rather than leaving whatever the last band selected.
+//
+// Every amateur band lands on the same value Quisk's table gives it — that is
+// the check that the range boundaries are right, not an accident of rounding.
+//
+// Two deliberate departures from "always engage the HPF":
+//   - Below 1.6 MHz the AM-blocking HPF would remove exactly what is being
+//     listened to, so nothing is engaged.
+//   - On 160 m the HPF stays OUT. The HL2's own switching supply couples spurs
+//     into the filter board's 160 m and HPF inductors (HL2 wiki, Options.md),
+//     and Quisk's default omits it there for that reason.
+//   - Above 30 MHz the board has no filter at all (6 m and up), so
+//     everything is released rather than engaging a low-pass that would
+//     attenuate the very signal being received.
+std::uint8_t ocFilterByteForHz(double hz) noexcept;
+
+// Human-readable name of an open-collector filter selection, for logging.
+const char* ocFilterName(std::uint8_t oc) noexcept;
+
 // A 5-byte Command & Control payload: C0 (register address) + C1..C4 (data).
 using Cc = std::array<std::uint8_t, 5>;
 
-// Config register: sample rate + receiver count. Also carries the Mercury and
-// duplex bits for openHPSDR compatibility; both are ignored by the HL2 gateware.
-Cc ccConfig(SampleRate rate, int numRx = 1) noexcept;
-// RX1 NCO frequency in Hz (32-bit big-endian across C1..C4).
+// Config register: sample rate + receiver count + the J16 open-collector filter
+// byte. Also carries the Mercury and duplex bits for openHPSDR compatibility;
+// both are ignored by the HL2 gateware.
+//
+// ocFilterByte is the value from ocFilterByteForHz(); only bits [6:0] are used
+// (they land in DATA[23:17]). Bit 7 is the RX-antenna bit and lives elsewhere in
+// the register, so it is masked off here rather than silently switching antennas
+// on a caller who passed a full I2C byte.
+Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone) noexcept;
+// NCO frequency in Hz (32-bit big-endian across C1..C4) for receiver `rxIndex`,
+// zero-based: RX1 is index 0 at register 0x02, up to RX7 at 0x08. Clamped to
+// that run — see the note in the .cpp about why RX8..RX12 are not reachable by
+// continuing the arithmetic.
+Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept;
+// RX1 NCO frequency in Hz. Equivalent to ccRxFreq(0, hz).
 Cc ccRx1Freq(std::uint32_t hz) noexcept;
 // AD9866 LNA gain in dB, clamped to [-12, +48]; C4 = 0x40 | (dB + 12).
 Cc ccRxGain(int db) noexcept;
@@ -270,8 +440,10 @@ struct DiscoveryReply {
     std::uint8_t gatewareVersion = 0;   // raw byte; HL2 gateware e.g. 0x4A -> 7.4
     std::uint8_t boardId = 0;           // 0x06 = Hermes-Lite / Hermes-Lite 2
     bool streaming = false;             // discovery status byte 0x03 = already sending IQ
-    // Receiver count the board reports. Only present on full-length replies
-    // (>= 21 bytes); 0 means "not reported" and callers should assume 1.
+    // Receiver count the board reports, from discovery offset 0x13. Only present
+    // on full-length replies (> 19 bytes); 0 means "not reported" and callers
+    // apply their own default. See parseDiscoveryReply for why this offset is
+    // 19 and not 20, and what the byte at 20 actually is.
     std::uint8_t numRx = 0;
     [[nodiscard]] bool isHermesLite2() const noexcept { return boardId == 0x06; }
 };
@@ -295,5 +467,20 @@ std::optional<std::uint32_t> ep6Seq(std::span<const std::uint8_t> pkt) noexcept;
 // offset — that is the DSP layer's job.
 int ep6Samples(std::span<const std::uint8_t> pkt,
                std::vector<std::complex<float>>& out) noexcept;
+
+// Multi-receiver form: demultiplex an EP6 packet into one output vector per
+// receiver. `out.size()` IS the receiver count the packet is decoded against —
+// it must match what the radio was configured with at 0x00[6:3], because the
+// wire carries no receiver-count field and a mismatch silently reinterprets
+// every subsequent round. Samples are APPENDED to each vector.
+//
+// Returns the number of samples appended PER RECEIVER, or -1 if `pkt` is not a
+// valid EP6 packet or `out` is empty / larger than kMaxReceivers.
+//
+// The single-receiver ep6Samples() above is exactly this with out.size()==1 and
+// is kept because the transmit and bring-up paths read better without a span of
+// one vector; both share ep6DecodeRounds().
+int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
+                    std::span<std::vector<std::complex<float>>> out) noexcept;
 
 }  // namespace AetherSDR::hl2
