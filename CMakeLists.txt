@@ -751,6 +751,7 @@ set(GUI_SOURCES
     src/gui/Contribute.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
+    src/gui/WindowGeometryRestore.cpp
     src/gui/MainWindow_Controllers.cpp
     src/gui/MainWindow_DspApplets.cpp
     src/gui/MainWindow_Menus.cpp
@@ -2828,6 +2829,21 @@ add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
 add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
+
+# Frameless-window geometry restore (#4328) — blob parse + the caption-free
+# re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
+# every platform; case 4 drives a real QWidget so a future Qt changing the
+# saveGeometry() layout or dropping the clamp fails here instead of silently
+# misplacing the main window.
+add_executable(window_geometry_restore_test
+    tests/window_geometry_restore_test.cpp
+    src/gui/WindowGeometryRestore.cpp
+)
+target_include_directories(window_geometry_restore_test PRIVATE src)
+target_link_libraries(window_geometry_restore_test PRIVATE Qt6::Widgets)
+add_test(NAME window_geometry_restore_test COMMAND window_geometry_restore_test)
+set_tests_properties(window_geometry_restore_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
 add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)

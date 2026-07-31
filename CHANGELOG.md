@@ -8,6 +8,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Frameless window no longer drifts down the screen on Windows (#4328)** —
+  with **Frameless Window** enabled, AetherSDR reopened a title-bar height
+  below where you left it, so a window parked at the top of the screen had to
+  be nudged back up every launch. Qt was reserving room for a title bar the
+  custom frame does not have. The window now reopens exactly where you left
+  it, keeps its full size if you had it filling the screen, and stays put
+  through Minimal Mode round trips.
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

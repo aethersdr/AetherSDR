@@ -579,6 +579,12 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
+    // Undo Qt's caption-reserving restore clamp for the Windows custom frame,
+    // which has no caption to reserve for.  Call after every successful
+    // restoreGeometry() on this window, passing the same blob; a no-op off
+    // Windows, without the custom frame, or for a maximized/fullscreen blob.
+    // (#4328 — see src/gui/WindowGeometryRestore.h.)
+    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
