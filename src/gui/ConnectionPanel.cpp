@@ -1238,7 +1238,6 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     if (!chosen)
         return;
 
-    bool changed = false;
     if (chosen == setNick) {
         bool ok = false;
         const QString current = hl2::Hl2Discovery::effectiveNickname(
@@ -1252,13 +1251,10 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
             // confirmed shouldn't be lost to a crash or a kill.
             hl2::Hl2Discovery::setNickname(radio.family, radio.serial,
                                            name.trimmed());
-            changed = true;
         }
     } else if (clearNick && chosen == clearNick) {
         hl2::Hl2Discovery::setNickname(radio.family, radio.serial, QString());
-        changed = true;
     }
-    Q_UNUSED(changed);
 
     // Reflect the change immediately: re-label this row from the saved setting
     // rather than waiting for the next discovery sweep.

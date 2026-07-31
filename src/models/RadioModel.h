@@ -1220,7 +1220,8 @@ private:
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend(const QString& serial);  // RFC #4603
-    void persistOperatingState();                            // RFC #4603 PR 3
+    void persistOperatingState(bool force = false);          // RFC #4603 PR 3
+    void flushPendingOperatingState();                       // RFC #4603 PR 3
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1706,7 +1707,12 @@ private:
     bool      m_rebootInProgress{false};
     QTimer    m_reconnectTimer;
     // RFC #4603 PR 3: debounces operatingStateChanged into one store write.
+    // The companion max-wait timer guarantees a sustained burst (continuous
+    // tuning) still stores at least every interval; the disconnect path
+    // flushes whatever is pending (PR #4619 review — the state most likely
+    // to be lost was the operator's last edit before disconnecting).
     QTimer    m_operatingStateSaveTimer;
+    QTimer    m_operatingStateMaxWaitTimer;
 
     // ── Network quality monitor ──
     void startNetworkMonitor();

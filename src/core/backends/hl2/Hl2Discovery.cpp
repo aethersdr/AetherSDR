@@ -96,9 +96,8 @@ QString Hl2Discovery::effectiveNickname(const QString& family,
         const QString legacyKey = nicknameSettingsKey(serial);
         custom = settings.value(legacyKey).toString().trimmed();
         if (!custom.isEmpty()) {
+            // setNickname() removes the legacy key and commits — one write.
             setNickname(fam, serial, custom);
-            settings.remove(legacyKey);
-            settings.save();
         }
     }
     return custom.isEmpty() ? fallback : custom;

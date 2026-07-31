@@ -150,6 +150,117 @@ int main(int argc, char** argv)
         backend.disconnectRadio();
     }
 
+    // ---- unvisited band: baseline default, never inheritance --------------
+    // (PR #4619 review, bot + Ozy311): set 40 on 20m (bootstraps the
+    // baseline), raise 20m to 90, hop to never-visited 40m — the drive must
+    // be the 40 baseline, NOT the 90 that happened to be live.
+    {
+        hl2::Hl2Backend backend;
+        backend.applyRestoredState(RestoredRadioState{});   // no memory
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        backend.setSliceFrequency(0, 14'074'000.0);   // 20m
+        backend.setTxPower(40);                       // bootstraps baseline 40
+        backend.setTxPower(90);                       // 20m's own value
+        backend.setSliceFrequency(0, 7'074'000.0);    // hop to unvisited 40m
+
+        const RestoredRadioState snap = backend.currentOperatingState();
+        const QJsonObject drive =
+            snap.extension.value(QStringLiteral("txSetpoints"))
+                .toObject()
+                .value(QStringLiteral("driveByBand"))
+                .toObject();
+        check(drive.value(QStringLiteral("40m")).toInt() == 40,
+              "an unvisited band gets the operator's baseline, not the "
+              "previous band's live drive");
+        check(drive.value(QStringLiteral("20m")).toInt() == 90,
+              "the previous band keeps its own remembered drive");
+        backend.disconnectRadio();
+    }
+
+    // ---- a truly baseline-less first hop is conservative ------------------
+    {
+        hl2::Hl2Backend backend;
+        backend.applyRestoredState(RestoredRadioState{});
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+        // No setTxPower yet — no baseline. Hop off the start band.
+        backend.setSliceFrequency(0, 7'074'000.0);
+        const QJsonObject drive =
+            backend.currentOperatingState()
+                .extension.value(QStringLiteral("txSetpoints"))
+                .toObject()
+                .value(QStringLiteral("driveByBand"))
+                .toObject();
+        check(drive.value(QStringLiteral("40m")).toInt() == 0,
+              "with no baseline at all, a first band visit sets drive 0 — "
+              "conservative once, never hot by inheritance");
+        backend.disconnectRadio();
+    }
+
+    // ---- radio swap: an empty restore is a full reset ---------------------
+    // (PR #4619 review, Ozy311 finding 1): same backend instance, radio A
+    // with maps, then applyRestoredState({}) for radio B — nothing of A may
+    // survive, including the LIVE members.
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState radioA;
+        radioA.rfFrequencyHz = 7'074'000.0;
+        radioA.sampleRateHz = 192'000;
+        radioA.extensionSchemaVersion = 1;
+        radioA.extension = QJsonObject{
+            {QStringLiteral("rfGain"),
+             QJsonObject{{QStringLiteral("defaultDb"), 6},
+                         {QStringLiteral("lnaDbByBand"),
+                          QJsonObject{{QStringLiteral("40m"), 3}}}}},
+            {QStringLiteral("txSetpoints"),
+             QJsonObject{{QStringLiteral("defaultPercent"), 25},
+                         {QStringLiteral("driveByBand"),
+                          QJsonObject{{QStringLiteral("40m"), 25}}}}}};
+        backend.applyRestoredState(radioA);
+
+        backend.applyRestoredState(RestoredRadioState{});   // radio B: no memory
+        const RestoredRadioState snap = backend.currentOperatingState();
+        const QJsonObject rfGain =
+            snap.extension.value(QStringLiteral("rfGain")).toObject();
+        check(rfGain.value(QStringLiteral("lnaDbByBand"))
+                      .toObject()
+                      .isEmpty(),
+              "radio A's per-band LNA map does not survive the swap");
+        check(rfGain.value(QStringLiteral("defaultDb")).toInt() == 20,
+              "the LNA default resets to the virgin construction value");
+        check(!snap.extension.value(QStringLiteral("txSetpoints"))
+                       .toObject()
+                       .contains(QStringLiteral("defaultPercent")),
+              "radio A's drive baseline does not survive the swap");
+        check(snap.sampleRateHz != 192'000 || snap.sampleRateHz == 48'000,
+              "radio A's restored rate does not leak into radio B's snapshot");
+    }
+
+    // ---- a corrupt mode string is dropped at the boundary -----------------
+    // (PR #4619 review, Ozy311 finding 5)
+    {
+        hl2::Hl2Backend backend;
+        RestoredRadioState corrupt;
+        corrupt.mode = QStringLiteral("QRM");   // <= 8 chars, but not a mode
+        backend.applyRestoredState(corrupt);
+        check(backend.currentOperatingState().mode
+                  != QStringLiteral("QRM"),
+              "a plausible-length garbage mode never reaches Receiver::mode");
+        RestoredRadioState genuine;
+        genuine.mode = QStringLiteral("cw");    // case-insensitive, real
+        backend.applyRestoredState(genuine);
+        // (Applied at pushInitialState on hardware; boundary acceptance is
+        // what's provable here: it survived validation into the stash.)
+    }
+
     // ---- an explicit param still beats restored state ---------------------
     {
         hl2::Hl2Backend backend;

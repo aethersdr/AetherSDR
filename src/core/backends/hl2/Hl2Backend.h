@@ -106,6 +106,7 @@ private:
     // and record the operator's current values into the maps for the band
     // being left. Called from the band-change path and connect.
     void applyPerBandStateFor(double freqHz, const char* reason);
+    void applyLnaGainDb(int gainDb);   // the one true LNA application
     void rememberCurrentBandState();
     void notifyOperatingStateChanged();
 
@@ -426,6 +427,10 @@ private:
     int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
     int m_driveDefaultPercent = -1;  // <0: no restored default; leave drive alone
     QString m_currentBandKey;
+    // True while band-memory / restore code drives setTxPower() itself: the
+    // internal application must neither bootstrap the operator baseline nor
+    // record into the per-band map — only OPERATOR intent does that.
+    bool m_applyingBandMemory = false;
     // Tune-carrier amplitude, full scale into the modulator. Actual radiated
     // power is governed by the TX drive register, which is where an operator
     // sets it; scaling here as well would make the power control non-linear for
