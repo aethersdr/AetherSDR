@@ -62,15 +62,30 @@ void LocalMemoryBank::load()
     // one-time import source, consulted only while no document exists, and
     // left FROZEN afterwards — the document's existence is the migration
     // marker, matching the frozen-XML contract the settings store itself uses.
+    int storedRowVersion = 0;
     const QJsonObject doc = AppSettings::instance().radioFeatureExact(
         LocalMemoryStore::documentFamily(), QString(),
-        LocalMemoryStore::documentFeature());
+        LocalMemoryStore::documentFeature(), &storedRowVersion);
 
     LocalMemoryStore::ParseResult parsed;
     bool importedFromLegacy = false;
     if (!doc.isEmpty()) {
-        parsed = LocalMemoryStore::parse(
-            QJsonDocument(doc).toJson(QJsonDocument::Compact));
+        if (storedRowVersion > LocalMemoryStore::kFormatVersion) {
+            // The ROW version guards too, not just the envelope's own body
+            // version (PR #4623 review, nigelfenton's probe): a future build
+            // that bumps the column while keeping the envelope shape must get
+            // the same read-only refusal, or this build overwrites a document
+            // it cannot fully represent. Belt and braces with parse()'s body
+            // check below.
+            parsed.unreadable = true;
+            parsed.errors << QStringLiteral(
+                "memory bank row schema %1 is newer than this build's %2")
+                                 .arg(storedRowVersion)
+                                 .arg(LocalMemoryStore::kFormatVersion);
+        } else {
+            parsed = LocalMemoryStore::parse(
+                QJsonDocument(doc).toJson(QJsonDocument::Compact));
+        }
     } else {
         parsed = LocalMemoryStore::load(m_filePath);
         importedFromLegacy = parsed.overwritable() && !parsed.memories.isEmpty();

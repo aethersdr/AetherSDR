@@ -255,6 +255,47 @@ int main(int argc, char** argv)
                      "no document is created from a bank this build cannot read");
     }
 
+    // Variant 3 (nigelfenton's probe, PR #4623): the ROW version is newer
+    // while the envelope body is current — the divergent pair a future build
+    // could write. Must be read-only, exactly like the body-version case.
+    {
+        resetBankDocument();
+        QMap<int, MemoryEntry> precious;
+        {
+            MemoryEntry e;
+            e.index = 0;
+            e.freq = 7.2;
+            e.name = "Precious";
+            precious.insert(0, e);
+        }
+        const QJsonObject validV1Envelope =
+            QJsonDocument::fromJson(
+                LocalMemoryStore::serialize(precious, "2026-07-01T00:00:00Z"))
+                .object();
+        ok &= expect(AppSettings::instance().setRadioFeature(
+                         LocalMemoryStore::documentFamily(), QString(),
+                         LocalMemoryStore::documentFeature(), 999,
+                         validV1Envelope),
+                     "a row=999/body=1 divergent document is planted");
+
+        LocalMemoryBank bank;
+        bank.setFilePath(dir.path() + "/unused-row-version.json");
+        bank.load();
+        ok &= expect(!bank.isWritable(),
+                     "a newer ROW version is read-only even with a current "
+                     "envelope body");
+        bank.record(5, MemoryEntry{});
+        bank.flush();
+        ok &= expect(bankDocument()
+                             .value(QStringLiteral("memories"))
+                             .toArray()
+                             .size()
+                         == 1,
+                     "the divergent document survives the refused edit — "
+                     "'Precious' is not overwritten");
+        resetBankDocument();
+    }
+
     // Variant 2 (document era): the DOCUMENT is too new — same refusal, and
     // the newer document survives byte-for-byte.
     {
