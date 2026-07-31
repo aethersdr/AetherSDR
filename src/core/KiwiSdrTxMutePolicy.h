@@ -125,4 +125,52 @@ inline int kiwiSdrResumeHoldMs(bool estimateValid, int estimateOffsetMs,
                       kKiwiSdrResumeHoldMinMs, kKiwiSdrResumeHoldMaxMs);
 }
 
+// Which ingest-lag figure the hold above is entitled to use. Split out of the
+// caller because it is a decision, not arithmetic: getting it wrong does not
+// fail anything, it just silently changes how long the operator's audio stays
+// muted. A receive-sync offset only describes the ONE profile it was measured
+// against, and only while that measurement still holds the lock the sync
+// engine itself demands before acting on it — everything else falls back to
+// the caller's proxy.
+struct KiwiSdrResumeHoldSyncInputs {
+    bool isSyncTarget{false};       // this profile is the sync delay target
+    bool syncEnabled{false};
+    bool autoAssist{false};         // AutoAssist mode (false => Manual)
+    bool estimateValid{false};
+    bool estimateHeld{false};
+    float estimateConfidence{0.0f};
+    float autoLockConfidence{0.0f};
+    int estimateOffsetMs{0};        // positive delays Flex relative to Kiwi
+    int manualOffsetMs{0};
+};
+
+struct KiwiSdrResumeHoldIngestLag {
+    bool valid{false};
+    int offsetMs{0};
+};
+
+inline KiwiSdrResumeHoldIngestLag kiwiSdrResumeHoldIngestLag(
+    const KiwiSdrResumeHoldSyncInputs& in)
+{
+    if (!in.isSyncTarget || !in.syncEnabled) {
+        return {};
+    }
+    if (in.autoAssist) {
+        // Same condition ReceivePresentationSync applies before it will act
+        // on an estimate: held, or confident enough to lock.
+        if (in.estimateValid
+            && (in.estimateHeld
+                || in.estimateConfidence >= in.autoLockConfidence)) {
+            return {true, in.estimateOffsetMs};
+        }
+        return {};
+    }
+    // Manual: a negative or zero offset says the Kiwi is EARLIER than the
+    // Flex stream, which tells us nothing about its ingest lag.
+    if (in.manualOffsetMs > 0) {
+        return {true, in.manualOffsetMs};
+    }
+    return {};
+}
+
 } // namespace AetherSDR

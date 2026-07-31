@@ -489,8 +489,24 @@ private:
     void syncKiwiSdrTransmitMute();
     void refreshKiwiSdrVirtualAudioControls();
     void refreshKiwiSdrResumeHolds();
+    // Everything the resume hold needs that does NOT vary per profile.
+    // Resolving the sync target walks slices and the audio delay walks the
+    // sync engine, so a sweep over every profile resolves them once instead
+    // of once per profile — this runs on every key-down edge, which under CW
+    // break-in is once per element.
+    struct KiwiSdrResumeHoldContext {
+        ReceivePresentationSettings sync;
+        QString syncTargetProfileId;  // receiveSyncDelayKiwiProfileId()
+        QString delayKiwiProfileId;   // as handed to the audio engine:
+                                      // the target under AutoAssist, else empty
+        int kiwiAudioDelayMs{0};      // as handed to the audio engine
+    };
+    KiwiSdrResumeHoldContext kiwiSdrResumeHoldContext() const;
     int kiwiSdrResumeHoldMsForProfile(
         const KiwiSdrAntennaProfile& profile) const;
+    int kiwiSdrResumeHoldMsForProfile(
+        const KiwiSdrAntennaProfile& profile,
+        const KiwiSdrResumeHoldContext& context) const;
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     // Worker for the above. selectSlice=false suppresses the active-slice steal
     // for automatic re-arms (band-recall finish, #4158 recreation re-bind).

@@ -4803,8 +4803,12 @@ add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
 add_executable(kiwi_sdr_tx_mute_policy_test
     tests/kiwi_sdr_tx_mute_policy_test.cpp
+    # The resume hold's presentation-holdback input is routed by
+    # receivePresentationExternalKiwiDelayMs(); pinned against the real one.
+    src/core/ReceivePresentationSync.cpp
 )
 target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+target_link_libraries(kiwi_sdr_tx_mute_policy_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp

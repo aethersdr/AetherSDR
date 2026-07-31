@@ -1643,8 +1643,39 @@ void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice,
     }, Qt::QueuedConnection);
 }
 
+MainWindow::KiwiSdrResumeHoldContext
+MainWindow::kiwiSdrResumeHoldContext() const
+{
+    // Deliberately mirrors syncReceivePresentationDelaysToAudioEngine():
+    // whatever that pushed is what the mix is actually holding audio back
+    // by, and the resume hold has to add the same figure, not a differently
+    // derived one.
+    KiwiSdrResumeHoldContext context;
+    context.sync = m_receivePresentationSync.settings();
+    context.syncTargetProfileId = receiveSyncDelayKiwiProfileId();
+    context.delayKiwiProfileId =
+        context.sync.enabled
+            && context.sync.mode == ReceiveSyncMode::AutoAssist
+            ? context.syncTargetProfileId
+            : QString();
+    context.kiwiAudioDelayMs =
+        receivePresentationDelayMs(ReceivePresentationSource::KiwiSdr,
+                                   ReceivePresentationSurface::Audio);
+    return context;
+}
+
 int MainWindow::kiwiSdrResumeHoldMsForProfile(
     const KiwiSdrAntennaProfile& profile) const
+{
+    if (!profile.resumeAudioAfterTxDelay || profile.keepAudioDuringTx) {
+        return 0;
+    }
+    return kiwiSdrResumeHoldMsForProfile(profile, kiwiSdrResumeHoldContext());
+}
+
+int MainWindow::kiwiSdrResumeHoldMsForProfile(
+    const KiwiSdrAntennaProfile& profile,
+    const KiwiSdrResumeHoldContext& context) const
 {
     if (!profile.resumeAudioAfterTxDelay || profile.keepAudioDuringTx) {
         return 0;
@@ -1661,30 +1692,33 @@ int MainWindow::kiwiSdrResumeHoldMsForProfile(
     // presentation holdback for this source delays playback beyond
     // arrival, so it is added on top; kiwiSdrResumeHoldMs adds the
     // guard for what none of these can see.
-    const ReceivePresentationSettings sync =
-        m_receivePresentationSync.settings();
-    const bool isSyncTarget =
-        profile.id == receiveSyncDelayKiwiProfileId();
-    bool estimateValid = false;
-    int estimateOffsetMs = 0;
-    if (isSyncTarget && sync.enabled
-        && sync.mode == ReceiveSyncMode::AutoAssist
-        && sync.autoEstimate.valid
-        && (sync.autoEstimate.held
-            || sync.autoEstimate.confidence >= sync.autoLockConfidence)) {
-        estimateValid = true;
-        estimateOffsetMs = sync.autoEstimate.offsetMs;
-    } else if (isSyncTarget && sync.enabled
-               && sync.mode == ReceiveSyncMode::Manual
-               && sync.manualOffsetMs > 0) {
-        estimateValid = true;
-        estimateOffsetMs = sync.manualOffsetMs;
-    }
-    const int appliedDelayMs = receivePresentationDelayMs(
-        ReceivePresentationSource::KiwiSdr,
-        ReceivePresentationSurface::Audio, profile.id);
-    return AetherSDR::kiwiSdrResumeHoldMs(
-        estimateValid, estimateOffsetMs, sync.baseLatencyMs, appliedDelayMs);
+    const ReceivePresentationSettings& sync = context.sync;
+    AetherSDR::KiwiSdrResumeHoldSyncInputs inputs;
+    inputs.isSyncTarget = profile.id == context.syncTargetProfileId;
+    inputs.syncEnabled = sync.enabled;
+    inputs.autoAssist = sync.mode == ReceiveSyncMode::AutoAssist;
+    inputs.estimateValid = sync.autoEstimate.valid;
+    inputs.estimateHeld = sync.autoEstimate.held;
+    inputs.estimateConfidence = sync.autoEstimate.confidence;
+    inputs.autoLockConfidence = sync.autoLockConfidence;
+    inputs.estimateOffsetMs = sync.autoEstimate.offsetMs;
+    inputs.manualOffsetMs = sync.manualOffsetMs;
+    const AetherSDR::KiwiSdrResumeHoldIngestLag ingestLag =
+        AetherSDR::kiwiSdrResumeHoldIngestLag(inputs);
+
+    // The holdback this source is ACTUALLY playing behind arrival — derived
+    // exactly the way AudioEngine::setReceivePresentationDelays() derives it,
+    // because that is the number the mix obeys. Asking
+    // receivePresentationDelayMs() for this profile's own delay instead would
+    // report defaultKiwiDelayMs() for a profile that is not the AutoAssist
+    // delay target, while the engine hands that source 0 — and the hold would
+    // then run ~520 ms long, swallowing real post-TX audio rather than the
+    // operator's own tail.
+    const int appliedDelayMs =
+        AetherSDR::receivePresentationExternalKiwiDelayMs(
+            profile.id, context.delayKiwiProfileId, context.kiwiAudioDelayMs);
+    return AetherSDR::kiwiSdrResumeHoldMs(ingestLag.valid, ingestLag.offsetMs,
+                                          sync.baseLatencyMs, appliedDelayMs);
 }
 
 void MainWindow::refreshKiwiSdrVirtualAudioControls()
@@ -1721,13 +1755,17 @@ void MainWindow::refreshKiwiSdrResumeHolds()
     // push only the one field that actually goes stale between edges — the
     // resume hold, whose sync estimate moves continuously. Gain/mute/pan
     // follow slice signals and keep/hold policy follows profilesChanged.
+    // Resolve the sync target and the engine's Kiwi audio delay ONCE for the
+    // whole sweep; both walk the slice list and neither varies per profile.
     const QVector<KiwiSdrAntennaProfile> profiles =
         m_kiwiSdrManager->profiles();
+    const KiwiSdrResumeHoldContext context = kiwiSdrResumeHoldContext();
     for (const KiwiSdrAntennaProfile& profile : profiles) {
         if (m_kiwiSdrManager->assignedSliceForProfile(profile.id) < 0) {
             continue;
         }
-        const int resumeHoldMs = kiwiSdrResumeHoldMsForProfile(profile);
+        const int resumeHoldMs =
+            kiwiSdrResumeHoldMsForProfile(profile, context);
         QMetaObject::invokeMethod(m_audio,
                                   [audio = m_audio, profileId = profile.id,
                                    resumeHoldMs]() {
