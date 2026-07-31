@@ -3350,6 +3350,23 @@ target_include_directories(spe_protocol_test PRIVATE src)
 target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
 add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
 
+# HGauge range-change contract (PR #4531): a rescale must re-map the current
+# reading onto the new axis even when the reading itself never changes.
+# Renders the widget and measures painted fill — the defect this guards was
+# invisible to value/min/max assertions.
+add_executable(hgauge_range_test
+    tests/hgauge_range_test.cpp
+    src/gui/DragValuePopup.cpp   # HGauge's hover readout — header-only otherwise
+)
+target_include_directories(hgauge_range_test PRIVATE src src/gui)
+target_link_libraries(hgauge_range_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(hgauge_range_test PROPERTIES AUTOMOC ON)
+add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
+set_tests_properties(hgauge_range_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp

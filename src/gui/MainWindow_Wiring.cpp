@@ -5502,14 +5502,15 @@ void MainWindow::wireMeters()
         m_appletPanel->speApplet()->setResponding(responding);
     });
 
-    // Gauge range + model-dependent layout follow the Status ID field — the
-    // SPE identifies itself in every status reply, so this fires once on the
-    // first poll reply (no auto-ranging heuristics; contrast the ACOM block).
+    // Model-dependent layout follows the Status ID field — the SPE identifies
+    // itself in every status reply, so this fires once on the first poll reply
+    // (no auto-ranging heuristics; contrast the ACOM block). The gauge range
+    // is NOT set here: modelChanged and statusUpdated are emitted from the same
+    // frame, and the statusUpdated handler below derives the level-dependent
+    // scale that supersedes the model's HIGH scale anyway.
     connect(&m_speConn, &SpeConnection::modelChanged, this, [this](const QString& modelId) {
         const auto& spec = AetherSDR::Spe::modelSpec(modelId);
-        auto* spe = m_appletPanel->speApplet();
-        spe->setPowerRange(spec.nominalPowerW, spec.warnPowerW, spec.maxPowerW);
-        spe->setModelName(spec.displayName);
+        m_appletPanel->speApplet()->setModelName(spec.displayName);
     });
 
     connect(&m_speConn, &SpeConnection::statusUpdated, this,

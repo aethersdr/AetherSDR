@@ -192,6 +192,22 @@ QByteArray buildWillComPortOption();
 // IAC SB COM-PORT-OPTION SET-CONTROL <ctrl> IAC SE
 QByteArray buildSetControl(quint8 ctrl);
 
+// The peer's answer to buildWillComPortOption(). ser2net replies
+// IAC DO COM-PORT-OPTION when the port is configured
+// `accepter: telnet(rfc2217=true),<port>`, and IAC DONT for a plain-telnet
+// port. A raw port never answers at all — it forwards the negotiation into
+// the amplifier's UART as payload, where it lands as junk. Distinguishing
+// those three is the difference between driving the power line and silently
+// doing nothing, so powerOn() reads this rather than assuming success.
+enum class OptionReply { None, Accepted, Refused };
+
+// Scans a raw inbound chunk for that answer, returning the last one present.
+// Read-only: the negotiation bytes stay in the stream for FrameParser, whose
+// sync-run resync steps over them. A false positive would need the literal
+// sequence FF FD 2C inside a Status payload, which is ASCII CSV and cannot
+// contain 0xFF.
+OptionReply scanComPortOptionReply(const QByteArray& bytes);
+
 }  // namespace Rfc2217
 
 // ── Per-model display scaling ────────────────────────────────────────────

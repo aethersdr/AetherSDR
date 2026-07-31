@@ -8,11 +8,13 @@ PGXL/TGXL/Antenna Genius family — `peripheral(spe)` in
 awareness at all, so this is explicitly NOT a new `IRadioBackend` family.
 
 **Scope:** A dedicated `SpeApplet` driven by `SpeConnection`, a peripheral
-transport (serial or ser2net-style raw TCP, same bytes either way), plus a
-Peripherals settings row. Status/telemetry decode with model identification,
-Operate/Standby toggle, power-level cycle, TUNE, switch-off, and the
-band/antenna/input keys. No menu navigation (arrows/SET/DISPLAY), no manual
-L/C ATU stepping, no CAT-configuration mirror, no remote power-ON — see §4.
+transport (serial, or a ser2net proxy in raw **or telnet** mode — the same
+protocol bytes flow either way), plus a Peripherals settings row.
+Status/telemetry decode with model identification, Operate/Standby toggle,
+power-level cycle, TUNE, switch-off, the band/antenna/input keys, and remote
+power-ON (§4 — the one feature that needs the proxy in RFC 2217 telnet mode).
+No menu navigation (arrows/SET/DISPLAY), no manual L/C ATU stepping, no
+CAT-configuration mirror.
 
 ---
 
@@ -124,8 +126,11 @@ ACOM (raw-only), both are supported and telnet is verified on real
 hardware: the validation station's ser2net runs `accepter: telnet`. The
 parser's sync-run resync shrugs off telnet negotiation, and the rare status
 frame whose checksum byte is 0xFF (which telnet IAC-escapes) is dropped and
-re-polled 100 ms later — harmless in a polled protocol. Telnet mode is also
-what a future remote power-ON needs (§4).
+re-polled 100 ms later — harmless in a polled protocol. Remote power-ON (§4)
+is the one feature that needs more than telnet framing: it drives the proxy's
+control lines via RFC 2217, so that port must be
+`accepter: telnet(rfc2217=true),<port>`. Everything else — polling,
+telemetry, every keystroke — works over a raw port too.
 
 Status fields decoded (spec §5): amplifier ID (`13K`/`15K`/`20K`),
 STANDBY/OPERATE, RX/TX, memory bank (A/B, 1.3K/1.5K only), input port 1/2,
@@ -150,7 +155,7 @@ transcribed in `SpeProtocol.cpp`).
 | BAND± | No | The amp follows the radio's band via CAT/RF sensing on its own; a manual band override from a radio-control app invites disagreement between the two. Deferred, not rejected. |
 | Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
 | SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
-| Remote power-ON (ON button) | Yes | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network `SpeConnection::powerOn()` drives the proxy's DTR/RTS lines via **RFC 2217** COM-port-control (needs ser2net in telnet mode — the Peripherals row's tooltip carries the reference `ser2net.yaml`); on a local COM port it drives the lines directly. The pulse sequence (DTR on 100 ms, DTR off + RTS on 1000 ms, DTR on + RTS off) is carried verbatim from the field-proven reference application. The ON button is the one control that stays enabled while the amp is silent — that is its entire purpose — and `SpeConnection` holds DTR/RTS low otherwise so the power line is never tripped accidentally. |
+| Remote power-ON (ON button) | Yes | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network `SpeConnection::powerOn()` drives the proxy's DTR/RTS lines via **RFC 2217** COM-port-control (needs `accepter: telnet(rfc2217=true),<port>` — the Peripherals row's tooltip carries the reference `ser2net.yaml`); on a local COM port it drives the lines directly. The pulse sequence (DTR on 100 ms, DTR off + RTS on 1000 ms, DTR on + RTS off) is carried verbatim from the field-proven reference application, so **RTS carries the 1 s power pulse** and the sequence ends with RTS low. The ON button is the one control that stays enabled while the amp is silent — that is its entire purpose. Because a proxy that is not in RFC 2217 mode would silently discard the SET-CONTROL frames, `powerOn()` reads the peer's answer to `WILL COM-PORT-OPTION`: an explicit `DONT` aborts the pulse with an actionable message, and a proxy that never answers at all (raw mode) downgrades the completion message instead of claiming success. |
 | Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
 
 ---
@@ -222,15 +227,36 @@ no entry — the manifest tracks `core/`/`models/` headers, not `gui/` files.
   sequences; ACK and Status parsing round-trips including the spec's own
   verbatim 67-character Status example; parser resync past noise, bad
   checksums, implausible CNT, and split feeds; the full field decode for
-  both an RX/standby and a TX string; warning/alarm/band/model tables.
+  both an RX/standby and a TX string; warning/alarm/band/model tables; and
+  the RFC 2217 frame literals plus the COM-PORT-OPTION reply scan that
+  `powerOn()` gates on.
+- `tests/hgauge_range_test.cpp` (offscreen Qt Widgets): pins the gauge-rescale
+  contract `SpeApplet::setPowerRange` depends on — a range change re-maps the
+  current reading onto the new axis, and does so even when the reading itself
+  never changes. Renders the widget and measures the painted fill, because
+  the defect it guards against (PR #4531) was invisible to every value-level
+  assertion: `value`/`min`/`max` all read correct while the bar was wrong.
 - Hardware validation: developed and to be soak-tested against a real
-  1.5K-FA over ser2net raw TCP (the contributing author's station).
-  Serial-mode validation on real hardware is pending — the transport code
-  is shared with the network path and structurally identical to
+  1.5K-FA over ser2net in telnet mode (the contributing author's station;
+  §3). Serial-mode validation on real hardware is pending — the transport
+  code is shared with the network path and structurally identical to
   AcomConnection's, but this is stated, not assumed.
 
 ## 9. Open questions (for maintainer input)
 
+- **What is the Expert's correct idle state for DTR?** The power-ON pulse is
+  carried verbatim from the field-proven reference application and its
+  terminal step is `setControlLines(true, false)` — RTS (which carries the
+  1 s pulse) returns low, but DTR is left **high**. `connectSerial()`
+  meanwhile brings both lines up low. So the resting state of DTR depends on
+  whether ON was pressed this session, and a reconnect drops it, producing an
+  edge on that line. Both behaviours are as-shipped and hardware-validated in
+  isolation; what is missing is a ruling on which is *correct*, which needs an
+  Expert on the bench. The amplifier's own warning table has a code for this
+  class of condition (`R` — "Power switch held by remote"), so it is not
+  hypothetical. Until this is answered the code deliberately does not
+  second-guess the field-proven sequence, and the comments describe what it
+  actually does rather than asserting an invariant it does not hold.
 - 1.3K-FA / 2K-FA gauge thresholds are derived (§5) — need owners to
   confirm.
 - Whether the ACK for a keystroke should drive optimistic UI updates.

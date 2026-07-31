@@ -21,8 +21,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   poll. Model is identified from the amplifier's own status ID, and the
   power gauge rescales with the selected LOW/MID/HIGH level, matching the
   amp's own display. Configured from Radio Setup → Peripherals (the row's
-  tooltip documents the ser2net telnet config needed for future remote
-  power-ON). See `docs/architecture/spe-expert-amplifier-design.md`.
+  tooltip carries the `telnet(rfc2217=true)` ser2net config that remote
+  power-ON needs; monitoring and keystrokes work on a raw port too). See
+  `docs/architecture/spe-expert-amplifier-design.md`.
 
 ## [v26.7.4.1] — 2026-07-27
 

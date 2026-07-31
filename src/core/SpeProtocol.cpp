@@ -264,6 +264,8 @@ constexpr quint8 kIac = 0xFF;
 constexpr quint8 kWill = 0xFB;
 constexpr quint8 kSb = 0xFA;
 constexpr quint8 kSe = 0xF0;
+constexpr quint8 kDo = 0xFD;
+constexpr quint8 kDont = 0xFE;
 constexpr quint8 kComPortOption = 0x2C;
 constexpr quint8 kSetControl = 0x05;
 }  // namespace
@@ -288,6 +290,23 @@ QByteArray buildSetControl(quint8 ctrl)
     b.append(static_cast<char>(kIac));
     b.append(static_cast<char>(kSe));
     return b;
+}
+
+OptionReply scanComPortOptionReply(const QByteArray& bytes)
+{
+    OptionReply result = OptionReply::None;
+    for (int i = 0; i + 2 < bytes.size(); ++i) {
+        if (static_cast<quint8>(bytes.at(i)) != kIac)
+            continue;
+        if (static_cast<quint8>(bytes.at(i + 2)) != kComPortOption)
+            continue;
+        const quint8 verb = static_cast<quint8>(bytes.at(i + 1));
+        if (verb == kDo)
+            result = OptionReply::Accepted;
+        else if (verb == kDont)
+            result = OptionReply::Refused;
+    }
+    return result;
 }
 
 }  // namespace Rfc2217

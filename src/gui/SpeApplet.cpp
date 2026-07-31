@@ -215,8 +215,9 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_onBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     theme.applyStyleSheet(m_onBtn, activeBtnStyle("#0f2a1c", "#2a6a45"));
     m_onBtn->setToolTip(tr("Power the amplifier ON — pulses the serial control"
-                           " lines (over the network this needs ser2net in"
-                           " telnet mode; see the Radio Setup row's tooltip)."));
+                           " lines (over the network this needs an"
+                           " rfc2217-enabled ser2net port; see the Radio Setup"
+                           " row's tooltip)."));
     connect(m_onBtn, &QPushButton::clicked, this, &SpeApplet::powerOnClicked);
     // "OPER"/"STBY" rather than the full words — the row has 5 buttons and
     // the long labels clip at the applet's default width (hardware-tested).
@@ -233,8 +234,8 @@ SpeApplet::SpeApplet(QWidget* parent)
     connect(m_tuneBtn, &QPushButton::clicked, this, &SpeApplet::tuneClicked);
     m_offBtn = makeKeyBtn("OFF");
     m_offBtn->setToolTip(tr("Switch the amplifier off. Use ON to power it back"
-                            " up (over the network this needs ser2net in telnet"
-                            " mode)."));
+                            " up (over the network this needs an"
+                            " rfc2217-enabled ser2net port)."));
     connect(m_offBtn, &QPushButton::clicked, this, &SpeApplet::offClicked);
     btnRow1->addStretch();
     btnRow1->addWidget(m_onBtn);
@@ -256,10 +257,15 @@ SpeApplet::SpeApplet(QWidget* parent)
     // from the radio over CAT — no band keys here; the amp follows the
     // radio's band on its own.
     m_driveDownBtn = makeKeyBtn("▼");
+    // The glyph is the whole label, so without an explicit name a screen
+    // reader announces the arrow character itself. Tooltips reach AT only as
+    // help text on request (docs/a11y.md), so they don't stand in for a name.
+    m_driveDownBtn->setAccessibleName(tr("Lower requested drive power"));
     m_driveDownBtn->setToolTip(tr("Lower the drive power the amplifier requests"
                                   " from the radio (front-panel arrow key)"));
     connect(m_driveDownBtn, &QPushButton::clicked, this, &SpeApplet::driveDownClicked);
     m_driveUpBtn = makeKeyBtn("▲");
+    m_driveUpBtn->setAccessibleName(tr("Raise requested drive power"));
     m_driveUpBtn->setToolTip(tr("Raise the drive power the amplifier requests"
                                 " from the radio (front-panel arrow key)"));
     connect(m_driveUpBtn, &QPushButton::clicked, this, &SpeApplet::driveUpClicked);
@@ -291,9 +297,13 @@ void SpeApplet::setPowerRange(float nominalW, float warnW, float maxW)
 {
     // Called on every status frame with the level-derived scale — no-op on
     // repeats so only an actual LOW/MID/HIGH (or model) change repaints.
-    if (nominalW == m_rangeNominal && maxW == m_rangeMax)
+    // All three thresholds are compared: warnW is derived from nominalW
+    // today, but a guard that silently ignores one of its inputs is a trap
+    // for whoever changes that derivation.
+    if (nominalW == m_rangeNominal && warnW == m_rangeWarn && maxW == m_rangeMax)
         return;
     m_rangeNominal = nominalW;
+    m_rangeWarn = warnW;
     m_rangeMax = maxW;
     m_pwrGauge->setRange(0.0f, maxW, nominalW, evenTicks(maxW), warnW);
 }
@@ -396,7 +406,14 @@ void SpeApplet::applyModePill()
     if (m_connected && m_responding)
         state = !m_operate ? PillState::Standby
               : (m_transmitting ? PillState::OperateTx : PillState::OperateRx);
-    m_statusPill->setText(pillText(state));
+    // This runs on every status frame, i.e. at the 10 Hz poll rate, and both
+    // setStyleSheet() and ThemeManager::applyStyleSheet() re-resolve and
+    // re-polish unconditionally — neither has a no-op guard. pillText() is
+    // 1:1 with the state, so the pill's own text is a sufficient one.
+    const QString pill = pillText(state);
+    if (m_statusPill->text() == pill)
+        return;
+    m_statusPill->setText(pill);
     m_statusPill->setStyleSheet(pillStyle(state));
 
     auto& theme = AetherSDR::ThemeManager::instance();

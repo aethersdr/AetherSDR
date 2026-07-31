@@ -155,8 +155,9 @@ vendored, translated, or linked.
 
   The contributing author's own prior control application for the 1.5K-FA
   (Python, unpublished) served as the real-hardware cross-check: it
-  established that commands need a trailing CR LF in practice, the ~300 ms
-  status poll cadence, and the 1450/1500/1600 W gauge thresholds carried
+  established that commands need a trailing CR LF in practice, its ~300 ms
+  status poll cadence (this implementation polls faster, at 100 ms), and
+  the 1450/1500/1600 W gauge thresholds carried
   into SpeProtocol.cpp's modelTable(). Author's own work, contributed under
   this project's license; no third-party rights involved.
 

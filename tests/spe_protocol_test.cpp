@@ -253,6 +253,36 @@ int main()
            Rfc2217::buildSetControl(Rfc2217::kDtrOff)
                == QByteArray::fromHex("fffa2c0509fff0"));
 
+    // ── COM-PORT-OPTION reply scan. powerOn() gates the pulse on this:
+    //    without it a raw-mode proxy silently swallows every SET-CONTROL and
+    //    the client still reports success (PR #4531 review, finding 2).
+    report("IAC DO COM-PORT-OPTION reads as accepted",
+           Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffd2c"))
+               == Rfc2217::OptionReply::Accepted);
+    report("IAC DONT COM-PORT-OPTION reads as refused — a plain-telnet port",
+           Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffe2c"))
+               == Rfc2217::OptionReply::Refused);
+    report("a raw-mode proxy answers nothing, and nothing is what we report",
+           Rfc2217::scanComPortOptionReply(QByteArray(kSpecExample))
+               == Rfc2217::OptionReply::None);
+    report("negotiation for an unrelated option is not mistaken for ours",
+           Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffd01fffd03"))
+               == Rfc2217::OptionReply::None);
+    report("the reply is found when embedded in surrounding traffic",
+           Rfc2217::scanComPortOptionReply(
+               QByteArray::fromHex("aaaaaa010d0d") + QByteArray::fromHex("fffd2c")
+                   + QByteArray::fromHex("aaaaaa010909"))
+               == Rfc2217::OptionReply::Accepted);
+    report("a later reply wins over an earlier one in the same chunk",
+           Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffd2cfffe2c"))
+               == Rfc2217::OptionReply::Refused);
+    report("an escaped 0xFF pair is not decoded as a negotiation verb",
+           Rfc2217::scanComPortOptionReply(QByteArray::fromHex("ffff2c"))
+               == Rfc2217::OptionReply::None);
+    report("a truncated reply at the end of a chunk is not guessed at",
+           Rfc2217::scanComPortOptionReply(QByteArray::fromHex("fffd"))
+               == Rfc2217::OptionReply::None);
+
     std::printf("\n%d SPE protocol test(s) failed.\n", g_failed);
     return g_failed == 0 ? 0 : 1;
 }

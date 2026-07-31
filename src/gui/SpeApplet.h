@@ -132,6 +132,7 @@ private:
     // the wiring can re-derive the level-dependent scale on every status
     // frame (10/s) without triggering a repaint per frame.
     float m_rangeNominal{-1.0f};
+    float m_rangeWarn{-1.0f};
     float m_rangeMax{-1.0f};
 
     float m_fwdWatts{0.0f};

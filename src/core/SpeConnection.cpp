@@ -99,10 +99,17 @@ void SpeConnection::connectSerial(const QString& portName)
         if (m_autoReconnect) { armReconnect(); }
         return;
     }
-    // Hold DTR/RTS low — on the Expert the power-switch line can be driven
+    // Start with DTR/RTS low — on the Expert the power-switch line is driven
     // through the serial interface's control signals (that is how remote
-    // power-on works), so leaving them asserted by default risks holding
-    // the amp's power switch. Same precaution AcomConnection takes.
+    // power-on works, see powerOn()), so coming up with them asserted risks
+    // holding the amp's power switch. Same precaution AcomConnection takes.
+    //
+    // Note this is the state at CONNECT, not an invariant for the session:
+    // the power-ON pulse deliberately ends with DTR high (RTS, which carries
+    // the pulse, does return low). Whether DTR-high is the Expert's correct
+    // idle state is an open hardware question — design note §9 — and until
+    // it is answered a reconnect will drop DTR back low, producing an edge
+    // on that line.
     m_serialPort->setDataTerminalReady(false);
     m_serialPort->setRequestToSend(false);
 
@@ -170,6 +177,9 @@ void SpeConnection::onTransportUp()
     m_silentPolls = 0;
     m_responding = false;
     m_currentModelId.clear();
+    // Renegotiated per connection — a proxy reconfigured between sessions
+    // must not be judged on the previous session's answer.
+    m_comPortOption = Spe::Rfc2217::OptionReply::None;
     qCInfo(lcTuner) << "SpeConnection: connected via" << description();
 
     // First poll immediately — the timer only fires after a full interval,
@@ -217,7 +227,32 @@ void SpeConnection::armReconnect()
 void SpeConnection::onReadyRead()
 {
     if (!m_device) { return; }
-    m_parser.feed(m_device->readAll());
+    const QByteArray chunk = m_device->readAll();
+
+    // Watch for the proxy's answer to our WILL COM-PORT-OPTION before the
+    // bytes go to the frame parser. Read-only — the parser resyncs past
+    // negotiation on its own, so nothing is consumed here; this only records
+    // whether RFC 2217 control is actually available, which powerOn() needs
+    // to know before it claims the pulse reached the amplifier.
+    if (m_mode == Mode::Network) {
+        const auto reply = Spe::Rfc2217::scanComPortOptionReply(chunk);
+        if (reply != Spe::Rfc2217::OptionReply::None && reply != m_comPortOption) {
+            m_comPortOption = reply;
+            if (reply == Spe::Rfc2217::OptionReply::Accepted) {
+                qCInfo(lcTuner) << "SpeConnection: proxy accepted RFC 2217"
+                                   " COM-port control — remote power-ON is"
+                                   " available.";
+            } else {
+                qCWarning(lcTuner) << "SpeConnection: proxy REFUSED RFC 2217"
+                                      " COM-port control. Monitoring and"
+                                      " keystrokes still work, but remote"
+                                      " power-ON needs the ser2net port as"
+                                      " `accepter: telnet(rfc2217=true),<port>`.";
+            }
+        }
+    }
+
+    m_parser.feed(chunk);
 }
 
 void SpeConnection::pollTick()
@@ -319,6 +354,24 @@ void SpeConnection::powerOnStep()
     // pulse), then DTR on + RTS off to idle.
     switch (m_powerOnStep) {
         case 0:
+            // The proxy has had its 500 ms to answer WILL COM-PORT-OPTION.
+            // An explicit DONT is unambiguous: every SET-CONTROL below would
+            // be discarded, so stop rather than pulse into the void and then
+            // report success. Silence is NOT treated as refusal — a proxy
+            // that already agreed earlier in this session is not obliged to
+            // re-answer (RFC 854) — but it does downgrade the completion
+            // message in case 2.
+            if (m_mode == Mode::Network
+                && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
+                m_powerOnStep = -1;
+                qCWarning(lcTuner) << "SpeConnection: power-ON aborted — the"
+                                      " proxy refused RFC 2217 COM-port"
+                                      " control, so the control lines cannot"
+                                      " be driven. Configure the ser2net port"
+                                      " as `accepter: telnet(rfc2217=true),"
+                                      "<port>` and reconnect.";
+                break;
+            }
             setControlLines(true, false);
             m_powerOnStep = 1;
             m_powerOnTimer.start(100);
@@ -331,8 +384,24 @@ void SpeConnection::powerOnStep()
         case 2:
             setControlLines(true, false);
             m_powerOnStep = -1;
-            qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the amp"
-                               " should begin answering status polls shortly.";
+            if (m_mode == Mode::Network
+                && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
+                // Raw-mode ser2net never answers negotiation at all — it
+                // forwards our SET-CONTROL frames into the amplifier's UART
+                // as payload. Say what was actually confirmed rather than
+                // claiming a pulse we cannot know landed.
+                qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
+                                      " the proxy never confirmed RFC 2217"
+                                      " COM-port control — if the amplifier"
+                                      " stays silent, check that ser2net runs"
+                                      " this port as `accepter:"
+                                      " telnet(rfc2217=true),<port>` rather"
+                                      " than raw.";
+            } else {
+                qCInfo(lcTuner) << "SpeConnection: power-ON pulse complete — the"
+                                   " amp should begin answering status polls"
+                                   " shortly.";
+            }
             break;
         default:
             m_powerOnStep = -1;

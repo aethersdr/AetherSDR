@@ -53,9 +53,13 @@ public:
     // validation station runs telnet mode). Telnet negotiation bytes and
     // IAC-escaping are shrugged off by the parser's sync-run resync; the
     // rare status frame whose checksum byte happens to be 0xFF is dropped
-    // and simply re-polled 100 ms later. Telnet mode is in fact what a
-    // future remote power-ON feature needs (serial BREAK via
-    // telnet-brk-on-sync) — see the design note §4.
+    // and simply re-polled 100 ms later. Telnet mode is also what the remote
+    // power-ON pulse needs — it drives the proxy's DTR/RTS lines via RFC 2217
+    // COM-port control, so ser2net must run the port as
+    // `accepter: telnet(rfc2217=true),<port>`. A raw or plain-telnet port
+    // still monitors and sends keystrokes fine; only powerOn() is affected,
+    // and it detects and reports that case rather than assuming. See the
+    // design note §4.
     void connectNetwork(const QString& host, quint16 port);
     void disconnect();
 
@@ -72,11 +76,15 @@ public:
 
     // Power the amplifier ON — a hardware pulse on the serial connector's
     // control lines, not a protocol command, so it works while the amp is
-    // silent. Network mode drives the proxy's DTR/RTS via RFC 2217 (needs
-    // ser2net in telnet mode); serial mode drives the local lines directly.
-    // The pulse sequence and timing are carried verbatim from the
-    // field-proven reference application (see Spe::Rfc2217 and design note
-    // §4). No-op while a pulse is already in progress.
+    // silent. Network mode drives the proxy's DTR/RTS via RFC 2217, which
+    // needs ser2net running the port as
+    // `accepter: telnet(rfc2217=true),<port>`; serial mode drives the local
+    // lines directly. If the proxy answers DONT COM-PORT-OPTION the pulse is
+    // aborted rather than sent into a port that will discard it, and if it
+    // never answers at all (raw mode) the completion message says so instead
+    // of claiming success. The pulse sequence and timing are carried verbatim
+    // from the field-proven reference application (see Spe::Rfc2217 and
+    // design note §4). No-op while a pulse is already in progress.
     void powerOn();
 
     const Spe::Status& lastStatus() const { return m_lastStatus; }
@@ -151,6 +159,10 @@ private:
     // Power-ON pulse state machine (see powerOn()). -1 = idle.
     QTimer m_powerOnTimer;
     int    m_powerOnStep{-1};
+    // Whether the network peer accepted RFC 2217 COM-port control, learned
+    // from its reply to WILL COM-PORT-OPTION. Network mode only; a local
+    // serial port drives its own lines and needs no negotiation.
+    Spe::Rfc2217::OptionReply m_comPortOption{Spe::Rfc2217::OptionReply::None};
 
     // Responding/silent tracking: a poll counts as unanswered if no Status
     // frame arrived since the previous tick. A few misses are tolerated

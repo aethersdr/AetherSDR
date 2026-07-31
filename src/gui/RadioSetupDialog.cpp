@@ -6943,20 +6943,21 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         devLay->addWidget(modeCombo);
         // Network mode = ser2net proxy. Raw and telnet modes both work for
         // monitoring/control, but powering the amplifier ON over the network
-        // needs the port in telnet mode (serial BREAK via telnet-brk-on-sync)
-        // — surface the reference config where the user is already looking.
+        // drives the proxy's DTR/RTS lines via RFC 2217 COM-port control, so
+        // that one feature needs `telnet(rfc2217=true)` specifically — plain
+        // telnet answers DONT and a raw port never answers at all. Surface
+        // the reference config where the user is already looking.
         const QString speSer2netTip = QStringLiteral(
             "Network mode connects through a ser2net serial-to-TCP proxy.\n"
             "Monitoring and control work with the port in raw or telnet mode.\n"
-            "To power the amplifier ON over the network, ser2net must run the\n"
-            "port in telnet mode with BRK-on-sync, e.g. in ser2net.yaml:\n"
+            "Powering the amplifier ON over the network additionally needs\n"
+            "RFC 2217 COM-port control, i.e. an rfc2217-enabled telnet port:\n"
             "\n"
             "connection: &spe\n"
-            "    accepter: telnet,64002\n"
+            "    accepter: telnet(rfc2217=true),64002\n"
             "    enable: on\n"
             "    options:\n"
             "      kickolduser: true\n"
-            "      telnet-brk-on-sync: true\n"
             "    connector: serialdev,\n"
             "              /dev/ttyUSB0");
         devWidget->setToolTip(speSer2netTip);

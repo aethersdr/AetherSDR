@@ -141,6 +141,18 @@ public:
         m_min = min; m_max = max; m_redStart = redStart;
         m_yellowStart = std::isnan(yellowStart) ? redStart : yellowStart;
         m_ticks = ticks;
+        // Re-map the current reading onto the new axis.  The smoother holds a
+        // *fraction*, not a value, so without this it keeps the fraction it
+        // computed under the old range — and setValue() early-returns on an
+        // unchanged reading, so nothing would ever correct it while the signal
+        // sits still.  A steady 1000 W carrier rescaled from an SPE MID axis
+        // to HIGH painted 91% of a 0–1600 track, i.e. ~1456 W (PR #4531).
+        // Snap rather than animate: a range change is a discontinuity, and
+        // sweeping the bar across a scale it was never on reads as a real
+        // level change to the operator.
+        m_smooth.setTarget(qBound(0.0f, (m_value - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.snapToTarget();
+        if (m_animTimer.isActive()) m_animTimer.stop();
         publishAutomationState();
         update();
     }
