@@ -744,7 +744,39 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
     // at construction time and we need those scopes to keep existing
     // so the editor's tree picker can still navigate to them.
     for (const QString& path : m_declaredContainers) scopeOrCreate(path);
+
+    // Decide which bundled theme this one counts as a fork of, ONCE, here —
+    // with the file's own values loaded and no operator edits applied yet.
+    //
+    // This has to be a load-time decision rather than a lookup at Reset time.
+    // The fallback discriminator is background luminance, and the operator
+    // reaches for "Reset to default" precisely when they have just made a
+    // value wrong: classify on the live token and a light theme whose
+    // background has been dragged dark reclassifies as dark, so Reset restores
+    // the DARK value for that token and every other one for the rest of the
+    // session — the exact defect this is meant to fix, self-inflicted.
+    m_activeThemeBase = resolveThemeBase(root);
     return true;
+}
+
+QString ThemeManager::resolveThemeBase(const QJsonObject& root) const
+{
+    // Prefer recorded parentage. saveCurrentThemeAs() stamps the base it forked
+    // from into the document, so for any theme this build wrote there is no
+    // guessing at all.
+    const QString recorded = root.value(QStringLiteral("baseTheme")).toString();
+    if (recorded == QLatin1String("Default Light")
+        || recorded == QLatin1String("Default Dark")) {
+        return recorded;
+    }
+    // No parentage recorded (a bundled theme, a hand-written file, or one
+    // saved by a build predating the field): fall back to the theme's own
+    // background luminance as loaded from disk.
+    const QVariant bg = lookupRaw(QString(),
+                                  QStringLiteral("color.background.0"));
+    const QColor c(bg.toString());
+    if (c.isValid() && c.lightness() > 127) return QStringLiteral("Default Light");
+    return QStringLiteral("Default Dark");
 }
 
 void ThemeManager::readPrimitivesFromJson(const QJsonObject& obj)
@@ -917,24 +949,18 @@ QString ThemeManager::factoryBaselinePath() const
     // Which bundled theme "factory default" means depends on what the operator
     // is editing. This used to be hardcoded to default-dark.json, so pressing
     // "Reset to default" while editing Default Light restored the DARK value —
-    // wrong for 96 of the 147 root tokens the two themes share, including
+    // wrong for most of the root tokens the two themes share, including
     // color.background.0, which flipped a near-white background to near-black.
     //
-    // A user theme forked from Light keeps its light baseline: the fork's own
-    // JSON is not a factory artefact, so the closest honest answer is the
-    // bundled theme it descends from. We can't know that for certain, so we use
-    // the theme's own background luminance as the discriminator — a theme whose
-    // background is light resets to Light's values.
-    if (m_activeTheme == QLatin1String("Default Light"))
-        return QStringLiteral(":/themes/default-light.json");
-    if (m_activeTheme == QLatin1String("Default Dark"))
-        return QStringLiteral(":/themes/default-dark.json");
-
-    const QColor bg = const_cast<ThemeManager*>(this)
-                          ->color(QStringLiteral("color.background.0"));
-    if (bg.isValid() && bg.lightness() > 127)
-        return QStringLiteral(":/themes/default-light.json");
-    return QStringLiteral(":/themes/default-dark.json");
+    // m_activeThemeBase is decided once per theme load (see resolveThemeBase),
+    // from recorded parentage where we have it and from the file's own
+    // background luminance where we don't. Deliberately NOT recomputed here:
+    // this is read from the Reset button, and the operator presses Reset
+    // exactly when a value is wrong — classifying on live state lets a
+    // dragged-dark background on a light theme flip the whole baseline.
+    return m_activeThemeBase == QLatin1String("Default Light")
+               ? QStringLiteral(":/themes/default-light.json")
+               : QStringLiteral(":/themes/default-dark.json");
 }
 
 void ThemeManager::ensureFactoryLoaded() const
@@ -944,12 +970,15 @@ void ThemeManager::ensureFactoryLoaded() const
     // keeps offering the previous base's values.
     const QString wanted = factoryBaselinePath();
     if (m_factoryLoaded && m_factoryBaselinePath == wanted) return;
-    m_factoryLoaded = true;   // even if loading fails, don't spin on re-try
-    m_factoryBaselinePath = wanted;
     m_factoryTokens.clear();  // stale entries from the other base must not leak
 
     QFile f(wanted);
     if (!f.open(QIODevice::ReadOnly)) {
+        // Do NOT latch on failure. The old code set m_factoryLoaded before the
+        // load could fail, so a single miss disabled every Reset affordance for
+        // the rest of the process with nothing in the UI to say why. Leaving
+        // the flag clear costs one failed QFile::open per Reset press and lets
+        // it recover if the resource ever becomes readable.
         qCWarning(lcGui) << "ThemeManager: factory snapshot — failed to open"
                          << f.fileName();
         return;
@@ -1001,6 +1030,10 @@ void ThemeManager::ensureFactoryLoaded() const
         flattenTokens(root.value("tokens").toObject(), QString(),
                       m_factoryTokens);
     }
+    // Latch only on success — every early return above leaves the flags clear
+    // so the next Reset press retries instead of serving an empty snapshot.
+    m_factoryLoaded       = true;
+    m_factoryBaselinePath = wanted;
 }
 
 ThemeGradient ThemeManager::factoryGradient(const QString& token) const
@@ -1094,20 +1127,70 @@ bool ThemeManager::deleteTheme(const QString& name)
     return true;
 }
 
-// A theme name that becomes a filename must not carry path structure.
+// A theme name that becomes a filename must not carry path structure — and,
+// because a theme file is portable, must not be a name that only breaks once
+// the file reaches another OS.
 //
-// Checked rather than silently rewritten at these two call sites: the operator
-// TYPED this name, so replacing characters would save their theme under a name
-// they did not choose. importThemeFromFile() substitutes instead, correctly —
-// there the name comes from a file's JSON, nobody is watching, and refusing
-// would strand an otherwise-valid import.
+// Checked rather than silently rewritten at the two call sites where the
+// operator TYPED the name: replacing characters would save their theme under a
+// name they did not choose. importThemeFromFile() substitutes instead, and that
+// is right for it — there the name comes from a file's JSON, nobody is
+// watching, and refusing would strand an otherwise-valid import.
 //
-// Both separators are rejected on every platform: '\' is not a separator on
-// Unix, but a theme file is portable and a name containing one would become a
-// traversal the moment the file is opened on Windows.
-static bool containsPathSeparator(const QString& name)
+// Every rule below is applied on every platform, deliberately. '\' and ':' are
+// not special on Unix and the reserved device names mean nothing there, but a
+// theme saved on Linux gets opened on Windows, and the failure then belongs to
+// someone who never typed anything.
+//
+// `reason` is filled with operator-facing text — the caller is a dialog, and
+// "we refused, here is why" is the entire justification for refusing rather
+// than substituting. Silently returning false and letting the UI guess is how
+// you end up telling someone to check directory permissions.
+bool ThemeManager::isValidThemeName(const QString& name, QString* reason)
 {
-    return name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'));
+    auto no = [reason](const QString& why) {
+        if (reason) *reason = why;
+        return false;
+    };
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return no(QStringLiteral("A theme name can't be empty."));
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+        return no(QStringLiteral("A theme name can't contain \"/\" or \"\\\" — "
+                                 "it becomes a filename."));
+    if (trimmed.contains(QLatin1Char(':')))
+        return no(QStringLiteral("A theme name can't contain \":\" — it becomes "
+                                 "a filename, and \":\" is reserved on Windows."));
+    for (const QChar c : trimmed) {
+        if (c.unicode() < 0x20)
+            return no(QStringLiteral("A theme name can't contain control "
+                                     "characters."));
+    }
+    // Win32 strips a trailing dot, so "My Theme." and "My Theme" would collide
+    // on disk while reading as two different themes in the list.
+    if (trimmed.endsWith(QLatin1Char('.')))
+        return no(QStringLiteral("A theme name can't end with \".\"."));
+
+    // Reserved DOS device names: still special on Win32 today, with or without
+    // an extension, so "CON.json" opens the console rather than a file.
+    static const QStringList kReserved = {
+        QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
+        QStringLiteral("NUL"),
+        QStringLiteral("COM1"), QStringLiteral("COM2"), QStringLiteral("COM3"),
+        QStringLiteral("COM4"), QStringLiteral("COM5"), QStringLiteral("COM6"),
+        QStringLiteral("COM7"), QStringLiteral("COM8"), QStringLiteral("COM9"),
+        QStringLiteral("LPT1"), QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+        QStringLiteral("LPT4"), QStringLiteral("LPT5"), QStringLiteral("LPT6"),
+        QStringLiteral("LPT7"), QStringLiteral("LPT8"), QStringLiteral("LPT9"),
+    };
+    const QString stem = trimmed.section(QLatin1Char('.'), 0, 0).toUpper();
+    if (kReserved.contains(stem))
+        return no(QStringLiteral("\"%1\" is a name Windows reserves for a "
+                                 "device — pick another.").arg(trimmed));
+
+    if (reason) reason->clear();
+    return true;
 }
 
 bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
@@ -1117,9 +1200,10 @@ bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
     if (oldName == trimmed) return true;  // no-op rename
     // Becomes a filename below — same rule as saveCurrentThemeAs() and
     // importThemeFromFile().
-    if (containsPathSeparator(trimmed)) {
-        qCWarning(lcGui) << "ThemeManager::renameTheme: refusing name with"
-                            "a path separator:" << trimmed;
+    QString why;
+    if (!isValidThemeName(trimmed, &why)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: refusing name"
+                         << trimmed << "—" << why;
         return false;
     }
     if (isBuiltInTheme(oldName)) {
@@ -1273,6 +1357,13 @@ QJsonObject ThemeManager::themeDocumentJson(const QString& themeName,
     doc.insert("author",        QStringLiteral("AetherSDR user"));
     doc.insert("version",       QStringLiteral("1.0"));
     doc.insert("description",   description);
+    // Recorded parentage: which bundled theme this one descends from, so
+    // "Reset to default" restores the right base without having to guess from
+    // the theme's own colours.  Additive within v2 — older builds ignore an
+    // unknown key, and resolveThemeBase() falls back to luminance when it's
+    // absent, which is every file written before this field existed.
+    if (!m_activeThemeBase.isEmpty())
+        doc.insert("baseTheme", m_activeThemeBase);
     if (!primitives.isEmpty()) doc.insert("primitives", primitives);
     doc.insert("scopes",        scopes);
     return doc;
@@ -1296,16 +1387,23 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
 
 bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
 {
-    if (newThemeName.trimmed().isEmpty()) return false;
+    // Trim ONCE and use the trimmed name for everything below — the guard, the
+    // filename, and the map key.  The old code trimmed only for the emptiness
+    // test, so "My Theme " registered under a key with a trailing space and
+    // wrote "My Theme .json"; Win32 strips trailing spaces from filenames, so
+    // the key and the file on disk would disagree there.  renameTheme() has
+    // always trimmed throughout; match it.
+    const QString name = newThemeName.trimmed();
     // The name becomes a FILENAME below. importThemeFromFile() already refuses
     // path separators for exactly this reason ("sanitise so we can't
     // path-traverse via a malicious name field"), but this entry point — the
     // editor's Save As, where the operator types the name — did not, so a name
     // containing a separator wrote outside the themes directory. Same rule,
     // applied consistently.
-    if (containsPathSeparator(newThemeName)) {
-        qCWarning(lcGui) << "ThemeManager::saveCurrentThemeAs: refusing name with"
-                            "a path separator:" << newThemeName;
+    QString why;
+    if (!isValidThemeName(name, &why)) {
+        qCWarning(lcGui) << "ThemeManager::saveCurrentThemeAs: refusing name"
+                         << newThemeName << "—" << why;
         return false;
     }
 
@@ -1317,16 +1415,20 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
                             + QStringLiteral("/AetherSDR/themes");
     QDir().mkpath(userDir);
     const QString path = userDir + QLatin1Char('/')
-                       + newThemeName + QStringLiteral(".json");
-    if (!writeThemeFile(newThemeName, path)) return false;
+                       + name + QStringLiteral(".json");
+    if (!writeThemeFile(name, path)) return false;
 
     // Register the new theme in the path map so availableThemes() picks it
     // up immediately, then make it the active theme (loads cleanly from
     // the file we just wrote, so the on-disk shape doubles as a validation
     // check).
-    m_themePaths.insert(newThemeName, path);
-    m_activeTheme = newThemeName;
-    AppSettings::instance().setValue("ActiveTheme", newThemeName);
+    //
+    // m_activeThemeBase is deliberately carried across unchanged: a fork of
+    // Default Light is still a descendant of Default Light, and that is exactly
+    // the parentage writeThemeFile() just stamped into the new file.
+    m_themePaths.insert(name, path);
+    m_activeTheme = name;
+    AppSettings::instance().setValue("ActiveTheme", name);
     AppSettings::instance().save();
     emit themeChanged();
     return true;

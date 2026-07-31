@@ -345,15 +345,25 @@ public:
     QString       factoryString(const QString& token) const;
     bool          hasFactoryValue(const QString& token) const;
 
-    // Theme-file management — Delete / Rename for the user's saved
-    // themes living under ~/.config/AetherSDR/themes/.  Both refuse
-    // on built-in themes (those live inside the Qt resource bundle
-    // and aren't deletable).  Delete switches the active theme back
-    // to "Default Dark" before unlinking so the UI doesn't render
-    // half-blank during the file removal.
+    // Theme-file management — Delete / Rename for the user's saved themes
+    // living under QStandardPaths::GenericConfigLocation + "/AetherSDR/themes"
+    // (`~/.config/...` on Linux, `%LOCALAPPDATA%` on Windows, `~/Library/
+    // Preferences` on macOS).  Both refuse on built-in themes (those live
+    // inside the Qt resource bundle and aren't deletable).  Delete switches
+    // the active theme back to "Default Dark" before unlinking so the UI
+    // doesn't render half-blank during the file removal.
     bool        deleteTheme(const QString& name);
     bool        renameTheme(const QString& oldName, const QString& newName);
     bool        isBuiltInTheme(const QString& name) const;
+
+    // Is this a name we can turn into a theme FILE?  saveCurrentThemeAs() and
+    // renameTheme() both enforce it and both REFUSE rather than substitute,
+    // because at those two entry points the operator typed the name.  Public
+    // so the editor can check before it asks and report the actual reason —
+    // a refusal the UI can only describe as "couldn't write the file" is worse
+    // than useless, it sends the operator to check directory permissions.
+    // `reason` (optional) receives operator-facing text.
+    static bool isValidThemeName(const QString& name, QString* reason = nullptr);
 
     bool        saveCurrentThemeAs(const QString& newThemeName);
 
@@ -515,10 +525,12 @@ private:
     mutable QSet<QString>            m_warnedUnknownTokens;
     mutable QMutex                   m_unknownTokenMutex;
 
-    // Factory-default snapshot, loaded once from `:/themes/default-dark.json`
-    // at construction.  Drives the gradient editor's "Reset to default"
-    // button.  Lazy-initialised so a totally missing resource bundle
-    // doesn't take the whole singleton down.
+    // Factory-default snapshot of whichever bundled theme the active theme
+    // descends from (see factoryBaselinePath()).  Drives every "Reset to
+    // default" affordance in the editor.  Lazy-initialised so a totally
+    // missing resource bundle doesn't take the whole singleton down, and
+    // latched only on a SUCCESSFUL load so one failed read doesn't disable
+    // Reset for the rest of the process.
     mutable QHash<QString, QVariant> m_factoryTokens;
     mutable bool m_factoryLoaded{false};
     // Which bundled theme the current snapshot came from, so a Dark -> Light
@@ -527,6 +539,17 @@ private:
     void ensureFactoryLoaded() const;
     // Bundled theme the active theme's "factory default" should come from.
     QString factoryBaselinePath() const;
+
+    // "Default Light" / "Default Dark" — the bundled theme the ACTIVE theme is
+    // a descendant of.  Decided once per theme load by resolveThemeBase() and
+    // then held constant, because the thing that reads it is the Reset button
+    // and the operator presses Reset when a value is already wrong: deriving
+    // it from live token state lets a light theme whose background has been
+    // dragged dark reclassify itself, and then Reset hands back dark values.
+    QString m_activeThemeBase;
+    // From recorded parentage (`baseTheme` in the document) where present,
+    // falling back to the freshly-loaded background's luminance where not.
+    QString resolveThemeBase(const QJsonObject& root) const;
 
     // Smart-invalidation hint — set transiently by setColor / setGradient
     // / setSizing / setString to the token that just changed, then
