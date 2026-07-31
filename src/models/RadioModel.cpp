@@ -808,12 +808,6 @@ void RadioModel::setupBackend(const QString& family)
         if (m_backend)
             m_backend->setTxPower(percent);
     });
-    // Tell the transmit model whether the HOST modulates. It drives the
-    // mic-source list: a backend that modulates here has no physical input jacks
-    // to choose between, so "PC" is the only truthful answer.
-    connect(this, &RadioModel::connectionStateChanged, this,
-            [this](bool connected) { publishCapabilities(connected); });
-
     // A backend may revise its own capabilities mid-session (SimBackend does so
     // on connect; a Flex refines its seeded table as touchpoints convert), and
     // until now nothing above the seam listened — connectionStateChanged was the
@@ -894,17 +888,6 @@ void RadioModel::setupBackend(const QString& family)
             // trx:true for the carrier operators most often tune INTO an amp.
             publishBackendTransmitEdge(on);
         }
-    });
-
-    // Push the CURRENT power on connect, not only on change. rfPowerChanged
-    // fires on edges, so a session that never touches the control left the
-    // radio at whatever its own default was — on the HL2 that is drive 0, which
-    // also leaves the PA disabled, so a perfectly correct keyed transmission
-    // produced no RF at all. Measured: forward-power counts stuck at zero.
-    connect(this, &RadioModel::connectionStateChanged, this,
-            [this](bool connected) {
-        if (connected && m_backend)
-            m_backend->setTxPower(m_transmitModel.rfPower());
     });
 
     // Meter VALUES from a backend that decodes its own telemetry.
@@ -1532,6 +1515,28 @@ RadioModel::RadioModel(QObject* parent)
     // Default to Flex; the backend is swapped in connectToRadio() to match
     // whichever radio the operator picks in the connection manager.
     setupBackend(QStringLiteral("flex"));
+
+    // These connection-edge callbacks follow whichever backend is current, but
+    // neither connection is owned by that backend. Install them once for the
+    // RadioModel lifetime rather than once per setupBackend() call.
+    //
+    // Tell the transmit model whether the HOST modulates. It drives the
+    // mic-source list: a backend that modulates here has no physical input jacks
+    // to choose between, so "PC" is the only truthful answer.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) { publishCapabilities(connected); });
+
+    // Push the CURRENT power on connect, not only on change. rfPowerChanged
+    // fires on edges, so a session that never touches the control left the
+    // radio at whatever its own default was — on the HL2 that is drive 0, which
+    // also leaves the PA disabled, so a perfectly correct keyed transmission
+    // produced no RF at all. Measured: forward-power counts stuck at zero.
+    connect(this, &RadioModel::connectionStateChanged, this,
+            [this](bool connected) {
+        if (connected && m_backend) {
+            m_backend->setTxPower(m_transmitModel.rfPower());
+        }
+    });
 
     // #4142 — single owner of the deferred pan-write replay. Armed by the
     // defer path (armProfileLoadPanWriteFlush), hold-relative, self-re-arming;

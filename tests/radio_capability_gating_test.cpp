@@ -451,6 +451,23 @@ int main(int argc, char** argv)
               "round-trip: Flex regains hasSupplyVoltageTelemetry after sim -> Flex");
     }
 
+    // ---- Family swaps do not duplicate the connection-edge relay -----------
+    //
+    // setupBackend() ran once for each of Flex -> HL2 -> Sim -> Flex above.
+    // A RadioModel-owned connection installed there survives teardownBackend(),
+    // so one connectionStateChanged edge would fan out once per family visited.
+    // Invoke the signal synchronously to isolate this ownership invariant from
+    // any backend's asynchronous connect lifecycle or capabilitiesChanged signal.
+    {
+        QSignalSpy spy(&model, &RadioModel::capabilitiesChanged);
+        const bool invoked = QMetaObject::invokeMethod(
+            &model, "connectionStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, true));
+        check(invoked, "connectionStateChanged can be invoked for the ownership check");
+        check(spy.count() == 1,
+              "family swaps leave exactly one connection-edge capability relay");
+    }
+
     // ---- Flex extended DSP is unchanged by the reconciliation -------------
     //
     // The byte-identical claim: FlexBackend computes caps.hasExtendedDsp as
