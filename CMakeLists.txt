@@ -1185,12 +1185,69 @@ target_link_libraries(AetherSDR PRIVATE aethercore)
 # force every backend option OFF so the missing directories are never referenced
 # and builds are deterministic across platforms (incl. no -march=native, which
 # would break portable/Pi/CI binaries). GPU backends land in a later phase.
+#
+# USE_SYSTEM_LIBWHISPER=ON swaps that vendored tree for a distro libwhisper found
+# through pkg-config — the packagers' path, off by default so CI, releases, and
+# contributor laptops all build the pinned snapshot.
 if (ENABLE_ASR)
+    # GPU acceleration for ASR: the native GPU backend per platform — Metal on
+    # Apple (macOS has no native Vulkan), Vulkan elsewhere (cross-platform
+    # NVIDIA/AMD/Intel on Linux/Windows). Both are the only GPU backends vendored,
+    # and both are gated so machines/CI without the toolchain build CPU-only,
+    # exactly as before. At runtime ggml falls back to CPU when no GPU device is
+    # found, so a GPU-enabled binary still runs on GPU-less hosts.
+    #
+    # Declared ahead of the engine branch below so they always reach the cache: an
+    # option() that exists on only one branch turns a user's -DENABLE_ASR_VULKAN=OFF
+    # into a bare "unused variable" warning on the other.
+    set(_asr_vulkan OFF)
+    set(_asr_metal  OFF)
+    if (APPLE)
+        # Metal uses the Metal framework + the `metal` shader compiler from full
+        # Xcode (present on macOS CI); no external SDK to install.
+        option(ENABLE_ASR_METAL "Enable Metal GPU acceleration for ASR (macOS)" ON)
+    else()
+        option(ENABLE_ASR_VULKAN "Enable Vulkan GPU acceleration for ASR (auto-detected)" ON)
+    endif()
+
     if(USE_SYSTEM_LIBWHISPER)
+        # Distro-packaged libwhisper, for packagers who link everything dynamically.
+        # Which ggml backends it carries is the packager's call and is not visible
+        # from here, so this path never claims a GPU backend.
+        #
+        # Release guard: for that same reason it can never satisfy REQUIRE_ASR_GPU.
+        # Fail here rather than let a release image quietly lose GPU inference —
+        # the whole point of the guard.
+        if (REQUIRE_ASR_GPU)
+            message(FATAL_ERROR "REQUIRE_ASR_GPU is set but USE_SYSTEM_LIBWHISPER=ON. The GPU "
+                "backends compiled into a distro libwhisper are the packager's choice and cannot "
+                "be verified at configure time; build release images against the vendored engine "
+                "(-DUSE_SYSTEM_LIBWHISPER=OFF).")
+        endif()
         find_package(PkgConfig REQUIRED)
         if(PkgConfig_FOUND)
-            pkg_check_modules(whisper REQUIRED IMPORTED_TARGET whisper>=1.7.4)
+            # 1.8.0 is the real floor: WhisperAsrBackend.cpp enumerates devices with
+            # GGML_BACKEND_DEVICE_TYPE_IGPU, which whisper.cpp only gained in 1.8.0.
+            # Against 1.7.x this configures cleanly and then fails to compile.
+            pkg_check_modules(whisper REQUIRED IMPORTED_TARGET whisper>=1.8.0)
         endif()
+        # That same code calls ggml directly (<ggml-backend.h>, ggml_backend_dev_*),
+        # so take ggml as a dependency of our own instead of leaning on whisper.pc's
+        # transitive "-lggml -lggml-base" and flat "-I${includedir}". Upstream ggml
+        # ships a CMake package config and Debian additionally ships ggml.pc; use
+        # whichever exists, and fall back to whisper's own flags where neither does
+        # (that fallback is what carries the build on Debian today).
+        pkg_check_modules(ggml QUIET IMPORTED_TARGET ggml)
+        if (TARGET PkgConfig::ggml)
+            set(_asr_ggml_target PkgConfig::ggml)
+        else()
+            find_package(ggml QUIET CONFIG)
+            if (TARGET ggml::ggml)
+                set(_asr_ggml_target ggml::ggml)
+            endif()
+        endif()
+        message(STATUS "ASR: system libwhisper ${whisper_VERSION} "
+            "(ggml: ${_asr_ggml_target}; backends per distro, GPU unverifiable)")
     else()
         set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
         set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -1200,24 +1257,12 @@ if (ENABLE_ASR)
         set(GGML_NATIVE            OFF CACHE BOOL "" FORCE)  # portable binaries (Pi/CI/release)
         set(GGML_CPU               ON  CACHE BOOL "" FORCE)
 
-        # GPU acceleration for ASR: the native GPU backend per platform — Metal on
-        # Apple (macOS has no native Vulkan), Vulkan elsewhere (cross-platform
-        # NVIDIA/AMD/Intel on Linux/Windows). Both are the only GPU backends vendored,
-        # and both are gated so machines/CI without the toolchain build CPU-only,
-        # exactly as before. At runtime ggml falls back to CPU when no GPU device is
-        # found, so a GPU-enabled binary still runs on GPU-less hosts.
-        set(_asr_vulkan OFF)
-        set(_asr_metal  OFF)
         if (APPLE)
-            # Metal uses the Metal framework + the `metal` shader compiler from full
-            # Xcode (present on macOS CI); no external SDK to install.
-            option(ENABLE_ASR_METAL "Enable Metal GPU acceleration for ASR (macOS)" ON)
             if (ENABLE_ASR_METAL)
                 set(_asr_metal ON)
                 message(STATUS "ASR: Metal GPU backend enabled (Apple)")
             endif()
         else()
-            option(ENABLE_ASR_VULKAN "Enable Vulkan GPU acceleration for ASR (auto-detected)" ON)
             if (ENABLE_ASR_VULKAN)
                 # Prebuilt Windows path: skips the glslc + SPIRV-Headers requirement
                 # because the shaders are already compiled INTO the shipped
@@ -1332,6 +1377,14 @@ if (ENABLE_ASR)
         endif()
     endif()
 
+    # One name for "the whisper we link", resolved once above, so aetherasr and the
+    # two whisper-linked tests below can't drift apart on the system/vendored split.
+    if (USE_SYSTEM_LIBWHISPER)
+        set(_asr_whisper_link PkgConfig::whisper ${_asr_ggml_target})
+    else()
+        set(_asr_whisper_link whisper)
+    endif()
+
     # ASR ships as its OWN static library, deliberately NOT part of libaethercore.
     # Per the aetherd direction (RFC #3849/#4333), speech processing belongs on
     # the engine/headless side and streams only the resulting text to a thin UI;
@@ -1355,13 +1408,8 @@ if (ENABLE_ASR)
         src/core/Resampler.cpp   # standalone r8brain wrapper (24k->16k on the ASR worker)
     )
     target_include_directories(aetherasr PUBLIC src PRIVATE ${CMAKE_SOURCE_DIR}/third_party/r8brain)
-    target_link_libraries(aetherasr PUBLIC Qt6::Core Qt6::Network PRIVATE Qt6::Concurrent)
+    target_link_libraries(aetherasr PUBLIC Qt6::Core Qt6::Network PRIVATE Qt6::Concurrent ${_asr_whisper_link})
     target_compile_definitions(aetherasr PUBLIC AETHER_ASR_ENABLED=1)
-    if(USE_SYSTEM_LIBWHISPER)
-        target_link_libraries(aetherasr PRIVATE PkgConfig::whisper)
-    else()
-        target_link_libraries(aetherasr PRIVATE whisper)
-    endif()
     if (_asr_vulkan OR _asr_metal)
         target_compile_definitions(aetherasr PRIVATE AETHER_ASR_GPU=1)
     endif()
@@ -3416,11 +3464,7 @@ add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 # compiles and links via two model-free entry points. No model, no audio.
 if (ENABLE_ASR)
     add_executable(asr_whisper_smoke_test tests/asr_whisper_smoke_test.cpp)
-    if(USE_SYSTEM_LIBWHISPER)
-        target_link_libraries(asr_whisper_smoke_test PRIVATE PkgConfig::whisper)
-    else()
-        target_link_libraries(asr_whisper_smoke_test PRIVATE whisper)
-    endif()
+    target_link_libraries(asr_whisper_smoke_test PRIVATE ${_asr_whisper_link})
     add_test(NAME asr_whisper_smoke_test COMMAND asr_whisper_smoke_test)
 
     # Model manager: offline download/verify/failover test (file:// sources).
@@ -3515,12 +3559,7 @@ if (ENABLE_ASR)
         src/asr/WhisperAsrBackend.cpp
     )
     target_include_directories(asr_whisper_backend_test PRIVATE src)
-    target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core)
-    if(USE_SYSTEM_LIBWHISPER)
-        target_link_libraries(asr_whisper_backend_test PRIVATE PkgConfig::whisper)
-    else()
-        target_link_libraries(asr_whisper_backend_test PRIVATE whisper)
-    endif()
+    target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core ${_asr_whisper_link})
     add_test(NAME asr_whisper_backend_test COMMAND asr_whisper_backend_test)
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
