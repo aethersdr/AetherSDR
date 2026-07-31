@@ -7,6 +7,8 @@
 #include <QByteArray>
 #include <QTimer>
 
+#include <atomic>
+
 namespace AetherSDR {
 
 // FlexControl USB tuning knob driver.
@@ -42,7 +44,12 @@ public:
     // the recovery behaviour is observable without a FlexControl attached —
     // "is it still trying?" is otherwise indistinguishable from "it gave up",
     // which is precisely the bug in #4574.
-    bool isReconnecting() const { return m_reconnectTimer.isActive(); }
+    //
+    // Mirrored into an atomic rather than reading m_reconnectTimer.isActive():
+    // the manager lives on the ExtControllers worker thread, so a GUI-thread
+    // caller (a "Reconnecting…" indicator, say) would otherwise be racing
+    // QTimer's internals.
+    bool isReconnecting() const { return m_reconnecting.load(std::memory_order_relaxed); }
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
     void setActiveLedButton(int button);
@@ -55,6 +62,12 @@ public:
     // hands-on control, so a slow recovery is felt, and re-detection is just a
     // QSerialPortInfo enumeration.
     static constexpr int kReconnectIntervalMs = 2000;
+    // ...but a device that is present and permanently un-openable (Linux user
+    // not in `dialout`, port held by another process) would otherwise re-scan
+    // and log forever at that rate. Back off towards a slow poll so the
+    // steady-state cost is bounded; the first few retries stay fast, which is
+    // the case that matters for a replug.
+    static constexpr int kMaxReconnectIntervalMs = 30000;
 
 signals:
     // +N = tune up N steps, -N = tune down N steps
@@ -80,6 +93,9 @@ private:
     // writing to it would be pointless.
     void releasePort();
     void armReconnect();
+    void stopReconnect();
+    void retryOnce();
+    void backOff();
 
     QSerialPort m_port;
     QByteArray  m_buffer;
@@ -89,9 +105,17 @@ private:
     // Reconnect state. Mirrors AcomConnection's serial recovery: a repeating
     // timer re-detects the device while a connection is WANTED, and an
     // operator-initiated close() suppresses it so Disconnect stays disconnected.
+    //
+    // m_reconnectTimer is parented to `this` in the constructor for the same
+    // reason m_port is: MainWindow moves this object to the ExtControllers
+    // thread, and an unparented QTimer member would stay behind on the GUI
+    // thread, where start() from the worker is silently refused. (#4574)
     QTimer  m_reconnectTimer;
     QString m_wantedPort;              // empty = no connection wanted
-    bool    m_deliberateDisconnect{false};
+    int     m_retryIntervalMs{kReconnectIntervalMs};
+    bool    m_retryFailureLogged{false};   // warn once per outage, not per tick
+    bool    m_releasing{false};            // releasePort() re-entrancy guard
+    std::atomic<bool> m_reconnecting{false};
 };
 
 } // namespace AetherSDR

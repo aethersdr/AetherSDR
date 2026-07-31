@@ -25,26 +25,54 @@ FlexControlManager::FlexControlManager(QObject* parent)
     connect(&m_port, &QSerialPort::errorOccurred,
             this, &FlexControlManager::handlePortError);
 
-    m_reconnectTimer.setInterval(kReconnectIntervalMs);
-    connect(&m_reconnectTimer, &QTimer::timeout, this, [this] {
-        if (m_wantedPort.isEmpty()) {          // nothing wanted — stop retrying
-            m_reconnectTimer.stop();
-            return;
-        }
-        if (m_port.isOpen()) {                 // recovered by another path
-            m_reconnectTimer.stop();
-            return;
-        }
-        // Re-detect rather than reusing the old name: a USB re-enumeration can
-        // hand the device a different COM port than it had before.
-        const QString port = detectPort();
-        if (port.isEmpty()) return;            // device still absent; keep trying
-        qCDebug(lcDevices) << "FlexControlManager: retrying" << port;
-        if (open(port)) {
-            m_reconnectTimer.stop();
-            qCInfo(lcDevices) << "FlexControlManager: reconnected on" << port;
-        }
-    });
+    // Parent the timer for exactly the reason m_port is parented above, and it
+    // matters more here: MainWindow does
+    //     m_flexControl = new FlexControlManager;
+    //     m_flexControl->moveToThread(m_extCtrlThread);
+    // (MainWindow_Controllers.cpp). An unparented QTimer member is not a child,
+    // so moveToThread() leaves it on the GUI thread — and QTimer::start() from
+    // the worker thread is then silently refused, so the whole recovery below
+    // never runs. MidiControlManager avoids this by allocating its hotplug
+    // timer as `new QTimer(this)`. (#4574)
+    m_reconnectTimer.setParent(this);
+    m_reconnectTimer.setInterval(m_retryIntervalMs);
+    connect(&m_reconnectTimer, &QTimer::timeout, this, &FlexControlManager::retryOnce);
+}
+
+void FlexControlManager::retryOnce()
+{
+    if (m_wantedPort.isEmpty()) {          // nothing wanted — stop retrying
+        stopReconnect();
+        return;
+    }
+    if (m_port.isOpen()) {                 // recovered by another path
+        stopReconnect();
+        return;
+    }
+    // Re-detect rather than reusing the old name: a USB re-enumeration can
+    // hand the device a different COM port than it had before.
+    const QString port = detectPort();
+    if (port.isEmpty()) {                  // device still absent; keep trying
+        backOff();
+        return;
+    }
+    qCDebug(lcDevices) << "FlexControlManager: retrying" << port;
+    if (open(port))
+        qCInfo(lcDevices) << "FlexControlManager: reconnected on" << port;
+    else
+        backOff();
+}
+
+// Widen the retry interval towards kMaxReconnectIntervalMs. The first retries
+// stay at 2 s because that is the case worth being fast for (a replug); a
+// device that never opens settles into a 30 s poll instead of scanning and
+// warning every 2 s for the rest of the session.
+void FlexControlManager::backOff()
+{
+    if (m_retryIntervalMs >= kMaxReconnectIntervalMs)
+        return;
+    m_retryIntervalMs = qMin(m_retryIntervalMs * 2, kMaxReconnectIntervalMs);
+    m_reconnectTimer.setInterval(m_retryIntervalMs);
 }
 
 FlexControlManager::~FlexControlManager()
@@ -69,7 +97,6 @@ bool FlexControlManager::open(const QString& portName)
     // Recorded BEFORE the open attempt: a connection is now wanted, so a
     // failure here arms the retry rather than giving up. close() clears it.
     m_wantedPort = portName;
-    m_deliberateDisconnect = false;
     // A previous error can leave the port latched; clear it or Qt may refuse
     // to reopen the same object.
     m_port.clearError();
@@ -82,18 +109,33 @@ bool FlexControlManager::open(const QString& portName)
     m_port.setFlowControl(QSerialPort::NoFlowControl);
 
     if (!m_port.open(QIODevice::ReadWrite)) {
-        qCWarning(lcDevices) << "FlexControlManager: failed to open" << portName
-                   << m_port.errorString();
+        // Warn once per outage. handlePortError() has already logged the real
+        // errorString() (it runs re-entrantly from inside m_port.open()), and
+        // repeating it on every retry tick is what turns a missing `dialout`
+        // group into a log full of the same line.
+        if (!m_retryFailureLogged) {
+            qCWarning(lcDevices) << "FlexControlManager: failed to open" << portName
+                       << "— will keep retrying";
+            m_retryFailureLogged = true;
+        }
         // Keep trying: the device may be mid-enumeration, or another process
         // may still be releasing it.
         armReconnect();
         return false;
     }
 
-    m_reconnectTimer.stop();   // connected — stop retrying
     m_buffer.clear();
     qCDebug(lcDevices) << "FlexControlManager: opened" << portName;
     writeLedState();
+    // writeLedState() -> writeLedCommand() routes a short write into
+    // releasePort(), which closes the port and emits connectionChanged(false).
+    // Don't then announce a connection we no longer have: a device that is
+    // present but wedged would otherwise leave AetherControl showing
+    // "Connected" with no open port, and hand the caller a bogus true.
+    if (!m_port.isOpen())
+        return false;
+
+    stopReconnect();   // connected — stop retrying, reset the backoff
     emit connectionChanged(true);
     return true;
 }
@@ -104,59 +146,83 @@ void FlexControlManager::handlePortError(QSerialPort::SerialPortError error)
     // ResourceError / DeviceNotFound are the USB-went-away cases; the rest
     // (permission, framing, timeout) are treated the same way because the
     // recovery is identical and re-detecting a healthy device is cheap.
-    qCWarning(lcDevices) << "FlexControlManager: serial error" << error
-                         << m_port.errorString() << "— releasing port and retrying";
+    //
+    // Logged once per outage rather than once per retry: this also fires
+    // re-entrantly from inside m_port.open(), so an un-openable device would
+    // otherwise emit this line on every tick for the rest of the session.
+    if (!m_retryFailureLogged) {
+        qCWarning(lcDevices) << "FlexControlManager: serial error" << error
+                             << m_port.errorString() << "— releasing port and retrying";
+        m_retryFailureLogged = true;
+    }
     releasePort();
     armReconnect();
 }
 
 void FlexControlManager::releasePort()
 {
+    // Re-entrancy guard: m_port.close() can itself set an error, which lands
+    // back here through errorOccurred while we are still inside this function.
+    if (m_releasing) return;
+    m_releasing = true;
+
     const bool wasOpen = m_port.isOpen();
     // clearError() first: on an errored port Qt can refuse further operations
-    // until the error state is reset, which is exactly how the handle used to
-    // be leaked.
+    // until the error state is reset.
     m_port.clearError();
     if (wasOpen) m_port.close();
     m_buffer.clear();
+
+    m_releasing = false;
     if (wasOpen) emit connectionChanged(false);
 }
 
 void FlexControlManager::armReconnect()
 {
-    if (m_wantedPort.isEmpty()) return;      // no connection wanted
-    if (m_deliberateDisconnect) return;      // operator asked for this
+    // m_wantedPort is the single source of truth for "a connection is wanted".
+    // close() clears it, which is what makes a deliberate Disconnect stick.
+    if (m_wantedPort.isEmpty()) return;
     if (!m_reconnectTimer.isActive()) m_reconnectTimer.start();
+    // Mirror the timer's ACTUAL state, not the intent to start it. If start()
+    // is ever refused — a QTimer left on the wrong thread is exactly how — then
+    // isReconnecting() must report false rather than claim a recovery that is
+    // not running. Storing `true` here unconditionally would make the
+    // thread-affinity case below untestable. (#4574)
+    m_reconnecting.store(m_reconnectTimer.isActive(), std::memory_order_relaxed);
+}
+
+void FlexControlManager::stopReconnect()
+{
+    m_reconnectTimer.stop();
+    m_reconnecting.store(false, std::memory_order_relaxed);
+    m_retryIntervalMs = kReconnectIntervalMs;
+    m_reconnectTimer.setInterval(m_retryIntervalMs);
+    m_retryFailureLogged = false;
 }
 
 void FlexControlManager::close()
 {
     // Operator-initiated: stop wanting a connection, so the retry timer does
-    // not immediately undo this.
-    m_deliberateDisconnect = true;
+    // not immediately undo this. Callers must reach this unconditionally —
+    // gating on isOpen() would make Disconnect unreachable after a port drop
+    // and leave m_wantedPort set, so the driver would reclaim a device the
+    // operator had switched off. (#4574)
     m_wantedPort.clear();
-    m_reconnectTimer.stop();
+    stopReconnect();
 
-    // NOT an early return on !isOpen().
-    //
-    // The old code returned immediately when the port did not report itself
-    // open, which is the state an errored port can be left in — so m_port.close()
-    // never ran and the OS handle was never released. On Windows that meant a
-    // relaunched AetherSDR could not reopen a port the previous process still
-    // held, which is a plausible reason a reporter needs a full reboot rather
-    // than an app restart. (#4574)
     if (!m_port.isOpen()) {
+        // Nothing to release: QSerialPort has already given the OS handle back
+        // — isOpen() only goes false once QSerialPortPrivate::close() has run.
         // Still clear any latched error so a later open() on this object is not
         // refused by Qt, and drop any partial frame.
         m_port.clearError();
         m_buffer.clear();
-        m_deliberateDisconnect = false;
         return;
     }
     // If this write fails it calls releasePort(), which closes the port and
     // emits connectionChanged(false) itself; the guard below then avoids a
     // second, duplicate emission. armReconnect() is a no-op on this path
-    // because m_wantedPort is already cleared and m_deliberateDisconnect is set.
+    // because m_wantedPort has already been cleared.
     writeLedCommand(0);
     if (m_port.isOpen()) {
         m_port.waitForBytesWritten(50);
@@ -166,7 +232,6 @@ void FlexControlManager::close()
         qCDebug(lcDevices) << "FlexControlManager: closed";
         emit connectionChanged(false);
     }
-    m_deliberateDisconnect = false;
 }
 
 void FlexControlManager::setActiveLedButton(int button)
@@ -268,8 +333,8 @@ void FlexControlManager::writeLedCommand(int button)
         // so a device that died during a write stayed dead. Route it into the
         // same recovery as a read error. (#4574)
         //
-        // Not called when close() is writing the LEDs off on its way out —
-        // m_deliberateDisconnect suppresses the retry in armReconnect().
+        // Harmless when close() is writing the LEDs off on its way out:
+        // m_wantedPort is already cleared by then, so armReconnect() no-ops.
         releasePort();
         armReconnect();
         return;

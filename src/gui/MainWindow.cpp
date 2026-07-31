@@ -2945,16 +2945,19 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         const QString fcPort = fcs.value("FlexControlPort").toString();
         const bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
         QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
+            // close() is called unconditionally, never gated on isOpen(): after
+            // a port drop the driver is closed but still *wants* the port and is
+            // retrying, and close() is the only thing that clears that. Gating
+            // on isOpen() would let the driver reclaim a device the operator
+            // had just switched off here. close() is idempotent. (#4574)
             if (fcOpen) {
                 if (fcPort.isEmpty()) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                 } else if (!m_flexControl->isOpen() || m_flexControl->portName() != fcPort) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                     m_flexControl->open(fcPort);
                 }
-            } else if (m_flexControl->isOpen()) {
+            } else {
                 m_flexControl->close();
             }
             m_flexControl->setInvertDirection(fcInvert);
@@ -3006,17 +3009,17 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         QString fcPort = fcs.value("FlexControlPort").toString();
         bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
         QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
+            // Unconditional close() — see the matching comment on the
+            // serialSettingsChanged path above. (#4574)
             if (fcOpen) {
                 if (fcPort.isEmpty()) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                 } else if (!m_flexControl->isOpen() || m_flexControl->portName() != fcPort) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                     m_flexControl->open(fcPort);
                 }
             } else {
-                if (m_flexControl->isOpen()) m_flexControl->close();
+                m_flexControl->close();
             }
             m_flexControl->setInvertDirection(fcInvert);
         });

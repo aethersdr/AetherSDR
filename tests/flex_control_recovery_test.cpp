@@ -16,6 +16,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QTest>
+#include <QThread>
 
 #include <cstdio>
 
@@ -55,9 +56,16 @@ int main(int argc, char** argv)
               "a failed open ARMS the retry (was: gave up silently)");
 
         // Still retrying after several intervals — it must not latch off.
-        QTest::qWait(FlexControlManager::kReconnectIntervalMs * 2 + 400);
-        check(fc.isReconnecting(), "still retrying while the device is absent");
-        check(!fc.isOpen(), "no device, so still not open — but not wedged");
+        //
+        // Guarded on the device being absent: with a real FlexControl attached
+        // the retry legitimately re-detects it, opens it and stops, which is
+        // success rather than failure. Without this guard the case fails on
+        // exactly the hardware we are asking someone to validate on.
+        if (FlexControlManager::detectPort().isEmpty()) {
+            QTest::qWait(FlexControlManager::kReconnectIntervalMs * 2 + 400);
+            check(fc.isReconnecting(), "still retrying while the device is absent");
+            check(!fc.isOpen(), "no device, so still not open — but not wedged");
+        }
     }
 
     {
@@ -98,6 +106,49 @@ int main(int argc, char** argv)
         fc.open(kAbsentPort);
         check(fc.isReconnecting(), "a fresh open() re-arms the retry after a close()");
         fc.close();
+    }
+
+    {
+        // THE case the first version of this test could not see.
+        //
+        // MainWindow constructs the manager on the GUI thread and immediately
+        // moves it to the ExtControllers worker thread:
+        //     m_flexControl = new FlexControlManager;
+        //     m_flexControl->moveToThread(m_extCtrlThread);
+        // Everything after that arrives via QMetaObject::invokeMethod on the
+        // worker. A QTimer member that is not parented to `this` does not move
+        // with the object, and QTimer::start() from the wrong thread is
+        // silently refused — so the retry armed fine in every single-threaded
+        // case above while never running once in the shipping app.
+        //
+        // Assert the recovery through the path the app actually uses. (#4574)
+        QThread worker;
+        worker.setObjectName("ExtControllers");
+        worker.start();
+
+        auto* fc = new FlexControlManager;      // unparented, as in MainWindow
+        fc->moveToThread(&worker);
+
+        bool armed = false;
+        QMetaObject::invokeMethod(fc, [&] {
+            fc->open(kAbsentPort);
+            armed = fc->isReconnecting();
+        }, Qt::BlockingQueuedConnection);
+        check(armed, "retry arms when driven from the worker thread "
+                     "(m_reconnectTimer must be parented to move with us)");
+
+        // ...and a deliberate close() still cancels it from over there.
+        bool cancelled = false;
+        QMetaObject::invokeMethod(fc, [&] {
+            fc->close();
+            cancelled = !fc->isReconnecting();
+        }, Qt::BlockingQueuedConnection);
+        check(cancelled, "close() cancels the retry on the worker thread too");
+
+        QMetaObject::invokeMethod(fc, [fc] { delete fc; },
+                                  Qt::BlockingQueuedConnection);
+        worker.quit();
+        worker.wait();
     }
 
     if (g_failures == 0) {

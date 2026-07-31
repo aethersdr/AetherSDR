@@ -27,6 +27,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - The table is generated from `resources/themes/default-dark.json` by
   `tools/gen_theme_seed.py`, so the two can no longer disagree.
 
+### Fixed
+
+- **FlexControl now recovers on its own after losing its USB port.** The knob
+  driver had no error handling at all: if the serial port dropped — a USB
+  glitch, a driver reset, the host reclaiming the device — nothing noticed, and
+  the knob stayed dead for the rest of the session. It now detects the error,
+  releases the port, and re-detects the device every couple of seconds until it
+  comes back (re-detecting rather than reusing the old name, since a replug can
+  hand the device a different COM port). Disconnecting from AetherControl or
+  turning FlexControl off in Radio Setup still stops it for good. Enabling the
+  **Ext Devices** log category now also shows the serial error at the moment
+  the port drops, instead of silence. (#4574)
+
 ### Client settings store moved to SQLite (RFC #4603, phase 1)
 
 - **Settings now live in a SQLite database** (`AetherSDR.db` in the config
