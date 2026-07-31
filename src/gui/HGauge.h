@@ -7,6 +7,7 @@
 #include <QAccessibleWidget>
 #include <QEnterEvent>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -438,6 +439,17 @@ signals:
     void relayAdjusted(int direction);  // +1 scroll up, -1 scroll down
 
 protected:
+    void focusOutEvent(QFocusEvent* e) override {
+        // setValue() is driven by hardware state pushes regardless of focus,
+        // and both the schedule and publish gates require focus — so relay
+        // positions can move unannounced while the bar is not focused. Forget
+        // the last published value so a position that wandered away and back
+        // is not mistaken for "unchanged" and swallowed by the dedup.
+        m_accessibilityTimer.stop();
+        m_lastAccessibleValue = std::numeric_limits<int>::min();
+        QWidget::focusOutEvent(e);
+    }
+
     void keyPressEvent(QKeyEvent* e) override {
         if (!m_scrollEnabled) { QWidget::keyPressEvent(e); return; }
         if (e->key() == Qt::Key_Up || e->key() == Qt::Key_Plus || e->key() == Qt::Key_Right) {

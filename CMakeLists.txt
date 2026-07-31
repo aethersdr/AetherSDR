@@ -3834,6 +3834,22 @@ add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# RangeSlider accessibility announcements (#4565): arrow-key bursts debounce to
+# one settled announcement, while discrete handle-focus moves announce
+# immediately instead of being swallowed by that debounce.
+add_executable(range_slider_a11y_test
+    tests/range_slider_a11y_test.cpp
+    src/gui/RangeSlider.cpp
+)
+target_include_directories(range_slider_a11y_test PRIVATE src)
+target_link_libraries(range_slider_a11y_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(range_slider_a11y_test PROPERTIES AUTOMOC ON)
+add_test(NAME range_slider_a11y_test COMMAND range_slider_a11y_test)
+set_tests_properties(range_slider_a11y_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
 add_executable(native_widget_topology_test

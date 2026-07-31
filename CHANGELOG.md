@@ -42,6 +42,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   custom frame does not have. The window now reopens exactly where you left
   it, keeps its full size if you had it filling the screen, and stays put
   through Minimal Mode round trips.
+- **Screen readers no longer stutter on the ATU relay bars and the CW decoder
+  range sliders (#4565)** — with VoiceOver / NVDA / Orca running, a focused
+  relay bar announced every step of an ATU tune sweep, and the decoder Pitch
+  and WPM sliders announced every repeat of a held arrow key. Both now
+  announce the settled value about ten times a second, matching the S-meter
+  and VFO. Moving between a range slider's low and high handle with Tab still
+  announces immediately, so the handle change is never lost behind a value
+  update, and neither control does any accessibility work when no screen
+  reader is running.
 
 ## [v26.7.4.1] — 2026-07-27
 
