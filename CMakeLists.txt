@@ -4701,7 +4701,9 @@ set_tests_properties(flex_control_dialog_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Connect-to-Radio manual/VPN page: no row on that page may be allocated less
-# height than it asks for, however the Advanced source-path section is revealed.
+# height than it asks for once the Advanced source-path section is expanded.
+# The height floor that holds is the constructor-time ConnectionPanel::
+# refitToContent(); the toggle the test drives does not refit on its own.
 add_executable(connection_panel_advanced_layout_test
     tests/connection_panel_advanced_layout_test.cpp
     src/gui/ConnectionPanel.cpp
