@@ -672,7 +672,7 @@ connects).
 
 | `model` | `selector` | returns |
 |---|---|---|
-| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
+| `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, Opus TX pacing counters, KiwiSDR TX mute gate, Receive Presentation output-signal counters) |
 | `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `gps` | — | GPS status, tracked/visible counts, grid, radio-format coordinates, altitude, speed, course, UTC time, frequency error, and oscillator-reference state |
@@ -701,6 +701,12 @@ chunks dispatched to Receive Presentation Sync analysis, while
 `receivePresentationOutputSignalSuppressedCount` counts non-empty output chunks
 that were captured for automation but skipped because no KiwiSDR audio source
 was active.
+
+`opusTxPacing` reports the live remote-audio TX pacing queue:
+`queueDepth`, lifetime `maxQueueDepth`, `packetsSent`, `catchUpPackets`, and
+`droppedPackets`. A late audio-thread timer increments `catchUpPackets` when the
+pacer repays missed 10 ms deadlines; `droppedPackets` must remain zero during a
+healthy TX-mic run.
 
 The TX input endpoint also exposes in-memory capture-health evidence for TCI
 handoffs: `buffer_bytes_available`, `buffer_capacity_bytes`,
