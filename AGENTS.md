@@ -585,7 +585,7 @@ if (!scope.setFeature("MyFeature", kMySchemaVersion, doc)) {
   (see `RadioStateMemory::store()` for the canonical shape).
 - Shipped precedents: the HL2 `OperatingState` document (per-band drive/LNA
   maps in its extension), the `Identity` nickname document, and `BandStack`
-  (#4621); the shared memory bank follows in #4623.
+  (#4621), and the shared memory bank at `(local, '', MemoryBank)` (#4623).
 
 ### Client-Side Radio State Memory (capture/restore)
 
@@ -631,7 +631,7 @@ touches it.)
 
 **Migrating a legacy side file into scoped documents** follows the
 claim-and-freeze pattern (precedents: `Hl2Discovery` nicknames and
-`BandStackSettings`; `LocalMemoryBank` follows in #4623):
+`BandStackSettings`, `LocalMemoryBank`):
 
 - Claim lazily, per scope, on first access — the document needs the radio's
   FAMILY, which only the live scope knows.
