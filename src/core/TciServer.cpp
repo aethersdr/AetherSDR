@@ -1167,6 +1167,53 @@ SliceModel* TciServer::sliceForTrx(int trx) const
     return m_trxMap.sliceForTrx(m_model, trx);
 }
 
+SliceModel* TciServer::sliceForTrxStrict(int trx) const
+{
+    // REBASE HAZARD — must be rewired when PR #4577 (TciTrxMap, #4567) lands.
+    //
+    // #4577 repoints sliceForTrx() above at `m_trxMap.sliceForTrx(m_model, trx)`
+    // so receiver numbers survive a band-stack recreate. This function would
+    // keep resolving positionally, making PTT the ONE path that ignores the
+    // stable binding: after a recreate every other command follows the map
+    // while keying follows list position, so a band change keys the wrong
+    // slice — #4567 reintroduced on the transmit path, the single path where
+    // being wrong puts RF on the air.
+    //
+    // It fails silently. Both test suites pass: #4547's never build a trx map,
+    // #4577's never key. Nothing covers the seam.
+    //
+    // The fix is small, because TciTrxMap::sliceForTrx() is already fail-closed
+    // for a BOUND trx (it returns nullptr in the settle window rather than
+    // answering positionally). Only the unbound fallback differs. Add
+    // TciTrxMap::sliceForTrxStrict() — identical, but falling through to
+    // resolveSliceForTrxStrict() instead of resolveSliceForTrx() — and call it
+    // here.
+    return TciProtocol::resolveSliceForTrxStrict(m_model, trx);
+}
+
+int TciServer::effectiveTrx(QWebSocket* client, int requestedTrx) const
+{
+    // Every WSJT-X instance in TCI/ESDR3 mode addresses trx 0, so with two
+    // instances on two slices the wire request carries nothing that tells them
+    // apart and both resolve to the same receiver (#4547). The one per-client
+    // signal that does exist is the receiver declared in `audio_start:<n>` —
+    // already parsed and stored per socket — so an instance that started audio
+    // on receiver 1 is operating receiver 1 whatever index it puts on the wire.
+    //
+    // Thetis scopes RX-audio enabled-receiver sets per client while radio state
+    // stays global, so reading the declared receiver as the client's identity
+    // follows the reference implementation. A client that declares no receiver
+    // (`audio_start` with no argument, or control-only) keeps the wire index.
+    // Replies still echo the trx the client sent — the binding changes which
+    // slice is addressed, never the wire shape.
+    for (const auto& cs : m_clients) {
+        if (cs.socket == client) {
+            return cs.audioReceiver >= 0 ? cs.audioReceiver : requestedTrx;
+        }
+    }
+    return requestedTrx;
+}
+
 QVector<TciSliceEndpoint> TciServer::routingEndpoints() const
 {
     QVector<TciSliceEndpoint> endpoints;
@@ -1849,13 +1896,23 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         return;
     }
 
-    SliceModel* rxSlice = sliceForTrx(request.trx);
+    // Strict resolution: this path keys the radio, so an unresolvable receiver
+    // must decline rather than fall back to slices[0] and transmit on a slice
+    // the client never addressed (#4547). Report the actual false state — the
+    // PTT-rejection invariant — so the client gets a cause instead of the
+    // silence WSJT-X surfaces as "TCI failed to set ptt".
+    const int boundTrx = effectiveTrx(client, request.trx);
+    SliceModel* rxSlice = sliceForTrxStrict(boundTrx);
     if (!rxSlice) {
+        qCWarning(lcCat) << "TCI: PTT declined — no slice for receiver"
+                         << boundTrx << "(requested" << request.trx << ")";
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
     const int txSliceId = m_routingState.resolvePttSlice(rxSlice->sliceId(), routingEndpoints());
     SliceModel* txSlice = m_model->slice(txSliceId);
     if (!txSlice || !m_model->panTransmitInhibitReason(txSlice->panId()).isEmpty()) {
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
 

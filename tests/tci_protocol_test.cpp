@@ -86,6 +86,120 @@ bool testRoutingPolicy()
     return true;
 }
 
+// #4547 secondary defect: a cached route that the live topology contradicts
+// must never win under a bare PTT. The operator moves TX from the GUI; the
+// cache is refreshed only in branch 1 and the VFO-B paths, so a client that
+// addresses the slice actually holding TX skips branch 1 and — before the fix
+// — keyed the stale slice's band and antenna.
+bool testStaleRouteFailsSafe()
+{
+    using Owner = TciRoutingState::TxRouteOwner;
+
+    // 1. WSJT-X negotiates a route while slice 0 holds TX.
+    TciRoutingState routing;
+    QVector<TciSliceEndpoint> bound { { 4, false }, { 0, true } };
+    const auto decision = routing.resolveVfoB(4, bound);
+    if (!check(decision.txSliceId == 0 && routing.txSliceId() == 0,
+            "setup: VFO B must bind the externally selected TX slice")) {
+        return false;
+    }
+
+    // 2. The operator moves TX to slice 1 from the GUI. Nothing refreshes the
+    //    cache. 3. The client addresses the slice that actually holds TX —
+    //    #4547's literal repro, which returned the stale slice 0.
+    QVector<TciSliceEndpoint> moved { { 4, false }, { 0, false }, { 1, true } };
+    if (!check(routing.resolvePttSlice(1, moved) == 1,
+            "a stale cached route must not move TX off the live TX slice")) {
+        return false;
+    }
+
+    // The same staleness reached through the client's own bound RX slice, where
+    // the route does apply: the live TX slice still wins, and the cache is
+    // refreshed so it cannot answer for a slice that no longer holds TX.
+    TciRoutingState bound2;
+    bound2.resolveVfoB(4, bound);
+    if (!check(bound2.resolvePttSlice(4, moved) == 1 && bound2.txSliceId() == 1,
+            "an applicable route must refresh against the live TX slice")) {
+        return false;
+    }
+
+    // The refresh must also drop TCI ownership. handleSplitRequest() issues
+    // `slice remove` for a TciCreated route on teardown, so carrying that
+    // owner onto a slice TCI never created would delete an operator's slice.
+    TciRoutingState created;
+    created.bindCreatedRoute(4, 9);
+    QVector<TciSliceEndpoint> operatorMoved { { 4, false }, { 9, false }, { 1, true } };
+    if (!check(created.resolvePttSlice(4, operatorMoved) == 1
+                && created.owner() != Owner::TciCreated,
+            "a refreshed route must not stay TCI-owned on a foreign slice")) {
+        return false;
+    }
+
+    // Backends that report no TX slice at all still fall back to the cache,
+    // then to the requested slice — the Flex always-one-TX-slice invariant
+    // does not hold on the seam backends (HL2).
+    TciRoutingState noTx;
+    QVector<TciSliceEndpoint> headless { { 4, false }, { 7, false } };
+    noTx.bindCreatedRoute(4, 7);
+    if (!check(noTx.resolvePttSlice(4, headless) == 7,
+            "with no live TX slice the tracked route still answers")) {
+        return false;
+    }
+    TciRoutingState bare;
+    if (!check(bare.resolvePttSlice(4, headless) == 4,
+            "with no route and no TX slice PTT resolves to the requested slice")) {
+        return false;
+    }
+    return true;
+}
+
+// #4547 primary defect: a bare `trx:N,true` must key slice N. A Flex always
+// marks exactly one TX slice, so the unconditional external-TX branch fired on
+// every request whose slice was not already TX — the common path. Two WSJT-X
+// instances on different slices both keyed whichever slice happened to hold TX.
+bool testBarePttKeysTheRequestedSlice()
+{
+    // Operator left TX on slice 7. A client with no split and no bound route
+    // asks for slice 4.
+    QVector<TciSliceEndpoint> twoSlices { { 4, false }, { 7, true } };
+    TciRoutingState bare;
+    if (!check(bare.resolvePttSlice(4, twoSlices) == 4,
+            "a bare PTT must key the requested slice, not the incidental TX slice")) {
+        return false;
+    }
+    // ...and the client working slice 7 still keys 7.
+    TciRoutingState other;
+    if (!check(other.resolvePttSlice(7, twoSlices) == 7,
+            "a second client must key its own slice")) {
+        return false;
+    }
+
+    // Split is the signal that a distinct TX route is intended: once the client
+    // asks for it, the externally selected TX slice wins again.
+    TciRoutingState split;
+    split.setSplitRequested(true);
+    if (!check(split.resolvePttSlice(4, twoSlices) == 7,
+            "a split client must still key the external TX slice")) {
+        return false;
+    }
+
+    // A bare PTT must not adopt a route bound for a different RX slice, and
+    // must stay stable when repeated. Recording the requested slice here would
+    // pair it with the surviving m_txSliceId, so the SECOND identical request
+    // would take the route branch and key slice 7 after the first keyed 5.
+    QVector<TciSliceEndpoint> threeSlices {
+        { 4, false }, { 5, false }, { 7, true }
+    };
+    TciRoutingState bound;
+    bound.resolveVfoB(4, twoSlices);          // route bound for slice 4 → 7
+    if (!check(bound.resolvePttSlice(5, threeSlices) == 5
+                && bound.resolvePttSlice(5, threeSlices) == 5,
+            "a bare PTT must not adopt another slice's route, even when repeated")) {
+        return false;
+    }
+    return true;
+}
+
 bool testWsjtxRoutingContracts()
 {
     using Action = TciRoutingState::RouteAction;
@@ -303,7 +417,9 @@ int main(int argc, char** argv)
         }
     }
 
-    if (!testRoutingPolicy() || !testWsjtxRoutingContracts()
+    if (!testRoutingPolicy() || !testStaleRouteFailsSafe()
+        || !testBarePttKeysTheRequestedSlice()
+        || !testWsjtxRoutingContracts()
         || !testDeferredCommands() || !testDriveWireContract()) {
         return 1;
     }

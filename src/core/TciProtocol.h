@@ -200,6 +200,15 @@ public:
     // command paths so GET and SET never target different receivers.
     static SliceModel* resolveSliceForTrx(RadioModel* model, int trx);
 
+    // Same resolution WITHOUT the first-slice fallback: an unresolvable trx
+    // returns nullptr instead of silently addressing slices[0]. Use on any
+    // path that keys the radio (#4547) — the compatibility fallback is a
+    // reasonable guess for a read, but under PTT it transmits on a slice the
+    // client never asked for, on that slice's band and antenna. The positional
+    // and raw-id steps are unchanged, so a correctly-addressed legacy client
+    // still resolves; only the guess is withdrawn.
+    static SliceModel* resolveSliceForTrxStrict(RadioModel* model, int trx);
+
     static long long mhzToHz(double mhz);
 
     // IQ center (DDS) for a slice = its populated panadapter center in Hz.

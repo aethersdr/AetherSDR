@@ -33,7 +33,29 @@ The receiver-index policy is only one half of the routing contract. Channel
    back to the first owned slice.  This keeps older clients that cached
    raw Flex IDs functional in the common single-slice case.
 
-4. **Two channels per receiver.**
+   **The first-slice fallback does not apply to paths that key the radio.**
+   `resolveSliceForTrxStrict()` performs the same positional and raw-id
+   resolution but returns `nullptr` instead of guessing, and
+   `TciServer::handleTrxRequest()` uses it: an unresolvable receiver is
+   declined with `trx:<n>,false;` rather than transmitting on a slice the
+   client never addressed, on that slice's band and antenna (#4547).  A
+   guess is a reasonable answer for a read and an unacceptable one under
+   PTT.
+
+4. **A client's declared audio receiver identifies it.**
+   Every WSJT-X instance in TCI/ESDR3 mode addresses `trx:0`, so with two
+   instances on two slices the wire request carries nothing that tells
+   them apart.  `TciServer::effectiveTrx()` resolves a client's PTT
+   against the receiver it declared in `audio_start:<n>`, falling back to
+   the wire index when it declared none (control-only clients such as the
+   Stream Deck plugin).  Replies still echo the trx the client sent — the
+   binding changes which slice is addressed, never the wire shape.
+
+   This follows Thetis, which scopes RX-audio enabled-receiver sets per
+   client while radio state stays global (see the oracle's shared-versus-
+   per-client table).
+
+5. **Two channels per receiver.**
    AetherSDR advertises `channels_count:2`. Channel 0 is the receiver's RX
    slice. Channel 1 is the resolved radio-global TX slice for that RX route.
    The route uses stable Flex slice IDs internally even if public TRX indexes

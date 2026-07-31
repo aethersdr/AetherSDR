@@ -72,6 +72,45 @@ public:
             && server.m_pendingRouteCommands.first().client == &otherClient;
     }
 
+    // #4547: two WSJT-X instances both address trx 0, so the wire request
+    // cannot tell them apart. The receiver each declared in audio_start does.
+    static bool pttBindsToTheDeclaredAudioReceiver()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket wsjtxA;
+        QWebSocket wsjtxB;
+        QWebSocket controlOnly;
+
+        TciServer::ClientState a;
+        a.socket = &wsjtxA;
+        a.audioEnabled = true;
+        a.audioReceiver = 0;
+        TciServer::ClientState b;
+        b.socket = &wsjtxB;
+        b.audioEnabled = true;
+        b.audioReceiver = 1;
+        TciServer::ClientState c;      // Stream Deck: control only, no audio
+        c.socket = &controlOnly;
+        c.audioReceiver = -1;
+        server.m_clients.append(a);
+        server.m_clients.append(b);
+        server.m_clients.append(c);
+
+        // Both instances put trx 0 on the wire; B is operating receiver 1.
+        return server.effectiveTrx(&wsjtxA, 0) == 0
+            && server.effectiveTrx(&wsjtxB, 0) == 1
+            // A declared receiver is the client's identity, so it also wins
+            // over a stale wire index the client may still be sending.
+            && server.effectiveTrx(&wsjtxB, 0) == 1
+            // A client that declared none keeps whatever it addresses.
+            && server.effectiveTrx(&controlOnly, 0) == 0
+            && server.effectiveTrx(&controlOnly, 2) == 2
+            // An unknown socket falls back to the wire index rather than
+            // guessing receiver 0.
+            && server.effectiveTrx(nullptr, 3) == 3;
+    }
+
     static bool routeFailureIsObservable()
     {
         RadioModel model;
@@ -799,6 +838,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::deferredAbortIsClientScoped();
     const bool observableFailure
         = AetherSDR::TciServerReviewTest::routeFailureIsObservable();
+    const bool pttBindsReceiver
+        = AetherSDR::TciServerReviewTest::pttBindsToTheDeclaredAudioReceiver();
     const bool powerRateLimits
         = AetherSDR::TciServerReviewTest::powerBroadcastRateLimits();
     const bool trxCacheHolds
@@ -834,6 +875,8 @@ int main(int argc, char** argv)
                 deferredAbort ? "PASS" : "FAIL");
     std::printf("%s  VFO-B route failure is observable\n",
                 observableFailure ? "PASS" : "FAIL");
+    std::printf("%s  PTT binds to the declared audio receiver (#4547)\n",
+                pttBindsReceiver ? "PASS" : "FAIL");
     std::printf("%s  drive: rate-limits and de-dups\n",
                 powerRateLimits ? "PASS" : "FAIL");
     std::printf("%s  drive: trx survives a TX-flag clear\n",
@@ -864,7 +907,7 @@ int main(int argc, char** argv)
     std::printf("%s  vfo: SET still acknowledges a no-op\n",
                 vfoAcksNoOp ? "PASS" : "FAIL");
 
-    return validProfile && deferredAbort && observableFailure
+    return validProfile && deferredAbort && observableFailure && pttBindsReceiver
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
