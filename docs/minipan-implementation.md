@@ -249,8 +249,10 @@ criterion #4 is testing.
   (MainWindow.h:1514) so it joins the tracked-dialogs list and `WA_DeleteOnClose` flow.
 - **Geometry persistence**: `saveGeometry().toBase64()` under a dedicated key
   (e.g. `"MiniPanGeometry"`) into `AppSettings::instance()` (**reference**, `.value(...)`,
-  include `"core/AppSettings.h"`); base64 required for the XML store. Debounced in-memory
-  on move/resize; `AppSettings::save()` on close. (PanFloatingWindow.cpp:98 idiom.)
+  include `"core/AppSettings.h"`); `AppSettings` stores values as text (SQLite TEXT rows
+  since RFC #4603, XML before that), so the binary `QByteArray` from `saveGeometry()`
+  needs base64 to round-trip. Debounced in-memory on move/resize; `AppSettings::save()`
+  on close. (PanFloatingWindow.cpp:98 idiom.)
 - **Open-state restore at startup**: if `"MiniPanOpen"=="True"`, reopen via
   `QTimer::singleShot(0, ...)` after initial layout (MainWindow_Menus.cpp:779 idiom).
 - **Bandwidth selection** persisted client-side (`"MiniPanBandwidthKHz"`), per the

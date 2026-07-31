@@ -4751,7 +4751,7 @@ add_executable(mini_pan_widget_test
     src/gui/MiniPanWidget.cpp
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4994,6 +4994,7 @@ set(AETHER_SETTINGS_CONSUMERS
     amp_applet_test
     container_manager_test
     container_nesting_test
+    mini_pan_widget_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
