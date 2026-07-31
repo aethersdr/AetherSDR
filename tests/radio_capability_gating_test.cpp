@@ -192,8 +192,10 @@ int main(int argc, char** argv)
                   && caps.clientSettingsDomains.testFlag(Domain::RfGain)
                   && caps.clientSettingsDomains.testFlag(Domain::TxSetpoints),
               "HL2 declares the five client-owned settings domains");
-        check(!caps.clientSettingsDomains.testFlag(Domain::Memories),
-              "HL2 does not declare Memories (the #4590 bank folds in later)");
+        check(caps.clientSettingsDomains.testFlag(Domain::Memories),
+              "HL2 declares Memories (the #4590 bank's channels are client-"
+              "owned; the bank engages on persistsMemories and keeps its own "
+              "shared document — RFC #4603 PR 6)");
     }
 
     // ---- Sim declares none of them, and is genuinely CONNECTED -----------

@@ -1,8 +1,13 @@
+#include "TestSettingsProfile.h"
+#include "core/AppSettings.h"
 #include "core/LocalMemoryBank.h"
 #include "core/LocalMemoryStore.h"
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 #include <iostream>
@@ -16,6 +21,36 @@ bool expect(bool condition, const char* message)
     if (!condition)
         std::cerr << "FAIL: " << message << '\n';
     return condition;
+}
+
+// The bank's ONE shared document (RFC #4603 PR 6). Cases used to isolate via
+// per-case file paths; now they isolate by resetting the document.
+QJsonObject bankDocument()
+{
+    return AppSettings::instance().radioFeatureExact(
+        LocalMemoryStore::documentFamily(), QString(),
+        LocalMemoryStore::documentFeature());
+}
+
+void resetBankDocument()
+{
+    AppSettings::instance().removeRadioFeature(
+        LocalMemoryStore::documentFamily(), QString(),
+        LocalMemoryStore::documentFeature());
+}
+
+// A foreign process's write, simulated at the same layer it would really
+// happen: a whole-envelope document replace.
+bool writeForeignDocument(const QMap<int, MemoryEntry>& entries,
+                          const QString& savedAtIso)
+{
+    const QJsonObject envelope =
+        QJsonDocument::fromJson(LocalMemoryStore::serialize(entries, savedAtIso))
+            .object();
+    return AppSettings::instance().setRadioFeature(
+        LocalMemoryStore::documentFamily(), QString(),
+        LocalMemoryStore::documentFeature(), LocalMemoryStore::kFormatVersion,
+        envelope);
 }
 
 // The kv tail the client actually builds (MemoryCommands::buildMemoryUpdateData):
@@ -33,7 +68,13 @@ QString setTail(int index, const QString& name, double freqMhz, const QString& m
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("aether-local-memory-bank-test"));
+    if (!profile.isValid()) {
+        std::cerr << "FAIL: create temporary home\n";
+        return 1;
+    }
     QCoreApplication app(argc, argv);
+    AppSettings::instance().load();
     bool ok = true;
 
     QTemporaryDir dir;
@@ -42,6 +83,7 @@ int main(int argc, char** argv)
 
     // --- slot allocation --------------------------------------------------
     {
+        resetBankDocument();
         LocalMemoryBank bank;
         bank.setFilePath(path);
 
@@ -67,6 +109,7 @@ int main(int argc, char** argv)
 
     // --- set / apply ------------------------------------------------------
     {
+        resetBankDocument();
         LocalMemoryBank bank;
         bank.setFilePath(dir.path() + "/set.json");
         bank.handleCommand("memory create");
@@ -90,6 +133,7 @@ int main(int argc, char** argv)
 
     // --- rejections -------------------------------------------------------
     {
+        resetBankDocument();
         LocalMemoryBank bank;
         bank.setFilePath(dir.path() + "/reject.json");
 
@@ -116,6 +160,7 @@ int main(int argc, char** argv)
 
     // --- commands the bank does not own are left alone --------------------
     {
+        resetBankDocument();
         LocalMemoryBank bank;
         bank.setFilePath(dir.path() + "/passthrough.json");
         ok &= expect(!bank.handleCommand("memory list").handled,
@@ -124,8 +169,9 @@ int main(int argc, char** argv)
                      "a non-memory command is not answered");
     }
 
-    // --- persistence across bank instances --------------------------------
+    // --- persistence across bank instances (through the DOCUMENT) ---------
     {
+        resetBankDocument();
         const QString persistPath = dir.path() + "/persist.json";
         MemoryEntry stored;
         stored.freq = 7.200;
@@ -140,7 +186,9 @@ int main(int argc, char** argv)
             bank.flush();
         }
 
-        ok &= expect(QFile::exists(persistPath), "flush wrote the bank");
+        ok &= expect(!bankDocument().isEmpty(), "flush wrote the bank document");
+        ok &= expect(!QFile::exists(persistPath),
+                     "flush writes the settings store, never a file");
 
         LocalMemoryBank reopened;
         reopened.setFilePath(persistPath);
@@ -157,7 +205,10 @@ int main(int argc, char** argv)
     }
 
     // --- a bank this build cannot read is never overwritten ----------------
+    // Variant 1: the LEGACY FILE is too new — the import refuses and the
+    // bank is read-only, exactly as the file-era behavior was.
     {
+        resetBankDocument();
         const QString futurePath = dir.path() + "/future.json";
         const QByteArray future =
             R"({"format":"aether.memories","version":999,
@@ -191,58 +242,82 @@ int main(int argc, char** argv)
         ok &= expect(!created.body.contains("no memory in slot"),
                      "the refusal is not the misleading empty-slot error");
 
-        // An edit made against it must not be written back — that would replace
-        // channels this build cannot represent with the empty bank it read.
+        // An edit made against it must not be written anywhere — that would
+        // replace channels this build cannot represent with the empty bank it
+        // read (as a document, since files are never written now).
         bank.record(0, MemoryEntry{});
         bank.flush();
 
         QFile f(futurePath);
         ok &= expect(f.open(QIODevice::ReadOnly), "the fixture is still readable");
         ok &= expect(f.readAll() == future, "the unreadable bank was left untouched");
+        ok &= expect(bankDocument().isEmpty(),
+                     "no document is created from a bank this build cannot read");
+    }
+
+    // Variant 2 (document era): the DOCUMENT is too new — same refusal, and
+    // the newer document survives byte-for-byte.
+    {
+        resetBankDocument();
+        QJsonObject futureDoc =
+            QJsonDocument::fromJson(
+                R"({"format":"aether.memories","version":999,
+                    "memories":[{"index":0,"freq":7.2,"name":"Precious"}]})")
+                .object();
+        ok &= expect(AppSettings::instance().setRadioFeature(
+                         LocalMemoryStore::documentFamily(), QString(),
+                         LocalMemoryStore::documentFeature(), 999, futureDoc),
+                     "a future-version document is planted");
+
+        LocalMemoryBank bank;
+        bank.setFilePath(dir.path() + "/unused-legacy.json");
+        bank.load();
+        ok &= expect(bank.entries().isEmpty(), "a too-new document reads as empty");
+        ok &= expect(!bank.isWritable(), "a too-new document is not writable");
+        bank.record(0, MemoryEntry{});
+        bank.flush();
+        ok &= expect(bankDocument()
+                             .value(QStringLiteral("memories"))
+                             .toArray()
+                             .size()
+                         == 1,
+                     "the newer document survives the refused edit intact");
+        resetBankDocument();
     }
 
     // --- record() skips a genuine no-op ------------------------------------
     {
-        const QString noopPath = dir.path() + "/noop.json";
+        resetBankDocument();
         LocalMemoryBank bank;
-        bank.setFilePath(noopPath);
+        bank.setFilePath(dir.path() + "/noop.json");
         bank.handleCommand("memory create");
 
         MemoryEntry entry;
         entry.freq = 21.074;
         bank.record(0, entry);
         bank.flush();
-        ok &= expect(QFile::exists(noopPath), "the first record saved");
+        ok &= expect(!bankDocument().isEmpty(), "the first record saved");
 
-        // Snapshot the file's CONTENT rather than overwriting it with a
-        // sentinel. The sentinel trick was an external write to the bank's own
-        // file, which the concurrent-writer guard in flush() now (correctly)
-        // refuses to clobber — so it would have measured that refusal instead of
-        // the no-op logic it is actually about. Content comparison tests the same
-        // property and stays independent of filesystem timestamp granularity,
-        // which was the original reason for avoiding mtimes.
-        auto contentOf = [&](const QString& p) {
-            QFile f(p);
-            return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray("<unreadable>");
-        };
-        const QByteArray afterFirstSave = contentOf(noopPath);
-        ok &= expect(afterFirstSave != "<unreadable>", "the saved bank is readable");
+        // The envelope carries a savedAt stamp, so an unnecessary rewrite is
+        // visible even when the entry content would be identical.
+        const QJsonObject afterFirstSave = bankDocument();
 
         // Re-asserting the same values (what the dialog does via
         // handleMemoryStatus after every successful write) must not dirty it.
         bank.record(0, entry);
         bank.flush();
-        ok &= expect(contentOf(noopPath) == afterFirstSave,
-                     "re-recording identical values does not rewrite the file");
+        ok &= expect(bankDocument() == afterFirstSave,
+                     "re-recording identical values does not rewrite the document");
 
-        // A real change still saves. The envelope carries a savedAt stamp, so a
-        // rewrite is visible even if the entry diff were somehow byte-identical.
+        // A real change still saves.
         entry.freq = 21.075;
         bank.record(0, entry);
         bank.flush();
-        const QByteArray afterChange = contentOf(noopPath);
-        ok &= expect(afterChange != afterFirstSave, "a changed value does rewrite the file");
-        ok &= expect(afterChange.contains("21.075"), "the rewrite carries the new value");
+        const QJsonObject afterChange = bankDocument();
+        ok &= expect(afterChange != afterFirstSave,
+                     "a changed value does rewrite the document");
+        ok &= expect(QJsonDocument(afterChange).toJson().contains("21.075"),
+                     "the rewrite carries the new value");
         ok &= expect(bank.lastError().isEmpty(),
                      "a legitimate consecutive save is not mistaken for a foreign write");
     }
@@ -252,6 +327,7 @@ int main(int argc, char** argv)
         // MemoryDialog's import is a create→set chain, re-entered per record.
         // Allocation has to keep up across the whole file: every record must
         // land in its own slot, in order, with none reused or skipped.
+        resetBankDocument();
         LocalMemoryBank bank;
         bank.setFilePath(dir.path() + "/bulk.json");
 
@@ -288,7 +364,7 @@ int main(int argc, char** argv)
         reopened.setFilePath(dir.path() + "/bulk.json");
         reopened.load();
         ok &= expect(reopened.entries().size() == kRecords,
-                     "the whole bulk bank round-trips through the file");
+                     "the whole bulk bank round-trips through the document");
     }
 
     // --- an UNPARSEABLE bank is never overwritten --------------------------
@@ -317,6 +393,7 @@ int main(int argc, char** argv)
                 f.write(c.bytes);
             }
 
+            resetBankDocument();
             LocalMemoryBank bank;
             bank.setFilePath(p);
             bank.load();
@@ -333,74 +410,111 @@ int main(int argc, char** argv)
             ok &= expect(f.open(QIODevice::ReadOnly), "the damaged fixture still opens");
             ok &= expect(f.readAll() == c.bytes,
                          "a damaged bank is left byte-for-byte intact");
+            ok &= expect(bankDocument().isEmpty(),
+                         "no document is created from a damaged legacy file");
         }
     }
 
     // --- a concurrent writer is detected, not clobbered --------------------
     //
-    // The bank is replaced wholesale and read once per process, so two instances
-    // sharing a config dir used to silently discard each other's channels.
+    // The bank is replaced wholesale and read once per process, so two
+    // instances sharing a settings store would silently discard each other's
+    // channels. The savedAt baseline turns that into a visible refusal.
     {
-        const QString p = dir.path() + "/shared.json";
-
+        resetBankDocument();
         LocalMemoryBank first;
-        first.setFilePath(p);
+        first.setFilePath(dir.path() + "/shared-unused.json");
         first.handleCommand("memory create");
         first.flush();
-        ok &= expect(QFile::exists(p), "the first instance saved");
+        ok &= expect(!bankDocument().isEmpty(), "the first instance saved");
 
-        // A second process writes its own channels behind our back.
-        const QByteArray theirs = LocalMemoryStore::serialize(
-            [] {
-                QMap<int, MemoryEntry> m;
-                MemoryEntry e;
-                e.index = 5;
-                e.freq = 14.074;
-                e.name = "Theirs";
-                m.insert(5, e);
-                return m;
-            }(),
-            "2026-07-30T00:00:00Z");
+        // A second process writes its own channels behind our back — at the
+        // document layer, where it would really happen.
+        QMap<int, MemoryEntry> theirsMap;
         {
-            QFile f(p);
-            ok &= expect(f.open(QIODevice::WriteOnly | QIODevice::Truncate),
-                         "the other instance wrote the shared bank");
-            f.write(theirs);
+            MemoryEntry e;
+            e.index = 5;
+            e.freq = 14.074;
+            e.name = "Theirs";
+            theirsMap.insert(5, e);
         }
+        ok &= expect(writeForeignDocument(theirsMap, "2026-07-30T00:00:00.000Z"),
+                     "the other instance wrote the shared bank");
+        const QJsonObject theirs = bankDocument();
 
-        // Our next edit must NOT replace their file.
+        // Our next edit must NOT replace their document.
         first.record(1, MemoryEntry{});
         first.flush();
 
-        // Scoped, so the read handle is CLOSED before the flushes below. On
-        // Windows an open handle blocks QSaveFile::commit()'s atomic rename
-        // ("Access is denied"), so leaving it open made both saves fail — the
-        // assertion at the end of this block then read as a re-baselining bug
-        // that was not there. POSIX permits the rename, which is why this only
-        // ever failed on Windows.
-        {
-            QFile f(p);
-            ok &= expect(f.open(QIODevice::ReadOnly), "the shared bank still opens");
-            ok &= expect(f.readAll() == theirs,
-                         "a foreign write is not clobbered by our flush");
-        }
+        ok &= expect(bankDocument() == theirs,
+                     "a foreign write is not clobbered by our flush");
         ok &= expect(first.lastError().contains("changed by another"),
                      "the refusal names the concurrent-write reason");
 
         // And our own save must re-baseline, or the very next flush would
-        // mistake our own mtime for somebody else's and refuse forever.
+        // mistake our own savedAt for somebody else's and refuse forever.
         LocalMemoryBank fresh;
-        fresh.setFilePath(p);
+        fresh.setFilePath(dir.path() + "/shared-unused.json");
         fresh.load();
         fresh.record(9, MemoryEntry{});
         fresh.flush();
         fresh.record(10, MemoryEntry{});
         fresh.flush();
         LocalMemoryBank reread;
-        reread.setFilePath(p);
+        reread.setFilePath(dir.path() + "/shared-unused.json");
         reread.load();
         ok &= expect(reread.entries().contains(9) && reread.entries().contains(10),
                      "consecutive flushes both land after a clean load");
+    }
+
+    // --- the legacy file imports once and stays frozen ---------------------
+    {
+        resetBankDocument();
+        const QString legacyPath = dir.path() + "/legacy-import.json";
+        QMap<int, MemoryEntry> legacyMap;
+        {
+            MemoryEntry e;
+            e.index = 3;
+            e.freq = 3.573;
+            e.name = "Legacy Net";
+            legacyMap.insert(3, e);
+        }
+        const QByteArray legacyBytes =
+            LocalMemoryStore::serialize(legacyMap, "2026-07-01T00:00:00Z");
+        {
+            QFile f(legacyPath);
+            ok &= expect(f.open(QIODevice::WriteOnly), "legacy fixture written");
+            f.write(legacyBytes);
+        }
+
+        LocalMemoryBank bank;
+        bank.setFilePath(legacyPath);
+        bank.load();
+        ok &= expect(bank.entries().value(3).name == "Legacy Net",
+                     "legacy channels import on first load");
+        ok &= expect(!bankDocument().isEmpty(),
+                     "the import lands in the document immediately (no edit "
+                     "needed to claim it)");
+        {
+            QFile f(legacyPath);
+            ok &= expect(f.open(QIODevice::ReadOnly)
+                             && f.readAll() == legacyBytes,
+                         "the legacy file stays byte-for-byte frozen");
+        }
+
+        // With the document in place, the legacy file is never consulted
+        // again — even when it still exists.
+        LocalMemoryBank again;
+        again.setFilePath(legacyPath);
+        again.load();
+        again.record(7, MemoryEntry{});
+        again.flush();
+        LocalMemoryBank verify;
+        verify.setFilePath(legacyPath);
+        verify.load();
+        ok &= expect(verify.entries().contains(3) && verify.entries().contains(7),
+                     "post-import edits accumulate in the document, on top of "
+                     "the imported channels");
     }
 
     if (ok)

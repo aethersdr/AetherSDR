@@ -1207,7 +1207,15 @@ RadioCapabilities Hl2Backend::capabilities() const
                             | RadioCapabilities::ClientSettingsDomain::Passband
                             | RadioCapabilities::ClientSettingsDomain::SpanRate
                             | RadioCapabilities::ClientSettingsDomain::RfGain
-                            | RadioCapabilities::ClientSettingsDomain::TxSetpoints;
+                            | RadioCapabilities::ClientSettingsDomain::TxSetpoints
+                            // Memories: the client owns them (persistsMemories
+                            // is false above). NOTE the bank itself engages on
+                            // persistsMemories and keeps its own SHARED
+                            // document — this declaration is descriptive
+                            // completeness, and Memories stays out of
+                            // RadioStateMemory's ext gate (one domain, one
+                            // document — RFC #4603 PR 6).
+                            | RadioCapabilities::ClientSettingsDomain::Memories;
     // No extension namespaces (no invokeExtension verbs yet), matching FlexBackend.
     return c;
 }
