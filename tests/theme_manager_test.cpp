@@ -457,9 +457,12 @@ int main(int argc, char** argv)
         stack->addWidget(label);               // label reparented onto an
                                                // orphan → still root
         hostLayout->addWidget(stack);          // stack joins the scoped host
-        // show() drives Qt's polish pass, which is when a widget is first
-        // prepared for display and is guaranteed to be in its final parent
-        // chain. The real VfoWidget is shown too, so this matches the app.
+        // show() is what catches this: Show / ShowToParent arrive with the
+        // widget unavoidably in its final chain, however it got there. Polish
+        // alone does NOT rescue this shape — restrict the filter to
+        // ParentChange|Polish and the assertion below goes red, because the
+        // label's single Polish is spent before the stack joins `host`. The
+        // real VfoWidget is shown too, so this matches the app.
         host.show();
         QApplication::processEvents();
 
@@ -468,6 +471,176 @@ int main(int argc, char** argv)
         // stack and nothing re-resolved the label.
         EXPECT_TRUE(label->styleSheet().contains("#ff4d4d"));
 
+        QApplication::processEvents();
+    }
+
+    // ── #4520 follow-up: a re-resolve must not clobber a directly-set sheet ──
+    //
+    // Re-resolving on Show means the filter now runs on a widget that has been
+    // alive and visible for a while — and registration through applyStyleSheet()
+    // does NOT imply the widget is still wearing what we gave it. The house
+    // pattern "register a generic themed look, then overwrite it directly with
+    // per-state colour" is all over the GUI:
+    //
+    //     applyStyleSheet(m_sliceBadge, "... {{color.background.2}} ...");  // generic
+    //     m_sliceBadge->setStyleSheet("... " + sliceColour + " ...");        // per-slice
+    //
+    // RxApplet.cpp:388/2046 and VfoWidget.cpp:885/4812 (per-slice badge colour),
+    // VfoWidget.cpp:4715 (ghosted split badge), VfoWidget.cpp:6207 (SNR-coloured
+    // RADE label), TitleBar.cpp:131/1198 (discovery heartbeat), and
+    // MainWindow_Session.cpp:1103/1106 — where the TRACKED template is the
+    // TX-ON red one and the direct sheet is the TX-OFF dim one, so an
+    // unguarded re-resolve repaints a red TX indicator while receiving.
+    //
+    // Reached by ordinary operation: VfoWidget::setCollapsed bulk-toggles
+    // visibility across every direct child, and RxApplet::updateSliceTabs
+    // toggles m_sliceBadge outright.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+
+        QWidget host;
+        theme::setContainer(&host, "applet/tx");
+        auto* hostLayout = new QVBoxLayout(&host);
+
+        // The badge is styled BEFORE it is parented, exactly as the production
+        // sites do — that is what makes the guard load-bearing rather than
+        // incidental. The recorded sheet is root-scoped; the show-time
+        // re-resolve would produce the applet/tx one, so a bare
+        // "did the resolved QSS change?" test would NOT protect it.
+        auto* stack = new QStackedWidget;      // untracked ancestor
+        auto* badge = new QLabel("A");
+
+        // 1. Registered with the generic themed template — resolves at root.
+        tm.applyStyleSheet(badge, "QLabel { color: {{color.slider.foreground}}; }");
+        EXPECT_TRUE(badge->styleSheet().contains("#00b4d8"));    // root Dark
+        // 2. Overwritten directly with per-state colour, as connectSlice() does.
+        badge->setStyleSheet("QLabel { color: #ff8800; }");
+
+        // 3. The widget reaches its final (scoped) chain and is shown. The
+        //    filter fires, resolves applet/tx red — and must NOT apply it.
+        stack->addWidget(badge);
+        hostLayout->addWidget(stack);
+        host.show();
+        QApplication::processEvents();
+        EXPECT_TRUE(badge->styleSheet().contains("#ff8800"));
+        EXPECT_TRUE(!badge->styleSheet().contains("#ff4d4d"));
+
+        // 4. And again across a hide/show cycle (the collapse/expand shape).
+        badge->setVisible(false);
+        QApplication::processEvents();
+        badge->setVisible(true);
+        QApplication::processEvents();
+        EXPECT_TRUE(badge->styleSheet().contains("#ff8800"));
+
+        // 5. A theme switch still repaints unconditionally — that is a
+        //    deliberate, user-initiated repaint and predates this filter.
+        tm.setActiveTheme("Default Light");
+        QApplication::processEvents();
+        EXPECT_TRUE(!badge->styleSheet().contains("#ff8800"));
+        EXPECT_TRUE(badge->styleSheet().contains("#c02020"));    // applet/tx Light
+
+        // 6. …and the guard is live again afterwards — it protects the next
+        //    direct sheet too, rather than latching off once the theme switch
+        //    has re-claimed the widget.
+        badge->setStyleSheet("QLabel { color: #00ff00; }");
+        badge->setVisible(false);
+        QApplication::processEvents();
+        badge->setVisible(true);
+        QApplication::processEvents();
+        EXPECT_TRUE(badge->styleSheet().contains("#00ff00"));
+
+        tm.setActiveTheme("Default Dark");
+        host.hide();
+        QApplication::processEvents();
+    }
+
+    // ── the "still ours" record must survive a theme switch ──
+    //
+    // reapplyAllTrackedStyleSheets() re-applies unconditionally, so it has to
+    // refresh what we recorded as ours. If it doesn't, every tracked widget
+    // looks permanently overridden after the first theme change and the #4520
+    // scope re-resolution above silently stops working for the rest of the
+    // session — the worst kind of regression, since the fix would still pass
+    // its own test on a freshly-started app.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Light");
+
+        QWidget host;
+        theme::setContainer(&host, "applet/tx");
+        auto* hostLayout = new QVBoxLayout(&host);
+
+        auto* stack = new QStackedWidget;      // untracked, as VfoWidget's is
+        auto* label = new QLabel;
+        tm.applyStyleSheet(label, "QLabel { color: {{color.slider.foreground}}; }");
+        EXPECT_TRUE(label->styleSheet().contains("#0088b0"));   // root Light
+
+        // A theme switch happens before the widget reaches its final chain.
+        // Note the switch is one-way: a Light→Dark→Light round trip would
+        // land back on the stale recorded value by accident and prove nothing.
+        tm.setActiveTheme("Default Dark");
+        QApplication::processEvents();
+        EXPECT_TRUE(label->styleSheet().contains("#00b4d8"));   // root Dark
+
+        // Now the #4520 shape: the untracked ancestor joins the scoped host.
+        // This only re-resolves if the theme switch refreshed the record.
+        stack->addWidget(label);
+        hostLayout->addWidget(stack);
+        host.show();
+        QApplication::processEvents();
+        EXPECT_TRUE(label->styleSheet().contains("#ff4d4d"));   // applet/tx Dark
+
+        host.hide();
+        QApplication::processEvents();
+    }
+
+    // ── a re-resolve that changes nothing must not repolish ──
+    //
+    // Show and ShowToParent BOTH fire on every show transition, so without a
+    // no-op guard each visibility toggle costs two full setStyleSheet() calls
+    // per tracked widget — and setStyleSheet drives a QStyleSheetStyle
+    // repolish of the widget and its children, not just the regex substitution.
+    // VfoWidget::setCollapsed bulk-toggles visibility across the whole flag
+    // subtree, so that would be a repolish burst per collapse/expand, times
+    // slice count. QEvent::StyleChange is the observable proxy for the
+    // repolish: 0 with the guard, 20 without it over the loop below.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+
+        struct StyleChangeCounter : QObject {
+            int count = 0;
+            bool eventFilter(QObject*, QEvent* e) override {
+                if (e->type() == QEvent::StyleChange) ++count;
+                return false;
+            }
+        } counter;
+
+        QWidget host;
+        theme::setContainer(&host, "applet/tx");
+        auto* hostLayout = new QVBoxLayout(&host);
+        auto* lbl = new QLabel("x");
+        hostLayout->addWidget(lbl);
+        tm.applyStyleSheet(lbl, "QLabel { color: {{color.slider.foreground}}; }");
+
+        // Settle first: the initial show legitimately re-resolves once, from
+        // root scope to applet/tx.  Only steady-state toggles are counted.
+        host.show();
+        QApplication::processEvents();
+        EXPECT_TRUE(lbl->styleSheet().contains("#ff4d4d"));
+        lbl->installEventFilter(&counter);
+
+        for (int i = 0; i < 10; ++i) {
+            lbl->setVisible(false);
+            QApplication::processEvents();
+            lbl->setVisible(true);
+            QApplication::processEvents();
+        }
+        EXPECT_EQ(counter.count, 0);
+
+        lbl->removeEventFilter(&counter);
+        host.hide();
         QApplication::processEvents();
     }
 

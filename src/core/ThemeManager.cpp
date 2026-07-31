@@ -1675,7 +1675,8 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     // Scope-aware resolve — the widget's container chain decides which
     // overrides apply.  Widgets with no declared ancestor fall through
     // to root scope, matching the historical flat behaviour.
-    widget->setStyleSheet(resolveFor(widget, stylesheetTemplate));
+    const QString resolved = resolveFor(widget, stylesheetTemplate);
+    widget->setStyleSheet(resolved);
 
     // First-time registration: connect to destroyed() so the entry
     // disappears when the widget does, AND install ourselves as an
@@ -1702,6 +1703,9 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     }
     TrackedWidget ctx;
     ctx.stylesheetTemplate = stylesheetTemplate;
+    // Remember what we actually pushed so eventFilter can tell "still ours"
+    // from "somebody set their own sheet afterwards".
+    ctx.appliedStylesheet  = resolved;
     ctx.tokens = extractReferencedTokens(stylesheetTemplate);
     m_trackedWidgets.insert(widget, ctx);
 }
@@ -1731,13 +1735,22 @@ bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
     //
     // Show / ShowToParent are the ones that actually catch it: they arrive when
     // the widget first becomes visible, by which point it is unavoidably in its
-    // final chain no matter how it got there. Polish is kept alongside them for
-    // widgets that are styled but never shown. ParentChange stays because it is
-    // the earliest and cheapest signal for the direct case.
+    // final chain no matter how it got there. Polish alone does NOT rescue this
+    // shape — it fires at most once per widget, and in the stack case above it
+    // is spent before the stack joins its scoped host (drop Show/ShowToParent
+    // and the #4520 regression test goes red). Polish still earns its place: it
+    // is what reaches a QStackedWidget page that is never the *current* one, so
+    // VfoWidget's edit-mode m_freqEdit gets the scoped font too, not just the
+    // visible m_freqLabel. ParentChange stays as the earliest and cheapest
+    // signal for the direct case.
     //
-    // All four fire a handful of times per widget over a session, never during
-    // paint or drag, so re-resolving on them is not a hot path. resolveFor() is
-    // a regex pass over a short template.
+    // Cost: ParentChange and Polish are once-ish per widget, but Show and
+    // ShowToParent BOTH fire on every show transition — a VFO flag
+    // collapse/expand (VfoWidget::setCollapsed) bulk-toggles visibility across
+    // the whole subtree, so this is not a rare event. The re-resolve is kept
+    // cheap by the no-op guard below: resolveFor() is a regex pass over a short
+    // template, and setStyleSheet() (which drives a full QStyleSheetStyle
+    // repolish) only runs when the resolved QSS actually changed.
     if (event->type() == QEvent::ParentChange
         || event->type() == QEvent::Polish
         || event->type() == QEvent::Show
@@ -1746,10 +1759,29 @@ bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
         if (w) {
             const auto it = m_trackedWidgets.constFind(w);
             if (it != m_trackedWidgets.constEnd()
-                && !it.value().stylesheetTemplate.isEmpty()) {
-                // Re-resolve against the new scope chain.  Cheap: only
-                // fires on rare reparent events, not in any hot path.
-                w->setStyleSheet(resolveFor(w, it.value().stylesheetTemplate));
+                && !it.value().stylesheetTemplate.isEmpty()
+                // Registration through applyStyleSheet() does NOT mean the
+                // widget is still wearing what we gave it.  The house pattern
+                // "register a generic themed look, then overwrite it directly
+                // with per-state colour" is everywhere — RxApplet's per-slice
+                // badge colour, VfoWidget's split badge and RADE SNR label, the
+                // status bar's TX indicator (which would otherwise repaint
+                // itself TX-red while the radio is receiving).  Re-resolving
+                // over one of those wipes real state, so only re-resolve while
+                // the widget still carries exactly the QSS we last applied.
+                && w->styleSheet() == it.value().appliedStylesheet) {
+                const QString resolved =
+                    resolveFor(w, it.value().stylesheetTemplate);
+                // No-op guard: Show + ShowToParent fire as a pair on every
+                // show, so without this each toggle costs two full repolishes
+                // per tracked widget for an identical result.
+                if (resolved != it.value().appliedStylesheet) {
+                    // Record BEFORE setStyleSheet: the repolish it triggers can
+                    // re-enter arbitrary widget code that touches
+                    // m_trackedWidgets, which would invalidate `it`.
+                    m_trackedWidgets[w].appliedStylesheet = resolved;
+                    w->setStyleSheet(resolved);
+                }
             }
         }
     }
@@ -1877,7 +1909,17 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         // Scope-aware re-apply — same path as applyStyleSheet() so an
         // edit at a non-root scope visibly takes effect for every
         // tracked widget under that container.
-        w->setStyleSheet(resolveFor(w, ctx.stylesheetTemplate));
+        //
+        // Unlike eventFilter this re-applies unconditionally, including over
+        // a sheet a caller set directly — a theme switch is an explicit,
+        // user-initiated repaint and that has always been its behaviour.
+        // Recording it keeps eventFilter's "still ours" test meaningful; skip
+        // this and the guard would latch off permanently after the first
+        // theme change.  Record before setStyleSheet(), which can re-enter
+        // widget code that mutates m_trackedWidgets.
+        const QString resolved = resolveFor(w, ctx.stylesheetTemplate);
+        m_trackedWidgets[w].appliedStylesheet = resolved;
+        w->setStyleSheet(resolved);
     }
 }
 
