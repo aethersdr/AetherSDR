@@ -4431,7 +4431,7 @@ set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
 add_executable(log_manager_filter_rules_test
     tests/log_manager_filter_rules_test.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/AsyncLogWriter.cpp
 )
 target_include_directories(log_manager_filter_rules_test PRIVATE src)
@@ -4970,6 +4970,7 @@ set(AETHER_SETTINGS_CONSUMERS
     amp_applet_test
     container_manager_test
     container_nesting_test
+    log_manager_filter_rules_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
