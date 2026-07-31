@@ -9,7 +9,7 @@ tool. Each tool has its own well-known file at a different path
 project-wide lives in **this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~440 lines; that's the cost
+code or recommending merges. The file is ~830 lines; that is the cost
 of doing the job right on this codebase.
 
 ## Project Goal
@@ -535,15 +535,72 @@ Rules that come with the store:
 - **Credentials never go in the settings store.** QtKeychain (service
   `"AetherSDR"`) is the only persistent credential store; without keychain
   support a credential is session-only via
-  `AppSettings::setSessionCredential()`. Follow the patterns in
+  `AppSettings::setSessionCredential()`. The known credential names live in
+  ONE table — `src/core/SettingsCredentialPolicy.h` — shared by the import
+  exodus, the export sanitizer, the `setValue()` seam guard, and the CLI, so
+  add new credentials THERE (the seam then enforces the policy for you).
+  Follow the patterns in
   `MqttSettings`/`AutomationBridgeSettings`/`CopyAssistSettings`.
 - The legacy XML file (`AetherSDR.settings`) is a **frozen snapshot** from the
   one-time import — never write to it, never delete it outside Reset Settings.
 - Pre-`QApplication` code reads via `SettingsBootstrap::readValue()` and paths
   come from `SettingsPaths` — never hand-build a config path.
-- The `AetherSDR --config <list|get|set|unset|export|path>` CLI inspects and
+- The `AetherSDR --config <list|get|set|unset|export|features|path>` CLI inspects and
   repairs the store without starting the GUI (the recovery path when a stored
   value breaks startup).
+
+### Radio-Scoped Feature Documents (`radio_settings`)
+
+Radio-scoped configuration — state that belongs to one physical radio or one
+backend family — does NOT go in flat `AppSettings` keys. It goes in the
+`radio_settings` table as **one versioned JSON document per feature per scope**
+(Constitution Principle V, realized in the store):
+
+```cpp
+const RadioSettingsScope scope = m_radioModel.settingsScope();  // (family, serial)
+QJsonObject doc = scope.feature("MyFeature");          // exact → family-wide → {}
+scope.setFeature("MyFeature", kMySchemaVersion, doc);  // atomic whole-document write
+```
+
+- Identity comes from `RadioModel::settingsScope()` (Flex serial / HL2 MAC /
+  Kiwi UUID) — never re-derive it yourself. An empty `radio_id` row is the
+  family-wide default; guard against writing one by accident when the serial
+  isn't known yet (see `BandStackSettings` for the pattern).
+- **Check the write result.** `setFeature()` can refuse (read-only store,
+  reset in progress); a mutation that silently doesn't persist while the UI
+  repaints from the store is the worst failure shape (PR #4621 review). Log
+  loudly at minimum.
+- Writers judging the row they're about to replace use the **exact** read
+  (`featureExact()`), not the fallback-composed one; and never overwrite a
+  document whose `schema_version` is newer than yours — refuse and log
+  (see `RadioStateMemory::store()` for the canonical shape).
+- Shipped precedents: the HL2 `OperatingState` document (per-band drive/LNA
+  maps in its extension), the `Identity` nickname document; `BandStack` and
+  the shared memory bank follow in #4621/#4623.
+
+### Client-Side Radio State Memory (capture/restore)
+
+For radios that persist nothing themselves, the client is the radio's memory —
+but only through the one sanctioned pipeline:
+
+- A backend declares WHICH state the client owns via
+  `RadioCapabilities::clientSettingsDomains` (typed per-domain flags; empty =
+  restore nothing). **Flex and Sim declare explicitly empty** — a CI test
+  guards this, because a non-empty Flex declaration would re-introduce the
+  #2465/#4126/#4261 re-assert-stale-state bug class.
+- `RadioStateMemory` is the ONLY reader/writer of the `OperatingState`
+  document; engagement is `shouldEngage(caps)` — capability-shaped, **never a
+  family-name check**. `RadioModel` hands restored state to the backend
+  unconditionally before `connectRadio()` (an empty state is the reset that
+  prevents same-family radio-swap bleed), and debounces capture (2 s trailing
+  + 10 s max-wait) with an explicit flush on disconnect AND in
+  `MainWindow::closeEvent()` (quit doesn't pump the queued path).
+- The backend validates everything it restores at its own boundary
+  (Principle VII) and **restore never keys transmit** (Principle VI) —
+  restored values are setpoints; the TX gate is untouched.
+- The extension document's top level is domain-named sub-objects gated
+  per-domain by the engine; the CONTENTS of each sub-object are the backend's
+  own (opaque above the seam).
 
 ### Settings Migration
 
@@ -563,21 +620,46 @@ Run once at app or feature startup, not on every access. (The XML→SQLite store
 migration itself is automatic inside `AppSettings::load()` — feature code never
 touches it.)
 
-### Radio-Authoritative Settings Policy
+**Migrating a legacy side file into scoped documents** follows the
+claim-and-freeze pattern (precedents: `Hl2Discovery` nicknames,
+`BandStackSettings`, `LocalMemoryBank`):
 
-**The radio is always authoritative for any setting it stores** (Constitution
-Principles II & III). AetherSDR must never save, recall, or override radio-side
-settings from client-side persistence. Only save client-side settings for things
-the radio does NOT save.
+- Claim lazily, per scope, on first access — the document needs the radio's
+  FAMILY, which only the live scope knows.
+- The document's existence is the migration marker; a **present-but-empty**
+  document blocks re-import (an operator who emptied a store must not have it
+  resurrected by a restored backup).
+- The legacy source stays **frozen** (or per-section-pruned, for multi-radio
+  files) as the downgrade snapshot — never rewritten with new data.
+- Memoize only *settled* states (document exists, claim succeeded, section
+  confirmed absent); every retryable condition (file missing, unparseable,
+  write refused) must retry on the next access, not be latched away.
 
-**Radio-authoritative (do NOT persist):** frequency, mode, filter, step size,
-AGC, squelch, DSP flags, antennas, TX power, panadapter *count* and per-pan
-state (center, bandwidth, min/max dBm, FFT average/FPS/weighted-average, and
-waterfall line duration).
+### Settings Authority Policy (radio-authoritative vs client-owned)
 
-**Client-authoritative (persist in AppSettings):** window geometry, layout
-arrangement (`PanadapterLayout`, applet order/visibility), client-side DSP
-(NR2/RN2/NR4/DFNR), UI preferences, client-only display appearance
+**The radio is always authoritative for any setting it can store** (Constitution
+Principles II & III) — and the deciding test is Constitution III's own:
+*whether THIS radio can save and restore the value*, which since RFC #4603 is a
+**declared capability, not a family assumption**:
+
+- **On a radio that persists its own state (Flex)**: never save, recall, or
+  override radio-side settings from client-side persistence. The lists below
+  apply verbatim, and `clientSettingsDomains` is declared EMPTY.
+- **On a radio that persists nothing (HL2; Sim/Kiwi as applicable)**: the
+  client IS the radio's memory — for exactly the domains the backend declares
+  in `RadioCapabilities::clientSettingsDomains`, persisted ONLY through
+  `RadioStateMemory`'s `OperatingState` document (see "Client-Side Radio State
+  Memory" above). Never in flat `AppSettings` keys, and never via ad-hoc code
+  paths — the one pipeline is what keeps the Flex guarantees provable.
+
+**Radio-authoritative on Flex (do NOT persist client-side):** frequency, mode,
+filter, step size, AGC, squelch, DSP flags, antennas, TX power, panadapter
+*count* and per-pan state (center, bandwidth, min/max dBm, FFT
+average/FPS/weighted-average, and waterfall line duration).
+
+**Client-authoritative everywhere (persist in AppSettings):** window geometry,
+layout arrangement (`PanadapterLayout`, applet order/visibility), client-side
+DSP (NR2/RN2/NR4/DFNR), UI preferences, client-only display appearance
 preferences, spot settings.
 
 **Why:** When both persist the same setting, they fight on reconnect. The

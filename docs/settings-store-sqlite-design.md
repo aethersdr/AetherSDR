@@ -1,6 +1,8 @@
 # Client Settings Store — SQLite Design (RFC #4603)
 
-Status: **implemented** (PR 1 of the RFC's phased plan)
+Status: **implemented through PR 3** (storage engine #4612, scoped store +
+authority #4614, HL2 state memory #4619 — all merged; BandStack #4621 and the
+memory bank #4623 in review; the Settings Browser is the remaining phase)
 RFC / tracking issue: [#4603](https://github.com/aethersdr/AetherSDR/issues/4603)
 Closes: [#4602](https://github.com/aethersdr/AetherSDR/issues/4602) (thread safety)
 
@@ -61,9 +63,15 @@ radio_settings   (family, radio_id, feature, schema_version, value;
                   PRIMARY KEY (family, radio_id, feature))
 ```
 
-All four tables exist from v1 so the file format is stable, even though
-`radio_settings` (one **versioned JSON document per feature per scope**,
-Constitution Principle V) is consumed starting with RFC PR 2. `radio_id` is
+All four tables exist from v1 so the file format is stable. `radio_settings`
+holds one **versioned JSON document per feature per scope** (Constitution
+Principle V) and is live: the HL2 `OperatingState` document (universal fields
+plus per-band drive/LNA maps in domain-gated extension sub-objects), the
+`Identity` nickname document, and — in review — `BandStack` and the shared
+memory bank at `(local, '', MemoryBank)`. Writers judge the exact row they
+replace (`radioFeatureExact`, no family-wide fallback) and refuse to overwrite
+a newer `schema_version` — read-only toward the future, at both the store and
+the document layer. `radio_id` is
 the per-family canonical identity (Flex serial / HL2 MAC / Kiwi profile UUID);
 `radio_id=''` rows are family-wide defaults. Values are TEXT throughout; the
 `"True"`/`"False"` boolean convention is unchanged.
@@ -146,6 +154,32 @@ worker-thread event-loop code is fine — that is precisely the #4602 case.
   not a backup.
 - The support bundle's `settings.txt` is the same sanitized dump plus the
   current load notice and migration stamps.
+
+## Shipped hardening beyond the original design (review rounds)
+
+- **Credential seam**: `SettingsCredentialPolicy.h` is the single table of
+  credential names, shared by the import exodus, the sanitizer (exact names +
+  shape regex, recursive over JSON values), the `setValue()` seam guard
+  (flat keys divert to the session vault; document fields are stripped), and
+  the CLI's `set` refusal.
+- **Busy is not corrupt**: `SQLITE_BUSY/LOCKED` anywhere in the open sequence
+  fails the session instead of quarantining (POSIX `rename()` succeeds on
+  open files — quarantining a live store split-brains a concurrent writer);
+  quarantine+restore is serialized under a `QLockFile`.
+- **Newer-schema stores reopen `SQLITE_OPEN_READONLY`** — engine-enforced,
+  and `close()` never checkpoints (writes) a newer binary's file.
+- **Test isolation**: `SettingsPaths::configDir()` honors the
+  `AETHER_SETTINGS_DIR` override on every platform (Windows ignores env
+  redirects through `QStandardPaths`); `TestSettingsProfile` sets it, and
+  every store path — including side-file consumers like `BandStackSettings` —
+  must route through `SettingsPaths`.
+- **Capture/restore lifecycle** (PR 3): `RadioStateMemory` engagement is
+  capability-shaped (`clientSettingsDomains`, empty = inert, Flex/Sim guarded
+  by CI); restore is handed over unconditionally pre-connect (empty = the
+  radio-swap reset); capture debounces 2 s with a 10 s max-wait, flushes on
+  disconnect and explicitly in `closeEvent`; the connect-time power push is a
+  seeded value-identical echo that records nothing (bench-found on real
+  hardware — the review record on #4619 is the case study).
 
 ## Testing
 
