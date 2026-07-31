@@ -555,6 +555,12 @@ void MainWindow::wireRadioModel()
         // generation-guarded grace timer — don't clear it here or a concurrent
         // recall's #4158/Center Lock window could be torn down early.
         finishPreparedKiwiSdrBandRecallForPan(panId);
+        // The slice-selection window is the exception: it gates radio-driven
+        // selection, so leaving it armed would suppress reveal and the active
+        // echo for 1500 ms with no reconstruction to protect. cancelArm() undoes
+        // only this recall's arm — a still-live window from an earlier
+        // successful recall on the same pan is restored, not dropped.
+        m_bandRecallSelection.cancelArm(panId);
     });
     // Re-bind a KiwiSDR replacement across a band-stack slice recreation (#4158).
     // A band recall DROPS then RE-CREATES the slice (same id, new band). The

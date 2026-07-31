@@ -203,6 +203,10 @@ void MainWindow::noteBandRecallForPan(const QString& panId)
     // command. Restoration is deferred until the full grace window elapses so
     // slice status arrival order can never choose the receiver.
     m_kiwiRebind.noteBandRecall(panId);
+    // Open the radio-driven-selection window on the same edge. It is armed
+    // here and rolled back by panBandDispatchFailed, so unlike the markers
+    // around it, it never opens for a band write that never reached the wire.
+    m_bandRecallSelection.arm(panId, QDateTime::currentMSecsSinceEpoch());
     // Stamp this recall so the grace timer below only clears the Kiwi marker if
     // it is still the latest recall for this pan. Without it, an overlapping
     // recall (band button + memory spot / tune, now all routed here) would have
@@ -300,12 +304,17 @@ void MainWindow::selectSliceFromRadioState(
         return;
     }
 
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const bool bandRecallInFlight =
-        m_bandRecallGenerationByPan.contains(slice->panId());
+        m_bandRecallSelection.isActive(slice->panId(), nowMs);
     const RadioSliceSelectionDecision decision =
         radioSliceSelectionDecision(bandRecallInFlight, source);
 
     if (bandRecallInFlight) {
+        // A transient activation IS the radio still rebuilding this pan: hold
+        // the window open past it (bounded), so a rebuild slower than the base
+        // grace period can't land its last old-band activation just outside.
+        m_bandRecallSelection.refresh(slice->panId(), nowMs);
         qCDebug(lcProtocol).noquote()
             << "MainWindow: band recall suppressing slice reveal"
             << "pan=" << slice->panId()
@@ -1609,6 +1618,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
     qDebug() << "MainWindow: slice added" << s->sliceId();
     const bool firstSlice = (m_activeSliceId < 0);
 
+    // A slice arriving on a pan with a live band-recall window is the radio
+    // still rebuilding that pan. Extend the window (bounded) before anything
+    // below consults it, so a rebuild slower than the base grace period stays
+    // covered end to end instead of only for its first 1500 ms.
+    m_bandRecallSelection.refresh(s->panId(), QDateTime::currentMSecsSinceEpoch());
+
     // First slice — wire everything up
     if (firstSlice) {
         selectSliceFromRadioState(
@@ -1971,9 +1986,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // would send a stale pan-center command that undoes the selected band.
     connect(s, &SliceModel::activeChanged, this, [this, s](bool active) {
         if (!active) return;
-        // A local selection updates m_activeSliceId before SliceModel emits its
-        // optimistic edge, so only a differing id is a radio-originated change.
-        if (s->sliceId() == m_activeSliceId) return;
+        // Drop only our own optimistic edge, which setActiveSliceInternal
+        // brands as it emits. Comparing against m_activeSliceId instead would
+        // also drop a radio-originated re-activation of the already-selected
+        // slice — another client toggling active away and back, or a profile
+        // load replaying status — and that must still resync the UI and
+        // reveal the slice, as it did before this guard existed.
+        if (s->sliceId() == m_optimisticActiveEdgeSliceId) return;
         selectSliceFromRadioState(
             s, RadioSliceSelectionSource::ActiveStatus);
     });
@@ -2214,6 +2233,13 @@ void MainWindow::onSliceRemoved(int id)
     // enters the grace path, so a stale prune can't later clear a live
     // assignment.
     const bool liveRemoval = !m_radioModel.slice(id);
+    // Same reconstruction evidence as onSliceAdded, but a live removal cannot
+    // name its pan — the slice has already left the model (see the comment on
+    // the overlay cleanup below). Refresh every live window; see
+    // BandRecallSelectionGuard::refreshAll for why that is the safe read.
+    if (liveRemoval) {
+        m_bandRecallSelection.refreshAll(QDateTime::currentMSecsSinceEpoch());
+    }
     const QString kiwiRebindProfile = (liveRemoval && m_kiwiSdrManager)
         ? m_kiwiSdrManager->assignedProfileForSlice(id) : QString();
     const auto rebindAction =

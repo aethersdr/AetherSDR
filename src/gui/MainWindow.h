@@ -19,6 +19,7 @@
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
 #include "gui/CenterLockRebindTracker.h"
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
@@ -1078,6 +1079,15 @@ private:
     QHash<QString, quint64> m_bandRecallGenerationByPan;
     quint64              m_bandRecallGeneration{0};
     static constexpr int kBandRecallRecreateGraceMs = 1500;
+    // Upper bound on the extended slice-selection window. The base window is
+    // the grace period above; reconstruction evidence pushes it out, but never
+    // past this, so a chatty session can't hold selection suppressed.
+    static constexpr int kBandRecallSelectionGuardMaxMs = 4000;
+    // When radio-driven active-slice selection is synchronization-only. Not
+    // m_bandRecallGenerationByPan: this window must not open when the band
+    // write is dropped, and must outlast a slow rebuild. See the header.
+    BandRecallSelectionGuard m_bandRecallSelection{
+        kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1219,6 +1229,13 @@ private:
     // Guard: set true while updating controls from the model so shared tune
     // helpers do not echo model-driven changes back to the radio.
     bool m_updatingFromModel{false};
+    // The slice whose optimistic activeChanged(true) edge we are inside of.
+    // SliceModel::setActive() emits that edge synchronously, before the wire
+    // write (#3854), so the activeChanged handler re-enters on our own local
+    // selection. Identifying it by slice id — rather than by "the id already
+    // equals m_activeSliceId" — keeps a genuinely radio-originated
+    // re-activation of the already-selected slice a real selection event.
+    int  m_optimisticActiveEdgeSliceId{-1};
     bool m_shuttingDown{false};
     bool m_panadapterUiPreparedForShutdown{false};
     void preparePanadapterUiForShutdown();
