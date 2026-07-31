@@ -4251,7 +4251,15 @@ void RadioModel::applyWaterfallAutoBlack()
     // Otherwise the client renders the floor from its own estimate, so keep
     // auto_black=0 (radio-authoritative when, and only when, the user asks).
     if (activeWfId().isEmpty()) return;
-    const int v = (m_wfAutoBlackOn && m_wfAutoBlackRadioSide) ? 1 : 0;
+    // …and only when the RADIO can actually do it. m_wfAutoBlackRadioSide is the
+    // operator's stored intent, which deliberately survives a session on a radio
+    // that computes no black level (#4600), so the capability has to be ANDed in
+    // here too. Belt-and-braces with the GUI's own mask: this is the one place
+    // that emits the command, so a caller that reaches it with a stale intent —
+    // say a connect-time push that lands before the widget has been told the
+    // capability — still cannot ask a radio for a level it will never send.
+    const int v = (m_wfAutoBlackOn && m_wfAutoBlackRadioSide
+                   && hasRadioSideWaterfallAutoBlack()) ? 1 : 0;
     sendCmd(
         QString("display panafall set %1 auto_black=%2")
             .arg(activeWfId()).arg(v));

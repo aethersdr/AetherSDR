@@ -3,6 +3,7 @@
 #include "MemoryBrowsePanel.h"
 #include "SpectrumWidget.h"
 #include "SpectrumOverlayWheelGuard.h"
+#include "AutoBlackMode.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "Theme.h"
@@ -1655,8 +1656,10 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         // and advancing to HW-as-SW again would look like a dead button. A click
         // is a real choice on this radio, so it overwrites the stored intent —
         // the one case where losing a stashed HW is correct.
-        applyAutoBlackMode((effectiveAutoBlackMode() + 1) % autoBlackModeCount(),
-                           /*emitSignals=*/true);
+        applyAutoBlackMode(
+            AutoBlackMode::nextOnClick(m_autoBlackMode,
+                                       m_radioSideAutoBlackAvailable),
+            /*emitSignals=*/true);
     });
     applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);  // initial label/slider role
 
@@ -2024,24 +2027,17 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 // matching slider-value signal so the renderer and radio both update.
 int SpectrumOverlayMenu::autoBlackModeCount() const
 {
-    // HW is only a reachable position when the radio actually computes a black
-    // level. Without it the button cycles Off <-> SW: two positions, not three
-    // with one that does nothing. (#4600)
-    return m_radioSideAutoBlackAvailable ? 3 : 2;
+    return AutoBlackMode::modeCount(m_radioSideAutoBlackAvailable);
 }
 
 int SpectrumOverlayMenu::effectiveAutoBlackMode() const
 {
     // m_autoBlackMode is the operator's stored INTENT and may legitimately hold
-    // HW while attached to a radio that has none. What the button shows, and
-    // what the rest of the app acts on, is that intent MASKED by the capability.
-    //
-    // SW rather than Off for a masked HW: the intent behind HW was "pick the
-    // floor for me", and the client-side estimate is the one that still can.
-    if (m_autoBlackMode == 2 && !m_radioSideAutoBlackAvailable) {
-        return 1;
-    }
-    return m_autoBlackMode;
+    // HW while attached to a radio that has none; this is that intent masked by
+    // the capability. See gui/AutoBlackMode.h — the arithmetic lives there
+    // because this class cannot be linked into a test on its own.
+    return AutoBlackMode::effective(m_autoBlackMode,
+                                    m_radioSideAutoBlackAvailable);
 }
 
 void SpectrumOverlayMenu::setRadioSideAutoBlackAvailable(bool available)
@@ -2063,12 +2059,26 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
 {
     // Intent keeps the full 0..2 range even while HW is masked off, so coming
     // back to a Flex restores HW without the operator re-selecting it.
-    m_autoBlackMode = std::clamp(mode, 0, 2);
+    m_autoBlackMode = AutoBlackMode::clampIntent(mode);
     mode = effectiveAutoBlackMode();
     const bool autoOn    = (mode != 0);
     const bool radioSide = (mode == 2);
 
-    if (m_autoBlackBtn) {
+    // KIWI MODE OWNS THESE TWO WIDGETS. While a pan is displaying KiwiSDR the
+    // button is a one-shot "Auto" (setKiwiWaterfallControlMode) and the slider is
+    // the Kiwi floor in dBm with a -260..29 range — neither has anything to do
+    // with the Off/SW/HW cycle. Writing the cycle's label and its 0..100 offset
+    // into them here would relabel "Auto" as "SW" and jam an out-of-range value
+    // into the floor slider.
+    //
+    // Until #4600 this could not happen: every caller was either kiwi-guarded or
+    // reached only via setKiwiWaterfallControlMode(false). setRadioSideAutoBlack-
+    // Available() is a new caller that fires on a capability change regardless of
+    // display source, so the guard belongs HERE, at the mutation, rather than at
+    // each call site — the next new caller gets it for free.
+    const bool ownsWidgets =
+        AutoBlackMode::ownsSharedWidgets(m_kiwiWaterfallControlMode);
+    if (m_autoBlackBtn && ownsWidgets) {
         QSignalBlocker bb(m_autoBlackBtn);
         m_autoBlackBtn->setCheckable(true);
         m_autoBlackBtn->setChecked(autoOn);   // highlight in either Auto mode
@@ -2087,19 +2097,16 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
                 "SW = client-side noise-floor estimate (software)\n"
                 "This radio computes no black level of its own, so there is no "
                 "hardware option."));
-        // Kiwi mode owns its own wording (setKiwiWaterfallControlMode); outside
-        // it, keep the spoken description in step with the gate the same way the
-        // tooltip is, so the two cannot disagree about whether HW exists.
-        if (!m_kiwiWaterfallControlMode) {
-            m_autoBlackBtn->setAccessibleDescription(m_radioSideAutoBlackAvailable
-                ? tr("Cycles the waterfall auto-black mode: off (manual black "
-                     "level), software noise-floor estimate, or hardware level.")
-                : tr("Cycles the waterfall auto-black mode: off (manual black "
-                     "level) or software noise-floor estimate. This radio "
-                     "computes no black level of its own."));
-        }
+        // Kept in step with the tooltip so the two cannot disagree about whether
+        // HW exists.
+        m_autoBlackBtn->setAccessibleDescription(m_radioSideAutoBlackAvailable
+            ? tr("Cycles the waterfall auto-black mode: off (manual black "
+                 "level), software noise-floor estimate, or hardware level.")
+            : tr("Cycles the waterfall auto-black mode: off (manual black "
+                 "level) or software noise-floor estimate. This radio "
+                 "computes no black level of its own."));
     }
-    if (m_blackSlider) {
+    if (m_blackSlider && ownsWidgets) {
         QSignalBlocker bs(m_blackSlider);
         const int v = autoOn ? m_blackAutoOffsetValue : m_blackManualValue;
         m_blackSlider->setValue(v);
@@ -2107,14 +2114,12 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
         m_blackSlider->setToolTip(autoOn
             ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
             : "Waterfall black level. Decrease to darken the noise floor.");
-        if (!m_kiwiWaterfallControlMode) {
-            m_blackSlider->setAccessibleName(autoOn
-                ? tr("Waterfall auto-black offset")
-                : tr("Waterfall black level"));
-            m_blackSlider->setAccessibleDescription(autoOn
-                ? tr("Sets the target offset from the measured noise floor.")
-                : tr("Sets the manual waterfall black level."));
-        }
+        m_blackSlider->setAccessibleName(autoOn
+            ? tr("Waterfall auto-black offset")
+            : tr("Waterfall black level"));
+        m_blackSlider->setAccessibleDescription(autoOn
+            ? tr("Sets the target offset from the measured noise floor.")
+            : tr("Sets the manual waterfall black level."));
     }
     if (emitSignals) {
         emit wfAutoBlackChanged(autoOn);

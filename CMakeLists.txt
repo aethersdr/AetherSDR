@@ -2888,6 +2888,11 @@ target_include_directories(model_capabilities_test PRIVATE src)
 target_link_libraries(model_capabilities_test PRIVATE Qt6::Core)
 add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
 
+# Waterfall Black Level mode arithmetic (#4600) — header-only pure logic.
+add_executable(auto_black_mode_test tests/auto_black_mode_test.cpp)
+target_include_directories(auto_black_mode_test PRIVATE src)
+add_test(NAME auto_black_mode_test COMMAND auto_black_mode_test)
+
 # Waterfall rate <-> row cadence mapping (#4600) — header-only pure logic.
 add_executable(waterfall_rate_test tests/waterfall_rate_test.cpp)
 target_include_directories(waterfall_rate_test PRIVATE src)

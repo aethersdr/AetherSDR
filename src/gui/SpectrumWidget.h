@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AutoBlackMode.h"
+
 #include <limits>
 #include <algorithm>
 #include <array>
@@ -522,7 +524,8 @@ public:
     // a black level at all (RadioCapabilities::hasRadioSideWaterfallAutoBlack).
     // Read this when rendering, or when telling the radio anything. (#4600)
     bool  effectiveWfAutoBlackRadioSide() const {
-        return m_wfAutoBlackRadioSide && m_radioSideAutoBlackAvailable;
+        return AutoBlackMode::effectiveRadioSide(m_wfAutoBlackRadioSide,
+                                                 m_radioSideAutoBlackAvailable);
     }
     // The capability mask. Never persists — that is the whole point, see
     // wfAutoBlackRadioSide() above.

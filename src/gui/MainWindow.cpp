@@ -6390,12 +6390,24 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     }
     // A MASK, not a rewrite: the operator's stored HW preference survives a
     // session on a radio that has no hardware black level, and comes back by
-    // itself on the next Flex. Neither call writes AppSettings.
+    // itself on the next Flex. Does not write AppSettings.
     sw->setRadioSideAutoBlackAvailable(
         m_radioModel.hasRadioSideWaterfallAutoBlack());
-    // …and the radio is told the EFFECTIVE source, so a masked HW never asks a
-    // backend with no display engine to compute a level it cannot.
-    m_radioModel.setWaterfallAutoBlackSource(sw->effectiveWfAutoBlackRadioSide());
+    // NO RadioModel push from here, deliberately. This runs once PER PAN, from
+    // loops in applyCapabilitiesToUi and the infoChanged-bound XVTR refresh —
+    // but setWaterfallAutoBlackSource() is global state applied to activeWfId(),
+    // so pushing a per-pan value would let the last pan in the loop overwrite
+    // the ACTIVE pan's radio setting, and would emit one `display panafall set
+    // … auto_black=` per pan on every infoChanged. This function is UI
+    // visibility only.
+    //
+    // The model learns the effective source where it always did, and where the
+    // scope is right: the once-per-connect push in wirePanLifecycle (reset via
+    // m_displaySettingsPushed on each connection edge) and the operator's own
+    // click. Both already use effectiveWfAutoBlackRadioSide(). Nothing is lost
+    // by dropping it here — on a backend the mask applies to there is no Flex
+    // command plane for auto_black to reach, and the renderer is gated on the
+    // effective value in intensityToWaterfallLevel(). (#4600)
 }
 
 SliceModel* MainWindow::activeSlice() const
