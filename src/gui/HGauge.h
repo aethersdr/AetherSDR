@@ -69,6 +69,13 @@ public:
         update();
     }
 
+    // The fraction of the bar actually filled — what paintEvent multiplies by
+    // the bar width, after ballistics. Distinct from value()/min()/max(): those
+    // are the INPUTS, this is the derived state that gets drawn, and the two
+    // can disagree (see setRange). Exposed so that divergence is assertable
+    // without pixel-reading.
+    float filledFraction() const { return m_smooth.value(); }
+
     void setValue(float v) {
         if (qFuzzyCompare(m_value, v)) return;
         m_value = v;
@@ -141,6 +148,18 @@ public:
         m_min = min; m_max = max; m_redStart = redStart;
         m_yellowStart = std::isnan(yellowStart) ? redStart : yellowStart;
         m_ticks = ticks;
+        // Re-map the CURRENT value onto the new axis. Without this the fill
+        // keeps the fraction computed under the old bounds, and setValue()'s
+        // unchanged-value early-return means a steady reading never corrects
+        // it — an amplifier holding a constant carrier across a range change
+        // (ACOM auto-range, SPE LOW/MID/HIGH) shows the old fraction against
+        // the new scale indefinitely, misreporting RF output by hundreds of
+        // watts. Snapped, not animated: the axis moved, the signal did not,
+        // so sweeping the needle would show a change that never happened.
+        m_smooth.setTarget(
+            qBound(0.0f, (m_value - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.snapToTarget();
+        if (m_animTimer.isActive()) m_animTimer.stop();
         publishAutomationState();
         update();
     }

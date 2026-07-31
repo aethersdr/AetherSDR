@@ -3716,6 +3716,17 @@ target_link_libraries(s_meter_geometry_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets
 )
 set_target_properties(s_meter_geometry_test PROPERTIES AUTOMOC ON)
+add_executable(hgauge_range_test
+    tests/hgauge_range_test.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(hgauge_range_test PRIVATE src src/gui)
+target_link_libraries(hgauge_range_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+set_target_properties(hgauge_range_test PROPERTIES AUTOMOC ON)
+add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
+set_tests_properties(hgauge_range_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_test(NAME s_meter_geometry_test COMMAND s_meter_geometry_test)
 set_tests_properties(s_meter_geometry_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
