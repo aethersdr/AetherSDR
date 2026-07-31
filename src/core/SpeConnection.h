@@ -79,10 +79,10 @@ public:
     // silent. Network mode drives the proxy's DTR/RTS via RFC 2217, which
     // needs ser2net running the port as
     // `accepter: telnet(rfc2217=true),<port>`; serial mode drives the local
-    // lines directly. If the proxy answers DONT COM-PORT-OPTION the pulse is
-    // aborted rather than sent into a port that will discard it, and if it
-    // never answers at all (raw mode) the completion message says so instead
-    // of claiming success. The pulse sequence and timing are carried verbatim
+    // lines directly. The pulse is always sent — a proxy that ignores
+    // COM-port control just discards it — but the completion message reports
+    // what the peer actually agreed to (DO / DONT / no answer at all) rather
+    // than assuming it landed. The pulse sequence and timing are carried verbatim
     // from the field-proven reference application (see Spe::Rfc2217 and
     // design note §4). No-op while a pulse is already in progress.
     void powerOn();

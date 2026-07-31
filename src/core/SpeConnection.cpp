@@ -354,24 +354,6 @@ void SpeConnection::powerOnStep()
     // pulse), then DTR on + RTS off to idle.
     switch (m_powerOnStep) {
         case 0:
-            // The proxy has had its 500 ms to answer WILL COM-PORT-OPTION.
-            // An explicit DONT is unambiguous: every SET-CONTROL below would
-            // be discarded, so stop rather than pulse into the void and then
-            // report success. Silence is NOT treated as refusal — a proxy
-            // that already agreed earlier in this session is not obliged to
-            // re-answer (RFC 854) — but it does downgrade the completion
-            // message in case 2.
-            if (m_mode == Mode::Network
-                && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
-                m_powerOnStep = -1;
-                qCWarning(lcTuner) << "SpeConnection: power-ON aborted — the"
-                                      " proxy refused RFC 2217 COM-port"
-                                      " control, so the control lines cannot"
-                                      " be driven. Configure the ser2net port"
-                                      " as `accepter: telnet(rfc2217=true),"
-                                      "<port>` and reconnect.";
-                break;
-            }
             setControlLines(true, false);
             m_powerOnStep = 1;
             m_powerOnTimer.start(100);
@@ -384,12 +366,21 @@ void SpeConnection::powerOnStep()
         case 2:
             setControlLines(true, false);
             m_powerOnStep = -1;
+            // Report what was actually confirmed rather than assuming. The
+            // pulse is always sent: a proxy that ignores COM-port control
+            // simply discards the SET-CONTROL frames (or, in raw mode,
+            // forwards them to the amp, which rejects them as unframed
+            // noise), so sending is harmless — claiming it landed is not.
             if (m_mode == Mode::Network
-                && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
-                // Raw-mode ser2net never answers negotiation at all — it
-                // forwards our SET-CONTROL frames into the amplifier's UART
-                // as payload. Say what was actually confirmed rather than
-                // claiming a pulse we cannot know landed.
+                && m_comPortOption == Spe::Rfc2217::OptionReply::Refused) {
+                qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
+                                      " the proxy REFUSED RFC 2217 COM-port"
+                                      " control, so it almost certainly did"
+                                      " not reach the amplifier. Configure the"
+                                      " ser2net port as `accepter:"
+                                      " telnet(rfc2217=true),<port>`.";
+            } else if (m_mode == Mode::Network
+                       && m_comPortOption != Spe::Rfc2217::OptionReply::Accepted) {
                 qCWarning(lcTuner) << "SpeConnection: power-ON pulse sent, but"
                                       " the proxy never confirmed RFC 2217"
                                       " COM-port control — if the amplifier"
