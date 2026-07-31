@@ -4270,6 +4270,15 @@ target_link_libraries(hl2_state_restore_test PRIVATE aethercore Qt6::Core Qt6::T
 set_target_properties(hl2_state_restore_test PROPERTIES AUTOMOC ON)
 add_test(NAME hl2_state_restore_test COMMAND hl2_state_restore_test)
 
+# BandStack fold-in (RFC #4603 PR 4): per-radio feature documents,
+# write-through mutations, lazy per-radio legacy import with side-file
+# retirement, panel prefs in AppSettings.
+add_executable(bandstack_scoped_test tests/bandstack_scoped_test.cpp)
+target_include_directories(bandstack_scoped_test PRIVATE src tests)
+target_link_libraries(bandstack_scoped_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(bandstack_scoped_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandstack_scoped_test COMMAND bandstack_scoped_test)
+
 # TCI signaling on a backend with neither a Flex command plane nor a DAX data
 # plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of
 # the file compiles wherever HAVE_WEBSOCKETS is set for aethercore.
