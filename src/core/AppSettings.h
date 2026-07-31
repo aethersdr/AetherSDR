@@ -68,6 +68,12 @@ public:
     QJsonObject radioFeature(const QString& family, const QString& radioId,
                              const QString& feature,
                              int* schemaVersionOut = nullptr) const;
+    // Exact-row read — NO family-wide fallback. The write-side schema guard
+    // must judge the row it is about to overwrite, not whatever the read
+    // fallback resolves to (PR #4614 review).
+    QJsonObject radioFeatureExact(const QString& family, const QString& radioId,
+                                  const QString& feature,
+                                  int* schemaVersionOut = nullptr) const;
     bool setRadioFeature(const QString& family, const QString& radioId,
                          const QString& feature, int schemaVersion,
                          const QJsonObject& doc);

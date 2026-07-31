@@ -37,6 +37,18 @@ public:
                                                     schemaVersionOut);
     }
 
+    // Exact-row read, no family-wide fallback — for writers judging the row
+    // they are about to replace (PR #4614 review).
+    QJsonObject featureExact(const QString& name,
+                             int* schemaVersionOut = nullptr) const
+    {
+        if (!isValid()) {
+            return {};
+        }
+        return AppSettings::instance().radioFeatureExact(m_family, m_radioId,
+                                                         name, schemaVersionOut);
+    }
+
     bool setFeature(const QString& name, int schemaVersion,
                     const QJsonObject& doc) const
     {

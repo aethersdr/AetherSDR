@@ -833,6 +833,11 @@ void AppSettings::save()
 
 void AppSettings::reset()
 {
+    // Lock ORDER matches save()/the feature-doc writers (m_saveMutex outer,
+    // m_lock inner): the close below cannot interleave with a writer that is
+    // mid-statement under m_saveMutex (PR #4614 review — the sqlite handle
+    // has no API armor, so a closed-underneath call is a crash, not an error).
+    QMutexLocker ioLocker(&m_saveMutex);
     QWriteLocker locker(&m_lock);
     m_guiClientLock.reset();
     m_settings.clear();
@@ -1003,6 +1008,38 @@ QList<QPair<QString, QString>> AppSettings::radioFeaturesForDiagnostics() const
 
 // ─── Radio-scoped feature documents (RFC #4603) ──────────────────────────────
 
+QJsonObject AppSettings::radioFeatureExact(const QString& family,
+                                           const QString& radioId,
+                                           const QString& feature,
+                                           int* schemaVersionOut) const
+{
+    if (schemaVersionOut != nullptr) {
+        *schemaVersionOut = 0;
+    }
+    QMutexLocker ioLocker(&m_saveMutex);
+    if (!m_db || !m_db->isOpen()) {
+        return {};
+    }
+    int version = 0;
+    QString value;
+    if (!m_db->readRadioFeature(family, radioId, feature, version, value)) {
+        return {};
+    }
+    QJsonParseError parseError{};
+    const QJsonDocument parsed =
+        QJsonDocument::fromJson(value.toUtf8(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !parsed.isObject()) {
+        qWarning() << "AppSettings: radio feature document is corrupt —"
+                   << family << radioId << feature << ':'
+                   << parseError.errorString();
+        return {};
+    }
+    if (schemaVersionOut != nullptr) {
+        *schemaVersionOut = version;
+    }
+    return parsed.object();
+}
+
 QJsonObject AppSettings::radioFeature(const QString& family,
                                       const QString& radioId,
                                       const QString& feature,
@@ -1071,6 +1108,9 @@ bool AppSettings::setRadioFeature(const QString& family, const QString& radioId,
             return false;
         }
     }
+    if (!m_db || !m_db->isOpen()) {
+        return false;   // reset() may have closed the store (PR #4614 review)
+    }
     const QString value = QString::fromUtf8(
         QJsonDocument(doc).toJson(QJsonDocument::Compact));
     if (!m_db->begin()) {
@@ -1097,9 +1137,12 @@ bool AppSettings::removeRadioFeature(const QString& family,
             return false;
         }
     }
+    if (!m_db || !m_db->isOpen()) {
+        return false;   // reset() may have closed the store (PR #4614 review)
+    }
     if (!m_db->removeRadioFeature(family, radioId, feature)) {
         qWarning() << "AppSettings: radio feature remove failed:" << family
-                   << radioId << feature << '—' << m_db->lastError();
+                   << radioId << feature << "—" << m_db->lastError();
         return false;
     }
     return true;

@@ -246,6 +246,31 @@ int main(int argc, char** argv)
               "version downgrade");
     }
 
+    // ---- a newer FAMILY-WIDE row never blocks per-radio capture -----------
+    // (PR #4614 re-review, Ozy311): the store guard must judge the exact row
+    // it replaces — the fallback would let a newer family-wide default refuse
+    // every per-radio capture in the family.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope familyWide(QStringLiteral("hl2"), QString());
+        QJsonObject newerFamilyDoc{{QStringLiteral("rfFrequencyHz"), 1'840'000.0}};
+        check(familyWide.setFeature(RadioStateMemory::featureName(),
+                                    RadioStateMemory::kSchemaVersion + 1,
+                                    newerFamilyDoc),
+              "a newer-schema FAMILY-WIDE document is planted");
+        const RadioSettingsScope freshRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("DE:AD:BE:EF:00:03"));
+        RestoredRadioState state = sampleState();
+        check(RadioStateMemory::store(freshRadio, caps, state),
+              "a per-radio capture still succeeds under a newer family row");
+        check(RadioStateMemory::load(freshRadio, caps).rfFrequencyHz
+                  == 7'074'000.0,
+              "the per-radio document was really written");
+        // Clean up the newer family row so later cases keep their semantics.
+        check(familyWide.removeFeature(RadioStateMemory::featureName()),
+              "the planted family row is removed again");
+    }
+
     // ---- a corrupt document is loud, and falls back (PR #4614 review) -----
     {
         auto& s = AppSettings::instance();

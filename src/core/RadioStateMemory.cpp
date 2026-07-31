@@ -102,9 +102,12 @@ bool store(const RadioSettingsScope& scope, const RadioCapabilities& caps,
     // newer schema — a v1 rebuild would drop the fields v1 doesn't know and
     // stamp the version back down (PR #4614 review, three independent
     // reports). Mirrors SettingsDatabase's own newer-schema rule.
+    // EXACT row only: the guard judges the document this write would
+    // replace. The fallback read would smuggle in the family-wide row's
+    // version and could refuse every per-radio capture in the family
+    // (PR #4614 review, Ozy311).
     int storedVersion = 0;
-    const QJsonObject existing = scope.feature(featureName(), &storedVersion);
-    Q_UNUSED(existing);
+    scope.featureExact(featureName(), &storedVersion);
     if (storedVersion > kSchemaVersion) {
         qWarning() << "RadioStateMemory: refusing to overwrite operating-state"
                       " document at schema" << storedVersion
