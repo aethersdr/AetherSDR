@@ -1124,6 +1124,20 @@ QJsonObject err(const QString& msg)
                        {QStringLiteral("error"), msg}};
 }
 
+// Render a frequency for an error message the way the caller typed it.
+//
+// 'f' with a fixed decimal count is wrong in both directions here: rounding a
+// rejected value to whole MHz makes 105000.4 report as "105000, above the
+// 105000 MHz ceiling", and printing a tiny one in full gives 300 leading zeros.
+// 'g' with 15 significant digits keeps every realistic value in plain notation
+// (it only goes exponential below 1e-5 or above 1e15, which is exactly where
+// plain notation stops being readable), and 15 digits stays inside double's
+// exact range so no rounding artifacts leak into a user-facing string.
+QString formatMhz(double mhz)
+{
+    return QString::number(mhz, 'g', 15);
+}
+
 QJsonObject deferredResponse()
 {
     return QJsonObject{{QStringLiteral("_deferred"), true}};
@@ -6109,11 +6123,25 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     // about the value itself rather than a unit mistake it isn't.
     if (!okF || !std::isfinite(mhz) || mhz <= 0)
         return err(QStringLiteral("tune requires a positive finite frequency in MHz"));
-    // Hz passed to an MHz verb. A value above anything AE can tune is a unit
-    // mistake rather than an ambitious request, and saying so beats silently
-    // doing nothing. It is NOT auto-converted: guessing the caller's intent
-    // would make 14200000 mean 14.2 MHz here and something else in every other
-    // frequency verb.
+    // Below anything a supported radio tunes. Matches the floor typed frequency
+    // entry already applies to the same value (VfoWidget.cpp / RxApplet.cpp,
+    // `freqMhz >= 0.001`), so the bridge and the VFO field agree on what is too
+    // small rather than the bridge passing values the GUI would refuse.
+    //
+    // This is NOT a unit guard and does not pretend to be one: GHz-for-MHz on HF
+    // (`tune 0.0142` meaning 14.2 MHz) lands at 14.2 kHz, which is a plausible
+    // VLF frequency, not a diagnosable mistake. What it does stop is nonsense
+    // (`tune 1e-300`) reaching setFrequency() and the radio.
+    constexpr double kMinTunableMhz = 0.001;
+    if (mhz < kMinTunableMhz)
+        return err(QStringLiteral("tune requires at least ")
+                   + formatMhz(kMinTunableMhz) + QStringLiteral(" MHz — got ")
+                   + formatMhz(mhz));
+    // Hz passed to an MHz verb. A value above anything AetherSDR can tune is a
+    // unit mistake rather than an ambitious request, and saying so beats
+    // silently doing nothing. It is NOT auto-converted: guessing the caller's
+    // intent would make 14200000 mean 14.2 MHz here and something else in every
+    // other frequency verb.
     //
     // The ceiling is 10x the top of the band table (3cm ends at 10.5 GHz), so it
     // clears any real transverter setup with an order of magnitude to spare
@@ -6122,10 +6150,16 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     // which would otherwise fall past the guard and land back in the silent
     // no-op this refusal exists to prevent.
     //
+    // It is deliberately LOOSER than the 50000.0 MHz cap typed frequency entry
+    // applies on XVTR (VfoWidget.cpp / RxApplet.cpp): the GUI cap is a limit on
+    // what a human can dial, while this one only has to be high enough that no
+    // real request trips it. Neither is "the" tuning limit — if one ever becomes
+    // the authority, the other should be derived from it rather than re-guessed.
+    //
     // kHz-for-MHz (e.g. `tune 14200` for 20m) deliberately PASSES: that value
     // is indistinguishable from a legitimate microwave request (14.2 GHz is
     // inside the transverter headroom this ceiling exists to protect), and
-    // refusing the range would break real 24/47/76 GHz operation. A band-table
+    // refusing the range would break real 24 and 47 GHz operation. A band-table
     // lookup was considered and rejected for the same reason — XVTR RF
     // frequency is user-configurable beyond the table. Decided, not overlooked.
     constexpr double kMaxTunableMhz = 105'000.0;
@@ -6137,15 +6171,13 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
         // transverter "did you mean 0.122250?" would be confidently wrong,
         // which is the failure mode this guard's messaging exists to avoid.
         if (mhz <= 300'000.0)
-            return err(QStringLiteral("tune takes MHz — got ")
-                       + QString::number(mhz, 'f', 0)
-                       + QStringLiteral(", above the 105000 MHz ceiling. If that was "
-                                        "Hz, resend as ")
+            return err(QStringLiteral("tune takes MHz — got ") + formatMhz(mhz)
+                       + QStringLiteral(", above the ") + formatMhz(kMaxTunableMhz)
+                       + QStringLiteral(" MHz ceiling. If that was Hz, resend as ")
                        + QString::number(mhz / 1.0e6, 'f', 6)
                        + QStringLiteral("; if it is a millimetre-wave frequency in "
-                                        "MHz, it is beyond what AE can tune"));
-        return err(QStringLiteral("tune takes MHz, not Hz — got ")
-                   + QString::number(mhz, 'f', 0)
+                                        "MHz, it is beyond what AetherSDR can tune"));
+        return err(QStringLiteral("tune takes MHz, not Hz — got ") + formatMhz(mhz)
                    + QStringLiteral(" (did you mean ")
                    + QString::number(mhz / 1.0e6, 'f', 6)
                    + QStringLiteral("?)"));
@@ -6190,8 +6222,8 @@ QJsonObject AutomationServer::doTune(const QString& value, const QString& id)
     //
     // Confirming what the radio actually took would need a read-back, and there
     // is nothing to read: SliceModel::setFrequency() assigns m_frequency = mhz
-    // before it sends `slice tune` (SliceModel.cpp:117-124), so the model holds
-    // the request by construction and the radio's real value only arrives later,
+    // before it sends `slice tune`, so the model holds the request by
+    // construction and the radio's real value only arrives later,
     // asynchronously, in applyStatus(). An echo is at least honest about being
     // an acknowledgement rather than a confirmation. Closing the gap properly
     // means waiting on that status update — a different change, and one that

@@ -164,10 +164,11 @@ int main(int argc, char** argv)
 
     // ---- #4550: Hz passed to an MHz verb is refused, not silently no-opped ----
     //
-    // A tune handler IS installed above, exactly as MainWindow_Session.cpp:1937
-    // does in the shipping app. That matters: the guard is only worth anything
-    // if it runs BEFORE the m_tuneHandler dispatch, so these cases also pin that
-    // ordering — expectRejected asserts the handler was never reached.
+    // A tune handler IS installed above, exactly as MainWindow_Session.cpp's
+    // setTuneHandler(...) call does in the shipping app. That matters: the guard
+    // is only worth anything if it runs BEFORE the m_tuneHandler dispatch, so
+    // these cases also pin that ordering — expectRejected asserts the handler
+    // was never reached.
     auto expectTuneValueRejected = [&](const QString& value, const char* description) {
         const int callsBefore = handlerCalls;
         const QJsonObject response = client.request(tuneValueRequest(value));
@@ -219,6 +220,39 @@ int main(int argc, char** argv)
                   && handlerCalls == callsBefore,
               "122.25 GHz in MHz is refused without misdiagnosing it as Hz");
     }
+
+    // A rejected value must be quoted back as sent. Rounding it to whole MHz
+    // made everything in (105000, 105000.5) report as "got 105000, above the
+    // 105000 MHz ceiling" — a message that contradicts itself, in the branch
+    // that exists to stop this guard asserting things that aren't true.
+    {
+        const int callsBefore = handlerCalls;
+        const QJsonObject response =
+            client.request(tuneValueRequest(QStringLiteral("105000.4")));
+        const QString error = response.value(QStringLiteral("error")).toString();
+        check(!response.value(QStringLiteral("ok")).toBool()
+                  && error.contains(QStringLiteral("got 105000.4,"))
+                  && handlerCalls == callsBefore,
+              "a value just over the ceiling is quoted back unrounded");
+    }
+
+    // Floor. Nothing below what any supported radio tunes should reach
+    // setFrequency(); 0.001 matches the floor typed frequency entry applies to
+    // the same value (VfoWidget / RxApplet), so the two paths agree.
+    {
+        const int callsBefore = handlerCalls;
+        const QJsonObject response =
+            client.request(tuneValueRequest(QStringLiteral("1e-300")));
+        const QString error = response.value(QStringLiteral("error")).toString();
+        check(!response.value(QStringLiteral("ok")).toBool()
+                  && error == QStringLiteral("tune requires at least 0.001 MHz — got 1e-300")
+                  && handlerCalls == callsBefore,
+              "a sub-floor frequency is refused, never tuned");
+    }
+    // ...and the floor itself must not refuse anything real. 0.001 MHz is 1 kHz,
+    // below every amateur allocation including the VLF experiments at ~8.3 kHz.
+    expectAccepted(tuneValueRequest(QStringLiteral("0.001")), -1,
+                   "the floor value itself still tunes");
 
     // The ceiling must not refuse anything real. 10368.1 is the 3cm calling
     // frequency, the top of the band table, and it has to keep working.

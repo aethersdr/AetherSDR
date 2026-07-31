@@ -1089,6 +1089,27 @@ transverter could plausibly need still passes. It is deliberately not
 auto-corrected: `14200000` would have to mean 14.2 MHz here and something else
 in every other frequency verb.
 
+Four refusals guard the value, and the wording differs on purpose:
+
+| input | reply |
+|---|---|
+| `> 300000` | `tune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)` |
+| `> 105000`, `<= 300000` | `tune takes MHz — got 122250, above the 105000 MHz ceiling. If that was Hz, resend as 0.122250; if it is a millimetre-wave frequency in MHz, it is beyond what AetherSDR can tune` |
+| `< 0.001` | `tune requires at least 0.001 MHz — got 1e-300` |
+| `nan`, `inf`, `-inf`, `0`, negatives, unparseable | `tune requires a positive finite frequency in MHz` |
+
+The second row exists because that window is genuinely ambiguous — an Hz
+mistake, or a real millimetre-wave allocation (122.25 / 134 / 241 GHz) entered
+correctly in MHz — so the reply offers both readings rather than asserting a
+conversion. `nan` and `inf` get their own row because `"nan"` parses as a number
+and fails every range comparison, so it would otherwise pass the guard entirely.
+
+**kHz-for-MHz is accepted**, not refused: `tune 14200` is indistinguishable from
+a 14.2 GHz transverter request, which is inside the headroom the ceiling exists
+to protect. It reaches the radio and, if 14.2 GHz is out of range, becomes the
+same silent no-op described below — so a client that might send kHz should
+verify with [`get slices`](#get).
+
 Note `ok:true` is an **acknowledgement, not a confirmation** — `tune` echoes the
 frequency you asked for. The slice model records a tune optimistically and the
 radio's own value arrives asynchronously afterwards, so a request the radio
