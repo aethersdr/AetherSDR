@@ -4700,6 +4700,24 @@ add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_tes
 set_tests_properties(flex_control_dialog_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Connect-to-Radio manual/VPN page: no row on that page may be allocated less
+# height than it asks for, however the Advanced source-path section is revealed.
+add_executable(connection_panel_advanced_layout_test
+    tests/connection_panel_advanced_layout_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(connection_panel_advanced_layout_test PRIVATE src)
+target_link_libraries(connection_panel_advanced_layout_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(connection_panel_advanced_layout_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_panel_advanced_layout_test
+         COMMAND connection_panel_advanced_layout_test)
+set_tests_properties(connection_panel_advanced_layout_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp

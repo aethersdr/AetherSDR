@@ -644,6 +644,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualGroupLayout->addWidget(m_manualResultLabel);
 
     m_manualAdvancedToggle = new QToolButton(manualGroup);
+    m_manualAdvancedToggle->setObjectName(QStringLiteral("connectionManualAdvancedToggle"));
     m_manualAdvancedToggle->setText("Advanced: choose the VPN source path");
     m_manualAdvancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     m_manualAdvancedToggle->setCheckable(true);
@@ -652,13 +653,16 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualGroupLayout->addWidget(m_manualAdvancedToggle, 0, Qt::AlignLeft);
 
     m_manualAdvancedWidget = new QWidget(manualGroup);
+    m_manualAdvancedWidget->setObjectName(QStringLiteral("connectionManualAdvancedSection"));
     auto* manualAdvancedLayout = new QVBoxLayout(m_manualAdvancedWidget);
     manualAdvancedLayout->setContentsMargins(8, 4, 8, 4);
     manualAdvancedLayout->setSpacing(6);
-    manualAdvancedLayout->addWidget(makeWrappedLabel(
+    auto* manualAdvancedHint = makeWrappedLabel(
         "Most users can leave this on Auto. Pick a source path only if your VPN creates more "
         "than one active network adapter or a saved path is no longer available.",
-        kHintLabelStyle));
+        kHintLabelStyle);
+    manualAdvancedHint->setObjectName(QStringLiteral("connectionManualAdvancedHint"));
+    manualAdvancedLayout->addWidget(manualAdvancedHint);
     auto* sourceRow = new QHBoxLayout;
     sourceRow->setContentsMargins(0, 0, 0, 0);
     sourceRow->addWidget(new QLabel("Source path:", m_manualAdvancedWidget));
