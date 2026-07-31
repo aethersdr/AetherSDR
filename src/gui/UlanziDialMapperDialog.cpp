@@ -476,11 +476,20 @@ QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
         if (obj.contains(pillId)) {
             return obj.value(pillId).toString();
         }
+    } else if (!raw.isEmpty() && raw != "{}") {
+        qCWarning(lcDevices) << "Ulanzi Dial: corrupted settings JSON under" << rootSettingsKey()
+                             << err.errorString() << "— falling back to defaults";
     }
-    // Backward compatibility for legacy flat key
+    // One-shot migration: if legacy per-pill flat key exists (underscore or slash form),
+    // adopt into JSON document, remove the flat keys, and persist so the JSON document alone is authoritative.
     const QString legacyKey = actionSettingsKey(pillId);
-    if (s.contains(legacyKey)) {
-        return s.value(legacyKey).toString();
+    const QString legacySlashKey = QStringLiteral("UlanziDial/action/%1").arg(pillId);
+    if (s.contains(legacyKey) || s.contains(legacySlashKey)) {
+        const QString legacyVal = s.contains(legacyKey) ? s.value(legacyKey).toString() : s.value(legacySlashKey).toString();
+        if (s.contains(legacyKey)) s.remove(legacyKey);
+        if (s.contains(legacySlashKey)) s.remove(legacySlashKey);
+        setActionForPill(pillId, legacyVal);
+        return legacyVal;
     }
     return defaultActionForPill(pillId);
 }
@@ -499,9 +508,15 @@ void UlanziDialMapperDialog::setActionForPill(const QString& pillId, const QStri
                              << err.errorString() << "— resetting mappings object";
     }
     obj.insert(pillId, actionId);
-    s.setValue(rootSettingsKey(),
-               QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    const QString jsonStr = QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    s.setValue(rootSettingsKey(), jsonStr);
     s.save();
+
+    QString readBack;
+    if (!s.readAppRowFromDisk(rootSettingsKey(), readBack) || readBack != jsonStr) {
+        qCWarning(lcDevices) << "Ulanzi Dial: failed to persist action mapping for pill"
+                             << pillId << "under" << rootSettingsKey();
+    }
 }
 
 QString UlanziDialMapperDialog::defaultActionForPill(const QString& pillId)

@@ -42,6 +42,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   custom frame does not have. The window now reopens exactly where you left
   it, keeps its full size if you had it filling the screen, and stays put
   through Minimal Mode round trips.
+- **fix(ulanzi): one-shot settings migration and fail-safe key release (#4611)** —
+  Migrate legacy flat `UlanziDial_action_*` settings keys into the `UlanziDialMappings`
+  JSON document on first read and delete the flat keys so JSON config remains the sole
+  source of truth. Added persistence write verification and release-fail-safe guarantees
+  on dial disconnection.
 
 ## [v26.7.4.1] — 2026-07-27
 

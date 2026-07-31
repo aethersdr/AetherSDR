@@ -293,10 +293,11 @@ void EvdevEncoderManager::onReadable()
                 if (m_suppressReleasePrevsong) {
                     if (value == 0) {
                         m_suppressReleasePrevsong = false;
-                    } else if (value == 1) {
-                        m_suppressReleasePrevsong = false;
+                        continue; // suppress trailing release from chord
                     }
-                    if (value == 0) continue; // suppress trailing release from chord
+                    if (value == 2) {
+                        continue; // ignore autorepeat while release is suppressed
+                    }
                 }
                 if (value == 1 || value == 0) {
                     emit buttonEvent(bareKeySignature(keycode), value);
@@ -309,10 +310,11 @@ void EvdevEncoderManager::onReadable()
                 if (keycode == m_suppressReleaseNonModKey) {
                     if (value == 0) {
                         m_suppressReleaseNonModKey = -1;
-                    } else if (value == 1) {
-                        m_suppressReleaseNonModKey = -1;
+                        continue; // suppress trailing release from chord
                     }
-                    if (value == 0) continue; // suppress trailing release from chord
+                    if (value == 2) {
+                        continue; // ignore autorepeat while release is suppressed
+                    }
                 }
                 if (value == 1 || value == 0) {
                     emit buttonEvent(bareKeySignature(keycode), value);

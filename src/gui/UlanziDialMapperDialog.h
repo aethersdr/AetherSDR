@@ -63,11 +63,11 @@ public:
     static QString rootSettingsKey();
 
     // Legacy per-pill AppSettings key (e.g. "UlanziDial_action_top_left").
-    // Retained for backward-compatibility lookup during JSON migration.
+    // Retained as migration source for legacy flat-key settings.
     static QString actionSettingsKey(const QString& pillId);
 
-    // Returns the active action ID for a pill (checking JSON config, legacy keys,
-    // and falling back to defaultActionForPill).
+    // Returns the active action ID for a pill (checking JSON config, migrating
+    // legacy flat keys on first read, and falling back to defaultActionForPill).
     static QString actionForPill(const QString& pillId);
 
     // Binds an action ID to a pill in AppSettings JSON and persists immediately.

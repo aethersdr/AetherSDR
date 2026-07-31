@@ -242,10 +242,8 @@ void UlanziDialMacOSManager::emitKeyTransition(int linuxKey, int value)
         if (m_suppressReleasePrevsong) {
             if (value == 0) {
                 m_suppressReleasePrevsong = false;
-            } else if (value == 1) {
-                m_suppressReleasePrevsong = false;
+                return;
             }
-            if (value == 0) return;
         }
         if (value == 1 || value == 0)
             emit buttonEvent(bareKeySignature(linuxKey), value);
@@ -255,10 +253,8 @@ void UlanziDialMacOSManager::emitKeyTransition(int linuxKey, int value)
         if (linuxKey == m_suppressReleaseNonModKey) {
             if (value == 0) {
                 m_suppressReleaseNonModKey = -1;
-            } else if (value == 1) {
-                m_suppressReleaseNonModKey = -1;
+                return;
             }
-            if (value == 0) return;
         }
         if (value == 1 || value == 0)
             emit buttonEvent(bareKeySignature(linuxKey), value);
