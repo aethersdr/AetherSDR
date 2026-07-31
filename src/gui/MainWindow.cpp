@@ -108,6 +108,7 @@
 #include "Ax25HfPacketDecodeDialog.h"
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
+#include "DvkAvailabilityGate.h"
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
@@ -1706,6 +1707,15 @@ MainWindow::MainWindow(QWidget* parent)
             }
         }
     });
+
+    // "license feature" statuses answer "sub license all" asynchronously, well
+    // after the DVK indicator is first painted, and the set is cleared on
+    // disconnect — so the DVK entitlement gate has to be re-evaluated on every
+    // change rather than sampled once. (The clear-on-disconnect emit is what
+    // returns the indicator to its unknown-entitlement, fail-open state before
+    // the next radio's statuses arrive.)
+    connect(&m_radioModel, &RadioModel::licenseFeaturesChanged, this,
+            &MainWindow::updateKeyerAvailability);
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) now
     // live only in the AetherDSP applet, which owns its own
@@ -8295,8 +8305,20 @@ void MainWindow::updateKeyerAvailability()
                           || txMode == "FM" || txMode == "NFM"
                           || txMode == "DFM");
 
+    // DVK carries a second, mode-independent gate: the radio's own DVK
+    // entitlement. Unlike the mode gate it survives every mode change, so it is
+    // evaluated once here and applied to the indicator, the panel and the
+    // F1-F12 shortcuts alike — otherwise the keys stay armed and each keypress
+    // is refused by the radio (the "silently does nothing" report).
+    const DvkIndicatorBlocker dvkBlocker = dvkIndicatorBlocker(
+        txIsSsb,
+        m_radioModel.licenseFeatureSeen(kDvkLicenseFeature),
+        m_radioModel.licenseFeatureEnabled(kDvkLicenseFeature));
+    const bool dvkAvailable = (dvkBlocker == DvkIndicatorBlocker::None);
+    const bool dvkUnlicensed = (dvkBlocker == DvkIndicatorBlocker::NotLicensed);
+
     if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(txIsCw);
-    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(txIsSsb);
+    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(dvkAvailable);
 
     // Only auto-hide an open panel when a TX slice *exists* and is in the wrong
     // mode (a deliberate mode change).  A momentary "no TX slice" — during a TX
@@ -8314,17 +8336,26 @@ void MainWindow::updateKeyerAvailability()
     }
     m_cwxIndicator->setCursor(txIsCw ? Qt::PointingHandCursor : Qt::ArrowCursor);
 
-    // DVK: available in voice modes (SSB, AM, FM — not DIGU/DIGL)
-    m_dvkIndicator->setEnabled(txIsSsb);
-    if (txSlice && !txIsSsb && m_dvkPanel->isVisible()) {
+    // DVK: available in voice modes (SSB, AM, FM — not DIGU/DIGL), and only on
+    // a radio that reports the DVK entitlement (see dvkIndicatorBlocker).
+    m_dvkIndicator->setEnabled(dvkAvailable);
+    // An unlicensed radio said so itself, so hide an open panel whether or not
+    // a TX slice currently exists — the mode gate's "keep it open across a
+    // transient no-TX-slice" caveat (#4173) applies only to the mode gate.
+    if ((dvkUnlicensed || (txSlice && !txIsSsb)) && m_dvkPanel->isVisible()) {
         m_dvkPanel->hide();
         m_dvkIndicator->setStyleSheet(kDisabled);
     } else if (m_dvkPanel->isVisible()) {
         m_dvkIndicator->setStyleSheet(kActive);
     } else {
-        m_dvkIndicator->setStyleSheet(txIsSsb ? kAvail : kDisabled);
+        m_dvkIndicator->setStyleSheet(dvkAvailable ? kAvail : kDisabled);
     }
-    m_dvkIndicator->setCursor(txIsSsb ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    m_dvkIndicator->setCursor(dvkAvailable ? Qt::PointingHandCursor
+                                           : Qt::ArrowCursor);
+    // An unlicensed radio gets a tooltip naming the missing subscription; the
+    // mode gate keeps the normal one, since the panel's own title and the F-key
+    // rows already make "wrong mode" obvious once it opens.
+    m_dvkIndicator->setToolTip(dvkIndicatorTooltip(dvkBlocker));
 
 #ifdef AETHER_ASR_ENABLED
     // ASR (Copy Assist): the inverse of CWX — available in voice modes only,

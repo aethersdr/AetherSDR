@@ -3528,6 +3528,15 @@ target_include_directories(waveform_install_gate_test PRIVATE src)
 target_link_libraries(waveform_install_gate_test PRIVATE Qt6::Core)
 add_test(NAME waveform_install_gate_test COMMAND waveform_install_gate_test)
 
+# DVK indicator availability — TX-slice mode + the radio's DVK entitlement.
+# Header-only, pure logic.
+add_executable(dvk_availability_gate_test
+    tests/dvk_availability_gate_test.cpp
+)
+target_include_directories(dvk_availability_gate_test PRIVATE src)
+target_link_libraries(dvk_availability_gate_test PRIVATE Qt6::Core)
+add_test(NAME dvk_availability_gate_test COMMAND dvk_availability_gate_test)
+
 add_executable(digital_voice_waveform_process_test
     tests/digital_voice_waveform_process_test.cpp
     src/core/DigitalVoiceWaveformTelemetry.cpp
