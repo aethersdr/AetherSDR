@@ -166,9 +166,14 @@ void seedStore()
     s.setValue(QStringLiteral("VoiceChainCfg"),
                QStringLiteral("{\"enabled\":true,"
                               "\"asr_remote_api_key\":\"sk-live-PROBE\"}"));
-    // The control: same shape, no credential-shaped field anywhere.
+    // The control: same shape, no credential-shaped field anywhere. The
+    // key ORDER and number format are deliberately not canonical — a
+    // re-serialising display path would reorder to {"alpha":2.5,...} and
+    // the divergence would be visible, which is what makes the
+    // display-equals-stored-bytes assertion discriminating rather than
+    // accidentally true.
     s.setValue(QStringLiteral("PlainCfg"),
-               QStringLiteral("{\"enabled\":true,\"gainDb\":12}"));
+               QStringLiteral("{\"zulu\":1, \"alpha\":2.50}"));
     s.save();
 
     // Radio-scope documents: clean, and present-but-unparseable.
@@ -206,7 +211,7 @@ void testMaskedRowsAreReadOnly()
 
     // The control proves the guard is doing work rather than the whole
     // table being read-only: an identically-shaped clean row IS editable.
-    expect(plainItem->text().contains(QStringLiteral("gainDb")),
+    expect(plainItem->text().contains(QStringLiteral("zulu")),
            "control: the clean JSON row renders verbatim");
     expect(plainItem->flags() & Qt::ItemIsEditable,
            "control: a clean JSON row stays editable");
@@ -316,6 +321,105 @@ void testCorruptDocumentIsNotEditable()
            "would overwrite recoverable bytes");
 }
 
+// A stored JSON ARRAY parses cleanly but is not an object, so
+// radioFeatureExact() rejects it and returns {} at version 0 — a
+// parse-only check would call the row healthy, enable Edit, and let Save
+// write {} while DOWNGRADING schema_version to 0 (setRadioFeature has no
+// version guard; the upsert takes excluded.schema_version). The viewer
+// must mirror the API's own condition (PR #4631 review, NF0T).
+void testArrayDocumentIsTreatedAsCorrupt()
+{
+    SettingsBrowserDialog dlg;
+    dlg.resize(900, 600);
+    dlg.show();
+    QTest::qWaitForWindowExposed(&dlg);
+    QTreeWidget* tree = treeOf(dlg);
+    QTableWidget* table = tableOf(dlg);
+    if (tree == nullptr || table == nullptr
+        || !selectScope(tree, QStringLiteral("AA:BB:CC:DD:EE:01"))) {
+        expect(false, "radio scope reachable for the array-document case");
+        return;
+    }
+    QApplication::processEvents();
+
+    const int docRow = rowForKey(table, QStringLiteral("ArrayDoc"));
+    expect(docRow >= 0, "the array document lists in the radio scope");
+    if (docRow < 0) {
+        return;
+    }
+
+    bool editDisabled = false;
+    bool sawNotParse = false;
+    auto* probe = new QTimer(table);
+    probe->setInterval(10);
+    QObject::connect(probe, &QTimer::timeout, table,
+                     [&editDisabled, &sawNotParse] {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (modal == nullptr) {
+            return;
+        }
+        for (const QLabel* label : modal->findChildren<QLabel*>()) {
+            if (label->text().contains(QStringLiteral("DOES NOT PARSE"))) {
+                sawNotParse = true;
+            }
+        }
+        for (const QPushButton* button : modal->findChildren<QPushButton*>()) {
+            if (button->text().startsWith(QStringLiteral("Edit Raw JSON"))) {
+                editDisabled = !button->isEnabled();
+            }
+        }
+        modal->close();
+    });
+    probe->start();
+    sendDoubleClick(table, docRow, 2);
+    settle();
+    probe->stop();
+
+    expect(sawNotParse && editDisabled,
+           "a stored JSON ARRAY is treated as unreadable, not as an empty "
+           "document at v0 — Edit stays disabled");
+
+    // The row must still be intact afterwards: nothing wrote {} over it.
+    QString stillThere;
+    SettingsDatabase check;
+    bool intact = false;
+    if (check.open(SettingsPaths::databasePath())) {
+        int version = 0;
+        intact = check.readRadioFeature(QStringLiteral("hl2"),
+                                        QStringLiteral("AA:BB:CC:DD:EE:01"),
+                                        QStringLiteral("ArrayDoc"), version,
+                                        stillThere)
+                 && stillThere.startsWith(QLatin1Char('['))
+                 && version == 4;
+        check.close();
+    }
+    expect(intact,
+           "the array document survives the visit with its bytes and schema "
+           "version 4 intact");
+}
+
+// Editable rows must display exactly what is stored: redactedValue()
+// re-serialises JSON (keys sort, numbers normalise), so routing a CLEAN
+// row through it would leave the cell showing something the store does
+// not contain — and committing would persist that (PR #4631, NF0T).
+void testEditableRowShowsStoredBytes()
+{
+    const QString stored =
+        AppSettings::instance().value(QStringLiteral("PlainCfg")).toString();
+    SettingsBrowserDialog dlg;
+    QTableWidget* table = tableOf(dlg);
+    const int row = rowForKey(table, QStringLiteral("PlainCfg"));
+    if (row < 0) {
+        expect(false, "the clean JSON row is present");
+        return;
+    }
+    const QTableWidgetItem* item = table->item(row, 1);
+    expect(item->text() == stored,
+           "an editable JSON row displays the stored bytes verbatim");
+    expect(item->flags() & Qt::ItemIsEditable,
+           "control: that row is the editable one (masked rows may diverge)");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -344,13 +448,20 @@ int main(int argc, char** argv)
                                    QStringLiteral("AA:BB:CC:DD:EE:01"),
                                    QStringLiteral("CorruptDoc"), 1,
                                    QStringLiteral("{\"frequencyHz\":710000"));
+            // Valid JSON, wrong shape: parses, but is not an object.
+            raw.upsertRadioFeature(QStringLiteral("hl2"),
+                                   QStringLiteral("AA:BB:CC:DD:EE:01"),
+                                   QStringLiteral("ArrayDoc"), 4,
+                                   QStringLiteral("[{\"slot\":1}]"));
             raw.close();
         }
     }
 
     testMaskedRowsAreReadOnly();
+    testEditableRowShowsStoredBytes();
     testDoubleClickOpensOneViewer();
     testCorruptDocumentIsNotEditable();
+    testArrayDocumentIsTreatedAsCorrupt();
 
     std::printf("\n%s\n", g_failures == 0 ? "PASS" : "FAIL");
     return g_failures == 0 ? 0 : 1;

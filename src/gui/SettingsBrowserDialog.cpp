@@ -227,11 +227,12 @@ SettingsBrowserDialog::SettingsBrowserDialog(QWidget* parent)
     // Keyboard open is bound explicitly below instead (PR #4631 review, NF0T).
     connect(m_table, &QTableWidget::cellDoubleClicked, this,
             [this](int row, int) { onTableActivated(row); });
-    auto* openDocShortcut =
-        new QShortcut(QKeySequence(Qt::Key_Return), m_table);
-    openDocShortcut->setContext(Qt::WidgetShortcut);
-    connect(openDocShortcut, &QShortcut::activated, this,
-            [this] { onTableActivated(m_table->currentRow()); });
+    for (const int key : {Qt::Key_Return, Qt::Key_Enter}) {   // Enter = numpad
+        auto* openDocShortcut = new QShortcut(QKeySequence(key), m_table);
+        openDocShortcut->setContext(Qt::WidgetShortcut);
+        connect(openDocShortcut, &QShortcut::activated, this,
+                [this] { onTableActivated(m_table->currentRow()); });
+    }
     connect(m_table, &QTableWidget::itemSelectionChanged, this,
             [this] { updateButtonState(); });
     right->addWidget(m_table, 1);
@@ -443,8 +444,15 @@ void SettingsBrowserDialog::populateTable()
         keyItem->setData(kRoleKey, key);
         m_table->setItem(row, 0, keyItem);
 
+        // Only masked rows go through the sanitizer. redactedValue() also
+        // re-serialises clean JSON (QJsonObject sorts keys, numbers
+        // normalise), so routing every row through it would leave an
+        // EDITABLE row displaying something other than the stored bytes,
+        // and committing would persist the re-serialisation. Masked rows
+        // are read-only, so there the divergence is the point; everywhere
+        // else display now equals stored truth (PR #4631, NF0T).
         auto* valueItem = new QTableWidgetItem(
-            SettingsSanitizer::redactedValue(key, value));
+            secret ? SettingsSanitizer::redactedValue(key, value) : value);
         valueItem->setData(kRoleSecret, secret);
         if (secret || !editable || !m_storeWritable) {
             valueItem->setFlags(valueItem->flags() & ~Qt::ItemIsEditable);
@@ -582,7 +590,11 @@ void SettingsBrowserDialog::onTableItemChanged(QTableWidgetItem* item)
                                   : s.stationValue(key).toString();
         const bool wasPopulating = m_populating;
         m_populating = true;   // the revert must not re-enter this handler
-        item->setText(SettingsSanitizer::redactedValue(key, truth));
+        // Same display rule as addRow(): stored bytes verbatim unless the
+        // row is masked (an editable row's text must equal stored truth).
+        item->setText(item->data(kRoleSecret).toBool()
+                          ? SettingsSanitizer::redactedValue(key, truth)
+                          : truth);
         m_populating = wasPopulating;
     }
 }
@@ -625,10 +637,19 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     // recoverable document. Detect it from the stored bytes and refuse to
     // edit (PR #4631 review, NF0T).
     QJsonParseError storedError{};
-    const bool corrupt =
-        !rawValue.trimmed().isEmpty()
-        && (QJsonDocument::fromJson(rawValue.toUtf8(), &storedError).isNull()
-            || storedError.error != QJsonParseError::NoError);
+    const QJsonDocument storedDoc =
+        QJsonDocument::fromJson(rawValue.toUtf8(), &storedError);
+    // Mirror radioFeatureExact()'s OWN condition, including !isObject(): a
+    // stored JSON *array* parses cleanly, so a parse-only check calls it
+    // healthy while the API returns {} at version 0 — Edit enabled, Save
+    // writing {} and downgrading the row's schema_version to 0, with no
+    // guard downstream (setRadioFeature has no version check; the upsert
+    // takes excluded.schema_version). Same threat model as the redaction
+    // work: foreign, hand-edited, or older-build stores (PR #4631, NF0T).
+    const bool corrupt = !rawValue.trimmed().isEmpty()
+                         && (storedDoc.isNull()
+                             || storedError.error != QJsonParseError::NoError
+                             || !storedDoc.isObject());
 
     // Same recursive masking as the table and the sanitized dump — the
     // viewer must not be the one path that renders a credential-shaped
@@ -713,7 +734,8 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     });
     connect(closeBtn, &QPushButton::clicked, &viewer, &QDialog::reject);
     connect(saveBtn, &QPushButton::clicked, &viewer,
-            [this, &viewer, text, family, radioId, feature, schemaVersion] {
+            [this, &viewer, text, family, radioId, feature, schemaVersion,
+             openTimeDoc = doc] {
         QJsonParseError parseError{};
         const QJsonDocument parsed = QJsonDocument::fromJson(
             text->toPlainText().toUtf8(), &parseError);
@@ -729,13 +751,16 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
             return;
         }
         // The store changes underneath an open viewer (features write
-        // debounced). Saving open-time content over a document that has
-        // since moved — or reasserting the open-time schema version — is a
-        // silent clobber; make the operator re-open against current truth.
+        // debounced). Compare CONTENT, not just the schema version: a
+        // feature rewriting its document at the same version is the common
+        // case by a wide margin, and a version-only check would pass it
+        // through and commit the open-time buffer over the newer content —
+        // a guard that reads right and checks the wrong quantity (PR #4631,
+        // NF0T, same class as the cache-vs-disk finding).
         int nowVersion = 0;
-        AppSettings::instance().radioFeatureExact(family, radioId, feature,
-                                                  &nowVersion);
-        if (nowVersion != schemaVersion) {
+        const QJsonObject nowDoc = AppSettings::instance().radioFeatureExact(
+            family, radioId, feature, &nowVersion);
+        if (nowVersion != schemaVersion || nowDoc != openTimeDoc) {
             FramelessMessageBox::warning(
                 &viewer, "Document Changed",
                 "This document was rewritten by its owning feature while the "
