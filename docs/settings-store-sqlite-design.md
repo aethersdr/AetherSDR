@@ -1,7 +1,7 @@
 # Client Settings Store — SQLite Design (RFC #4603)
 
-Status: **implemented through PR 3** (storage engine #4612, scoped store +
-authority #4614, HL2 state memory #4619 — all merged; BandStack #4621 and the
+Status: **implemented through PR 4** (storage engine #4612, scoped store +
+authority #4614, HL2 state memory #4619, BandStack #4621 — all merged; the
 memory bank #4623 in review; the Settings Browser is the remaining phase)
 RFC / tracking issue: [#4603](https://github.com/aethersdr/AetherSDR/issues/4603)
 Closes: [#4602](https://github.com/aethersdr/AetherSDR/issues/4602) (thread safety)
@@ -67,8 +67,9 @@ All four tables exist from v1 so the file format is stable. `radio_settings`
 holds one **versioned JSON document per feature per scope** (Constitution
 Principle V) and is live: the HL2 `OperatingState` document (universal fields
 plus per-band drive/LNA maps in domain-gated extension sub-objects), the
-`Identity` nickname document, and — in review — `BandStack` and the shared
-memory bank at `(local, '', MemoryBank)`. Writers judge the exact row they
+`Identity` nickname document, and `BandStack` (#4621); the shared memory bank
+at `(local, '', MemoryBank)` follows in #4623 (its shared-vs-per-radio scoping
+awaits the #4590 author's blessing there — re-check this sentence if re-cut). Writers judge the exact row they
 replace (`radioFeatureExact`, no family-wide fallback) and refuse to overwrite
 a newer `schema_version` — read-only toward the future, at both the store and
 the document layer. `radio_id` is

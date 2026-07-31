@@ -558,8 +558,17 @@ backend family — does NOT go in flat `AppSettings` keys. It goes in the
 
 ```cpp
 const RadioSettingsScope scope = m_radioModel.settingsScope();  // (family, serial)
-QJsonObject doc = scope.feature("MyFeature");          // exact → family-wide → {}
-scope.setFeature("MyFeature", kMySchemaVersion, doc);  // atomic whole-document write
+// Read-modify-write uses the EXACT row (no family-wide fallback — you must
+// not clone the family default into a per-radio row), and the write result
+// is checked: a refused write that the UI repaints over is the worst
+// failure shape.
+QJsonObject doc = scope.featureExact("MyFeature");
+doc.insert("field", newValue);
+if (!scope.setFeature("MyFeature", kMySchemaVersion, doc)) {
+    qWarning() << "MyFeature: settings write did not persist";
+}
+// (scope.feature() — exact → family-wide → {} — is for CONSUMERS reading
+// effective config, not for writers.)
 ```
 
 - Identity comes from `RadioModel::settingsScope()` (Flex serial / HL2 MAC /
@@ -575,8 +584,8 @@ scope.setFeature("MyFeature", kMySchemaVersion, doc);  // atomic whole-document 
   document whose `schema_version` is newer than yours — refuse and log
   (see `RadioStateMemory::store()` for the canonical shape).
 - Shipped precedents: the HL2 `OperatingState` document (per-band drive/LNA
-  maps in its extension), the `Identity` nickname document; `BandStack` and
-  the shared memory bank follow in #4621/#4623.
+  maps in its extension), the `Identity` nickname document, and `BandStack`
+  (#4621); the shared memory bank follows in #4623.
 
 ### Client-Side Radio State Memory (capture/restore)
 
@@ -621,8 +630,8 @@ migration itself is automatic inside `AppSettings::load()` — feature code neve
 touches it.)
 
 **Migrating a legacy side file into scoped documents** follows the
-claim-and-freeze pattern (precedents: `Hl2Discovery` nicknames,
-`BandStackSettings`, `LocalMemoryBank`):
+claim-and-freeze pattern (precedents: `Hl2Discovery` nicknames and
+`BandStackSettings`; `LocalMemoryBank` follows in #4623):
 
 - Claim lazily, per scope, on first access — the document needs the radio's
   FAMILY, which only the live scope knows.
@@ -645,9 +654,10 @@ Principles II & III) — and the deciding test is Constitution III's own:
 - **On a radio that persists its own state (Flex)**: never save, recall, or
   override radio-side settings from client-side persistence. The lists below
   apply verbatim, and `clientSettingsDomains` is declared EMPTY.
-- **On a radio that persists nothing (HL2; Sim/Kiwi as applicable)**: the
+- **On a radio that persists nothing and declares so (HL2 today)**: the
   client IS the radio's memory — for exactly the domains the backend declares
-  in `RadioCapabilities::clientSettingsDomains`, persisted ONLY through
+  in `RadioCapabilities::clientSettingsDomains` (Sim deliberately declares
+  none: a synthetic scene has nothing worth remembering), persisted ONLY through
   `RadioStateMemory`'s `OperatingState` document (see "Client-Side Radio State
   Memory" above). Never in flat `AppSettings` keys, and never via ad-hoc code
   paths — the one pipeline is what keeps the Flex guarantees provable.
@@ -662,8 +672,11 @@ layout arrangement (`PanadapterLayout`, applet order/visibility), client-side
 DSP (NR2/RN2/NR4/DFNR), UI preferences, client-only display appearance
 preferences, spot settings.
 
-**Why:** When both persist the same setting, they fight on reconnect. The
-radio's GUIClientID session restore is always more current than our saved state.
+**Why (the Flex half):** when both the client and a self-persisting radio
+store the same setting, they fight on reconnect — the radio's GUIClientID
+session restore is always more current than our saved copy. On a declared-
+domain radio there is no second store to fight with, which is exactly why the
+client may hold the state there and only there.
 
 **Anti-pattern (recurring — see #4261):** Do not write a radio-echoed status
 value into a setter that *also* persists it to `AppSettings`. That makes the

@@ -122,8 +122,8 @@ static int runConfigCli(int argc, char* argv[])
             "  export             sanitized dump of the whole store (secrets\n"
             "                     redacted; diagnostic output, not a backup)\n"
             "  features [family]  list radio-scoped feature documents\n"
-            "                     (sanitized; write access lands with RFC #4603\n"
-            "                     PR 3, when something writes them)\n"
+            "                     (sanitized; written by the app's own\n"
+            "                     features — HL2 state, nicknames, band stacks)\n"
             "  path               print the settings database path\n",
             stderr);
         return 1;
