@@ -14,7 +14,7 @@ warning came true (#3184):
     `color.slice.a..h`. The seed's own comment reads "Preliminary values — a
     dedicated slice-colour audit may tune these in a follow-up"; the JSON was
     tuned, the seed never was.
-  * 25 tokens were never seeded AT ALL — `slice.dim.a..h`, `highlight.*`,
+  * 24 tokens were never seeded AT ALL — `slice.dim.a..h`, `highlight.*`,
     `button.*.disabled`, and the six `waterfall.colormap.*` gradients. Those
     resolve TRANSPARENT on a theme predating them, which is a strictly worse
     failure than a wrong colour.
@@ -34,6 +34,11 @@ gate that fails when it drifts.
 Alias resolution: `{color.red.500}` references are resolved against the
 primitives palette and the CONCRETE value is emitted, because the seed runs
 before any primitives are loaded (older user themes have no primitives section).
+Resolution refuses to degrade: an alias naming a primitive that does not exist
+is a hard error, not a passthrough. Passing it through would emit the literal
+string `"{color.teal.500}"` into the C++, which QColor reads as transparent —
+the exact silent failure this generator exists to remove, re-entering through
+the generator itself.
 
 Usage:
     python tools/gen_theme_seed.py            # write the generated source
@@ -83,13 +88,31 @@ def flatten(node, prefix: str = "") -> dict:
 
 
 def resolve(value, primitives: dict, depth: int = 0):
-    """Expand {color.red.500} against the primitives palette, recursively."""
-    if isinstance(value, str) and depth < 8:
+    """Expand {color.red.500} against the primitives palette, recursively.
+
+    Hard-fails on an alias with no matching primitive rather than passing the
+    literal `{...}` string through — see the module docstring.
+
+    `depth` budgets the ALIAS CHAIN only, so descending into a gradient's stop
+    list doesn't spend it. Lists are walked because gradient stops live in one:
+    an alias there would otherwise survive to `QColor("{color.blue.500}")`.
+    """
+    if isinstance(value, str):
         match = re.fullmatch(r"\{([^}]+)\}", value.strip())
         if match:
-            return resolve(primitives.get(match.group(1), value), primitives, depth + 1)
+            if depth >= 8:
+                raise SystemExit(f"FAIL: alias chain deeper than 8 at {value!r}")
+            if match.group(1) not in primitives:
+                raise SystemExit(
+                    f"FAIL: {value!r} names a primitive that does not exist in "
+                    f"{THEME_JSON.name}. The seed would compile in the literal "
+                    f"string, which QColor reads as transparent — exactly the "
+                    f"failure this generator exists to remove.")
+            return resolve(primitives[match.group(1)], primitives, depth + 1)
+    if isinstance(value, list):
+        return [resolve(v, primitives, depth) for v in value]
     if isinstance(value, dict):
-        return {k: resolve(v, primitives, depth + 1) for k, v in value.items()}
+        return {k: resolve(v, primitives, depth) for k, v in value.items()}
     return value
 
 
@@ -172,7 +195,7 @@ def generate() -> str:
     out.append("// Source of truth:  resources/themes/default-dark.json")
     out.append("//")
     out.append("// ThemeManager::seedBuiltinDefaults() used to be a hand-maintained copy of")
-    out.append("// that JSON. It drifted (9 tokens) and was incomplete (25 tokens never")
+    out.append("// that JSON. It drifted (9 tokens) and was incomplete (24 tokens never")
     out.append("// seeded at all, resolving TRANSPARENT on themes that predate them) — see")
     out.append("// #3184. Generating it makes the resource authoritative by construction.")
     out.append("//")
@@ -246,14 +269,22 @@ def main() -> int:
         # dropped a token family — the file would match its own (wrong) output.
         # This asserts every token in the bundled JSON actually reaches the
         # emitted table, which is the property that was violated before the
-        # generator existed: 25 tokens had no compiled default at all and
+        # generator existed: 24 tokens had no compiled default at all and
         # resolved TRANSPARENT on themes predating them. (#3184)
+        #
+        # Compares the (scope, token) SETS, not the counts: a fault that
+        # duplicates one token and drops another leaves the count unchanged,
+        # and a count can only say "something is missing", not what.
         data = json.loads(THEME_JSON.read_text(encoding="utf-8"))
-        expected = collect(data["scopes"]["root"])
-        emitted = text.count("insert(") + text.count("seedScopedToken(")
-        if emitted < len(expected):
-            print(f"FAIL: generator emitted {emitted} tokens but the theme "
-                  f"defines {len(expected)} — a token family is being dropped.")
+        expected = set(collect(data["scopes"]["root"]))
+        emitted = {("root", m.group(1)) for m in
+                   re.finditer(r'm_tokens\.insert\("([^"]+)"', text)}
+        emitted |= {(m.group(1), m.group(2)) for m in re.finditer(
+            r'seedScopedToken\(QStringLiteral\("([^"]+)"\), "([^"]+)"', text)}
+        if emitted != expected:
+            print(f"FAIL: the emitted table does not match the theme's token set.\n"
+                  f"      missing:    {sorted(expected - emitted)}\n"
+                  f"      unexpected: {sorted(emitted - expected)}")
             return 1
 
         if not OUT_FILE.exists():

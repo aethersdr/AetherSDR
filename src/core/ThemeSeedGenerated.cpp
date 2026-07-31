@@ -4,7 +4,7 @@
 // Source of truth:  resources/themes/default-dark.json
 //
 // ThemeManager::seedBuiltinDefaults() used to be a hand-maintained copy of
-// that JSON. It drifted (9 tokens) and was incomplete (25 tokens never
+// that JSON. It drifted (9 tokens) and was incomplete (24 tokens never
 // seeded at all, resolving TRANSPARENT on themes that predate them) — see
 // #3184. Generating it makes the resource authoritative by construction.
 //

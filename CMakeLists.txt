@@ -2909,6 +2909,28 @@ add_test(NAME theme_manager_test COMMAND theme_manager_test)
 set_tests_properties(theme_manager_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Compiled-in theme seed (#3184).  DELIBERATELY has no ${THEME_TEST_RESOURCES}:
+# with the theme resource linked, the ThemeManager constructor loads Default
+# Dark straight after seeding and the JSON hides whatever the seed actually
+# contains — which is how nine seed tokens drifted unnoticed for months.
+# Without it, the seed IS the rendered palette and every token is assertable
+# through the public API.  Adding the resource here would silently turn this
+# into a second, weaker copy of theme_manager_test; the test asserts
+# availableThemes() is empty so that mistake fails loudly instead.
+add_executable(theme_seed_test
+    tests/theme_seed_test.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(theme_seed_test PRIVATE src)
+target_link_libraries(theme_seed_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME theme_seed_test COMMAND theme_seed_test)
+set_tests_properties(theme_seed_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
 # the indicator disappear while its condition still holds.
@@ -5073,6 +5095,7 @@ endif()
 set(AETHER_SETTINGS_CONSUMERS
     slice_label_test
     theme_manager_test
+    theme_seed_test
     panadapter_message_overlay_test
     app_settings_safety_test
     nr2_settings_model_test

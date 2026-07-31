@@ -8,6 +8,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Theme fallback colours corrected on themes that predate the token (#3184)
+
+- **Slice colours A–H and `color.accent.dim` now match the bundled themes.**
+  AetherSDR compiles a copy of the default theme into the binary as a fallback
+  for tokens a theme file doesn't define. That table was maintained by hand and
+  had drifted: it said slice A was red (`#ff4040`) while both bundled themes say
+  cyan (`#00d4ff`), and eight more slice colours disagreed the same way. If your
+  theme predates the slice tokens you will see the corrected — cyan — palette.
+  Themes that define their own slice colours are unaffected.
+
+- **24 tokens that had no compiled fallback at all now have one.** The dimmed
+  slice colours, the highlight and disabled-button colours, and all six
+  waterfall colormap gradients previously resolved to *transparent* on a theme
+  that predated them. On such a theme the waterfall could render with no
+  colormap; it now falls back to the bundled Default Dark gradients.
+
+- The table is generated from `resources/themes/default-dark.json` by
+  `tools/gen_theme_seed.py`, so the two can no longer disagree.
+
 ### Client settings store moved to SQLite (RFC #4603, phase 1)
 
 - **Settings now live in a SQLite database** (`AetherSDR.db` in the config

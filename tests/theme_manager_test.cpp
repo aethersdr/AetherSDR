@@ -76,17 +76,21 @@ int main(int argc, char** argv)
     auto& tm = ThemeManager::instance();
     EXPECT_TRUE(tm.color("color.accent").isValid());
 
-    // NOTE on testing the SEED itself: you cannot, from here. The constructor
-    // loads Default Dark immediately after seeding (see ThemeManager.cpp), so by
-    // the time instance() returns, the JSON has overwritten every token the seed
-    // set. That is exactly the invisibility that let the seed drift unnoticed
-    // for months (#3184) — a wrong seed is unobservable through the public API
-    // on any machine where a theme file loads.
+    // NOTE on testing the SEED itself: not from THIS target. This binary links
+    // resources.qrc, so the constructor loads Default Dark immediately after
+    // seeding and the JSON overwrites every token the seed set — a wrong seed is
+    // invisible here. That invisibility is what let the seed drift unnoticed for
+    // months (#3184).
     //
-    // The seed's completeness and correctness are therefore verified where they
-    // ARE observable: tools/gen_theme_seed.py --check asserts the generated
-    // table matches the bundled JSON token-for-token, and the theme-seed CI gate
-    // runs it on every PR that touches either side.
+    // It is NOT invisible everywhere. tests/theme_seed_test.cpp links
+    // ThemeManager + ThemeSeedGenerated WITHOUT the theme resource, which is the
+    // resource-missing fallback path #3184 named, and asserts the seeded values
+    // through the ordinary public API. Those assertions fail against the old
+    // hand-written table. Put seed assertions there, not here.
+    //
+    // Two other layers back it up: tools/gen_theme_seed.py --check asserts the
+    // generated table matches the bundled JSON token-for-token, and the
+    // theme-seed CI gate runs it on every PR touching either side.
 
     // ── Default Dark loads from :/themes/ via setActiveTheme ──
     // The shipped resource theme should be in availableThemes(); switching

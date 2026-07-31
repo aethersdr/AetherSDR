@@ -368,11 +368,15 @@ ThemeManager::ThemeManager()
                               .value("ActiveTheme", "Default Dark").toString();
     if (!setActiveTheme(saved)) {
         // Saved theme is gone (most commonly: user saved a custom theme
-        // via the editor and later removed the file out-of-band).  Don't
-        // limp along on seedBuiltinDefaults() — its scalar-only token set
-        // lacks the waterfall.colormap gradients and the operator gets a
-        // baffling all-grayscale waterfall.  Fall back to "Default Dark"
-        // explicitly so the bundled JSON loads and every token is populated.
+        // via the editor and later removed the file out-of-band).  Fall
+        // back to "Default Dark" explicitly rather than limping along on
+        // the seed: the seed is Default Dark's token set, so a user whose
+        // saved theme was light-derived would silently get a dark UI with
+        // no indication why.  (Before the seed was generated the reason
+        // was starker — it had no waterfall.colormap gradients at all, so
+        // the operator got a baffling all-grayscale waterfall.  #3184
+        // fixed that; the fallback is still right for the theme-identity
+        // reason.)
         qCWarning(lcGui) << "ThemeManager: saved theme" << saved
                           << "is unavailable — falling back to Default Dark";
         if (!setActiveTheme(QStringLiteral("Default Dark"))) {
@@ -397,13 +401,15 @@ void ThemeManager::seedBuiltinDefaults()
     // The table is GENERATED from resources/themes/default-dark.json — see
     // src/core/ThemeSeedGenerated.cpp and tools/gen_theme_seed.py. It used to be
     // maintained by hand, and both failure modes the old comment warned about
-    // had already happened (#3184): 9 tokens had drifted from the JSON, and 25
+    // had already happened (#3184): 9 tokens had drifted from the JSON, and 24
     // more were never seeded at all, resolving TRANSPARENT on any theme that
     // predated them.
     //
     // Regenerate with `python tools/gen_theme_seed.py` after editing the bundled
     // theme; tools/check_theme_seed.py --strict fails the build's PR gate when
-    // the two disagree.
+    // the two disagree.  Do NOT hand-add tokens here — that is the dual source
+    // of truth this replaced.  tests/theme_seed_test.cpp pins the seed values
+    // that actually reach m_tokens.
     seedGeneratedDefaults();
 }
 
