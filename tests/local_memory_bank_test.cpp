@@ -372,10 +372,18 @@ int main(int argc, char** argv)
         first.record(1, MemoryEntry{});
         first.flush();
 
-        QFile f(p);
-        ok &= expect(f.open(QIODevice::ReadOnly), "the shared bank still opens");
-        ok &= expect(f.readAll() == theirs,
-                     "a foreign write is not clobbered by our flush");
+        // Scoped, so the read handle is CLOSED before the flushes below. On
+        // Windows an open handle blocks QSaveFile::commit()'s atomic rename
+        // ("Access is denied"), so leaving it open made both saves fail — the
+        // assertion at the end of this block then read as a re-baselining bug
+        // that was not there. POSIX permits the rename, which is why this only
+        // ever failed on Windows.
+        {
+            QFile f(p);
+            ok &= expect(f.open(QIODevice::ReadOnly), "the shared bank still opens");
+            ok &= expect(f.readAll() == theirs,
+                         "a foreign write is not clobbered by our flush");
+        }
         ok &= expect(first.lastError().contains("changed by another"),
                      "the refusal names the concurrent-write reason");
 
