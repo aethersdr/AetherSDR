@@ -62,7 +62,7 @@ private:
     void deleteSelected();
     void exportSanitized();
     void openDocumentViewer(const QString& family, const QString& radioId,
-                            const QString& feature);
+                            const QString& feature, const QString& rawValue);
 
     void setStatus(const QString& text, bool error);
     void updateButtonState();

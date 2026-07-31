@@ -112,6 +112,15 @@ public:
     // one save() at a time.
     bool storeWritable() const;
 
+    // Evidence-over-assertion verification reads: fetch the row from the
+    // database FILE, not the cache. A failed save() deliberately keeps the
+    // change in memory (dirty, for retry), so a cache re-read after save()
+    // matches even when nothing was committed — only a file read proves
+    // persistence (the --config set pattern; PR #4631 review). Returns
+    // false when the row does not exist on disk.
+    bool readAppRowFromDisk(const QString& key, QString& value) const;
+    bool readStationRowFromDisk(const QString& key, QString& value) const;
+
     // Path of the settings database (the store this class persists to).
     QString filePath() const { return m_filePath; }
     // The frozen pre-SQLite XML snapshot (may not exist).

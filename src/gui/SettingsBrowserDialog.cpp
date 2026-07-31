@@ -21,6 +21,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QShortcut>
 #include <QShowEvent>
 #include <QSplitter>
 #include <QStyledItemDelegate>
@@ -40,6 +41,11 @@ constexpr int kRoleFamily = Qt::UserRole + 1;
 constexpr int kRoleRadioId = Qt::UserRole + 2;
 constexpr int kRoleKey = Qt::UserRole + 3;       // app/station key, or feature
 constexpr int kRoleSecret = Qt::UserRole + 4;    // bool: rendered redacted
+// The document row's stored bytes, so the viewer can tell a CORRUPT document
+// (present, unparseable) from an ABSENT one — both read back as an empty
+// object through the typed API (PR #4631 review, NF0T). Feature rows only;
+// never carries a flat value, so no plaintext is stashed for a copy action.
+constexpr int kRoleRawValue = Qt::UserRole + 5;
 
 const QString kDialogStyle =
     "QDialog { background: #0f0f1a; color: #c8d8e8; }"
@@ -214,10 +220,18 @@ SettingsBrowserDialog::SettingsBrowserDialog(QWidget* parent)
     m_table->setAccessibleName("Settings for selected scope");
     connect(m_table, &QTableWidget::itemChanged, this,
             &SettingsBrowserDialog::onTableItemChanged);
-    connect(m_table, &QTableWidget::cellActivated, this,
-            [this](int row, int) { onTableActivated(row); });
+    // ONLY doubleClicked — not activated. Both fire from
+    // QAbstractItemView::mouseDoubleClickEvent(), and `activated` also fires
+    // on a SINGLE click under styles where ActivateItemOnSingleClick is true
+    // (Breeze, some GTK themes), which would pop this modal on a stray click.
+    // Keyboard open is bound explicitly below instead (PR #4631 review, NF0T).
     connect(m_table, &QTableWidget::cellDoubleClicked, this,
             [this](int row, int) { onTableActivated(row); });
+    auto* openDocShortcut =
+        new QShortcut(QKeySequence(Qt::Key_Return), m_table);
+    openDocShortcut->setContext(Qt::WidgetShortcut);
+    connect(openDocShortcut, &QShortcut::activated, this,
+            [this] { onTableActivated(m_table->currentRow()); });
     connect(m_table, &QTableWidget::itemSelectionChanged, this,
             [this] { updateButtonState(); });
     right->addWidget(m_table, 1);
@@ -472,6 +486,7 @@ void SettingsBrowserDialog::populateTable()
             auto* featureItem = new QTableWidgetItem(entry.feature);
             featureItem->setFlags(featureItem->flags() & ~Qt::ItemIsEditable);
             featureItem->setData(kRoleKey, entry.feature);
+            featureItem->setData(kRoleRawValue, entry.value);
             m_table->setItem(row, 0, featureItem);
 
             auto* versionItem = new QTableWidgetItem(
@@ -541,22 +556,34 @@ void SettingsBrowserDialog::onTableItemChanged(QTableWidgetItem* item)
     }
     s.save();
 
-    // Verify by reading back — the honest check that the write both survived
-    // the credential seam and reached a writable store (mirrors --config set).
-    const QString stored = scope.kind == ScopeKind::App
-                               ? s.value(key).toString()
-                               : s.stationValue(key).toString();
-    if (stored == newValue) {
+    // Verify from the DATABASE FILE, not the cache: a failed save() keeps the
+    // change in memory for retry, so a cache re-read would report "Saved" for
+    // a write that never reached disk (PR #4631 review, NF0T). This is what
+    // `--config set` does, and what AGENTS.md means by checking the write
+    // result — the credential-divert case is caught either way, but a genuine
+    // commit failure is only visible on disk.
+    QString stored;
+    const bool onDisk = scope.kind == ScopeKind::App
+                            ? s.readAppRowFromDisk(key, stored)
+                            : s.readStationRowFromDisk(key, stored);
+    if (onDisk && stored == newValue) {
         setStatus(QStringLiteral("Saved %1").arg(key), false);
     } else {
-        setStatus(QStringLiteral("Write to %1 was refused — value reverted")
+        setStatus(QStringLiteral("%1 was NOT written to the store — value "
+                                 "reverted")
                       .arg(key),
                   true);
-        // Deferred: we are inside this item's own itemChanged emission, and
-        // repopulating clears the table — deleting the emitting item out
-        // from under the model (PR #4631 review).
-        QMetaObject::invokeMethod(
-            this, [this] { populateTable(); }, Qt::QueuedConnection);
+        // Revert IN PLACE rather than repopulating: we are inside this
+        // item's own itemChanged emission (rebuilding would delete the
+        // emitting item mid-signal), and an in-place revert also keeps the
+        // filter, selection, and scroll position (PR #4631 review).
+        const QString truth = scope.kind == ScopeKind::App
+                                  ? s.value(key).toString()
+                                  : s.stationValue(key).toString();
+        const bool wasPopulating = m_populating;
+        m_populating = true;   // the revert must not re-enter this handler
+        item->setText(SettingsSanitizer::redactedValue(key, truth));
+        m_populating = wasPopulating;
     }
 }
 
@@ -571,12 +598,14 @@ void SettingsBrowserDialog::onTableActivated(int row)
         return;
     }
     openDocumentViewer(scope.family, scope.radioId,
-                       featureItem->data(kRoleKey).toString());
+                       featureItem->data(kRoleKey).toString(),
+                       featureItem->data(kRoleRawValue).toString());
 }
 
 void SettingsBrowserDialog::openDocumentViewer(const QString& family,
                                                const QString& radioId,
-                                               const QString& feature)
+                                               const QString& feature,
+                                               const QString& rawValue)
 {
     // A double-click delivers cellActivated AND cellDoubleClicked on some
     // platforms — one viewer per gesture (PR #4631 review).
@@ -589,6 +618,17 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     int schemaVersion = 0;
     const QJsonObject doc =
         s.radioFeatureExact(family, radioId, feature, &schemaVersion);
+
+    // A row that is PRESENT but unparseable reads back as an empty object
+    // through the typed API, indistinguishable from an absent row — and
+    // saving over it would write {} at v0 across someone's damaged-but-
+    // recoverable document. Detect it from the stored bytes and refuse to
+    // edit (PR #4631 review, NF0T).
+    QJsonParseError storedError{};
+    const bool corrupt =
+        !rawValue.trimmed().isEmpty()
+        && (QJsonDocument::fromJson(rawValue.toUtf8(), &storedError).isNull()
+            || storedError.error != QJsonParseError::NoError);
 
     // Same recursive masking as the table and the sanitized dump — the
     // viewer must not be the one path that renders a credential-shaped
@@ -613,14 +653,25 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
         QStringLiteral("%1 / %2 / %3 — schema v%4%5")
             .arg(family, scopeLabelForRadioId(radioId), feature)
             .arg(schemaVersion)
-            .arg(hasSecret
-                     ? QStringLiteral("  ·  credential fields masked, read-only")
-                     : QString()));
+            .arg(corrupt
+                     ? QStringLiteral("  ·  DOES NOT PARSE — read-only")
+                     : hasSecret
+                           ? QStringLiteral(
+                                 "  ·  credential fields masked, read-only")
+                           : QString()));
     layout->addWidget(header);
 
     auto* text = new QPlainTextEdit;
-    text->setPlainText(QString::fromUtf8(
-        QJsonDocument(displayDoc).toJson(QJsonDocument::Indented)));
+    text->setPlainText(
+        corrupt ? QStringLiteral(
+                      "This document is stored but does not parse as JSON "
+                      "(%1 at offset %2), so it cannot be edited here without "
+                      "overwriting it.\n\nStored bytes:\n\n%3")
+                      .arg(storedError.errorString())
+                      .arg(storedError.offset)
+                      .arg(SettingsSanitizer::redactedValue(feature, rawValue))
+                : QString::fromUtf8(
+                      QJsonDocument(displayDoc).toJson(QJsonDocument::Indented)));
     text->setReadOnly(true);
     text->setAccessibleName(
         QStringLiteral("%1 document contents").arg(feature));
@@ -633,8 +684,13 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     // masked flat rows. (Delete stays available: a whole-document delete is
     // the sanctioned remediation for a legacy store that still carries a
     // credential-bearing document, and destroys rather than corrupts.)
-    editBtn->setEnabled(m_storeWritable && !hasSecret);
-    if (hasSecret) {
+    editBtn->setEnabled(m_storeWritable && !hasSecret && !corrupt);
+    if (corrupt) {
+        editBtn->setToolTip(
+            "This document does not parse — editing here would overwrite "
+            "recoverable bytes. Repair it with --config, or delete it to let "
+            "the owning feature start fresh.");
+    } else if (hasSecret) {
         editBtn->setToolTip(
             "This document contains a credential-shaped field — edit it "
             "through the owning feature's UI, which keeps the secret in the "
@@ -766,15 +822,16 @@ void SettingsBrowserDialog::addKey()
         s.setStationValue(key, valueEdit->text());
     }
     s.save();
-    // Same read-back verification as the inline-edit path — "Added" must
-    // mean the row survived the seam and the store (PR #4631 review).
-    const QString stored = scope.kind == ScopeKind::App
-                               ? s.value(key).toString()
-                               : s.stationValue(key).toString();
-    if (stored == valueEdit->text()) {
+    // Same on-disk verification as the inline-edit path — "Added" must mean
+    // the row reached the database, not just the cache (PR #4631 review).
+    QString stored;
+    const bool onDisk = scope.kind == ScopeKind::App
+                            ? s.readAppRowFromDisk(key, stored)
+                            : s.readStationRowFromDisk(key, stored);
+    if (onDisk && stored == valueEdit->text()) {
         setStatus(QStringLiteral("Added %1").arg(key), false);
     } else {
-        setStatus(QStringLiteral("Add of %1 was refused by the store").arg(key),
+        setStatus(QStringLiteral("%1 was NOT written to the store").arg(key),
                   true);
     }
     populateTable();

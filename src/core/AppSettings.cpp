@@ -1025,6 +1025,23 @@ bool AppSettings::storeWritable() const
     return m_loadState == LoadState::ReadyToSave;
 }
 
+bool AppSettings::readAppRowFromDisk(const QString& key, QString& value) const
+{
+    return SettingsDatabase::readAppValueFromFile(m_filePath, key, value);
+}
+
+bool AppSettings::readStationRowFromDisk(const QString& key,
+                                         QString& value) const
+{
+    QString station;
+    {
+        QReadLocker locker(&m_lock);
+        station = m_stationName;
+    }
+    return SettingsDatabase::readStationValueFromFile(m_filePath, station, key,
+                                                      value);
+}
+
 // ─── Radio-scoped feature documents (RFC #4603) ──────────────────────────────
 
 QJsonObject AppSettings::radioFeatureExact(const QString& family,

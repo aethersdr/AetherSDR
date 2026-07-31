@@ -733,6 +733,40 @@ void testBrowserApi()
     expect(redacted.contains(QStringLiteral("[REDACTED]"))
                && !redacted.contains(QStringLiteral("SUPERSECRET")),
            "display redaction masks the nested field the predicate flagged");
+
+    // Cache-vs-disk verification (PR #4631 review, NF0T): a failed save()
+    // deliberately KEEPS the change in memory for retry, so a cache re-read
+    // is not evidence of persistence. The browser's verification therefore
+    // reads the database file. Falsifiable by construction — the control
+    // below proves the cache would have lied.
+    settings.setValue(QStringLiteral("DiskProbe"), QStringLiteral("committed"));
+    settings.save();
+    QString disk;
+    expect(settings.readAppRowFromDisk(QStringLiteral("DiskProbe"), disk)
+               && disk == QStringLiteral("committed"),
+           "a committed app row reads back from the database file");
+    expect(!settings.readAppRowFromDisk(QStringLiteral("NeverWritten"), disk),
+           "a key that was never written is absent from the file");
+
+    // The control: mutate the cache WITHOUT saving. The cache now reports
+    // the new value (what the old verification read) while the file still
+    // holds the old one (what the browser now reads).
+    settings.setValue(QStringLiteral("DiskProbe"), QStringLiteral("uncommitted"));
+    expect(settings.value(QStringLiteral("DiskProbe")).toString()
+               == QStringLiteral("uncommitted"),
+           "control: the cache reports an unsaved change as current");
+    expect(settings.readAppRowFromDisk(QStringLiteral("DiskProbe"), disk)
+               && disk == QStringLiteral("committed"),
+           "the file still holds the last COMMITTED value — a cache read "
+           "would have reported an unwritten change as saved");
+
+    settings.setStationValue(QStringLiteral("DiskProbeStation"),
+                             QStringLiteral("s1"));
+    settings.save();
+    expect(settings.readStationRowFromDisk(QStringLiteral("DiskProbeStation"),
+                                           disk)
+               && disk == QStringLiteral("s1"),
+           "a committed station row reads back from the database file");
 }
 
 } // namespace
