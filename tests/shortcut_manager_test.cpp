@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/SettingsDatabase.h"
 #include "core/ShortcutManager.h"
 
 #include <QCoreApplication>
@@ -51,24 +52,30 @@ int main(int argc, char** argv)
     manager.setBinding(QStringLiteral("cwdit"), QKeySequence(Qt::Key_F10));
     manager.setBinding(QStringLiteral("cwdah"), QKeySequence(Qt::Key_F11));
 
-    QFile saved(settings.filePath());
-    bool ok = expect(saved.open(QIODevice::ReadOnly | QIODevice::Text),
-                     "shortcut settings file is written");
-    const QString xml = ok ? QString::fromUtf8(saved.readAll()) : QString();
-    saved.close();
-
-    ok &= expect(xml.contains(QStringLiteral("<Shortcut_cwkey>F9</Shortcut_cwkey>")),
+    // Assert against the persisted database file (not the in-memory cache):
+    // the sanitized ids must be the stored rows, and the dotted CW ids must
+    // not exist — that sanitization now lives in ShortcutManager, since the
+    // SQLite store no longer rejects exotic key characters the way the XML
+    // element-name rule did.
+    bool ok = expect(QFile::exists(settings.filePath()),
+                     "shortcut settings store is written");
+    const auto storedRow = [&settings](const char* key, QString& value) {
+        return SettingsDatabase::readAppValueFromFile(
+            settings.filePath(), QString::fromLatin1(key), value);
+    };
+    QString value;
+    ok &= expect(storedRow("Shortcut_cwkey", value) && value == QStringLiteral("F9"),
                  "straight-key shortcut persists as Shortcut_cwkey");
-    ok &= expect(xml.contains(QStringLiteral("<Shortcut_cwdit>F10</Shortcut_cwdit>")),
+    ok &= expect(storedRow("Shortcut_cwdit", value) && value == QStringLiteral("F10"),
                  "dit shortcut persists as Shortcut_cwdit");
-    ok &= expect(xml.contains(QStringLiteral("<Shortcut_cwdah>F11</Shortcut_cwdah>")),
+    ok &= expect(storedRow("Shortcut_cwdah", value) && value == QStringLiteral("F11"),
                  "dah shortcut persists as Shortcut_cwdah");
-    ok &= expect(!xml.contains(QStringLiteral("Shortcut_cw.key")),
-                 "shortcut XML does not use dotted CW IDs");
-    ok &= expect(!xml.contains(QStringLiteral("Shortcut_cw.dit")),
-                 "shortcut XML does not use dotted CW dit ID");
-    ok &= expect(!xml.contains(QStringLiteral("Shortcut_cw.dah")),
-                 "shortcut XML does not use dotted CW dah ID");
+    ok &= expect(!storedRow("Shortcut_cw.key", value),
+                 "shortcut store does not use dotted CW IDs");
+    ok &= expect(!storedRow("Shortcut_cw.dit", value),
+                 "shortcut store does not use dotted CW dit ID");
+    ok &= expect(!storedRow("Shortcut_cw.dah", value),
+                 "shortcut store does not use dotted CW dah ID");
 
     settings.reset();
     settings.load();

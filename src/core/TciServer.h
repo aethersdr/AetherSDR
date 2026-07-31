@@ -3,6 +3,7 @@
 
 #include "TciProtocol.h"
 #include "TciRoutingState.h"
+#include "TciTrxMap.h"
 
 #include <QObject>
 #include <QPointer>
@@ -268,6 +269,10 @@ private:
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
+    // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,
+    // released 500 ms after a genuine slice close (recreates reclaim their
+    // number), cleared on disconnect. Injected into every TciProtocol.
+    TciTrxMap m_trxMap;
     struct PendingVfoBCreate
     {
         QPointer<QWebSocket> client;

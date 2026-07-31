@@ -26,6 +26,7 @@ option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
 option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
+option(USE_SYSTEM_LIBWHISPER   "Use system libwhisper"   OFF)
 
 # Build features options
 
@@ -522,6 +523,19 @@ if(ENABLE_MQTT)
 endif()
 
 # Sources
+# The settings store (RFC #4603): AppSettings' implementation spans the SQLite
+# wrapper, path helpers, pre-QApplication bootstrap reader, and the sanitizer.
+# Every target that compiles AppSettings.cpp needs the whole group — and the
+# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop near the end
+# of this file.
+set(AETHER_SETTINGS_SOURCES
+    src/core/AppSettings.cpp
+    src/core/SettingsDatabase.cpp
+    src/core/SettingsPaths.cpp
+    src/core/SettingsBootstrap.cpp
+    src/core/SettingsSanitizer.cpp
+)
+
 set(CORE_SOURCES
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
@@ -539,7 +553,8 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -620,6 +635,7 @@ set(CORE_SOURCES
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
+    src/core/TciTrxMap.cpp
     src/core/AutomationServer.cpp
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
@@ -757,6 +773,7 @@ set(GUI_SOURCES
     src/gui/Contribute.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
+    src/gui/WindowGeometryRestore.cpp
     src/gui/MainWindow_Controllers.cpp
     src/gui/MainWindow_DspApplets.cpp
     src/gui/MainWindow_Menus.cpp
@@ -837,6 +854,7 @@ set(GUI_SOURCES
     src/gui/PersistentDialog.cpp
     src/gui/FramelessMessageBox.cpp
     src/gui/ProfileManagerDialog.cpp
+    src/gui/SettingsBrowserDialog.cpp
     src/gui/ProfileImportExportDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
@@ -1056,6 +1074,36 @@ target_include_directories(aether_afskdemod PUBLIC
 target_compile_features(aether_afskdemod PUBLIC cxx_std_20)
 message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-later")
 
+# Vendored SQLite amalgamation (public domain) — the client settings store
+# (RFC #4603). Deliberately NOT Qt6::Sql: the amalgamation needs no runtime
+# driver plugin in any deployment artifact and is usable before QApplication
+# exists (the pre-QApplication bootstrap reads in main.cpp / GpuSelector).
+# The ONLY permitted consumer is src/core/SettingsDatabase.cpp — see
+# third_party/sqlite/README.md.
+add_library(aether_sqlite3 STATIC
+    third_party/sqlite/sqlite3.c
+)
+target_include_directories(aether_sqlite3 PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/sqlite
+)
+target_compile_definitions(aether_sqlite3 PRIVATE
+    SQLITE_THREADSAFE=1              # serialized mode; AppSettings adds its own cache lock
+    SQLITE_DQS=0                     # no double-quoted string literals
+    SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 # NORMAL is durability-sufficient under WAL
+    SQLITE_DEFAULT_FILE_PERMISSIONS=0600  # settings dir is user-private (unix)
+    SQLITE_LIKE_DOESNT_MATCH_BLOBS
+    SQLITE_MAX_EXPR_DEPTH=0
+    SQLITE_OMIT_DEPRECATED
+    SQLITE_OMIT_LOAD_EXTENSION
+    SQLITE_OMIT_SHARED_CACHE
+)
+if(MSVC)
+    target_compile_options(aether_sqlite3 PRIVATE /w)
+else()
+    target_compile_options(aether_sqlite3 PRIVATE -w)
+endif()
+message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
+
 # Bundled liquid-dsp (MIT) — comprehensive DSP toolkit covering modems
 # (PSK/QAM/FSK/GMSK/OFDM), FEC (Hamming/Golay/RS/convolutional), adaptive
 # filters (LMS/RLS), AGC, NCO, polyphase resampling, and equalizers.
@@ -1191,144 +1239,204 @@ target_link_libraries(AetherSDR PRIVATE aethercore)
 # force every backend option OFF so the missing directories are never referenced
 # and builds are deterministic across platforms (incl. no -march=native, which
 # would break portable/Pi/CI binaries). GPU backends land in a later phase.
+#
+# USE_SYSTEM_LIBWHISPER=ON swaps that vendored tree for a distro libwhisper found
+# through pkg-config — the packagers' path, off by default so CI, releases, and
+# contributor laptops all build the pinned snapshot.
 if (ENABLE_ASR)
-    set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
-    set(GGML_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
-    set(GGML_BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
-    set(GGML_NATIVE            OFF CACHE BOOL "" FORCE)  # portable binaries (Pi/CI/release)
-    set(GGML_CPU               ON  CACHE BOOL "" FORCE)
-
     # GPU acceleration for ASR: the native GPU backend per platform — Metal on
     # Apple (macOS has no native Vulkan), Vulkan elsewhere (cross-platform
     # NVIDIA/AMD/Intel on Linux/Windows). Both are the only GPU backends vendored,
     # and both are gated so machines/CI without the toolchain build CPU-only,
     # exactly as before. At runtime ggml falls back to CPU when no GPU device is
     # found, so a GPU-enabled binary still runs on GPU-less hosts.
+    #
+    # Declared ahead of the engine branch below so they always reach the cache: an
+    # option() that exists on only one branch turns a user's -DENABLE_ASR_VULKAN=OFF
+    # into a bare "unused variable" warning on the other.
     set(_asr_vulkan OFF)
     set(_asr_metal  OFF)
     if (APPLE)
         # Metal uses the Metal framework + the `metal` shader compiler from full
         # Xcode (present on macOS CI); no external SDK to install.
         option(ENABLE_ASR_METAL "Enable Metal GPU acceleration for ASR (macOS)" ON)
-        if (ENABLE_ASR_METAL)
-            set(_asr_metal ON)
-            message(STATUS "ASR: Metal GPU backend enabled (Apple)")
-        endif()
     else()
         option(ENABLE_ASR_VULKAN "Enable Vulkan GPU acceleration for ASR (auto-detected)" ON)
-        if (ENABLE_ASR_VULKAN)
-            # Prebuilt Windows path: skips the glslc + SPIRV-Headers requirement
-            # because the shaders are already compiled INTO the shipped
-            # ggml-vulkan.lib. Only the runtime Vulkan loader import lib is
-            # needed to link the final exe.
-            if (WIN32 AND MSVC AND ASR_USE_PREBUILT_WHISPER_GPU)
-                find_package(Vulkan QUIET)
-                if (Vulkan_FOUND)
-                    set(_asr_vulkan ON)
-                    set(_asr_use_prebuilt ON)
-                    message(STATUS "ASR: Vulkan GPU backend enabled via prebuilt whisper-gpu pack")
+    endif()
+
+    if(USE_SYSTEM_LIBWHISPER)
+        # Distro-packaged libwhisper, for packagers who link everything dynamically.
+        # Which ggml backends it carries is the packager's call and is not visible
+        # from here, so this path never claims a GPU backend.
+        #
+        # Release guard: for that same reason it can never satisfy REQUIRE_ASR_GPU.
+        # Fail here rather than let a release image quietly lose GPU inference —
+        # the whole point of the guard.
+        if (REQUIRE_ASR_GPU)
+            message(FATAL_ERROR "REQUIRE_ASR_GPU is set but USE_SYSTEM_LIBWHISPER=ON. The GPU "
+                "backends compiled into a distro libwhisper are the packager's choice and cannot "
+                "be verified at configure time; build release images against the vendored engine "
+                "(-DUSE_SYSTEM_LIBWHISPER=OFF).")
+        endif()
+        find_package(PkgConfig REQUIRED)
+        if(PkgConfig_FOUND)
+            # 1.8.0 is the real floor: WhisperAsrBackend.cpp enumerates devices with
+            # GGML_BACKEND_DEVICE_TYPE_IGPU, which whisper.cpp only gained in 1.8.0.
+            # Against 1.7.x this configures cleanly and then fails to compile.
+            pkg_check_modules(whisper REQUIRED IMPORTED_TARGET whisper>=1.8.0)
+        endif()
+        # That same code calls ggml directly (<ggml-backend.h>, ggml_backend_dev_*),
+        # so take ggml as a dependency of our own instead of leaning on whisper.pc's
+        # transitive "-lggml -lggml-base" and flat "-I${includedir}". Upstream ggml
+        # ships a CMake package config and Debian additionally ships ggml.pc; use
+        # whichever exists, and fall back to whisper's own flags where neither does
+        # (that fallback is what carries the build on Debian today).
+        pkg_check_modules(ggml QUIET IMPORTED_TARGET ggml)
+        if (TARGET PkgConfig::ggml)
+            set(_asr_ggml_target PkgConfig::ggml)
+        else()
+            find_package(ggml QUIET CONFIG)
+            if (TARGET ggml::ggml)
+                set(_asr_ggml_target ggml::ggml)
+            endif()
+        endif()
+        message(STATUS "ASR: system libwhisper ${whisper_VERSION} "
+            "(ggml: ${_asr_ggml_target}; backends per distro, GPU unverifiable)")
+    else()
+        set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+        set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(WHISPER_BUILD_SERVER   OFF CACHE BOOL "" FORCE)
+        set(GGML_BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+        set(GGML_BUILD_EXAMPLES    OFF CACHE BOOL "" FORCE)
+        set(GGML_NATIVE            OFF CACHE BOOL "" FORCE)  # portable binaries (Pi/CI/release)
+        set(GGML_CPU               ON  CACHE BOOL "" FORCE)
+
+        if (APPLE)
+            if (ENABLE_ASR_METAL)
+                set(_asr_metal ON)
+                message(STATUS "ASR: Metal GPU backend enabled (Apple)")
+            endif()
+        else()
+            if (ENABLE_ASR_VULKAN)
+                # Prebuilt Windows path: skips the glslc + SPIRV-Headers requirement
+                # because the shaders are already compiled INTO the shipped
+                # ggml-vulkan.lib. Only the runtime Vulkan loader import lib is
+                # needed to link the final exe.
+                if (WIN32 AND MSVC AND ASR_USE_PREBUILT_WHISPER_GPU)
+                    find_package(Vulkan QUIET)
+                    if (Vulkan_FOUND)
+                        set(_asr_vulkan ON)
+                        set(_asr_use_prebuilt ON)
+                        message(STATUS "ASR: Vulkan GPU backend enabled via prebuilt whisper-gpu pack")
+                    else()
+                        message(STATUS "ASR: ASR_USE_PREBUILT_WHISPER_GPU requested but Vulkan loader not found — CPU-only")
+                    endif()
                 else()
-                    message(STATUS "ASR: ASR_USE_PREBUILT_WHISPER_GPU requested but Vulkan loader not found — CPU-only")
-                endif()
-            else()
-                find_package(Vulkan QUIET COMPONENTS glslc)
-                find_package(SPIRV-Headers QUIET CONFIG)
-                if (Vulkan_FOUND AND Vulkan_glslc_FOUND AND SPIRV-Headers_FOUND)
-                    set(_asr_vulkan ON)
-                    message(STATUS "ASR: Vulkan GPU backend enabled (glslc: ${Vulkan_GLSLC_EXECUTABLE})")
-                else()
-                    message(STATUS "ASR: Vulkan toolchain not found — CPU-only "
-                        "(Vulkan=${Vulkan_FOUND} glslc=${Vulkan_glslc_FOUND} SPIRV-Headers=${SPIRV-Headers_FOUND})")
+                    find_package(Vulkan QUIET COMPONENTS glslc)
+                    find_package(SPIRV-Headers QUIET CONFIG)
+                    if (Vulkan_FOUND AND Vulkan_glslc_FOUND AND SPIRV-Headers_FOUND)
+                        set(_asr_vulkan ON)
+                        message(STATUS "ASR: Vulkan GPU backend enabled (glslc: ${Vulkan_GLSLC_EXECUTABLE})")
+                    else()
+                        message(STATUS "ASR: Vulkan toolchain not found — CPU-only "
+                            "(Vulkan=${Vulkan_FOUND} glslc=${Vulkan_glslc_FOUND} SPIRV-Headers=${SPIRV-Headers_FOUND})")
+                    endif()
                 endif()
             endif()
         endif()
-    endif()
-    # Release guard: fail loudly rather than silently shipping a CPU-only build.
-    if (REQUIRE_ASR_GPU AND NOT _asr_vulkan AND NOT _asr_metal)
-        message(FATAL_ERROR "REQUIRE_ASR_GPU is set but no ASR GPU backend was enabled. "
-            "Install the Vulkan SDK (glslc + Vulkan headers + SPIRV-Headers) on Linux/Windows, "
-            "or full Xcode on macOS, then reconfigure.")
-    endif()
-    set(GGML_VULKAN ${_asr_vulkan} CACHE BOOL "" FORCE)
-    set(GGML_METAL  ${_asr_metal}  CACHE BOOL "" FORCE)
-    # Embed the compiled Metal shader source into the binary instead of relying on
-    # a runtime file lookup (bundle Resources / cwd) for ggml-metal.metal — the
-    # unembedded path fails whenever the app isn't launched from inside its own
-    # bundle, silently disabling Metal and then crashing later via a confusing
-    # ggml_abort() deep in the backend scheduler rather than a clear GPU-init
-    # error. Fix diagnosed + verified by K5PTB on large-v3-turbo + Metal. Only
-    # needs the assembler + sed/echo (already in play). (RFC #4333)
-    set(GGML_METAL_EMBED_LIBRARY ${_asr_metal} CACHE BOOL "" FORCE)
-
-    # Every other non-CPU backend OFF (their source dirs are not vendored):
-    foreach(_ggml_backend
-            ACCELERATE BLAS CUDA HIP MUSA WEBGPU SYCL OPENCL
-            OPENVINO RPC CANN ZDNN ZENDNN HEXAGON)
-        set(GGML_${_ggml_backend} OFF CACHE BOOL "" FORCE)
-    endforeach()
-    if (_asr_use_prebuilt)
-        # Consume the prebuilt static libs from the whisper-gpu release asset.
-        # See scripts/build/build-whisper-vulkan-windows.ps1 for the producer.
-        # Public headers still come from the vendored source tree (in git); only
-        # the compiled .libs come off GitHub. Everything else — dep graph,
-        # target names — matches what add_subdirectory would have produced, so
-        # the rest of this file is unchanged.
-        include(FetchContent)
-        set(_whisper_gpu_ver "1.9.1")
-        set(_whisper_gpu_sha "7671384731bc286e8eacaab36d2d69e5ffad5a6458fb47fff8e8dec361f68ca7")
-        FetchContent_Declare(whisper_gpu_prebuilt
-            URL      "https://github.com/aethersdr/AetherSDR/releases/download/whisper-gpu-${_whisper_gpu_ver}/whisper-gpu-${_whisper_gpu_ver}-windows-x86_64.zip"
-            URL_HASH SHA256=${_whisper_gpu_sha}
-        )
-        FetchContent_MakeAvailable(whisper_gpu_prebuilt)
-        set(_wg_libs "${whisper_gpu_prebuilt_SOURCE_DIR}/libs")
-        set(_wc_root "${CMAKE_SOURCE_DIR}/third_party/whisper.cpp")
-
-        find_package(Threads REQUIRED)
-        foreach(_tgt IN ITEMS ggml-base ggml ggml-cpu ggml-vulkan whisper)
-            add_library(${_tgt} STATIC IMPORTED)
-            set_target_properties(${_tgt} PROPERTIES
-                IMPORTED_LOCATION "${_wg_libs}/${_tgt}.lib"
-            )
-        endforeach()
-        # Header search paths — mirror what the source targets propagate.
-        set_target_properties(ggml-base   PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(ggml        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(ggml-cpu    PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
-        set_target_properties(whisper     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/include;${_wc_root}/ggml/include")
-        # Link graph — matches whisper.cpp/ggml's own target_link_libraries so
-        # the final exe pulls in every transitive .lib and the Vulkan loader.
-        set_target_properties(ggml-base   PROPERTIES INTERFACE_LINK_LIBRARIES "Threads::Threads")
-        set_target_properties(ggml-cpu    PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base")
-        set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
-        set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
-        set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
-        message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
-    else()
-        # Build whisper/ggml as static objects, not .so's.
-        set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
-        set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-        add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
-        set(BUILD_SHARED_LIBS ${_aether_saved_shared_libs} CACHE BOOL "" FORCE)
-
-        if (MSVC)
-            # MSVC's optimizer is pathologically slow on ggml's SIMD/quant kernels
-            # (ggml-cpu/ops.cpp, ggml.c, ggml-quants.c, repack.cpp) — a cold Release
-            # build of the vendored engine ran Windows CI from ~28 min to 3h+. These
-            # kernels are explicitly vectorized (intrinsics) and memory-bandwidth-
-            # bound, so /O1 keeps runtime fast enough while cutting MSVC compile time
-            # dramatically. Scoped to the vendored ASR targets only; the rest of
-            # AetherSDR keeps its normal optimization. (/O1 intentionally overrides
-            # the config's /O2 — the D9025 override notice is expected.)
-            foreach(_asr_msvc_target ggml-base ggml ggml-cpu ggml-vulkan whisper)
-                if (TARGET ${_asr_msvc_target})
-                    target_compile_options(${_asr_msvc_target} PRIVATE /O1)
-                endif()
-            endforeach()
+        # Release guard: fail loudly rather than silently shipping a CPU-only build.
+        if (REQUIRE_ASR_GPU AND NOT _asr_vulkan AND NOT _asr_metal)
+            message(FATAL_ERROR "REQUIRE_ASR_GPU is set but no ASR GPU backend was enabled. "
+                "Install the Vulkan SDK (glslc + Vulkan headers + SPIRV-Headers) on Linux/Windows, "
+                "or full Xcode on macOS, then reconfigure.")
         endif()
+        set(GGML_VULKAN ${_asr_vulkan} CACHE BOOL "" FORCE)
+        set(GGML_METAL  ${_asr_metal}  CACHE BOOL "" FORCE)
+        # Embed the compiled Metal shader source into the binary instead of relying on
+        # a runtime file lookup (bundle Resources / cwd) for ggml-metal.metal — the
+        # unembedded path fails whenever the app isn't launched from inside its own
+        # bundle, silently disabling Metal and then crashing later via a confusing
+        # ggml_abort() deep in the backend scheduler rather than a clear GPU-init
+        # error. Fix diagnosed + verified by K5PTB on large-v3-turbo + Metal. Only
+        # needs the assembler + sed/echo (already in play). (RFC #4333)
+        set(GGML_METAL_EMBED_LIBRARY ${_asr_metal} CACHE BOOL "" FORCE)
+
+        # Every other non-CPU backend OFF (their source dirs are not vendored):
+        foreach(_ggml_backend
+                ACCELERATE BLAS CUDA HIP MUSA WEBGPU SYCL OPENCL
+                OPENVINO RPC CANN ZDNN ZENDNN HEXAGON)
+            set(GGML_${_ggml_backend} OFF CACHE BOOL "" FORCE)
+        endforeach()
+        if (_asr_use_prebuilt)
+            # Consume the prebuilt static libs from the whisper-gpu release asset.
+            # See scripts/build/build-whisper-vulkan-windows.ps1 for the producer.
+            # Public headers still come from the vendored source tree (in git); only
+            # the compiled .libs come off GitHub. Everything else — dep graph,
+            # target names — matches what add_subdirectory would have produced, so
+            # the rest of this file is unchanged.
+            include(FetchContent)
+            set(_whisper_gpu_ver "1.9.1")
+            set(_whisper_gpu_sha "7671384731bc286e8eacaab36d2d69e5ffad5a6458fb47fff8e8dec361f68ca7")
+            FetchContent_Declare(whisper_gpu_prebuilt
+                URL      "https://github.com/aethersdr/AetherSDR/releases/download/whisper-gpu-${_whisper_gpu_ver}/whisper-gpu-${_whisper_gpu_ver}-windows-x86_64.zip"
+                URL_HASH SHA256=${_whisper_gpu_sha}
+            )
+            FetchContent_MakeAvailable(whisper_gpu_prebuilt)
+            set(_wg_libs "${whisper_gpu_prebuilt_SOURCE_DIR}/libs")
+            set(_wc_root "${CMAKE_SOURCE_DIR}/third_party/whisper.cpp")
+
+            find_package(Threads REQUIRED)
+            foreach(_tgt IN ITEMS ggml-base ggml ggml-cpu ggml-vulkan whisper)
+                add_library(${_tgt} STATIC IMPORTED)
+                set_target_properties(${_tgt} PROPERTIES
+                    IMPORTED_LOCATION "${_wg_libs}/${_tgt}.lib"
+                )
+            endforeach()
+            # Header search paths — mirror what the source targets propagate.
+            set_target_properties(ggml-base   PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(ggml        PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(ggml-cpu    PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(ggml-vulkan PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/ggml/include")
+            set_target_properties(whisper     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_wc_root}/include;${_wc_root}/ggml/include")
+            # Link graph — matches whisper.cpp/ggml's own target_link_libraries so
+            # the final exe pulls in every transitive .lib and the Vulkan loader.
+            set_target_properties(ggml-base   PROPERTIES INTERFACE_LINK_LIBRARIES "Threads::Threads")
+            set_target_properties(ggml-cpu    PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base")
+            set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
+            set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
+            set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
+            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+        else()
+            # Build whisper/ggml as static objects, not .so's.
+            set(_aether_saved_shared_libs ${BUILD_SHARED_LIBS})
+            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            add_subdirectory(third_party/whisper.cpp EXCLUDE_FROM_ALL)
+            set(BUILD_SHARED_LIBS ${_aether_saved_shared_libs} CACHE BOOL "" FORCE)
+
+            if (MSVC)
+                # MSVC's optimizer is pathologically slow on ggml's SIMD/quant kernels
+                # (ggml-cpu/ops.cpp, ggml.c, ggml-quants.c, repack.cpp) — a cold Release
+                # build of the vendored engine ran Windows CI from ~28 min to 3h+. These
+                # kernels are explicitly vectorized (intrinsics) and memory-bandwidth-
+                # bound, so /O1 keeps runtime fast enough while cutting MSVC compile time
+                # dramatically. Scoped to the vendored ASR targets only; the rest of
+                # AetherSDR keeps its normal optimization. (/O1 intentionally overrides
+                # the config's /O2 — the D9025 override notice is expected.)
+                foreach(_asr_msvc_target ggml-base ggml ggml-cpu ggml-vulkan whisper)
+                    if (TARGET ${_asr_msvc_target})
+                        target_compile_options(${_asr_msvc_target} PRIVATE /O1)
+                    endif()
+                endforeach()
+            endif()
+        endif()
+    endif()
+
+    # One name for "the whisper we link", resolved once above, so aetherasr and the
+    # two whisper-linked tests below can't drift apart on the system/vendored split.
+    if (USE_SYSTEM_LIBWHISPER)
+        set(_asr_whisper_link PkgConfig::whisper ${_asr_ggml_target})
+    else()
+        set(_asr_whisper_link whisper)
     endif()
 
     # ASR ships as its OWN static library, deliberately NOT part of libaethercore.
@@ -1354,7 +1462,7 @@ if (ENABLE_ASR)
         src/core/Resampler.cpp   # standalone r8brain wrapper (24k->16k on the ASR worker)
     )
     target_include_directories(aetherasr PUBLIC src PRIVATE ${CMAKE_SOURCE_DIR}/third_party/r8brain)
-    target_link_libraries(aetherasr PUBLIC Qt6::Core Qt6::Network PRIVATE Qt6::Concurrent whisper)
+    target_link_libraries(aetherasr PUBLIC Qt6::Core Qt6::Network PRIVATE Qt6::Concurrent ${_asr_whisper_link})
     target_compile_definitions(aetherasr PUBLIC AETHER_ASR_ENABLED=1)
     if (_asr_vulkan OR _asr_metal)
         target_compile_definitions(aetherasr PRIVATE AETHER_ASR_GPU=1)
@@ -1932,6 +2040,7 @@ target_include_directories(aethercore PUBLIC
 # counts that may only shrink) and split out in step 3 — AutomationServer's
 # widget-facing dumpTree/grab half is the bulk of it.
 target_link_libraries(aethercore PUBLIC
+    aether_sqlite3
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
@@ -2752,7 +2861,7 @@ target_include_directories(client_comp_test PRIVATE src)
 add_executable(slice_label_test
     tests/slice_label_test.cpp
     src/gui/SliceLabel.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(slice_label_test PRIVATE src)
 target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
@@ -2789,7 +2898,7 @@ add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${THEME_TEST_RESOURCES}
@@ -2809,7 +2918,7 @@ add_executable(panadapter_message_overlay_test
     src/gui/PanadapterMessageOverlay.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${PAN_OVERLAY_TEST_RESOURCES}
@@ -2824,10 +2933,26 @@ set_tests_properties(panadapter_message_overlay_test PROPERTIES
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
 # cases.
+add_executable(settings_browser_dialog_test
+    tests/settings_browser_dialog_test.cpp
+    src/gui/SettingsBrowserDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/FramelessMessageBox.cpp
+)
+target_include_directories(settings_browser_dialog_test PRIVATE src tests)
+target_link_libraries(settings_browser_dialog_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(settings_browser_dialog_test PROPERTIES AUTOMOC ON)
+add_test(NAME settings_browser_dialog COMMAND settings_browser_dialog_test)
+set_tests_properties(settings_browser_dialog PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
-    src/core/AppSettings.cpp
-    # Real Hl2Discovery, so the nickname-key scenario exercises the shipping key
+    ${AETHER_SETTINGS_SOURCES}
     # format instead of a copy of it (Qt6::Network/AUTOMOC are for its QObject
     # + QUdpSocket; the test only calls its static helpers).
     src/core/backends/hl2/Hl2Discovery.cpp
@@ -2838,16 +2963,22 @@ target_include_directories(app_settings_safety_test PRIVATE src)
 target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core Qt6::Network)
 foreach(APP_SETTINGS_SCENARIO
         save-before-load
-        load-then-save
+        xml-import-parity
         first-run
-        count-guard
-        backup-recovery
-        missing-live-temp
-        missing-live-backup
-        missing-live-corrupt
-        failed-load
+        xml-import-tmp-promotion
+        xml-import-bak-fallback
+        xml-artifacts-unusable
+        no-reimport
+        xml-changed-notice
+        credential-exodus
+        corrupt-db-restore-backup
+        corrupt-db-reimport-xml
+        locked-db-fails-closed
+        newer-schema-readonly
+        dirty-row-save
         display-slice-depth-default
-        nickname-key-roundtrip)
+        nickname-key-roundtrip
+        browser-api)
     add_test(
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
@@ -2856,7 +2987,7 @@ endforeach()
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
     src/models/Nr2SettingsModel.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(nr2_settings_model_test PRIVATE src tests)
 target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
@@ -2869,7 +3000,7 @@ add_executable(panadapter_model_rx_antenna_test
     src/core/PerfTelemetry.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(panadapter_model_rx_antenna_test PRIVATE src)
 target_link_libraries(panadapter_model_rx_antenna_test PRIVATE Qt6::Core Qt6::Test)
@@ -2896,6 +3027,21 @@ add_executable(display_status_gate_test tests/display_status_gate_test.cpp)
 target_include_directories(display_status_gate_test PRIVATE src)
 add_test(NAME display_status_gate_test COMMAND display_status_gate_test)
 
+# Frameless-window geometry restore (#4328) — blob parse + the caption-free
+# re-clamp.  Windows-only in effect, but the logic is pure, so it is pinned on
+# every platform; case 4 drives a real QWidget so a future Qt changing the
+# saveGeometry() layout or dropping the clamp fails here instead of silently
+# misplacing the main window.
+add_executable(window_geometry_restore_test
+    tests/window_geometry_restore_test.cpp
+    src/gui/WindowGeometryRestore.cpp
+)
+target_include_directories(window_geometry_restore_test PRIVATE src)
+target_link_libraries(window_geometry_restore_test PRIVATE Qt6::Widgets)
+add_test(NAME window_geometry_restore_test COMMAND window_geometry_restore_test)
+set_tests_properties(window_geometry_restore_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # KiwiSDR band-recall re-bind policy (#4158) — header-only, pure logic.
 add_executable(kiwi_rebind_tracker_test tests/kiwi_rebind_tracker_test.cpp)
 target_include_directories(kiwi_rebind_tracker_test PRIVATE src)
@@ -2907,6 +3053,30 @@ add_executable(center_lock_rebind_tracker_test tests/center_lock_rebind_tracker_
 target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
+
+# Last-session DAX restore window + quit-time key prune (#4558) — header-only.
+add_executable(dax_restore_policy_test tests/dax_restore_policy_test.cpp)
+target_include_directories(dax_restore_policy_test PRIVATE src)
+target_link_libraries(dax_restore_policy_test PRIVATE Qt6::Core)
+add_test(NAME dax_restore_policy_test COMMAND dax_restore_policy_test)
+
+# Active-slice policy during FLEX band-stack teardown/rebuild — header-only.
+add_executable(band_recall_slice_selection_policy_test
+    tests/band_recall_slice_selection_policy_test.cpp
+)
+target_include_directories(band_recall_slice_selection_policy_test PRIVATE src)
+add_test(NAME band_recall_slice_selection_policy_test
+    COMMAND band_recall_slice_selection_policy_test)
+
+# When that policy applies — the window opened by an actually-dispatched
+# `display pan set <pan> band=` write. Header-only.
+add_executable(band_recall_selection_guard_test
+    tests/band_recall_selection_guard_test.cpp
+)
+target_include_directories(band_recall_selection_guard_test PRIVATE src)
+target_link_libraries(band_recall_selection_guard_test PRIVATE Qt6::Core)
+add_test(NAME band_recall_selection_guard_test
+    COMMAND band_recall_selection_guard_test)
 
 add_executable(declared_bands_test
     tests/declared_bands_test.cpp
@@ -3055,7 +3225,7 @@ add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
 add_executable(qso_recorder_slice_lifetime_test
     tests/qso_recorder_slice_lifetime_test.cpp
     src/core/QsoRecorder.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/LogManager.cpp
@@ -3118,7 +3288,7 @@ add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 add_executable(band_plan_license_filter_test
     tests/band_plan_license_filter_test.cpp
     src/models/BandPlanManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
@@ -3324,7 +3494,7 @@ endif()
 
 add_executable(passive_spots_policy_test
     tests/passive_spots_policy_test.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/SpotCommandPolicy.cpp
 )
 target_include_directories(passive_spots_policy_test PRIVATE src)
@@ -3369,7 +3539,7 @@ add_executable(digital_voice_waveform_process_test
     src/models/DigitalVoiceWaveformHistory.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(digital_voice_waveform_process_test PRIVATE src)
 target_link_libraries(digital_voice_waveform_process_test PRIVATE Qt6::Core Qt6::Network)
@@ -3392,7 +3562,7 @@ add_executable(dstar_model_test
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(dstar_model_test PRIVATE src)
 target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -3426,7 +3596,7 @@ add_executable(ole_compound_file_test
     src/core/CabExtractor.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ole_compound_file_test PRIVATE src)
 if (USE_SYSTEM_MSPACK)
@@ -3484,7 +3654,7 @@ add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 # compiles and links via two model-free entry points. No model, no audio.
 if (ENABLE_ASR)
     add_executable(asr_whisper_smoke_test tests/asr_whisper_smoke_test.cpp)
-    target_link_libraries(asr_whisper_smoke_test PRIVATE whisper)
+    target_link_libraries(asr_whisper_smoke_test PRIVATE ${_asr_whisper_link})
     add_test(NAME asr_whisper_smoke_test COMMAND asr_whisper_smoke_test)
 
     # Model manager: offline download/verify/failover test (file:// sources).
@@ -3579,7 +3749,7 @@ if (ENABLE_ASR)
         src/asr/WhisperAsrBackend.cpp
     )
     target_include_directories(asr_whisper_backend_test PRIVATE src)
-    target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core whisper)
+    target_link_libraries(asr_whisper_backend_test PRIVATE Qt6::Core ${_asr_whisper_link})
     add_test(NAME asr_whisper_backend_test COMMAND asr_whisper_backend_test)
 
     # Remote backend: offline round-trip against a local mock HTTP endpoint.
@@ -3621,8 +3791,7 @@ if (ENABLE_ASR)
         src/gui/FramelessWindowTitleBar.cpp
         src/core/ThemeManager.cpp
         src/core/ThemeSeedGenerated.cpp
-    src/core/ThemeSeedGenerated.cpp
-        src/core/AppSettings.cpp
+        ${AETHER_SETTINGS_SOURCES}
         src/core/LogManager.cpp
         src/core/AsyncLogWriter.cpp
     )
@@ -3663,7 +3832,7 @@ add_executable(s_meter_geometry_test
     src/gui/SMeterWidget.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${CROSS_NEEDLE_METER_TEST_RESOURCES}
@@ -3778,7 +3947,7 @@ add_executable(qrz_callsign_test
     # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(qrz_callsign_test PRIVATE src)
 target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -3787,7 +3956,7 @@ add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
@@ -3798,7 +3967,7 @@ add_executable(antenna_alias_test
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(antenna_alias_test PRIVATE src)
 target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
@@ -3817,7 +3986,7 @@ add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
     src/core/MqttAntennaAlias.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(mqtt_settings_test PRIVATE src)
 target_link_libraries(mqtt_settings_test PRIVATE Qt6::Core)
@@ -3873,7 +4042,7 @@ add_executable(ax25_libmodem_shim_test
     # destructor chain at link time.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core
@@ -3897,7 +4066,7 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ax25_replay PRIVATE src)
 target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
@@ -3911,7 +4080,7 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
@@ -3921,7 +4090,7 @@ add_executable(pms_mailbox_test
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/pms/PmsMailbox.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(pms_mailbox_test PRIVATE src)
 target_link_libraries(pms_mailbox_test PRIVATE Qt6::Core)
@@ -3948,7 +4117,7 @@ add_executable(aprs_messenger_test
     src/core/tnc/Ax25.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(aprs_messenger_test PRIVATE src)
 target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
@@ -3964,7 +4133,7 @@ add_executable(tnc_terminal_test
     # LogManager + its deps so the category symbol resolves.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(tnc_terminal_test PRIVATE src)
 target_link_libraries(tnc_terminal_test PRIVATE Qt6::Core)
@@ -3979,7 +4148,7 @@ add_executable(cwx_speed_modifier_test
     # config), so both come along to satisfy the link. (#3949)
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(cwx_speed_modifier_test PRIVATE src)
 target_link_libraries(cwx_speed_modifier_test PRIVATE Qt6::Core)
@@ -3993,7 +4162,7 @@ add_executable(cwx_drain_watch_test
     src/models/CwxModel.h
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(cwx_drain_watch_test PRIVATE src)
 target_link_libraries(cwx_drain_watch_test PRIVATE Qt6::Core Qt6::Test)
@@ -4009,7 +4178,7 @@ add_executable(cwx_panel_test
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4023,7 +4192,7 @@ add_executable(meter_model_test
     src/models/MeterModel.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(meter_model_test PRIVATE src)
 target_link_libraries(meter_model_test PRIVATE Qt6::Core)
@@ -4039,7 +4208,7 @@ add_executable(health_applet_test
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4146,6 +4315,11 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tci_protocol_test PRIVATE aethercore Qt6::Core)
     add_test(NAME tci_protocol_test COMMAND tci_protocol_test)
 
+    add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
+    target_include_directories(tci_trxmap_test PRIVATE src)
+    target_link_libraries(tci_trxmap_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME tci_trxmap_test COMMAND tci_trxmap_test)
+
     add_executable(tci_automation_test tests/tci_automation_test.cpp)
     target_include_directories(tci_automation_test PRIVATE src tests)
     target_link_libraries(tci_automation_test PRIVATE
@@ -4209,6 +4383,34 @@ add_executable(radio_capability_gating_test tests/radio_capability_gating_test.c
 target_include_directories(radio_capability_gating_test PRIVATE src)
 target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
+
+# RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
+# capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
+# load AND store, per-radio isolation, family-wide fallback, schema tolerance.
+add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
+target_include_directories(radio_state_memory_test PRIVATE src tests)
+target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(radio_state_memory_test PROPERTIES AUTOMOC ON)
+add_test(NAME radio_state_memory_test COMMAND radio_state_memory_test)
+
+# HL2 state restore/capture (RFC #4603 PR 3): band-key table, the
+# applyRestoredState validation boundary, restored-rate/LNA connect seeding,
+# param precedence, and the capture snapshot round-trip. Hardware-path
+# validation happens on nigelfenton's bench.
+add_executable(hl2_state_restore_test tests/hl2_state_restore_test.cpp)
+target_include_directories(hl2_state_restore_test PRIVATE src tests)
+target_link_libraries(hl2_state_restore_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(hl2_state_restore_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_state_restore_test COMMAND hl2_state_restore_test)
+
+# BandStack fold-in (RFC #4603 PR 4): per-radio feature documents,
+# write-through mutations, lazy per-radio legacy import with side-file
+# retirement, panel prefs in AppSettings.
+add_executable(bandstack_scoped_test tests/bandstack_scoped_test.cpp)
+target_include_directories(bandstack_scoped_test PRIVATE src tests)
+target_link_libraries(bandstack_scoped_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(bandstack_scoped_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandstack_scoped_test COMMAND bandstack_scoped_test)
 
 # TCI signaling on a backend with neither a Flex command plane nor a DAX data
 # plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of
@@ -4379,7 +4581,7 @@ add_executable(perf_telemetry_test
     # files come along to satisfy the ctor/dtor chain at link time.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(perf_telemetry_test PRIVATE src)
 target_link_libraries(perf_telemetry_test PRIVATE Qt6::Core)
@@ -4453,7 +4655,7 @@ add_executable(local_memory_bank_test
     src/core/backends/MemoryWireCodec.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(local_memory_bank_test PRIVATE src)
 target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
@@ -4476,7 +4678,7 @@ add_executable(transmit_model_apd_test
     src/core/ClientQuindarTone.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(transmit_model_apd_test PRIVATE src)
 target_link_libraries(transmit_model_apd_test PRIVATE Qt6::Core Qt6::Test)
@@ -4497,7 +4699,7 @@ add_executable(help_dialog_test
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4522,7 +4724,7 @@ add_executable(flex_control_dialog_size_test
     src/core/KiwiSdrProtocol.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4535,6 +4737,21 @@ add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_tes
 set_tests_properties(flex_control_dialog_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(connection_panel_size_test
+    tests/connection_panel_size_test.cpp
+    src/gui/ConnectionPanel.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(connection_panel_size_test PRIVATE src tests)
+target_link_libraries(connection_panel_size_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Widgets Qt6::Test
+)
+set_target_properties(connection_panel_size_test PROPERTIES AUTOMOC ON)
+add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
+set_tests_properties(connection_panel_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
     src/gui/PanLayoutDialog.cpp
@@ -4543,7 +4760,7 @@ add_executable(pan_layout_dialog_size_test
     src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4602,7 +4819,7 @@ add_executable(transmit_model_test
     tests/transmit_model_test.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
 )
@@ -4623,8 +4840,12 @@ add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
 add_executable(kiwi_sdr_tx_mute_policy_test
     tests/kiwi_sdr_tx_mute_policy_test.cpp
+    # The resume hold's presentation-holdback input is routed by
+    # receivePresentationExternalKiwiDelayMs(); pinned against the real one.
+    src/core/ReceivePresentationSync.cpp
 )
 target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+target_link_libraries(kiwi_sdr_tx_mute_policy_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
@@ -4640,8 +4861,7 @@ add_executable(container_widget_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    src/core/AppSettings.cpp
-    # FloatingContainerWindow now calls applyAppTheme() which routes
+    ${AETHER_SETTINGS_SOURCES}
     # through ThemeManager::applyStyleSheet — pull in the manager + its
     # logging deps so the test links.  ThemeManager's compiled-in
     # seedBuiltinDefaults() means we don't need the theme resource here.
@@ -4672,7 +4892,7 @@ add_executable(hl2_pc_audio_lock_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/DragValuePopup.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
@@ -4691,7 +4911,7 @@ add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
     src/gui/DragValuePopup.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
@@ -4729,7 +4949,7 @@ add_executable(container_manager_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
@@ -4748,7 +4968,7 @@ add_executable(container_nesting_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     src/core/LogManager.cpp
@@ -4845,3 +5065,56 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
+
+# ── Settings store (RFC #4603) ───────────────────────────────────────────────
+# Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
+# directly (rather than linking aethercore) needs the vendored SQLite engine.
+# Conditional targets are guarded with if(TARGET ...).
+set(AETHER_SETTINGS_CONSUMERS
+    slice_label_test
+    theme_manager_test
+    panadapter_message_overlay_test
+    app_settings_safety_test
+    nr2_settings_model_test
+    panadapter_model_rx_antenna_test
+    qso_recorder_slice_lifetime_test
+    band_plan_license_filter_test
+    passive_spots_policy_test
+    digital_voice_waveform_process_test
+    dstar_model_test
+    ole_compound_file_test
+    copy_assist_settings_dialog_test
+    s_meter_geometry_test
+    qrz_callsign_test
+    shortcut_manager_test
+    antenna_alias_test
+    mqtt_settings_test
+    ax25_libmodem_shim_test
+    ax25_replay
+    ax25_session_analyze
+    pms_mailbox_test
+    aprs_messenger_test
+    tnc_terminal_test
+    cwx_speed_modifier_test
+    cwx_drain_watch_test
+    cwx_panel_test
+    meter_model_test
+    health_applet_test
+    perf_telemetry_test
+    local_memory_bank_test
+    transmit_model_apd_test
+    help_dialog_test
+    flex_control_dialog_size_test
+    pan_layout_dialog_size_test
+    transmit_model_test
+    container_widget_test
+    hl2_pc_audio_lock_test
+    amp_applet_test
+    container_manager_test
+    container_nesting_test
+)
+foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
+    if(TARGET ${_settings_consumer})
+        target_link_libraries(${_settings_consumer} PRIVATE aether_sqlite3)
+    endif()
+endforeach()

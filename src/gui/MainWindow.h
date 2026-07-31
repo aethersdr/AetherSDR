@@ -20,7 +20,9 @@
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/ReceivePresentationSync.h"
+#include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
 #include "gui/CenterLockRebindTracker.h"
+#include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
@@ -100,6 +102,8 @@ class QSystemTrayIcon;
 
 namespace AetherSDR {
 
+enum class RadioSliceSelectionSource;
+
 class AetherClockApplet;
 class AetherClockEngine;
 class AetherClockModel;
@@ -108,6 +112,7 @@ class ConnectionPanel;
 class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
+struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
 class SpectrumOverlayMenu;
 class IRadioBackend;
@@ -119,6 +124,7 @@ class BandPlanManager;
 class NetworkDiagnosticsHistory;
 class WhatsNewDialog;
 class ProfileManagerDialog;
+class SettingsBrowserDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
@@ -423,6 +429,9 @@ private:
     SpectrumWidget* spectrum() const;
     void setActiveSlice(int sliceId);
     void setActiveSliceInternal(int sliceId, bool revealOffscreen);
+    void selectSliceFromRadioState(
+        SliceModel* slice,
+        RadioSliceSelectionSource source);
     void queueActiveSliceForSpectrumTarget(int sliceId);
     void updateFilterLimitsForMode(const QString& mode);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
@@ -480,6 +489,25 @@ private:
     bool kiwiSdrTransmitMuteRequired() const;
     void syncKiwiSdrTransmitMute();
     void refreshKiwiSdrVirtualAudioControls();
+    void refreshKiwiSdrResumeHolds();
+    // Everything the resume hold needs that does NOT vary per profile.
+    // Resolving the sync target walks slices and the audio delay walks the
+    // sync engine, so a sweep over every profile resolves them once instead
+    // of once per profile — this runs on every key-down edge, which under CW
+    // break-in is once per element.
+    struct KiwiSdrResumeHoldContext {
+        ReceivePresentationSettings sync;
+        QString syncTargetProfileId;  // receiveSyncDelayKiwiProfileId()
+        QString delayKiwiProfileId;   // as handed to the audio engine:
+                                      // the target under AutoAssist, else empty
+        int kiwiAudioDelayMs{0};      // as handed to the audio engine
+    };
+    KiwiSdrResumeHoldContext kiwiSdrResumeHoldContext() const;
+    int kiwiSdrResumeHoldMsForProfile(
+        const KiwiSdrAntennaProfile& profile) const;
+    int kiwiSdrResumeHoldMsForProfile(
+        const KiwiSdrAntennaProfile& profile,
+        const KiwiSdrResumeHoldContext& context) const;
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     // Worker for the above. selectSlice=false suppresses the active-slice steal
     // for automatic re-arms (band-recall finish, #4158 recreation re-bind).
@@ -644,6 +672,12 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
+    // Undo Qt's caption-reserving restore clamp for the Windows custom frame,
+    // which has no caption to reserve for.  Call after every successful
+    // restoreGeometry() on this window, passing the same blob; a no-op off
+    // Windows, without the custom frame, or for a maximized/fullscreen blob.
+    // (#4328 — see src/gui/WindowGeometryRestore.h.)
+    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -1150,6 +1184,15 @@ private:
     QHash<QString, quint64> m_bandRecallGenerationByPan;
     quint64              m_bandRecallGeneration{0};
     static constexpr int kBandRecallRecreateGraceMs = 1500;
+    // Upper bound on the extended slice-selection window. The base window is
+    // the grace period above; reconstruction evidence pushes it out, but never
+    // past this, so a chatty session can't hold selection suppressed.
+    static constexpr int kBandRecallSelectionGuardMaxMs = 4000;
+    // When radio-driven active-slice selection is synchronization-only. Not
+    // m_bandRecallGenerationByPan: this window must not open when the band
+    // write is dropped, and must outlast a slow rebuild. See the header.
+    BandRecallSelectionGuard m_bandRecallSelection{
+        kBandRecallRecreateGraceMs, kBandRecallSelectionGuardMaxMs};
     ReceivePresentationSync m_receivePresentationSync;
     ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
     ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
@@ -1207,6 +1250,7 @@ private:
 #endif
     QPointer<WaveformsDialog> m_waveformsDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;
+    QPointer<SettingsBrowserDialog> m_settingsBrowserDialog;
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
     QPointer<MidiMappingDialog> m_midiDialog;
@@ -1307,6 +1351,13 @@ private:
     // Guard: set true while updating controls from the model so shared tune
     // helpers do not echo model-driven changes back to the radio.
     bool m_updatingFromModel{false};
+    // The slice whose optimistic activeChanged(true) edge we are inside of.
+    // SliceModel::setActive() emits that edge synchronously, before the wire
+    // write (#3854), so the activeChanged handler re-enters on our own local
+    // selection. Identifying it by slice id — rather than by "the id already
+    // equals m_activeSliceId" — keeps a genuinely radio-originated
+    // re-activation of the already-selected slice a real selection event.
+    int  m_optimisticActiveEdgeSliceId{-1};
     bool m_shuttingDown{false};
     bool m_panadapterUiPreparedForShutdown{false};
     void preparePanadapterUiForShutdown();
@@ -1394,6 +1445,13 @@ private:
     // User layout choices should suppress startup rearrange, but still allow
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
+    // #4558: the last-session DAX restore (#1221) may only apply during the
+    // slice enumeration that follows a connect — a slice recreated mid-session
+    // has current state that last-session keys must never override. The window
+    // and the quit-time key prune are pure logic in DaxRestorePolicy.h (which
+    // carries the full reasoning and is covered by dax_restore_policy_test);
+    // this member is just the live instance.
+    DaxRestorePolicy m_daxRestore;
     QTimer* m_heartbeatMissTimer{nullptr}; // fires every 1.5s to detect missed discovery beats
     QTimer* m_bsExpiryTimer{nullptr};    // band-stack bookmark auto-expiry, started on connect only (#1471)
     QTimer* m_bsAutoSaveTimer{nullptr};  // band-stack dwell auto-save (single-shot per dwell window)
@@ -1477,6 +1535,7 @@ private:
     AetherClockEngine* m_clockEngine{nullptr};
     AetherClockModel* m_clockModel{nullptr};
     QMetaObject::Connection m_clockDaxConn;  // daxAudioReady feed — live only while the engine runs
+    QMetaObject::Connection m_clockSliceAudioConn;  // seam per-slice audio feed — same lifetime
     void setupAetherClock();
 
 #ifdef HAVE_RADE

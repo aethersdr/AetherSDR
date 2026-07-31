@@ -110,6 +110,7 @@ struct AetherClockEngine::Impl {
     // with DaxConsumer::Clock; the engine drives these with the bound channel.
     std::function<void(int)> acquireCh;
     std::function<void(int)> releaseCh;
+    std::function<bool()> daxAvailable;               // unset = assume DAX
 
     QPointer<SliceModel> slice;
     std::unique_ptr<IDecoder> decoder;
@@ -153,6 +154,8 @@ struct AetherClockEngine::Impl {
     bool haveFrame = false;
 
     std::vector<float> monoScratch;
+
+    void ingest(const QByteArray& pcm);
 
     QMetaObject::Connection connDax;
     QMetaObject::Connection connDestroyed;
@@ -307,6 +310,11 @@ void AetherClockEngine::setDaxChannelProvider(std::function<void(int)> acquire,
     m_impl->releaseCh = std::move(release);
 }
 
+void AetherClockEngine::setDaxAvailabilityProvider(
+    std::function<bool()> hasDaxStreams) {
+    m_impl->daxAvailable = std::move(hasDaxStreams);
+}
+
 void AetherClockEngine::setHostClock(std::function<qint64()> nowUtcMs) {
     if (nowUtcMs)
         m_impl->nowUtcMs = std::move(nowUtcMs);
@@ -413,6 +421,11 @@ void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
     } else if (ch >= 1 && ch <= 4) {
         d.heldChannel = ch;
         d.acquireCh(ch);
+    } else if (d.daxAvailable && !d.daxAvailable()) {
+        // Seam-native backend: the radio declares no DAX plane, so there is no
+        // channel to assign and nothing to hold. Audio arrives through
+        // feedRxSliceAudio() instead. Warning here would be true-sounding and
+        // wrong, and would send the reader debugging the wrong subsystem.
     } else {
         qWarning() << "AetherClockEngine::start: slice" << slice->sliceId()
                    << "has no DAX channel assigned - audio will not flow";
@@ -499,11 +512,11 @@ void AetherClockEngine::applyStationPreset(SliceModel* slice, ClockStation stati
         slice->setAgcMode(QStringLiteral("off"));
 }
 
-void AetherClockEngine::feedRxAudio(int channel, const QByteArray& pcm) {
-    auto& d = *m_impl;
-    if (!d.running || !d.decoder || !d.slice) return;
-    if (channel != d.slice->daxChannel()) return;  // live channel filter
-
+// Shared PCM tail for both ingest slots. The two public slots are a filter
+// each - channel-keyed for DAX, slice-keyed for the seam - and the DSP body
+// exists exactly once here.
+void AetherClockEngine::Impl::ingest(const QByteArray& pcm) {
+    auto& d = *this;
     // Payload contract (shared with the Bridge/Tci/Rade DAX consumers):
     // float32 interleaved stereo, native-endian, 24 kHz, 8 bytes per frame,
     // 4-byte-aligned buffer. A trailing partial frame is deliberately floored
@@ -523,6 +536,22 @@ void AetherClockEngine::feedRxAudio(int channel, const QByteArray& pcm) {
     d.anchorSamples = d.decoder->samplesConsumed() + static_cast<std::int64_t>(n);
     d.anchorHostMs = d.nowUtcMs();
     d.decoder->process(d.monoScratch.data(), n);
+}
+
+void AetherClockEngine::feedRxAudio(int channel, const QByteArray& pcm) {
+    auto& d = *m_impl;
+    if (!d.running || !d.decoder || !d.slice) return;
+    if (channel != d.slice->daxChannel()) return;  // live channel filter
+    d.ingest(pcm);
+}
+
+void AetherClockEngine::feedRxSliceAudio(int sliceId, const QByteArray& pcm) {
+    auto& d = *m_impl;
+    if (!d.running || !d.decoder || !d.slice) return;
+    // Live slice filter. Deliberately NOT a daxChannel() compare: the sender
+    // already identified the slice, and a seam backend's daxChannel() is 0.
+    if (sliceId != d.slice->sliceId()) return;
+    d.ingest(pcm);
 }
 
 // ---- Station preset statics ----

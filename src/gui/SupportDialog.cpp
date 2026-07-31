@@ -2,6 +2,7 @@
 #include "FramelessMessageBox.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/SettingsPaths.h"
 #include "core/IssueReport.h"
 #include "core/LogManager.h"
 #include "core/SupportBundle.h"
@@ -203,22 +204,43 @@ void SupportDialog::openLogFolder()
 
 void SupportDialog::resetSettings(QWidget* parent)
 {
+    // The settings database + every sidecar and recovery artifact a reset
+    // must not resurrect (RFC #4603): WAL/SHM, the frozen pre-SQLite XML
+    // snapshot with its .bak/.tmp/.corrupt siblings, rolling backups and
+    // quarantined copies. A final pre-reset backup is written first, into a
+    // location the purge does NOT touch, so a reset is recoverable.
+    const QString dbPath = AppSettings::instance().filePath();
+    const QString xmlPath = AppSettings::instance().legacyXmlPath();
     QStringList resetPaths = {
-        AppSettings::instance().filePath(),
+        dbPath,
+        dbPath + "-wal",
+        dbPath + "-shm",
+        xmlPath,
+        xmlPath + ".bak",
+        xmlPath + ".tmp",
+        xmlPath + ".corrupt",
         AudioEngine::wisdomFilePath()
     };
 #ifdef Q_OS_MAC
     resetPaths << (QDir::homePath() + "/Library/Preferences/com.aethersdr.AetherSDR.plist");
 #endif
 
+    QStringList promptPaths;
+    for (const QString& path : resetPaths) {
+        if (QFileInfo::exists(path))
+            promptPaths << path;
+    }
+
     const QString prompt = QString(
         "This will remove AetherSDR's app-specific settings only.\n"
         "It will not change settings stored on the radio.\n"
+        "A backup of the current settings is written to\n%1\nbefore anything is removed.\n"
         "AetherSDR will close immediately after reset so these files are not recreated.\n\n"
         "Files to remove:\n"
-        "%1\n\n"
+        "%2\n\n"
         "Continue?")
-        .arg(QString("- %1").arg(resetPaths.join("\n- ")));
+        .arg(AetherSDR::SettingsPaths::backupsDir(),
+             QString("- %1").arg(promptPaths.join("\n- ")));
 
     if (FramelessMessageBox::question(parent, "Reset Settings", prompt,
             QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Yes) {
@@ -226,6 +248,15 @@ void SupportDialog::resetSettings(QWidget* parent)
     }
 
     QCoreApplication::instance()->setProperty("AetherSettingsResetInProgress", true);
+
+    // Backup, checkpoint, and close every database connection BEFORE deleting:
+    // Windows holds the files locked while a connection is open, and the WAL
+    // must be folded into the main file for the backup to be complete.
+    const QString backupPath = AppSettings::instance().shutdownForReset();
+    if (backupPath.isEmpty()) {
+        qWarning() << "SupportDialog: pre-reset settings backup could not be"
+                      " written — continuing with the reset";
+    }
 
     QStringList removed;
     QStringList failed;
@@ -241,6 +272,21 @@ void SupportDialog::resetSettings(QWidget* parent)
 
     for (const QString& path : resetPaths)
         removeIfPresent(path);
+
+    // Rolling backups and quarantined corrupt stores go too — but never the
+    // pre-reset backups, which live in the same directory under a distinct
+    // suffix and are the recovery path from this very operation.
+    {
+        QDir backups(AetherSDR::SettingsPaths::backupsDir());
+        const QStringList stale = backups.entryList(
+            {"*-auto.db", "*-postmigration.db"}, QDir::Files);
+        for (const QString& name : stale)
+            removeIfPresent(backups.filePath(name));
+        QDir quarantine(AetherSDR::SettingsPaths::quarantineDir());
+        const QStringList quarantined = quarantine.entryList(QDir::Files);
+        for (const QString& name : quarantined)
+            removeIfPresent(quarantine.filePath(name));
+    }
 
     AppSettings::instance().reset();
 

@@ -38,6 +38,17 @@ public:
     static constexpr int kFormatVersion = 1;
     static constexpr const char* kFormatId = "aether.memories";
 
+    // The bank's home since RFC #4603 PR 6: ONE shared feature document in
+    // radio_settings — ("local", "", "MemoryBank") — because the bank is
+    // deliberately shared across every memory-less radio (#4590: the
+    // operator's channel list follows them across HL2 / Kiwi / demo, like a
+    // shack's paper log). "local" is the client itself as the owning scope,
+    // not an IRadioBackend family. The document's content is exactly this
+    // store's envelope, so the version/format guards keep working, and the
+    // legacy memories.json becomes a frozen import source.
+    static QString documentFamily() { return QStringLiteral("local"); }
+    static QString documentFeature() { return QStringLiteral("MemoryBank"); }
+
     struct ParseResult {
         QMap<int, MemoryEntry> memories;
         QStringList errors;

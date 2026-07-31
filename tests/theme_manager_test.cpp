@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QStringList>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -836,6 +837,249 @@ int main(int argc, char** argv)
         EXPECT_EQ(rt.family, QString("Inter"));
         EXPECT_EQ(rt.size,   13);
         EXPECT_EQ(rt.color.name().toLower(), QString("#aabbcc"));
+    }
+
+    // ---- round-trip correctness (#3184) ----
+    //
+    // Three independent losses, each silent: the file still loads, so nothing
+    // announces that something went missing.
+    {
+        // (1) A radial gradient must keep its CENTRE across save + reload.
+        //
+        // The writer emitted centerX/centerY as two scalars; the reader only
+        // looked for a "center" ARRAY, so the centre silently reverted to the
+        // {0.5, 0.5} default. `radius` used the same key on both sides and DID
+        // survive, which made the loss look like a half-working feature.
+        ThemeGradient g;
+        g.type   = ThemeGradient::Radial;
+        g.center = QPointF(0.2, 0.8);      // deliberately not the 0.5,0.5 default
+        g.radius = 0.7;
+        g.stops  = { {0.0, QColor("#000000")}, {1.0, QColor("#ffffff")} };
+        tm.setGradient("color.test.radial", g);
+
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Radial Round Trip"));
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("Radial Round Trip"));
+
+        const ThemeGradient rt = tm.gradient("color.test.radial");
+        EXPECT_EQ(rt.type, ThemeGradient::Radial);
+        EXPECT_TRUE(qFuzzyCompare(rt.center.x(), 0.2));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.center.y(), 0.8));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.radius,     0.7));
+    }
+
+    {
+        // (2) The reader still accepts the OLD centerX/centerY shape, so a
+        // theme written by a pre-fix build keeps its gradient instead of being
+        // stranded at the default.
+        QTemporaryDir legacyDir;
+        EXPECT_TRUE(legacyDir.isValid());
+        const QString path = legacyDir.filePath(QStringLiteral("legacy.json"));
+        QFile f(path);
+        EXPECT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(R"({
+          "schemaVersion": 2, "name": "Legacy Centre",
+          "scopes": { "root": { "tokens": {
+            "color.test.legacy": { "type": "radial-gradient", "angle": 180,
+              "centerX": 0.25, "centerY": 0.75, "radius": 0.6,
+              "stops": [ {"at":0.0,"color":"#000000"}, {"at":1.0,"color":"#ffffff"} ] }
+          } } } })");
+        f.close();
+
+        QString impErr;
+        const QString name = tm.importThemeFromFile(path, &impErr);
+        EXPECT_EQ(name, QString("Legacy Centre"));
+        EXPECT_TRUE(impErr.isEmpty());
+
+        const ThemeGradient lg = tm.gradient("color.test.legacy");
+        EXPECT_TRUE(qFuzzyCompare(lg.center.x(), 0.25));
+        EXPECT_TRUE(qFuzzyCompare(lg.center.y(), 0.75));
+    }
+
+    {
+        // (3) Exporting the ACTIVE theme must not drop scoped tokens.
+        //
+        // The old export walked m_tokens, which is a reference into the ROOT
+        // SCOPE ONLY — every child scope lives in the scope tree and was simply
+        // absent. It wrote a flat top-level "tokens" object, which the reader's
+        // legacy fallback still accepts, so the file loaded cleanly and had
+        // quietly lost its per-applet overrides.
+        // Fork first: a built-in can't be re-imported by name (importThemeFromFile
+        // refuses to shadow one), and the re-import below is the assertion that
+        // actually matters.
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Export Round Trip"));
+        tm.setColor(QStringLiteral("applet/tx"),
+                    QStringLiteral("color.slider.foreground"),
+                    QColor("#123456"));
+
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        const QString out = tmp.filePath(QStringLiteral("exported.json"));
+        QString err;
+        EXPECT_TRUE(tm.exportThemeToFile(tm.activeTheme(), out, &err));
+
+        QFile ef(out);
+        EXPECT_TRUE(ef.open(QIODevice::ReadOnly));
+        const QJsonObject doc = QJsonDocument::fromJson(ef.readAll()).object();
+        ef.close();
+
+        // Schema-2 shape, not the flat legacy dump.
+        EXPECT_TRUE(doc.contains("scopes"));
+        const QJsonObject root = doc.value("scopes").toObject()
+                                    .value("root").toObject();
+        // The scoped override survived the export.
+        const QJsonObject applet = root.value("scopes").toObject()
+                                       .value("applet").toObject();
+        const QJsonObject tx = applet.value("scopes").toObject()
+                                     .value("tx").toObject();
+        EXPECT_EQ(tx.value("tokens").toObject()
+                    .value("color.slider.foreground").toString().toLower(),
+                  QString("#123456"));
+
+        // applet/rx was NOT overwritten above, so it still carries the bundled
+        // theme's ALIAS — the shape every scoped token actually ships in. An
+        // exported document that has scopes but no `primitives` is WORSE than
+        // one that has neither: the alias survives into the file, finds no
+        // palette on import, and resolveAlias() hands QColor the literal
+        // "{color.green.500}". Pin both halves.
+        const QJsonObject rx = applet.value("scopes").toObject()
+                                     .value("rx").toObject();
+        EXPECT_EQ(rx.value("tokens").toObject()
+                    .value("color.slider.foreground").toString(),
+                  QString("{color.green.500}"));
+        EXPECT_TRUE(doc.contains("primitives"));
+
+        // The assertion that inspecting JSON can't make: import the file back
+        // and read through the resolving API. Fails with an invalid QColor if
+        // `primitives` ever goes missing again, whatever the JSON looks like.
+        QString impErr;
+        const QString reimported = tm.importThemeFromFile(out, &impErr);
+        EXPECT_TRUE(!reimported.isEmpty());
+        EXPECT_TRUE(impErr.isEmpty());
+        const QColor rxSlider = tm.colorAt(QStringLiteral("applet/rx"),
+                                           QStringLiteral("color.slider.foreground"));
+        EXPECT_TRUE(rxSlider.isValid());
+        EXPECT_EQ(rxSlider.name().toLower(), QString("#4dd87a"));  // {color.green.500}
+        EXPECT_EQ(tm.colorAt(QStringLiteral("applet/tx"),
+                             QStringLiteral("color.slider.foreground"))
+                    .name().toLower(),
+                  QString("#123456"));
+    }
+
+    {
+        // (4) A radial gradient stored as a PRIMITIVE keeps its centre and
+        // radius too.
+        //
+        // The primitives palette had its own hand-rolled gradient writer that
+        // emitted type/angle/stops only — no centre, no radius, for either
+        // gradient type. Same loss as the scope-level one a tier down, and one
+        // the reader cannot recover from: there is no centerX in the file to
+        // fall back to either. Both tiers now share gradientToJson().
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        QTemporaryDir pdir;
+        EXPECT_TRUE(pdir.isValid());
+        const QString ppath = pdir.filePath(QStringLiteral("prim-radial.json"));
+        QFile pf(ppath);
+        EXPECT_TRUE(pf.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        pf.write(R"({
+          "schemaVersion": 2, "name": "Primitive Radial",
+          "primitives": {
+            "gradient.spot": { "type": "radial-gradient", "angle": 0,
+              "center": [0.3, 0.7], "radius": 0.9,
+              "stops": [ {"at":0.0,"color":"#112233"}, {"at":1.0,"color":"#445566"} ] }
+          },
+          "scopes": { "root": { "tokens": {
+            "color.test.spot": "{gradient.spot}"
+          } } } })");
+        pf.close();
+
+        QString pErr;
+        EXPECT_EQ(tm.importThemeFromFile(ppath, &pErr), QString("Primitive Radial"));
+        EXPECT_TRUE(qFuzzyCompare(tm.gradient("color.test.spot").center.x(), 0.3));
+
+        // Re-save through the writer and reload: centre and radius must still
+        // be there. Before the shared writer both reverted to the {0.5, 0.5}
+        // / 0.5 defaults on exactly this hop.
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Primitive Radial Saved"));
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("Primitive Radial Saved"));
+
+        const ThemeGradient rt = tm.gradient("color.test.spot");
+        EXPECT_EQ(rt.type, ThemeGradient::Radial);
+        EXPECT_TRUE(qFuzzyCompare(rt.center.x(), 0.3));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.center.y(), 0.7));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.radius,     0.9));   // was 0.5 before the fix
+    }
+
+    {
+        // (5) cssFragment() warns for an unknown token — once per theme.
+        //
+        // The warning IS the fix, so the warning is what has to be pinned.
+        // LogManager installs a message handler, so it never reaches stderr;
+        // capture it directly.
+        static QStringList s_captured;
+        static QtMessageHandler s_prev = nullptr;
+        s_captured.clear();
+        s_prev = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+                // Match the probe token itself, not merely "unknown token": a
+                // theme switch reapplies every tracked stylesheet, so a
+                // pre-existing template typo would otherwise inflate the count.
+                if (type == QtWarningMsg
+                    && msg.contains("color.definitely.not.a.token"))
+                    s_captured << msg;
+                if (s_prev) s_prev(type, ctx, msg);
+            });
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.cssFragment("color.definitely.not.a.token").isEmpty());
+        EXPECT_EQ(s_captured.size(), 1);
+
+        // Warned once — resolveFor() runs on every tracked-stylesheet reapply,
+        // so an unguarded warning would flood the log.
+        for (int i = 0; i < 5; ++i) tm.cssFragment("color.definitely.not.a.token");
+        EXPECT_EQ(s_captured.size(), 1);
+
+        // ...but once per THEME, not once per process: switching themes must
+        // re-arm it, or a token only the incoming theme is missing goes
+        // unreported because some earlier theme already burned the one warning.
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        tm.cssFragment("color.definitely.not.a.token");
+        EXPECT_EQ(s_captured.size(), 2);
+
+        qInstallMessageHandler(s_prev);
+    }
+
+    {
+        // (6) Importing a file this build just wrote must not warn that the
+        // file comes from a newer build. The guard tested schemaVersion > 1
+        // while both write paths emit 2, so every ordinary save/export round
+        // trip tripped it — and a warning that fires on the common case
+        // trains operators to ignore the real one.
+        static QStringList s_verWarnings;
+        static QtMessageHandler s_verPrev = nullptr;
+        s_verWarnings.clear();
+        s_verPrev = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+                if (type == QtWarningMsg && msg.contains("newer than this build"))
+                    s_verWarnings << msg;
+                if (s_verPrev) s_verPrev(type, ctx, msg);
+            });
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Version Guard Fork"));
+        QTemporaryDir vdir;
+        EXPECT_TRUE(vdir.isValid());
+        const QString vout = vdir.filePath(QStringLiteral("version-guard.json"));
+        QString vErr;
+        EXPECT_TRUE(tm.exportThemeToFile(tm.activeTheme(), vout, &vErr));
+
+        QString vImpErr;
+        EXPECT_TRUE(!tm.importThemeFromFile(vout, &vImpErr).isEmpty());
+        EXPECT_EQ(s_verWarnings.size(), 0);
+
+        qInstallMessageHandler(s_verPrev);
     }
 
     // Restore Default Dark for any future test additions below.

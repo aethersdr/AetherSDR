@@ -8,6 +8,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Client settings store moved to SQLite (RFC #4603, phase 1)
+
+- **Settings now live in a SQLite database** (`AetherSDR.db` in the config
+  folder) instead of the XML file. The switch is automatic and verified on
+  first launch; your old `AetherSDR.settings` stays in place untouched, so
+  rolling back to an older release keeps the settings you had at upgrade
+  time (changes made after the upgrade stay with the new version).
+- **Safer storage**: transactional saves (no more full-file rewrites),
+  startup integrity checks, automatic verified backups, and quarantine +
+  restore if the store is ever damaged — with a notice telling you which
+  backup was used. Reset Settings now writes a final backup before wiping.
+- **Credentials are never stored in settings anymore.** The MQTT password,
+  automation-bridge token, and remote-ASR API key move to your OS keychain
+  automatically during the upgrade.
+- **New `--config` command line**: `aethersdr --config list|get|set|unset|
+  export|path` inspects or repairs settings without starting the GUI —
+  the escape hatch when a broken stored value prevents startup.
+- **New Settings Browser** (Settings ▸ Settings Browser…): browse and edit
+  the whole settings store — app keys, the station section, and each
+  radio's stored feature documents — with live filtering, guarded
+  editing (True/False picker, JSON validation, confirmations), and a
+  sanitized diagnostic export. Credential-shaped values are masked and
+  read-only; a store from a newer version browses read-only.
+- Fixes a latent threading race in the settings core (#4602).
+
+### Fixed
+
+- **Frameless window no longer drifts down the screen on Windows (#4328)** —
+  with **Frameless Window** enabled, AetherSDR reopened a title-bar height
+  below where you left it, so a window parked at the top of the screen had to
+  be nudged back up every launch. Qt was reserving room for a title bar the
+  custom frame does not have. The window now reopens exactly where you left
+  it, keeps its full size if you had it filling the screen, and stays put
+  through Minimal Mode round trips.
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

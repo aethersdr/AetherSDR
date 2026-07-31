@@ -313,6 +313,9 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasMultiClientSessions = false;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    // The demo radio regenerates its synthetic scene on every connect; there
+    // is no operating state worth resurrecting across sessions.
+    caps.clientSettingsDomains = {};
     return caps;
 }
 

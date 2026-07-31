@@ -46,6 +46,12 @@ public:
     bool ownsRxAudio() const override { return true; }
 
     void connectRadio(const RadioConnectRequest& request) override;
+    // RFC #4603 PR 3: the client is this radio's memory. Restored state is
+    // stashed here pre-connect (validated at this boundary — Principle VII)
+    // and applied during connect/pushInitialState; capture reports through
+    // currentOperatingState() + operatingStateChanged().
+    void applyRestoredState(const RestoredRadioState& state) override;
+    RestoredRadioState currentOperatingState() const override;
     void disconnectRadio() override;
     bool isConnected() const override;
 
@@ -95,6 +101,14 @@ private:
     // frequency. Idempotent and change-gated, so it is safe to call from every
     // path that can move the dial.
     void applyBandFilter(const char* reason);
+    // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
+    // the band containing freqHz (falling back to the restored defaults),
+    // and record the operator's current values into the maps for the band
+    // being left. Called from the band-change path and connect.
+    void applyPerBandStateFor(double freqHz, const char* reason);
+    void applyLnaGainDb(int gainDb);   // the one true LNA application
+    void rememberCurrentBandState();
+    void notifyOperatingStateChanged();
 
     void emitSliceState(int ddc);   // sliceChanged(delta) from a receiver's state
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
@@ -401,6 +415,22 @@ private:
     // TransmitModel defaults rfPower to, so a TUNE before any power change
     // restores something sane rather than 0.
     int m_rfPowerPercent = 100;
+    // RFC #4603 PR 3 state memory. m_restoredState is the validated snapshot
+    // handed over pre-connect; the per-band maps are the working copies the
+    // session reads and updates (band key -> value; see Hl2Bands.h). Defaults
+    // apply to bands never visited. m_currentBandKey tracks which band's
+    // entries the operator's live edits belong to.
+    bool m_haveRestoredState = false;
+    RestoredRadioState m_restoredState;
+    QMap<QString, int> m_lnaDbByBand;
+    QMap<QString, int> m_driveByBand;
+    int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
+    int m_driveDefaultPercent = -1;  // <0: no restored default; leave drive alone
+    QString m_currentBandKey;
+    // True while band-memory / restore code drives setTxPower() itself: the
+    // internal application must neither bootstrap the operator baseline nor
+    // record into the per-band map — only OPERATOR intent does that.
+    bool m_applyingBandMemory = false;
     // Tune-carrier amplitude, full scale into the modulator. Actual radiated
     // power is governed by the TX drive register, which is where an operator
     // sets it; scaling here as well would make the power control non-linear for

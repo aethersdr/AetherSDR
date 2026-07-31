@@ -43,6 +43,14 @@ ThemeGradient parseGradient(const QJsonObject& obj)
         const QJsonArray c = obj.value("center").toArray();
         if (c.size() >= 2) {
             g.center = QPointF(c.at(0).toDouble(0.5), c.at(1).toDouble(0.5));
+        } else if (obj.contains("centerX") || obj.contains("centerY")) {
+            // Recovery path for themes written before the writer was fixed: it
+            // emitted centerX/centerY as two scalars, which this parser never
+            // looked for, so those files load with a lost centre. Accept the
+            // old shape on read so an existing user theme keeps its gradient;
+            // the next save rewrites it as the "center" array.
+            g.center = QPointF(obj.value("centerX").toDouble(0.5),
+                               obj.value("centerY").toDouble(0.5));
         }
         g.radius = obj.value("radius").toDouble(0.5);
     }
@@ -96,6 +104,44 @@ QString colorHexToCssFragment(const QString& hex)
     return QStringLiteral("rgba(%1, %2, %3, %4)")
         .arg(c.red()).arg(c.green()).arg(c.blue())
         .arg(c.alphaF(), 0, 'f', 3);
+}
+
+// The single writer for the gradient JSON shape, and the exact inverse of
+// parseGradient() above.  Both storage tiers route through here — semantic
+// tokens via scopeToJson(), the primitives palette via themeDocumentJson() —
+// because they used to hold one hand-rolled copy each and the copies drifted.
+// The palette's copy emitted type/angle/stops only, so a radial gradient
+// stored as a primitive lost its centre AND radius on every save: the same
+// defect as the scope-level one, a tier down, and one parseGradient()'s
+// centerX/centerY recovery cannot help with because there is no centerX in
+// the file to recover from either.  One writer means the next shape fix can
+// only ever need applying once.
+QJsonObject gradientToJson(const ThemeGradient& g)
+{
+    QJsonObject gj;
+    gj.insert("type", g.type == ThemeGradient::Radial
+                        ? QStringLiteral("radial-gradient")
+                        : QStringLiteral("linear-gradient"));
+    gj.insert("angle", g.angle);
+    if (g.type == ThemeGradient::Radial) {
+        // "center" as a [x, y] ARRAY — the shape the reader parses and this
+        // file's own format comment documents.  This used to write
+        // centerX/centerY as two scalars, which the reader never looks for,
+        // so a radial gradient came back at the {0.5, 0.5} default.
+        // `radius` round-tripped fine, which made the loss look like a
+        // half-working feature rather than a format mismatch.
+        gj.insert("center", QJsonArray{g.center.x(), g.center.y()});
+        gj.insert("radius", g.radius);
+    }
+    QJsonArray stops;
+    for (const auto& s : g.stops) {
+        QJsonObject sj;
+        sj.insert("at",    s.at);
+        sj.insert("color", colorToTokenString(s.color));
+        stops.append(sj);
+    }
+    gj.insert("stops", stops);
+    return gj;
 }
 
 // Recursively walk a JSON object, emitting `category.subkey...leaf = value`
@@ -463,6 +509,13 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
     // are the floor, the JSON wins where defined.
     m_rootScope->children.clear();
     m_primitives.clear();
+    // Per-theme, not per-process: a token missing only in THIS theme should be
+    // reported again when the operator comes back to it, otherwise the one log
+    // line they need has scrolled away and never reappears.
+    {
+        QMutexLocker lock(&m_unknownTokenMutex);
+        m_warnedUnknownTokens.clear();
+    }
     rebuildScopePathIndex();
     seedBuiltinDefaults();  // resets m_tokens (= root scope tokens) + re-seeds applet/* scope tree
 
@@ -907,26 +960,7 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
             else if (ut == QMetaType::Double)  leaf = v.toDouble();
             else if (ut == QMetaType::Bool)    leaf = v.toBool();
             else if (ut == gradMetaId) {
-                const ThemeGradient g = v.value<ThemeGradient>();
-                QJsonObject gj;
-                gj.insert("type", g.type == ThemeGradient::Radial
-                                    ? QStringLiteral("radial-gradient")
-                                    : QStringLiteral("linear-gradient"));
-                gj.insert("angle", g.angle);
-                if (g.type == ThemeGradient::Radial) {
-                    gj.insert("centerX", g.center.x());
-                    gj.insert("centerY", g.center.y());
-                    gj.insert("radius",  g.radius);
-                }
-                QJsonArray stops;
-                for (const auto& s : g.stops) {
-                    QJsonObject sj;
-                    sj.insert("at",    s.at);
-                    sj.insert("color", colorToTokenString(s.color));
-                    stops.append(sj);
-                }
-                gj.insert("stops", stops);
-                leaf = gj;
+                leaf = gradientToJson(v.value<ThemeGradient>());
             }
             else if (ut == fontMetaId) {
                 const ThemeFont f = v.value<ThemeFont>();
@@ -955,10 +989,19 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
     return result;
 }
 
-bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
+QJsonObject ThemeManager::themeDocumentJson(const QString& themeName,
+                                            const QString& description) const
 {
-    // v2 schema — primitives map + nested scope tree.  v1 themes loaded
-    // from disk auto-upgrade on first save through this writer.
+    // THE one place a theme document is assembled.  Save and export both come
+    // through here, so they cannot disagree about what a theme file contains —
+    // which they did: export hand-rolled its own document and left out
+    // `primitives`, and scope tokens store `{color.red.500}` aliases verbatim,
+    // so an exported theme carried aliases pointing into a palette that wasn't
+    // in the file.  On import resolveAlias() returned the literal and QColor
+    // got handed "{color.red.500}".
+    //
+    // v2 schema — primitives map + nested scope tree.  v1 themes loaded from
+    // disk auto-upgrade on first save through this writer.
     QJsonObject primitives;
     const int gradMetaId = qMetaTypeId<ThemeGradient>();
     for (auto it = m_primitives.constBegin(); it != m_primitives.constEnd(); ++it) {
@@ -969,23 +1012,10 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
         else if (ut == QMetaType::Double)  primitives.insert(it.key(), v.toDouble());
         else if (ut == QMetaType::Bool)    primitives.insert(it.key(), v.toBool());
         else if (ut == gradMetaId) {
-            // Same gradient JSON shape as scope-level tokens; the loader
-            // recognises both ambient locations.
-            const ThemeGradient g = v.value<ThemeGradient>();
-            QJsonObject gj;
-            gj.insert("type", g.type == ThemeGradient::Radial
-                                ? QStringLiteral("radial-gradient")
-                                : QStringLiteral("linear-gradient"));
-            gj.insert("angle", g.angle);
-            QJsonArray stops;
-            for (const auto& s : g.stops) {
-                QJsonObject sj;
-                sj.insert("at",    s.at);
-                sj.insert("color", colorToTokenString(s.color));
-                stops.append(sj);
-            }
-            gj.insert("stops", stops);
-            primitives.insert(it.key(), gj);
+            // Literally the same writer the scope tokens use — this used to
+            // be a separate copy that omitted `center` and `radius`, so a
+            // radial gradient in the palette round-tripped to the defaults.
+            primitives.insert(it.key(), gradientToJson(v.value<ThemeGradient>()));
         }
     }
 
@@ -997,9 +1027,16 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
     doc.insert("name",          themeName);
     doc.insert("author",        QStringLiteral("AetherSDR user"));
     doc.insert("version",       QStringLiteral("1.0"));
-    doc.insert("description",   QStringLiteral("Edited via the Theme Editor."));
+    doc.insert("description",   description);
     if (!primitives.isEmpty()) doc.insert("primitives", primitives);
     doc.insert("scopes",        scopes);
+    return doc;
+}
+
+bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
+{
+    const QJsonObject doc = themeDocumentJson(
+        themeName, QStringLiteral("Edited via the Theme Editor."));
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1050,62 +1087,35 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
     if (themeName.isEmpty()) return fail(QStringLiteral("Empty theme name."));
     if (filePath.isEmpty())  return fail(QStringLiteral("Empty file path."));
 
-    // For the *active* theme, the live m_tokens already holds the operator's
-    // session edits — saveCurrentThemeAs uses that snapshot.  For any other
-    // theme, re-read its on-disk JSON so we don't accidentally export the
+    // For the *active* theme, the live scope tree already holds the operator's
+    // session edits — saveCurrentThemeAs serialises the same thing.  For any
+    // other theme, re-read its on-disk JSON so we don't accidentally export the
     // active theme's tokens under a different name.
     QJsonObject doc;
     if (themeName == m_activeTheme) {
-        QJsonObject tokensObj;
-        const int gradMetaId = qMetaTypeId<ThemeGradient>();
-        const int fontMetaId = qMetaTypeId<ThemeFont>();
-        for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
-            const QVariant& v = it.value();
-            const int ut = v.userType();
-            QJsonValue leaf;
-            if (ut == QMetaType::QString)      leaf = v.toString();
-            else if (ut == QMetaType::Int)     leaf = v.toInt();
-            else if (ut == QMetaType::Double)  leaf = v.toDouble();
-            else if (ut == QMetaType::Bool)    leaf = v.toBool();
-            else if (ut == gradMetaId) {
-                const ThemeGradient g = v.value<ThemeGradient>();
-                QJsonObject gj;
-                gj.insert("type", g.type == ThemeGradient::Radial
-                                    ? QStringLiteral("radial-gradient")
-                                    : QStringLiteral("linear-gradient"));
-                gj.insert("angle", g.angle);
-                if (g.type == ThemeGradient::Radial) {
-                    gj.insert("centerX", g.center.x());
-                    gj.insert("centerY", g.center.y());
-                    gj.insert("radius",  g.radius);
-                }
-                QJsonArray stops;
-                for (const auto& s : g.stops) {
-                    QJsonObject sj;
-                    sj.insert("at",    s.at);
-                    sj.insert("color", colorToTokenString(s.color));
-                    stops.append(sj);
-                }
-                gj.insert("stops", stops);
-                leaf = gj;
-            }
-            else if (ut == fontMetaId) {
-                const ThemeFont f = v.value<ThemeFont>();
-                QJsonObject fj;
-                fj.insert("family", f.family);
-                if (f.size > 0)        fj.insert("size",  f.size);
-                if (f.color.isValid()) fj.insert("color", colorToTokenString(f.color));
-                leaf = fj;
-            }
-            else continue;
-            tokensObj.insert(it.key(), leaf);
-        }
-        doc.insert("schemaVersion", 1);
-        doc.insert("name",          themeName);
-        doc.insert("author",        QStringLiteral("AetherSDR user"));
-        doc.insert("version",       QStringLiteral("1.0"));
-        doc.insert("description",   QStringLiteral("Exported via the Theme Editor."));
-        doc.insert("tokens",        tokensObj);
+        // Build the SAME document the save path writes, through the same
+        // function, instead of hand-rolling one here.
+        //
+        // The old code walked m_tokens and wrote a top-level "tokens" object.
+        // But m_tokens is a reference into the ROOT SCOPE only (see the header)
+        // — every child scope lives in m_rootScope/m_scopeByPath and was simply
+        // absent from the export. On the bundled dark theme that silently drops
+        // 9 of 12 scoped tokens: all the per-applet slider/knob/toggle
+        // overrides for applet/tx, applet/rx and applet/comp.
+        //
+        // The file still LOADED (the reader has a legacy flat-"tokens"
+        // fallback), which is what made this invisible: the operator got a
+        // theme file back that opened cleanly and had quietly lost its
+        // per-applet differentiation.
+        //
+        // Sharing themeDocumentJson() rather than just scopeToJson() matters:
+        // scope tokens store `{color.red.500}` ALIASES verbatim, so a document
+        // carrying scopes without the `primitives` palette they point into is
+        // worse than one carrying neither — resolveAlias() hands the literal
+        // back and QColor("{color.red.500}") is invalid. Every one of the nine
+        // scoped tokens on the bundled dark theme is such an alias.
+        doc = themeDocumentJson(themeName,
+                                QStringLiteral("Exported via the Theme Editor."));
     } else {
         const auto pit = m_themePaths.constFind(themeName);
         if (pit == m_themePaths.constEnd())
@@ -1150,9 +1160,15 @@ QString ThemeManager::importThemeFromFile(const QString& filePath,
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(0);
     if (schemaVersion <= 0)
         return fail(QStringLiteral("Missing or invalid schemaVersion — file may not be a theme."));
-    if (schemaVersion > 1) {
+    if (schemaVersion > 2) {
         // Forward-compatible-ish: load anyway, but warn the operator.
         // Unknown tokens round-trip; missing tokens fall back to factory.
+        //
+        // The gate was `> 1`, which is stale: loadThemeFile() has read v2
+        // natively since the scope-tree work, and both the save and export
+        // paths now emit v2 — so every ordinary "export a theme, hand it to
+        // another operator, import it" round trip logged "newer than this
+        // build supports". v2 IS what this build writes.
         qCWarning(lcGui) << "ThemeManager::importThemeFromFile: schemaVersion"
                          << schemaVersion << "is newer than this build supports;"
                          << "loading anyway with unknown tokens preserved.";
@@ -1316,6 +1332,27 @@ QString ThemeManager::cssFragment(const QString& token) const
         if (compound.userType() == qMetaTypeId<ThemeFont>()) {
             const int sz = compound.value<ThemeFont>().size;
             if (sz > 0) return QString::number(sz);
+        }
+    }
+    // Unknown token. The empty string still goes back to resolveFor(), because
+    // substituting a placeholder would be worse — Qt would apply a wrong colour
+    // rather than none — but it must not vanish silently.
+    //
+    // What the caller sees without this: `{{color.acent}}` (typo) resolves to
+    // "", the template becomes `color: ;`, Qt discards the malformed
+    // declaration, and the widget keeps its previous appearance. No error, no
+    // log line, and the theme looks "nearly right" — which is far harder to
+    // diagnose than an obviously missing colour.
+    //
+    // Warned once per token: resolveFor() runs on every theme change and every
+    // tracked-stylesheet reapply, so an unguarded warning would flood the log.
+    {
+        QMutexLocker lock(&m_unknownTokenMutex);
+        if (!m_warnedUnknownTokens.contains(token)) {
+            m_warnedUnknownTokens.insert(token);
+            qCWarning(lcGui) << "ThemeManager: stylesheet references unknown token"
+                             << token << "— it resolves to an empty fragment, so the"
+                             << "declaration using it will be dropped by Qt";
         }
     }
     return QString();

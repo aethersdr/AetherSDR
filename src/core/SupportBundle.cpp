@@ -1,5 +1,6 @@
 #include "SupportBundle.h"
 #include "AppSettings.h"
+#include "SettingsSanitizer.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
 #include "ZipArchive.h"
@@ -156,30 +157,20 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
             f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
     }
 
-    // 4. Sanitized settings
+    // 4. Sanitized settings — dumped from the store through the recursive
+    // redactor (a secret-shaped field nested inside a JSON document value is
+    // redacted too, not just secret-named rows). Store metadata (migration
+    // stamps, backup history) rides along for upgrade diagnostics.
     {
-        auto& settings = AppSettings::instance();
-        QFile src(settings.filePath());
-        if (src.open(QIODevice::ReadOnly)) {
-            QString xml = QString::fromUtf8(src.readAll());
-            src.close();
-
-            // Strip lines containing sensitive keys
-            QStringList lines = xml.split('\n');
-            QStringList sanitized;
-            for (const auto& line : lines) {
-                QString lower = line.toLower();
-                if (lower.contains("token") || lower.contains("password") ||
-                    lower.contains("secret") || lower.contains("auth0") ||
-                    lower.contains("refresh")) {
-                    sanitized << "  <!-- [REDACTED] -->";
-                } else {
-                    sanitized << line;
-                }
+        QFile dst(tmp + "/settings.txt");
+        if (dst.open(QIODevice::WriteOnly)) {
+            dst.write(SettingsSanitizer::dump().toUtf8());
+            const QString notice = AppSettings::instance().loadNotice();
+            if (!notice.isEmpty()) {
+                dst.write("\n## load notice\n");
+                dst.write(notice.toUtf8());
+                dst.write("\n");
             }
-            QFile dst(tmp + "/settings.xml");
-            if (dst.open(QIODevice::WriteOnly))
-                dst.write(sanitized.join('\n').toUtf8());
         }
     }
 

@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QMutex>
 #include <QSet>
 #include <QColor>
 #include <QFont>
@@ -433,6 +434,16 @@ private:
     // are not committed (the previously-active theme stays loaded).
     bool loadThemeFromPath(const QString& path);
 
+    // Assemble the v2 theme document (schemaVersion + metadata + primitives
+    // palette + nested scope tree) for the live theme state.  THE single
+    // document builder: writeThemeFile() and exportThemeToFile() both go
+    // through it so the two can't emit structurally different files.  In
+    // particular `primitives` and `scopes` can only ever travel together —
+    // scope tokens hold `{primitive.key}` aliases verbatim, so scopes without
+    // the palette they point into load as invalid colours.
+    QJsonObject themeDocumentJson(const QString& themeName,
+                                  const QString& description) const;
+
     // Serialize the current scope tree into AetherSDR's v2 theme JSON
     // (primitives + nested scopes) and write it to `path`.  Shared by
     // saveCurrentThemeAs (new user copy) and saveActiveTheme (rewrite
@@ -503,6 +514,17 @@ private:
     // every loadThemeFromPath().
     QSet<QString>                    m_declaredContainers;
     QString m_activeTheme;
+
+    // Tokens already warned about by cssFragment(), so a stylesheet typo is
+    // reported once rather than on every theme change and every tracked-
+    // stylesheet reapply.  Cleared on every theme load, so the warning tracks
+    // the theme it's about instead of latching for the process.  Mutable
+    // because cssFragment() is const; the mutex guards only this set, which is
+    // the whole of ThemeManager's locking — every other member is
+    // main-thread-only, as resolveFor()'s callers all terminate in
+    // QWidget::setStyleSheet.
+    mutable QSet<QString>            m_warnedUnknownTokens;
+    mutable QMutex                   m_unknownTokenMutex;
 
     // Factory-default snapshot, loaded once from `:/themes/default-dark.json`
     // at construction.  Drives the gradient editor's "Reset to default"
