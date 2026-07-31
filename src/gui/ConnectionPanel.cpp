@@ -1230,9 +1230,8 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
 
     QMenu menu(this);
     QAction* setNick = menu.addAction(tr("Set Nickname…"));
-    const QString savedKey = hl2::Hl2Discovery::nicknameSettingsKey(radio.serial);
     const bool hasCustom =
-        !AppSettings::instance().value(savedKey).toString().trimmed().isEmpty();
+        hl2::Hl2Discovery::hasCustomNickname(radio.family, radio.serial);
     QAction* clearNick = hasCustom ? menu.addAction(tr("Clear Nickname")) : nullptr;
 
     QAction* chosen = menu.exec(m_radioList->mapToGlobal(pos));
@@ -1242,32 +1241,31 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     bool changed = false;
     if (chosen == setNick) {
         bool ok = false;
-        const QString current =
-            AppSettings::instance().value(savedKey).toString();
+        const QString current = hl2::Hl2Discovery::effectiveNickname(
+            radio.family, radio.serial, QString());
         const QString name = QInputDialog::getText(
             this, tr("Set Nickname"),
             tr("Nickname for %1:").arg(radio.model),
             QLineEdit::Normal, current, &ok);
         if (ok) {
-            AppSettings::instance().setValue(savedKey, name.trimmed());
+            // setNickname commits eagerly — a naming the operator just
+            // confirmed shouldn't be lost to a crash or a kill.
+            hl2::Hl2Discovery::setNickname(radio.family, radio.serial,
+                                           name.trimmed());
             changed = true;
         }
     } else if (clearNick && chosen == clearNick) {
-        AppSettings::instance().remove(savedKey);
+        hl2::Hl2Discovery::setNickname(radio.family, radio.serial, QString());
         changed = true;
     }
-
-    // Commit to disk now rather than riding on the shutdown save — a naming the
-    // operator just confirmed shouldn't be lost to a crash or a kill, and the
-    // rest of this panel (onLocalConnectClicked) saves eagerly for the same reason.
-    if (changed)
-        AppSettings::instance().save();
+    Q_UNUSED(changed);
 
     // Reflect the change immediately: re-label this row from the saved setting
     // rather than waiting for the next discovery sweep.
     RadioInfo updated = radio;
     updated.nickname =
-        hl2::Hl2Discovery::effectiveNickname(radio.serial, radio.model);
+        hl2::Hl2Discovery::effectiveNickname(radio.family, radio.serial,
+                                             radio.model);
     m_radios[row] = updated;
     item->setText(formatLocalRadioLabel(updated));
 }
@@ -2006,7 +2004,7 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
             // keyed by serial — and hard-coding the model here meant a radio named
             // in Radio Setup showed that name when found locally and
             // "Hermes-Lite 2" when reached over the VPN. Needs the serial first.
-            info.nickname = hl2::Hl2Discovery::effectiveNickname(info.serial, info.model);
+            info.nickname = hl2::Hl2Discovery::effectiveNickname(info.family, info.serial, info.model);
             info.version  = QString::number(reply->gatewareVersion);
             // Same label Hl2Discovery sets on the broadcast path — this
             // is the SECOND place an HL2 RadioInfo is built, and a field

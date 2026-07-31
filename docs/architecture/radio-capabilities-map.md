@@ -50,7 +50,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
 | `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | host-side memory bank vs radio-side slots |
-| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | DECLARED + gate wired only: `applyRestoredState` is a no-op in every backend until RFC #4603 PR 3 lands capture/restore — nothing restores today (this row would otherwise be the exact trap the header warns about) |
+| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. Flex/Sim: no-op by empty declaration. |
 | `extensionNamespaces` | `["flex"]` | — | — | `invokeExtension` pre-check | Amp / tuner operate/bypass/autotune verbs |
 
 `MainWindow::applyCapabilitiesToUi()` is the single fan-out for UI visibility. It

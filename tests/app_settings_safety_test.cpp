@@ -579,28 +579,56 @@ void testThreeDSliceDepthDefaultAndOptIn()
 // in-memory map (the original XML-era bug this scenario was born from).
 void testNicknameKeySurvivesDisk()
 {
+    const QString family = QStringLiteral("hl2");
     const QString serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
-    const QString key = hl2::Hl2Discovery::nicknameSettingsKey(serial);
 
     AppSettings& settings = AppSettings::instance();
     settings.load();
-    settings.setValue(key, QStringLiteral("Pat's Hermes"));
-    settings.save();
 
-    QString stored;
-    expect(dbRow(key, stored) && stored == QStringLiteral("Pat's Hermes"),
-           "the nickname is actually written to the settings database");
+    // New-world storage: the (family, MAC, Identity) feature document, where
+    // the raw MAC is a legal identity (RFC #4603 PR 3).
+    hl2::Hl2Discovery::setNickname(family, serial, QStringLiteral("Pat's Hermes"));
+    expect(settings.radioFeature(family, serial, QStringLiteral("Identity"))
+                   .value(QStringLiteral("nickname"))
+                   .toString()
+               == QStringLiteral("Pat's Hermes"),
+           "the nickname is stored in the scoped Identity document");
 
     // Re-read from disk the way a fresh launch does: the name must come back.
     settings.reset();
     settings.load();
-    expect(hl2::Hl2Discovery::effectiveNickname(serial, QStringLiteral("Hermes-Lite 2"))
+    expect(hl2::Hl2Discovery::effectiveNickname(family, serial,
+                                                QStringLiteral("Hermes-Lite 2"))
                == QStringLiteral("Pat's Hermes"),
            "a nickname set in a previous session survives restart");
 
-    expect(hl2::Hl2Discovery::nicknameSettingsKey(QStringLiteral("AA:BB:CC:DD:EE:00"))
-               != key,
-           "two different MACs still map to two different keys");
+    // Legacy migration: a pre-#4603 sanitized flat key is adopted into the
+    // document on first read and the flat key is removed.
+    const QString legacySerial = QStringLiteral("AA:BB:CC:DD:EE:00");
+    const QString legacyKey = hl2::Hl2Discovery::nicknameSettingsKey(legacySerial);
+    settings.setValue(legacyKey, QStringLiteral("Legacy Hermes"));
+    settings.save();
+    expect(hl2::Hl2Discovery::effectiveNickname(family, legacySerial, QString())
+               == QStringLiteral("Legacy Hermes"),
+           "a legacy flat-key nickname is still honored");
+    expect(!settings.contains(legacyKey),
+           "the legacy flat key is removed after the one-shot migration");
+    expect(settings.radioFeature(family, legacySerial, QStringLiteral("Identity"))
+                   .value(QStringLiteral("nickname"))
+                   .toString()
+               == QStringLiteral("Legacy Hermes"),
+           "the migrated nickname lives in the scoped document");
+
+    expect(hl2::Hl2Discovery::effectiveNickname(family, serial, QString())
+               != hl2::Hl2Discovery::effectiveNickname(family, legacySerial,
+                                                       QString()),
+           "two different MACs keep two different nicknames");
+
+    // Clearing removes both homes.
+    hl2::Hl2Discovery::setNickname(family, serial, QString());
+    expect(hl2::Hl2Discovery::effectiveNickname(family, serial, QString())
+               .isEmpty(),
+           "a cleared nickname stays cleared");
 }
 
 } // namespace

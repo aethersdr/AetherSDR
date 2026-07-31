@@ -4254,6 +4254,16 @@ add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
 # RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
 # capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
 # load AND store, per-radio isolation, family-wide fallback, schema tolerance.
+# HL2 state restore/capture (RFC #4603 PR 3): band-key table, the
+# applyRestoredState validation boundary, restored-rate/LNA connect seeding,
+# param precedence, and the capture snapshot round-trip. Hardware-path
+# validation happens on nigelfenton's bench.
+add_executable(hl2_state_restore_test tests/hl2_state_restore_test.cpp)
+target_include_directories(hl2_state_restore_test PRIVATE src tests)
+target_link_libraries(hl2_state_restore_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(hl2_state_restore_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_state_restore_test COMMAND hl2_state_restore_test)
+
 add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
 target_include_directories(radio_state_memory_test PRIVATE src tests)
 target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)

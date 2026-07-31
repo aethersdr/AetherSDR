@@ -1220,6 +1220,7 @@ private:
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
     void handRestoredStateToBackend(const QString& serial);  // RFC #4603
+    void persistOperatingState();                            // RFC #4603 PR 3
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1704,6 +1705,8 @@ private:
     // while the radio is still booting and would otherwise spam the UI.
     bool      m_rebootInProgress{false};
     QTimer    m_reconnectTimer;
+    // RFC #4603 PR 3: debounces operatingStateChanged into one store write.
+    QTimer    m_operatingStateSaveTimer;
 
     // ── Network quality monitor ──
     void startNetworkMonitor();

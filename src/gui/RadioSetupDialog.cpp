@@ -1076,7 +1076,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
             const RadioInfo info = m_model->lastRadioInfo();
             if (!hl2::Hl2Discovery::nicknameLivesOnRadio(info))
                 initialNickname = hl2::Hl2Discovery::effectiveNickname(
-                    info.serial, info.model.isEmpty() ? m_model->name() : info.model);
+                    info.family, info.serial,
+                    info.model.isEmpty() ? m_model->name() : info.model);
         }
         m_nicknameEdit = new QLineEdit(initialNickname);
         m_nicknameEdit->setStyleSheet(kEditStyle);
@@ -1108,11 +1109,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
             if (hl2::Hl2Discovery::nicknameLivesOnRadio(info)) {
                 m_model->sendCommand("radio name " + m_nicknameEdit->text());
             } else {
-                AppSettings::instance().setValue(
-                    hl2::Hl2Discovery::nicknameSettingsKey(info.serial),
-                    m_nicknameEdit->text().trimmed());
-                // Commit now; don't rely on the shutdown save to carry it.
-                AppSettings::instance().save();
+                // Commits eagerly inside; don't rely on the shutdown save.
+                hl2::Hl2Discovery::setNickname(info.family, info.serial,
+                                               m_nicknameEdit->text());
             }
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {

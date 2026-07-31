@@ -97,6 +97,12 @@ public:
         Q_UNUSED(state);
     }
     virtual void connectRadio(const RadioConnectRequest& request) = 0;
+    // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend whose
+    // declared clientSettingsDomains is non-empty reports its operating state
+    // here on demand, and emits operatingStateChanged() (see signals) when it
+    // moves. RadioModel debounces the signal and persists the snapshot via
+    // RadioStateMemory::store — the backend never touches the settings store.
+    virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
@@ -497,6 +503,11 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+    // Operating state moved (frequency, mode, passband, rate, gain, drive) —
+    // fetch it with currentOperatingState(). Emitted only by backends with a
+    // non-empty clientSettingsDomains declaration; rate-limiting is the
+    // subscriber's job (RadioModel debounces).
+    void operatingStateChanged();
 
     // The RF-gain range and step this pan actually offers, in dB.
     //

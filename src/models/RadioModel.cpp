@@ -424,6 +424,21 @@ QJsonObject clientInfoToJson(quint32 handle,
 // immediately before connectRadio(); a backend with an empty declaration
 // (Flex, Sim) never sees restored state — the radio-authoritative policy
 // (Constitution II/III) is structurally untouched.
+// RFC #4603 PR 3: the debounced store write. Gated by the same predicate as
+// the restore path — capability-shaped, never family-shaped.
+void RadioModel::persistOperatingState()
+{
+    if (!m_backend || !isConnected()) {
+        return;
+    }
+    const RadioCapabilities caps = m_backend->capabilities();
+    if (!RadioStateMemory::shouldEngage(caps)) {
+        return;
+    }
+    RadioStateMemory::store(settingsScope(), caps,
+                            m_backend->currentOperatingState());
+}
+
 void RadioModel::handRestoredStateToBackend(const QString& serial)
 {
     if (!m_backend) {
@@ -773,6 +788,14 @@ void RadioModel::setupBackend(const QString& family)
     // signal to bind to and cannot observe a stale picture.
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] { publishCapabilities(isConnected()); });
+
+    // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend that
+    // declares client-owned settings domains reports state movement; one
+    // debounced store per burst of changes. Engagement is capability-shaped —
+    // for an empty declaration (Flex, Sim) the signal is never emitted AND
+    // the store call is gated again in persistOperatingState().
+    connect(m_backend.get(), &IRadioBackend::operatingStateChanged, this,
+            [this] { m_operatingStateSaveTimer.start(); });
 
     // Keying and tune from the GUI.
     //
@@ -1454,6 +1477,11 @@ RadioModel::RadioModel(QObject* parent)
             [this](const QString&) { updateOperatorTransmit(); });
 
     m_reconnectTimer.setInterval(5000);
+    // RFC #4603 PR 3: one settings write per burst of operating-state changes.
+    m_operatingStateSaveTimer.setSingleShot(true);
+    m_operatingStateSaveTimer.setInterval(2000);
+    connect(&m_operatingStateSaveTimer, &QTimer::timeout, this,
+            &RadioModel::persistOperatingState);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
