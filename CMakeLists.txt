@@ -3850,6 +3850,24 @@ add_test(NAME range_slider_a11y_test COMMAND range_slider_a11y_test)
 set_tests_properties(range_slider_a11y_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# RelayBar accessibility announcements (#4565): an ATU sweep debounces to one
+# settled position, and the last-published value is forgotten on focus loss so
+# a position that moved while unfocused is still announced when it returns.
+# HGauge.h is listed so AUTOMOC picks up RelayBar's Q_OBJECT (header-only class).
+add_executable(relay_bar_a11y_test
+    tests/relay_bar_a11y_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/HGauge.h
+)
+target_include_directories(relay_bar_a11y_test PRIVATE src)
+target_link_libraries(relay_bar_a11y_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(relay_bar_a11y_test PROPERTIES AUTOMOC ON)
+add_test(NAME relay_bar_a11y_test COMMAND relay_bar_a11y_test)
+set_tests_properties(relay_bar_a11y_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
 add_executable(native_widget_topology_test
