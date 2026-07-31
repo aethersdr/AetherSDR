@@ -2128,7 +2128,15 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Frequency reference label from oscillator status (#478)
     // Show radio oscillator state immediately; GPS status only adds details.
-    connect(&m_radioModel, &RadioModel::oscillatorChanged, this, updateFrequencyReferenceLabel);
+    connect(&m_radioModel, &RadioModel::oscillatorChanged, this,
+            [this, updateFrequencyReferenceLabel] {
+        updateFrequencyReferenceLabel();
+        // Optional GPSDO presence arrives after the connection capability
+        // event, so re-evaluate the unit-level GPS gate on live oscillator
+        // status rather than leaving the initial hidden state latched.
+        applyCapabilitiesToUi(m_radioModel.isConnected(),
+                              m_radioModel.backendCapabilities());
+    });
     updateFrequencyReferenceLabel();
 
     connect(&m_radioModel, &RadioModel::gpsStatusChanged,
@@ -2138,6 +2146,10 @@ MainWindow::MainWindow(QWidget* parent)
                          const QString& /*lat*/, const QString& /*lon*/,
                          const QString& utcTime) {
         updateFrequencyReferenceLabel();
+        // Some firmware establishes presence through the GPS status object
+        // rather than an oscillator flag.
+        applyCapabilitiesToUi(m_radioModel.isConnected(),
+                              m_radioModel.backendCapabilities());
 
         // Use GPS UTC time only when GPSDO is installed and locked.
         // GPS with no antenna/lock sends stale "00:00:00Z" — fall back to system clock.
@@ -6375,19 +6387,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
 
     // ── GPS: the status-bar position readout and the dialog it opens ────────
     //
-    // Measured on a live Hermes-Lite 2 before this gate existed: the button sat
-    // `visible:true, enabled:true` reading **"[Waiting]"** indefinitely, because
-    // that radio has no GNSS receiver and so never sends a `gps` status at all.
-    // A control that can only ever say "waiting" is worse than an absent one —
-    // it reads as a fix that has not arrived yet rather than a receiver that
-    // does not exist.
+    // Family capability and unit presence are separate facts. Flex radios can
+    // support GPS, but optional-GPSDO 6000-series units must not expose the
+    // dashboard until oscillator/GPS status confirms that this unit has one.
+    // A control that can only ever wait is worse than an absent one — it reads
+    // as a fix that has not arrived yet rather than a receiver that does not
+    // exist.
     //
     // NB this stack carries the 10 MHz reference readout as well as the
     // satellite count, so hiding it removes both. That is right for a radio
-    // declaring no position source — the reference lock is a GPSDO/external-10M
-    // concept and the same stack's tooltip already read "Actual: Unknown /
-    // Lock: Unlocked" on the HL2 — but it is a second surface, so it is called
-    // out here rather than left for a reviewer to find.
+    // declaring no GPS position source. The reference readout remains part of
+    // this GPS-specific stack, so it follows the same unit-presence gate.
     //
     // Hidden WITH its trailing separator, or the divider is left stranded
     // between the neighbouring telemetry stacks.
@@ -6396,7 +6406,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // the Profile Manager is above: a live GPS dashboard left on screen against
     // a radio that has no receiver reports "Waiting for a valid GPS fix"
     // forever, which reads as a broken fix rather than an absent one.
-    const bool gps = !connected || caps.hasGpsLocation;
+    const bool gps = !connected
+        || (caps.hasGpsLocation && m_radioModel.hasGpsHardware());
     if (m_gpsStatusButton) {
         m_gpsStatusButton->setVisible(gps);
     }

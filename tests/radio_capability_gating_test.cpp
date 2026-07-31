@@ -79,6 +79,14 @@ static bool uiWouldShow(bool connected, bool declared)
     return !connected || declared;
 }
 
+// GPS presence has two layers: the family must support a position source and
+// this connected unit must actually report one. Unlike the shared capability
+// helper above, either connected-layer false is enough to hide the surface.
+static bool gpsUiWouldShow(bool connected, bool familySupportsGps, bool unitHasGps)
+{
+    return !connected || (familySupportsGps && unitHasGps);
+}
+
 static RadioInfo hl2Info()
 {
     RadioInfo i;
@@ -153,6 +161,49 @@ int main(int argc, char** argv)
         check(caps.clientSettingsDomains
                   == RadioCapabilities::ClientSettingsDomains{},
               "Flex declares clientSettingsDomains EMPTY (radio-authoritative)");
+
+        check(!gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
+              "connected GPSDO-less Flex hides the GPS stack");
+
+        const auto applyOscillatorPresence = [&model](const char* key, bool present) {
+            const QMap<QString, QString> status{
+                {QString::fromLatin1(key), present ? QStringLiteral("1")
+                                                   : QStringLiteral("0")}
+            };
+            const QString object = QStringLiteral("radio oscillator");
+            return QMetaObject::invokeMethod(
+                &model, "onStatusReceived", Qt::DirectConnection,
+                QGenericArgument("QString", &object),
+                QGenericArgument("QMap<QString,QString>", &status));
+        };
+
+        check(applyOscillatorPresence("gpsdo_present", true),
+              "GPSDO presence fixture reached RadioModel");
+        check(model.hasGpsHardware(),
+              "gpsdo_present=1 marks an optional 6000-series GPSDO present");
+        check(gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
+              "connected optional-GPSDO Flex shows the GPS stack");
+        check(applyOscillatorPresence("gpsdo_present", false),
+              "GPSDO absence fixture reached RadioModel");
+        check(!model.hasGpsHardware(),
+              "gpsdo_present=0 clears optional GPSDO presence");
+
+        check(applyOscillatorPresence("gnss_present", true),
+              "GNSS presence fixture reached RadioModel");
+        check(model.hasGpsHardware(),
+              "gnss_present=1 marks on-board GNSS present");
+        check(applyOscillatorPresence("gnss_present", false),
+              "GNSS absence fixture reached RadioModel");
+        check(!model.hasGpsHardware(),
+              "gnss_present=0 clears on-board GNSS presence instead of latching");
+
+        check(applyOscillatorPresence("gpsdo_present", true),
+              "GPSDO reconnect fixture reached RadioModel");
+        check(QMetaObject::invokeMethod(
+                  &model, "onDisconnected", Qt::DirectConnection),
+              "disconnect fixture reached RadioModel");
+        check(!model.hasGpsHardware(),
+              "GPS presence does not leak from the previous radio session");
     }
 
     // ---- HL2 declares none of them ---------------------------------------

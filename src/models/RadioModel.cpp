@@ -5527,6 +5527,28 @@ void RadioModel::onDisconnected()
     m_maxSlices = 4;
     m_model.clear();
     m_version.clear();
+    m_oscState.clear();
+    m_oscSetting = QStringLiteral("auto");
+    m_oscLocked = false;
+    m_extPresent = false;
+    m_gpsdoPresent = false;
+    m_tcxoPresent = false;
+    m_gpsStatus.clear();
+    m_gpsTracked = 0;
+    m_gpsVisible = 0;
+    m_gpsGrid.clear();
+    m_gpsAltitude.clear();
+    m_gpsLat.clear();
+    m_gpsLon.clear();
+    m_gpsTime.clear();
+    m_gpsSpeed.clear();
+    m_gpsTrack.clear();
+    m_gpsFreqError.clear();
+    m_automationGpsNtpServerAddress.clear();
+    emit oscillatorChanged();
+    emit gpsStatusChanged(m_gpsStatus, m_gpsTracked, m_gpsVisible,
+                          m_gpsGrid, m_gpsAltitude, m_gpsLat, m_gpsLon,
+                          m_gpsTime);
     // Cleared beside m_version rather than relying on the next connect to
     // reassign it: this block's contract is that everything here is re-derived
     // from the new radio's status, and a path that reaches a Flex without
@@ -7798,9 +7820,14 @@ void RadioModel::onStatusReceived(const QString& object,
         if (kvs.contains("setting"))      m_oscSetting  = kvs["setting"];
         if (kvs.contains("locked"))       m_oscLocked   = kvs["locked"] == "1";
         if (kvs.contains("ext_present"))  m_extPresent  = kvs["ext_present"] == "1";
-        if (kvs.contains("gpsdo_present"))m_gpsdoPresent= kvs["gpsdo_present"] == "1";
+        if (kvs.contains("gpsdo_present") || kvs.contains("gnss_present")) {
+            // Firmware generations use either spelling. Treat them as aliases
+            // within this status update; do not latch a previous true value
+            // when a later update explicitly reports that the source is gone.
+            m_gpsdoPresent = kvs.value("gpsdo_present") == QLatin1String("1")
+                || kvs.value("gnss_present") == QLatin1String("1");
+        }
         if (kvs.contains("tcxo_present")) m_tcxoPresent = kvs["tcxo_present"] == "1";
-        if (kvs.contains("gnss_present")) m_gpsdoPresent= m_gpsdoPresent || kvs["gnss_present"] == "1";
         emit oscillatorChanged();
         emit infoChanged();
         return;
