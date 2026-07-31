@@ -1690,36 +1690,41 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // other slices are open: with B alive, a recreated A reads
     // DaxChannel_SliceB and steals B's live channel 300 ms later. Mid-session
     // adds have current radio/TCI state; last-session keys apply only to the
-    // initial enumeration.
-    if (m_daxRestoreWindowOpen) {
+    // enumeration that follows a connect. See DaxRestorePolicy.h.
+    {
         const int sliceIdx = m_radioModel.slices().indexOf(s);
-        if (sliceIdx >= 0) {
-            const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + sliceIdx));
-            int savedDax = AppSettings::instance().value(key, "0").toInt();
-            if (savedDax > 0) {
-                // QPointer guards against a dangling slice: a raw SliceModel*
-                // stays non-null after the slice is destroyed, so the `s &&`
-                // check below is only meaningful if the capture auto-nulls.
-                // Removing the slice within this 300 ms window (rapid
-                // add/remove) would otherwise dereference freed memory. (#3646)
-                QPointer<SliceModel> sp(s);
-                QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
-                    if (sp && !profileLoadRadioStateWritesHeld()) {
-                        // The send path below (SliceModel::commandReady) has no
-                        // logging of its own; without this line the restore is
-                        // invisible in any capture (#4558).
-                        qCDebug(lcDax) << "MainWindow: restoring last-session DAX"
-                                       << key << "=" << savedDax
-                                       << "to slice" << sp->sliceId();
-                        sp->setDaxChannel(savedDax);
-                    }
-                });
-            }
+        const QString key = sliceIdx >= 0
+            ? DaxRestorePolicy::keyForIndex(sliceIdx) : QString();
+        const int savedDax = key.isEmpty()
+            ? 0 : AppSettings::instance().value(key, "0").toInt();
+        // Resolve the key before branching so the skip path can say whether a
+        // restore was actually suppressed. Logging every mid-session add would
+        // report "skipping" for the overwhelmingly common case of no key at
+        // all, which is noise in exactly the captures this logging exists for.
+        if (savedDax > 0 && m_daxRestore.restoreAllowed()) {
+            // QPointer guards against a dangling slice: a raw SliceModel*
+            // stays non-null after the slice is destroyed, so the `s &&`
+            // check below is only meaningful if the capture auto-nulls.
+            // Removing the slice within this 300 ms window (rapid
+            // add/remove) would otherwise dereference freed memory. (#3646)
+            QPointer<SliceModel> sp(s);
+            QTimer::singleShot(300, this, [this, sp, savedDax, key]() {
+                if (sp && !profileLoadRadioStateWritesHeld()) {
+                    // The send path below (SliceModel::commandReady) has no
+                    // logging of its own; without this line the restore is
+                    // invisible in any capture (#4558).
+                    qCDebug(lcDax) << "MainWindow: restoring last-session DAX"
+                                   << key << "=" << savedDax
+                                   << "to slice" << sp->sliceId();
+                    sp->setDaxChannel(savedDax);
+                }
+            });
+        } else if (savedDax > 0) {
+            qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore"
+                           << key << "=" << savedDax
+                           << "for mid-session slice add, id" << s->sliceId()
+                           << "(#4558)";
         }
-    } else {
-        qCDebug(lcDax) << "MainWindow: skipping last-session DAX restore for"
-                          " mid-session slice add, id" << s->sliceId()
-                       << "(#4558)";
     }
 
     // Re-claim TX assignment after profile load or slice recreation (#145).
@@ -2213,14 +2218,9 @@ void MainWindow::onSliceRemoved(int id)
     // must keep their live radio state. The post-reconnect stale-slice prune
     // emits sliceRemoved too but is not live (slice(id) is non-null, same
     // discriminator as the Center Lock guard below) and must not end it.
-    // Limit: the discriminator holds while the reconnected session
-    // re-enumerates the same slice ids; when it does not, the prune's ids
-    // read as live removals and the window closes early. That failure only
-    // skips restores: the flag's sole restore-side consumer is the apply-gate
-    // in onSliceAdded (false = log-and-skip branch), so an early close cannot
-    // cause a restore to fire.
-    if (m_daxRestoreWindowOpen && !m_radioModel.slice(id)) {
-        m_daxRestoreWindowOpen = false;
+    // The discriminator is one-directional and its failures are all safe —
+    // DaxRestorePolicy::onSliceRemoved() has the enumeration and the argument.
+    if (m_daxRestore.onSliceRemoved(/*liveRemoval=*/!m_radioModel.slice(id))) {
         qCDebug(lcDax) << "MainWindow: last-session DAX restore window closed"
                           " (live slice removal, id" << id << ")";
     }

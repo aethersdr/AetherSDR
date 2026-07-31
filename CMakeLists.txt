@@ -3050,6 +3050,12 @@ target_include_directories(center_lock_rebind_tracker_test PRIVATE src)
 target_link_libraries(center_lock_rebind_tracker_test PRIVATE Qt6::Core)
 add_test(NAME center_lock_rebind_tracker_test COMMAND center_lock_rebind_tracker_test)
 
+# Last-session DAX restore window + quit-time key prune (#4558) — header-only.
+add_executable(dax_restore_policy_test tests/dax_restore_policy_test.cpp)
+target_include_directories(dax_restore_policy_test PRIVATE src)
+target_link_libraries(dax_restore_policy_test PRIVATE Qt6::Core)
+add_test(NAME dax_restore_policy_test COMMAND dax_restore_policy_test)
+
 # Active-slice policy during FLEX band-stack teardown/rebuild — header-only.
 add_executable(band_recall_slice_selection_policy_test
     tests/band_recall_slice_selection_policy_test.cpp

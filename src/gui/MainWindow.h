@@ -22,6 +22,7 @@
 #include "core/ReceivePresentationSync.h"
 #include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
 #include "gui/CenterLockRebindTracker.h"
+#include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
@@ -1425,15 +1426,12 @@ private:
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
     // #4558: the last-session DAX restore (#1221) may only apply during the
-    // initial post-connect slice enumeration. The window opens on connect and
-    // closes on the first LIVE slice removal (a band-stack recreate is always
-    // preceded by one; the post-reconnect stale-slice prune is not live and
-    // must not close it) or after a settle timeout, whichever comes first —
-    // a slice recreated mid-session has current state that last-session keys
-    // must never override. The generation guard keeps a previous connect's
-    // pending timeout from closing the next connect's window.
-    bool m_daxRestoreWindowOpen{false};
-    int  m_daxRestoreWindowGen{0};
+    // slice enumeration that follows a connect — a slice recreated mid-session
+    // has current state that last-session keys must never override. The window
+    // and the quit-time key prune are pure logic in DaxRestorePolicy.h (which
+    // carries the full reasoning and is covered by dax_restore_policy_test);
+    // this member is just the live instance.
+    DaxRestorePolicy m_daxRestore;
     QTimer* m_heartbeatMissTimer{nullptr}; // fires every 1.5s to detect missed discovery beats
     QTimer* m_bsExpiryTimer{nullptr};    // band-stack bookmark auto-expiry, started on connect only (#1471)
     QTimer* m_bsAutoSaveTimer{nullptr};  // band-stack dwell auto-save (single-shot per dwell window)

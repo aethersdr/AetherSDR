@@ -3465,27 +3465,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
     {
         const QList<SliceModel*> slices = m_radioModel.slices();
         for (int i = 0; i < slices.size(); ++i) {
-            const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + i));
+            const QString key = DaxRestorePolicy::keyForIndex(i);
             if (slices[i]->daxChannel() > 0) {
                 s.setValue(key, QString::number(slices[i]->daxChannel()));
             } else {
                 s.remove(key);
             }
         }
-        // #4558: also drop keys beyond the slice count at quit. They could
-        // only be written by a session that had more slices open, and a stale
-        // survivor (e.g. DaxChannel_SliceB from an old two-slice quit) is what
-        // arms the restore mis-key — this makes an affected config self-heal.
-        // 'Z' bounds the historical letter space, not any radio's slice count.
-        // Prune only while connected: only then is the slice list an
-        // authoritative enumeration. Quitting radio-less (never connected,
-        // failed connect, or disconnected first) must not erase the previous
-        // session's keys — that would lose the restore data on any
-        // radio-less launch (#4572 review).
-        if (m_radioModel.isConnected()) {
-            for (int i = slices.size(); i <= 'Z' - 'A'; ++i) {
-                s.remove(QString("DaxChannel_Slice%1").arg(QChar('A' + i)));
-            }
+        // #4558: also drop keys beyond the slice count at quit, so a config
+        // poisoned by an earlier multi-slice quit self-heals instead of staying
+        // armed forever. Both preconditions — connected AND holding a populated
+        // slice list — are load-bearing; DaxRestorePolicy::staleKeysToPrune()
+        // carries why, and the unit test pins both.
+        for (const QString& key :
+             DaxRestorePolicy::staleKeysToPrune(m_radioModel.isConnected(),
+                                                slices.size())) {
+            s.remove(key);
         }
     }
 
@@ -5393,14 +5388,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (connected) {
         m_terminalConnectionError.clear();
         m_suppressStartupPanLayoutRearrange = false;
-        // #4558: open the last-session DAX restore window for the initial
-        // slice enumeration only (see MainWindow.h). 10 s covers a slow
-        // WAN/SmartLink status trickle with a wide margin.
-        m_daxRestoreWindowOpen = true;
-        const int gen = ++m_daxRestoreWindowGen;
-        QTimer::singleShot(10000, this, [this, gen]() {
-            if (m_daxRestoreWindowGen == gen)
-                m_daxRestoreWindowOpen = false;
+        // #4558: open the last-session DAX restore window for this connect's
+        // slice enumeration only (see DaxRestorePolicy.h). The primary close is
+        // the first live slice removal; the settle timer is belt-and-braces for
+        // a session that never removes one, and 10 s clears a slow WAN/SmartLink
+        // status trickle with a wide margin. The generation it carries keeps a
+        // previous connect's pending timeout from closing this window.
+        m_daxRestore.onConnected();
+        const int daxGen = m_daxRestore.generation();
+        QTimer::singleShot(10000, this, [this, daxGen]() {
+            m_daxRestore.onSettleTimeout(daxGen);
         });
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
@@ -5656,6 +5653,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
 #endif
     } else {
         stopDigitalVoiceService(false);
+
+        // #4558: the restore window cannot span a disconnect — the next connect
+        // reopens it for its own enumeration. Disconnect teardown does not emit
+        // sliceRemoved, so without this the window would stay armed until the
+        // settle timer happened to fire.
+        m_daxRestore.onDisconnected();
 
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
         // stay connected through brief reconnects, higher channels stop cleanly.
