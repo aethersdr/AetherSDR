@@ -1924,6 +1924,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_titleBar, &TitleBar::lineoutMuteChanged, this, [this](bool muted) {
         m_audio->setMuted(muted);
         m_radioModel.sendCommand(QString("mixer lineout mute %1").arg(muted ? 1 : 0));
+    });
+    connect(m_audio, &AudioEngine::mutedChanged, this, [this](bool muted) {
+        m_titleBar->setLineoutMuted(muted);
         auto& s = AppSettings::instance();
         s.setValue("PcAudioMuted", muted ? "True" : "False");
         s.save();
@@ -1971,7 +1974,6 @@ MainWindow::MainWindow(QWidget* parent)
     bool savedMute = AppSettings::instance().value("PcAudioMuted", "False").toString() == "True";
     if (savedMute) {
         m_audio->setMuted(true);
-        m_titleBar->setLineoutMuted(true);
     }
 
 
