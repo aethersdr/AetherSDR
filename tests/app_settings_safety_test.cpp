@@ -22,6 +22,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
 #include <QStandardPaths>
@@ -705,6 +706,33 @@ void testBrowserApi()
     expect(formattedSeen,
            "the display-string diagnostics stay in lockstep with the "
            "structured enumeration");
+
+    // The Settings Browser's masking parity (PR #4631 review): the SAME
+    // predicate that drives recursive display redaction must drive
+    // editability, or an operator edits a "[REDACTED]" buffer and saves it
+    // over the live secret. Pin the predicate on nigelfenton's bench probe
+    // shape — a credential field nested inside an innocuously-named doc.
+    const QJsonObject probeDoc{
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("nested"),
+         QJsonObject{{QStringLiteral("AsrRemoteApiKey"),
+                      QStringLiteral("sk-live-SUPERSECRET")}}}};
+    expect(SettingsSanitizer::containsSecretField(probeDoc),
+           "containsSecretField finds a credential field at depth");
+    expect(!SettingsSanitizer::containsSecretField(
+               QJsonObject{{QStringLiteral("frequencyHz"), 7100000},
+                           {QStringLiteral("mode"), QStringLiteral("CW")}}),
+           "containsSecretField stays quiet on a clean operating-state doc");
+    // And the two stay in agreement: whatever the display path would mask,
+    // the editability predicate must flag (break one on purpose and this
+    // pair diverges).
+    const QString probeJson = QString::fromUtf8(
+        QJsonDocument(probeDoc).toJson(QJsonDocument::Compact));
+    const QString redacted =
+        SettingsSanitizer::redactedValue(QStringLiteral("CopyAssist"), probeJson);
+    expect(redacted.contains(QStringLiteral("[REDACTED]"))
+               && !redacted.contains(QStringLiteral("SUPERSECRET")),
+           "display redaction masks the nested field the predicate flagged");
 }
 
 } // namespace

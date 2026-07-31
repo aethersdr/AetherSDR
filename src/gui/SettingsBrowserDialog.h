@@ -79,6 +79,8 @@ private:
 
     bool m_populating{false};
     bool m_storeWritable{false};
+    bool m_docViewerOpen{false};   // double-click emits activated too — one
+                                   // viewer per gesture, not two
 };
 
 } // namespace AetherSDR

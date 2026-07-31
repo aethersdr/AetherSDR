@@ -13,6 +13,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -75,6 +76,33 @@ const char* kResultErrorStyle =
 const char* kBannerStyle =
     "QLabel { color: #ffc978; font-size: 11px; background: #241c10;"
     "  border: 1px solid #4a3a1a; border-radius: 3px; padding: 5px 8px; }";
+
+const char* kAdvancedBannerText =
+    "Advanced — edits apply immediately and bypass each feature's own "
+    "validation. Prefer the feature's UI when one exists.";
+
+// True when a stored VALUE is a JSON document holding a credential-shaped
+// field at any depth. Such a row renders partially redacted, so it must be
+// read-only too — otherwise committing an edit writes the "[REDACTED]"
+// placeholder over the real secret (PR #4631 review, both reviewers).
+bool valueHidesSecret(const QString& value)
+{
+    const QByteArray raw = value.toUtf8().trimmed();
+    if (!raw.startsWith('{') && !raw.startsWith('[')) {
+        return false;
+    }
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
+    if (parseError.error != QJsonParseError::NoError || doc.isNull()) {
+        return false;
+    }
+    if (doc.isObject()) {
+        return SettingsSanitizer::containsSecretField(doc.object());
+    }
+    // Top-level array: wrap so the recursive object check walks it.
+    return SettingsSanitizer::containsSecretField(
+        QJsonObject{{QStringLiteral("_"), doc.array()}});
+}
 
 // Values that are exactly "True"/"False" (the store's boolean convention) get
 // a two-entry combo instead of free text, so a typo can't produce "Ture".
@@ -139,9 +167,7 @@ SettingsBrowserDialog::SettingsBrowserDialog(QWidget* parent)
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(9);
 
-    m_banner = new QLabel(
-        "Advanced — edits apply immediately and bypass each feature's own "
-        "validation. Prefer the feature's UI when one exists.");
+    m_banner = new QLabel(kAdvancedBannerText);
     m_banner->setStyleSheet(kBannerStyle);
     m_banner->setWordWrap(true);
     root->addWidget(m_banner);
@@ -259,9 +285,7 @@ void SettingsBrowserDialog::rebuildTree()
 
     m_storeWritable = s.storeWritable();
     if (m_storeWritable) {
-        m_banner->setText(
-            "Advanced — edits apply immediately and bypass each feature's own "
-            "validation. Prefer the feature's UI when one exists.");
+        m_banner->setText(kAdvancedBannerText);
     } else {
         const QString notice = s.loadNotice();
         m_banner->setText(
@@ -321,10 +345,12 @@ void SettingsBrowserDialog::rebuildTree()
         }
     }
 
-    m_populating = false;
+    // Select while m_populating still holds so currentItemChanged's populate
+    // no-ops — one explicit populate below, not two (PR #4631 review).
     selectScopeItem(remembered.kind == ScopeKind::None
                         ? Scope{ScopeKind::App, {}, {}}
                         : remembered);
+    m_populating = false;
     populateTable();
 }
 
@@ -391,7 +417,12 @@ void SettingsBrowserDialog::populateTable()
                          bool editable) {
         const int row = m_table->rowCount();
         m_table->insertRow(row);
-        const bool secret = SettingsSanitizer::isSecretKey(key);
+        // Masked = the display differs from the stored truth, whether the
+        // whole row is credential-shaped or a JSON value hides a secret
+        // field. Either way editing the displayed text would commit
+        // "[REDACTED]" over the real value, so masked rows are read-only.
+        const bool secret =
+            SettingsSanitizer::isSecretKey(key) || valueHidesSecret(value);
 
         auto* keyItem = new QTableWidgetItem(key);
         keyItem->setFlags(keyItem->flags() & ~Qt::ItemIsEditable);
@@ -448,10 +479,11 @@ void SettingsBrowserDialog::populateTable()
             versionItem->setFlags(versionItem->flags() & ~Qt::ItemIsEditable);
             m_table->setItem(row, 1, versionItem);
 
-            const QJsonDocument doc =
-                QJsonDocument::fromJson(entry.value.toUtf8());
+            // Redacted like every other rendering path — the preview column
+            // is a display of the document, not an exception to the policy
+            // (found while fixing the viewer leak from the #4631 review).
             auto* docItem = new QTableWidgetItem(
-                QString::fromUtf8(doc.toJson(QJsonDocument::Compact)));
+                SettingsSanitizer::redactedValue(entry.feature, entry.value));
             docItem->setFlags(docItem->flags() & ~Qt::ItemIsEditable);
             docItem->setToolTip("Double-click to view the document");
             m_table->setItem(row, 2, docItem);
@@ -520,7 +552,11 @@ void SettingsBrowserDialog::onTableItemChanged(QTableWidgetItem* item)
         setStatus(QStringLiteral("Write to %1 was refused — value reverted")
                       .arg(key),
                   true);
-        populateTable();
+        // Deferred: we are inside this item's own itemChanged emission, and
+        // repopulating clears the table — deleting the emitting item out
+        // from under the model (PR #4631 review).
+        QMetaObject::invokeMethod(
+            this, [this] { populateTable(); }, Qt::QueuedConnection);
     }
 }
 
@@ -542,10 +578,29 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
                                                const QString& radioId,
                                                const QString& feature)
 {
+    // A double-click delivers cellActivated AND cellDoubleClicked on some
+    // platforms — one viewer per gesture (PR #4631 review).
+    if (m_docViewerOpen) {
+        return;
+    }
+    m_docViewerOpen = true;
+
     auto& s = AppSettings::instance();
     int schemaVersion = 0;
     const QJsonObject doc =
         s.radioFeatureExact(family, radioId, feature, &schemaVersion);
+
+    // Same recursive masking as the table and the sanitized dump — the
+    // viewer must not be the one path that renders a credential-shaped
+    // field in cleartext (PR #4631 review, nigelfenton's bench probe).
+    const bool hasSecret = SettingsSanitizer::containsSecretField(doc);
+    QJsonObject displayDoc = doc;
+    if (hasSecret) {
+        const QString redacted = SettingsSanitizer::redactedValue(
+            feature, QString::fromUtf8(
+                         QJsonDocument(doc).toJson(QJsonDocument::Compact)));
+        displayDoc = QJsonDocument::fromJson(redacted.toUtf8()).object();
+    }
 
     QDialog viewer(this);
     viewer.setWindowTitle(QStringLiteral("%1 — %2 / %3").arg(
@@ -555,14 +610,17 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     auto* layout = new QVBoxLayout(&viewer);
 
     auto* header = new QLabel(
-        QStringLiteral("%1 / %2 / %3 — schema v%4")
+        QStringLiteral("%1 / %2 / %3 — schema v%4%5")
             .arg(family, scopeLabelForRadioId(radioId), feature)
-            .arg(schemaVersion));
+            .arg(schemaVersion)
+            .arg(hasSecret
+                     ? QStringLiteral("  ·  credential fields masked, read-only")
+                     : QString()));
     layout->addWidget(header);
 
     auto* text = new QPlainTextEdit;
     text->setPlainText(QString::fromUtf8(
-        QJsonDocument(doc).toJson(QJsonDocument::Indented)));
+        QJsonDocument(displayDoc).toJson(QJsonDocument::Indented)));
     text->setReadOnly(true);
     text->setAccessibleName(
         QStringLiteral("%1 document contents").arg(feature));
@@ -570,7 +628,18 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
 
     auto* buttons = new QHBoxLayout;
     auto* editBtn = new QPushButton("Edit Raw JSON…");
-    editBtn->setEnabled(m_storeWritable);
+    // Editing a redacted buffer would save "[REDACTED]" over the live
+    // credential — documents holding one are read-only here, matching the
+    // masked flat rows. (Delete stays available: a whole-document delete is
+    // the sanctioned remediation for a legacy store that still carries a
+    // credential-bearing document, and destroys rather than corrupts.)
+    editBtn->setEnabled(m_storeWritable && !hasSecret);
+    if (hasSecret) {
+        editBtn->setToolTip(
+            "This document contains a credential-shaped field — edit it "
+            "through the owning feature's UI, which keeps the secret in the "
+            "OS keychain");
+    }
     auto* saveBtn = new QPushButton("Save");
     saveBtn->setEnabled(false);
     auto* closeBtn = new QPushButton("Close");
@@ -603,6 +672,21 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
                           "Not saved — the document must be a JSON object."));
             return;
         }
+        // The store changes underneath an open viewer (features write
+        // debounced). Saving open-time content over a document that has
+        // since moved — or reasserting the open-time schema version — is a
+        // silent clobber; make the operator re-open against current truth.
+        int nowVersion = 0;
+        AppSettings::instance().radioFeatureExact(family, radioId, feature,
+                                                  &nowVersion);
+        if (nowVersion != schemaVersion) {
+            FramelessMessageBox::warning(
+                &viewer, "Document Changed",
+                "This document was rewritten by its owning feature while the "
+                "viewer was open. Nothing saved — close and re-open to edit "
+                "the current version.");
+            return;
+        }
         if (!AppSettings::instance().setRadioFeature(
                 family, radioId, feature, schemaVersion, parsed.object())) {
             FramelessMessageBox::warning(
@@ -616,6 +700,7 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     });
 
     viewer.exec();
+    m_docViewerOpen = false;
     populateTable();
 }
 
@@ -681,7 +766,17 @@ void SettingsBrowserDialog::addKey()
         s.setStationValue(key, valueEdit->text());
     }
     s.save();
-    setStatus(QStringLiteral("Added %1").arg(key), false);
+    // Same read-back verification as the inline-edit path — "Added" must
+    // mean the row survived the seam and the store (PR #4631 review).
+    const QString stored = scope.kind == ScopeKind::App
+                               ? s.value(key).toString()
+                               : s.stationValue(key).toString();
+    if (stored == valueEdit->text()) {
+        setStatus(QStringLiteral("Added %1").arg(key), false);
+    } else {
+        setStatus(QStringLiteral("Add of %1 was refused by the store").arg(key),
+                  true);
+    }
     populateTable();
 }
 
@@ -762,8 +857,16 @@ void SettingsBrowserDialog::exportSanitized()
                   true);
         return;
     }
-    file.write(SettingsSanitizer::dump().toUtf8());
+    const QByteArray payload = SettingsSanitizer::dump().toUtf8();
+    const bool wrote = file.write(payload) == payload.size() && file.flush();
     file.close();
+    if (!wrote || file.error() != QFileDevice::NoError) {
+        setStatus(QStringLiteral("Export to %1 failed: %2 — file may be "
+                                 "truncated")
+                      .arg(path, file.errorString()),
+                  true);
+        return;
+    }
     setStatus(QStringLiteral("Exported sanitized dump to %1").arg(path), false);
 }
 
