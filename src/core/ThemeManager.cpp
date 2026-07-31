@@ -661,6 +661,13 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
     // are the floor, the JSON wins where defined.
     m_rootScope->children.clear();
     m_primitives.clear();
+    // Per-theme, not per-process: a token missing only in THIS theme should be
+    // reported again when the operator comes back to it, otherwise the one log
+    // line they need has scrolled away and never reappears.
+    {
+        QMutexLocker lock(&m_unknownTokenMutex);
+        m_warnedUnknownTokens.clear();
+    }
     rebuildScopePathIndex();
     seedBuiltinDefaults();  // resets m_tokens (= root scope tokens) + re-seeds applet/* scope tree
 
@@ -1159,10 +1166,19 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
     return result;
 }
 
-bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
+QJsonObject ThemeManager::themeDocumentJson(const QString& themeName,
+                                            const QString& description) const
 {
-    // v2 schema — primitives map + nested scope tree.  v1 themes loaded
-    // from disk auto-upgrade on first save through this writer.
+    // THE one place a theme document is assembled.  Save and export both come
+    // through here, so they cannot disagree about what a theme file contains —
+    // which they did: export hand-rolled its own document and left out
+    // `primitives`, and scope tokens store `{color.red.500}` aliases verbatim,
+    // so an exported theme carried aliases pointing into a palette that wasn't
+    // in the file.  On import resolveAlias() returned the literal and QColor
+    // got handed "{color.red.500}".
+    //
+    // v2 schema — primitives map + nested scope tree.  v1 themes loaded from
+    // disk auto-upgrade on first save through this writer.
     QJsonObject primitives;
     const int gradMetaId = qMetaTypeId<ThemeGradient>();
     for (auto it = m_primitives.constBegin(); it != m_primitives.constEnd(); ++it) {
@@ -1201,9 +1217,16 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
     doc.insert("name",          themeName);
     doc.insert("author",        QStringLiteral("AetherSDR user"));
     doc.insert("version",       QStringLiteral("1.0"));
-    doc.insert("description",   QStringLiteral("Edited via the Theme Editor."));
+    doc.insert("description",   description);
     if (!primitives.isEmpty()) doc.insert("primitives", primitives);
     doc.insert("scopes",        scopes);
+    return doc;
+}
+
+bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
+{
+    const QJsonObject doc = themeDocumentJson(
+        themeName, QStringLiteral("Edited via the Theme Editor."));
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1260,7 +1283,8 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
     // active theme's tokens under a different name.
     QJsonObject doc;
     if (themeName == m_activeTheme) {
-        // Reuse the SAVE path's serialiser instead of hand-rolling a flat dump.
+        // Build the SAME document the save path writes, through the same
+        // function, instead of hand-rolling one here.
         //
         // The old code walked m_tokens and wrote a top-level "tokens" object.
         // But m_tokens is a reference into the ROOT SCOPE only (see the header)
@@ -1274,19 +1298,14 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
         // theme file back that opened cleanly and had quietly lost its
         // per-applet differentiation.
         //
-        // scopeToJson() emits the schemaVersion-2 { "scopes": { "root": ... } }
-        // shape the loader prefers, recursing through the whole tree, and is
-        // already what saveCurrentThemeAs() uses — so export and save can no
-        // longer disagree about what a theme file contains.
-        QJsonObject scopes;
-        scopes.insert(QStringLiteral("root"), scopeToJson(m_rootScope.get()));
-
-        doc.insert("schemaVersion", 2);
-        doc.insert("name",          themeName);
-        doc.insert("author",        QStringLiteral("AetherSDR user"));
-        doc.insert("version",       QStringLiteral("1.0"));
-        doc.insert("description",   QStringLiteral("Exported via the Theme Editor."));
-        doc.insert("scopes",        scopes);
+        // Sharing themeDocumentJson() rather than just scopeToJson() matters:
+        // scope tokens store `{color.red.500}` ALIASES verbatim, so a document
+        // carrying scopes without the `primitives` palette they point into is
+        // worse than one carrying neither — resolveAlias() hands the literal
+        // back and QColor("{color.red.500}") is invalid. Every one of the nine
+        // scoped tokens on the bundled dark theme is such an alias.
+        doc = themeDocumentJson(themeName,
+                                QStringLiteral("Exported via the Theme Editor."));
     } else {
         const auto pit = m_themePaths.constFind(themeName);
         if (pit == m_themePaths.constEnd())
@@ -1331,9 +1350,15 @@ QString ThemeManager::importThemeFromFile(const QString& filePath,
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(0);
     if (schemaVersion <= 0)
         return fail(QStringLiteral("Missing or invalid schemaVersion — file may not be a theme."));
-    if (schemaVersion > 1) {
+    if (schemaVersion > 2) {
         // Forward-compatible-ish: load anyway, but warn the operator.
         // Unknown tokens round-trip; missing tokens fall back to factory.
+        //
+        // The gate was `> 1`, which is stale: loadThemeFile() has read v2
+        // natively since the scope-tree work, and both the save and export
+        // paths now emit v2 — so every ordinary "export a theme, hand it to
+        // another operator, import it" round trip logged "newer than this
+        // build supports". v2 IS what this build writes.
         qCWarning(lcGui) << "ThemeManager::importThemeFromFile: schemaVersion"
                          << schemaVersion << "is newer than this build supports;"
                          << "loading anyway with unknown tokens preserved.";

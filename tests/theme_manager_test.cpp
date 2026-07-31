@@ -891,7 +891,11 @@ int main(int argc, char** argv)
         // absent. It wrote a flat top-level "tokens" object, which the reader's
         // legacy fallback still accepts, so the file loaded cleanly and had
         // quietly lost its per-applet overrides.
+        // Fork first: a built-in can't be re-imported by name (importThemeFromFile
+        // refuses to shadow one), and the re-import below is the assertion that
+        // actually matters.
         EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Export Round Trip"));
         tm.setColor(QStringLiteral("applet/tx"),
                     QStringLiteral("color.slider.foreground"),
                     QColor("#123456"));
@@ -918,6 +922,35 @@ int main(int argc, char** argv)
                                      .value("tx").toObject();
         EXPECT_EQ(tx.value("tokens").toObject()
                     .value("color.slider.foreground").toString().toLower(),
+                  QString("#123456"));
+
+        // applet/rx was NOT overwritten above, so it still carries the bundled
+        // theme's ALIAS — the shape every scoped token actually ships in. An
+        // exported document that has scopes but no `primitives` is WORSE than
+        // one that has neither: the alias survives into the file, finds no
+        // palette on import, and resolveAlias() hands QColor the literal
+        // "{color.green.500}". Pin both halves.
+        const QJsonObject rx = applet.value("scopes").toObject()
+                                     .value("rx").toObject();
+        EXPECT_EQ(rx.value("tokens").toObject()
+                    .value("color.slider.foreground").toString(),
+                  QString("{color.green.500}"));
+        EXPECT_TRUE(doc.contains("primitives"));
+
+        // The assertion that inspecting JSON can't make: import the file back
+        // and read through the resolving API. Fails with an invalid QColor if
+        // `primitives` ever goes missing again, whatever the JSON looks like.
+        QString impErr;
+        const QString reimported = tm.importThemeFromFile(out, &impErr);
+        EXPECT_TRUE(!reimported.isEmpty());
+        EXPECT_TRUE(impErr.isEmpty());
+        const QColor rxSlider = tm.colorAt(QStringLiteral("applet/rx"),
+                                           QStringLiteral("color.slider.foreground"));
+        EXPECT_TRUE(rxSlider.isValid());
+        EXPECT_EQ(rxSlider.name().toLower(), QString("#4dd87a"));  // {color.green.500}
+        EXPECT_EQ(tm.colorAt(QStringLiteral("applet/tx"),
+                             QStringLiteral("color.slider.foreground"))
+                    .name().toLower(),
                   QString("#123456"));
     }
 
