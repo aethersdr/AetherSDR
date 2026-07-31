@@ -11,6 +11,8 @@
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonObject>
 
 #include <iostream>
 
@@ -186,16 +188,48 @@ int main(int argc, char** argv)
     }
 
     // ---- an existing document never re-imports legacy ---------------------
-    // A radio that already owns a document — including one the operator
-    // deliberately EMPTIED — must not resurrect bookmarks from a legacy file
-    // that reappears (backup restore, sync tooling).
+    // The load-bearing subtlety (PR #4621 review, Ozy311 — the first version
+    // of this test could not fail): clearAllEntries() writes {"entries": []},
+    // and a PRESENT-but-empty document is distinguishable from an absent row;
+    // that presence is what blocks re-import. To make the guard falsifiable,
+    // BOTH scopes below have their sections in the same freshly planted
+    // legacy file and neither has a migration memo — the only difference is
+    // the planted empty document, and only the document-less scope imports.
     {
-        check(writeLegacyFixture(), "legacy fixture is re-planted");
-        // crudScope's document exists (emptied above). Section
-        // Radio_0001_0000_0000_0001 is absent from the fixture anyway, so
-        // plant one for it by claiming through a scope whose doc exists:
-        check(stack.entries(crudScope).isEmpty(),
-              "an emptied stack stays empty when a legacy file reappears");
+        const RadioSettingsScope emptiedScope(QStringLiteral("flex"),
+                                              QStringLiteral("9999-8888-7777-6666"));
+        const RadioSettingsScope virginScope(QStringLiteral("flex"),
+                                             QStringLiteral("5555-4444-3333-2222"));
+        const char* doc = R"(<?xml version="1.0" encoding="UTF-8"?>
+<BandStack>
+  <Radio_9999_8888_7777_6666>
+    <Entry_0><FrequencyMhz>10.136000</FrequencyMhz><Mode>DIGU</Mode></Entry_0>
+  </Radio_9999_8888_7777_6666>
+  <Radio_5555_4444_3333_2222>
+    <Entry_0><FrequencyMhz>5.357000</FrequencyMhz><Mode>USB</Mode></Entry_0>
+  </Radio_5555_4444_3333_2222>
+</BandStack>
+)";
+        {
+            QFile f(legacyPath());
+            check(f.open(QIODevice::WriteOnly | QIODevice::Truncate)
+                      && f.write(doc) > 0,
+                  "resurrection fixture is planted");
+        }
+        // The deliberately-emptied document, planted beneath BandStackSettings
+        // so no migration memo exists for its scope.
+        check(AppSettings::instance().setRadioFeature(
+                  emptiedScope.family(), emptiedScope.radioId(),
+                  BandStackSettings::featureName(), 1,
+                  QJsonObject{{QStringLiteral("entries"), QJsonArray{}}}),
+              "an emptied document is planted for a never-accessed scope");
+
+        check(stack.entries(emptiedScope).isEmpty(),
+              "a present-but-EMPTY document blocks legacy re-import "
+              "(no bookmark resurrection)");
+        check(stack.entries(virginScope).size() == 1,
+              "the SAME file's section imports for the document-less scope — "
+              "proving the file was claimable and only the document blocked");
         QFile::remove(legacyPath());
     }
 

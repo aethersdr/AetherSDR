@@ -1109,7 +1109,9 @@ bool AppSettings::setRadioFeature(const QString& family, const QString& radioId,
         }
     }
     if (!m_db || !m_db->isOpen()) {
-        return false;   // reset() may have closed the store (PR #4614 review)
+        qWarning() << "AppSettings: radio feature write refused — the store is"
+                      " closed (reset in progress?)";
+        return false;
     }
     const QString value = QString::fromUtf8(
         QJsonDocument(doc).toJson(QJsonDocument::Compact));

@@ -4415,7 +4415,7 @@ void MainWindow::buildUI()
                     m_radioModel.settingsScope(), maxAge);
         if (removed > 0) {
             m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.settingsScope(), m_bandPlanMgr);
+                m_radioModel.settingsScope(), m_bandPlanMgr);
         }
     });
 
@@ -5386,7 +5386,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_bsConnectGraceUntilMs = QDateTime::currentMSecsSinceEpoch() + 5000;
         if (bandStackPanel) {
             bandStackPanel->loadBookmarks(
-            m_radioModel.settingsScope(), m_bandPlanMgr);
+                m_radioModel.settingsScope(), m_bandPlanMgr);
         }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();

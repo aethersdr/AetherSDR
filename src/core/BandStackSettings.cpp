@@ -320,7 +320,13 @@ void BandStackSettings::load()
                               QString::number(legacy.autoSaveDwellSeconds));
         }
     }
-    settings.setValue(kPrefsMigratedKey, QStringLiteral("True"));
+    // Stamp only when the migration actually happened (file parsed) or there
+    // is genuinely nothing to migrate — a transiently unreadable side file
+    // must retry next launch, matching ensureScopeMigrated()'s behavior for
+    // the entries in the very same file (PR #4621 review, Ozy311).
+    if (legacy.parsed || !QFile::exists(m_legacyFilePath)) {
+        settings.setValue(kPrefsMigratedKey, QStringLiteral("True"));
+    }
     settings.save();
 }
 
@@ -333,29 +339,36 @@ void BandStackSettings::ensureScopeMigrated(const RadioSettingsScope& scope)
     if (m_scopesChecked.contains(memo)) {
         return;
     }
-    m_scopesChecked.insert(memo);
 
-    // Already migrated (or born scoped): the document exists.
+    // Already migrated (or born scoped): the document exists. This includes a
+    // stack the operator deliberately EMPTIED — {"entries": []} is a present
+    // document, distinguishable from an absent row, and it must block
+    // re-import (no bookmark resurrection from a restored side file).
     if (!scope.featureExact(featureName()).isEmpty()) {
+        m_scopesChecked.insert(memo);
         return;
     }
+    // NO memo when there is nothing to claim yet: a side file restored from a
+    // backup mid-session must still be claimable on this radio's next access
+    // (PR #4621 review, Ozy311).
     if (!QFile::exists(m_legacyFilePath)) {
         return;
     }
     const LegacyFile legacy = parseLegacyFile(m_legacyFilePath);
     if (!legacy.parsed) {
-        return;   // unreadable legacy file: leave it for inspection
+        return;   // unreadable legacy file: leave it, retry next access
     }
     const QString section = sanitizeSerial(scope.radioId());
     if (!legacy.sections.contains(section)) {
+        m_scopesChecked.insert(memo);
         return;
     }
     if (!writeEntries(scope, legacy.sections.value(section))) {
         // The claim failed (read-only store?): leave the legacy section in
-        // place so a later launch can retry.
-        m_scopesChecked.remove(memo);
+        // place so a later access can retry.
         return;
     }
+    m_scopesChecked.insert(memo);
     rewriteLegacyWithout(m_legacyFilePath, legacy, section);
     qDebug() << "BandStackSettings: migrated" << legacy.sections.value(section).size()
              << "bookmarks for" << scope.family() << scope.radioId()
@@ -365,6 +378,13 @@ void BandStackSettings::ensureScopeMigrated(const RadioSettingsScope& scope)
 QVector<BandStackEntry> BandStackSettings::readEntries(const RadioSettingsScope& scope)
 {
     QVector<BandStackEntry> out;
+    // The class already decided an empty radioId is not a BandStack target
+    // (ensureScopeMigrated guards it); the readers/writers must agree, or a
+    // mutation landing before the serial is known would write one radio's
+    // bookmarks as the FAMILY-WIDE default row (PR #4621 review, Ozy311).
+    if (!scope.isValid() || scope.radioId().isEmpty()) {
+        return out;
+    }
     const QJsonArray array =
         scope.featureExact(featureName()).value(QStringLiteral("entries")).toArray();
     out.reserve(array.size());
@@ -377,6 +397,11 @@ QVector<BandStackEntry> BandStackSettings::readEntries(const RadioSettingsScope&
 bool BandStackSettings::writeEntries(const RadioSettingsScope& scope,
                                      const QVector<BandStackEntry>& entries)
 {
+    if (!scope.isValid() || scope.radioId().isEmpty()) {
+        qWarning() << "BandStackSettings: refusing a bookmark write without a"
+                      " radio identity (would create a family-wide row)";
+        return false;
+    }
     QJsonArray array;
     for (const BandStackEntry& e : entries) {
         array.append(entryToJson(e));
@@ -397,7 +422,14 @@ void BandStackSettings::addEntry(const RadioSettingsScope& scope,
     ensureScopeMigrated(scope);
     QVector<BandStackEntry> all = readEntries(scope);
     all.append(entry);
-    writeEntries(scope, all);
+    if (!writeEntries(scope, all)) {
+        // The write-through IS the durability story — a refused write must be
+        // loud, not a bookmark that silently repaints as absent on the next
+        // panel reload (PR #4621 review, Ozy311).
+        qWarning() << "BandStackSettings: bookmark add did NOT persist for"
+                   << scope.family() << scope.radioId()
+                   << "— the settings store refused the write";
+    }
 }
 
 void BandStackSettings::removeEntry(const RadioSettingsScope& scope, int index)
@@ -408,13 +440,19 @@ void BandStackSettings::removeEntry(const RadioSettingsScope& scope, int index)
         return;
     }
     all.removeAt(index);
-    writeEntries(scope, all);
+    if (!writeEntries(scope, all)) {
+        qWarning() << "BandStackSettings: bookmark removal did NOT persist for"
+                   << scope.family() << scope.radioId();
+    }
 }
 
 void BandStackSettings::clearAllEntries(const RadioSettingsScope& scope)
 {
     ensureScopeMigrated(scope);
-    writeEntries(scope, {});
+    if (!writeEntries(scope, {})) {
+        qWarning() << "BandStackSettings: bookmark clear did NOT persist for"
+                   << scope.family() << scope.radioId();
+    }
 }
 
 void BandStackSettings::clearBandEntries(const RadioSettingsScope& scope,
@@ -429,8 +467,9 @@ void BandStackSettings::clearBandEntries(const RadioSettingsScope& scope,
                                         && e.frequencyMhz <= highMhz;
                              }),
               all.end());
-    if (all.size() != before) {
-        writeEntries(scope, all);
+    if (all.size() != before && !writeEntries(scope, all)) {
+        qWarning() << "BandStackSettings: band clear did NOT persist for"
+                   << scope.family() << scope.radioId();
     }
 }
 
@@ -449,8 +488,13 @@ int BandStackSettings::removeExpiredEntries(const RadioSettingsScope& scope,
                              }),
               all.end());
     const int removed = before - all.size();
-    if (removed > 0) {
-        writeEntries(scope, all);
+    if (removed > 0 && !writeEntries(scope, all)) {
+        // The caller acts on this count (MainWindow reloads the panel) — a
+        // prune that did not persist must report 0, or the panel repaints
+        // the expired entries right back (PR #4621 review, Ozy311).
+        qWarning() << "BandStackSettings: expiry prune did NOT persist for"
+                   << scope.family() << scope.radioId();
+        return 0;
     }
     return removed;
 }
