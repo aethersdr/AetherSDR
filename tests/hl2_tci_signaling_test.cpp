@@ -334,9 +334,16 @@ static void testSeamBackendCannotWedgeOnVfoB()
     SliceDelta txFlag;
     txFlag.txSlice = true;
     model.slice(0)->applyChanges(txFlag);
-    check(model.maxSlices() > 1,
-          "fixture precondition: maxSlices() over-reports, so only the "
-          "command-plane guard can refuse the create");
+    // maxSlices() now reports what the BACKEND says, not the Flex model-string
+    // estimate — so on a backend that is not connected (this fixture) it is 1,
+    // and the CAPACITY guard is what refuses rather than the command-plane one.
+    //
+    // Which guard refuses is not the subject. The subject is that whichever one
+    // does, it must not strand the route transition — so the precondition now
+    // pins the honest capacity instead of an over-report, and every invariant
+    // below is unchanged.
+    check(model.maxSlices() == 1,
+          "fixture precondition: maxSlices() reports the backend's own capacity");
 
     TciServer server(&model);
     QWebSocket client;
@@ -389,13 +396,24 @@ static void testSeamBackendPromoteAlwaysAnswers()
         return;
     }
     check(!model.slice(0)->isTxSlice(),
-          "fixture precondition: the slice is not already the TX slice");
+          "fixture precondition: the FIXTURE seeded tx=0 on this slice");
 
     TciServer server(&model);
     bool answered = false, selected = false;
     Hl2TciSignalingTest::promote(server, 0, &answered, &selected);
     check(answered, "promoteTxSliceAndContinue answers on a seam backend");
-    check(!selected, "it answers 'not selected' -- there is no seam verb to promote");
+    // There IS a seam verb now (IRadioBackend::setTxSlice), so this no longer
+    // answers a flat "not selected". It asks the backend and reports what the
+    // backend says — and the backend's answer for slice 0 is that it already
+    // owns transmit, which it CONFIRMS by republishing rather than returning
+    // silently. The fixture's seeded tx=0 was the disagreement, and the
+    // backend's answer is the one that survives it.
+    //
+    // The contract this test exists for is unchanged and is the line above:
+    // ANSWER. False is fine, silence strands the route transition.
+    check(selected, "it reports the backend's answer: slice 0 already owns transmit");
+    check(model.slice(0)->isTxSlice(),
+          "and the backend's republish corrected the model's seeded tx=0");
 
     // A slice that is ALREADY the TX slice still succeeds without a command:
     // this is the path every HL2 TCI key takes, and it must not regress.

@@ -285,7 +285,11 @@ void MqttApplet::loadPasswordFromKeychain()
 {
 #ifdef HAVE_KEYCHAIN
     auto& settings = AppSettings::instance();
-    const QString legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
+    // A password diverted by the XML import (RFC #4603) normally reaches the
+    // keychain during the import; the session vault covers a failed write.
+    QString legacy = settings.takeSessionCredential(mqttKeychainKey());
+    if (legacy.isEmpty())
+        legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
     if (!legacy.isEmpty()) {
         m_password = legacy;
         finishPasswordLoad();
@@ -322,10 +326,16 @@ void MqttApplet::loadPasswordFromKeychain()
     });
     job->start();
 #else
-    const QString legacy = AppSettings::instance().value(legacyMqttPasswordSettingKey()).toString();
+    // No keychain: session-only (RFC #4603). take + set keeps the value
+    // available for other consumers this session.
+    auto& settings = AppSettings::instance();
+    QString legacy = settings.takeSessionCredential(mqttKeychainKey());
+    if (legacy.isEmpty())
+        legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
     if (!legacy.isEmpty()) {
+        settings.setSessionCredential(mqttKeychainKey(), legacy);
         qCWarning(lcMqtt) << "MqttApplet: HAVE_KEYCHAIN not set - MQTT password "
-                             "remains in plaintext AppSettings";
+                             "is session-only";
         m_password = legacy;
     }
     finishPasswordLoad();

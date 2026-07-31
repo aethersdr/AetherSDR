@@ -602,7 +602,8 @@ void MainWindow::setKiwiSdrVirtualAntennaForSliceInternal(int sliceId,
     m_kiwiSdrManager->assignSliceToProfile(
         sliceId, profileId, slice->frequency(), slice->mode(),
         slice->filterLow(), slice->filterHigh(), slice->panId(),
-        BandSettings::bandForFrequency(slice->frequency()));
+        BandSettings::bandForFrequency(slice->frequency()),
+        m_radioModel.transmitModel().cwPitch());
     updateKiwiSdrVirtualTrackingForSlice(slice);
     updateKiwiSdrVirtualAudioControlsForSlice(slice);
     updateKiwiSdrVirtualReceiverControlsForSlice(slice);
@@ -687,9 +688,9 @@ void MainWindow::prepareKiwiSdrBandRecallForPan(const QString& panId)
 
     // A deferred request can supersede an older one for the same pan. Re-arm
     // any still-prepared slice before beginning the new atomic command pair.
-    // The #4158/Center Lock rebind marker (noteBandRecallForPan) is owned by the
-    // band-recall trigger sites, not here — this path only performs the #4209
-    // audio-mute handoff, bracketed around the actual wire dispatch.
+    // The #4158/Center Lock rebind marker (noteBandRecallForPan) is started by
+    // the same actual-dispatch signal. This path only performs the #4209
+    // audio-mute handoff around the wire command.
     finishPreparedKiwiSdrBandRecallForPan(panId);
 
     for (SliceModel* slice : m_radioModel.slices()) {
@@ -1035,7 +1036,8 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
     m_kiwiSdrManager->updateSliceTracking(
         slice->sliceId(), slice->frequency(), slice->mode(),
         slice->filterLow(), slice->filterHigh(), slice->panId(),
-        BandSettings::bandForFrequency(slice->frequency()));
+        BandSettings::bandForFrequency(slice->frequency()),
+        m_radioModel.transmitModel().cwPitch());
     if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
         m_kiwiSdrManager->updateWaterfallView(
             slice->sliceId(), slice->panId(), spectrum->centerMhz(),
@@ -1308,6 +1310,87 @@ void MainWindow::syncKiwiSdrDiversityEscControls()
     }
 }
 
+// Leaving kiwi display (#4081 toggle-back, or the virtual antenna cleared):
+// while the kiwi source owned the pan's display, tune-driven recenters stayed
+// widget-local and the radio pan kept its kiwi-assignment geometry
+// (PanRecenterPolicy). Handing the display back to the Flex source with the
+// widget still on its kiwi-era view would render radio tiles for a span the
+// operator isn't looking at — zero overlap draws a blank spectrum and bakes
+// black rows into waterfall history (#4142). Ask the radio to adopt the
+// widget's current view; the status echo reconciles anything the radio
+// clamps differently (Principle II).
+void MainWindow::reconcileFlexPanGeometryAfterKiwiDisplay(
+    const QString& panId, SpectrumWidget* spectrum)
+{
+    if (!spectrum || !m_radioModel.isConnected()) {
+        m_kiwiLeaveReconcilePending.remove(panId);
+        return;
+    }
+    // Never fight a live gesture — its own write path owns the view until
+    // release, and a mid-animation pan-follow center is not operator intent.
+    // But this reconcile is the only thaw, so remember the pan and retry it when
+    // the gesture settles; otherwise the flex pan stays on the frozen
+    // kiwi-assignment span until an unrelated gesture happens to correct it.
+    if (m_sliceDragInProgress || spectrum->panDragActive()
+        || spectrum->frequencyRangeGestureActive()) {
+        m_kiwiLeaveReconcilePending.insert(panId);
+        return;
+    }
+    m_kiwiLeaveReconcilePending.remove(panId);
+    const double widgetBwMhz = spectrum->bandwidthMhz();
+    if (widgetBwMhz <= 0.0) {
+        return;
+    }
+    // The kiwi display allows spans beyond the pan's limits; clamp back to
+    // what THIS pan can actually take (per-pan: an HL2 backend reports real
+    // limits far below the model-table guess — #4470), low edge >= 0 Hz.
+    const double bwMhz = std::clamp(widgetBwMhz,
+                                    m_radioModel.panMinBandwidthMhz(panId),
+                                    m_radioModel.panMaxBandwidthMhz(panId));
+    const double centerMhz = std::max(spectrum->centerMhz(), bwMhz / 2.0);
+    // Effective (pending-else-model) compare so a deferred reconcile already
+    // in flight is not re-issued on every UI sync (#4142).
+    if (qFuzzyCompare(m_radioModel.effectivePanCenterMhz(panId), centerMhz)
+        && qFuzzyCompare(m_radioModel.effectivePanBandwidthMhz(panId), bwMhz)) {
+        return;
+    }
+    m_radioModel.requestPanCenter(panId, centerMhz, bwMhz);
+}
+
+void MainWindow::retryDeferredKiwiLeaveReconcile(const QString& panId)
+{
+    if (!m_kiwiLeaveReconcilePending.contains(panId)) {
+        return;
+    }
+    // The pan may have returned to kiwi display while the gesture ran — the
+    // deferred leave-reconcile is moot then (the widget view IS the kiwi view,
+    // and reconciling would push that frozen span to the radio).
+    if (kiwiSdrPanDisplaysKiwi(panId)) {
+        m_kiwiLeaveReconcilePending.remove(panId);
+        return;
+    }
+    SpectrumWidget* spectrum = m_panStack ? m_panStack->spectrum(panId) : nullptr;
+    if (!spectrum) {
+        m_kiwiLeaveReconcilePending.remove(panId);
+        return;
+    }
+    // Re-runs the full guard: if another gesture is still live it re-defers,
+    // otherwise it reconciles and clears the pending entry.
+    reconcileFlexPanGeometryAfterKiwiDisplay(panId, spectrum);
+}
+
+void MainWindow::retryAllDeferredKiwiLeaveReconcile()
+{
+    if (m_kiwiLeaveReconcilePending.isEmpty()) {
+        return;
+    }
+    const QList<QString> pending(m_kiwiLeaveReconcilePending.cbegin(),
+                                 m_kiwiLeaveReconcilePending.cend());
+    for (const QString& panId : pending) {
+        retryDeferredKiwiLeaveReconcile(panId);
+    }
+}
+
 void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
 {
     if (!m_panStack || panId.isEmpty()) {
@@ -1344,6 +1427,11 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
             spectrum->dssGain(), spectrum->fftLineColor());
     };
 
+    // Capture the pre-sync display source: leaving kiwi display is the
+    // moment the radio pan (frozen at kiwi-assignment geometry while
+    // recenters stayed widget-local — PanRecenterPolicy) must be brought
+    // back to the view the operator is actually looking at.
+    const bool wasKiwiDisplay = spectrum->kiwiSdrDisplaySourceKiwi();
     spectrum->setKiwiSdrDisplaySourceKiwi(displayKiwi);
     spectrum->setKiwiSdrDisplaySourceControlVisible(hasKiwiSource);
 
@@ -1352,6 +1440,9 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         applyPanBandwidthLimitsToWidget(panId, spectrum,
                                         m_radioModel.panMinBandwidthMhz(panId),
                                         m_radioModel.panMaxBandwidthMhz(panId));
+        if (wasKiwiDisplay) {
+            reconcileFlexPanGeometryAfterKiwiDisplay(panId, spectrum);
+        }
         const QString overlayProfileId = kiwiSdrOverlayProfileForPan(panId);
         if (!overlayProfileId.isEmpty()) {
             spectrum->setKiwiSdrConnectionOverlay(
@@ -1375,6 +1466,9 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         applyPanBandwidthLimitsToWidget(panId, spectrum,
                                         m_radioModel.panMinBandwidthMhz(panId),
                                         m_radioModel.panMaxBandwidthMhz(panId));
+        if (wasKiwiDisplay) {
+            reconcileFlexPanGeometryAfterKiwiDisplay(panId, spectrum);
+        }
         spectrum->setKiwiSdrConnectionOverlay(false);
         setKiwiSdrWaterfallActive(m_radioModel, panId, spectrum, false);
         spectrum->setKiwiSdrWaterfallAvailable(
@@ -1503,7 +1597,8 @@ void MainWindow::scheduleKiwiSdrUiSync(int flags)
     });
 }
 
-void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
+void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice,
+                                                           bool includeEnable)
 {
     if (!m_kiwiSdrManager || !m_audio || !slice) {
         return;
@@ -1518,13 +1613,43 @@ void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
     const float gainPercent = slice->audioGain();
     const bool muted = slice->audioMute();
     const int pan = slice->audioPan();
+    const bool keepDuringTx =
+        m_kiwiSdrManager->profile(profileId).keepAudioDuringTx;
     QMetaObject::invokeMethod(m_audio,
-                              [audio = m_audio, profileId, gainPercent, muted, pan]() {
-        audio->setKiwiSdrAudioSourceEnabled(profileId, true);
+                              [audio = m_audio, profileId, gainPercent, muted,
+                               pan, keepDuringTx, includeEnable]() {
+        if (includeEnable) {
+            audio->setKiwiSdrAudioSourceEnabled(profileId, true);
+        }
         audio->setKiwiSdrAudioSourceGain(profileId, gainPercent);
         audio->setKiwiSdrAudioSourceMuted(profileId, muted);
         audio->setKiwiSdrAudioSourcePan(profileId, pan);
+        audio->setKiwiSdrAudioSourceKeepDuringTx(profileId, keepDuringTx);
     }, Qt::QueuedConnection);
+}
+
+void MainWindow::refreshKiwiSdrVirtualAudioControls()
+{
+    if (!m_kiwiSdrManager) {
+        return;
+    }
+
+    const QVector<KiwiSdrAntennaProfile> profiles =
+        m_kiwiSdrManager->profiles();
+    for (const KiwiSdrAntennaProfile& profile : profiles) {
+        const int sliceId =
+            m_kiwiSdrManager->assignedSliceForProfile(profile.id);
+        if (sliceId < 0) {
+            continue;
+        }
+        if (SliceModel* slice = m_radioModel.slice(sliceId)) {
+            // Settings refresh only — never force-enable here, or a profile
+            // edit would re-enable engine sources KiwiSdrManager disabled
+            // for a disconnected stream.
+            updateKiwiSdrVirtualAudioControlsForSlice(slice,
+                                                      /*includeEnable=*/false);
+        }
+    }
 }
 
 void MainWindow::updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice)
@@ -1648,8 +1773,16 @@ bool MainWindow::kiwiSdrTransmitMuteRequired() const
     }
 
     const TransmitModel& tx = m_radioModel.transmitModel();
-    bool txActive = tx.isTransmitting() || tx.isTuning()
-        || m_radioModel.isRadioTransmitting();
+    // Follow the optimistic local unkey: after this client drops MOX the
+    // radio keeps reporting TRANSMITTING for the interlock round trip plus
+    // any hang timers, and that tail should not hold the Kiwi gate closed.
+    // The radio term still mutes for TX this client never keyed (VOX, CAT,
+    // other clients) — the latch masks it only during our own unkey tail.
+    // The latch clause lives in KiwiSdrTxMutePolicy.h so the unit test
+    // exercises the production predicate rather than a copy.
+    bool txActive = AetherSDR::kiwiSdrTxMuteRequiredForLatch(
+        m_kiwiSdrTxMuteLatch, tx.isTransmitting() || tx.isTuning(),
+        m_radioModel.isRadioTransmitting());
 #ifdef HAVE_RADE
     txActive = txActive || m_radeEooPending;
 #endif
@@ -1660,6 +1793,41 @@ void MainWindow::syncKiwiSdrTransmitMute()
 {
     if (!m_audio) {
         return;
+    }
+
+    const TransmitModel& tx = m_radioModel.transmitModel();
+    const bool wasMasked = m_kiwiSdrTxMuteLatch.radioTermMasked();
+    m_kiwiSdrTxMuteLatch.update(tx.isTransmitting() || tx.isTuning(),
+                                m_radioModel.isRadioTransmitting());
+    // The mask only ever covers our own unkey tail. When the interlock names
+    // another client as the transmitter, end the mask immediately instead of
+    // riding out the timeout below — the foreign TX must re-engage the mute
+    // now. Unreported ownership keeps txOwnedByUs() true, so the ambiguous
+    // case still falls back to the bounded timeout.
+    if (AetherSDR::kiwiSdrTxMaskProvablyForeign(
+            m_kiwiSdrTxMuteLatch, m_radioModel.isRadioTransmitting(),
+            m_radioModel.txOwnedByUs())) {
+        m_kiwiSdrTxMuteLatch.expire();
+    }
+    if (m_kiwiSdrTxMuteLatch.radioTermMasked() != wasMasked) {
+        if (m_kiwiSdrTxMaskWatchdog.onMaskChanged(
+                m_kiwiSdrTxMuteLatch.radioTermMasked())) {
+            // Bound the mask: an interlock still reporting TRANSMITTING this
+            // long after our local unkey is a foreign transmission (another
+            // client, CAT, VOX) that must re-engage the mute. 2500 ms covers
+            // the interlock round trip plus the radio's hang timers (CW
+            // break-in / tx_delay cap at 2000 ms).
+            constexpr int kKiwiSdrUnkeyMaskTimeoutMs = 2500;
+            QTimer::singleShot(kKiwiSdrUnkeyMaskTimeoutMs, this,
+                               [this, epoch = m_kiwiSdrTxMaskWatchdog.epoch]() {
+                if (!m_kiwiSdrTxMaskWatchdog.shouldExpire(
+                        epoch, m_kiwiSdrTxMuteLatch.radioTermMasked())) {
+                    return;
+                }
+                m_kiwiSdrTxMuteLatch.expire();
+                syncKiwiSdrTransmitMute();
+            });
+        }
     }
 
     const bool muted = kiwiSdrTransmitMuteRequired();
@@ -1699,7 +1867,8 @@ void MainWindow::wireKiwiSdr()
                 spectrum ? spectrum->centerMhz() : slice->frequency(),
                 spectrum ? spectrum->bandwidthMhz() : 0.2,
                 spectrum ? spectrum->wfLineDuration() : 100,
-                BandSettings::bandForFrequency(slice->frequency()));
+                BandSettings::bandForFrequency(slice->frequency()),
+                m_radioModel.transmitModel().cwPitch());
         });
         if (m_audio) {
             connect(m_kiwiSdrManager, &KiwiSdrManager::decodedAudioReady,
@@ -2024,6 +2193,9 @@ void MainWindow::wireKiwiSdr()
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
                 this, [this] {
+            // Profile edits can change keepAudioDuringTx; re-push the
+            // per-source audio controls so the engine gate follows.
+            refreshKiwiSdrVirtualAudioControls();
             scheduleKiwiSdrUiSync(KiwiSdrUiSyncWaterfallAvailability
                                   | KiwiSdrUiSyncAppletReceivers
                                   | KiwiSdrUiSyncPanadapterStates);

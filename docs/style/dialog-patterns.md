@@ -122,9 +122,10 @@ captured during construction is the pre-show default position. See PR #2580.
 
 ### 4. Geometry persistence — base64 + move/resize/close
 
-`AppSettings` serializes via XML, so binary `QByteArray` values from
-`saveGeometry()` need base64 encoding to round-trip. The project's existing
-`MainWindowGeometry` / `MainWindowState` use this same pattern.
+`AppSettings` stores values as text (SQLite TEXT rows since RFC #4603, XML
+before that), so binary `QByteArray` values from `saveGeometry()` need base64
+encoding to round-trip. The project's existing `MainWindowGeometry` /
+`MainWindowState` use this same pattern.
 
 ```cpp
 void FooDialog::saveGeometryToSettings()

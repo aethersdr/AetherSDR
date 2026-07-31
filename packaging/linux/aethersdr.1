@@ -3,9 +3,36 @@
 AetherSDR \- FlexRadio transceiver client
 .SH SYNOPSIS
 .B aethersdr
+.br
+.B aethersdr --config
+.I command
+.RI [ key ] " " [ value ]
 .SH DESCRIPTION
 AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines.
 Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol
 natively and aims to replicate the full SmartSDR experience.
+.SH CONFIG COMMANDS
+Settings live in a SQLite store under the user config directory
+(\fB~/.config/AetherSDR/AetherSDR.db\fR). The \fB--config\fR mode
+inspects or repairs them without starting the GUI and then exits:
+.TP
+.B list \fR[\fIprefix\fR]
+Print every setting as key<TAB>value, optionally filtered by key prefix.
+.TP
+.B get \fIkey\fR
+Print one value (exit status 2 if the key does not exist).
+.TP
+.B set \fIkey\fR \fIvalue\fR
+Create or change a setting, verifying it persisted.
+.TP
+.B unset \fIkey\fR
+Delete a setting.
+.TP
+.B export
+Sanitized dump of the whole store (secrets redacted); diagnostic output,
+not a restorable backup.
+.TP
+.B path
+Print the settings database path.
 .SH SEE ALSO
 Project homepage: https://github.com/aethersdr/AetherSDR

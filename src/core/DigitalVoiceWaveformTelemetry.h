@@ -11,6 +11,7 @@ enum class DigitalVoiceWaveformHealth {
     Inactive,
     Measuring,
     Healthy,
+    NoInput,
     CadenceDegraded,
     TransportLoss,
     SourceDeficits

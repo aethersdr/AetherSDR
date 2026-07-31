@@ -1,4 +1,5 @@
 #include "FilterPassbandWidget.h"
+#include "MacCursorCompat.h"
 
 #include <QPainterPath>
 #include <QFontMetrics>
@@ -13,7 +14,7 @@ FilterPassbandWidget::FilterPassbandWidget(QWidget* parent)
     setMinimumSize(minimumSizeHint());
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
-    setCursor(Qt::SizeAllCursor);
+    setCursor(macSafeCursorShape(Qt::SizeAllCursor));
 }
 
 void FilterPassbandWidget::setFilter(int lo, int hi)
@@ -126,7 +127,7 @@ void FilterPassbandWidget::mousePressEvent(QMouseEvent* ev)
         setCursor(Qt::SizeHorCursor);
     } else {
         m_dragMode = DragShift;
-        setCursor(Qt::SizeAllCursor);
+        setCursor(macSafeCursorShape(Qt::SizeAllCursor));
     }
 }
 
@@ -140,10 +141,12 @@ void FilterPassbandWidget::mouseMoveEvent(QMouseEvent* ev)
         const int loLineX = margin + SKIRT + 8;
         const int hiLineX = width() - margin - SKIRT - 8;
         const int x = ev->pos().x();
-        Qt::CursorShape wanted = (x <= loLineX || x >= hiLineX)
-            ? Qt::SizeHorCursor : Qt::SizeAllCursor;
-        if (cursor().shape() != wanted)
+        const Qt::CursorShape wanted = macSafeCursorShape(
+            (x <= loLineX || x >= hiLineX)
+                ? Qt::SizeHorCursor : Qt::SizeAllCursor);
+        if (cursor().shape() != wanted) {
             setCursor(wanted);
+        }
         return;
     }
 

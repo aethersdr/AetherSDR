@@ -34,5 +34,11 @@ context that would otherwise live in tribal knowledge.
   dedicated `AcomConnection`/`AcomApplet` pair, deliberately independent of
   `AmpModel`/`AmpApplet` — see the doc's design-reversal section for why.
 
+- [`radio-capabilities-map.md`](radio-capabilities-map.md) — every
+  `RadioCapabilities` field, what each backend declares, and where the value is
+  read. Read before adding a field: the struct defaults to `false`, so a
+  backend that omits one silently declares the feature absent. Also records the
+  fields nothing reads yet, including the `maxSlices`/`maxPanadapters` bypass.
+
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.

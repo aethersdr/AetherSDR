@@ -452,12 +452,14 @@ void SpectrumOverlayMenu::buildBandPanel()
                     hideAllSubPanels();
                     emit bandSelected(bandName, freq, mode);
                 });
+                m_bandBtnFreqs.append({btn, freq});
             }
 
             grid->addWidget(btn, row, col);
         }
     }
 
+    applyTuningRangeToBandButtons();
     m_bandPanel->adjustSize();
 }
 
@@ -650,7 +652,13 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_wnbLabel->setFixedWidth(kValueW);
     m_wnbLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     wnbRow->addWidget(m_wnbLabel);
-    vbox->addLayout(wnbRow);
+    // Wrapped in a container rather than added as a bare layout, so the whole
+    // row can be hidden as one unit when the radio has no wideband noise
+    // blanker. Hiding the button alone would strand its level slider.
+    m_wnbRow = new QWidget;
+    wnbRow->setContentsMargins(0, 0, 0, 0);
+    m_wnbRow->setLayout(wnbRow);
+    vbox->addWidget(m_wnbRow);
 
     connect(m_wnbBtn, &QPushButton::toggled, this, &SpectrumOverlayMenu::wnbToggled);
     connect(m_wnbSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -2410,6 +2418,30 @@ void SpectrumOverlayMenu::layoutDisplayPanel()
     m_displayPanel->move(x() + width(), panelY);
 }
 
+// WNB is a RADIO-side noise blanker: the toggle and level go to the radio's own
+// wideband blanker, so on a backend that has none the row would be a control
+// with nothing behind it. Hidden as a unit, button and slider together.
+void SpectrumOverlayMenu::setRadioSideDspAvailable(bool available)
+{
+    if (m_wnbRow) {
+        m_wnbRow->setVisible(available);
+    }
+}
+
+void SpectrumOverlayMenu::setDaxStreamsAvailable(bool available)
+{
+    // The button lives in the menu row and the panel is a popup off it, so both
+    // have to go — hiding only the button would leave the panel reachable if it
+    // were already open when the capability changed.
+    if (m_menuBtns.size() > kBtnDax && m_menuBtns[kBtnDax]) {
+        m_menuBtns[kBtnDax]->setVisible(available);
+    }
+    if (!available && m_daxPanel) {
+        m_daxPanel->hide();
+        m_daxPanelVisible = false;
+    }
+}
+
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
 {
     syncWnbState(on, level, false);
@@ -2530,6 +2562,10 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     for (auto* btn : m_xvtrBandBtns)
         btn->deleteLater();
     m_xvtrBandBtns.clear();
+    // The whole band panel is destroyed and rebuilt below, so every pointer in
+    // here is about to dangle. Cleared HERE rather than after the rebuild,
+    // because deleteLater() on the panel takes its children with it.
+    m_bandBtnFreqs.clear();
 
     // Rebuild the main band panel to insert XVTR bands between
     // HF bands and utility buttons (WWV/GEN/2200/630/XVTR). (#571)
@@ -2583,6 +2619,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             hideAllSubPanels();
             emit bandSelected(bandName, freq, mode);
         });
+        m_bandBtnFreqs.append({btn, freq});
         return btn;
     };
 
@@ -2611,6 +2648,7 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
                 hideAllSubPanels();
                 emit bandSelected(bandName, freq, mode);
             });
+            m_bandBtnFreqs.append({btn, freq});
             grid->addWidget(btn, row, col % 3);
             if (++col % 3 == 0)
                 ++row;
@@ -2782,6 +2820,43 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
             m_bandPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
         m_wheelGuard->guardTree(
             m_xvtrPanel, SpectrumOverlayWheelGuard::BoundaryMode::Consume);
+    }
+    // The panel was rebuilt from scratch, so the range gate has to be
+    // re-applied — it is a property of the radio, not of the buttons.
+    applyTuningRangeToBandButtons();
+}
+
+void SpectrumOverlayMenu::setTuningRangeMhz(double minMhz, double maxMhz)
+{
+    if (qFuzzyCompare(m_tuningMinMhz, minMhz) && qFuzzyCompare(m_tuningMaxMhz, maxMhz))
+        return;
+    m_tuningMinMhz = minMhz;
+    m_tuningMaxMhz = maxMhz;
+    applyTuningRangeToBandButtons();
+}
+
+void SpectrumOverlayMenu::applyTuningRangeToBandButtons()
+{
+    // "Not reported" is max <= min, which covers both the (0,0) disconnected
+    // case and any backend that never sets a range. Everything stays enabled,
+    // so this is a no-op for Flex.
+    const bool constrained = m_tuningMaxMhz > m_tuningMinMhz;
+    for (auto it = m_bandBtnFreqs.begin(); it != m_bandBtnFreqs.end(); ) {
+        QPushButton* btn = it->first;
+        if (!btn) {                       // destroyed out from under us
+            it = m_bandBtnFreqs.erase(it);
+            continue;
+        }
+        const double freq = it->second;
+        const bool reachable = !constrained
+                            || (freq >= m_tuningMinMhz && freq <= m_tuningMaxMhz);
+        btn->setEnabled(reachable);
+        btn->setToolTip(reachable
+            ? QString()
+            : tr("Outside this radio's tuning range (%1–%2 MHz)")
+                  .arg(m_tuningMinMhz, 0, 'f', 3)
+                  .arg(m_tuningMaxMhz, 0, 'f', 3));
+        ++it;
     }
 }
 

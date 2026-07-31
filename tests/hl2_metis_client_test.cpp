@@ -97,7 +97,7 @@ int main(int argc, char** argv)
     check(startsSeen >= 1, "fake radio saw the metis start command");
     check(upSpy.count() == 1, "linkUp emitted exactly once (first EP6)");
     check(iqCount >= 5, "iqBlockReady fired for the EP6 stream");
-    check(lastBlockSize == static_cast<std::size_t>(kSamplesPerPacket),
+    check(lastBlockSize == static_cast<std::size_t>(kEp6BlockSamples),
           "decoded block carries 126 IQ samples");
     check(client.droppedPackets() == 0, "no drops on an ordered loopback stream");
 

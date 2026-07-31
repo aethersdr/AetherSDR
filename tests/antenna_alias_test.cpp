@@ -1,5 +1,6 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/SettingsDatabase.h"
 #include "models/AntennaAliasStore.h"
 #include "models/SliceModel.h"
 
@@ -43,13 +44,15 @@ int main(int argc, char** argv)
     AntennaAliasStore::save(radioKey, aliases);
 
     bool ok = true;
-    QFile saved(settings.filePath());
-    ok &= expect(saved.open(QIODevice::ReadOnly | QIODevice::Text),
-                 "alias settings file is written");
-    const QString xml = ok ? QString::fromUtf8(saved.readAll()) : QString();
-    saved.close();
-    ok &= expect(xml.contains(QStringLiteral("AntennaAliases_")),
-                 "aliases persist under an XML-safe per-radio key");
+    // Assert against the persisted database file: the per-radio row must be
+    // stored under the encoded AntennaAliases_<hex(radioKey)> key.
+    QString storedJson;
+    ok &= expect(SettingsDatabase::readAppValueFromFile(
+                     settings.filePath(),
+                     AntennaAliasStore::settingsKeyForRadio(radioKey),
+                     storedJson)
+                     && !storedJson.isEmpty(),
+                 "aliases persist under the encoded per-radio key");
 
     settings.reset();
     settings.load();

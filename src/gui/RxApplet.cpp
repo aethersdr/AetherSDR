@@ -1373,7 +1373,12 @@ int RxApplet::sqlManualLevel() const
         return clampManualSqlLevelForCurrentSurface(
             m_slice->receiveSquelchLevel());
     }
-    return clampManualSqlLevelForCurrentSurface(m_sqlManualLevel);
+    // Per-slice (#3326): m_sqlManualLevel is only the fallback for the rare
+    // moment no slice is attached — once attached, each slice keeps its own
+    // remembered manual threshold so switching the active slice doesn't
+    // pull in whichever slice last touched the control.
+    return clampManualSqlLevelForCurrentSurface(
+        m_slice ? m_slice->manualSquelchLevel() : m_sqlManualLevel);
 }
 
 int RxApplet::sqlManualMaximum() const
@@ -1395,7 +1400,16 @@ void RxApplet::setManualSqlLevelForCurrentSurface(int level)
         return;
     }
 
-    m_sqlManualLevel = clamped;
+    // Per-slice (#3326): the attached slice keeps its own threshold. The
+    // shared m_sqlManualLevel / AppSettings key still get updated too, but
+    // only as the seed a NEWLY created slice starts from when the radio's
+    // status carries no squelch_level of its own — see RadioModel.cpp's
+    // SliceModel construction — not a live cross-slice value read back here.
+    if (m_slice) {
+        m_slice->setManualSquelchLevel(clamped);
+    } else {
+        m_sqlManualLevel = clamped;
+    }
     auto& s = AppSettings::instance();
     s.setValue("LastManualSquelchLevel", QString::number(clamped));
     s.save();
