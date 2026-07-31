@@ -151,6 +151,39 @@ int main()
                      "new episode's own epoch expires normally");
     }
 
+    {
+        // Resume-hold computation ("Resume audio after TX delay").
+        using AetherSDR::kiwiSdrResumeHoldMs;
+        using AetherSDR::kKiwiSdrResumeHoldGuardMs;
+        using AetherSDR::kKiwiSdrResumeHoldMinMs;
+        using AetherSDR::kKiwiSdrResumeHoldMaxMs;
+
+        ok &= expect(kiwiSdrResumeHoldMs(true, 500, 520, 0)
+                         == 500 + kKiwiSdrResumeHoldGuardMs,
+                     "valid estimate: offset + guard");
+        ok &= expect(kiwiSdrResumeHoldMs(true, 500, 520, 520)
+                         == 500 + 520 + kKiwiSdrResumeHoldGuardMs,
+                     "applied presentation holdback adds to the hold");
+        ok &= expect(kiwiSdrResumeHoldMs(false, 0, 520, 520)
+                         == 520 + 520 + kKiwiSdrResumeHoldGuardMs,
+                     "no estimate: base latency proxy + holdback + guard");
+        ok &= expect(kiwiSdrResumeHoldMs(true, -300, 520, 0)
+                         == kKiwiSdrResumeHoldMinMs,
+                     "negative estimate clamps to minimum hold");
+        ok &= expect(kiwiSdrResumeHoldMs(true, -300, 520, -100)
+                         == kKiwiSdrResumeHoldMinMs,
+                     "negative holdback is ignored, clamps to minimum");
+        ok &= expect(kiwiSdrResumeHoldMs(true, 10000, 520, 0)
+                         == kKiwiSdrResumeHoldMaxMs,
+                     "huge estimate clamps to maximum hold");
+        ok &= expect(kiwiSdrResumeHoldMs(true, 3000, 520, 5000)
+                         == kKiwiSdrResumeHoldMaxMs,
+                     "estimate + holdback together clamp to maximum");
+        ok &= expect(kiwiSdrResumeHoldMs(false, 0, 0, 0)
+                         == kKiwiSdrResumeHoldMinMs,
+                     "zero fallback clamps to minimum hold");
+    }
+
     if (!ok) {
         std::cout << "kiwi_sdr_tx_mute_policy_test FAILED\n";
         return 1;

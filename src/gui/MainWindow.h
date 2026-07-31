@@ -111,6 +111,7 @@ class ConnectionPanel;
 class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
+struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
 class SpectrumOverlayMenu;
 class IRadioBackend;
@@ -487,6 +488,9 @@ private:
     bool kiwiSdrTransmitMuteRequired() const;
     void syncKiwiSdrTransmitMute();
     void refreshKiwiSdrVirtualAudioControls();
+    void refreshKiwiSdrResumeHolds();
+    int kiwiSdrResumeHoldMsForProfile(
+        const KiwiSdrAntennaProfile& profile) const;
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     // Worker for the above. selectSlice=false suppresses the active-slice steal
     // for automatic re-arms (band-recall finish, #4158 recreation re-bind).
