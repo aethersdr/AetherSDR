@@ -189,6 +189,14 @@ void PanadapterModel::setRxAntenna(const QString& ant)
     }
 }
 
+void PanadapterModel::setWide(bool wide)
+{
+    if (wide == m_wideActive)
+        return;
+    m_wideActive = wide;
+    emit wideChanged(m_wideActive);
+}
+
 void PanadapterModel::setAntList(const QStringList& ants)
 {
     if (ants != m_antList) {
@@ -242,11 +250,7 @@ void PanadapterModel::applyStateExtension(const QVariantMap& fields)
         bool ok = false;
         const uint v = fields.value(QStringLiteral("wide")).toString().toUInt(&ok);
         if (ok && v <= 1) {
-            const bool wide = (v != 0);
-            if (wide != m_wideActive) {
-                m_wideActive = wide;
-                emit wideChanged(m_wideActive);
-            }
+            setWide(v != 0);
         } else {
             qCDebug(lcProtocol) << "PanadapterModel: invalid wide value"
                                 << fields.value(QStringLiteral("wide"));

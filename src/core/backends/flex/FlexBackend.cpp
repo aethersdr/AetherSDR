@@ -7,6 +7,7 @@
 #include "core/LogManager.h"
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
+#include "core/backends/MemoryWireCodec.h"
 #include "core/backends/flex/FlexKvCarry.h"
 #include "models/ModelCapabilities.h"
 
@@ -148,6 +149,53 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canTransmit = true;
     caps.hasTuner = true;
     caps.canReboot = true;   // SmartSDR "radio reboot" (#4448 F3)
+    // Global / TX / mic profiles are a SmartSDR feature on every current model.
+    caps.hasProfiles = true;
+    // DAX audio + DAX IQ ride PanadapterStream's VITA-49 plane, which only this
+    // backend owns.
+    caps.hasDaxStreams = true;
+    // NR/NB/ANF/NRL/ANFL/ANFT, the APD predistorter and the wideband noise
+    // blanker all run in the radio's firmware, driven by command-plane verbs.
+    caps.hasRadioSideDsp = true;
+    caps.hasWaveforms = true;            // installable SmartSDR waveforms
+    caps.hasMultiClientSessions = true;  // multiFLEX
+    // GPSDO / on-board GNSS, reported through the `gps` status.
+    //
+    // TRUE for every Flex, and deliberately COARSER than
+    // RadioModel::hasGpsHardware(). The two answer different questions and both
+    // are needed:
+    //
+    //   - this flag: "can a radio of this family have GPS at all" — a family
+    //     fact, which is what the capability seam is for and all a backend can
+    //     honestly assert before any status has arrived;
+    //   - hasGpsHardware(): "does THIS unit have it" — model name (8400/8600/
+    //     AU-) OR a live `gps` status that is not "Not Present".
+    //
+    // Do not narrow this to the model-name test to match. That clause is one
+    // half of an OR: a FLEX-6700 with an optional GPSDO installed answers true
+    // through the STATUS clause, and a model-name test here would hide GPS on
+    // exactly those radios — a regression in the opposite direction from the one
+    // it would appear to fix.
+    //
+    // Consequence, and it is pre-existing rather than introduced by the
+    // capability gate: a GPSDO-less 6000-series still shows the GPS button
+    // reading [Waiting] forever, because this flag alone gates it. Fixing that
+    // means the gate consulting both — see the follow-up issue; it is not a
+    // one-line change, because the gate's test helper mirrors
+    // `!connected || declared` exactly.
+    caps.hasGpsLocation = true;
+    // The radio owns the memory slots and re-dumps them on every connect, so
+    // the client must NOT keep a local bank for a Flex — two stores that both
+    // believe they are authoritative would fight over slot indices.
+    caps.persistsMemories = true;
+    // The radio persists its own operating state (frequency, mode, filters,
+    // power) and restores it via GUIClientID session restore — the client must
+    // never re-assert any of it (Constitution II/III; the #2465/#4126/#4261
+    // bug class). Declared empty EXPLICITLY per the ADDING-A-FIELD contract.
+    caps.clientSettingsDomains = {};
+    // The "+13.8A" meter carries the PA supply rail (measurement point A,
+    // before the fuse), which the status bar renders under the PA temperature.
+    caps.hasSupplyVoltageTelemetry = true;
 
     // Advertise the "flex" extension namespace: the amp/tuner operate/bypass/
     // autotune verbs are now routed through invokeExtension() (#4092/#4094), and
@@ -939,42 +987,10 @@ void FlexBackend::decodeGpsStatus(const QString& rawBody)
 void FlexBackend::decodeMemoryStatus(int index, const QMap<QString, QString>& kvs)
 {
     // Memory-slot status → typed MemoryDelta (aetherd RFC 2.3 — RadioModel
-    // residual). Removal: the radio sends "in_use=0" or a bare "removed".
-    MemoryDelta d;
-    d.index = index;
-    if (kvs.value(QStringLiteral("in_use")) == QLatin1String("0")
-        || kvs.contains(QStringLiteral("removed"))) {
-        d.removed = true;
-        emit memoryChanged(d);
-        return;
-    }
-
-    // Text fields ride raw — the protocol space-encoding (0x7f→' ') and the
-    // NUL/control-byte sanitisation (MemoryFields) are a model concern applied in
-    // RadioModel::applyMemoryChanges, so the backend keeps no models/ dependency.
-    carry(kvs, "group", d.group);
-    carry(kvs, "owner", d.owner);
-    carry(kvs, "name", d.name);
-    carry(kvs, "mode", d.mode);
-    carry(kvs, "repeater", d.offsetDir);
-    carry(kvs, "tone_mode", d.toneMode);
-    // Numeric fields — ok-guarded (a malformed *present* value is dropped, so the
-    // model keeps the slot's prior value rather than clobbering it with 0). The
-    // old handler applied an unguarded toInt/toDouble (→0); the carry() guard is
-    // the same fail-closed improvement made at the slice/transmit sites.
-    carry(kvs, "freq", d.freq);
-    carry(kvs, "repeater_offset", d.repeaterOffset);
-    carry(kvs, "tone_value", d.toneValue);
-    carry(kvs, "step", d.step);
-    carry(kvs, "squelch", d.squelch);
-    carry(kvs, "squelch_level", d.squelchLevel);
-    carry(kvs, "rx_filter_low", d.rxFilterLow);
-    carry(kvs, "rx_filter_high", d.rxFilterHigh);
-    carry(kvs, "rtty_mark", d.rttyMark);
-    carry(kvs, "rtty_shift", d.rttyShift);
-    carry(kvs, "digl_offset", d.diglOffset);
-    carry(kvs, "digu_offset", d.diguOffset);
-    emit memoryChanged(d);
+    // residual). The decode itself moved to MemoryWire::decodeStatus so the
+    // local memory bank — which decodes the very same kv-set for a radio that
+    // has no memory storage of its own — cannot drift from what a Flex reports.
+    emit memoryChanged(MemoryWire::decodeStatus(index, kvs));
 }
 
 void FlexBackend::decodeProfileStatus(const QString& profileType, const QString& rawBody)

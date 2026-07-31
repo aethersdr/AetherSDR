@@ -158,13 +158,64 @@ caps.txPowerMaxWatts     = 0.0;
 caps.hasTuner            = false;
 caps.hasAmplifier        = false;
 caps.hasExtendedDsp      = false;                 // DSP is engine-side, not firmware
+caps.persistsMemories    = false;                 // no radio-side memory slots
 caps.extensionNamespaces = {};                    // advertise NONE until step 3
 ```
+
+`persistsMemories = false` is the struct's default, so HL2 gets it by saying
+nothing — see §4a.
 
 The empty `extensionNamespaces` follows FlexBackend's deliberate precedent
 (FlexBackend's capabilities setup): advertising a namespace whose `invokeExtension`
 can't yet reply would hang a client. HL2 keeps it empty until the step-3 encode
 path lands.
+
+---
+
+## 4a. Memory channels have nowhere to live on an HL2
+
+A Flex stores memory slots in the radio and re-dumps them to every client on
+connect. The HL2 has no such storage, so the entire memory feature — the Memory
+dialog, the browse panel, CSV import/export, the panadapter memory-spot feed,
+the automation `memory activate` verb — had nothing underneath it: `memory
+create` went to a command plane the backend does not own and was dropped, and
+nothing ever came back.
+
+The client keeps its own bank instead, selected by capability rather than by
+family name:
+
+| | Flex | HL2 / Kiwi / demo / not connected |
+|---|---|---|
+| `persistsMemories` | `true` | `false` (the default) |
+| Slots live in | the radio | `~/.config/AetherSDR/memories.json` |
+| Populated by | radio memory status on connect | `RadioModel::publishLocalMemories()` |
+
+Three pieces, and one seam:
+
+- **`LocalMemoryStore`** — versioned JSON (`aether.memories` v1), atomic writes
+  via `QSaveFile`, sparse slot indices preserved. A file whose version is newer
+  than the build fails the whole read and is never written back, so a downgrade
+  cannot silently delete fields it does not understand.
+- **`LocalMemoryBank`** — owns the slots, allocates the lowest free index,
+  answers `memory create` / `set` / `remove` / `apply`, and debounces saves.
+- **`RadioModel::tryLocalMemoryCommand()`** — the seam, in `sendCmd()`. Every
+  memory path in the app funnels through those four commands, so answering them
+  there is what let all of the UX above keep working with **no changes to the
+  memory dialog, the browse panel, the CSV codec, or the spot feed**.
+
+Two ordering rules are load-bearing:
+
+1. The bank stores what `RadioModel::applyMemoryChanges()` produced, not the
+   kv-set that came in — that method owns the `0x7f`→space decode and the
+   control-byte sanitisation, so persisting its output is what keeps the file
+   identical to what the UI and a CSV export see.
+2. Both stores number slots from 0. `syncMemoryStoreForSession()` clears the
+   cache when connecting to a radio that owns its slots, so a locally-banked
+   slot 0 published while disconnected cannot masquerade as the radio's.
+
+The decode itself is shared: `MemoryWire::decodeStatus()` is used by both
+`FlexBackend::decodeMemoryStatus()` and the bank, so a channel saved locally and
+one read back from a Flex cannot land in `MemoryEntry` differently.
 
 ---
 

@@ -497,20 +497,57 @@ No build step, npm, or command line is required just to use the plugin.
 
 #### What it controls
 
-The official Elgato plugin currently provides actions across areas such as:
+Actions are grouped into categories in the Stream Deck action list, in this
+order:
 
+- TCI connection status
 - TX
-- Bands
-- Frequency step actions
+- Slice controls, including slice targeting
+- Frequency, covering bands and step actions
 - Modes
-- Audio
+- Audio, both master and per-slice
 - DSP
-- Slice controls
 - DVK record and playback
+- Dials, for Stream Deck + encoder hardware
 
-#### Important note about dials
+#### Choosing which slice the buttons control
 
-The current official Elgato plugin is **button-oriented**. Its manifest advertises keypad-style actions, not dial/controller actions. If you want Stream Deck dial support, the Linux StreamController path below is currently the better fit.
+By default every slice-aware action controls **TRX0** — the first slice —
+which is how the plugin has always behaved.
+
+The **Slice Target** action changes that. Press it to cycle through:
+
+- **TRX0** — always the first slice
+- **TX** — whichever slice currently holds transmit
+- **ACTIVE** — whichever slice has focus in the AetherSDR window
+
+The button's label shows the current choice, and the choice is remembered
+across restarts. It applies to the mode, DSP, squelch, lock, RIT/XIT, split,
+slice volume and slice mute actions, and to the VFO dial.
+
+There is no option to target a specific slice by number. AetherSDR tells a
+control surface how many slices exist only once, when it first connects, and
+never mentions slices being added or removed — so a numbered choice would go
+out of date as soon as you added a slice, and would then quietly act on the
+first slice instead of the one you picked. **TX** and **ACTIVE** are always
+reported as they change, so they cannot go stale.
+
+**PTT, MOX and TUNE deliberately ignore this setting.** They always key
+whichever slice already holds transmit, because AetherSDR decides that itself —
+a control surface cannot choose the slice it transmits on, by design, so that a
+button press can never move you to another band or antenna mid-transmission.
+
+#### Dials
+
+Alongside the keypad actions, the plugin provides dial (encoder) actions for
+Stream Deck + hardware: VFO tuning, RF power, tune carrier power, and volume.
+
+Each dial's push gesture has its own function. The VFO dial cycles the tuning
+step, the RF power and tune power dials cycle their step between 1 W and 5 W,
+and the volume dial mutes the targeted slice.
+
+RF power and tune carrier power are separate radio settings, so they have
+separate dials — setting a low tune level leaves your operating power alone.
 
 #### Linux via OpenDeck (experimental)
 

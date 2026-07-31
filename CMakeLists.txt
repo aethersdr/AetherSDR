@@ -522,13 +522,29 @@ if(ENABLE_MQTT)
 endif()
 
 # Sources
+# The settings store (RFC #4603): AppSettings' implementation spans the SQLite
+# wrapper, path helpers, pre-QApplication bootstrap reader, and the sanitizer.
+# Every target that compiles AppSettings.cpp needs the whole group — and the
+# vendored engine, linked by the AETHER_SETTINGS_CONSUMERS loop near the end
+# of this file.
+set(AETHER_SETTINGS_SOURCES
+    src/core/AppSettings.cpp
+    src/core/SettingsDatabase.cpp
+    src/core/SettingsPaths.cpp
+    src/core/SettingsBootstrap.cpp
+    src/core/SettingsSanitizer.cpp
+)
+
 set(CORE_SOURCES
+    src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2EmergencyStop.cpp # release the radio from a signal handler
+    src/core/backends/hl2/Hl2Receivers.cpp   # per-receiver index-space map (HERMES.md §12.5)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
@@ -536,7 +552,8 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/dsp/WdspChannel.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/AdaptiveFilterEngine.cpp
@@ -668,6 +685,8 @@ set(CORE_SOURCES
     src/core/DxccWorkedStatus.cpp
     src/core/DxccColorProvider.cpp
     src/core/SleepInhibitor.cpp
+    src/core/LocalMemoryBank.cpp
+    src/core/LocalMemoryStore.cpp
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryFieldValues.cpp
     src/core/MemoryRecallPolicy.cpp
@@ -933,6 +952,7 @@ set(GUI_SOURCES
     src/gui/TitleBar.cpp
     src/gui/SupportDialog.cpp
     src/gui/SliceTroubleshootingDialog.cpp
+    src/gui/RadioHealthDialog.cpp
     src/gui/KeyboardMapWidget.cpp
     src/gui/ShortcutDialog.cpp
     src/gui/MultiFlexDialog.cpp
@@ -1051,6 +1071,36 @@ target_include_directories(aether_afskdemod PUBLIC
 )
 target_compile_features(aether_afskdemod PUBLIC cxx_std_20)
 message(STATUS "AetherAFSKDemod: Direwolf profile-A (VHF 1200 baud), GPL-2.0-or-later")
+
+# Vendored SQLite amalgamation (public domain) — the client settings store
+# (RFC #4603). Deliberately NOT Qt6::Sql: the amalgamation needs no runtime
+# driver plugin in any deployment artifact and is usable before QApplication
+# exists (the pre-QApplication bootstrap reads in main.cpp / GpuSelector).
+# The ONLY permitted consumer is src/core/SettingsDatabase.cpp — see
+# third_party/sqlite/README.md.
+add_library(aether_sqlite3 STATIC
+    third_party/sqlite/sqlite3.c
+)
+target_include_directories(aether_sqlite3 PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/sqlite
+)
+target_compile_definitions(aether_sqlite3 PRIVATE
+    SQLITE_THREADSAFE=1              # serialized mode; AppSettings adds its own cache lock
+    SQLITE_DQS=0                     # no double-quoted string literals
+    SQLITE_DEFAULT_WAL_SYNCHRONOUS=1 # NORMAL is durability-sufficient under WAL
+    SQLITE_DEFAULT_FILE_PERMISSIONS=0600  # settings dir is user-private (unix)
+    SQLITE_LIKE_DOESNT_MATCH_BLOBS
+    SQLITE_MAX_EXPR_DEPTH=0
+    SQLITE_OMIT_DEPRECATED
+    SQLITE_OMIT_LOAD_EXTENSION
+    SQLITE_OMIT_SHARED_CACHE
+)
+if(MSVC)
+    target_compile_options(aether_sqlite3 PRIVATE /w)
+else()
+    target_compile_options(aether_sqlite3 PRIVATE -w)
+endif()
+message(STATUS "Vendored SQLite ${CMAKE_SOURCE_DIR}/third_party/sqlite (settings store, RFC #4603)")
 
 # Bundled liquid-dsp (MIT) — comprehensive DSP toolkit covering modems
 # (PSK/QAM/FSK/GMSK/OFDM), FEC (Hamming/Golay/RS/convolutional), adaptive
@@ -1928,6 +1978,7 @@ target_include_directories(aethercore PUBLIC
 # counts that may only shrink) and split out in step 3 — AutomationServer's
 # widget-facing dumpTree/grab half is the bulk of it.
 target_link_libraries(aethercore PUBLIC
+    aether_sqlite3
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
@@ -2626,11 +2677,50 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 live band-filter probe — REQUIRES REAL HARDWARE, so deliberately NOT
+# registered with add_test(). Build it and run it by hand against a radio:
+#   cmake --build build --target hl2_live_band_filter_probe
+#   ./build/hl2_live_band_filter_probe 192.168.1.21
+add_executable(hl2_live_band_filter_probe EXCLUDE_FROM_ALL
+    tests/hl2_live_band_filter_probe.cpp)
+target_include_directories(hl2_live_band_filter_probe PRIVATE src)
+target_link_libraries(hl2_live_band_filter_probe PRIVATE aethercore Qt6::Core Qt6::Network)
+
+# A killed AetherSDR must still release the radio. A child process runs a real
+# MetisClient against a fake radio; the Python driver kills it and requires a
+# metis-stop datagram to arrive. End-to-end on purpose — see the .py header.
+add_executable(hl2_signal_stop_child tests/hl2_signal_stop_child.cpp)
+target_include_directories(hl2_signal_stop_child PRIVATE src)
+target_link_libraries(hl2_signal_stop_child PRIVATE aethercore Qt6::Core Qt6::Network)
+find_package(Python3 COMPONENTS Interpreter)
+if(NOT WIN32 AND Python3_Interpreter_FOUND)
+    add_test(NAME hl2_signal_stop_test
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/hl2_signal_stop_test.py
+                     $<TARGET_FILE:hl2_signal_stop_child>)
+endif()
+
 # HL2 MetisClient loopback test — drives the UDP wire against a fake HL2.
 add_executable(hl2_metis_client_test tests/hl2_metis_client_test.cpp)
 target_include_directories(hl2_metis_client_test PRIVATE src)
 target_link_libraries(hl2_metis_client_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_metis_client_test COMMAND hl2_metis_client_test)
+
+# HL2 receiver-count restart — a fake radio that "loses" a metis-start, proving
+# the restart retries it and that the recovery is not mistaken for a reconnect.
+add_executable(hl2_receiver_count_restart_test tests/hl2_receiver_count_restart_test.cpp)
+target_include_directories(hl2_receiver_count_restart_test PRIVATE src)
+target_link_libraries(hl2_receiver_count_restart_test
+    PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_receiver_count_restart_test COMMAND hl2_receiver_count_restart_test)
+
+# HL2 per-receiver index-space map — standalone, needs only QtCore for QString.
+add_executable(hl2_receivers_test
+    tests/hl2_receivers_test.cpp
+    src/core/backends/hl2/Hl2Receivers.cpp)
+target_include_directories(hl2_receivers_test PRIVATE src)
+target_link_libraries(hl2_receivers_test PRIVATE Qt6::Core)
+add_test(NAME hl2_receivers_test COMMAND hl2_receivers_test)
 
 # HL2 spectrum (FFT panadapter) — standalone, links FFTW3 directly.
 add_executable(hl2_spectrum_test
@@ -2670,6 +2760,18 @@ target_include_directories(hl2_backend_test PRIVATE src)
 target_link_libraries(hl2_backend_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_backend_test COMMAND hl2_backend_test)
 
+# HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
+# test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
+# is what lets the weekly TSan job (.github/workflows/sanitizers.yml) exercise the
+# ordering that keeps them apart: Hl2Backend::publishIoDsps() hands the sample
+# path its own copy (m_ioDsps) and blocks until the I/O thread has taken it, so
+# the reshape never mutates a container a fan-out is walking. (There is no
+# fenceIo() — an earlier draft named one and this comment outlived it.)
+add_executable(hl2_receiver_churn_test tests/hl2_receiver_churn_test.cpp)
+target_include_directories(hl2_receiver_churn_test PRIVATE src tests)
+target_link_libraries(hl2_receiver_churn_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_receiver_churn_test COMMAND hl2_receiver_churn_test)
+
 add_executable(client_eq_test
     tests/client_eq_test.cpp
     src/core/ClientEq.cpp
@@ -2697,7 +2799,7 @@ target_include_directories(client_comp_test PRIVATE src)
 add_executable(slice_label_test
     tests/slice_label_test.cpp
     src/gui/SliceLabel.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(slice_label_test PRIVATE src)
 target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
@@ -2709,6 +2811,13 @@ add_executable(vfo_flag_placement_test
 target_include_directories(vfo_flag_placement_test PRIVATE src)
 target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
 add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
+
+add_executable(mac_cursor_compat_test
+    tests/mac_cursor_compat_test.cpp
+)
+target_include_directories(mac_cursor_compat_test PRIVATE src)
+target_link_libraries(mac_cursor_compat_test PRIVATE Qt6::Core)
+add_test(NAME mac_cursor_compat_test COMMAND mac_cursor_compat_test)
 
 add_executable(slice_model_letter_test
     tests/slice_model_letter_test.cpp
@@ -2726,7 +2835,7 @@ qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
 add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${THEME_TEST_RESOURCES}
@@ -2734,6 +2843,8 @@ add_executable(theme_manager_test
 target_include_directories(theme_manager_test PRIVATE src)
 target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
+set_tests_properties(theme_manager_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # Panadapter overlay collapse semantics for owner-managed status cards (#4387):
 # a collapse must shrink the card, survive owner re-assertion, and never make
@@ -2743,7 +2854,7 @@ add_executable(panadapter_message_overlay_test
     tests/panadapter_message_overlay_test.cpp
     src/gui/PanadapterMessageOverlay.cpp
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${PAN_OVERLAY_TEST_RESOURCES}
@@ -2752,14 +2863,15 @@ target_include_directories(panadapter_message_overlay_test PRIVATE src)
 target_link_libraries(panadapter_message_overlay_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME panadapter_message_overlay_test COMMAND panadapter_message_overlay_test)
+set_tests_properties(panadapter_message_overlay_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # AppSettings persistence safety. Each scenario is a separate process because
 # AppSettings is a process-wide singleton and load state must not leak between
 # cases.
 add_executable(app_settings_safety_test
     tests/app_settings_safety_test.cpp
-    src/core/AppSettings.cpp
-    # Real Hl2Discovery, so the nickname-key scenario exercises the shipping key
+    ${AETHER_SETTINGS_SOURCES}
     # format instead of a copy of it (Qt6::Network/AUTOMOC are for its QObject
     # + QUdpSocket; the test only calls its static helpers).
     src/core/backends/hl2/Hl2Discovery.cpp
@@ -2770,14 +2882,19 @@ target_include_directories(app_settings_safety_test PRIVATE src)
 target_link_libraries(app_settings_safety_test PRIVATE Qt6::Core Qt6::Network)
 foreach(APP_SETTINGS_SCENARIO
         save-before-load
-        load-then-save
+        xml-import-parity
         first-run
-        count-guard
-        backup-recovery
-        missing-live-temp
-        missing-live-backup
-        missing-live-corrupt
-        failed-load
+        xml-import-tmp-promotion
+        xml-import-bak-fallback
+        xml-artifacts-unusable
+        no-reimport
+        xml-changed-notice
+        credential-exodus
+        corrupt-db-restore-backup
+        corrupt-db-reimport-xml
+        locked-db-fails-closed
+        newer-schema-readonly
+        dirty-row-save
         display-slice-depth-default
         nickname-key-roundtrip)
     add_test(
@@ -2788,7 +2905,7 @@ endforeach()
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
     src/models/Nr2SettingsModel.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(nr2_settings_model_test PRIVATE src tests)
 target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
@@ -2801,7 +2918,7 @@ add_executable(panadapter_model_rx_antenna_test
     src/core/PerfTelemetry.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(panadapter_model_rx_antenna_test PRIVATE src)
 target_link_libraries(panadapter_model_rx_antenna_test PRIVATE Qt6::Core Qt6::Test)
@@ -2987,7 +3104,7 @@ add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
 add_executable(qso_recorder_slice_lifetime_test
     tests/qso_recorder_slice_lifetime_test.cpp
     src/core/QsoRecorder.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/LogManager.cpp
@@ -3050,7 +3167,7 @@ add_test(NAME legacy_waveform_package_test COMMAND legacy_waveform_package_test)
 add_executable(band_plan_license_filter_test
     tests/band_plan_license_filter_test.cpp
     src/models/BandPlanManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(band_plan_license_filter_test PRIVATE src)
 target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
@@ -3159,6 +3276,16 @@ target_include_directories(spectrum_preview_logic_test PRIVATE src)
 target_link_libraries(spectrum_preview_logic_test PRIVATE Qt6::Core)
 add_test(NAME spectrum_preview_logic_test COMMAND spectrum_preview_logic_test)
 
+# Kiwi-display recenter write policy — pins that tune-driven recenters on a
+# kiwi-display pan stay widget-local (never pairing a new center with the
+# frozen PanadapterModel bandwidth, which snapped the zoom back to the
+# kiwi-assignment span).
+add_executable(pan_recenter_policy_test
+    tests/pan_recenter_policy_test.cpp
+)
+target_include_directories(pan_recenter_policy_test PRIVATE src)
+add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
+
 add_executable(waterfall_history_buffer_test
     tests/waterfall_history_buffer_test.cpp
     src/gui/WaterfallHistoryBuffer.cpp
@@ -3246,7 +3373,7 @@ endif()
 
 add_executable(passive_spots_policy_test
     tests/passive_spots_policy_test.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/SpotCommandPolicy.cpp
 )
 target_include_directories(passive_spots_policy_test PRIVATE src)
@@ -3291,7 +3418,7 @@ add_executable(digital_voice_waveform_process_test
     src/models/DigitalVoiceWaveformHistory.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(digital_voice_waveform_process_test PRIVATE src)
 target_link_libraries(digital_voice_waveform_process_test PRIVATE Qt6::Core Qt6::Network)
@@ -3314,7 +3441,7 @@ add_executable(dstar_model_test
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(dstar_model_test PRIVATE src)
 target_link_libraries(dstar_model_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -3373,7 +3500,7 @@ add_executable(ole_compound_file_test
     src/core/CabExtractor.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ole_compound_file_test PRIVATE src)
 if (USE_SYSTEM_MSPACK)
@@ -3567,7 +3694,7 @@ if (ENABLE_ASR)
         src/gui/FramelessResizer.cpp
         src/gui/FramelessWindowTitleBar.cpp
         src/core/ThemeManager.cpp
-        src/core/AppSettings.cpp
+        ${AETHER_SETTINGS_SOURCES}
         src/core/LogManager.cpp
         src/core/AsyncLogWriter.cpp
     )
@@ -3607,7 +3734,7 @@ add_executable(s_meter_geometry_test
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
     ${CROSS_NEEDLE_METER_TEST_RESOURCES}
@@ -3669,6 +3796,23 @@ target_include_directories(gui_client_identity_policy_test PRIVATE src)
 target_link_libraries(gui_client_identity_policy_test PRIVATE Qt6::Core)
 add_test(NAME gui_client_identity_policy_test COMMAND gui_client_identity_policy_test)
 
+add_executable(gui_client_registration_state_test
+    tests/gui_client_registration_state_test.cpp
+)
+target_include_directories(gui_client_registration_state_test PRIVATE src)
+target_link_libraries(gui_client_registration_state_test PRIVATE Qt6::Core)
+add_test(NAME gui_client_registration_state_test COMMAND gui_client_registration_state_test)
+
+add_executable(gui_client_registration_recovery_test
+    tests/gui_client_registration_recovery_test.cpp
+)
+target_include_directories(gui_client_registration_recovery_test PRIVATE src tests)
+target_link_libraries(gui_client_registration_recovery_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test
+)
+add_test(NAME gui_client_registration_recovery_test
+         COMMAND gui_client_registration_recovery_test)
+
 add_executable(profile_load_command_test
     tests/profile_load_command_test.cpp
 )
@@ -3705,7 +3849,7 @@ add_executable(qrz_callsign_test
     # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(qrz_callsign_test PRIVATE src)
 target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
@@ -3714,7 +3858,7 @@ add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
@@ -3725,7 +3869,7 @@ add_executable(antenna_alias_test
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
     src/core/DigitalVoiceModeRegistry.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(antenna_alias_test PRIVATE src)
 target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
@@ -3744,7 +3888,7 @@ add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
     src/core/MqttAntennaAlias.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(mqtt_settings_test PRIVATE src)
 target_link_libraries(mqtt_settings_test PRIVATE Qt6::Core)
@@ -3800,7 +3944,7 @@ add_executable(ax25_libmodem_shim_test
     # destructor chain at link time.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core
@@ -3824,7 +3968,7 @@ add_executable(ax25_replay EXCLUDE_FROM_ALL
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ax25_replay PRIVATE src)
 target_link_libraries(ax25_replay PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
@@ -3838,7 +3982,7 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
     src/core/tnc/KissFraming.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
@@ -3848,7 +3992,7 @@ add_executable(pms_mailbox_test
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/pms/PmsMailbox.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(pms_mailbox_test PRIVATE src)
 target_link_libraries(pms_mailbox_test PRIVATE Qt6::Core)
@@ -3875,7 +4019,7 @@ add_executable(aprs_messenger_test
     src/core/tnc/Ax25.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(aprs_messenger_test PRIVATE src)
 target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
@@ -3891,7 +4035,7 @@ add_executable(tnc_terminal_test
     # LogManager + its deps so the category symbol resolves.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(tnc_terminal_test PRIVATE src)
 target_link_libraries(tnc_terminal_test PRIVATE Qt6::Core)
@@ -3906,7 +4050,7 @@ add_executable(cwx_speed_modifier_test
     # config), so both come along to satisfy the link. (#3949)
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(cwx_speed_modifier_test PRIVATE src)
 target_link_libraries(cwx_speed_modifier_test PRIVATE Qt6::Core)
@@ -3920,7 +4064,7 @@ add_executable(cwx_drain_watch_test
     src/models/CwxModel.h
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(cwx_drain_watch_test PRIVATE src)
 target_link_libraries(cwx_drain_watch_test PRIVATE Qt6::Core Qt6::Test)
@@ -3935,7 +4079,7 @@ add_executable(cwx_panel_test
     # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -3949,7 +4093,7 @@ add_executable(meter_model_test
     src/models/MeterModel.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(meter_model_test PRIVATE src)
 target_link_libraries(meter_model_test PRIVATE Qt6::Core)
@@ -3964,7 +4108,7 @@ add_executable(health_applet_test
     src/gui/HealthApplet.cpp
     src/models/MeterModel.cpp
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4111,6 +4255,11 @@ target_include_directories(radiomodel_dax_null_test PRIVATE src)
 target_link_libraries(radiomodel_dax_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_dax_null_test COMMAND radiomodel_dax_null_test)
 
+add_executable(radiomodel_pan_id_mapping_test tests/radiomodel_pan_id_mapping_test.cpp)
+target_include_directories(radiomodel_pan_id_mapping_test PRIVATE src)
+target_link_libraries(radiomodel_pan_id_mapping_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radiomodel_pan_id_mapping_test COMMAND radiomodel_pan_id_mapping_test)
+
 add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
 target_include_directories(demo_backend_swap_test PRIVATE src)
 target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -4120,6 +4269,43 @@ add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_family_transition_test COMMAND hl2_family_transition_test)
+
+# Capability-gated UI surfaces (hasProfiles / hasDaxStreams / hasExtendedDsp):
+# every backend declares each flag explicitly, the RadioModel relay fires on
+# both connection edges, and the `!connected || caps.hasX` rule the GUI applies
+# restores the permissive value on disconnect.
+add_executable(radio_capability_gating_test tests/radio_capability_gating_test.cpp)
+target_include_directories(radio_capability_gating_test PRIVATE src)
+target_link_libraries(radio_capability_gating_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME radio_capability_gating_test COMMAND radio_capability_gating_test)
+
+# RadioStateMemory + the radio-scoped feature-document store (RFC #4603 PR 2):
+# capability-shaped engagement (empty domains ⇒ inert), per-domain gating on
+# load AND store, per-radio isolation, family-wide fallback, schema tolerance.
+add_executable(radio_state_memory_test tests/radio_state_memory_test.cpp)
+target_include_directories(radio_state_memory_test PRIVATE src tests)
+target_link_libraries(radio_state_memory_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(radio_state_memory_test PROPERTIES AUTOMOC ON)
+add_test(NAME radio_state_memory_test COMMAND radio_state_memory_test)
+
+# HL2 state restore/capture (RFC #4603 PR 3): band-key table, the
+# applyRestoredState validation boundary, restored-rate/LNA connect seeding,
+# param precedence, and the capture snapshot round-trip. Hardware-path
+# validation happens on nigelfenton's bench.
+add_executable(hl2_state_restore_test tests/hl2_state_restore_test.cpp)
+target_include_directories(hl2_state_restore_test PRIVATE src tests)
+target_link_libraries(hl2_state_restore_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(hl2_state_restore_test PROPERTIES AUTOMOC ON)
+add_test(NAME hl2_state_restore_test COMMAND hl2_state_restore_test)
+
+# BandStack fold-in (RFC #4603 PR 4): per-radio feature documents,
+# write-through mutations, lazy per-radio legacy import with side-file
+# retirement, panel prefs in AppSettings.
+add_executable(bandstack_scoped_test tests/bandstack_scoped_test.cpp)
+target_include_directories(bandstack_scoped_test PRIVATE src tests)
+target_link_libraries(bandstack_scoped_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(bandstack_scoped_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandstack_scoped_test COMMAND bandstack_scoped_test)
 
 # TCI signaling on a backend with neither a Flex command plane nor a DAX data
 # plane (HL2) — the seam WSJT-X rides. Links WebSockets so the TciServer half of
@@ -4290,7 +4476,7 @@ add_executable(perf_telemetry_test
     # files come along to satisfy the ctor/dtor chain at link time.
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(perf_telemetry_test PRIVATE src)
 target_link_libraries(perf_telemetry_test PRIVATE Qt6::Core)
@@ -4349,6 +4535,27 @@ target_include_directories(memory_field_values_test PRIVATE src)
 target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
 add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
 
+add_executable(local_memory_store_test
+    tests/local_memory_store_test.cpp
+    src/core/LocalMemoryStore.cpp
+)
+target_include_directories(local_memory_store_test PRIVATE src)
+target_link_libraries(local_memory_store_test PRIVATE Qt6::Core)
+add_test(NAME local_memory_store_test COMMAND local_memory_store_test)
+
+add_executable(local_memory_bank_test
+    tests/local_memory_bank_test.cpp
+    src/core/LocalMemoryBank.cpp
+    src/core/LocalMemoryStore.cpp
+    src/core/backends/MemoryWireCodec.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/LogManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(local_memory_bank_test PRIVATE src)
+target_link_libraries(local_memory_bank_test PRIVATE Qt6::Core)
+add_test(NAME local_memory_bank_test COMMAND local_memory_bank_test)
+
 add_executable(memory_csv_compat_test
     tests/memory_csv_compat_test.cpp
     src/core/MemoryCsvCompat.cpp
@@ -4366,7 +4573,7 @@ add_executable(transmit_model_apd_test
     src/core/ClientQuindarTone.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(transmit_model_apd_test PRIVATE src)
 target_link_libraries(transmit_model_apd_test PRIVATE Qt6::Core Qt6::Test)
@@ -4386,7 +4593,7 @@ add_executable(help_dialog_test
     # HelpDialog.cpp calls ThemeManager::resolve() post-Phase-2 migration;
     # pull in the manager + its logging deps so the test links.
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4410,7 +4617,7 @@ add_executable(flex_control_dialog_size_test
     src/core/DigitalVoiceModeRegistry.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4420,6 +4627,8 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
+set_tests_properties(flex_control_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -4428,7 +4637,7 @@ add_executable(pan_layout_dialog_size_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/core/ThemeManager.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
 )
@@ -4438,6 +4647,8 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
+set_tests_properties(pan_layout_dialog_size_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_overlay_wheel_guard_test
     tests/spectrum_overlay_wheel_guard_test.cpp
@@ -4485,7 +4696,7 @@ add_executable(transmit_model_test
     tests/transmit_model_test.cpp
     src/models/TransmitModel.cpp
     src/core/ClientQuindarTone.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
 )
@@ -4504,6 +4715,11 @@ target_include_directories(transmit_inhibit_policy_test PRIVATE src)
 target_link_libraries(transmit_inhibit_policy_test PRIVATE Qt6::Core)
 add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
 
+add_executable(kiwi_sdr_tx_mute_policy_test
+    tests/kiwi_sdr_tx_mute_policy_test.cpp
+)
+target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
+add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -4518,8 +4734,7 @@ add_executable(container_widget_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    src/core/AppSettings.cpp
-    # FloatingContainerWindow now calls applyAppTheme() which routes
+    ${AETHER_SETTINGS_SOURCES}
     # through ThemeManager::applyStyleSheet — pull in the manager + its
     # logging deps so the test links.  ThemeManager's compiled-in
     # seedBuiltinDefaults() means we don't need the theme resource here.
@@ -4549,7 +4764,7 @@ add_executable(hl2_pc_audio_lock_test
     src/gui/FramelessResizer.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/DragValuePopup.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4567,7 +4782,7 @@ add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
     src/gui/DragValuePopup.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4604,7 +4819,7 @@ add_executable(container_manager_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4622,7 +4837,7 @@ add_executable(container_nesting_test
     src/gui/containers/ContainerTitleBar.cpp
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
-    src/core/AppSettings.cpp
+    ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp
     src/core/AsyncLogWriter.cpp
@@ -4718,3 +4933,56 @@ else()
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
     )
 endif()
+
+# ── Settings store (RFC #4603) ───────────────────────────────────────────────
+# Every standalone test/tool target that compiles ${AETHER_SETTINGS_SOURCES}
+# directly (rather than linking aethercore) needs the vendored SQLite engine.
+# Conditional targets are guarded with if(TARGET ...).
+set(AETHER_SETTINGS_CONSUMERS
+    slice_label_test
+    theme_manager_test
+    panadapter_message_overlay_test
+    app_settings_safety_test
+    nr2_settings_model_test
+    panadapter_model_rx_antenna_test
+    qso_recorder_slice_lifetime_test
+    band_plan_license_filter_test
+    passive_spots_policy_test
+    digital_voice_waveform_process_test
+    dstar_model_test
+    ole_compound_file_test
+    copy_assist_settings_dialog_test
+    s_meter_geometry_test
+    qrz_callsign_test
+    shortcut_manager_test
+    antenna_alias_test
+    mqtt_settings_test
+    ax25_libmodem_shim_test
+    ax25_replay
+    ax25_session_analyze
+    pms_mailbox_test
+    aprs_messenger_test
+    tnc_terminal_test
+    cwx_speed_modifier_test
+    cwx_drain_watch_test
+    cwx_panel_test
+    meter_model_test
+    health_applet_test
+    perf_telemetry_test
+    local_memory_bank_test
+    transmit_model_apd_test
+    help_dialog_test
+    flex_control_dialog_size_test
+    pan_layout_dialog_size_test
+    transmit_model_test
+    container_widget_test
+    hl2_pc_audio_lock_test
+    amp_applet_test
+    container_manager_test
+    container_nesting_test
+)
+foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
+    if(TARGET ${_settings_consumer})
+        target_link_libraries(${_settings_consumer} PRIVATE aether_sqlite3)
+    endif()
+endforeach()

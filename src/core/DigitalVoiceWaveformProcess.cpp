@@ -61,6 +61,25 @@ DigitalVoiceWaveformProcess::DigitalVoiceWaveformProcess(QObject* parent)
     : QObject(parent)
 {
     m_process.setProcessChannelMode(QProcess::SeparateChannels);
+    m_rxStartupWatchdog.setSingleShot(true);
+    m_rxStartupWatchdog.setInterval(8000);
+
+    connect(&m_rxStartupWatchdog, &QTimer::timeout, this, [this] {
+        if (m_state != State::Running
+                || !m_registrationVerified
+                || m_metrics.valid
+                || !DigitalVoiceModeRegistry::instance().activeClaim().has_value()) {
+            return;
+        }
+        setHealth(DigitalVoiceWaveformHealth::NoInput);
+        emit degradationStarted(healthDetail());
+        qCWarning(lcWaveform)
+            << "DigitalVoiceWaveformProcess: registered D-STAR helper received no waveform UDP";
+    });
+    connect(&DigitalVoiceModeRegistry::instance(),
+            &DigitalVoiceModeRegistry::activeSliceChanged,
+            this,
+            [this](int) { updateRxStartupWatchdog(); });
 
     connect(&m_process, &QProcess::started, this, [this] {
         setState(State::Starting, tr("Registering %1")
@@ -127,6 +146,7 @@ QString DigitalVoiceWaveformProcess::healthName(DigitalVoiceWaveformHealth healt
     case DigitalVoiceWaveformHealth::Inactive:        return QStringLiteral("Inactive");
     case DigitalVoiceWaveformHealth::Measuring:       return QStringLiteral("Measuring");
     case DigitalVoiceWaveformHealth::Healthy:         return QStringLiteral("Healthy");
+    case DigitalVoiceWaveformHealth::NoInput:         return QStringLiteral("No waveform data");
     case DigitalVoiceWaveformHealth::CadenceDegraded: return QStringLiteral("Cadence degraded");
     case DigitalVoiceWaveformHealth::TransportLoss:   return QStringLiteral("Transport loss");
     case DigitalVoiceWaveformHealth::SourceDeficits:  return QStringLiteral("Source deficits");
@@ -137,6 +157,16 @@ QString DigitalVoiceWaveformProcess::healthName(DigitalVoiceWaveformHealth healt
 QString DigitalVoiceWaveformProcess::healthDetail() const
 {
     switch (m_health) {
+    case DigitalVoiceWaveformHealth::NoInput:
+#if defined(Q_OS_WIN)
+        return tr("No D-STAR waveform data is reaching the helper. "
+                  "Check Windows Defender Firewall and the radio network path, "
+                  "then restart the D-STAR service.");
+#else
+        return tr("No D-STAR waveform data is reaching the helper. "
+                  "Check the host firewall and radio network path, then restart "
+                  "the D-STAR service.");
+#endif
     case DigitalVoiceWaveformHealth::CadenceDegraded:
         return tr("D-STAR waveform delivery is degraded (%1 of 24.00 ksps). "
                   "Other active radio clients may be consuming radio resources.")
@@ -491,6 +521,7 @@ void DigitalVoiceWaveformProcess::processLines(const QList<QByteArray>& lines)
             m_registrationVerified = true;
             setState(State::Running, tr("Running"));
             setHealth(DigitalVoiceWaveformHealth::Measuring);
+            updateRxStartupWatchdog();
             continue;
         }
 
@@ -608,6 +639,7 @@ void DigitalVoiceWaveformProcess::updateMetrics(DigitalVoiceWaveformMetrics metr
         return;
     }
 
+    m_rxStartupWatchdog.stop();
     metrics.timestampMs = nowMs;
     m_vitaSequenceGapsTotal = saturatedAdd(
         m_vitaSequenceGapsTotal, metrics.vitaSequenceGaps);
@@ -661,6 +693,7 @@ void DigitalVoiceWaveformProcess::updateMetrics(DigitalVoiceWaveformMetrics metr
 
 void DigitalVoiceWaveformProcess::resetTelemetry(bool advanceGeneration)
 {
+    m_rxStartupWatchdog.stop();
     const bool hadMetrics = m_metrics.valid || m_metrics.txValid;
     const bool hadHealth = m_health != DigitalVoiceWaveformHealth::Inactive;
     if (advanceGeneration) {
@@ -701,6 +734,24 @@ void DigitalVoiceWaveformProcess::setHealth(DigitalVoiceWaveformHealth health)
     }
     m_health = health;
     emit healthChanged();
+}
+
+void DigitalVoiceWaveformProcess::updateRxStartupWatchdog()
+{
+    const bool shouldWatch = m_state == State::Running
+        && m_registrationVerified
+        && !m_metrics.valid
+        && DigitalVoiceModeRegistry::instance().activeClaim().has_value();
+    if (shouldWatch) {
+        m_rxStartupWatchdog.start();
+    } else {
+        m_rxStartupWatchdog.stop();
+        if (m_health == DigitalVoiceWaveformHealth::NoInput
+                && m_state == State::Running
+                && !m_metrics.valid) {
+            setHealth(DigitalVoiceWaveformHealth::Measuring);
+        }
+    }
 }
 
 } // namespace AetherSDR

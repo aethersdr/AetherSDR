@@ -3,12 +3,34 @@ name: Stream Deck Plugins
 on:
   push:
     tags: ['v*']
+  pull_request:
+    paths: ['plugins/**']
 
 permissions:
   contents: write
 
 jobs:
+  # Runs on PRs touching plugins/. Until this existed the plugins had no gate
+  # at all — a syntax error in plugin.js would have shipped in a release zip.
+  test-elgato:
+    runs-on: ubuntu-latest
+    # Least privilege: this job executes repo-controlled JavaScript (test.js
+    # spawns plugin.js as a child process) on a pull_request trigger, and needs
+    # nothing beyond reading the checkout. The workflow-level `contents: write`
+    # exists for the release-upload job below.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+      - name: Test Elgato plugin
+        working-directory: plugins/elgato-aethersdr/com.aethersdr.radio.sdPlugin
+        run: npm test
+
   upload-plugins:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
@@ -17,7 +39,8 @@ jobs:
       - name: Package Elgato plugin
         run: |
           cd plugins/elgato-aethersdr
-          zip -r ../../com.aethersdr.radio.streamDeckPlugin com.aethersdr.radio.sdPlugin/
+          zip -r ../../com.aethersdr.radio.streamDeckPlugin com.aethersdr.radio.sdPlugin/ \
+            -x "*/test.js"
 
       - name: Package StreamController plugin
         run: |

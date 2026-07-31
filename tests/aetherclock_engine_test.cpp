@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -217,9 +218,9 @@ qint64 synthEpochMs(const Truth& g, const SynthOpts& o) {
 // mono = 0.5*(L+R), recovering the original). When `advanceClock`, *fakeNow is
 // updated per block to model host = epoch + samplesFed/24 kHz + skew at the END
 // of the block (the anchor point). processEvents() drains any queued paths.
-void feedStereo(AetherClockEngine& eng, int channel, const std::vector<float>& mono,
-                qint64 epochMs, qint64 skewMs,
-                qint64& samplesFed, qint64& fakeNow, bool advanceClock) {
+void feedStereoVia(const std::function<void(const QByteArray&)>& sink,
+                   const std::vector<float>& mono, qint64 epochMs, qint64 skewMs,
+                   qint64& samplesFed, qint64& fakeNow, bool advanceClock) {
     constexpr size_t kBlockFrames = 4800;   // 200 ms @ 24 kHz
     for (size_t i = 0; i < mono.size(); i += kBlockFrames) {
         const size_t n = std::min(kBlockFrames, mono.size() - i);
@@ -233,9 +234,26 @@ void feedStereo(AetherClockEngine& eng, int channel, const std::vector<float>& m
         samplesFed += static_cast<qint64>(n);
         if (advanceClock)
             fakeNow = epochMs + samplesFed * 1000 / kFs + skewMs;
-        eng.feedRxAudio(channel, block);
+        sink(block);
         QCoreApplication::processEvents();
     }
+}
+
+// Channel-keyed feed (Flex / daxAudioReady).
+void feedStereo(AetherClockEngine& eng, int channel, const std::vector<float>& mono,
+                qint64 epochMs, qint64 skewMs,
+                qint64& samplesFed, qint64& fakeNow, bool advanceClock) {
+    feedStereoVia([&eng, channel](const QByteArray& b) { eng.feedRxAudio(channel, b); },
+                  mono, epochMs, skewMs, samplesFed, fakeNow, advanceClock);
+}
+
+// Slice-keyed feed (seam-native / backendSliceAudioFrameReady). Same payload
+// bytes, different slot — that parity is part of what these tests assert.
+void feedStereoSlice(AetherClockEngine& eng, int sliceId, const std::vector<float>& mono,
+                     qint64 epochMs, qint64 skewMs,
+                     qint64& samplesFed, qint64& fakeNow, bool advanceClock) {
+    feedStereoVia([&eng, sliceId](const QByteArray& b) { eng.feedRxSliceAudio(sliceId, b); },
+                  mono, epochMs, skewMs, samplesFed, fakeNow, advanceClock);
 }
 
 using Clock = PanadapterStream::DaxConsumer;   // ::Clock == time-signal consumer
@@ -658,6 +676,86 @@ void sectionDiagnosticsTelemetry() {
     CHECK(dStop.classifiedPct == 0);    // ring cleared
 }
 
+// [12] Seam-native per-slice ingest — the Hermes-Lite 2 shape: a bound slice
+// with NO DAX channel, on a radio that declares no DAX plane at all. Asserts
+// the sibling slot accepts the bound slice id and rejects any other, that a
+// dax==0 slice decodes fine through it, and that nothing is acquired on a
+// DAX registry that does not exist here.
+void sectionSeamSliceAudio() {
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+
+    PanadapterStream stream;
+    SliceModel slice(0);
+    CHECK(slice.daxChannel() == 0);        // HL2: none assigned, none ever will be
+
+    AetherClockEngine engine;
+    wireProvider(engine, stream);
+    engine.setDaxAvailabilityProvider([] { return false; });   // no DAX plane
+    qint64 fakeNow = epochMs + kSkewMs;
+    engine.setHostClock([&fakeNow] { return fakeNow; });
+
+    QSignalSpy spyAlign(&engine, &AetherClockEngine::alignmentFrame);
+    QSignalSpy spyTime(&engine, &AetherClockEngine::timeDecoded);
+
+    engine.start(&slice, ClockStation::Wwv);
+    CHECK(engine.isRunning());
+    for (int ch = 1; ch <= 4; ++ch)        // nothing held; there is nothing to hold
+        CHECK(!stream.daxChannelHeldBy(ch, Clock::Clock));
+
+    // Another slice's audio is ignored.
+    qint64 samplesFed = 0;
+    feedStereoSlice(engine, 1, mono, epochMs, kSkewMs, samplesFed, fakeNow, /*advance*/ true);
+    CHECK(spyAlign.isEmpty());
+    CHECK(spyTime.isEmpty());
+
+    // The bound slice decodes — on a slice whose daxChannel() is 0. The decoder
+    // consumed nothing above, so the fake clock rewinds with the feed.
+    samplesFed = 0;
+    fakeNow = epochMs + kSkewMs;
+    feedStereoSlice(engine, 0, mono, epochMs, kSkewMs, samplesFed, fakeNow, /*advance*/ true);
+    CHECK(!spyAlign.isEmpty());
+    CHECK(!spyTime.isEmpty());
+
+    engine.stop();
+}
+
+// [13] Flex regression guard for the channel-keyed slot. A Flex slice may sit
+// at daxChannel()==0 (unassigned) while the radio's DAX plane is very much
+// alive. Loosening the filter to `want != 0 && channel != want` — the tempting
+// way to make HL2 work without a sibling slot — would make THIS slice accept
+// every other slice's DAX audio, which is exactly what the filter exists to
+// prevent. Nothing may be accepted here.
+void sectionDaxZeroChannelStillFilters() {
+    SynthOpts opts;
+    const std::vector<float> mono = synthWwv(kGold, opts);
+    const qint64 epochMs = synthEpochMs(kGold, opts);
+
+    PanadapterStream stream;
+    SliceModel slice(0);
+    CHECK(slice.daxChannel() == 0);        // unassigned, on a DAX-capable radio
+
+    AetherClockEngine engine;
+    wireProvider(engine, stream);
+    engine.setDaxAvailabilityProvider([] { return true; });    // Flex: DAX exists
+    qint64 fakeNow = epochMs + kSkewMs;
+    engine.setHostClock([&fakeNow] { return fakeNow; });
+
+    QSignalSpy spyAlign(&engine, &AetherClockEngine::alignmentFrame);
+    QSignalSpy spyTime(&engine, &AetherClockEngine::timeDecoded);
+
+    engine.start(&slice, ClockStation::Wwv);
+    qint64 samplesFed = 0;
+    feedStereo(engine, 1, mono, epochMs, kSkewMs, samplesFed, fakeNow, /*advance*/ true);
+
+    CHECK(spyAlign.isEmpty());             // ch 1 MUST NOT reach a dax==0 slice
+    CHECK(spyTime.isEmpty());
+    CHECK(engine.lockState() == ClockLockState::NoSignal);
+
+    engine.stop();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -680,6 +778,8 @@ int main(int argc, char** argv) {
     sectionLockDecayNoSignalStable();
     sectionLockDecayDemotes();
     sectionDiagnosticsTelemetry();
+    sectionSeamSliceAudio();
+    sectionDaxZeroChannelStillFilters();
 
     if (g_failures == 0) {
         std::printf("aetherclock_engine_test: all checks passed\n");

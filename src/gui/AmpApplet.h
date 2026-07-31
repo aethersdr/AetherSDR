@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QPushButton>
+#include <QComboBox>
 #include <QTimer>
 
 class QLabel;
@@ -51,7 +52,7 @@ private:
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
     bool     m_directConnected{false};
 
-    QPushButton* m_fanBtn{nullptr};
+    QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
     QString      m_fanMode{"STANDARD"};
 

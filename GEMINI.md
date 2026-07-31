@@ -25,6 +25,8 @@ the must-knows that fit in Gemini's chat context efficiently.
 4. **Use `AppSettings`, NOT `QSettings`.** Persist as nested JSON
    under one root key per feature (Principle V). Example pattern:
    `AppSettings["MyFeature"] = {"enabled": true, "mode": "auto"}`.
+   The store is SQLite (RFC #4603); credentials go to QtKeychain,
+   never the settings store.
 
 5. **All meter UI uses `MeterSmoother`** — never roll your own
    envelope follower. (AGENTS.md → Key Implementation Patterns.)

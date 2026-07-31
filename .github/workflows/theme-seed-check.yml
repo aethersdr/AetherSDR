@@ -1,0 +1,45 @@
+name: Theme Seed Check
+
+# ThemeManager::seedBuiltinDefaults() compiles a copy of the default theme into
+# the binary, kept in sync with resources/themes/default-dark.json BY HAND — the
+# source comments say so, and warn that a drifted seed diverges "silently".
+# Nine tokens have already drifted that way (8 slice colours + color.accent.dim)
+# and are frozen in KNOWN_SEED_DRIFT; any NEW divergence fails the job
+# (--strict). The baseline only shrinks.
+#
+# Cheap to run (stdlib-only, no build), so it gates on the two files that can
+# cause the drift plus the checker itself.
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "src/core/ThemeManager.cpp"
+      - "resources/themes/**"
+      - "tools/check_theme_seed.py"
+      - ".github/workflows/theme-seed-check.yml"
+
+# Auto-cancel superseded runs when a newer commit lands on the same PR. Matches
+# the shape used by ci.yml / codeql.yml / engine-boundary.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  theme-seed:
+    name: Theme seed vs bundled JSON
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Check the compiled seed against default-dark.json
+        run: python tools/check_theme_seed.py --strict

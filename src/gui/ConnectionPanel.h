@@ -32,10 +32,19 @@ public:
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
 
+    // Radio families the "Connect by IP" page can dial. The manual page can no
+    // longer guess: a FlexRadio answers TCP/4992 and a Hermes-Lite 2 answers
+    // UDP/1024 (HPSDR Protocol 1), so the operator picks the wire protocol and
+    // we probe exactly that one. Values match RadioInfo::family.
+    static constexpr const char* kFamilyFlex = "flex";
+    static constexpr const char* kFamilyHl2  = "hl2";
+
     // IConnectionAutomation — engine-facing connect/disconnect/dialog hook.
     QList<RadioInfo> automationLocalRadios() const override;
     bool automationConnectLocalSerial(const QString& serial, QString* error = nullptr) override;
-    bool automationConnectByIp(const QString& hostOrIp, QString* error = nullptr) override;
+    bool automationConnectByIp(const QString& hostOrIp,
+                               const QString& family = QString(),
+                               QString* error = nullptr) override;
     bool automationDisconnect(QString* error = nullptr) override;
     bool automationDialogVisible() const override { return isVisible(); }
     void automationSetDialogVisible(bool visible) override
@@ -114,6 +123,30 @@ private:
     RadioBindSettings currentManualBindSettings(bool* staleSelection = nullptr) const;
     void loadRecentManualIps();
     void rememberManualIp(const QString& ip);
+    // Radio-type selector on the manual page (persisted globally, and per-IP in
+    // the routed profile so picking a recent address restores its family).
+    QString currentManualFamily() const;
+    void setManualFamily(const QString& family);
+    void updateManualFamilyHints();
+    // Directed (unicast) Metis discovery against one host.
+    //
+    // Three outcomes, not two: "nothing answered" and "we never got to ask" need
+    // different messages, and collapsing them into a bool sent the operator to
+    // power-cycle a radio that was never contacted. Only NoAnswer leaves the
+    // error message to the caller — the other two have already reported.
+    enum class Hl2ProbeResult {
+        Answered,      // an HL2 replied; connect or refusal already reported
+        NoAnswer,      // nothing replied within the deadline; caller owns the message
+        NotAttempted,  // never got to ask — bind, resolve or send failed; reported here
+    };
+    Hl2ProbeResult probeHermesLite2(const QString& ip, const RadioBindSettings& bindSettings);
+    void probeFlexRadio(const QString& ip, const RadioBindSettings& bindSettings);
+    void resetManualConnectButton();
+    // Grow the dialog when the current page needs more room than it has. The
+    // manual page's height is not constant — the Advanced source-path section
+    // expands, and the result line wraps — and a dialog that cannot grow makes
+    // Qt overlap the rows instead. Cheap and idempotent; safe to call often.
+    void refitToContent();
     void saveManualProfile(const QString& targetIp,
                            const RadioBindSettings& settings,
                            const QHostAddress& lastSuccessfulLocalIp);
@@ -157,6 +190,8 @@ private:
     QList<WanRadioInfo> m_wanRadios;
 
     // Manual (VPN / routed) connection
+    QComboBox*   m_manualRadioTypeCombo{nullptr};
+    QLabel*      m_manualHintLabel{nullptr};
     QComboBox*   m_manualIpCombo{nullptr};
     QLineEdit*   m_manualIpEdit{nullptr};
     QLabel*      m_manualResultLabel{nullptr};
@@ -167,6 +202,9 @@ private:
     QPushButton* m_manualConnectBtn{nullptr};
     QString      m_manualProfileIp;
     bool         m_manualConnectPending{false};
+    // Last height refitToContent() set, so it can tell its own sizing from a
+    // height the operator dragged to and only reclaim the former.
+    int          m_autoFitHeight{0};
 
     QCheckBox*   m_autoConnectCheck{nullptr};
     QCheckBox*   m_showDemoCheck{nullptr};    // RFC #4288: offer the demo entry

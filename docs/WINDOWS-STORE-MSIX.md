@@ -65,8 +65,16 @@ Values that need maintainer choice:
   - `runFullTrust`: required for a packaged classic desktop app.
   - `internetClient`: needed for SmartLink, release metadata, propagation data,
     and other internet-backed features.
+  - `internetClientServer` is intentionally not declared. It does not create a
+    Windows Firewall exception for this medium-IL packaged desktop helper.
   - `privateNetworkClientServer`: needed for LAN radio/peripheral TCP and UDP.
   - `microphone`: recommended because AetherSDR captures PC mic audio for TX.
+- Desktop extension disclosure:
+  - [`windows.firewallRules`](https://learn.microsoft.com/windows/apps/desktop/modernize/desktop-to-uwp-extensions):
+    adds an all-profile inbound UDP exception scoped to
+    `aether-dv-waveform.exe`. Windows owns the packaged rule lifecycle, so
+    package installation and updates retain it and package removal deletes it
+    without a separate elevation prompt.
 
 ## Automation Plan
 

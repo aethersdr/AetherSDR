@@ -156,9 +156,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         connect(m_model, &RadioModel::radioTransmittingChanged, this,
             &TciServer::onRadioTransmittingChanged);
         connect(&m_model->meterModel(), &MeterModel::txMetersChanged,
-                this, [this](float fwd, float swr) {
+                this, [this](float fwd, float swr, bool swrValid) {
             m_cachedFwdPower = fwd;
-            m_cachedSwr = swr;
+            // TCI's wire format has no absent marker; 1.0 is what this cache
+            // held before any SWR arrived, so absence maps back to it rather
+            // than to 0.0 (which is out of the meter's domain).
+            m_cachedSwr = swrValid ? swr : 1.0f;
         });
         connect(&m_model->meterModel(), &MeterModel::micMetersChanged,
                 this, [this](float micLevel, float, float, float) {
@@ -1248,17 +1251,35 @@ void TciServer::promoteTxSliceAndContinue(int sliceId, std::function<void(bool)>
 
     // Seam backend (HL2): `slice set N tx=1` is Flex text with no counterpart on
     // this plane, so the sendCmdPublic below would be swallowed AND this
-    // continuation would never run. Every caller opens a route transition
-    // around it, so a silent drop leaks m_routeTransitionInFlight forever and
-    // wedges TCI keying for the rest of the connection. Answer honestly instead
-    // of hanging: there is no seam verb to promote a slice, and the one slice
-    // such a radio has already returned true above (Hl2Backend publishes
-    // txSlice=true — its single slice IS the transmitter), so this only fires
-    // for a route that genuinely cannot be built.
+    // continuation would never run. Every caller opens a route transition around
+    // it, so a silent drop leaks m_routeTransitionInFlight forever and wedges
+    // TCI keying for the rest of the connection.
+    //
+    // There IS a seam verb now. This used to refuse outright, correctly, because
+    // such a radio had exactly one slice and it was already the transmitter —
+    // so the only way to reach here was a route that could not be built. With
+    // several receivers the request is meaningful: it moves the transmitter.
+    //
+    // Synchronous, unlike the Flex round trip below: the backend either owns the
+    // move or it does not, and there is no radio to wait for. The continuation
+    // is invoked either way, which is what keeps the route transition closed.
     if (!m_model->usesFlexCommandPlane()) {
-        qCWarning(lcCat) << "TCI: TX-slice selection unsupported on this radio"
-                         << "slice=" << sliceId;
-        continuation(false);
+        SliceModel* target = m_model->slice(sliceId);
+        if (!target) {
+            qCWarning(lcCat) << "TCI: TX-slice selection — no such slice" << sliceId;
+            continuation(false);
+            return;
+        }
+        target->setTxSlice(true);
+        // Confirm against the MODEL rather than assuming the request took. The
+        // backend republishes both the old and the new slice as part of the
+        // move, so by here txSlice() is the answer the radio actually gave.
+        const bool moved = target->isTxSlice();
+        if (!moved) {
+            qCWarning(lcCat) << "TCI: TX-slice selection refused by the backend"
+                             << "slice=" << sliceId;
+        }
+        continuation(moved);
         return;
     }
 
@@ -1304,11 +1325,87 @@ void TciServer::createTxSliceForVfoB(QWebSocket* client,
     // "Split = Rig/Fake It" reaches exactly here, and reportVfoBRouteFailure
     // sends split_enable:...,false; plus the authoritative channel-1 VFO, which
     // is what makes it fall back to single-VFO operation instead of waiting.
+    // Seam backend (HL2): `slice create` is Flex text this radio does not speak,
+    // and this used to refuse outright — correctly, while such a radio had one
+    // receiver and could not make a second.
+    //
+    // It can now. createPanadapter() brings up another DDC together with its
+    // slice, which is exactly what VFO B needs, so split becomes available up to
+    // whatever the board and the link budget allow.
+    //
+    // The shape is different enough from the Flex path below to be written out
+    // rather than shared: the seam create is SYNCHRONOUS — the backend either
+    // owns the request or it does not, and there is no radio to wait for — so
+    // there is no reply to parse, no window in which the requester can leave,
+    // and no pending-create record to reconcile. What IS shared is the
+    // discipline: one route transition, closed on every exit, and teardown of a
+    // slice that gets created but cannot be used.
     if (!m_model->usesFlexCommandPlane()) {
-        reportVfoBRouteFailure(client, request,
-            QStringLiteral("this radio has no second VFO: split needs a TX slice "
-                           "it cannot create"),
-            !routeConfirmation.isEmpty());
+        if (m_model->slices().size() >= m_model->maxSlices()) {
+            reportVfoBRouteFailure(client, request,
+                QStringLiteral("cannot create VFO B: receiver capacity reached"),
+                !routeConfirmation.isEmpty());
+            return;
+        }
+
+        // Which slice is new is found by DIFFING, not by predicting an id. The
+        // backend numbers its slices and is free to skip a retired number after
+        // a close, so guessing "the next one" would address the wrong receiver.
+        QSet<int> before;
+        for (SliceModel* s : m_model->slices())
+            if (s) before.insert(s->sliceId());
+
+        const quint64 transitionGeneration = beginRouteTransition();
+        m_model->createPanadapter();
+
+        int createdId = -1;
+        for (SliceModel* s : m_model->slices()) {
+            if (s && !before.contains(s->sliceId())) {
+                createdId = s->sliceId();
+                break;
+            }
+        }
+        if (createdId < 0) {
+            reportVfoBRouteFailure(client, request,
+                QStringLiteral("VFO-B receiver could not be created"),
+                !routeConfirmation.isEmpty());
+            finishRouteTransition(transitionGeneration);
+            return;
+        }
+
+        const auto tearDown = [this, createdId] {
+            if (SliceModel* s = m_model->slice(createdId))
+                m_model->removePanadapter(s->panId());
+        };
+
+        if (splitOnly && !m_routingState.splitRequested()) {
+            tearDown();
+            finishRouteTransition(transitionGeneration);
+            return;
+        }
+
+        m_routingState.bindCreatedRoute(rxSlice->sliceId(), createdId);
+        QPointer<TciServer> self(this);
+        promoteTxSliceAndContinue(createdId,
+            [self, client, request, routeConfirmation, createdId, tearDown,
+             transitionGeneration](bool selected) {
+            if (!self)
+                return;
+            if (!client || !selected) {
+                tearDown();
+                self->m_routingState.clearTciRoute();
+                self->reportVfoBRouteFailure(client, request,
+                    QStringLiteral("created VFO-B slice could not be selected for TX"),
+                    !routeConfirmation.isEmpty());
+                self->finishRouteTransition(transitionGeneration);
+                return;
+            }
+            if (!routeConfirmation.isEmpty() && self->m_routingState.splitRequested())
+                self->broadcast(routeConfirmation);
+            self->tuneSliceAndConfirm(client, request.trx, request.channel,
+                                      createdId, request.frequencyHz);
+            self->finishRouteTransition(transitionGeneration);
+        });
         return;
     }
 

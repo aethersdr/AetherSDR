@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PacketLossConcealment.h"
+#include "VitaBinCoverage.h"
 
 #include <QObject>
 #include <QUdpSocket>
@@ -268,16 +269,19 @@ private:
     struct FrameAssembler {
         quint32        frameIndex{0xFFFFFFFF};
         quint16        totalBins{0};
-        quint16        binsReceived{0};
+        quint16        lastAcceptedTotalBins{0};
         QVector<quint16> buf;          // raw uint16 bins, host byte-order
+        VitaBinCoverage coverage;
+        FftGrowthSuffixGuard growthSuffixGuard;
 
         void reset(quint32 idx, quint16 total) {
             frameIndex   = idx;
             totalBins    = total;
-            binsReceived = 0;
             buf.resize(total);
+            buf.fill(0);
+            coverage.reset(total);
         }
-        bool isComplete() const { return totalBins > 0 && binsReceived >= totalBins; }
+        bool isComplete() const { return coverage.isComplete(); }
     };
 
     // Waterfall frame assembly: tiles arrive in fragments across multiple packets.
@@ -285,23 +289,23 @@ private:
     struct WaterfallFrame {
         quint32          timecode{0xFFFFFFFF};
         quint16          totalBins{0};
-        quint16          binsReceived{0};
         double           lowFreqMhz{0};
         double           binBwMhz{0};
         quint32          autoBlack{0};
         QVector<float>   buf;   // intensity values (int16/128.0f)
+        VitaBinCoverage  coverage;
 
         void reset(quint32 tc, quint16 total, double low, double bw, quint32 ab) {
             timecode     = tc;
             totalBins    = total;
-            binsReceived = 0;
             lowFreqMhz   = low;
             binBwMhz     = bw;
             autoBlack    = ab;
             buf.resize(total);
             buf.fill(0.0f);
+            coverage.reset(total);
         }
-        bool isComplete() const { return totalBins > 0 && binsReceived >= totalBins; }
+        bool isComplete() const { return coverage.isComplete(); }
     };
 
     QMap<quint32, WaterfallFrame> m_wfFrames;  // per-stream waterfall frame assembly

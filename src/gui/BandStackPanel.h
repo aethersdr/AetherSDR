@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/BandStackSettings.h"
+#include "core/RadioSettingsScope.h"
 
 #include <QWidget>
 #include <QVector>
@@ -25,7 +26,7 @@ public:
     explicit BandStackPanel(QWidget* parent = nullptr);
 
     // Load all bookmarks for a radio, looking up colors from band plan
-    void loadBookmarks(const QString& radioSerial, const BandPlanManager* bpm);
+    void loadBookmarks(const RadioSettingsScope& scope, const BandPlanManager* bpm);
 
     // Clear all bookmarks (on disconnect)
     void clear();

@@ -787,6 +787,22 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                  .arg(formatNumber(telemetry["alc"]))
                  .arg(formatNumber(telemetry["mic_level_dbfs"]))
                  .arg(formatNumber(telemetry["comp_level_db"]));
+    // Qualify the TX group on the line above whenever it is NOT live.
+    //
+    // TX forward power holds its last smoothed value while SWR correctly reads
+    // n/a, so without this the reader of a support bundle sees a plausible
+    // wattage next to a missing SWR and concludes the antenna is the problem.
+    // Only emitted when stale: a live group needs no caveat, and the common
+    // case should stay quiet. (#4533 review)
+    if (telemetry.contains("tx_meters_fresh") && !telemetry["tx_meters_fresh"].toBool()) {
+        const qint64 ageMs = static_cast<qint64>(telemetry["tx_meters_age_ms"].toDouble(-1));
+        lines << QString("  - ⚠ TX meters are NOT live (%1) — TX forward power is the last "
+                          "value received, not a current reading, and TX SWR is omitted "
+                          "rather than shown stale.")
+                     .arg(ageMs >= 0
+                              ? QString("last sample %1 ms ago").arg(ageMs)
+                              : QString("no TX meter sample this session"));
+    }
     lines << QString("- Amplifier: present `%1`, model `%2`, handle `%3`, operate `%4`")
                  .arg(yesNo(amplifier["present"].toBool()))
                  .arg(orPlaceholder(amplifier["model"].toString()))

@@ -28,6 +28,14 @@ public:
         qputenv("XDG_CONFIG_HOME", root);
         qputenv("LOCALAPPDATA", root);
         qputenv("APPDATA", root);
+        // On Windows, QStandardPaths ignores the env redirects above (known
+        // folders resolve through the shell API), so test-mode paths land in
+        // the REAL shared %LOCALAPPDATA%\qttest and scenarios contaminate
+        // each other (PR #4612 review). AETHER_SETTINGS_DIR is the explicit
+        // settings-store override SettingsPaths honors on every platform —
+        // the settings sandbox no longer depends on platform env semantics.
+        qputenv("AETHER_SETTINGS_DIR",
+                QString(m_root.path() + QStringLiteral("/AetherSDR")).toUtf8());
         QStandardPaths::setTestModeEnabled(true);
 
         // AppSettings first-run migration still probes the legacy QSettings

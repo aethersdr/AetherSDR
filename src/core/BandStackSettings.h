@@ -1,8 +1,10 @@
 #pragma once
 
+#include "RadioSettingsScope.h"
+
+#include <QSet>
 #include <QString>
 #include <QVector>
-#include <QMap>
 
 namespace AetherSDR {
 
@@ -26,47 +28,66 @@ struct BandStackEntry {
     bool autoSaved{false};  // true if added by auto-save dwell; false = manual
 };
 
-// Persistence for user frequency bookmarks, stored per-radio in
-// ~/.config/AetherSDR/BandStack.settings (XML, atomic save).
+// User frequency bookmarks, stored per radio as ONE feature document —
+// (family, serial, "BandStack") in radio_settings (RFC #4603 PR 4). Every
+// mutation writes the whole document through immediately (atomic, Principle
+// V), so there is no separate save() step anymore and a crash can't lose a
+// bookmark the operator just made.
+//
+// The legacy side file (~/.config/AetherSDR/BandStack.settings) is imported
+// LAZILY, one radio at a time, on that radio's first access — because the
+// document needs the radio's FAMILY, which only the live scope knows (the
+// legacy file keyed sections by serial alone). A migrated section is removed
+// from the side file; the file itself is deleted when its last radio section
+// has been claimed. Sections for radios that never connect again simply wait
+// there, harmlessly. The three panel-wide preferences move to AppSettings
+// keys (they were never per-radio) via a one-shot in load().
 class BandStackSettings {
 public:
+    static constexpr int kSchemaVersion = 1;
+    static QString featureName() { return QStringLiteral("BandStack"); }
+
     static BandStackSettings& instance();
 
+    // One-shot migration of the legacy file's panel-wide preferences into
+    // AppSettings. Idempotent; call once after AppSettings::load().
     void load();
-    void save();
 
-    QVector<BandStackEntry> entries(const QString& radioSerial) const;
-    void addEntry(const QString& radioSerial, const BandStackEntry& entry);
-    void removeEntry(const QString& radioSerial, int index);
-    void clearAllEntries(const QString& radioSerial);
-    void clearBandEntries(const QString& radioSerial, double lowMhz, double highMhz);
+    QVector<BandStackEntry> entries(const RadioSettingsScope& scope);
+    void addEntry(const RadioSettingsScope& scope, const BandStackEntry& entry);
+    void removeEntry(const RadioSettingsScope& scope, int index);
+    void clearAllEntries(const RadioSettingsScope& scope);
+    void clearBandEntries(const RadioSettingsScope& scope, double lowMhz,
+                          double highMhz);
 
     // Remove entries older than maxAgeMs; returns number removed.
-    int removeExpiredEntries(const QString& radioSerial, qint64 maxAgeMs);
+    int removeExpiredEntries(const RadioSettingsScope& scope, qint64 maxAgeMs);
 
-    int autoExpiryMinutes() const { return m_autoExpiryMinutes; }
-    void setAutoExpiryMinutes(int minutes) { m_autoExpiryMinutes = minutes; }
-
-    bool groupByBand() const { return m_groupByBand; }
-    void setGroupByBand(bool grouped) { m_groupByBand = grouped; }
-
+    // Panel-wide preferences (AppSettings-backed; setters persist).
+    int autoExpiryMinutes() const;
+    void setAutoExpiryMinutes(int minutes);
+    bool groupByBand() const;
+    void setGroupByBand(bool grouped);
     // Auto-save: seconds the active slice must dwell on a frequency before
-    // being added to the stack automatically.  0 = disabled.
-    int autoSaveDwellSeconds() const { return m_autoSaveDwellSeconds; }
-    void setAutoSaveDwellSeconds(int seconds) { m_autoSaveDwellSeconds = seconds; }
+    // being added to the stack automatically. 0 = disabled.
+    int autoSaveDwellSeconds() const;
+    void setAutoSaveDwellSeconds(int seconds);
 
 private:
     BandStackSettings();
     BandStackSettings(const BandStackSettings&) = delete;
     BandStackSettings& operator=(const BandStackSettings&) = delete;
 
+    // Legacy side-file section name for a serial (XML element-name rules).
     static QString sanitizeSerial(const QString& serial);
 
-    QMap<QString, QVector<BandStackEntry>> m_entries;
-    QString m_filePath;
-    int m_autoExpiryMinutes{0};      // 0 = disabled
-    bool m_groupByBand{false};
-    int m_autoSaveDwellSeconds{0};   // 0 = disabled
+    void ensureScopeMigrated(const RadioSettingsScope& scope);
+    QVector<BandStackEntry> readEntries(const RadioSettingsScope& scope);
+    bool writeEntries(const RadioSettingsScope& scope,
+                      const QVector<BandStackEntry>& entries);
+
+    QString m_legacyFilePath;
+    QSet<QString> m_scopesChecked;   // per-process migration memo
 };
 
 } // namespace AetherSDR
