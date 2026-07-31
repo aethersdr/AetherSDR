@@ -125,6 +125,17 @@ QString dump()
                    + QLatin1Char('\n');
         }
     }
+
+    // The radio-scoped feature documents are part of "the whole store" too
+    // (PR #4614 review) — same recursive redaction over each document.
+    const auto radioRows = s.radioFeaturesForDiagnostics();
+    if (!radioRows.isEmpty()) {
+        out += QStringLiteral("## radio_settings\n");
+        for (const auto& row : radioRows) {
+            out += row.first + QLatin1Char('\t')
+                   + redactedValue(row.first, row.second) + QLatin1Char('\n');
+        }
+    }
     return out;
 }
 

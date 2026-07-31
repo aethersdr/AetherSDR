@@ -50,7 +50,7 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
 | `persistsMemories` | ✅ | ❌ | ❌ | `LocalMemoryBank` engagement (#4590) | host-side memory bank vs radio-side slots |
-| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore (RFC #4603; per-band maps in PR 3) |
+| `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | DECLARED + gate wired only: `applyRestoredState` is a no-op in every backend until RFC #4603 PR 3 lands capture/restore — nothing restores today (this row would otherwise be the exact trap the header warns about) |
 | `extensionNamespaces` | `["flex"]` | — | — | `invokeExtension` pre-check | Amp / tuner operate/bypass/autotune verbs |
 
 `MainWindow::applyCapabilitiesToUi()` is the single fan-out for UI visibility. It

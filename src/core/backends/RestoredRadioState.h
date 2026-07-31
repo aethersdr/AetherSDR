@@ -30,7 +30,12 @@ struct RestoredRadioState {
     int sampleRateHz = 0;         // SpanRate
 
     // Per-family extension document (per-band gain/drive maps live here —
-    // RFC PR 3). Versioned by its owner; opaque to everything above the seam.
+    // RFC PR 3). Versioned by its owner. GATED PER DOMAIN at the top level:
+    // the engine hands over only the sub-objects named for declared domains —
+    // "rfGain" (ClientSettingsDomain::RfGain) and "txSetpoints"
+    // (ClientSettingsDomain::TxSetpoints) — and each sub-object's CONTENTS
+    // stay opaque to everything above the seam; the owning backend writes and
+    // validates them (Principle VII; PR #4614 review).
     int extensionSchemaVersion = 0;
     QJsonObject extension;
 

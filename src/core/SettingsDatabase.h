@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QList>
 #include <QMap>
 
 struct sqlite3;
@@ -91,6 +92,15 @@ public:
                           QString& value);
     bool removeRadioFeature(const QString& family, const QString& radioId,
                             const QString& feature);
+    // Full enumeration for diagnostics (--config features / support bundle).
+    struct RadioFeatureRow {
+        QString family;
+        QString radioId;
+        QString feature;
+        int schemaVersion = 0;
+        QString value;
+    };
+    bool listRadioFeatures(QList<RadioFeatureRow>& out);
 
     // Transactions -----------------------------------------------------------
     bool beginExclusive();   // BEGIN EXCLUSIVE — blocks concurrent writers

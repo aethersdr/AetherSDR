@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QMutex>
+#include <QPair>
 #include <QReadWriteLock>
 #include <QSet>
 #include <QString>
@@ -82,6 +83,10 @@ public:
     // their keys and never iterate the shared namespace.
     QStringList allKeysForDiagnostics() const;
     QStringList stationKeysForDiagnostics() const;
+    // radio_settings rows as "family/radioId/feature@vN<TAB-side value>" pairs
+    // for the sanitizer's dump — the third table is part of "the whole store"
+    // (PR #4614 review).
+    QList<QPair<QString, QString>> radioFeaturesForDiagnostics() const;
 
     // Path of the settings database (the store this class persists to).
     QString filePath() const { return m_filePath; }
@@ -177,7 +182,7 @@ private:
     QString m_loadNotice;
     LoadState m_loadState{LoadState::NotAttempted};
 
-    QMutex m_saveMutex;                          // serializes save()/import I/O
+    mutable QMutex m_saveMutex;                  // serializes save()/import/feature-doc I/O
 
     std::unique_ptr<QLockFile> m_guiClientLock;
     QString m_persistentGuiClientId;

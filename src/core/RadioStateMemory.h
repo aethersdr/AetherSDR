@@ -17,6 +17,18 @@ namespace AetherSDR {
 // deltas → debounced store) and the per-domain field application — including
 // the per-band drive/LNA maps from nigelfenton's RFC review — land in PR 3
 // together with the HL2 restore path.
+//
+// Two deliberate contract points (PR #4614 review):
+// - store() is READ-ONLY TOWARD NEWER DOCUMENTS: it refuses to overwrite a
+//   document whose schema_version exceeds kSchemaVersion, because a rebuild
+//   at this version would drop unknown fields and downgrade the version.
+// - store() writes the whole document filtered to the DECLARED domains — so a
+//   session under a NARROWER declaration doesn't just skip the undeclared
+//   domains, it erases them from the stored document. Harmless while
+//   declarations are static per family; revisit if they ever become dynamic.
+// The Memories domain is deliberately absent from the extension gate: the
+// host-side memory bank (#4590) gets its own feature documents (PR 6) —
+// one domain, one document.
 namespace RadioStateMemory {
 
 // The feature document name in radio_settings, and its current schema.

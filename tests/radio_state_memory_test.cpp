@@ -13,6 +13,8 @@
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
 #include "core/RadioStateMemory.h"
+#include "core/SettingsDatabase.h"
+#include "core/SettingsPaths.h"
 
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -53,8 +55,15 @@ RestoredRadioState sampleState()
     state.filterHighHz = 2'900.0;
     state.sampleRateHz = 192'000;
     state.extensionSchemaVersion = 1;
-    state.extension = QJsonObject{{QStringLiteral("lnaDbByBand"),
-                                   QJsonObject{{QStringLiteral("40m"), 19}}}};
+    // The extension's top level is domain sub-objects (the per-domain gate);
+    // each sub-object's contents are backend-owned.
+    state.extension = QJsonObject{
+        {QStringLiteral("rfGain"),
+         QJsonObject{{QStringLiteral("lnaDbByBand"),
+                      QJsonObject{{QStringLiteral("40m"), 19}}}}},
+        {QStringLiteral("txSetpoints"),
+         QJsonObject{{QStringLiteral("driveByBand"),
+                      QJsonObject{{QStringLiteral("40m"), 42}}}}}};
     return state;
 }
 
@@ -106,12 +115,16 @@ int main(int argc, char** argv)
               "passband round-trips");
         check(restored.sampleRateHz == 192'000, "span/rate round-trips");
         check(restored.extensionSchemaVersion == 1
-                  && restored.extension.value(QStringLiteral("lnaDbByBand"))
+                  && restored.extension.value(QStringLiteral("rfGain"))
+                             .toObject()
+                             .value(QStringLiteral("lnaDbByBand"))
                              .toObject()
                              .value(QStringLiteral("40m"))
                              .toInt()
-                         == 19,
-              "the extension document round-trips opaquely");
+                         == 19
+                  && restored.extension
+                         .contains(QStringLiteral("txSetpoints")),
+              "the extension document round-trips (contents opaque)");
     }
 
     // ---- two radios of one family stay independent ------------------------
@@ -187,6 +200,78 @@ int main(int argc, char** argv)
         check(RadioStateMemory::load(futureRadio, caps).rfFrequencyHz
                   == 21'074'000.0,
               "known fields load from a newer-schema document");
+    }
+
+    // ---- the extension gate splits per domain (PR #4614 review) -----------
+    // The regression K5PTB specified: RfGain-only declaration, stored ext
+    // carrying both maps — TxSetpoints data must NOT come back.
+    {
+        RadioCapabilities rfGainOnly;
+        rfGainOnly.family = QStringLiteral("hl2");
+        rfGainOnly.clientSettingsDomains = Domain::RfGain;
+        const RestoredRadioState gated = RadioStateMemory::load(radioA, rfGainOnly);
+        check(gated.extension.contains(QStringLiteral("rfGain")),
+              "a declared ext domain's sub-object loads");
+        check(!gated.extension.contains(QStringLiteral("txSetpoints")),
+              "an undeclared ext domain's sub-object is NOT handed over");
+    }
+
+    // ---- store is read-only toward newer documents (PR #4614 review) ------
+    // The load→capture→store cycle against a v2 document must refuse, not
+    // truncate-and-downgrade.
+    {
+        const RadioCapabilities caps = hl2Caps();
+        const RadioSettingsScope newerRadio(QStringLiteral("hl2"),
+                                            QStringLiteral("FE:ED:FA:CE:00:02"));
+        QJsonObject future{{QStringLiteral("rfFrequencyHz"), 28'074'000.0},
+                           {QStringLiteral("v2Field"), QStringLiteral("keep")}};
+        check(newerRadio.setFeature(RadioStateMemory::featureName(),
+                                    RadioStateMemory::kSchemaVersion + 1, future),
+              "a newer-schema document is planted");
+        RestoredRadioState captured = RadioStateMemory::load(newerRadio, caps);
+        check(captured.rfFrequencyHz == 28'074'000.0,
+              "the newer document's known fields load");
+        captured.rfFrequencyHz = 28'500'000.0;
+        check(!RadioStateMemory::store(newerRadio, caps, captured),
+              "store REFUSES to overwrite a newer-schema document");
+        int storedVersion = 0;
+        const QJsonObject after =
+            newerRadio.feature(RadioStateMemory::featureName(), &storedVersion);
+        check(storedVersion == RadioStateMemory::kSchemaVersion + 1
+                  && after.value(QStringLiteral("v2Field")).toString()
+                         == QStringLiteral("keep")
+                  && after.value(QStringLiteral("rfFrequencyHz")).toDouble()
+                         == 28'074'000.0,
+              "the newer document survives byte-for-byte — no truncation, no "
+              "version downgrade");
+    }
+
+    // ---- a corrupt document is loud, and falls back (PR #4614 review) -----
+    {
+        auto& s = AppSettings::instance();
+        check(s.setRadioFeature(QStringLiteral("hl2"), QString(),
+                                QStringLiteral("CorruptProbe"), 1,
+                                QJsonObject{{QStringLiteral("fromFamily"), true}}),
+              "family-wide fallback document for the corrupt case stores");
+        // Plant a genuinely corrupt EXACT row underneath the API: the raw
+        // row writer stores any string, simulating on-disk damage.
+        {
+            SettingsDatabase raw;
+            check(raw.open(SettingsPaths::databasePath()),
+                  "a raw handle opens the store");
+            check(raw.upsertRadioFeature(QStringLiteral("hl2"),
+                                         QStringLiteral("CO:RR:UP:TE:D0:01"),
+                                         QStringLiteral("CorruptProbe"), 1,
+                                         QStringLiteral("{not json")),
+                  "a corrupt exact row is planted");
+            raw.close();
+        }
+        const QJsonObject viaFallback = s.radioFeature(
+            QStringLiteral("hl2"), QStringLiteral("CO:RR:UP:TE:D0:01"),
+            QStringLiteral("CorruptProbe"));
+        check(viaFallback.value(QStringLiteral("fromFamily")).toBool(),
+              "a corrupt exact row is logged and falls back to the family "
+              "document instead of reading as 'nothing stored'");
     }
 
     // ---- persistence survives a fresh load --------------------------------

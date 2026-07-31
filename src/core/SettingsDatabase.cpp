@@ -494,6 +494,32 @@ bool SettingsDatabase::removeRadioFeature(const QString& family,
     return true;
 }
 
+bool SettingsDatabase::listRadioFeatures(QList<RadioFeatureRow>& out)
+{
+    Statement stmt(m_db,
+        "SELECT family, radio_id, feature, schema_version, value "
+        "FROM radio_settings ORDER BY family, radio_id, feature;");
+    if (!stmt.valid()) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    int rc = 0;
+    while ((rc = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        RadioFeatureRow row;
+        row.family = columnText(stmt.get(), 0);
+        row.radioId = columnText(stmt.get(), 1);
+        row.feature = columnText(stmt.get(), 2);
+        row.schemaVersion = sqlite3_column_int(stmt.get(), 3);
+        row.value = columnText(stmt.get(), 4);
+        out.append(row);
+    }
+    if (rc != SQLITE_DONE) {
+        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+        return false;
+    }
+    return true;
+}
+
 bool SettingsDatabase::beginExclusive() { return exec("BEGIN EXCLUSIVE;"); }
 bool SettingsDatabase::begin()          { return exec("BEGIN IMMEDIATE;"); }
 bool SettingsDatabase::commit()         { return exec("COMMIT;"); }

@@ -121,6 +121,9 @@ static int runConfigCli(int argc, char* argv[])
             "  unset <key>        delete a setting\n"
             "  export             sanitized dump of the whole store (secrets\n"
             "                     redacted; diagnostic output, not a backup)\n"
+            "  features [family]  list radio-scoped feature documents\n"
+            "                     (sanitized; write access lands with RFC #4603\n"
+            "                     PR 3, when something writes them)\n"
             "  path               print the settings database path\n",
             stderr);
         return 1;
@@ -164,6 +167,20 @@ static int runConfigCli(int argc, char* argv[])
     }
     if (op == QStringLiteral("export")) {
         std::printf("%s", qPrintable(AetherSDR::SettingsSanitizer::dump()));
+        return 0;
+    }
+    if (op == QStringLiteral("features")) {
+        const QString family = args.value(3);
+        const auto rows = settings.radioFeaturesForDiagnostics();
+        for (const auto& row : rows) {
+            if (!family.isEmpty()
+                && !row.first.startsWith(family + QLatin1Char('/'))) {
+                continue;
+            }
+            std::printf("%s\t%s\n", qPrintable(row.first),
+                        qPrintable(AetherSDR::SettingsSanitizer::redactedValue(
+                            row.first, row.second)));
+        }
         return 0;
     }
     if (op == QStringLiteral("set") || op == QStringLiteral("unset")) {

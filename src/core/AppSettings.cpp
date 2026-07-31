@@ -978,6 +978,29 @@ QStringList AppSettings::stationKeysForDiagnostics() const
     return m_stationSettings.keys();
 }
 
+QList<QPair<QString, QString>> AppSettings::radioFeaturesForDiagnostics() const
+{
+    QMutexLocker ioLocker(&m_saveMutex);
+    QList<QPair<QString, QString>> out;
+    if (!m_db || !m_db->isOpen()) {
+        return out;
+    }
+    QList<SettingsDatabase::RadioFeatureRow> rows;
+    if (!m_db->listRadioFeatures(rows)) {
+        return out;
+    }
+    for (const auto& row : rows) {
+        out.append({QStringLiteral("%1/%2/%3@v%4")
+                        .arg(row.family,
+                             row.radioId.isEmpty() ? QStringLiteral("<family>")
+                                                   : row.radioId,
+                             row.feature)
+                        .arg(row.schemaVersion),
+                    row.value});
+    }
+    return out;
+}
+
 // ─── Radio-scoped feature documents (RFC #4603) ──────────────────────────────
 
 QJsonObject AppSettings::radioFeature(const QString& family,
@@ -988,27 +1011,46 @@ QJsonObject AppSettings::radioFeature(const QString& family,
     if (schemaVersionOut != nullptr) {
         *schemaVersionOut = 0;
     }
-    auto* self = const_cast<AppSettings*>(this);
-    QMutexLocker ioLocker(&self->m_saveMutex);
+    QMutexLocker ioLocker(&m_saveMutex);
     if (!m_db || !m_db->isOpen()) {
         return {};
     }
+
+    // Read one row and parse it; a row that exists but does not parse is a
+    // CORRUPT document — logged, never silently treated as "nothing stored"
+    // (PR #4614 review).
+    const auto readRow = [this, &family, &feature](const QString& id,
+                                                   int& version,
+                                                   QJsonObject& doc) {
+        QString value;
+        if (!m_db->readRadioFeature(family, id, feature, version, value)) {
+            return false;
+        }
+        QJsonParseError parseError{};
+        const QJsonDocument parsed =
+            QJsonDocument::fromJson(value.toUtf8(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !parsed.isObject()) {
+            qWarning() << "AppSettings: radio feature document is corrupt —"
+                       << family << id << feature << ':'
+                       << parseError.errorString();
+            return false;
+        }
+        doc = parsed.object();
+        return true;
+    };
+
     int version = 0;
-    QString value;
-    // Exact radio first, then the family-wide default row.
-    if (!self->m_db->readRadioFeature(family, radioId, feature, version, value)
-        && !(radioId.isEmpty()
-             || self->m_db->readRadioFeature(family, QString(), feature, version,
-                                             value))) {
-        return {};
+    QJsonObject doc;
+    // Exact radio first; a missing OR corrupt exact row falls back to the
+    // family-wide default row (radioId "").
+    if (readRow(radioId, version, doc)
+        || (!radioId.isEmpty() && readRow(QString(), version, doc))) {
+        if (schemaVersionOut != nullptr) {
+            *schemaVersionOut = version;
+        }
+        return doc;
     }
-    if (value.isEmpty()) {
-        return {};
-    }
-    if (schemaVersionOut != nullptr) {
-        *schemaVersionOut = version;
-    }
-    return QJsonDocument::fromJson(value.toUtf8()).object();
+    return {};
 }
 
 bool AppSettings::setRadioFeature(const QString& family, const QString& radioId,
@@ -1055,7 +1097,12 @@ bool AppSettings::removeRadioFeature(const QString& family,
             return false;
         }
     }
-    return m_db->removeRadioFeature(family, radioId, feature);
+    if (!m_db->removeRadioFeature(family, radioId, feature)) {
+        qWarning() << "AppSettings: radio feature remove failed:" << family
+                   << radioId << feature << '—' << m_db->lastError();
+        return false;
+    }
+    return true;
 }
 
 // ─── Per-station accessors ────────────────────────────────────────────────────
