@@ -52,6 +52,22 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
+      # The Build step above compiles `all`, so every test target in the tree
+      # is already linked by the time we get here — and until #4559 this
+      # workflow ran none of them. Two cross_needle_meter_test assertions duly
+      # sat failing on main unnoticed. Running it here costs the ~10 s of
+      # runtime and no build time at all.
+      #
+      # QT_QPA_PLATFORM=offscreen is what makes the render measurements
+      # deterministic (bit-identical across Windows / Linux x86_64 / macOS
+      # arm64 / Linux arm64 — see #4559). CMakeLists.txt sets it as a test
+      # property too; it is repeated here so the requirement is legible at the
+      # call site rather than only in the build system.
+      - name: Test cross-needle meter geometry
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "cross_needle_meter_test" --output-on-failure
+
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted
@@ -259,13 +275,27 @@ jobs:
       - name: Build
         # This job's purpose is to catch Windows-only compile/link regressions
         # (WASAPI, Q_OS_WIN paths) that Linux/macOS CI can't see — served by
-        # linking the app plus the handful of portability tests run below, NOT the
-        # default `all` target. Building every *_test.exe relinked the same
-        # libraries into hundreds of tiny executables for no added Windows coverage
-        # (cross-platform test linkage is already exercised by the Linux/macOS CI
-        # that build AND run the full suite), and that link tail was stalling for
-        # hours on the runner. timeout-minutes fails fast (with logs) if it ever
-        # hangs again, instead of running to the 6-hour job limit.
+        # linking the app plus the handful of tests run below, NOT the default
+        # `all` target. Building every *_test.exe relinked the same libraries
+        # into hundreds of tiny executables for no added Windows coverage, and
+        # that link tail was stalling for hours on the runner. timeout-minutes
+        # fails fast (with logs) if it ever hangs again, instead of running to
+        # the 6-hour job limit.
+        #
+        # This comment used to justify that by claiming cross-platform test
+        # linkage "is already exercised by the Linux/macOS CI that build AND
+        # run the full suite". It never was: before #4559 the only ctest calls
+        # in this file were the ThumbDV allow-list below and asr_gpu_probe_test
+        # in check-macos, and the Linux `build` job ran none. That wrong claim
+        # is how cross_needle_meter_test failed on main for weeks unnoticed.
+        # The Linux job now runs that one test; everything else still runs only
+        # in sanitizers.yml — weekly, and non-gating.
+        #
+        # cross_needle_meter_test is the deliberate exception to the
+        # no-test-tree rule here. #4559's separator assertion failed on Windows
+        # while passing on Linux, so gating its reformulated assertions on
+        # Windows too is what actually backs their claim to be bit-identical
+        # across platforms. One small test exe and ~10 s of ctest.
         timeout-minutes: 45
         run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
@@ -274,7 +304,11 @@ jobs:
 
       # cross_needle_meter_test renders widgets; the offscreen platform makes
       # its measurements deterministic (verified bit-identical across
-      # Windows/Linux x86_64/macOS arm64/Linux arm64 — see #4559).
+      # Windows/Linux x86_64/macOS arm64/Linux arm64 — see #4559). The Linux
+      # `build` job runs this too; Windows is the platform on which #4559's
+      # separator assertion actually failed, which is the point of gating both.
+      # CMakeLists.txt sets QT_QPA_PLATFORM as a test property as well — it is
+      # repeated here so the requirement is legible at the call site.
       - name: Test cross-needle meter geometry
         env:
           QT_QPA_PLATFORM: offscreen

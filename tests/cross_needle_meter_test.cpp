@@ -896,20 +896,22 @@ void testResourceAndConstruction() {
     // this face every 175%-stretched box still cleared at its base anchor,
     // so the old fixed-stretch "something must move" assertion tested a
     // coincidence of clearance, not the contract, and failed on a healthy
-    // build. Worse, stretch is not even portable: the offscreen fallback
-    // font ("Sans Serif", pixel-sized) IGNORES stretch outright — measured
-    // width("1.5") is bit-identical from 175% through 2000% — so no
-    // stretch-driven assertion can work across platforms. Grow the SIZE
-    // instead (honored by every engine) until a collision must occur. The
-    // #4274 bug (placement cache not keyed by the font) can never move a
-    // label at ANY size, so this still discriminates the original
+    // build. Stretch is also the wrong lever for a portable assertion: how
+    // far a given stretch widens the box — or whether the host's fallback
+    // font honors it at all — is a property of the runner's font stack, not
+    // of Qt, so no fixed stretch discriminates the defect everywhere. Grow
+    // the SIZE instead (honored by every engine) until a collision must
+    // occur. The #4274 bug (placement cache not keyed by the font) can never
+    // move a label at ANY size, so this still discriminates the original
     // regression — while a healthy build must eventually reposition, and
     // must stay collision-free when it does.
     double firstMovingScale = 0.0;
+    double largestPlaceableScale = 0.0;
     bool movingLayoutSeparated = true;
     bool movingLayoutClearsMask = true;
     bool baselineWideSeparated = true;
     bool baselineWideClearsMask = true;
+    bool baselineWideMeasured = false;
     for (double scale : {1.5, 2.0, 3.0, 4.0}) {
         QFont wideSwrLabelFont = swrLabelFont;
         if (wideSwrLabelFont.pixelSize() > 0) {
@@ -953,12 +955,23 @@ void testResourceAndConstruction() {
                 separated = separated && !rects[first].intersects(rects[second]);
             }
         }
-        if (scale == 1.5 && usable) {
-            // The original companion promise, unchanged in spirit: at a
-            // merely-larger font the layout is still collision-free and
-            // above the mask.
-            baselineWideSeparated = separated;
-            baselineWideClearsMask = clearsMask;
+        if (usable) {
+            largestPlaceableScale = scale;
+            if (!baselineWideMeasured) {
+                // The original companion promise, unchanged in spirit: at a
+                // merely-larger font the layout is still collision-free and
+                // above the mask. Taken from the first PLACEABLE rung rather
+                // than from 1.5x specifically, so a face whose 1.5x ring does
+                // not fit still measures this instead of passing vacuously.
+                // When that rung is also the one that moves — which is what
+                // happens everywhere measured so far (first_moving_scale=1.5)
+                // — this is the same layout the moving assertion checks, not
+                // an independent second sample; the unscaled ring is pinned
+                // by the 1x assertions above.
+                baselineWideMeasured = true;
+                baselineWideSeparated = separated;
+                baselineWideClearsMask = clearsMask;
+            }
         }
         if (usable && moved) {
             firstMovingScale = scale;
@@ -968,14 +981,29 @@ void testResourceAndConstruction() {
             break;
         }
     }
+    // largest_placeable_scale separates the two ways this can go red: a
+    // placement that never consulted the font (every rung placeable, none
+    // moved) from a face that simply cannot host an enlarged ring at all
+    // (nothing placeable) — which would otherwise be misreported as the
+    // former.
     report("SWR label placement consults the rendered font once sizes collide",
            firstMovingScale > 0.0,
            "first_moving_scale=" + std::to_string(firstMovingScale) +
-               " (0 = no size up to 4x repositioned any label; placement "
-               "never consulted the font)");
+               " largest_placeable_scale=" +
+               std::to_string(largestPlaceableScale) +
+               (largestPlaceableScale > 0.0
+                    ? " (0 moving = placement never consulted the font)"
+                    : " (nothing placeable above 1x — the ladder never "
+                      "exercised the contract)"));
     report("wider rendered-font SWR labels remain collision-free",
-           baselineWideSeparated && baselineWideClearsMask &&
-               movingLayoutSeparated && movingLayoutClearsMask);
+           baselineWideMeasured && baselineWideSeparated &&
+               baselineWideClearsMask && movingLayoutSeparated &&
+               movingLayoutClearsMask,
+           "baseline_measured=" + std::to_string(baselineWideMeasured) +
+               " baseline_sep=" + std::to_string(baselineWideSeparated) +
+               " baseline_mask=" + std::to_string(baselineWideClearsMask) +
+               " moving_sep=" + std::to_string(movingLayoutSeparated) +
+               " moving_mask=" + std::to_string(movingLayoutClearsMask));
 
     bool maskSymmetric = true;
     for (int i = 0; i < geometry.mask.boundary.size(); ++i) {
