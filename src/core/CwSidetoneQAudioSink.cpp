@@ -65,11 +65,11 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
             continue;   // the sidetone tick only knows Float / Int16
 
         auto* sink = new QAudioSink(dev, c, this);
-        constexpr int kSidetoneBufferMs = 50;
-        const int sampleBytes = (c.sampleFormat() == QAudioFormat::Float)
-                                    ? static_cast<int>(sizeof(float))
-                                    : static_cast<int>(sizeof(int16_t));
-        sink->setBufferSize(c.sampleRate() * 2 * sampleBytes * kSidetoneBufferMs / 1000);
+        // 50 ms buffer — Pulse/PipeWire happily honour ≥40 ms; <30 ms causes
+        // pull-mode Idle/Active flapping and audible chop.  Real perceived
+        // latency stays low (~25 ms typical) because we keep the buffer about
+        // half-full via the 2 ms timer, not because the buffer itself is small.
+        sink->setBufferSize(c.bytesForDuration(50'000));
         QIODevice* io = sink->start();
         if (!io) {
             delete sink;

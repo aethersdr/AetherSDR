@@ -84,8 +84,7 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
         // Match CwSidetoneQAudioSink's 50 ms buffer — required to keep
         // Pulse/PipeWire push-mode happy.  Net latency ~25 ms; fine for
         // 250 ms Quindar tones.
-        const int bytesPerFrame = c.channelCount() * sizeof(float);
-        sink->setBufferSize(50 * c.sampleRate() / 1000 * bytesPerFrame);
+        sink->setBufferSize(c.bytesForDuration(50'000));
         QIODevice* io = sink->start();
         if (!io) {
             lastOpenError = QString::number(static_cast<int>(sink->error()));
