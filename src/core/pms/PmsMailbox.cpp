@@ -312,6 +312,15 @@ void PmsMailbox::disconnectCaller()
         m_link->disconnect();
 }
 
+void PmsMailbox::dropLink()
+{
+    if (m_link->state() == Ax25Connection::State::Disconnected)
+        return;
+    emit activity(QStringLiteral("PMS session with %1 dropped — the modem is no longer "
+                                 "listening.").arg(m_caller.toString()));
+    m_link->reset(); // silent: enterDisconnected() transmits nothing
+}
+
 void PmsMailbox::recordHeard(const Frame& frame)
 {
     if (!m_loaded)

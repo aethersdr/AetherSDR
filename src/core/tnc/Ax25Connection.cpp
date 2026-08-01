@@ -816,6 +816,20 @@ void Ax25Connection::disconnect()
 {
     if (m_state == State::Disconnected)
         return;
+
+    // A second disconnect request while we are ALREADY tearing down means the
+    // operator wants out now — not a politer retry. The old code restarted the
+    // teardown unconditionally, including `m_retryCount = 0`, so every press of
+    // BYE handed the DISC retransmissions a fresh N2 budget: the command that
+    // was supposed to stop the transmissions was the thing keeping them going.
+    // Drop the link silently instead (enterDisconnected() sends nothing).
+    if (m_state == State::Disconnecting) {
+        emit activity(QStringLiteral(
+            "Disconnect forced — dropping the link without waiting for a UA"));
+        enterDisconnected(/*byPeer=*/false);
+        return;
+    }
+
     m_state = State::Disconnecting;
     m_retryCount = 0;
     m_sendBuffer.clear();

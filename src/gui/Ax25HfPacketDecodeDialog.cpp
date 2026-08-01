@@ -1793,6 +1793,33 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
     } else {
         if (m_captureActive)
             finishAudioCapture(false);
+
+        // Switching the modem off must stop the RADIO, not just the decoder.
+        // Previously this stopped only the RX tap: an in-flight transmission
+        // kept keying, the TX queue kept draining, and a connected-mode session
+        // kept running its T1 retransmits — so a stuck link went on transmitting
+        // long after the operator had switched the modem off, while the terminal
+        // still showed "Connected" to a peer it could no longer hear. Keying a
+        // transmitter the operator has just disabled is exactly what Principle VI
+        // forbids, and being deaf makes every one of those transmissions futile.
+        if (m_txActive || m_txPendingStream)
+            finishTransmit(true, QStringLiteral("modem disabled"));
+        if (!m_kissTxQueue.isEmpty()) {
+            appendSystemLine(QStringLiteral(
+                "Dropping %1 queued TX frame(s): the modem is off.")
+                .arg(m_kissTxQueue.size()));
+            m_kissTxQueue.clear();
+        }
+        m_kissTxBusyRetries = 0;
+        // Drop both connected-mode sessions silently — a graceful DISC would
+        // key the transmitter we were just told to stop using, and the peer
+        // cannot be heard anyway. This is also what clears the terminal's
+        // Connect state, which used to survive the modem being switched off.
+        if (m_terminal)
+            m_terminal->reset();
+        if (m_pms)
+            m_pms->dropLink();
+
         if (m_audio)
             m_audio->setTncRxTapEnabled(false);
         QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
@@ -1800,9 +1827,12 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
         m_lastDiagnosticsUtc = {};
         m_lastActivityHdlc = 0;
         m_lastActivityAccepted = 0;
-        appendSystemLine(QStringLiteral("Modem disabled. RX tap stopped."));
+        appendSystemLine(QStringLiteral("Modem disabled. RX tap stopped, TX stopped, "
+                                        "any connected session dropped."));
     }
     refreshStatus();
+    refreshTerminalStatus();
+    refreshPmsStatus();
 }
 
 void Ax25HfPacketDecodeDialog::handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate)

@@ -130,6 +130,12 @@ public slots:
     // Force-disconnect the current caller (graceful DISC).
     void disconnectCaller();
 
+    // Drop the session immediately WITHOUT transmitting anything, leaving the
+    // mailbox's enabled state alone. For when the radio interface goes away
+    // under us (the modem being switched off): a graceful DISC would key a
+    // transmitter the operator just asked us to stop using.
+    void dropLink();
+
     // Send a beacon immediately (also called by the hourly timer).
     void sendBeaconNow();
 

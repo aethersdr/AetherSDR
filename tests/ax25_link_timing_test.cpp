@@ -345,6 +345,71 @@ static void testRttSamplingExcludesRetransmits()
           "a retransmitted frame contributes no RTT sample (Karn's algorithm)");
 }
 
+// BYE must be able to STOP a teardown, not restart it. disconnect() used to
+// reset the retry budget on every call, so a second BYE handed the DISC
+// retransmissions a fresh N2 — pressing it repeatedly kept the radio keying
+// indefinitely. Found on the air 2026-07-31.
+static void testSecondDisconnectDropsTheLink()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+
+    QVector<Frame> sent;
+    bool disconnected = false;
+    QObject::connect(&link, &Ax25Connection::sendFrame, [&](const QByteArray& raw) {
+        if (auto f = Frame::decode(raw))
+            sent.append(*f);
+    });
+    QObject::connect(&link, &Ax25Connection::disconnected,
+                     [&](const Address&, bool) { disconnected = true; });
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+    CHECK(link.isConnected(), "connected");
+
+    // First BYE: the polite teardown, one DISC on the air.
+    sent.clear();
+    link.disconnect();
+    CHECK(link.state() == Ax25Connection::State::Disconnecting, "first disconnect starts teardown");
+    CHECK(sent.size() == 1 && sent.first().type == FrameType::DISC, "first BYE sends DISC");
+
+    // Second BYE while the peer has not answered: stop, do not re-arm.
+    sent.clear();
+    link.disconnect();
+    CHECK(disconnected, "second BYE drops the link instead of retrying");
+    CHECK(link.state() == Ax25Connection::State::Disconnected, "link is down");
+    CHECK(sent.isEmpty(), "the forced drop transmits nothing — BYE must stop the radio, not key it");
+
+    // And a third is harmless.
+    link.disconnect();
+    CHECK(sent.isEmpty(), "disconnecting an idle link is a no-op");
+}
+
+// reset() is the "the radio interface went away" path (the modem being switched
+// off). It must tear the session down without putting anything on the air.
+static void testResetDropsSilently()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+
+    QVector<Frame> sent;
+    QObject::connect(&link, &Ax25Connection::sendFrame, [&](const QByteArray& raw) {
+        if (auto f = Frame::decode(raw))
+            sent.append(*f);
+    });
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+    link.sendData(QByteArrayLiteral("data\r"));
+    CHECK(link.unacked() == 1, "a frame is in flight");
+
+    sent.clear();
+    link.reset();
+    CHECK(link.state() == Ax25Connection::State::Disconnected, "reset drops the link");
+    CHECK(sent.isEmpty(), "reset transmits nothing");
+    CHECK(!link.idlePollArmed(), "and leaves no timer armed");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -360,6 +425,8 @@ int main(int argc, char** argv)
     testStaleAckDoesNotRefillRetryBudget();
     testSabmeRefusedWithDm();
     testRttSamplingExcludesRetransmits();
+    testSecondDisconnectDropsTheLink();
+    testResetDropsSilently();
 
     if (g_failures == 0)
         std::fprintf(stderr, "ax25_link_timing_test: all checks passed\n");
