@@ -40,7 +40,18 @@ private:
 struct AsrGpuDevice {
     int index = 0;
     QString name;
+    // Whether the device supports the kernels whisper's heavy path needs
+    // (probed via ggml_backend_dev_supports_op — see asrGpuDevices()). An
+    // unusable device stays selectable for diagnostics but must never be the
+    // default: on such devices the scheduler splits the graph across GPU and
+    // CPU, producing wrong output and reaching an aborting transfer path
+    // (#4676).
+    bool usable = true;
 };
+
+// The device auto-selection policy (#4676): index of the first usable device,
+// or -1 (CPU) when none qualifies. Pure so the unit test can pin the contract.
+int asrResolveDefaultGpuIndex(const std::vector<AsrGpuDevice>& devices);
 
 // Factory for wiring AsrEngine to the production whisper backend. Kept here so
 // AsrEngine.cpp never references whisper (keeping the engine — and its unit

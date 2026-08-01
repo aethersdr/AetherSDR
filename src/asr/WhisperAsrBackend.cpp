@@ -222,6 +222,34 @@ std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QSt
     };
 }
 
+namespace {
+// Whether `dev` can run the kernels whisper's heavy path schedules on the GPU.
+// Probed through the public ggml_backend_dev_supports_op with synthetic ops —
+// a contiguous F32 soft-max (gated on has_simdgroup_reduction in the Metal
+// backend) and an F16 mat-mul (gated on has_simdgroup_mm) — rather than by
+// reading backend-internal device props, so it works unchanged for Vulkan/CUDA
+// hosts. supports_op only consults device properties: nothing is compiled or
+// allocated (no_alloc context, freed before returning).
+bool asrDeviceUsableForDecode(ggml_backend_dev_t dev)
+{
+    ggml_init_params params = {};
+    params.mem_size = 16 * 1024;
+    params.no_alloc = true;
+    ggml_context* ctx = ggml_init(params);
+    if (!ctx) {
+        return false;
+    }
+    ggml_tensor* act = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
+    ggml_tensor* softMax = ggml_soft_max(ctx, act);
+    ggml_tensor* weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 64, 64);
+    ggml_tensor* mulMat = ggml_mul_mat(ctx, weights, act);
+    const bool usable = ggml_backend_dev_supports_op(dev, softMax)
+        && ggml_backend_dev_supports_op(dev, mulMat);
+    ggml_free(ctx);
+    return usable;
+}
+} // namespace
+
 std::vector<AsrGpuDevice> asrGpuDevices()
 {
     if (!asrMetalUsableHost()) {
@@ -239,10 +267,25 @@ std::vector<AsrGpuDevice> asrGpuDevices()
             AsrGpuDevice d;
             d.index = index++;
             d.name = QString::fromUtf8(ggml_backend_dev_description(dev));
+            d.usable = asrDeviceUsableForDecode(dev);
+            if (!d.usable) {
+                qCInfo(lcAsrWhisper) << "GPU device" << d.index << d.name
+                                     << "fails the decode capability probe - not offered as default";
+            }
             devices.push_back(std::move(d));
         }
     }
     return devices;
+}
+
+int asrResolveDefaultGpuIndex(const std::vector<AsrGpuDevice>& devices)
+{
+    for (const AsrGpuDevice& d : devices) {
+        if (d.usable) {
+            return d.index;
+        }
+    }
+    return -1;
 }
 
 bool asrGpuAvailable()

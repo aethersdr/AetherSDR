@@ -36,6 +36,7 @@
 #include <QElapsedTimer>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -143,7 +144,41 @@ int main()
     std::printf("[ok] full GPU probe returned: %zu device(s) in %lld ms\n",
                 devices.size(), static_cast<long long>(probeMs));
     for (const AsrGpuDevice& d : devices) {
-        std::printf("     device %d: %s\n", d.index, qPrintable(d.name));
+        std::printf("     device %d: %s (usable=%s)\n", d.index, qPrintable(d.name),
+                    d.usable ? "true" : "false");
+    }
+
+    // #4676 default-selection contract, on the real enumeration: the resolved
+    // default is either CPU (-1) or a device that passed the capability probe.
+    // A capability-failing device as default runs a mixed GPU/CPU graph: wrong
+    // output at every tier, and an aborting transfer path on discrete GPUs.
+    {
+        const int def = asrResolveDefaultGpuIndex(devices);
+        if (def != -1) {
+            const auto it = std::find_if(devices.begin(), devices.end(),
+                                         [def](const AsrGpuDevice& d) { return d.index == def; });
+            if (it == devices.end() || !it->usable) {
+                std::fprintf(stderr, "[FAIL] default resolved to device %d, which is "
+                                     "not a usable enumerated device (#4676)\n", def);
+                return 1;
+            }
+        }
+        std::printf("[ok] #4676 default resolution: %d\n", def);
+
+        // And the pure contract, host-independent: first usable wins; no usable
+        // device means CPU.
+        const std::vector<AsrGpuDevice> noneUsable = {
+            {0, QStringLiteral("dGPU"), false}, {1, QStringLiteral("iGPU"), false}};
+        const std::vector<AsrGpuDevice> secondUsable = {
+            {0, QStringLiteral("dGPU"), false}, {1, QStringLiteral("iGPU"), true}};
+        if (asrResolveDefaultGpuIndex({}) != -1
+            || asrResolveDefaultGpuIndex(noneUsable) != -1
+            || asrResolveDefaultGpuIndex(secondUsable) != 1) {
+            std::fprintf(stderr, "[FAIL] asrResolveDefaultGpuIndex contract broken "
+                                 "(#4676)\n");
+            return 1;
+        }
+        std::printf("[ok] #4676 resolution contract (empty/none-usable/mixed lists)\n");
     }
 
 #ifdef Q_OS_MACOS

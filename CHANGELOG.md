@@ -10,6 +10,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Copy Assist no longer auto-selects a GPU that can't run the decoder
+  (#4676).** On Intel Macs the first enumerated Metal device — e.g. a Radeon
+  Pro 560X that fails every ggml capability check — became the default compute
+  device, producing unreadable transcription at every model tier and an abort
+  in ggml's discrete-GPU transfer path. The default now resolves to the first
+  device that passes a capability probe (public `ggml_backend_dev_supports_op`,
+  so Vulkan/CUDA hosts benefit unchanged), else CPU; capability-failing devices
+  stay selectable but are labeled "(unsupported)". The Large-v3-Turbo default
+  tier now applies only when decode actually lands on a usable GPU, and the
+  chosen model tier persists across restarts.
+
 - **Amplifier bar gauges no longer keep painting the old scale after the range
   changes (#4636).** When a gauge's scale is re-derived from live telemetry —
   the ACOM auto-range as forward power outgrows its tier, an SPE LOW/MID/HIGH

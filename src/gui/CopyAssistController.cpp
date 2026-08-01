@@ -156,6 +156,16 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         CopyAssistSettings::value(QStringLiteral("AsrGpuDevice"), QString()).toString();
     if (!savedGpu.isEmpty()) {
         m_gpuDevice = savedGpu.toInt(); // an explicit compute-device choice always wins
+        m_gpuDeviceExplicit = true;
+    }
+    // A previously chosen catalog tier survives restart (#4676). Remote is
+    // restored above; custom/sherpa keep their own path keys and re-prompt.
+    const QString savedTier =
+        CopyAssistSettings::value(QStringLiteral("AsrTier"), QString()).toString();
+    if (m_backend == AsrBackendKind::Whisper && !savedTier.isEmpty()
+        && AsrModelCatalog::tierById(savedTier) != nullptr) {
+        m_tierId = savedTier;
+        m_useGpuDefaultIfAvailable = false;
     }
     m_settings->setCurrentTier(m_tierId);
 
@@ -229,6 +239,7 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
             return;
         }
         m_gpuDevice = index;
+        m_gpuDeviceExplicit = true;
         saveInt("AsrGpuDevice", index);
         if (m_backend != AsrBackendKind::Remote) {
             m_tap->setEnabled(false);
@@ -478,23 +489,37 @@ void CopyAssistController::applyGpuDevices(const std::vector<AsrGpuDevice>& gpus
 
         if (!gpus.empty()) {
             for (const AsrGpuDevice& gpu : gpus) {
-                m_settings->addGpuDevice(gpu.index, gpu.name);
+                // An unusable device stays selectable for diagnostics, but the
+                // combo says why it isn't the default (#4676).
+                m_settings->addGpuDevice(gpu.index,
+                                         gpu.usable ? gpu.name
+                                                    : tr("%1 (unsupported)").arg(gpu.name));
             }
             m_settings->addGpuDevice(-1, tr("CPU")); // explicit force-CPU option
 
-            if (resolvedDevice != -1
+            const bool outOfRange = resolvedDevice != -1
                 && (resolvedDevice < 0
-                    || resolvedDevice >= static_cast<int>(gpus.size()))) {
-                resolvedDevice = 0;
-                persistResolvedDevice = true;
+                    || resolvedDevice >= static_cast<int>(gpus.size()));
+            if (!m_gpuDeviceExplicit || outOfRange) {
+                // Default to the first device that passes the decode capability
+                // probe, else CPU. A device that fails the probe runs a mixed
+                // GPU/CPU graph: wrong output at every tier, and an aborting
+                // transfer path on discrete GPUs (#4676). Only an out-of-range
+                // clamp is persisted — a computed default stays recomputable.
+                resolvedDevice = asrResolveDefaultGpuIndex(gpus);
+                persistResolvedDevice = outOfRange;
             }
             m_settings->setCurrentGpu(resolvedDevice);
             m_settings->setGpuSelectorVisible(true);
             m_settings->setGpuSelectorEnabled(true);
 
-            // Preserve the existing GPU-host default, but only while the
-            // operator has not made an explicit model choice during the probe.
-            if (m_useGpuDefaultIfAvailable) {
+            // Preserve the GPU-host default tier, but only while the operator
+            // has not made an explicit model choice, and only when the decode
+            // will actually run on a usable GPU — a CPU or capability-failing
+            // resolution must not select the heaviest model (#4676).
+            if (m_useGpuDefaultIfAvailable && resolvedDevice >= 0
+                && resolvedDevice < static_cast<int>(gpus.size())
+                && gpus[resolvedDevice].usable) {
                 m_tierId = QStringLiteral("large-v3-turbo");
                 m_settings->setCurrentTier(m_tierId);
             }
@@ -657,7 +682,16 @@ void CopyAssistController::onTierChanged(const QString& tierId)
                                  tr("Sherpa: %1").arg(QDir(dir).dirName()));
         setBackend(AsrBackendKind::SherpaOnnx, tierId);
     } else {
+        // A catalog tier is an explicit, restorable choice — persist it so it
+        // survives restart (#4676). Special tiers keep their own keys and the
+        // stale catalog choice must not resurrect over them.
+        CopyAssistSettings::setValue(QStringLiteral("AsrTier"), tierId);
         setBackend(backendForTier(tierId), tierId);
+    }
+    if (tierId == QString::fromLatin1(kRemoteTierId)
+        || tierId == QString::fromLatin1(kCustomTierId)
+        || tierId == QString::fromLatin1(kSherpaTierId)) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrTier"), QString());
     }
 
     if (m_enabled) {

@@ -100,6 +100,8 @@ private:
     bool m_gpuDiscoveryPending = true;
     bool m_enableAfterGpuDiscovery = false;
     int m_gpuDevice = 0; // resolved default or explicit setting; -1 forces CPU
+    bool m_gpuDeviceExplicit = false; // true only for a user/persisted choice —
+                                      // a computed default stays recomputable (#4676)
     QString m_tierId;
     QString m_customModelPath; // user-picked local model (for the "Custom model…" tier)
     QString m_sherpaModelDir;  // user-picked sherpa-onnx model directory
