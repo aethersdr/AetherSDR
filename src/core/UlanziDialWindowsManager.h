@@ -2,6 +2,8 @@
 #include <QtGlobal>
 #if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 
+#include "core/UlanziChordDecoder.h"
+
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -71,9 +73,9 @@ private:
     QTimer* m_pollTimer{nullptr};
     QTimer* m_hotplugTimer{nullptr};
 
-    bool m_ctrlDown{false};
-    int  m_lastNonModKey{-1};
-    bool m_prevsongAlongsideCtrl{false};
+    // Chord assembly and signature formatting are shared with the Linux and
+    // macOS backends (ulanzi_chord_decoder_test covers all three).
+    UlanziChordDecoder m_decoder;
 
     static constexpr int POLL_INTERVAL_MS    = 5;
     static constexpr int HOTPLUG_INTERVAL_MS = 3000;

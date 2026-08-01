@@ -58,6 +58,12 @@
 
 namespace AetherSDR {
 
+// Shown wherever a figure is displayed that THIS transport cannot produce —
+// latency on a stream with no round trip to time, delivery spacing before the
+// first timing window has closed. Distinct from "0" on purpose: a measurement of
+// nothing and the absence of a measurement are different claims about the link.
+const QString kNotMeasuredOnLink = QStringLiteral("not measured on this link");
+
 constexpr const char* kNetworkDiagnosticsStyle = R"(
 QWidget {
     color: #aeb9cc;
@@ -2739,7 +2745,9 @@ void NetworkDiagnosticsHistory::sampleNow()
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const double elapsedSeconds = std::max(0.001, (nowMs - m_lastSampleMs) / 1000.0);
     sample.timestampMs = nowMs;
-    sample.rttMs = m_model->lastPingRtt();
+    // -1 means "this transport has no round trip to time", so the trace can be
+    // omitted rather than drawn as a flat 0 ms line. See the latency series.
+    sample.rttMs = m_model->hasLinkRtt() ? m_model->lastPingRtt() : -1;
 
     static constexpr PanadapterStream::StreamCategory cats[] = {
         PanadapterStream::CatAudio, PanadapterStream::CatFFT,
@@ -3234,13 +3242,22 @@ void NetworkDiagnosticsDialog::refresh()
     m_udpEndpointLabel->setText(m_model->localUdpEndpoint());
     m_udpSeenLabel->setText(m_model->firstUdpPacketSeen() ? "Yes" : "No");
 
+    // "< 1 ms" is what a zero RTT formats to, so on a transport that has no
+    // round trip to time these three would advertise the best latency the app
+    // can display — from a measurement nothing ever took. Say so instead.
+    const bool haveRtt = m_model->hasLinkRtt();
     const int rtt = m_model->lastPingRtt();
-    m_rttLabel->setText(rtt < 1 ? "< 1 ms" : QString("%1 ms").arg(rtt));
+    const QString rttText = haveRtt
+        ? (rtt < 1 ? QStringLiteral("< 1 ms") : QStringLiteral("%1 ms").arg(rtt))
+        : kNotMeasuredOnLink;
+    m_rttLabel->setText(rttText);
     m_overviewStatusValue->setText(m_model->networkQuality());
-    m_overviewLatencyValue->setText(rtt < 1 ? "< 1 ms" : QString("%1 ms").arg(rtt));
+    m_overviewLatencyValue->setText(haveRtt ? rttText : QStringLiteral("n/a"));
 
     const int maxRtt = m_model->maxPingRtt();
-    m_maxRttLabel->setText(maxRtt < 1 ? "< 1 ms" : QString("%1 ms").arg(maxRtt));
+    m_maxRttLabel->setText(
+        haveRtt ? (maxRtt < 1 ? QStringLiteral("< 1 ms") : QStringLiteral("%1 ms").arg(maxRtt))
+                : kNotMeasuredOnLink);
 
     // Per-category rates
     static constexpr PanadapterStream::StreamCategory cats[] = {
@@ -3250,7 +3267,21 @@ void NetworkDiagnosticsDialog::refresh()
     QLabel* rateLabels[] = { m_audioRateLabel, m_fftRateLabel, m_wfRateLabel, m_meterRateLabel };
     QLabel* dropLabels[] = { m_audioDropLabel, m_fftDropLabel, m_wfDropLabel, m_meterDropLabel };
 
+    // The per-category breakdown describes the VITA-49 multiplex: five
+    // separately-sequenced streams sharing one socket. A transport that carries
+    // everything in a single stream has no such split, and printing "0 kbps ·
+    // 0 / 0 packets" on five rows reads as five dead streams rather than as a
+    // distinction that does not apply to this radio. The TOTAL rx/tx rows below
+    // are real on both and are left alone.
+    const bool perStream = m_model->hasStreamCategoryStats();
+    const QString notApplicable = QStringLiteral("n/a");
+
     for (int i = 0; i < 4; ++i) {
+        if (!perStream) {
+            rateLabels[i]->setText(notApplicable);
+            dropLabels[i]->setText(notApplicable);
+            continue;
+        }
         PanadapterStream::CategoryStats cs = m_model->categoryStats(cats[i]);
         double rateKbps = 0.0;
         if (cats[i] == PanadapterStream::CatAudio) {
@@ -3267,7 +3298,10 @@ void NetworkDiagnosticsDialog::refresh()
     }
 
     // DAX traffic
-    {
+    if (!perStream) {
+        m_daxRateLabel->setText(notApplicable);
+        m_daxDropLabel->setText(notApplicable);
+    } else {
         PanadapterStream::CategoryStats cs = m_model->categoryStats(PanadapterStream::CatDAX);
         m_daxRateLabel->setText(QString("%1 kbps").arg(static_cast<int>(sample.daxKbps)));
         m_daxDropLabel->setText(formatDrop(cs));
@@ -3310,9 +3344,18 @@ void NetworkDiagnosticsDialog::refresh()
         m_audioUnderrunLabel->setText(QString::number(underruns));
         m_audioUnderrunRateLabel->setText(QString::number(sample.underrunsPerSecond, 'f', 0));
 
-        m_audioPacketGapLabel->setText(formatMsValue(m_model->audioPacketGapMs()));
-        m_audioPacketGapMaxLabel->setText(formatMsValue(m_model->audioPacketGapMaxMs()));
-        m_audioJitterLabel->setText(formatMsValue(m_model->audioPacketJitterMs()));
+        // formatMsValue(0) is "< 1 ms", and the model clamps the seam's
+        // "not measured" sentinel to 0 so the charts stay numeric — so these
+        // three ask the same question the RTT rows above do before printing.
+        // A backend is `reported` from its first tick, a second before its first
+        // delivery-timing window closes.
+        const bool haveTiming = m_model->hasLinkTiming();
+        m_audioPacketGapLabel->setText(
+            haveTiming ? formatMsValue(m_model->audioPacketGapMs()) : kNotMeasuredOnLink);
+        m_audioPacketGapMaxLabel->setText(
+            haveTiming ? formatMsValue(m_model->audioPacketGapMaxMs()) : kNotMeasuredOnLink);
+        m_audioJitterLabel->setText(
+            haveTiming ? formatMsValue(m_model->audioPacketJitterMs()) : kNotMeasuredOnLink);
         m_audioStreamLabel->setText(formatAudioStream(sample, sliceLabels));
         m_audioFeedRateLabel->setText(formatFeedRate(sample.audioFeedRateHz, sample.audioStreamCount));
         m_audioFeedDeficitLabel->setText(formatFeedDeficit(sample.audioFeedDeficitMs));
@@ -3534,27 +3577,42 @@ void NetworkDiagnosticsDialog::updateCharts()
         return series;
     };
 
-    QVector<TimeSeriesGraphWidget::Series> latencySeries{
-        buildSeriesWithUnit("RTT", QColor("#00b4d8"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.rttMs); }),
-        buildSeriesWithUnit("Arrival gap", QColor("#f2c94c"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioGapMs); }),
-        buildSeriesWithUnit("Jitter", QColor("#eb5757"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioJitterMs); })
-    };
+    // The RTT trace is OMITTED, not zeroed, on a transport with no round trip to
+    // time. Samples carry -1 for "not measured", and std::max(0.0, …) inside the
+    // series builders would flatten that to a confident 0 ms line running under
+    // the real traces — the chart contradicting the "n/a" the latency tile
+    // already shows, and the more believable of the two because it is drawn.
+    QVector<TimeSeriesGraphWidget::Series> latencySeries;
+    if (m_model->hasLinkRtt()) {
+        latencySeries.push_back(buildSeriesWithUnit("RTT", QColor("#00b4d8"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.rttMs); }));
+    }
+    latencySeries.push_back(buildSeriesWithUnit("Arrival gap", QColor("#f2c94c"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioGapMs); }));
+    latencySeries.push_back(buildSeriesWithUnit("Jitter", QColor("#eb5757"), " ms", [](const NetworkDiagnosticsSample& s) { return static_cast<double>(s.audioJitterMs); }));
+
+    // Same reasoning for the per-category rate traces: five flat zero lines
+    // would claim five dead streams on a transport that never had five.
     QVector<TimeSeriesGraphWidget::Series> rateSeries{
-        buildSeriesWithUnit("RX total", QColor("#00b4d8"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.rxKbps; }),
-        buildSeriesWithUnit("Audio", QColor("#6fcf97"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.audioKbps; }),
-        buildSeriesWithUnit("FFT", QColor("#bb6bd9"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.fftKbps; }),
-        buildSeriesWithUnit("Waterfall", QColor("#f2994a"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.waterfallKbps; }),
-        buildSeriesWithUnit("Meters", QColor("#56ccf2"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.meterKbps; }),
-        buildSeriesWithUnit("DAX", QColor("#bdbdbd"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.daxKbps; })
+        buildSeriesWithUnit("RX total", QColor("#00b4d8"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.rxKbps; })
     };
+    if (m_model->hasStreamCategoryStats()) {
+        rateSeries.push_back(buildSeriesWithUnit("Audio", QColor("#6fcf97"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.audioKbps; }));
+        rateSeries.push_back(buildSeriesWithUnit("FFT", QColor("#bb6bd9"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.fftKbps; }));
+        rateSeries.push_back(buildSeriesWithUnit("Waterfall", QColor("#f2994a"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.waterfallKbps; }));
+        rateSeries.push_back(buildSeriesWithUnit("Meters", QColor("#56ccf2"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.meterKbps; }));
+        rateSeries.push_back(buildSeriesWithUnit("DAX", QColor("#bdbdbd"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.daxKbps; }));
+    }
+    // The TOTAL loss trace is real on both transports — it is the per-category
+    // breakdown underneath it that only the VITA-49 multiplex has.
     QVector<TimeSeriesGraphWidget::Series> lossSeries{
-        buildSeriesWithUnit("Recent total", QColor("#eb5757"), "%", [](const NetworkDiagnosticsSample& s) { return s.packetLossPct; }),
-        buildSeriesWithUnit("Audio", QColor("#6fcf97"), "%", [](const NetworkDiagnosticsSample& s) { return s.audioLossPct; }),
-        buildSeriesWithUnit("FFT", QColor("#bb6bd9"), "%", [](const NetworkDiagnosticsSample& s) { return s.fftLossPct; }),
-        buildSeriesWithUnit("Waterfall", QColor("#f2994a"), "%", [](const NetworkDiagnosticsSample& s) { return s.waterfallLossPct; }),
-        buildSeriesWithUnit("Meters", QColor("#56ccf2"), "%", [](const NetworkDiagnosticsSample& s) { return s.meterLossPct; }),
-        buildSeriesWithUnit("DAX", QColor("#bdbdbd"), "%", [](const NetworkDiagnosticsSample& s) { return s.daxLossPct; })
+        buildSeriesWithUnit("Recent total", QColor("#eb5757"), "%", [](const NetworkDiagnosticsSample& s) { return s.packetLossPct; })
     };
+    if (m_model->hasStreamCategoryStats()) {
+        lossSeries.push_back(buildSeriesWithUnit("Audio", QColor("#6fcf97"), "%", [](const NetworkDiagnosticsSample& s) { return s.audioLossPct; }));
+        lossSeries.push_back(buildSeriesWithUnit("FFT", QColor("#bb6bd9"), "%", [](const NetworkDiagnosticsSample& s) { return s.fftLossPct; }));
+        lossSeries.push_back(buildSeriesWithUnit("Waterfall", QColor("#f2994a"), "%", [](const NetworkDiagnosticsSample& s) { return s.waterfallLossPct; }));
+        lossSeries.push_back(buildSeriesWithUnit("Meters", QColor("#56ccf2"), "%", [](const NetworkDiagnosticsSample& s) { return s.meterLossPct; }));
+        lossSeries.push_back(buildSeriesWithUnit("DAX", QColor("#bdbdbd"), "%", [](const NetworkDiagnosticsSample& s) { return s.daxLossPct; }));
+    }
     QVector<TimeSeriesGraphWidget::Series> audioBufferSeries{
         buildSeriesWithUnit("Buffer", QColor("#00b4d8"), " ms", [](const NetworkDiagnosticsSample& s) { return s.audioBufferMs; }),
         buildSeriesWithUnit("Slow delivery", QColor("#f2c94c"), " ms", [](const NetworkDiagnosticsSample& s) { return s.audioFeedDeficitMs; }),

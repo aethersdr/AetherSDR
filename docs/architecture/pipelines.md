@@ -107,6 +107,37 @@ independently of microphone callbacks and sends it through a client-owned
 `dax_tx` stream in DIGU. Its dedicated non-voice PTT source suppresses Quindar,
 and the generator holds silence through the unkey edge.
 
+Four conventions in that generator are taken from WSJT-X's `Modulator.cpp`
+rather than invented, because a WSPR frame is judged by decoders we do not own:
+
+- **Tone 0 sits at the requested audio frequency**, with the constellation
+  running upward from it (`m_frequency + itone[isym] * m_toneSpacing`). Centring
+  the four tones on it instead shifts every resulting spot 2.2 Hz low.
+- **Both ends of the frame are tapered** over 0.017 symbols (11.6 ms). WSJT-X
+  fades only the tail; the head ramp is ours. Phase is continuous across symbol
+  boundaries, so these are the only two discontinuities in 111.6 s, and an
+  untapered one is a broadband click in a 200 Hz-wide shared sub-band.
+- **The lead-in is referenced to the slot**, not to whenever the pump started,
+  so scheduling latency is absorbed rather than reported as DT.
+- **A missed boundary truncates the head** of the frame instead of sliding the
+  whole transmission later.
+
+The beacon also borrows station state that is not slice state and hands it back
+on stop. Arming takes only the transmit passband. Everything else is taken at
+the KEY, in `reassertBeaconChannel()`: the slice mode, both passbands again, the
+speech processor, the compander, the TX equalizer and VOX. None of the audio
+four is bypassed by selecting DIGU and all of them misshape a constant-envelope
+tone; VOX is taken because it can unkey part-way through a 111.6 s frame.
+
+The key, not arm, is where those belong for one reason: arming happens up to
+120 s ahead of the key — up to ~6 minutes once the permitted deferrals are
+spent — so anything pushed at arm is stale by the time it matters. A cross-band
+`slice tune` triggers an asynchronous band-stack recall that can land after the
+mode and filter sent behind it (§6.2 of the FlexLib oracle; #2824), and another
+client, a band button or a profile load can move the slice in that window. The
+same staleness argument applies to the speech chain, which is additionally why
+a station that is merely *armed* keeps its own audio processing and VOX intact.
+
 TCP COMMAND PIPELINE (bidirectional):
   GUI widget ──→ SliceModel.setXxx() ──→ emit commandReady("slice ...")  [MAIN]
                  TransmitModel          ──→ emit commandReady("xmit ...")

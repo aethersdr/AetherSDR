@@ -41,6 +41,11 @@ bool macDaxDriverInstalled()
 
 // ─── Network diagnostics tooltip ─────────────────────────────────────────────
 
+// Shown where a figure exists in the readout but this transport cannot produce
+// it. Deliberately not "0" or "—": the operator must be able to tell a
+// measurement of nothing from the absence of a measurement.
+const QString kNetworkNotMeasured = QStringLiteral("not measured on this link");
+
 QString formatNetworkMs(int ms)
 {
     return ms < 1 ? "< 1 ms" : QString("%1 ms").arg(ms);
@@ -153,17 +158,34 @@ QString buildNetworkTooltip(const RadioModel& model,
     }
 
     html += networkTooltipSection(QStringLiteral("LINK TIMING"));
-    html += networkTooltipRow(QStringLiteral("Current RTT"),
-                              formatNetworkMs(model.lastPingRtt()));
-    html += networkTooltipRow(QStringLiteral("Session maximum"),
-                              formatNetworkMs(model.maxPingRtt()));
-    html += networkTooltipRow(QStringLiteral("Network jitter"),
-                              formatNetworkMs(model.audioPacketJitterMs()));
-    html += networkTooltipRow(
-        QStringLiteral("Audio gap"),
-        QStringLiteral("%1 · max %2")
-            .arg(formatNetworkMs(model.audioPacketGapMs()),
-                 formatNetworkMs(model.audioPacketGapMaxMs())));
+    // A transport with no request/response exchange has no round trip to time.
+    // formatNetworkMs(0) renders "< 1 ms", so printing the getter unconditionally
+    // would show the best possible latency on a link nothing ever pinged.
+    if (model.hasLinkRtt()) {
+        html += networkTooltipRow(QStringLiteral("Current RTT"),
+                                  formatNetworkMs(model.lastPingRtt()));
+        html += networkTooltipRow(QStringLiteral("Session maximum"),
+                                  formatNetworkMs(model.maxPingRtt()));
+    } else {
+        html += networkTooltipRow(QStringLiteral("Current RTT"),
+                                  kNetworkNotMeasured);
+    }
+    // Same rule, one field over. A backend is `reported` from its first tick on
+    // purpose, but its first delivery-timing window has not closed yet, and the
+    // getters clamp that "not measured" sentinel to 0 for the charts — which
+    // reads here as the best delivery the app can display.
+    if (model.hasLinkTiming()) {
+        html += networkTooltipRow(QStringLiteral("Network jitter"),
+                                  formatNetworkMs(model.audioPacketJitterMs()));
+        html += networkTooltipRow(
+            QStringLiteral("Audio gap"),
+            QStringLiteral("%1 · max %2")
+                .arg(formatNetworkMs(model.audioPacketGapMs()),
+                     formatNetworkMs(model.audioPacketGapMaxMs())));
+    } else {
+        html += networkTooltipRow(QStringLiteral("Network jitter"), kNetworkNotMeasured);
+        html += networkTooltipRow(QStringLiteral("Audio gap"), kNetworkNotMeasured);
+    }
 
     html += networkTooltipSection(QStringLiteral("PACKET INTEGRITY"));
     html += networkTooltipRow(
@@ -174,13 +196,20 @@ QString buildNetworkTooltip(const RadioModel& model,
         QStringLiteral("Session sequence gaps"),
         formatNetworkSeqErrors(model.packetDropCount(), model.packetTotalCount()));
 
-    html += networkTooltipSection(QStringLiteral("STREAM SEQUENCE GAPS"));
-    html += networkTooltipRow(QStringLiteral("Audio"), formatCategorySeqErrors(audioStats));
-    html += networkTooltipRow(QStringLiteral("FFT"), formatCategorySeqErrors(fftStats));
-    html += networkTooltipRow(QStringLiteral("Waterfall"),
-                              formatCategorySeqErrors(waterfallStats));
-    html += networkTooltipRow(QStringLiteral("Meters"), formatCategorySeqErrors(meterStats));
-    html += networkTooltipRow(QStringLiteral("DAX"), formatCategorySeqErrors(daxStats));
+    // Per-category counters are a property of the VITA-49 multiplex, where each
+    // category is a separately-sequenced stream sharing one socket. A transport
+    // that carries everything in a single stream has no such breakdown, and five
+    // rows of "0 / 0 packets" would read as five dead streams rather than as a
+    // distinction that does not apply.
+    if (model.hasStreamCategoryStats()) {
+        html += networkTooltipSection(QStringLiteral("STREAM SEQUENCE GAPS"));
+        html += networkTooltipRow(QStringLiteral("Audio"), formatCategorySeqErrors(audioStats));
+        html += networkTooltipRow(QStringLiteral("FFT"), formatCategorySeqErrors(fftStats));
+        html += networkTooltipRow(QStringLiteral("Waterfall"),
+                                  formatCategorySeqErrors(waterfallStats));
+        html += networkTooltipRow(QStringLiteral("Meters"), formatCategorySeqErrors(meterStats));
+        html += networkTooltipRow(QStringLiteral("DAX"), formatCategorySeqErrors(daxStats));
+    }
 
     html += networkTooltipSection(QStringLiteral("UDP TRAFFIC"));
     html += networkTooltipRow(QStringLiteral("Received"),

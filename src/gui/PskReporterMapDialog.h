@@ -7,6 +7,7 @@
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QSpinBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -18,6 +19,7 @@ class AudioEngine;
 class PropForecastClient;
 class PskReporterClient;
 class RadioModel;
+class TransmitModel;
 
 // PSK Reporter reception map (View menu). Shows who is hearing our
 // callsign, centered on the radio's GPS fix (falling back to the reported
@@ -56,7 +58,15 @@ private:
     void updateBeaconDefaults();
     void setBeaconControlsEnabled(bool enabled);
     bool applyBeaconBand();
-    void restoreBeaconTxFilter();
+    // Re-sends mode and both passbands immediately before the key, and reports
+    // whether the channel is still the one the operator armed. See the
+    // definition for why one push at arm time is not enough.
+    bool reassertBeaconChannel(QString* reason);
+    // Called from reassertBeaconChannel(), i.e. at the KEY and not at arm, so
+    // the operator's own station keeps its audio processing (and VOX) for the
+    // whole time the beacon is merely waiting for its slot.
+    void borrowBeaconSpeechChain(TransmitModel& tx);
+    void restoreBorrowedTxState();
 
     AudioEngine*         m_audioEngine{nullptr};
     RadioModel*         m_radioModel{nullptr};
@@ -79,6 +89,7 @@ private:
     QComboBox*          m_beaconBand{nullptr};
     QComboBox*          m_beaconPower{nullptr};
     QDoubleSpinBox*     m_beaconTone{nullptr};
+    QSpinBox*           m_beaconLevel{nullptr};
     QPushButton*        m_beaconButton{nullptr};
     QLabel*             m_beaconStatus{nullptr};
     qint64              m_beaconSlotMs{0};
@@ -94,9 +105,18 @@ private:
     static constexpr qint64 kBeaconSlotMs = 2 * 60 * 1000;
     static constexpr qint64 kBeaconMaxSlotLatenessMs = 2000;
     static constexpr int    kBeaconMaxDeferrals = 2;
+    // Canonical WSPR audio start: 1.000 s into the even minute.
+    static constexpr qint64 kBeaconAudioStartMs = 1000;
     int                 m_beaconPrevTxFilterLow{0};
     int                 m_beaconPrevTxFilterHigh{0};
     bool                m_beaconTxFilterSaved{false};
+    // The station TX processing the beacon switches off for the duration of a
+    // frame, and the values to hand back afterwards. Flex command plane only.
+    bool                m_beaconTxChainSaved{false};
+    bool                m_beaconPrevSpeechProc{false};
+    bool                m_beaconPrevCompander{false};
+    bool                m_beaconPrevVox{false};
+    bool                m_beaconPrevTxEq{false};
     bool                m_beaconArmed{false};
     bool                m_beaconTransmitting{false};
     QLabel*             m_bandCondPills[4]{};

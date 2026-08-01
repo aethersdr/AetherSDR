@@ -80,7 +80,10 @@ public:
     // reached nothing — and the engine has to shape the stream itself. This is
     // where the target it shapes to lives. Emits the same *Reported/*Changed
     // pairs as the radio path so consumers cannot tell the two apart.
-    void setDisplayRates(int fps, int wfLineDurationMs);
+    // `wfRate` is the 1..100 waterfall RATE, low slow / high fast — not the
+    // milliseconds Flex's `line_duration` wire name claims (core/WaterfallRate.h,
+    // #4606).
+    void setDisplayRates(int fps, int wfRate);
     // Flex-specific WNB extension applied from the backend's namespaced
     // extensionStatus("flex","panWnb",…). Applies only the keys present;
     // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3
@@ -120,12 +123,17 @@ public:
     // painting a definitive unchecked box before the real value is known, the
     // same way average()/fps() use a -1 unknown sentinel (#4261).
     bool weightedAverageKnown() const { return m_weightedAverageKnown; }
+    // The 1..100 waterfall RATE, low slow / high fast. The accessor keeps
+    // Flex's `line_duration` wire name because that is the field it decodes,
+    // but the VALUE IS NOT MILLISECONDS — convert through core/WaterfallRate.h
+    // before pacing anything on it. Reading it literally is what ran the
+    // control backwards on the HL2 (#4606).
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
-    // Normalized waterfall-line-duration setter driven by the backend (universal
-    // display timing). Feeds PerfTelemetry and always emits
+    // Normalized waterfall-rate setter driven by the backend (universal display
+    // timing). Feeds PerfTelemetry and always emits
     // waterfallLineDurationReported; the change-gated signal fires only on a real
     // change. (aetherd RFC 2.3.)
-    void setWaterfallLineDuration(int ms);
+    void setWaterfallLineDuration(int rate);
     int fftYPixels() const { return m_fftYPixels; }
     bool setFftYPixels(int yPixels) {
         if (m_fftYPixels == yPixels) {

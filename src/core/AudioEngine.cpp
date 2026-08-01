@@ -2267,18 +2267,29 @@ AudioEngine::AudioEngine(QObject* parent)
             // the pre-warm-pipeline mute froze both correlator buffers. A
             // TX-gated source's ramp-zeroed chunks (or a one-sided Flex feed
             // against them) would pollute the GCC-PHAT delay estimate and
-            // drop the auto-assist confidence on every over.
+            // drop the auto-assist confidence on every over. A source's gate
+            // stays held through its pending post-unkey resume hold ("Resume
+            // audio after TX delay"), so the pause must cover that window
+            // too; it lifts as soon as any source is audible through the
+            // gate (keepAudioDuringTx during TX, or a source with no pending
+            // hold after unkey).
             const bool kiwiTxGateEngaged = kiwiSdrAudioTransmitMuted();
-            bool anyKeepAudioDuringTx = false;
+            bool anyKiwiGateHeld = false;
+            bool anyKiwiAudibleThroughGate = false;
             for (const auto& s : m_externalKiwiSources) {
-                if (s && s->keepAudioDuringTx
-                    && externalKiwiSourceProcessing(*s)) {
-                    anyKeepAudioDuringTx = true;
-                    break;
+                if (!s || !externalKiwiSourceProcessing(*s)) {
+                    continue;
                 }
+                const bool held = !s->keepAudioDuringTx
+                    && (kiwiTxGateEngaged
+                        || !s->txResumeDeadline.hasExpired());
+                anyKiwiGateHeld = anyKiwiGateHeld || held;
+                anyKiwiAudibleThroughGate =
+                    anyKiwiAudibleThroughGate || !held;
             }
             const bool presentationPausedForTx =
-                kiwiTxGateEngaged && !anyKeepAudioDuringTx;
+                (kiwiTxGateEngaged || anyKiwiGateHeld)
+                && !anyKiwiAudibleThroughGate;
             // Per-frame gate ramp step; depends only on the device rate, so
             // compute it once for the Flex gate and every Kiwi source alike.
             const float gateStep =
@@ -2416,11 +2427,13 @@ AudioEngine::AudioEngine(QObject* parent)
                     // Transmit gate: the source keeps draining at real-time
                     // rate through TX so playback rejoins the live stream at
                     // unkey; only its mix contribution ramps to zero. The
-                    // short ramp avoids a hard-mute click on both edges.
-                    const float gateTarget =
-                        (!kiwiSdrAudioTransmitMuted()
-                         || source->keepAudioDuringTx)
-                            ? 1.0f : 0.0f;
+                    // short ramp avoids a hard-mute click on both edges. A
+                    // pending resume deadline extends the hold past unkey
+                    // ("Resume audio after TX delay").
+                    const bool gateOpen = source->keepAudioDuringTx
+                        || (!kiwiSdrAudioTransmitMuted()
+                            && source->txResumeDeadline.hasExpired());
+                    const float gateTarget = gateOpen ? 1.0f : 0.0f;
                     if (!externalKiwiSourceProcessing(*source)
                         || source->prebuffering) {
                         // Silent while skipped: snap the gate DOWNWARD only —
@@ -2478,9 +2491,12 @@ AudioEngine::AudioEngine(QObject* parent)
                         ++activeOutputSources;
                     }
                     source->outputBuffer.remove(0, sourceTake);
-                    emitOutputSource(QStringLiteral("kiwi"), source->id, sourceChunk,
-                                     kiwiTxGateEngaged
-                                         && !source->keepAudioDuringTx);
+                    // Suppress the correlator feed exactly while the mix
+                    // gate holds this source closed — including the
+                    // post-unkey resume hold, when the chunks above were
+                    // just ramped to zero.
+                    emitOutputSource(QStringLiteral("kiwi"), source->id,
+                                     sourceChunk, !gateOpen);
                 }
 
                 const qsizetype radeTake = (std::min(len, m_radeRxBuffer.size()) / floatBytes) * floatBytes;
@@ -3980,8 +3996,12 @@ void AudioEngine::setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on)
         // Entry snap: the mix-loop's downward snap only runs on ticks that
         // reach the mix path, which a lone prebuffering source never does —
         // without this, a source enabled mid-TX would enter the mix at its
-        // stale full-gain gate and blip ~8 ms of audio during transmit.
-        if (on && kiwiSdrAudioTransmitMuted() && !source->keepAudioDuringTx) {
+        // stale full-gain gate and blip ~8 ms of audio during transmit. The
+        // gate stays engaged through a pending post-unkey resume hold
+        // ("Resume audio after TX delay"), so cover that window too.
+        if (on && !source->keepAudioDuringTx
+            && (kiwiSdrAudioTransmitMuted()
+                || !source->txResumeDeadline.hasExpired())) {
             source->txGateGain = 0.0f;
         }
         updateRxBufferStats();
@@ -4024,9 +4044,11 @@ void AudioEngine::setKiwiSdrAudioSourceMuted(const QString& sourceId,
         source->prebuffering = !muted && source->enabled;
         // Entry snap — same reason as setKiwiSdrAudioSourceEnabled: a source
         // muted before key-down still has txGateGain at 1.0, and unmuting it
-        // mid-TX must not let it enter the mix at full gain.
-        if (!muted && kiwiSdrAudioTransmitMuted()
-            && !source->keepAudioDuringTx) {
+        // mid-TX (or during a pending resume hold) must not let it enter the
+        // mix at full gain.
+        if (!muted && !source->keepAudioDuringTx
+            && (kiwiSdrAudioTransmitMuted()
+                || !source->txResumeDeadline.hasExpired())) {
             source->txGateGain = 0.0f;
         }
         updateRxBufferStats();
@@ -4049,6 +4071,18 @@ void AudioEngine::setKiwiSdrAudioTransmitMuted(bool muted)
     // the legacy single-stream path keeps the historical wipe-and-reprime,
     // since nothing gates its feed during TX.
     std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    if (!muted) {
+        // Unkey: sources configured for delayed resume hold their gate
+        // closed for the Kiwi chain latency so playback rejoins on audio
+        // received after the transmission ended.
+        for (const auto& source : m_externalKiwiSources) {
+            if (source && source->txResumeHoldMs > 0
+                && !source->keepAudioDuringTx) {
+                source->txResumeDeadline =
+                    QDeadlineTimer(source->txResumeHoldMs);
+            }
+        }
+    }
     m_kiwiSdrRxBuffer.clear();
     m_kiwiSdrRxPackets.clear();
     m_kiwiSdrOutputBuffer.clear();
@@ -4072,6 +4106,24 @@ void AudioEngine::setKiwiSdrAudioSourceKeepDuringTx(const QString& sourceId,
     source->keepAudioDuringTx = keep;
 }
 
+void AudioEngine::setKiwiSdrAudioSourceResumeHold(const QString& sourceId,
+                                                  int holdMs)
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
+    if (!source) {
+        return;
+    }
+
+    source->txResumeHoldMs = std::max(holdMs, 0);
+    if (source->txResumeHoldMs == 0) {
+        // Hold disabled: disarm any deadline from the last unkey so the
+        // gate reopens promptly instead of waiting out a stale hold
+        // (default-constructed QDeadlineTimer is already expired).
+        source->txResumeDeadline = QDeadlineTimer();
+    }
+}
+
 void AudioEngine::setKiwiSdrAudioSourcePan(const QString& sourceId, int pan)
 {
     std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
@@ -4081,6 +4133,22 @@ void AudioEngine::setKiwiSdrAudioSourcePan(const QString& sourceId, int pan)
     }
 
     source->pan = qBound(0, pan, 100);
+}
+
+bool AudioEngine::hasKiwiSdrAudioSource(const QString& sourceId) const
+{
+    const QString id = sourceId.trimmed();
+    if (id.isEmpty()) {
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->id == id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void AudioEngine::removeKiwiSdrAudioSource(const QString& sourceId)
@@ -4254,9 +4322,12 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     // processing still runs (to keep DSP state warm through TX) but the
     // presentation-side telemetry — RX level meter, scopes, EQ FFT tap,
     // receive-presentation post-DSP feed — must stay quiet, or the meters
-    // bounce with audio the operator cannot hear.
+    // bounce with audio the operator cannot hear. Mirrors the mix gate's
+    // closed condition exactly, including the post-unkey resume hold.
     const bool txPresentationGated = externalSource
-        && kiwiSdrAudioTransmitMuted() && !externalSource->keepAudioDuringTx;
+        && !externalSource->keepAudioDuringTx
+        && (kiwiSdrAudioTransmitMuted()
+            || !externalSource->txResumeDeadline.hasExpired());
 
     // TX-time RX-chain bypass (#367/#1505), decided once per packet: non-Kiwi
     // sources bypass the client RX DSP during TX so stateful stages don't
@@ -8754,25 +8825,19 @@ void AudioEngine::pumpWsprBeacon()
     constexpr qint64 kMaximumCatchUpFrames = WsprBeacon::kFramesPerSymbol / 2;
     const int frames = static_cast<int>(
         std::min(dueFrames, kMaximumCatchUpFrames));
-    m_wsprInt16Scratch.resize(
-        frames * 2 * static_cast<int>(sizeof(int16_t)));
+    // Straight to float. This used to generate int16 and divide by 32768 right
+    // back into float, which bought nothing and cost an undithered
+    // quantization of a pure tone — the one signal for which quantization
+    // error is harmonically correlated rather than noise-like.
+    m_wsprFloatScratch.resize(
+        frames * 2 * static_cast<int>(sizeof(float)));
     // process() leaves the buffer untouched if the beacon was stopped from the
     // GUI thread since the isActive() check above, and QByteArray::resize does
     // not initialize the bytes it adds. Clear first so a stop landing inside
     // that window can never put uninitialized memory on the air.
-    m_wsprInt16Scratch.fill('\0');
+    m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
-        reinterpret_cast<int16_t*>(m_wsprInt16Scratch.data()), frames, 2);
-
-    const int sampleCount = frames * 2;
-    m_wsprFloatScratch.resize(
-        sampleCount * static_cast<int>(sizeof(float)));
-    const auto* input =
-        reinterpret_cast<const int16_t*>(m_wsprInt16Scratch.constData());
-    auto* output = reinterpret_cast<float*>(m_wsprFloatScratch.data());
-    for (int i = 0; i < sampleCount; ++i) {
-        output[i] = input[i] / 32768.0f;
-    }
+        reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
     feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
     m_wsprPumpedFrames += frames;
 }
