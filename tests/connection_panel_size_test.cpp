@@ -5,7 +5,9 @@
 #include "core/AppSettings.h"
 #include "gui/ConnectionPanel.h"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QFont>
 #include <QLabel>
 #include <QPushButton>
@@ -13,6 +15,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStyle>
+#include <QToolButton>
 
 #include <cstdio>
 #include <string>
@@ -37,6 +40,51 @@ void report(const char* name, bool ok, const std::string& detail = {})
 int bottomInPanel(QWidget* widget, QWidget* panel)
 {
     return widget->mapTo(panel, QPoint(0, widget->height())).y();
+}
+
+// Every word-wrapped label currently on screen has room for the lines it will
+// actually draw. The failure this catches is a label handed one line's height
+// for two lines of text, which Qt renders as a sliced row overlapping its
+// neighbour rather than as anything obviously broken.
+bool wrappedLabelsFit(QWidget* bodyContent)
+{
+    if (!bodyContent) {
+        return false;
+    }
+    const QList<QLabel*> labels = bodyContent->findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (!label->wordWrap() || !label->isVisibleTo(bodyContent)) {
+            continue;
+        }
+        const int requiredHeight = label->heightForWidth(label->width());
+        if (requiredHeight > 0 && label->height() < requiredHeight) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Put the panel on the manual/VPN page with "Advanced: choose the VPN source
+// path" open. The section only auto-reveals when the host has more than one
+// IPv4 candidate, which a test machine cannot be relied on to have, so drive
+// the widgets directly and keep the geometry deterministic.
+bool expandManualAdvancedSection(ConnectionPanel& panel)
+{
+    auto* manualMode =
+        panel.findChild<QAbstractButton*>(QStringLiteral("connectionManualModeButton"));
+    auto* toggle =
+        panel.findChild<QToolButton*>(QStringLiteral("connectionManualAdvancedToggle"));
+    auto* section =
+        panel.findChild<QWidget*>(QStringLiteral("connectionManualAdvancedSection"));
+    if (!manualMode || !toggle || !section) {
+        return false;
+    }
+    manualMode->click();
+    toggle->setVisible(true);
+    toggle->setChecked(true);
+    section->setVisible(true);
+    QApplication::processEvents();
+    return true;
 }
 
 bool setScaledApplicationFont(QApplication& app,
@@ -128,23 +176,31 @@ void checkFooterReachable(QApplication& app,
                    >= body->mapTo(&panel, QPoint(0, body->height())).y(),
            suffix);
 
-    bool wrappedLabelsFit = bodyContent != nullptr;
-    if (bodyContent) {
-        const QList<QLabel*> labels = bodyContent->findChildren<QLabel*>();
-        for (QLabel* label : labels) {
-            if (!label->wordWrap() || !label->isVisibleTo(bodyContent)) {
-                continue;
-            }
-            const int requiredHeight = label->heightForWidth(label->width());
-            if (requiredHeight > 0 && label->height() < requiredHeight) {
-                wrappedLabelsFit = false;
-                break;
-            }
-        }
-    }
     report("visible wrapped labels receive their required height",
-           wrappedLabelsFit,
+           wrappedLabelsFit(bodyContent),
            suffix);
+
+    // The manual/VPN page with Advanced open is the tallest state this dialog
+    // has, and it is the one an operator reported squashed: the source-path
+    // combo drawn as a sliver under a hint clipped to a sliced single line.
+    // Worth its own pass because the section is collapsed by default, so the
+    // sweep above skips both widgets via isVisibleTo().
+    report("manual page reveals its Advanced source-path section",
+           expandManualAdvancedSection(panel),
+           suffix);
+    report("visible wrapped labels still fit with Advanced expanded",
+           wrappedLabelsFit(bodyContent),
+           suffix);
+
+    auto* sourcePath =
+        panel.findChild<QComboBox*>(QStringLiteral("connectionManualSourcePath"));
+    report("source-path combo is allocated the height it asks for",
+           sourcePath && sourcePath->isVisible()
+               && sourcePath->height() >= sourcePath->minimumSizeHint().height(),
+           suffix + " h="
+               + std::to_string(sourcePath ? sourcePath->height() : -1)
+               + " wants="
+               + std::to_string(sourcePath ? sourcePath->minimumSizeHint().height() : -1));
 
     // Behavioural, not a policy read-back: squeeze the window below the body's
     // own minimum width and require a usable horizontal scrollbar. Asserting
