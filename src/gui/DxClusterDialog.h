@@ -11,6 +11,7 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/N1MMSpotClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
 #endif
@@ -85,6 +86,7 @@ public:
     explicit DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                              WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
                              PotaClient* potaClient,
+                             N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                              FreeDvClient* freedvClient,
 #endif
@@ -106,6 +108,8 @@ signals:
     void spotCollectorStopRequested();
     void potaStartRequested(int intervalSec);
     void potaStopRequested();
+    void n1mmStartRequested(quint16 port);
+    void n1mmStopRequested();
 #ifdef HAVE_WEBSOCKETS
     void freedvStartRequested();
     void freedvStopRequested();
@@ -135,6 +139,7 @@ private:
     void buildWsjtxTab(QTabWidget* tabs);
     void buildSpotCollectorTab(QTabWidget* tabs);
     void buildPotaTab(QTabWidget* tabs);
+    void buildN1mmTab(QTabWidget* tabs);
 #ifdef HAVE_WEBSOCKETS
     void buildFreeDvTab(QTabWidget* tabs);
 #endif
@@ -162,12 +167,14 @@ private:
     QString m_potaLogPath;
     QString m_freedvLogPath;
     QString m_scLogPath;
+    QString m_n1mmLogPath;
 
     DxClusterClient*      m_client;
     DxClusterClient*      m_rbnClient;
     WsjtxClient*          m_wsjtxClient;
     SpotCollectorClient*  m_spotCollectorClient;
     PotaClient*           m_potaClient;
+    N1MMSpotClient*       m_n1mmSpotClient;
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*    m_freedvClient;
 #endif
@@ -219,6 +226,13 @@ private:
     QPushButton*    m_potaAutoStartBtn;
     QLabel*         m_potaStatusLabel;
     QPlainTextEdit* m_potaConsole;
+
+    // N1MM/DXLog tab (#2906)
+    QSpinBox*       m_n1mmPortSpin;
+    QPushButton*    m_n1mmStartBtn;
+    QPushButton*    m_n1mmAutoStartBtn;
+    QLabel*         m_n1mmStatusLabel;
+    QPlainTextEdit* m_n1mmConsole;
 
 #ifdef HAVE_WEBSOCKETS
     // FreeDV tab — connection controls

@@ -624,6 +624,8 @@ set(CORE_SOURCES
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
+    src/core/N1MMSpotClient.cpp
+    src/core/N1MMSpotParser.cpp
     src/core/PropForecastClient.cpp
     src/core/PskReporterClient.cpp
     src/core/LocationAddressResolver.cpp
@@ -3691,6 +3693,15 @@ add_executable(spot_mode_resolver_test
 target_include_directories(spot_mode_resolver_test PRIVATE src)
 target_link_libraries(spot_mode_resolver_test PRIVATE Qt6::Core)
 add_test(NAME spot_mode_resolver_test COMMAND spot_mode_resolver_test)
+
+add_executable(n1mm_spot_client_test
+    tests/n1mm_spot_client_test.cpp
+    src/core/N1MMSpotParser.cpp
+    src/models/BandSettings.cpp
+)
+target_include_directories(n1mm_spot_client_test PRIVATE src)
+target_link_libraries(n1mm_spot_client_test PRIVATE Qt6::Core)
+add_test(NAME n1mm_spot_client_test COMMAND n1mm_spot_client_test)
 
 add_executable(navtex_model_test
     tests/navtex_model_test.cpp

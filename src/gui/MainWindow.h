@@ -43,6 +43,7 @@
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
+#include "core/N1MMSpotClient.h"
 #include "core/PropForecastClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
@@ -1003,6 +1004,7 @@ private:
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};
     PotaClient*          m_potaClient{nullptr};
+    N1MMSpotClient*      m_n1mmSpotClient{nullptr};
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
@@ -1075,6 +1077,10 @@ private:
     QStringList m_spotCmdBatch;
     int m_nextPassiveSpotId{-2000000};
     QHash<int, qint64> m_passiveSpotExpiryMs;
+    // N1MM spot identity: N1MMSpotParser::spotKey(dxcall, freq) -> passive
+    // spot id, so an "add" for a callsign already on this band updates the
+    // existing spot instead of minting a duplicate (#2906).
+    QHash<QString, int> m_n1mmSpotIdByKey;
     // External controllers run on a dedicated worker thread (#502)
     QThread*             m_extCtrlThread{nullptr};
 #ifdef HAVE_SERIALPORT

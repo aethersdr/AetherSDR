@@ -301,6 +301,7 @@ bool BandFilterProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceP
 DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient* rbnClient,
                                    WsjtxClient* wsjtxClient, SpotCollectorClient* spotCollectorClient,
                                    PotaClient* potaClient,
+                                   N1MMSpotClient* n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                                    FreeDvClient* freedvClient,
 #endif
@@ -310,7 +311,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     : PersistentDialog("SpotHub", "DxClusterDialogGeometry", parent),
       m_client(clusterClient), m_rbnClient(rbnClient),
       m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
-      m_potaClient(potaClient),
+      m_potaClient(potaClient), m_n1mmSpotClient(n1mmSpotClient),
 #ifdef HAVE_WEBSOCKETS
       m_freedvClient(freedvClient),
 #endif
@@ -331,6 +332,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     m_wsjtxLogPath   = wsjtxClient->logFilePath();
     m_potaLogPath    = potaClient->logFilePath();
     m_scLogPath      = spotCollectorClient->logFilePath();
+    m_n1mmLogPath    = n1mmSpotClient->logFilePath();
 #ifdef HAVE_WEBSOCKETS
     m_freedvLogPath  = freedvClient->logFilePath();
 #endif
@@ -350,6 +352,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildWsjtxTab(tabs);
     buildSpotCollectorTab(tabs);
     buildPotaTab(tabs);
+    buildN1mmTab(tabs);
 #ifdef HAVE_WEBSOCKETS
     buildFreeDvTab(tabs);
 #endif
@@ -588,6 +591,43 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
 
     // POTA log loaded in deferred loadLogFiles() (#748)
+
+    // ── Live updates from N1MM/DXLog client (#2906) ───────────────────
+    connect(n1mmSpotClient, &N1MMSpotClient::rawPacketReceived, this, [this, isAtBottom](const QString& xml) {
+        bool follow = isAtBottom(m_n1mmConsole);
+        m_n1mmConsole->appendPlainText(xml);
+        if (follow) {
+            auto* sb = m_n1mmConsole->verticalScrollBar();
+            sb->setValue(sb->maximum());
+        }
+    });
+
+    connect(n1mmSpotClient, &N1MMSpotClient::spotAdded, this, [this](const N1mmSpot& n1mm) {
+        DxSpot spot;
+        spot.dxCall = n1mm.dxCall;
+        spot.freqMhz = n1mm.freqMhz;
+        spot.spotterCall = n1mm.spotterCall;
+        spot.comment = n1mm.statusRaw.isEmpty() ? n1mm.comment
+                     : (n1mm.comment.isEmpty() ? n1mm.statusRaw : n1mm.comment + " [" + n1mm.statusRaw + "]");
+        spot.source = "N1MM";
+        m_spotBatch.append(spot);
+    });
+    connect(n1mmSpotClient, &N1MMSpotClient::spotDeleted, this, [this](const QString& dxCall, double freqMhz) {
+        m_n1mmConsole->appendPlainText(QString("--- delete %1 @ %2 MHz ---").arg(dxCall).arg(freqMhz, 0, 'f', 3));
+    });
+
+    connect(n1mmSpotClient, &N1MMSpotClient::listening, this, [this] {
+        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmPortSpin->value()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Stop");
+        m_n1mmConsole->appendPlainText("--- Listening ---");
+    });
+    connect(n1mmSpotClient, &N1MMSpotClient::stopped, this, [this] {
+        m_n1mmStatusLabel->setText("Stopped");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Start");
+        m_n1mmConsole->appendPlainText("--- Stopped ---");
+    });
 
 #ifdef HAVE_WEBSOCKETS
     // ── Live updates from FreeDV client ───────────────────────────────
@@ -1616,6 +1656,166 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     tabs->addTab(page, "POTA");
 }
 
+void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+
+    auto& s = AppSettings::instance();
+
+    // ── Connection settings ─────────────────────────────────────────────
+    auto* connGroup = new QGroupBox("N1MM/DXLog UDP Listener");
+    auto* connLayout = new QVBoxLayout(connGroup);
+    connLayout->setSpacing(4);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+
+    grid->addWidget(new QLabel("UDP Port:"), 0, 0);
+    m_n1mmPortSpin = new QSpinBox;
+    m_n1mmPortSpin->setRange(1, 65535);
+    m_n1mmPortSpin->setValue(s.value("N1MMSpotPort", 12060).toInt());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
+    grid->addWidget(m_n1mmPortSpin, 0, 1);
+
+    connLayout->addLayout(grid);
+
+    auto* helpLabel = new QLabel(
+        "Receives contest bandmap spots from N1MM+ or DXLog via the SmartSDR-CAT\n"
+        "compatible N1MMSpot UDP broadcast (default port 12060 — the same port\n"
+        "SmartSDR CAT uses, so existing logger configurations work unchanged).\n"
+        "In N1MM+: Config -> Configure Ports... -> Broadcast Data -> check\n"
+        "\"Contact Info\", set this address/port as an additional destination.");
+    helpLabel->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(helpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    connLayout->addWidget(helpLabel);
+
+    // Button row
+    auto* btnRow = new QHBoxLayout;
+    m_n1mmAutoStartBtn = new QPushButton(
+        s.value("N1MMSpotAutoStart", "False").toString() == "True" ? "Auto-Start: ON" : "Auto-Start: OFF");
+    m_n1mmAutoStartBtn->setCheckable(true);
+    m_n1mmAutoStartBtn->setChecked(s.value("N1MMSpotAutoStart", "False").toString() == "True");
+    m_n1mmAutoStartBtn->setStyleSheet(kSpotHubToggle);
+    connect(m_n1mmAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_n1mmAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
+        auto& s = AppSettings::instance();
+        s.setValue("N1MMSpotAutoStart", on ? "True" : "False");
+        s.save();
+    });
+    btnRow->addWidget(m_n1mmAutoStartBtn);
+    btnRow->addStretch();
+
+    m_n1mmStatusLabel = new QLabel("Stopped");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    btnRow->addWidget(m_n1mmStatusLabel);
+    btnRow->addStretch();
+
+    m_n1mmStartBtn = new QPushButton(m_n1mmSpotClient->isListening() ? "Stop" : "Start");
+    m_n1mmStartBtn->setFixedWidth(100);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
+        "QPushButton:hover { background: {{color.accent.bright}}; }"
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
+    connect(m_n1mmStartBtn, &QPushButton::clicked, this, [this] {
+        if (m_n1mmSpotClient->isListening()) {
+            emit n1mmStopRequested();
+            return;
+        }
+        quint16 port = static_cast<quint16>(m_n1mmPortSpin->value());
+        auto& s = AppSettings::instance();
+        s.setValue("N1MMSpotPort", port);
+        s.save();
+        emit n1mmStartRequested(port);
+    });
+    btnRow->addWidget(m_n1mmStartBtn);
+    connLayout->addLayout(btnRow);
+
+    layout->addWidget(connGroup);
+
+    // ── Contest status colors ───────────────────────────────────────────
+    // One swatch per N1MM status flag, matching the SmartSDR habits contest
+    // operators already know (needed/mult stands out, dupes fade back).
+    auto* colorGroup = new QGroupBox("Contest Status Colors");
+    auto* colorGrid = new QGridLayout(colorGroup);
+    colorGrid->setSpacing(6);
+
+    struct StatusColorRow { const char* label; const char* key; const char* def; };
+    static const StatusColorRow kRows[] = {
+        {"Busted call",        "N1MMStatusColorBust",    "#FF0000"},
+        {"Dupe",                "N1MMStatusColorDupe",    "#808080"},
+        {"Needed multiplier",   "N1MMStatusColorMult",    "#00FFFF"},
+        {"CQ frequency",        "N1MMStatusColorCq",      "#00FF00"},
+        {"Busy (marked)",       "N1MMStatusColorBusy",    "#FFA500"},
+        {"QTC",                 "N1MMStatusColorQtc",     "#FFFF00"},
+        {"New QSO (not mult)",  "N1MMStatusColorNew",     "#FF00FF"},
+        {"No status",           "N1MMStatusColorDefault", "#FFFFFF"},
+    };
+    int row = 0;
+    for (const auto& r : kRows) {
+        auto* label = new QLabel(r.label);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+        colorGrid->addWidget(label, row / 2, (row % 2) * 2);
+
+        const QString key = r.key;
+        const QString def = r.def;
+        QColor color(s.value(key, def).toString());
+        auto* colorBtn = new QPushButton;
+        colorBtn->setFixedSize(18, 18);
+        colorBtn->setStyleSheet(QString(
+            "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
+            "QPushButton:hover { border-color: #c8d8e8; }").arg(color.name()));
+        connect(colorBtn, &QPushButton::clicked, this, [this, colorBtn, key, def] {
+            QColor c = QColorDialog::getColor(
+                QColor(AppSettings::instance().value(key, def).toString()),
+                this, "N1MM Status Color");
+            if (c.isValid()) {
+                colorBtn->setStyleSheet(QString(
+                    "QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
+                    "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name()));
+                AppSettings::instance().setValue(key, c.name());
+                AppSettings::instance().save();
+            }
+        });
+        colorGrid->addWidget(colorBtn, row / 2, (row % 2) * 2 + 1);
+        ++row;
+    }
+    layout->addWidget(colorGroup);
+
+    // ── Console output ──────────────────────────────────────────────────
+    auto* consoleLabel = new QLabel("N1MM Spots");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
+    layout->addWidget(consoleLabel);
+
+    m_n1mmConsole = new QPlainTextEdit;
+    m_n1mmConsole->setReadOnly(true);
+    m_n1mmConsole->setMaximumBlockCount(2000);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmConsole, "QPlainTextEdit {"
+        "  background: {{color.background.0}};"
+        "  color: {{color.text.secondary}};"
+        "  font-family: monospace;"
+        "  font-size: 11px;"
+        "  border: 1px solid {{color.background.1}};"
+        "  padding: 4px;"
+        "}");
+    layout->addWidget(m_n1mmConsole, 1);
+
+    auto* n1mmBtnRow = new QHBoxLayout;
+    n1mmBtnRow->addStretch();
+    n1mmBtnRow->addWidget(makeConsoleClearButton(m_n1mmConsole, &m_n1mmLogPath, "n1mmClearBtn"));
+    layout->addLayout(n1mmBtnRow);
+
+    // Update status if already listening
+    if (m_n1mmSpotClient->isListening()) {
+        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmPortSpin->value()));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Stop");
+    }
+
+    tabs->addTab(page, "N1MM");
+}
+
 #ifdef HAVE_WEBSOCKETS
 void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 {
@@ -2244,8 +2444,9 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             truncateLogFile(m_potaLogPath);
             truncateLogFile(m_scLogPath);
             truncateLogFile(m_freedvLogPath);
+            truncateLogFile(m_n1mmLogPath);
             for (QPlainTextEdit* console : {m_console, m_rbnConsole, m_wsjtxConsole,
-                                            m_scConsole, m_potaConsole}) {
+                                            m_scConsole, m_potaConsole, m_n1mmConsole}) {
                 if (console)
                     console->clear();
             }

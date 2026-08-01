@@ -360,7 +360,7 @@ void MainWindow::buildMenuBar()
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;
         showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
-                              m_spotCollectorClient, m_potaClient,
+                              m_spotCollectorClient, m_potaClient, m_n1mmSpotClient,
 #ifdef HAVE_WEBSOCKETS
                               m_freedvClient,
 #endif
@@ -451,6 +451,12 @@ void MainWindow::buildMenuBar()
         });
         connect(dlg, &DxClusterDialog::potaStopRequested,
                 this, [this] { QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->stopPolling(); }); });
+        connect(dlg, &DxClusterDialog::n1mmStartRequested,
+                this, [this](quint16 port) {
+            QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(port); });
+        });
+        connect(dlg, &DxClusterDialog::n1mmStopRequested,
+                this, [this] { QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->stopListening(); }); });
 #ifdef HAVE_WEBSOCKETS
         connect(dlg, &DxClusterDialog::freedvStartRequested,
                 this, [this] { QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->startConnection(); }); });

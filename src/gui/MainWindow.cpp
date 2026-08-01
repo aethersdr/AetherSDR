@@ -5710,6 +5710,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (!m_potaClient->isPolling())
                     QMetaObject::invokeMethod(m_potaClient, [=, this] { m_potaClient->startPolling(pInterval); });
             }
+            // Auto-start N1MM/DXLog spot listener if enabled (#2906)
+            if (cs.value("N1MMSpotAutoStart", "False").toString() == "True") {
+                quint16 nPort = static_cast<quint16>(cs.value("N1MMSpotPort", 12060).toInt());
+                if (!m_n1mmSpotClient->isListening())
+                    QMetaObject::invokeMethod(m_n1mmSpotClient, [=, this] { m_n1mmSpotClient->startListening(nPort); });
+            }
 #ifdef HAVE_WEBSOCKETS
             // Auto-start FreeDV Reporter if enabled
             if (cs.value("FreeDvAutoStart", "False").toString() == "True") {

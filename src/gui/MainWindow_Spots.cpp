@@ -17,6 +17,7 @@
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
+#include "core/N1MMSpotClient.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -54,6 +55,7 @@ void MainWindow::wireSpotSubsystem()
     m_wsjtxClient = new WsjtxClient;
     m_spotCollectorClient = new SpotCollectorClient;
     m_potaClient = new PotaClient;
+    m_n1mmSpotClient = new N1MMSpotClient;
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient = new FreeDvClient;
 #endif
@@ -220,6 +222,7 @@ void MainWindow::wireSpotSubsystem()
     m_wsjtxClient->moveToThread(m_spotThread);
     m_spotCollectorClient->moveToThread(m_spotThread);
     m_potaClient->moveToThread(m_spotThread);
+    m_n1mmSpotClient->moveToThread(m_spotThread);
 #ifdef HAVE_WEBSOCKETS
     m_freedvClient->moveToThread(m_spotThread);
 #endif
@@ -239,6 +242,8 @@ void MainWindow::wireSpotSubsystem()
     QMetaObject::invokeMethod(m_spotCollectorClient, &SpotCollectorClient::initialize,
                               Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_potaClient, &PotaClient::initialize,
+                              Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_n1mmSpotClient, &N1MMSpotClient::initialize,
                               Qt::QueuedConnection);
 #ifdef HAVE_WEBSOCKETS
     QMetaObject::invokeMethod(m_freedvClient, &FreeDvClient::initialize,
@@ -418,7 +423,83 @@ void MainWindow::wireSpotSubsystem()
         }
     });
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
-            this, [this] { m_passiveSpotExpiryMs.clear(); });
+            this, [this] { m_passiveSpotExpiryMs.clear(); m_n1mmSpotIdByKey.clear(); });
+
+    // ── N1MM/DXLog contest logger spots (#2906) ───────────────────────────
+    // Unlike the other feeds, N1MM tells us explicitly when a spot is added,
+    // updated (re-"add" for a callsign already on this band), or removed
+    // ("delete", e.g. when the station moves within the band), so this
+    // bypasses queueSpotCmd's freq-based dedup and keys spots by
+    // N1MMSpotParser::spotKey() (callsign+band) instead. A generous lifetime
+    // still backstops the model in case the logger exits without sending
+    // deletes for its open spots.
+    auto n1mmColorForStatus = [](const QString& statusFlag) {
+        auto& as = AppSettings::instance();
+        if (statusFlag == "bust") return as.value("N1MMStatusColorBust", "#FF0000").toString();
+        if (statusFlag == "dupe") return as.value("N1MMStatusColorDupe", "#808080").toString();
+        if (statusFlag == "mult") return as.value("N1MMStatusColorMult", "#00FFFF").toString();
+        if (statusFlag == "cq")   return as.value("N1MMStatusColorCq",   "#00FF00").toString();
+        if (statusFlag == "busy") return as.value("N1MMStatusColorBusy", "#FFA500").toString();
+        if (statusFlag == "qtc")  return as.value("N1MMStatusColorQtc",  "#FFFF00").toString();
+        if (statusFlag == "new")  return as.value("N1MMStatusColorNew",  "#FF00FF").toString();
+        return as.value("N1MMStatusColorDefault", "#FFFFFF").toString();
+    };
+
+    connect(m_n1mmSpotClient, &N1MMSpotClient::spotAdded,
+            this, [this, n1mmColorForStatus](const N1mmSpot& n1mm) {
+        if (n1mm.dxCall.trimmed().isEmpty() || n1mm.freqMhz <= 0.0)
+            return;
+
+        const QString key = N1MMSpotParser::spotKey(n1mm.dxCall, n1mm.freqMhz);
+        const int lifetimeSec = AppSettings::instance().value("N1MMSpotLifetimeSec", 10800).toInt();
+
+        QString color = n1mmColorForStatus(n1mm.statusFlag);
+        if (color.length() == 7)
+            color = "#FF" + color.mid(1);
+
+        QMap<QString, QString> kvs;
+        kvs["callsign"] = QString(n1mm.dxCall).replace(' ', QChar(0x7f));
+        kvs["rx_freq"] = QString::number(n1mm.freqMhz, 'f', 6);
+        kvs["tx_freq"] = QString::number(n1mm.freqMhz, 'f', 6);
+        kvs["source"] = "N1MM";
+        kvs["spotter_callsign"] = n1mm.spotterCall;
+        kvs["lifetime_seconds"] = QString::number(lifetimeSec);
+        kvs["timestamp"] = QString::number(QDateTime::currentSecsSinceEpoch());
+        kvs["color"] = color;
+        kvs["status_flag"] = n1mm.statusFlag;
+        if (!n1mm.mode.isEmpty())
+            kvs["mode"] = n1mm.mode;
+
+        QString comment = n1mm.comment;
+        if (!n1mm.statusRaw.isEmpty())
+            comment = comment.isEmpty() ? n1mm.statusRaw : (comment + " [" + n1mm.statusRaw + "]");
+        if (!comment.isEmpty())
+            kvs["comment"] = QString(comment).replace(' ', QChar(0x7f));
+
+        auto it = m_n1mmSpotIdByKey.constFind(key);
+        int spotId;
+        if (it != m_n1mmSpotIdByKey.constEnd()) {
+            spotId = it.value();
+        } else {
+            spotId = m_nextPassiveSpotId--;
+            m_n1mmSpotIdByKey.insert(key, spotId);
+        }
+        m_radioModel.spotModel().applySpotStatus(spotId, kvs);
+
+        const qint64 expiresAt = QDateTime::currentMSecsSinceEpoch()
+                               + qint64(lifetimeSec) * 1000;
+        m_passiveSpotExpiryMs.insert(spotId, expiresAt);
+    });
+
+    connect(m_n1mmSpotClient, &N1MMSpotClient::spotDeleted,
+            this, [this](const QString& dxCall, double freqMhz) {
+        const QString key = N1MMSpotParser::spotKey(dxCall, freqMhz);
+        const int spotId = m_n1mmSpotIdByKey.take(key);
+        if (spotId == 0)
+            return;
+        m_passiveSpotExpiryMs.remove(spotId);
+        m_radioModel.spotModel().removeSpot(spotId);
+    });
 
     connect(m_dxCluster, &DxClusterClient::spotReceived,
             this, [queueSpotCmd](const DxSpot& spot) {
