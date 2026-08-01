@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QUdpSocket>
 #include <QFile>
+#include <QSet>
 #include <QString>
 #include <atomic>
 
@@ -48,7 +49,12 @@ signals:
     void spotAdded(const N1mmSpot& spot);
     // action == "delete": remove the spot keyed by spotKey(dxCall, freqMhz).
     void spotDeleted(const QString& dxCall, double freqMhz);
-    void rawPacketReceived(const QString& xml);
+    // One compact console line per accepted spot, matching the other SpotHub
+    // clients. Deliberately not the raw XML: measured against a live contest
+    // feed, 333 spot datagrams produced 4146 lines of XML in ~15 minutes,
+    // turning the console's 2000-block buffer over twice. Full documents go
+    // to the log file, which is what it's for.
+    void rawLineReceived(const QString& line);
 
 private slots:
     void onReadyRead();
@@ -58,6 +64,9 @@ private:
     QFile       m_logFile;
     quint16     m_port{12060};
     std::atomic<bool> m_listening{false};
+    // Root elements of non-spot documents already noted this session, so the
+    // console says "RadioInfo is arriving here" once instead of every packet.
+    QSet<QString> m_notedNonSpotRoots;
 };
 
 } // namespace AetherSDR

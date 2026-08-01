@@ -594,9 +594,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     // POTA log loaded in deferred loadLogFiles() (#748)
 
     // ── Live updates from N1MM/DXLog client (#2906) ───────────────────
-    connect(n1mmSpotClient, &N1MMSpotClient::rawPacketReceived, this, [this, isAtBottom](const QString& xml) {
+    connect(n1mmSpotClient, &N1MMSpotClient::rawLineReceived, this, [this, isAtBottom](const QString& line) {
         bool follow = isAtBottom(m_n1mmConsole);
-        m_n1mmConsole->appendPlainText(xml);
+        m_n1mmConsole->appendPlainText(line);
         if (follow) {
             auto* sb = m_n1mmConsole->verticalScrollBar();
             sb->setValue(sb->maximum());

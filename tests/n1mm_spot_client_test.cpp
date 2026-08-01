@@ -260,6 +260,61 @@ void testStrayTextBetweenElements()
     expectEqual("stray text does not corrupt dxcall", spot.dxCall, "W1ABC");
 }
 
+void testDocumentRootAndRealWorldTraffic()
+{
+    // N1MM sends several document types to the same destinations. Captured
+    // from a live contest feed: RadioInfo was 15% of all datagrams on the
+    // spot port, so telling "not a spot broadcast" apart from "malformed
+    // spot" is what keeps the console usable.
+    expectEqual("documentRoot on a spot", N1MMSpotParser::documentRoot(
+                    n1mmPacket("AL3CDE", "7061.2")), "spot");
+    expectEqual("documentRoot on non-XML", N1MMSpotParser::documentRoot("garbage"), "");
+    expectEqual("documentRoot on empty", N1MMSpotParser::documentRoot(""), "");
+
+    // Trimmed from a real captured RadioInfo datagram.
+    const QByteArray radioInfo =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<RadioInfo>\r\n"
+        "\t<app>N1MM</app>\r\n\t<StationName>DESKTOP-NKOIHPB</StationName>\r\n"
+        "\t<RadioNr>1</RadioNr>\r\n\t<Freq>1404025</Freq>\r\n"
+        "\t<Mode>CW</Mode>\r\n\t<IsRunning>True</IsRunning>\r\n</RadioInfo>\r\n";
+    expectEqual("documentRoot on RadioInfo",
+                N1MMSpotParser::documentRoot(radioInfo), "RadioInfo");
+    N1mmSpot spot;
+    QString action;
+    expectTrue("RadioInfo is not accepted as a spot",
+               !N1MMSpotParser::parsePacket(radioInfo, spot, action));
+
+    // A real delete, verbatim from the capture: tab-indented, CRLF, and with
+    // no <comment>/<status>/<statuslist> at all — deletes carry none.
+    const QByteArray realDelete =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n<spot>\r\n"
+        "\t<app>N1MM</app>\r\n\t<StationName>DESKTOP-NKOIHPB</StationName>\r\n"
+        "\t<dxcall>UC7A</dxcall>\r\n\t<frequency>1820.43</frequency>\r\n"
+        "\t<spottercall>UC7A</spottercall>\r\n"
+        "\t<timestamp>2026-08-01 23:11:12</timestamp>\r\n"
+        "\t<action>delete</action>\r\n\t<mode>CW</mode>\r\n</spot>\r\n";
+    N1mmSpot del;
+    expectTrue("real delete packet parses",
+               N1MMSpotParser::parsePacket(realDelete, del, action));
+    expectEqual("real delete action", action, "delete");
+    expectEqual("real delete dxcall", del.dxCall, "UC7A");
+    expectNear("real delete frequency (160m)", del.freqMhz, 1.82043);
+    expectEqual("real delete has no status", del.statusFlag, "");
+    expectEqual("real delete stationName", del.stationName, "DESKTOP-NKOIHPB");
+    expectEqual("real delete keys to 160m",
+                N1MMSpotParser::spotKey(del.dxCall, del.freqMhz), "UC7A|160m");
+
+    // Every <status> value observed on the live feed maps to a known flag.
+    expectEqual("live status: new qso", N1MMSpotParser::normalizeStatusFlag("new qso"), "new");
+    expectEqual("live status: cq", N1MMSpotParser::normalizeStatusFlag("cq"), "cq");
+    expectEqual("live status: single mult", N1MMSpotParser::normalizeStatusFlag("single mult"), "mult");
+    expectEqual("live status: dupe", N1MMSpotParser::normalizeStatusFlag("dupe"), "dupe");
+
+    // The feed carried 2 m spots (144.300 MHz), so band keying must not stop at HF.
+    expectEqual("2m spot keys to 2m",
+                N1MMSpotParser::spotKey("W1ABC", 144.300), "W1ABC|2m");
+}
+
 void testSpotKeyIdentity()
 {
     const QString keyA = N1MMSpotParser::spotKey("AL3CDE", 7.0612);   // 40m
@@ -313,6 +368,7 @@ int main(int argc, char** argv)
     testTruncatedMidFrequencyRejected();
     testOversizedDatagramDoesNotCrash();
     testStrayTextBetweenElements();
+    testDocumentRootAndRealWorldTraffic();
     testSpotKeyIdentity();
     testStatusFlagPriority();
 

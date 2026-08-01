@@ -59,6 +59,12 @@ inline constexpr StatusColorSpec kStatusColorSpecs[] = {
 // outAction is "add" or "delete" (defaults to "add" if <action> is absent).
 bool parsePacket(const QByteArray& data, N1mmSpot& outSpot, QString& outAction);
 
+// Name of the document's root element, or empty if the datagram isn't XML.
+// N1MM sends several document types to the same destinations (RadioInfo,
+// contactinfo, ...), so a spot listener needs to tell "not a spot broadcast"
+// apart from "malformed spot".
+QString documentRoot(const QByteArray& data);
+
 // Stable per-spot identity: same callsign on the same band replaces the
 // existing spot; same callsign on a different band is a new spot (#2906).
 QString spotKey(const QString& dxCall, double freqMhz);

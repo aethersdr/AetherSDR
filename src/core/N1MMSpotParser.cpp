@@ -92,6 +92,16 @@ bool parsePacket(const QByteArray& data, N1mmSpot& outSpot, QString& outAction)
     return true;
 }
 
+QString documentRoot(const QByteArray& data)
+{
+    QXmlStreamReader xml(data);
+    while (!xml.atEnd() && !xml.hasError()) {
+        if (xml.readNext() == QXmlStreamReader::StartElement)
+            return xml.name().toString();
+    }
+    return {};
+}
+
 QString spotKey(const QString& dxCall, double freqMhz)
 {
     return dxCall.trimmed().toUpper() + "|" + BandSettings::bandForFrequency(freqMhz);
