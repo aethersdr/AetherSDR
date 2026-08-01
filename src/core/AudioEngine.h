@@ -1194,7 +1194,6 @@ private:
     QTimer* m_wsprPumpTimer{nullptr};
     QElapsedTimer m_wsprPumpClock;
     qint64 m_wsprPumpedFrames{0};
-    QByteArray m_wsprInt16Scratch;
     QByteArray m_wsprFloatScratch;
     // DAX TX mode borrowed for the duration of a WSPR frame so the mic path
     // cannot produce a second packet stream against the same m_txPacketCount.

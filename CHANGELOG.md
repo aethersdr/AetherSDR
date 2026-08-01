@@ -27,6 +27,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - The table is generated from `resources/themes/default-dark.json` by
   `tools/gen_theme_seed.py`, so the two can no longer disagree.
 
+### Fixed
+
+- **FlexControl now recovers on its own after losing its USB port.** The knob
+  driver had no error handling at all: if the serial port dropped — a USB
+  glitch, a driver reset, the host reclaiming the device — nothing noticed, and
+  the knob stayed dead for the rest of the session. It now detects the error,
+  releases the port, and re-detects the device every couple of seconds until it
+  comes back (re-detecting rather than reusing the old name, since a replug can
+  hand the device a different COM port). Disconnecting from AetherControl or
+  turning FlexControl off in Radio Setup still stops it for good. Enabling the
+  **Ext Devices** log category now also shows the serial error at the moment
+  the port drops, instead of silence. (#4574)
+
 ### Client settings store moved to SQLite (RFC #4603, phase 1)
 
 - **Settings now live in a SQLite database** (`AetherSDR.db` in the config
@@ -80,6 +93,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   instead of asking the query for permission first. Previously, pressing
   Record in AetherVoice on an affected device would mute audio and silently
   never play the recording back.
+- **Manual squelch is remembered per slice again, on every path (#4592)** —
+  each slice keeps its own manual squelch threshold, but only the RX applet
+  was keeping that memory current. Setting the level any other way — from a
+  non-active slice's own VFO flag, a MIDI or controller squelch knob, or from
+  the radio itself (your own edit on another client, or the radio's session
+  restore) — left the remembered value stale, so the next time you cycled the
+  SQL button that stale value was pushed back to the radio and quietly undid
+  what you had set. Every route now keeps the live level and the remembered
+  one together, and levels the radio reports back update it too — except while
+  Auto is computing them, so Auto's tracking of the noise floor no longer
+  overwrites the threshold you chose by hand. Switching squelch off and back
+  on returns you to your own level rather than the Auto margin.
+- **Squelch is no longer saved between sessions (#4592)** — squelch belongs to
+  the radio, and AetherSDR was also keeping its own copy. On a FLEX that copy
+  was never read back — the radio reports the real level on every connect — so
+  it only added a settings write each time you moved the slider, and risked
+  fighting the radio on reconnect. New slices now start from the radio's own
+  level, and the leftover setting is removed from existing installs on first
+  launch.
 
 ## [v26.7.4.1] — 2026-07-27
 

@@ -2978,6 +2978,18 @@ target_include_directories(slice_model_letter_test PRIVATE src)
 target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
 
+# Per-slice manual squelch memory (#3326 follow-up, #4592) — guards against
+# the cross-slice leak reopening via a caller that forgets to keep the live
+# level and the manual memory in sync, or an Auto-mode echo overwriting it.
+add_executable(slice_model_squelch_memory_test
+    tests/slice_model_squelch_memory_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(slice_model_squelch_memory_test PRIVATE src)
+target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
@@ -4880,6 +4892,24 @@ set_target_properties(connection_panel_size_test PROPERTIES AUTOMOC ON)
 add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# FlexControl port-loss recovery (#4574). Guarded on SERIALPORT for the same
+# reason FlexControlManager itself is: the whole class is inside
+# #ifdef HAVE_SERIALPORT, so without Qt SerialPort there is nothing to test.
+if(TARGET Qt6::SerialPort)
+    add_executable(flex_control_recovery_test
+        tests/flex_control_recovery_test.cpp
+    )
+    target_include_directories(flex_control_recovery_test PRIVATE src)
+    # aethercore already carries FlexControlManager and the logging category it
+    # uses; compiling the .cpp standalone would drag in LogManager -> AppSettings
+    # -> AsyncLogWriter and need most of the core library linked by hand anyway.
+    target_link_libraries(flex_control_recovery_test PRIVATE
+        aethercore Qt6::Core Qt6::SerialPort Qt6::Test
+    )
+    set_target_properties(flex_control_recovery_test PROPERTIES AUTOMOC ON)
+    add_test(NAME flex_control_recovery_test COMMAND flex_control_recovery_test)
+endif()
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp

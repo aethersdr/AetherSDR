@@ -8831,25 +8831,26 @@ void RadioModel::handleSliceStatus(int id,
                                 << "from previous session";
         } else {
             s = new SliceModel(id, this);
-            // Seed this slice's manual-squelch memory (#3326).  The radio
-            // wins whenever its status frame carries a level: a slice that
-            // already existed when we connected — ours from a prior run, or
-            // one another Multi-Flex client created — arrives with its own
-            // squelch_level, and adopting this client's last-used value
-            // instead would clobber it on the first flip to Manual
-            // (Principle II).  Only when the status is silent do we fall
-            // back to the operator's last-used value so a genuinely new
-            // slice starts where they left off.  Either way this is only a
-            // starting point, not a live shared value; each slice's own
-            // threshold is independent from here on.
+            // Seed this slice's manual-squelch memory (#3326) from the
+            // radio's own status when the frame carries a level: a slice
+            // that already existed when we connected — ours from a prior
+            // run, or one another Multi-Flex client created — arrives with
+            // its own squelch_level, and that's the value to start from
+            // (Principle II: the radio is authoritative). When the status
+            // is silent, SliceModel's own class default applies — squelch
+            // is radio-authoritative (AGENTS.md "do NOT persist"), so there
+            // is no client-side last-used value to fall back to (#4592).
+            // Either way this is only a starting point, not a live shared
+            // value; each slice's own threshold is independent from here on.
+            // applyChanges() below maintains the same memory from every
+            // subsequent echo (the gate defaults open for a slice with no
+            // surface attached), so this seed is the explicit belt to that
+            // braces — it pins the value before any UI can observe the slice.
             bool haveRadioLevel = false;
             const int radioLevel =
                 kvs.value(QStringLiteral("squelch_level")).toInt(&haveRadioLevel);
-            s->setManualSquelchLevel(
-                haveRadioLevel
-                    ? radioLevel
-                    : AppSettings::instance()
-                          .value("LastManualSquelchLevel", "20").toInt());
+            if (haveRadioLevel)
+                s->setManualSquelchLevel(radioLevel);
             // Forward slice commands to the radio
             connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
                 sendSliceCommand(s, cmd);
