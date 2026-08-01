@@ -149,6 +149,15 @@ private:
     void submitTerminalInput();
     void refreshTerminalStatus();
     void applyTerminalConfigFromUi(bool persist);
+    // Push the active modem profile's air-interface timing into the terminal and
+    // the mailbox, so T1/T2/T3 and paclen track the baud rate instead of being
+    // hardcoded for VHF. See Ax25LinkTiming.h and docs/HFMODEM.md §1.
+    void applyLinkTimingProfile();
+    // Reset a persisted T1 that cannot work on the active profile back to Auto,
+    // explaining why in the system log. Only touches values that are physically
+    // impossible (shorter than the modelled round trip) — a deliberate override
+    // that is merely aggressive is left alone.
+    void migrateImpossibleTerminalTimers();
     void refreshTerminalHeardCombo();
     // Hide the shared log panel and grow the tab stack on the Terminal tab so the
     // transcript gets the full viewport; restore the chrome on the other tabs.
@@ -319,6 +328,9 @@ private:
 
     // Personal Mailbox System (PMS) service and its controls.
     PmsMailbox* m_pms{nullptr};
+    // Last link-timing line written to the system log, so repeated config
+    // applies (every spinbox edit) don't repeat an unchanged message.
+    QString m_lastLinkTimingSummary;
     QAbstractButton* m_mailboxTab{nullptr};
     QCheckBox* m_pmsEnable{nullptr};
     QLineEdit* m_pmsListenCall{nullptr};

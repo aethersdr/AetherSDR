@@ -216,15 +216,29 @@ needs AX.25 v2.0 connected mode (LAPB, mod-8). Two reusable, RF-agnostic,
 unit-tested layers provide it:
 
 - `src/core/tnc/Ax25.{h,cpp}` — frame primitives: callsign/SSID `Address`
-  encode/decode and `Frame` parse/build for I, RR/RNR/REJ, SABM, DISC, DM, UA,
-  FRMR, and UI frames (address..info, no FCS — the same convention as
-  `buildTransmitAudioFromFrame`).
+  encode/decode and `Frame` parse/build for I, RR/RNR/REJ, SABM, SABME, DISC,
+  DM, UA, FRMR, and UI frames (address..info, no FCS — the same convention as
+  `buildTransmitAudioFromFrame`). SABME is decoded but never sent: we are mod-8,
+  and answering a v2.2 caller's SABME with DM is what makes it fall back to
+  SABM immediately instead of waiting out its own retry budget.
+- `src/core/tnc/Ax25LinkTiming.h` — the airtime model. Frame airtime, T1, T2,
+  T3, and paclen are all **derived from baud rate and framing**, never
+  hardcoded. This exists because the previous fixed defaults (T1 6 s, paclen
+  128) were sized for 1200-baud VHF FM and are physically impossible at 300
+  baud: T1 expired before the frame it was timing had finished transmitting, so
+  every HF I-frame retransmitted and every HF link died at N2. See
+  [`HFMODEM.md`](HFMODEM.md) §1 and §3.
 - `src/core/tnc/Ax25Connection.{h,cpp}` — a single-connection state machine:
   accepts an inbound SABM (→ UA), tracks V(S)/V(R)/V(A), acknowledges with RR,
   segments outbound data into I-frames (≤ paclen), and retransmits unacked
   I-frames on the T1 timeout up to N2 tries before declaring link failure.
-  Defaults (T1 6 s, N2 8, paclen 128, window 4) are sized for 1200-baud FM with
-  PTT overhead, so a lossy link recovers via REJ/T1 rather than dropping.
+  Window is 1 (MAXFRAME=1) — on a half-duplex radio link each I-frame is its own
+  PTT keyup, so sending several back-to-back makes us deaf to the ack. T3 polls
+  an idle link so a peer that vanishes cannot leave the session up forever, and
+  REJ recovery is bounded so a REJ-looping peer cannot make us retransmit
+  indefinitely. Per-session round-trip times are measured (Karn-safe) and logged
+  under `aether.ax25.link` — that is the number that says whether T1 is sized
+  correctly for the channel.
 
 **The mailbox service** is `src/core/pms/PmsMailbox.{h,cpp}` (one file pair). It
 owns the `Ax25Connection`, greets a caller by callsign with the AetherMailbox SID
@@ -259,6 +273,10 @@ reuse `Ax25`/`Ax25Connection` and the heard list directly.
 ## Open Work
 
 The remaining missed packets are mostly AX.25-looking candidates that fail FCS. That means the decoder is often finding packet structure but still has symbol/bit errors before CRC.
+
+> The connected-mode link layer, channel access, and the sensitivity roadmap
+> that grew out of these findings now live in [`HFMODEM.md`](HFMODEM.md). This
+> file remains the decoder capture-replay logbook.
 
 Next work should focus on:
 

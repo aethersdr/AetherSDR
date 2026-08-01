@@ -123,9 +123,17 @@ constexpr auto kTerminalRetrySecsSetting = "AetherModemTerminalRetrySecs";
 constexpr auto kTerminalMaxTriesSetting = "AetherModemTerminalMaxTries";
 constexpr auto kTerminalPaclenSetting = "AetherModemTerminalPaclen";
 constexpr auto kTerminalLogSetting = "AetherModemTerminalLogEnabled";
-constexpr int kTerminalDefaultRetrySecs = 6;
+// 0 = Auto: derive T1 and paclen from the modem profile via Ax25LinkTiming.h.
+// Auto is the default because the previous fixed values (T1 6 s, paclen 128)
+// were sized for 1200-baud VHF and are physically impossible at 300 baud — T1
+// expired before the frame it was timing had finished transmitting. A non-zero
+// value is an explicit operator override and is honoured as-is, except when it
+// is below the modelled round trip for the active profile (see
+// migrateImpossibleTerminalTimers). See docs/HFMODEM.md §1.
+constexpr int kTerminalAutoTiming = 0;
+constexpr int kTerminalDefaultRetrySecs = kTerminalAutoTiming;
 constexpr int kTerminalDefaultMaxTries = 8;
-constexpr int kTerminalDefaultPaclen = 128;
+constexpr int kTerminalDefaultPaclen = kTerminalAutoTiming;
 
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
@@ -1395,7 +1403,87 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
 
     if (m_log)
         appendSystemLine(QStringLiteral("Configured %1.").arg(ax25DemodDescription(m_shimConfig)));
+
+    // The connected-mode timers belong to the air interface, not to the tab
+    // they were typed into: switching between 300 baud HF and 1200 baud VHF
+    // changes one I-frame's airtime by a factor of four.
+    applyLinkTimingProfile();
+    migrateImpossibleTerminalTimers();
     refreshStatus();
+}
+
+void Ax25HfPacketDecodeDialog::applyLinkTimingProfile()
+{
+    // Our own keying overhead is dead air on every transmission, so it is part
+    // of the round-trip budget the timers are sized from.
+    const int txOverheadMs = kTxLeadMs + kTxDaxSettleMs + m_txTailMs;
+    const ax25::LinkTimingProfile profile = ax25LinkTimingForConfig(m_shimConfig, txOverheadMs);
+
+    if (m_terminal)
+        m_terminal->setLinkProfile(profile);
+    if (m_pms)
+        m_pms->setLinkProfile(profile);
+
+    // Operator overrides win over the model, but only where one was actually set.
+    if (m_terminal) {
+        if (m_terminalRetrySecs && m_terminalRetrySecs->value() != kTerminalAutoTiming)
+            m_terminal->setRetryTimeoutMs(m_terminalRetrySecs->value() * 1000);
+        if (m_terminalPaclen && m_terminalPaclen->value() != kTerminalAutoTiming)
+            m_terminal->setPaclen(m_terminalPaclen->value());
+    }
+
+    if (m_log && m_terminal) {
+        // applyTerminalConfigFromUi() lands here on every spinbox edit, so only
+        // say something when the answer actually changed.
+        const QString summary = QStringLiteral(
+            "Link timing for %1 baud: T1 %2 ms%3, paclen %4%5, T3 %6 s "
+            "(modelled round trip %7 ms).")
+            .arg(profile.baud)
+            .arg(m_terminal->recommendedRetryTimeoutMs())
+            .arg(m_terminalRetrySecs && m_terminalRetrySecs->value() != kTerminalAutoTiming
+                     ? QStringLiteral(" (overridden to %1 ms)")
+                           .arg(m_terminalRetrySecs->value() * 1000)
+                     : QString())
+            .arg(m_terminal->recommendedPaclen())
+            .arg(m_terminalPaclen && m_terminalPaclen->value() != kTerminalAutoTiming
+                     ? QStringLiteral(" (overridden to %1)").arg(m_terminalPaclen->value())
+                     : QString())
+            .arg(m_terminal->idlePollMs() / 1000)
+            .arg(m_terminal->expectedRoundTripMs());
+        if (summary != m_lastLinkTimingSummary) {
+            m_lastLinkTimingSummary = summary;
+            appendSystemLine(summary);
+        }
+    }
+}
+
+void Ax25HfPacketDecodeDialog::migrateImpossibleTerminalTimers()
+{
+    if (!m_terminal || !m_terminalRetrySecs)
+        return;
+    const int overrideMs = m_terminalRetrySecs->value() * 1000;
+    if (overrideMs == 0)
+        return; // already Auto
+    const int modelRttMs = m_terminal->expectedRoundTripMs();
+    if (overrideMs >= modelRttMs)
+        return; // aggressive, perhaps, but not impossible — leave it alone
+
+    // Below the modelled round trip T1 cannot succeed: it expires before the
+    // peer's acknowledgement can physically arrive, so every I-frame
+    // retransmits and the link dies at N2. This is what a T1 persisted from the
+    // VHF-only defaults does on HF, so fix it rather than silently failing.
+    const QSignalBlocker block(m_terminalRetrySecs);
+    m_terminalRetrySecs->setValue(kTerminalAutoTiming);
+    m_terminal->setRetryTimeoutMs(m_terminal->recommendedRetryTimeoutMs());
+    appendSystemLine(QStringLiteral(
+        "Retry timeout of %1 s is shorter than this profile's %2 ms round trip — "
+        "every frame would time out before the ack could arrive. Reset to Auto (%3 ms).")
+        .arg(overrideMs / 1000)
+        .arg(modelRttMs)
+        .arg(m_terminal->recommendedRetryTimeoutMs()));
+    AppSettings::instance().setValue(kTerminalRetrySecsSetting,
+        QString::number(kTerminalAutoTiming));
+    AppSettings::instance().save();
 }
 
 void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
@@ -2544,12 +2632,24 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
         paramRow->addLayout(col);
         return spin;
     };
-    m_terminalRetrySecs = addSpin(QStringLiteral("Retry s"), 1, 60, kTerminalDefaultRetrySecs,
-        QStringLiteral("T1 retransmit timeout in seconds."));
+    m_terminalRetrySecs = addSpin(QStringLiteral("Retry s"), 0, 60, kTerminalDefaultRetrySecs,
+        QStringLiteral("T1 retransmit timeout in seconds. Auto derives it from the modem "
+                       "profile — at 300 baud one I-frame can take over 6 seconds to "
+                       "transmit, so a VHF-sized T1 expires before the ack can arrive."));
+    m_terminalRetrySecs->setSpecialValueText(QStringLiteral("Auto"));
     m_terminalMaxTries = addSpin(QStringLiteral("Tries"), 1, 20, kTerminalDefaultMaxTries,
         QStringLiteral("N2 — retransmit attempts before the link is declared dead."));
-    m_terminalPaclen = addSpin(QStringLiteral("Paclen"), 16, 256, kTerminalDefaultPaclen,
-        QStringLiteral("Max bytes per I-frame."));
+    m_terminalPaclen = addSpin(QStringLiteral("Paclen"), 0, 256, kTerminalDefaultPaclen,
+        QStringLiteral("Max bytes per I-frame. Auto uses 64 on HF 300 (a 128-byte frame is "
+                       "4 seconds of continuous air, and one bit error costs the whole "
+                       "frame) and 128 on VHF 1200."));
+    m_terminalPaclen->setSpecialValueText(QStringLiteral("Auto"));
+    // The spin range has to start at 0 to carry the Auto sentinel, but there is
+    // no such thing as a 7-byte paclen; snap anything below the real floor.
+    connect(m_terminalPaclen, &QSpinBox::valueChanged, this, [this](int value) {
+        if (value > 0 && value < 16)
+            m_terminalPaclen->setValue(16);
+    });
     m_terminalTxTail = addSpin(QStringLiteral("TX Tail ms"), 0, 500, kTxTailDefaultMs,
         QStringLiteral("PTT tail (ms) held after the TX audio before unkey. Lower = we hear "
                        "the peer's next frame sooner on a half-duplex link; too low clips the "
@@ -2713,14 +2813,14 @@ void Ax25HfPacketDecodeDialog::applyTerminalConfigFromUi(bool persist)
         return;
     const QString call = m_terminalMyCall->text().trimmed();
     m_terminal->setMyCall(call);
-    if (m_terminalRetrySecs)
-        m_terminal->setRetryTimeoutMs(m_terminalRetrySecs->value() * 1000);
-    if (m_terminalMaxTries)
-        m_terminal->setMaxRetries(m_terminalMaxTries->value());
-    if (m_terminalPaclen)
-        m_terminal->setPaclen(m_terminalPaclen->value());
     if (m_terminalTxTail)
         m_txTailMs = m_terminalTxTail->value(); // applies to the next transmission
+    if (m_terminalMaxTries)
+        m_terminal->setMaxRetries(m_terminalMaxTries->value());
+    // Re-derive from the profile first (the TX tail above feeds the round-trip
+    // budget), then let any explicit override land on top. Auto (0) means "use
+    // the model", which is the default and the only sane choice on HF.
+    applyLinkTimingProfile();
     if (persist) {
         AppSettings::instance().setValue(kTerminalMyCallSetting, call);
         if (m_terminalRetrySecs)

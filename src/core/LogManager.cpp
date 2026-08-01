@@ -38,6 +38,13 @@ Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
 Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
+// Info by default, like aether.hl2 and for the same reason: this is the only
+// record of what a connected-mode link actually did — measured round-trip times
+// against the configured T1, retransmit ratios, why a session ended. An HF link
+// failure is not reproducible on demand, so the evidence has to already be in a
+// support log that was captured without foreknowledge. Rates are low (a handful
+// of lines per session), so Info costs nothing.
+Q_LOGGING_CATEGORY(lcAx25Link,   "aether.ax25.link",   QtInfoMsg)
 Q_LOGGING_CATEGORY(lcWaveform,   "aether.waveform",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcKiwiSdr,    "aether.kiwisdr",     QtDebugMsg)
 Q_LOGGING_CATEGORY(lcKiwiSdrAudio, "aether.kiwisdr.audio", QtWarningMsg)
@@ -78,6 +85,7 @@ LogManager::LogManager()
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
         {"aether.ax25",       "AetherModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
+        {"aether.ax25.link",  "AX.25 Link",  "Connected-mode data link: session open/close, measured round-trip vs configured T1, retransmits, idle-link polls"},
         {"aether.waveform",   "Waveform",    "Docker waveform image install upload and local waveform helper lifecycle"},
         {"aether.kiwisdr",    "KiwiSDR",     "KiwiSDR remote RX antennas: connect, handshake, audio/waterfall negotiation, reconnect, profile lifecycle"},
         {"aether.kiwisdr.audio", "KiwiSDR Audio/DSP", "Verbose KiwiSDR receive audio: frame decode, resampler, jitter/FIFO under/overrun, mixing (high-rate; off by default)"},

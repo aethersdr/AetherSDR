@@ -4331,11 +4331,29 @@ add_executable(ax25_session_analyze EXCLUDE_FROM_ALL
 target_include_directories(ax25_session_analyze PRIVATE src)
 target_link_libraries(ax25_session_analyze PRIVATE Qt6::Core aether_libmodem_core aether_afskdemod)
 
+# AX.25 airtime model + link-liveness behaviour (T3 idle poll, bounded REJ
+# recovery, SABME refusal, Karn-safe RTT sampling). See docs/HFMODEM.md.
+add_executable(ax25_link_timing_test
+    tests/ax25_link_timing_test.cpp
+    src/core/tnc/Ax25.cpp
+    src/core/tnc/Ax25Connection.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(ax25_link_timing_test PRIVATE src)
+target_link_libraries(ax25_link_timing_test PRIVATE Qt6::Core)
+add_test(NAME ax25_link_timing_test COMMAND ax25_link_timing_test)
+
 add_executable(pms_mailbox_test
     tests/pms_mailbox_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
     src/core/pms/PmsMailbox.cpp
+    # Ax25Connection logs link timing / RTT via lcAx25Link; LogManager brings
+    # AsyncLogWriter (member) along, same pattern as tnc_terminal_test.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
 target_include_directories(pms_mailbox_test PRIVATE src)
@@ -5411,6 +5429,7 @@ set(AETHER_SETTINGS_CONSUMERS
     ax25_libmodem_shim_test
     ax25_replay
     ax25_session_analyze
+    ax25_link_timing_test
     pms_mailbox_test
     aprs_messenger_test
     tnc_terminal_test

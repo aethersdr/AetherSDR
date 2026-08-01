@@ -10,6 +10,7 @@ constexpr quint8 kPollFinalBit = 0x10;
 constexpr quint8 kCtrlUI = 0x03;
 constexpr quint8 kCtrlDM = 0x0F;
 constexpr quint8 kCtrlSABM = 0x2F;
+constexpr quint8 kCtrlSABME = 0x6F; // AX.25 v2.2 mod-128 connect; decoded, never sent
 constexpr quint8 kCtrlDISC = 0x43;
 constexpr quint8 kCtrlUA = 0x63;
 constexpr quint8 kCtrlFRMR = 0x87;
@@ -99,6 +100,7 @@ QString frameTypeName(FrameType type)
     case FrameType::RNR: return QStringLiteral("RNR");
     case FrameType::REJ: return QStringLiteral("REJ");
     case FrameType::SABM: return QStringLiteral("SABM");
+    case FrameType::SABME: return QStringLiteral("SABME");
     case FrameType::DISC: return QStringLiteral("DISC");
     case FrameType::DM: return QStringLiteral("DM");
     case FrameType::UA: return QStringLiteral("UA");
@@ -147,6 +149,9 @@ QByteArray Frame::encode() const
         carriesPid = true;
         break;
     case FrameType::SABM: control = kCtrlSABM | (pollFinal ? kPollFinalBit : 0); break;
+    // Encodable for round-trip/test symmetry only — the data link never sends
+    // SABME, because we implement the mod-8 sequence space.
+    case FrameType::SABME: control = kCtrlSABME | (pollFinal ? kPollFinalBit : 0); break;
     case FrameType::DISC: control = kCtrlDISC | (pollFinal ? kPollFinalBit : 0); break;
     case FrameType::DM:   control = kCtrlDM | (pollFinal ? kPollFinalBit : 0); break;
     case FrameType::UA:   control = kCtrlUA | (pollFinal ? kPollFinalBit : 0); break;
@@ -226,6 +231,7 @@ std::optional<Frame> Frame::decode(const QByteArray& rawNoFcs)
         case kCtrlUI: frame.type = FrameType::UI; carriesPid = true; break;
         case kCtrlDM: frame.type = FrameType::DM; break;
         case kCtrlSABM: frame.type = FrameType::SABM; break;
+        case kCtrlSABME: frame.type = FrameType::SABME; break;
         case kCtrlDISC: frame.type = FrameType::DISC; break;
         case kCtrlUA: frame.type = FrameType::UA; break;
         case kCtrlFRMR:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Ax25DecodedFrame.h"
+#include "core/tnc/Ax25LinkTiming.h"
 
 #include <QByteArray>
 #include <QObject>
@@ -115,6 +116,16 @@ Ax25DemodConfig ax25DemodConfigForProfile(
 QString ax25ModemProfileName(Ax25ModemProfile profile);
 int ax25DemodLaneCount(const Ax25DemodConfig& cfg);
 QString ax25DemodDescription(const Ax25DemodConfig& cfg);
+// Number of leading/trailing HDLC flags this modulator actually transmits for
+// the given profile. Exposed so the link layer's airtime model reads the same
+// framing that goes on the air rather than a copy of it.
+int ax25TxPreambleFlags(Ax25ModemProfile profile);
+int ax25TxPostambleFlags();
+// The link-timing profile implied by this modem configuration. `localTxOverheadMs`
+// is the caller's own keying overhead (PTT lead + backend settle + TX tail) —
+// dead air paid on every transmission, so it belongs in the round-trip budget.
+ax25::LinkTimingProfile ax25LinkTimingForConfig(const Ax25DemodConfig& cfg,
+                                                int localTxOverheadMs);
 Ax25TransmitResult ax25BuildTransmitAudio(const Ax25DemodConfig& cfg,
                                           const QString& text,
                                           const QString& defaultSource,

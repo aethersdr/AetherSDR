@@ -19,10 +19,14 @@ TncTerminal::TncTerminal(QObject* parent)
     : QObject(parent)
 {
     m_link = new Ax25Connection(this);
-    // Defaults sized for 1200-baud VHF FM with PTT overhead — same as the PMS.
-    m_link->setRetryTimeoutMs(6000);
     m_link->setMaxRetries(8);
-    m_link->setPaclen(128);
+    // Timers are DERIVED from the air interface, never hardcoded. The previous
+    // fixed 6 s T1 / 128 paclen were sized for 1200-baud VHF FM; at 300 baud
+    // that T1 expired before we had even finished transmitting the frame it was
+    // timing, so every HF I-frame retransmitted and every HF link died at N2.
+    // setLinkProfile() from the GUI when the modem profile changes; this is the
+    // VHF default so a terminal that is never told otherwise still works.
+    setLinkProfile(ax25::LinkTimingProfile::forBaud(1200));
 
     connect(m_link, &Ax25Connection::sendFrame, this, &TncTerminal::transmitFrame);
     connect(m_link, &Ax25Connection::activity, this, &TncTerminal::onLinkActivity);
@@ -68,6 +72,21 @@ void TncTerminal::setEscapeChar(QChar c)
 void TncTerminal::setRetryTimeoutMs(int t1) { m_link->setRetryTimeoutMs(t1); }
 void TncTerminal::setMaxRetries(int n2) { m_link->setMaxRetries(n2); }
 void TncTerminal::setPaclen(int bytes) { m_link->setPaclen(bytes); }
+
+void TncTerminal::setLinkProfile(const ax25::LinkTimingProfile& profile)
+{
+    m_link->setLinkProfile(profile);
+    m_link->setPaclen(ax25::recommendedPaclen(profile.baud));
+    m_link->applyRecommendedTimers();
+}
+
+int TncTerminal::recommendedRetryTimeoutMs() const { return m_link->recommendedRetryTimeoutMs(); }
+int TncTerminal::recommendedPaclen() const
+{
+    return ax25::recommendedPaclen(m_link->linkProfile().baud);
+}
+int TncTerminal::expectedRoundTripMs() const { return m_link->expectedRoundTripMs(); }
+int TncTerminal::idlePollMs() const { return m_link->idlePollMs(); }
 
 bool TncTerminal::isConnected() const
 {
@@ -467,9 +486,27 @@ void TncTerminal::cmdStatus()
         .arg(s.iSent).arg(s.iResent).arg(s.iRcvd).arg(s.iDropped));
     emitLine(QStringLiteral("  Acks    : RR rcvd %1   REJ sent %2  REJ rcvd %3  RNR %4")
         .arg(s.rrRcvd).arg(s.rejSent).arg(s.rejRcvd).arg(s.rnrRcvd));
-    emitLine(QStringLiteral("  Retries : %1/%2   T1 timeouts %3   deferred-acks %4")
-        .arg(m_link->retries()).arg(m_link->maxRetries()).arg(s.t1Timeouts).arg(s.t2Acks));
+    emitLine(QStringLiteral("  Retries : %1/%2   T1 timeouts %3   deferred-acks %4   idle polls %5")
+        .arg(m_link->retries()).arg(m_link->maxRetries())
+        .arg(s.t1Timeouts).arg(s.t2Acks).arg(s.t3Polls));
     emitLine(QStringLiteral("  Errors  : FRMR %1   bad-N(R) %2").arg(s.frmrRcvd).arg(s.invalidNr));
+    // The timing contract and what the link actually measured against it. On HF
+    // this is the line that says whether a stalling link is mis-tuned timers or
+    // a bad channel: if avg RTT approaches or exceeds T1, no channel work helps.
+    emitLine(QStringLiteral("  Timing  : T1 %1 ms   T3 %2 s   paclen %3   model RTT %4 ms")
+        .arg(m_link->retryTimeoutMs())
+        .arg(m_link->idlePollMs() / 1000)
+        .arg(m_link->paclen())
+        .arg(m_link->expectedRoundTripMs()));
+    if (s.rttSamples > 0) {
+        emitLine(QStringLiteral("  Measured: RTT min %1 / avg %2 / max %3 ms over %4 sample(s)%5")
+            .arg(s.rttMinMs).arg(s.averageRttMs()).arg(s.rttMaxMs).arg(s.rttSamples)
+            .arg(s.averageRttMs() >= m_link->retryTimeoutMs()
+                     ? QStringLiteral("  *** T1 TOO SHORT")
+                     : QString()));
+    } else {
+        emitLine(QStringLiteral("  Measured: no round-trip samples yet"));
+    }
     emitLine(QStringLiteral("------------------------------------------"));
 }
 
