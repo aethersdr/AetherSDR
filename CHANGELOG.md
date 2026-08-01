@@ -90,6 +90,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   **Ext Devices** log category now also shows the serial error at the moment
   the port drops, instead of silence. (#4574)
 
+- **Demo mode's CW tone clicked instead of sliding when you moved its pitch
+  slider.** The tone was synthesized from absolute time × the current pitch, so
+  every notch of **CW tone** in the Demo applet jumped the oscillator's phase
+  rather than changing its frequency — a hard click mid-dah, which is exactly
+  the artifact the generator's raised-cosine key edges exist to prevent. The
+  jump grows with how long the session has been running, so after half a minute
+  even a 1 Hz nudge is a full-amplitude step. The tone now accumulates phase per
+  sample, the way the birdie carrier already did, and slides smoothly to the new
+  pitch. Fixed alongside it: three of the mixer's sample counters were 32-bit on
+  Windows and hit undefined behaviour after about 25 hours of unbroken demo
+  audio. Demo mode only — no radio, protocol, or transmit path is involved.
+  (#4618)
+
 ### Client settings store moved to SQLite (RFC #4603, phase 1)
 
 - **Settings now live in a SQLite database** (`AetherSDR.db` in the config
