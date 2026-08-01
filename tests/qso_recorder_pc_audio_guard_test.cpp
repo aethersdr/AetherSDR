@@ -173,9 +173,16 @@ int main(int argc, char** argv)
         EXPECT_TRUE(rec.evaluateStart() == RecordStartDecision::Allow);
     }
 
-    // ── RADIO-SIDE + PC Audio off MUST STILL START ──────────────────────────
-    // Radio-side recording is handled by the radio and has no dependency on the
-    // client's audio path. This is the case the guard must never catch.
+    // ── RADIO-SIDE: the client recorder must NOT write a local file ─────────
+    // Found in review of the PR that added this file. Every operator-facing
+    // path (VFO button, MIDI binding, MOX auto-record) tests RecordingMode and
+    // routes radio-side to SliceModel without ever reaching QsoRecorder — but
+    // AutomationServer::doRecord calls startRecording() unconditionally, so a
+    // policy that answered Allow here left a spurious header-only WAV behind:
+    // the exact artifact #4629 is about, reached by a different door.
+    //
+    // The operator's radio-side recording is untouched by this — it is routed
+    // before this policy is consulted. What is refused is only this recorder.
     {
         QTemporaryDir tmp;
         EXPECT_TRUE(tmp.isValid());
@@ -185,14 +192,38 @@ int main(int argc, char** argv)
         rec.setRecordingDir(tmp.path());
 
         int blocked = 0;
+        RecordStartDecision reason = RecordStartDecision::Allow;
         QObject::connect(&rec, &QsoRecorder::recordingBlocked,
-                         &rec, [&](RecordStartDecision) { ++blocked; });
+                         &rec, [&](RecordStartDecision r) { ++blocked; reason = r; });
 
-        EXPECT_TRUE(rec.evaluateStart() == RecordStartDecision::Allow);
+        EXPECT_TRUE(rec.evaluateStart()
+                    == RecordStartDecision::BlockedRecordingModeIsRadio);
         rec.startRecording();
-        EXPECT_TRUE(rec.isRecording());
-        EXPECT_EQ_INT(blocked, 0);
-        rec.stopRecording();
+
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_EQ_INT(fileCount(tmp.path()), 0);   // the assertion that matters
+        EXPECT_EQ_INT(blocked, 1);
+        EXPECT_TRUE(reason == RecordStartDecision::BlockedRecordingModeIsRadio);
+        // Never explained as a PC Audio failure — the operator's problem is a
+        // different one and that dialog would send them the wrong way.
+        EXPECT_TRUE(reason != RecordStartDecision::BlockedPcAudioDisabled);
+    }
+
+    // ── Radio-side outranks the seam-native exemption ───────────────────────
+    // A sim/HL2 backend does not make the client recorder the right tool when
+    // the operator asked the radio to record.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Radio", "False");
+
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+        rec.setBackendOwnsRxAudioProvider([]() { return true; });
+
+        rec.startRecording();
+        EXPECT_TRUE(!rec.isRecording());
+        EXPECT_EQ_INT(fileCount(tmp.path()), 0);
     }
 
     // ── Zero-capture is reported, not passed off as success ─────────────────

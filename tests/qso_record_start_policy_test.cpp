@@ -4,11 +4,20 @@
 // only while PC Audio is enabled. Starting anyway produced a correctly named,
 // header-only 44-byte WAV and no error at all.
 //
-// The case that matters most here is the one that must NOT change:
-// RADIO-SIDE RECORDING DOES NOT DEPEND ON PC AUDIO. It is a `slice set <n>
-// record=1` command handled entirely by the radio, and it is the standing
-// answer for an operator who monitors on the radio's own speaker. If the guard
-// ever starts blocking it, that operator loses the one path that still worked.
+// RADIO-SIDE RECORDING MUST NEVER BE BLOCKED — it is the standing answer for an
+// operator who monitors on the radio's own speaker, and it does not depend on
+// PC Audio. That guarantee is enforced by the ROUTING layer, not by this
+// policy: MainWindow_Wiring and the MIDI binding test RecordingMode and send
+// radio-side straight to SliceModel::setRecordOn(), so a radio-side recording
+// never consults this file at all.
+//
+// What this policy answers is narrower — "may THE CLIENT RECORDER start?" — and
+// in Radio-Side mode the answer is no, because QsoRecorder only ever writes a
+// local file. An earlier revision returned Allow here on the theory that
+// radio-side must not be blocked; that conflated the two questions and let a
+// non-routing caller (AutomationServer::doRecord) open a local WAV in Radio-Side
+// mode, leaving exactly the spurious header-only file this change exists to
+// prevent.
 //
 // Pure policy, so no Qt, no event loop, no settings store — and constexpr, so
 // the whole table is also checked at compile time.
@@ -20,6 +29,13 @@
 using namespace AetherSDR;
 
 static int g_failures = 0;
+
+#define EXPECT_TRUE_MSG(cond, msg) do { \
+    if (!(cond)) { \
+        std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, (msg)); \
+        ++g_failures; \
+    } \
+} while (0)
 
 #define EXPECT_DECISION(clientSide, pcAudio, seamNative, expected) do { \
     const RecordStartDecision got_ = \
@@ -40,10 +56,15 @@ static_assert(evaluateRecordStart(true,  false, false) == RecordStartDecision::B
               "Flex client-side without PC Audio must be refused");
 static_assert(evaluateRecordStart(true,  true,  false) == RecordStartDecision::Allow,
               "Flex client-side with PC Audio must be allowed");
-static_assert(evaluateRecordStart(false, false, false) == RecordStartDecision::Allow,
-              "RADIO-SIDE MUST NEVER BE BLOCKED: it does not use PC Audio");
-static_assert(evaluateRecordStart(false, true,  false) == RecordStartDecision::Allow,
-              "radio-side is allowed regardless of PC Audio");
+// Radio-Side: the CLIENT recorder must not run, and the reason must be its own
+// — never BlockedPcAudioDisabled, which would explain the refusal with a cause
+// that has nothing to do with it.
+static_assert(evaluateRecordStart(false, false, false) == RecordStartDecision::BlockedRecordingModeIsRadio,
+              "Radio-Side must not start the client recorder");
+static_assert(evaluateRecordStart(false, true,  false) == RecordStartDecision::BlockedRecordingModeIsRadio,
+              "Radio-Side is refused regardless of PC Audio, and for its own reason");
+static_assert(evaluateRecordStart(false, false, true)  == RecordStartDecision::BlockedRecordingModeIsRadio,
+              "Radio-Side outranks the seam-native exemption: the radio is recording");
 static_assert(evaluateRecordStart(true,  false, true)  == RecordStartDecision::Allow,
               "SEAM-NATIVE AUDIO (sim/HL2) MUST NEVER BE BLOCKED: it bypasses "
               "remote_audio_rx, so PC Audio is not in its path");
@@ -59,11 +80,19 @@ int main()
     // ── Client-side with PC Audio on: the working configuration ─────────────
     EXPECT_DECISION(true, true, false, RecordStartDecision::Allow);
 
-    // ── Radio-side: PC Audio is irrelevant, both ways ───────────────────────
-    // This is the operator's escape hatch when they listen on the radio rather
-    // than the PC. Blocking it would be a worse bug than the one being fixed.
-    EXPECT_DECISION(false, false, false, RecordStartDecision::Allow);
-    EXPECT_DECISION(false, true,  false, RecordStartDecision::Allow);
+    // ── Radio-side: the CLIENT recorder is the wrong tool, whatever the audio ─
+    // The operator's radio-side recording still happens — it is routed to
+    // SliceModel before this policy is ever consulted (see the header comment).
+    // What is refused is QsoRecorder writing a local file it cannot fill.
+    EXPECT_DECISION(false, false, false, RecordStartDecision::BlockedRecordingModeIsRadio);
+    EXPECT_DECISION(false, true,  false, RecordStartDecision::BlockedRecordingModeIsRadio);
+    EXPECT_DECISION(false, false, true,  RecordStartDecision::BlockedRecordingModeIsRadio);
+
+    // The reason must never be reported as a PC Audio problem — an operator in
+    // Radio-Side mode told to go enable PC Audio has been sent the wrong way.
+    EXPECT_TRUE_MSG(evaluateRecordStart(false, false, false)
+                        != RecordStartDecision::BlockedPcAudioDisabled,
+                    "Radio-Side must not be explained as a PC Audio failure");
 
     // ── Seam-native backends: SimBackend is the live counter-example ────────
     // Sim owns its RX audio (ownsRxAudio()==true) but neither host-modulates

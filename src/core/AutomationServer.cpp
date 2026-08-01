@@ -5465,12 +5465,29 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
             {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
             {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
         };
-        if (decision == RecordStartDecision::BlockedPcAudioDisabled) {
-            reply.insert(QStringLiteral("reason"),
-                         QStringLiteral("pc-audio-disabled"));
-            reply.insert(QStringLiteral("detail"),
-                         QStringLiteral("Client-Side recording requires PC Audio; "
-                                        "no RX audio stream exists."));
+        if (decision != RecordStartDecision::Allow) {
+            if (decision == RecordStartDecision::BlockedPcAudioDisabled) {
+                reply.insert(QStringLiteral("reason"),
+                             QStringLiteral("pc-audio-disabled"));
+                reply.insert(QStringLiteral("detail"),
+                             QStringLiteral("Client-Side recording requires PC Audio; "
+                                            "no RX audio stream exists."));
+            } else {
+                // Deliberately a REFUSAL, not a redirect to SliceModel. This verb
+                // is documented as driving the client-side recorder and returning
+                // the path of a local WAV; quietly starting a recording on the
+                // RADIO instead would be a hardware state change from a call that
+                // promised a local file, and a harness asking for that file would
+                // get a success it cannot use. Naming the mismatch lets the caller
+                // fix its own setup.
+                reply.insert(QStringLiteral("reason"),
+                             QStringLiteral("recording-mode-is-radio"));
+                reply.insert(QStringLiteral("detail"),
+                             QStringLiteral("RecordingMode is Radio, so the radio "
+                                            "records and no local file is written. "
+                                            "Set RecordingMode=Client to drive the "
+                                            "client-side recorder."));
+            }
             // recordingFilePath() falls back to the LAST finalized recording
             // when no file is open, so a refused start would otherwise hand back
             // a path to an unrelated earlier WAV — observed live while verifying

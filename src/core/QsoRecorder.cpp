@@ -119,8 +119,12 @@ void QsoRecorder::startRecording()
     // recorder fault rather than a configuration one.
     const RecordStartDecision decision = evaluateStart();
     if (decision != RecordStartDecision::Allow) {
-        qCWarning(lcAudio) << "QsoRecorder: start refused — client-side recording "
-                              "needs PC Audio (no RX audio stream exists)";
+        qCWarning(lcAudio) << "QsoRecorder: start refused —"
+                           << (decision == RecordStartDecision::BlockedRecordingModeIsRadio
+                                   ? "Radio-Side recording is selected; the radio "
+                                     "records, not this client"
+                                   : "client-side recording needs PC Audio "
+                                     "(no RX audio stream exists)");
         emit recordingBlocked(decision);
         return;
     }

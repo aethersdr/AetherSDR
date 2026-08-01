@@ -2417,9 +2417,13 @@ Not a transmit action — no gate.
 `start` / `stop` / `status` (default) / `path` / `dir <path>` (set the output
 directory).
 
-**`start` can be refused** (#4629). Client-Side recording captures the RX audio
+**`start` can be refused** (#4629), and no file is created at all when it is.
+Always check `ok` rather than assuming a start succeeded; a refusal carries a
+machine-readable `reason` and a human `detail`, and reports `path` as empty.
+
+`reason: "pc-audio-disabled"` — Client-Side recording captures the RX audio
 stream that PC Audio creates, so with `PcAudioEnabled=False` there is nothing to
-record and no file is created at all:
+record:
 
 ```json
 → {"cmd":"record","action":"start"}
@@ -2428,9 +2432,20 @@ record and no file is created at all:
    "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
 ```
 
-Enable PC Audio, or switch `RecordingMode` to `Radio` — radio-side recording
-runs on the radio and does not depend on PC Audio. Always check `ok` rather than
-assuming a start succeeded.
+`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio`, so the radio
+is the recorder and this verb has nothing local to drive:
+
+```json
+← {"ok":false,"record":"start","recording":false,"path":"",
+   "reason":"recording-mode-is-radio",
+   "detail":"RecordingMode is Radio, so the radio records and no local file is written. Set RecordingMode=Client to drive the client-side recorder."}
+```
+
+This verb **refuses rather than redirecting**. It is documented as driving the
+client-side recorder and returning the path of a local WAV, so silently issuing
+`slice set <n> record=1` instead would be a radio state change from a call that
+promised a local file — and a harness waiting for that file would get a success
+it cannot use. Set `RecordingMode=Client` if you want a local recording.
 
 ### `station`
 Set this GUI client's **MultiFlex station name** (FlexLib `SetClientStationName`)

@@ -1215,6 +1215,20 @@ MainWindow::MainWindow(QWidget* parent)
     // operator turned off on purpose, which is the behaviour #1071 removed.
     connect(m_qsoRecorder, &QsoRecorder::recordingBlocked, this,
             [this](AetherSDR::RecordStartDecision reason) {
+        if (reason == AetherSDR::RecordStartDecision::BlockedRecordingModeIsRadio) {
+            // Unreachable from the GUI — every operator-facing path tests
+            // RecordingMode and sends radio-side to SliceModel without ever
+            // touching this recorder. Handled rather than swallowed because a
+            // silently discarded refusal is the failure mode this whole change
+            // exists to remove; if a future caller forgets to route, this says
+            // so instead of leaving a stray header-only WAV.
+            QMessageBox::warning(this, tr("Radio Side Recording Is Selected"),
+                tr("The radio is doing the recording, so the client recorder was "
+                   "not started and no local file was created.\n\n"
+                   "Switch to Client Side in Radio Settings → Recording if you "
+                   "want the recording saved on this computer instead."));
+            return;
+        }
         if (reason != AetherSDR::RecordStartDecision::BlockedPcAudioDisabled)
             return;
         QMessageBox::warning(this, tr("PC Audio Required for Client-Side Recording"),
