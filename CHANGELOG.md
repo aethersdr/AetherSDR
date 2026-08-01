@@ -55,6 +55,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   resolved slice gone, and transmit-inhibited panadapter — now say so at the
   normal logging level, no rule needed.
 
+### AX.25 packet on the Hermes-Lite 2, and connected-mode reliability
+
+- **AetherModem now transmits on the Hermes-Lite 2.** APRS, the KISS TNC, the
+  terminal and the mailbox all key correctly on a host-modulating radio. TX
+  previously required a FlexRadio DAX stream and simply hung on any radio
+  without one — PTT never engaged and every queued frame was lost when the
+  window closed.
+
+- **Connected-mode timers are derived from the air interface** instead of
+  hardcoded. The old fixed 6-second retransmit timeout was shorter than the
+  6.8 seconds it takes to send one full-size frame at 300 baud, so every HF
+  frame timed out before its acknowledgement could physically arrive and the
+  link died. On HF the packet length now defaults to 64 bytes as well — at
+  300 baud a 128-byte frame is four seconds of continuous transmission, and a
+  single bit error costs the whole frame.
+
+- **A lost acknowledgement no longer kills the session.** A repeated frame was
+  treated as a gap in the sequence and answered with silence, so one dropped
+  acknowledgement was unrecoverable: the far end retransmitted, we said
+  nothing, and the link failed. Repeats are now acknowledged again.
+
+- **Sessions no longer stall or hang.** A connected link can't come to rest
+  with data still queued; an idle link is polled so a station that disappears
+  can't hold the mailbox open against every other caller (it previously stayed
+  locked out until restarted); and a peer that keeps rejecting can no longer
+  make us retransmit indefinitely.
+
+- **Stopping means stopping.** Pressing BYE a second time now ends a
+  disconnect instead of restarting it — repeated presses previously kept the
+  radio transmitting. Switching the modem off now halts transmission and drops
+  any session, where before it stopped only the decoder and kept keying.
+
+- **AX.25 v2.2 callers connect immediately.** A SABME connect request is
+  answered rather than ignored, so v2.2 stations fall back to v2.0 at once
+  instead of retrying until they give up.
+
+- **New Terminal controls**: Retry, Paclen and TXDELAY default to **Auto**,
+  derived from the current modem profile, and remain overridable. A session's
+  measured round-trip time is shown in `STATUS` and recorded in the log, which
+  is what tells a mis-sized timeout apart from a poor channel.
+
 ### Theme fallback colours corrected on themes that predate the token (#3184)
 
 - **Slice colours A–H and `color.accent.dim` now match the bundled themes.**

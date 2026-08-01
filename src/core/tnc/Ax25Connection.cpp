@@ -417,7 +417,17 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
     // stale N(R) could hold us below N2 indefinitely and we would retransmit
     // forever. Liveness must be proven, not assumed. The REJ path is bounded
     // separately by m_rejRecoveries, so this cannot reopen that loop.
-    if (m_state != State::Disconnected && !frame.command && frame.pollFinal)
+    // ...and only from our actual peer. On a shared channel a third party can
+    // put an F=1 response in front of us — another station calls the mailbox's
+    // listen address mid-session, we answer DM, and its reply arrives addressed
+    // to our callsign. Clearing the budget on that is the same defect as
+    // clearing it on a stale RR, just sourced from someone else's link.
+    // (AX.25 2.2 6.7.1.3 scopes this to the response to our OWN poll; filtering
+    // by peer gets most of the way there without tracking poll state.)
+    // m_remote is set before the SABM in connectTo(), so a UA arriving in the
+    // Connecting state still qualifies.
+    if (m_state != State::Disconnected && !frame.command && frame.pollFinal
+        && frame.src == m_remote)
         m_retryCount = 0;
 
     // Lost-UA recovery. We sent a SABM and are still awaiting its UA, but the

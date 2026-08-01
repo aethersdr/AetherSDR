@@ -30,7 +30,7 @@ namespace AetherSDR::ax25 {
 // reality. AetherAx25LibmodemShim includes this header and modulates from these.
 //
 // HF 300 keeps a long preamble (~2.13 s). That is the single largest term in
-// the HF airtime budget and is a roadmap item (docs/HFMODEM.md §6.8), but it
+// the HF airtime budget and is a roadmap item (docs/HFMODEM.md §6, item 11), but it
 // protects the *far* end's AGC and PLL, so it cannot be shortened on our own
 // authority. When it does drop, T1 tracks it automatically.
 inline constexpr int kAx25Hf300PreambleFlags = 80;   // ~2.13 s at 300 baud

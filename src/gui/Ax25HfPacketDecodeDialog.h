@@ -88,6 +88,39 @@ private:
     static void write(const QJsonObject& o);
 };
 
+// The connected-mode terminal's configuration, owned as ONE object under the
+// nested key "AetherModemTerminal" (Constitution Principle V — each feature owns
+// its configuration as a single object; and Principle XIV — persist atomically).
+//
+// These lived as seven separate flat AppSettings keys. Principle V grandfathers
+// the existing ones but forbids adding to them, and this group needed an eighth
+// (TXDELAY), so the group moved rather than growing. Loading and saving the
+// whole struct also means a settings write is one atomic replacement instead of
+// seven independent ones that can interleave halfway through.
+struct TerminalSettings {
+    // 0 means "derive it from the air interface" for the three timing fields —
+    // see Ax25LinkTiming.h. A non-zero value is an explicit operator override.
+    static constexpr int kAuto = 0;
+    static constexpr int kDefaultMaxTries = 8;
+    static constexpr int kDefaultTxTailMs = 150;
+
+    QString myCall;
+    QString lastCall;              // last station dialled, restored into the UI
+    int retrySecs{kAuto};          // T1; 0 = derived
+    int maxTries{kDefaultMaxTries};// N2
+    int paclen{kAuto};             // 0 = derived (64 on HF 300, 128 on VHF 1200)
+    int txTailMs{kDefaultTxTailMs};
+    int txPreambleFlags{kAuto};    // TXDELAY; 0 = profile default
+    bool logEnabled{false};
+
+    static TerminalSettings load();
+    void save() const;             // one write, one AppSettings::save()
+
+    // One-shot hop from the seven legacy flat keys (AetherModemTerminal*).
+    // Safe to call repeatedly; returns immediately once the nested blob exists.
+    static void migrateLegacy();
+};
+
 class Ax25HfPacketDecodeDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -174,7 +207,7 @@ private:
     // explaining why in the system log. Only touches values that are physically
     // impossible (shorter than the modelled round trip) — a deliberate override
     // that is merely aggressive is left alone.
-    void migrateImpossibleTerminalTimers();
+    void overrideImpossibleT1ForProfile();
     void refreshTerminalHeardCombo();
     // Hide the shared log panel and grow the tab stack on the Terminal tab so the
     // transcript gets the full viewport; restore the chrome on the other tabs.
@@ -274,6 +307,9 @@ private:
     bool m_txPreviousAudioDaxMode{false};
     bool m_txPreviousTransmitDax{false};
     bool m_txFromKiss{false};
+    // Identifies the current transmission so deferred work armed on its behalf
+    // (the DAX stream-wait timeout) cannot act on a later one.
+    quint64 m_txGeneration{0};
 
     // KISS TNC server (TCP) and its controls.
     KissTncServer* m_kissServer{nullptr};

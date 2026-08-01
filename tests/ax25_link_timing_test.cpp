@@ -565,6 +565,87 @@ static void testNeverIdleWithQueuedData()
     CHECK(link.sendQueueBytes() == 0, "the whole reply drains");
 }
 
+// Pins the post-switch safety net specifically. It has to be reached through a
+// branch that acknowledges but does NOT pump on its own, or the test passes with
+// the net removed — the RR handler and the duplicate handler both pump, and the
+// RNR handler cannot help because peer-busy blocks pumpOutbound() anyway.
+//
+// The out-of-sequence branch is the one: it calls ackUpTo() at the top of the
+// I-frame case, then drops the frame and (at most once) sends a REJ, and
+// deliberately returns without pumping. So a gap frame whose N(R) happens to
+// acknowledge our outstanding segment leaves the window free with data queued,
+// and only the net can restart us. Mutating the net to `if (false)` fails here.
+static void testSafetyNetCoversBranchesThatDoNotPump()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+    link.setPaclen(64);
+
+    QVector<Frame> sent;
+    QObject::connect(&link, &Ax25Connection::sendFrame, [&](const QByteArray& raw) {
+        if (auto f = Frame::decode(raw))
+            sent.append(*f);
+    });
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+    link.sendData(QByteArray(200, 'M')); // four segments at paclen 64
+    CHECK(link.unacked() == 1, "one segment in flight");
+    CHECK(link.sendQueueBytes() > 0, "more waiting");
+
+    // A genuine gap — V(R) is 0 and the peer sends N(S)=2 — carrying N(R)=1,
+    // which acknowledges the segment we have outstanding.
+    sent.clear();
+    link.onFrameReceived(Frame::makeI(call("N0PMS-1"), call("K7ABC"), /*ns=*/2, /*nr=*/1,
+                                      /*pf=*/true, QByteArrayLiteral("gap")));
+    CHECK(link.stats().iDropped == 1, "the gap frame is dropped, not accepted");
+    CHECK(link.stats().iDuplicate == 0, "and is not mistaken for a duplicate");
+
+    CHECK(link.unacked() == 1,
+          "the acknowledged window is refilled — the link must not come to rest "
+          "with data queued just because the branch that freed it does not pump");
+    bool sentData = false;
+    for (const Frame& f : sent)
+        if (f.type == FrameType::I) sentData = true;
+    CHECK(sentData, "the next segment actually goes on the air");
+}
+
+// Pins "T1 re-arms only on a real acknowledgement". Mutating the guard back to
+// an unconditional startT1() must fail here: a stream of stale RRs that
+// acknowledge nothing would keep pushing the deadline out, so T1 would never
+// expire and no retransmission would ever happen.
+static void testStaleAcksDoNotPostponeT1()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+    link.setRetryTimeoutMs(1000); // keep the test short
+    QObject::connect(&link, &Ax25Connection::sendFrame, [](const QByteArray&) {});
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+    link.sendData(QByteArrayLiteral("data\r"));
+    CHECK(link.unacked() == 1, "a frame is outstanding");
+
+    // Feed a stale, unpolled RR every ~250 ms for 2 s — faster than the 1000 ms
+    // T1, so anything that re-arms the timer keeps it permanently ahead of the
+    // deadline. N(R)=0 acknowledges nothing (V(A) is already 0), so none of
+    // these is progress.
+    //
+    // The assertion has to land INSIDE the feeding window: wait until after it
+    // and T1 fires 1000 ms past the last stale ack either way, which is exactly
+    // why the first version of this test passed with the guard mutated away.
+    QDeadlineTimer feeding(2000);
+    while (!feeding.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        link.onFrameReceived(Frame::makeS(call("N0PMS-1"), call("K7ABC"),
+                                          FrameType::RR, 0, false, false));
+    }
+
+    CHECK(link.stats().t1Timeouts > 0,
+          "T1 expires on schedule while stale acknowledgements keep arriving — a "
+          "frame that acknowledges nothing must not postpone the deadline");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -586,6 +667,8 @@ int main(int argc, char** argv)
     testRealGapStillUsesRejectException();
     testDuplicateDoesNotStrandQueuedData();
     testNeverIdleWithQueuedData();
+    testSafetyNetCoversBranchesThatDoNotPump();
+    testStaleAcksDoNotPostponeT1();
 
     if (g_failures == 0)
         std::fprintf(stderr, "ax25_link_timing_test: all checks passed\n");

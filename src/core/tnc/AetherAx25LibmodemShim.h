@@ -38,7 +38,7 @@ struct Ax25DemodConfig {
     // acknowledgement — so it is the largest single term in the airtime budget
     // and the one worth sweeping on air. Both the modulator and the link-timing
     // model read it through effectiveTxPreambleFlags(), so T1 tracks it
-    // automatically. See docs/HFMODEM.md §6.8.
+    // automatically. See docs/HFMODEM.md §6, item 11.
     int txPreambleFlags{0};
 };
 

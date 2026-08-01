@@ -9198,7 +9198,28 @@ QJsonObject AutomationServer::doModemAutomation(const QString& verb,
         return err(QStringLiteral("AetherModem automation is unavailable "
                                   "(no main window registered the hook)"));
     }
-    return m_modemAutomationHandler(verb, action.trimmed().toLower(), value.trimmed());
+
+    // `link connect` transmits a SABM, `link disconnect` a DISC, and `link pms
+    // on` puts the mailbox on the air answering callers and beaconing — all of
+    // them key the transmitter. The Terminal's Send button is already
+    // markTxKeying()-tagged so invoke() refuses it without the env var (#3646);
+    // reaching the same TX path through a verb must not be a hole around that
+    // rail. Note this is NOT isReadOnlyRequest()'s job — that is the
+    // observe-only gate, which only applies when m_readOnly is set. Turning the
+    // mailbox OFF never keys, so it stays ungated.
+    const QString normalizedAction = action.trimmed().toLower();
+    const QString normalizedValue = value.trimmed();
+    const bool keysTransmitter = verb == QLatin1String("link")
+        && (normalizedAction == QLatin1String("connect")
+            || normalizedAction == QLatin1String("disconnect")
+            || (normalizedAction == QLatin1String("pms")
+                && normalizedValue.toLower() == QLatin1String("on")));
+    if (keysTransmitter && !m_txAllowed) {
+        return err(QStringLiteral("'link %1' keys the transmitter — set "
+                                  "AETHER_AUTOMATION_ALLOW_TX=1 to allow")
+                       .arg(normalizedAction));
+    }
+    return m_modemAutomationHandler(verb, normalizedAction, normalizedValue);
 }
 
 QJsonObject AutomationServer::doStreams(const QString& action)

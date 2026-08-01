@@ -116,27 +116,24 @@ constexpr auto kPmsWelcomeSetting = "AetherModemPmsWelcome";
 constexpr auto kPmsBeaconEnabledSetting = "AetherModemPmsBeaconEnabled";
 constexpr auto kPmsBeaconTextSetting = "AetherModemPmsBeaconText";
 
-// TNC Terminal settings keys (persisted in AppSettings).
-constexpr auto kTerminalMyCallSetting = "AetherModemTerminalMyCall";
-constexpr auto kTerminalLastCallSetting = "AetherModemTerminalLastCall";
-constexpr auto kTerminalTxTailSetting = "AetherModemTerminalTxTailMs";
-constexpr auto kTerminalRetrySecsSetting = "AetherModemTerminalRetrySecs";
-constexpr auto kTerminalMaxTriesSetting = "AetherModemTerminalMaxTries";
-constexpr auto kTerminalPaclenSetting = "AetherModemTerminalPaclen";
-constexpr auto kTerminalLogSetting = "AetherModemTerminalLogEnabled";
+// TNC Terminal settings live as ONE nested-JSON object under this key — see
+// TerminalSettings in the header (Principle V). The seven legacy flat keys it
+// replaced are read once by TerminalSettings::migrateLegacy() and then unused.
 // TXDELAY override in HDLC flags, 0 = the profile default. Exposed because the
 // preamble is the largest single term in the HF airtime budget (2.13 s of every
 // 5.07 s data frame and 3.30 s acknowledgement at 80 flags) and the only way to
 // find the right value is to sweep it on the air against measured frame error
 // rate. A knob rather than a constant so a sweep needs no rebuild per step.
 constexpr auto kTxPreambleFlagsSetting = "AetherModemTxPreambleFlags";
+constexpr auto kTerminalSettingsKey = "AetherModemTerminal";
+
 // 0 = Auto: derive T1 and paclen from the modem profile via Ax25LinkTiming.h.
 // Auto is the default because the previous fixed values (T1 6 s, paclen 128)
 // were sized for 1200-baud VHF and are physically impossible at 300 baud — T1
 // expired before the frame it was timing had finished transmitting. A non-zero
 // value is an explicit operator override and is honoured as-is, except when it
 // is below the modelled round trip for the active profile (see
-// migrateImpossibleTerminalTimers). See docs/HFMODEM.md §1.
+// overrideImpossibleT1ForProfile). See docs/HFMODEM.md §1.
 constexpr int kTerminalAutoTiming = 0;
 constexpr int kTerminalDefaultRetrySecs = kTerminalAutoTiming;
 constexpr int kTerminalDefaultMaxTries = 8;
@@ -547,6 +544,81 @@ void TncSettings::setPort(int p)
     QJsonObject o = readObj();
     o["port"] = QString::number(p);
     write(o);
+}
+
+// ---------------------------------------------------------------------------
+// TerminalSettings — the terminal's configuration as one nested object
+// ---------------------------------------------------------------------------
+
+TerminalSettings TerminalSettings::load()
+{
+    const QString json =
+        AppSettings::instance().value(kTerminalSettingsKey, QString{}).toString();
+    const QJsonObject o = json.isEmpty()
+        ? QJsonObject{}
+        : QJsonDocument::fromJson(json.toUtf8()).object();
+
+    TerminalSettings s;
+    s.myCall = o.value("myCall").toString(QString{});
+    s.lastCall = o.value("lastCall").toString(QString{});
+    s.retrySecs = o.value("retrySecs").toString(QString::number(kAuto)).toInt();
+    s.maxTries = o.value("maxTries").toString(QString::number(kDefaultMaxTries)).toInt();
+    s.paclen = o.value("paclen").toString(QString::number(kAuto)).toInt();
+    s.txTailMs = o.value("txTailMs").toString(QString::number(kDefaultTxTailMs)).toInt();
+    s.txPreambleFlags = o.value("txPreambleFlags").toString(QString::number(kAuto)).toInt();
+    s.logEnabled = o.value("logEnabled").toString(QStringLiteral("False"))
+        == QLatin1String("True");
+    return s;
+}
+
+void TerminalSettings::save() const
+{
+    QJsonObject o;
+    o["myCall"] = myCall;
+    o["lastCall"] = lastCall;
+    o["retrySecs"] = QString::number(retrySecs);
+    o["maxTries"] = QString::number(maxTries);
+    o["paclen"] = QString::number(paclen);
+    o["txTailMs"] = QString::number(txTailMs);
+    o["txPreambleFlags"] = QString::number(txPreambleFlags);
+    o["logEnabled"] = logEnabled ? QStringLiteral("True") : QStringLiteral("False");
+
+    auto& app = AppSettings::instance();
+    app.setValue(kTerminalSettingsKey,
+                 QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+    app.save();
+}
+
+void TerminalSettings::migrateLegacy()
+{
+    auto& app = AppSettings::instance();
+    if (app.contains(kTerminalSettingsKey))
+        return; // already migrated
+
+    // Read the legacy flat keys with the defaults the old code used. Note
+    // retrySecs and paclen migrate their OLD defaults (6 s / 128) rather than
+    // the new Auto: a stored value is an operator's value and is carried across
+    // as-is. A fresh profile has no flat keys at all and simply lands on the
+    // struct's Auto defaults, which is where we want new installs.
+    TerminalSettings s;
+    s.myCall = app.value("AetherModemTerminalMyCall", QString{}).toString();
+    s.lastCall = app.value("AetherModemTerminalLastCall", QString{}).toString();
+    s.retrySecs = app.value("AetherModemTerminalRetrySecs",
+                            QString::number(kAuto)).toString().toInt();
+    s.maxTries = app.value("AetherModemTerminalMaxTries",
+                           QString::number(kDefaultMaxTries)).toString().toInt();
+    s.paclen = app.value("AetherModemTerminalPaclen",
+                         QString::number(kAuto)).toString().toInt();
+    s.txTailMs = app.value("AetherModemTerminalTxTailMs",
+                           QString::number(kDefaultTxTailMs)).toString().toInt();
+    s.logEnabled = app.value("AetherModemTerminalLogEnabled",
+                             QStringLiteral("False")).toString() == QLatin1String("True");
+    // txPreambleFlags has no legacy key — it is new with the nested blob.
+    s.save();
+
+    // The legacy flat keys are left in place, exactly as TncSettings::
+    // migrateLegacy() does: AppSettings is XML and a future cleanup PR can drop
+    // them once no other reader touches them. The nested object is authoritative.
 }
 
 void TncSettings::migrateLegacy()
@@ -1305,9 +1377,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     // Restore TNC Terminal state.
     applyTerminalConfigFromUi(false);
-    const bool termLogOn = AppSettings::instance()
-        .value(kTerminalLogSetting, QStringLiteral("False")).toString()
-            == QStringLiteral("True");
+    const bool termLogOn = TerminalSettings::load().logEnabled;
     if (termLogOn && m_terminalLogEnable)
         m_terminalLogEnable->setChecked(true); // fires the toggled handler
     refreshTerminalStatus();
@@ -1424,7 +1494,7 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
     // they were typed into: switching between 300 baud HF and 1200 baud VHF
     // changes one I-frame's airtime by a factor of four.
     applyLinkTimingProfile();
-    migrateImpossibleTerminalTimers();
+    overrideImpossibleT1ForProfile();
     refreshStatus();
 }
 
@@ -1816,7 +1886,7 @@ void Ax25HfPacketDecodeDialog::applyLinkTimingProfile()
     }
 }
 
-void Ax25HfPacketDecodeDialog::migrateImpossibleTerminalTimers()
+void Ax25HfPacketDecodeDialog::overrideImpossibleT1ForProfile()
 {
     if (!m_terminal || !m_terminalRetrySecs)
         return;
@@ -1829,20 +1899,24 @@ void Ax25HfPacketDecodeDialog::migrateImpossibleTerminalTimers()
 
     // Below the modelled round trip T1 cannot succeed: it expires before the
     // peer's acknowledgement can physically arrive, so every I-frame
-    // retransmits and the link dies at N2. This is what a T1 persisted from the
-    // VHF-only defaults does on HF, so fix it rather than silently failing.
-    const QSignalBlocker block(m_terminalRetrySecs);
-    m_terminalRetrySecs->setValue(kTerminalAutoTiming);
+    // retransmits and the link dies at N2.
+    //
+    // Override the LINK only — the operator's stored value is left exactly as
+    // they set it. This runs on every profile change, so rewriting the setting
+    // would silently destroy a deliberate choice: an 8 s T1 is impossible on
+    // HF 300 but perfectly sensible on VHF 1200, and a single band switch would
+    // otherwise erase it for good with no way to get it back. The value is
+    // theirs; only its applicability to *this* profile is ours to judge, and
+    // switching back restores it.
     m_terminal->setRetryTimeoutMs(m_terminal->recommendedRetryTimeoutMs());
     appendSystemLine(QStringLiteral(
         "Retry timeout of %1 s is shorter than this profile's %2 ms round trip — "
-        "every frame would time out before the ack could arrive. Reset to Auto (%3 ms).")
+        "every frame would time out before the ack could arrive. Using %3 ms for "
+        "this profile; your setting is unchanged and applies again on a profile "
+        "where it fits.")
         .arg(overrideMs / 1000)
         .arg(modelRttMs)
         .arg(m_terminal->recommendedRetryTimeoutMs()));
-    AppSettings::instance().setValue(kTerminalRetrySecsSetting,
-        QString::number(kTerminalAutoTiming));
-    AppSettings::instance().save();
 }
 
 void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
@@ -2022,6 +2096,9 @@ void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
 
 void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, bool fromKiss)
 {
+    // Identifies this transmission to any deferred work armed on its behalf
+    // (see armTxStreamWaitTimeout).
+    ++m_txGeneration;
     m_txFromKiss = fromKiss;
     m_pendingTx = tx;
     m_txPcm = tx.stereoFloat32Pcm;
@@ -2085,9 +2162,14 @@ bool Ax25HfPacketDecodeDialog::hostModulatesTx() const
 
 void Ax25HfPacketDecodeDialog::armTxStreamWaitTimeout()
 {
-    QTimer::singleShot(kTxStreamWaitTimeoutMs, this, [this] {
-        if (!m_txPendingStream)
-            return; // the stream arrived (or the TX ended some other way)
+    // Stamp the transmission this timer belongs to. Keying only on
+    // m_txPendingStream would let TX #1's timer kill TX #2 if #1 ends and #2
+    // starts pending inside the same 5 s — reachable with a KISS queue draining
+    // back to back — and the failure message would be untrue of the transmit it
+    // aborted.
+    QTimer::singleShot(kTxStreamWaitTimeoutMs, this, [this, gen = m_txGeneration] {
+        if (!m_txPendingStream || gen != m_txGeneration)
+            return; // the stream arrived, or this belongs to an earlier transmit
         finishTransmit(true, QStringLiteral(
             "DAX TX stream did not arrive within %1 ms — this radio may have no "
             "DAX transport").arg(kTxStreamWaitTimeoutMs));
@@ -3207,30 +3289,25 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
     }
     connect(m_terminalLogEnable, &QCheckBox::toggled, this, [this](bool on) {
         m_terminal->setLogging(on);
-        AppSettings::instance().setValue(kTerminalLogSetting,
-            on ? QStringLiteral("True") : QStringLiteral("False"));
-        AppSettings::instance().save();
+        TerminalSettings s = TerminalSettings::load();
+        s.logEnabled = on;
+        s.save();
         // Logging may fail to start (e.g. unwritable dir); reflect reality.
         const QSignalBlocker block(m_terminalLogEnable);
         m_terminalLogEnable->setChecked(m_terminal->isLogging());
     });
 
-    // Restore persisted config.
-    m_terminalMyCall->setText(
-        AppSettings::instance().value(kTerminalMyCallSetting, QString()).toString());
-    m_lastDialedCall =
-        AppSettings::instance().value(kTerminalLastCallSetting, QString()).toString();
+    // Restore persisted config from the single nested object (Principle V).
+    TerminalSettings::migrateLegacy(); // no-op once the nested blob exists
+    const TerminalSettings saved = TerminalSettings::load();
+    m_terminalMyCall->setText(saved.myCall);
+    m_lastDialedCall = saved.lastCall;
     m_terminalTarget->setText(m_lastDialedCall); // last BBS, persisted across restarts
-    m_terminalRetrySecs->setValue(AppSettings::instance()
-        .value(kTerminalRetrySecsSetting, kTerminalDefaultRetrySecs).toInt());
-    m_terminalMaxTries->setValue(AppSettings::instance()
-        .value(kTerminalMaxTriesSetting, kTerminalDefaultMaxTries).toInt());
-    m_terminalPaclen->setValue(AppSettings::instance()
-        .value(kTerminalPaclenSetting, kTerminalDefaultPaclen).toInt());
-    m_terminalTxTail->setValue(AppSettings::instance()
-        .value(kTerminalTxTailSetting, kTxTailDefaultMs).toInt());
-    m_terminalTxPreamble->setValue(AppSettings::instance()
-        .value(kTxPreambleFlagsSetting, kTerminalAutoTiming).toInt());
+    m_terminalRetrySecs->setValue(saved.retrySecs);
+    m_terminalMaxTries->setValue(saved.maxTries);
+    m_terminalPaclen->setValue(saved.paclen);
+    m_terminalTxTail->setValue(saved.txTailMs);
+    m_terminalTxPreamble->setValue(saved.txPreambleFlags);
 
     refreshTerminalHeardCombo();
     return page;
@@ -3271,23 +3348,16 @@ void Ax25HfPacketDecodeDialog::applyTerminalConfigFromUi(bool persist)
     // the model", which is the default and the only sane choice on HF.
     applyLinkTimingProfile();
     if (persist) {
-        AppSettings::instance().setValue(kTerminalMyCallSetting, call);
-        if (m_terminalRetrySecs)
-            AppSettings::instance().setValue(kTerminalRetrySecsSetting,
-                QString::number(m_terminalRetrySecs->value()));
-        if (m_terminalMaxTries)
-            AppSettings::instance().setValue(kTerminalMaxTriesSetting,
-                QString::number(m_terminalMaxTries->value()));
-        if (m_terminalPaclen)
-            AppSettings::instance().setValue(kTerminalPaclenSetting,
-                QString::number(m_terminalPaclen->value()));
-        if (m_terminalTxTail)
-            AppSettings::instance().setValue(kTerminalTxTailSetting,
-                QString::number(m_terminalTxTail->value()));
-        if (m_terminalTxPreamble)
-            AppSettings::instance().setValue(kTxPreambleFlagsSetting,
-                QString::number(m_terminalTxPreamble->value()));
-        AppSettings::instance().save();
+        // One atomic replacement of the whole object rather than six
+        // independent writes (Principle XIV).
+        TerminalSettings s = TerminalSettings::load();
+        s.myCall = call;
+        if (m_terminalRetrySecs)   s.retrySecs = m_terminalRetrySecs->value();
+        if (m_terminalMaxTries)    s.maxTries = m_terminalMaxTries->value();
+        if (m_terminalPaclen)      s.paclen = m_terminalPaclen->value();
+        if (m_terminalTxTail)      s.txTailMs = m_terminalTxTail->value();
+        if (m_terminalTxPreamble)  s.txPreambleFlags = m_terminalTxPreamble->value();
+        s.save();
     }
     refreshTerminalStatus();
 }
@@ -3348,8 +3418,9 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
             m_lastDialedCall = peer;
             if (m_terminalTarget)
                 m_terminalTarget->setText(peer);
-            AppSettings::instance().setValue(kTerminalLastCallSetting, peer);
-            AppSettings::instance().save();
+            TerminalSettings s = TerminalSettings::load();
+            s.lastCall = peer;
+            s.save();
         }
     }
 }

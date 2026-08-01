@@ -2603,19 +2603,30 @@ full data-link snapshot.
           "link":{ ...same shape... }}}
 ```
 
+> ⚠️ **`link connect`, `link disconnect` and `link pms on` key the transmitter**
+> and are refused unless the app was launched with
+> `AETHER_AUTOMATION_ALLOW_TX=1` — the same rail as a keying `invoke`. A SABM, a
+> DISC, and a mailbox that answers callers and beacons are all RF. `link pms off`
+> is ungated because stopping the mailbox never keys, and `link status`,
+> `link mycall`, `link listen` and `link alias` never transmit.
+
 - **`link status`** (or bare `link`) — the block above, read-only.
 - **`link mycall <call>`** — set the terminal callsign (persisted).
-- **`link connect <call> [via <digi>[,<digi>]]`** — dial a BBS. Routed through
+- **`link connect <call> [via <digi>[,<digi>]]`** ⚠️ — dial a BBS. Routed through
   the terminal's own `CONNECT` parser, so VIA paths and callsign validation
   behave identically to a typed command. Returns `ok:false` if MYCALL is unset,
   a session is already up, or the parser rejected the callsign.
-- **`link disconnect`** — graceful DISC.
+- **`link disconnect`** ⚠️ — graceful DISC. Twice in a row is a hard drop that
+  transmits nothing, which is the escape hatch when a DISC retry storm is
+  keying for its full N2 budget.
 - **`link listen <call>` / `link alias <call>`** — the mailbox's listen and
   vanity callsigns (persisted). The mailbox cannot be enabled without a valid
   listen callsign.
-- **`link pms on|off`** — start/stop the mailbox. Like `modem on`, this
-  **verifies** the state took: a mailbox with no listen callsign silently
-  unchecks itself, and the verb reports that as an error naming the fix.
+- **`link pms on`** ⚠️ **`| off`** — start/stop the mailbox. `on` is gated: a
+  listening mailbox answers callers and beacons on its own, which is
+  transmitting without a human in the loop. Like `modem on`, this **verifies**
+  the state took: a mailbox with no listen callsign silently unchecks itself,
+  and the verb reports that as an error naming the fix.
 
 **`t1TooShort` is the headline field.** It is true once the link has measured
 round trips at or beyond its own T1 — meaning the timer expires before the ack
