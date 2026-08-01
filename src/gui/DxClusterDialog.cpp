@@ -4,6 +4,7 @@
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
+#include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
 #include "models/RadioModel.h"

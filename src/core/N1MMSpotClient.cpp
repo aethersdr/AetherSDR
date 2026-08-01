@@ -2,6 +2,7 @@
 #include "LogManager.h"
 
 #include <QStandardPaths>
+#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 
@@ -35,6 +36,14 @@ QString N1MMSpotClient::logFilePath() const
 void N1MMSpotClient::startListening(quint16 port)
 {
     if (m_listening) return;
+
+    // initialize() is normally queued onto the SpotClients thread at startup,
+    // but don't assume it has run — construct the socket here if not, so an
+    // early start can't null-deref. Safe either way: both entry points are
+    // invoked on this object's own thread, which is where the socket must be
+    // created (#1929).
+    if (!m_socket)
+        initialize();
 
     m_port = port;
 

@@ -18,6 +18,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"

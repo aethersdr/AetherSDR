@@ -69,7 +69,9 @@ bool parsePacket(const QByteArray& data, N1mmSpot& outSpot, QString& outAction)
     if (!ts.isEmpty()) {
         QDateTime dt = QDateTime::fromString(ts, "yyyy-MM-dd HH:mm:ss");
         if (dt.isValid()) {
-            dt.setTimeZone(QTimeZone::UTC);
+            // QTimeZone::utc() rather than the Qt 6.5+ QTimeZone::UTC constant —
+            // the Linux CI image builds against an older Qt 6.
+            dt.setTimeZone(QTimeZone::utc());
             spot.timestamp = dt;
         }
     }
