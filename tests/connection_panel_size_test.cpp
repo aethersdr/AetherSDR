@@ -10,10 +10,12 @@
 #include <QComboBox>
 #include <QFont>
 #include <QLabel>
+#include <QLayout>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpacerItem>
 #include <QStyle>
 #include <QToolButton>
 
@@ -322,29 +324,59 @@ int main(int argc, char** argv)
     // recovers; without the second half a deliberately short window springs
     // back on every reopen.
     //
-    // Run at 150 %, because that is where the fixed 660 px opening height was
-    // short of the body — at 100 % it happens to be enough and growth would go
-    // untested.
+    // Font scaling is not a deterministic way to reach the growth branch: the
+    // platform font and style metrics may still fit at the nominal opening
+    // height. Instead, first let fitToScreen() own the current height, then
+    // make the scroll body's preferred height exceed it while the offscreen
+    // work area still has room. This proves the precondition as behaviour (a
+    // scrollbar before the re-fit), rather than assuming a particular metric.
     {
-        std::string fontDetail;
-        setScaledApplicationFont(app, originalFont, 1.5, &fontDetail);
         ConnectionPanel growPanel;
         growPanel.setFramelessMode(true);
         growPanel.show();
         QApplication::processEvents();
         growPanel.fitToScreen(screen);
         QApplication::processEvents();
-        const int autoHeight = growPanel.height();
+        const int initialAutoHeight = growPanel.height();
         QScrollArea* body = growPanel.findChild<QScrollArea*>(
             QStringLiteral("connectionBodyScrollArea"));
+        QWidget* bodyContent = growPanel.findChild<QWidget*>(
+            QStringLiteral("connectionBodyContent"));
+
+        const int availableHeight =
+            screen ? screen->availableGeometry().height() : initialAutoHeight;
+        const int forcedPreferredHeight =
+            qMin(initialAutoHeight + 40, availableHeight);
+        if (body && bodyContent && bodyContent->layout()) {
+            const int chromeHeight =
+                growPanel.sizeHint().height() - body->sizeHint().height();
+            const int naturalPreferredHeight =
+                chromeHeight + bodyContent->sizeHint().height();
+            bodyContent->layout()->addItem(new QSpacerItem(
+                0,
+                qMax(1, forcedPreferredHeight - naturalPreferredHeight),
+                QSizePolicy::Minimum,
+                QSizePolicy::Fixed));
+            QApplication::processEvents();
+        }
+        report("growth setup overflows an auto-fit-owned height",
+               forcedPreferredHeight > initialAutoHeight && body
+                   && body->verticalScrollBar()->maximum() > 0,
+               "height=" + std::to_string(initialAutoHeight) + " target="
+                   + std::to_string(forcedPreferredHeight) + " vbarMax="
+                   + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
+
+        growPanel.fitToScreen(screen);
+        QApplication::processEvents();
+        const int autoHeight = growPanel.height();
         report("auto-sized panel opens without needing to scroll",
                body && body->verticalScrollBar()->maximum() == 0,
                "height=" + std::to_string(autoHeight) + " vbarMax="
                    + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
-        report("auto-sized panel grows past the nominal opening height",
-               autoHeight > ConnectionPanel::kPreferredHeight,
-               "height=" + std::to_string(autoHeight) + " kPreferredHeight="
-                   + std::to_string(ConnectionPanel::kPreferredHeight));
+        report("auto-sized panel grows from its prior auto-fit height",
+               autoHeight > initialAutoHeight,
+               "height=" + std::to_string(autoHeight) + " initialAutoHeight="
+                   + std::to_string(initialAutoHeight));
 
         // Simulate the operator dragging it short, then reopening.
         growPanel.resize(growPanel.width(), ConnectionPanel::kSafeMinimumHeight);
