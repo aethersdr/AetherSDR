@@ -2720,6 +2720,16 @@ target_include_directories(hl2_link_stats_test PRIVATE src tests)
 target_link_libraries(hl2_link_stats_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_link_stats_test COMMAND hl2_link_stats_test)
 
+# The CONSUMER half of the same seam. The backend can publish a perfect snapshot
+# while every readout downstream still lies, so this drives a real RadioModel
+# against a fake HL2: the readouts leaving their structural zero, the
+# absent-vs-zero predicates on BOTH sides of the disconnect edge, and the
+# per-session reset the two scoring-session entry points share.
+add_executable(hl2_link_stats_model_test tests/hl2_link_stats_model_test.cpp)
+target_include_directories(hl2_link_stats_model_test PRIVATE src tests)
+target_link_libraries(hl2_link_stats_model_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_link_stats_model_test COMMAND hl2_link_stats_model_test)
+
 # HL2 receiver churn — add/close receivers against a LIVE EP6 stream. The only
 # test that puts the m_rx reshape and the I/O-thread fan-out in contention, which
 # is what lets the weekly TSan job (.github/workflows/sanitizers.yml) exercise the

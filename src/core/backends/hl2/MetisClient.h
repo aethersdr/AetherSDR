@@ -89,9 +89,20 @@ public:
         // reported as if it were still happening. Negative = nothing measured.
         int meanGapMs = -1;
         int maxGapMs = -1;
-        QString localEndpoint;      // "ip:port" of our bound socket
+        // "ip:port" of our bound socket. The address is the one the KERNEL
+        // delivered on, taken from the first datagram that carries a
+        // destination — a wildcard bind knows only the port, and "0.0.0.0"
+        // names no interface to an operator debugging a multi-homed host.
+        // "*:<port>" until (or unless) the platform supplies it.
+        QString localEndpoint;
     };
-    [[nodiscard]] const LinkCounters& linkCounters() const noexcept { return m_link; }
+    // I/O-THREAD ONLY, exactly like droppedPackets(): m_link is written from the
+    // receive path and this object lives on the I/O thread. Returned BY VALUE
+    // rather than by reference because LinkCounters holds a QString — handing out
+    // a reference to one that another thread is assigning is an implicit-sharing
+    // refcount race, not merely a torn integer. GUI-thread consumers read the
+    // copy Hl2Backend mirrors from linkCountersUpdated instead.
+    [[nodiscard]] LinkCounters linkCounters() const { return m_link; }
 
     // Blocking discovery broadcast; returns HPSDR/HL2 replies (deduped by MAC)
     // seen within timeoutMs. Safe to call before start().
@@ -265,9 +276,13 @@ private slots:
 
 private:
     void sendControlPacket();           // one round-robin EP2 C&C packet
-    // Accumulate one socket wakeup into the gap window and publish the counters
-    // if the window has elapsed.
+    // Accumulate one socket wakeup into the gap window. Called at the TOP of
+    // onReadyRead, because the instant the wakeup happened is what it measures.
     void accountReceiveWakeup();
+    // Emit the counters if the publish window has elapsed. Called at the END of
+    // onReadyRead, because the byte and packet totals are only true once this
+    // wakeup's datagrams have been drained and counted.
+    void publishLinkCountersIfDue();
     // Meter one outgoing datagram. Takes the socket's return value, so a write
     // the kernel refused is not counted as traffic that left the host.
     void countTx(qint64 bytesWritten) noexcept;
@@ -364,6 +379,7 @@ private:
 
     // ---- transport counters (see LinkCounters) ----
     LinkCounters  m_link;
+    bool          m_linkEndpointResolved = false;   // a datagram named our local address
     QElapsedTimer m_linkWindowClock;    // time since the last publish
     QElapsedTimer m_sinceLastWakeup;    // socket wakeup spacing
     int           m_linkWindowWakeups = 0;

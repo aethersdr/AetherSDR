@@ -58,10 +58,11 @@
 
 namespace AetherSDR {
 
-// Shown wherever a latency figure is displayed on a transport that has no round
-// trip to time. Distinct from "0" on purpose — a measurement of nothing and the
-// absence of a measurement are different claims about the link.
-const QString kRttNotMeasured = QStringLiteral("not measured on this link");
+// Shown wherever a figure is displayed that THIS transport cannot produce —
+// latency on a stream with no round trip to time, delivery spacing before the
+// first timing window has closed. Distinct from "0" on purpose: a measurement of
+// nothing and the absence of a measurement are different claims about the link.
+const QString kNotMeasuredOnLink = QStringLiteral("not measured on this link");
 
 constexpr const char* kNetworkDiagnosticsStyle = R"(
 QWidget {
@@ -3248,7 +3249,7 @@ void NetworkDiagnosticsDialog::refresh()
     const int rtt = m_model->lastPingRtt();
     const QString rttText = haveRtt
         ? (rtt < 1 ? QStringLiteral("< 1 ms") : QStringLiteral("%1 ms").arg(rtt))
-        : kRttNotMeasured;
+        : kNotMeasuredOnLink;
     m_rttLabel->setText(rttText);
     m_overviewStatusValue->setText(m_model->networkQuality());
     m_overviewLatencyValue->setText(haveRtt ? rttText : QStringLiteral("n/a"));
@@ -3256,7 +3257,7 @@ void NetworkDiagnosticsDialog::refresh()
     const int maxRtt = m_model->maxPingRtt();
     m_maxRttLabel->setText(
         haveRtt ? (maxRtt < 1 ? QStringLiteral("< 1 ms") : QStringLiteral("%1 ms").arg(maxRtt))
-                : kRttNotMeasured);
+                : kNotMeasuredOnLink);
 
     // Per-category rates
     static constexpr PanadapterStream::StreamCategory cats[] = {
@@ -3343,9 +3344,18 @@ void NetworkDiagnosticsDialog::refresh()
         m_audioUnderrunLabel->setText(QString::number(underruns));
         m_audioUnderrunRateLabel->setText(QString::number(sample.underrunsPerSecond, 'f', 0));
 
-        m_audioPacketGapLabel->setText(formatMsValue(m_model->audioPacketGapMs()));
-        m_audioPacketGapMaxLabel->setText(formatMsValue(m_model->audioPacketGapMaxMs()));
-        m_audioJitterLabel->setText(formatMsValue(m_model->audioPacketJitterMs()));
+        // formatMsValue(0) is "< 1 ms", and the model clamps the seam's
+        // "not measured" sentinel to 0 so the charts stay numeric — so these
+        // three ask the same question the RTT rows above do before printing.
+        // A backend is `reported` from its first tick, a second before its first
+        // delivery-timing window closes.
+        const bool haveTiming = m_model->hasLinkTiming();
+        m_audioPacketGapLabel->setText(
+            haveTiming ? formatMsValue(m_model->audioPacketGapMs()) : kNotMeasuredOnLink);
+        m_audioPacketGapMaxLabel->setText(
+            haveTiming ? formatMsValue(m_model->audioPacketGapMaxMs()) : kNotMeasuredOnLink);
+        m_audioJitterLabel->setText(
+            haveTiming ? formatMsValue(m_model->audioPacketJitterMs()) : kNotMeasuredOnLink);
         m_audioStreamLabel->setText(formatAudioStream(sample, sliceLabels));
         m_audioFeedRateLabel->setText(formatFeedRate(sample.audioFeedRateHz, sample.audioStreamCount));
         m_audioFeedDeficitLabel->setText(formatFeedDeficit(sample.audioFeedDeficitMs));

@@ -1069,16 +1069,30 @@ void RadioModel::applyBackendLinkStats(const IRadioBackend::LinkStats& stats)
 
     const bool first = !m_linkStats.reported;
     m_linkStats = stats;
+    // What this transport can MEASURE, latched separately from what it measured
+    // this second. Sticky-once-true so a window that closes with no samples in
+    // it does not flip a readout back to "not measured" mid-session, and read by
+    // hasLinkRtt() / hasLinkTiming() after stopNetworkMonitor() has dropped the
+    // counters. See the member declaration for why the distinction matters.
+    m_backendLinkShape.reports = true;
+    if (stats.rttMs >= 0)
+        m_backendLinkShape.hasRtt = true;
+    if (stats.gapMs >= 0)
+        m_backendLinkShape.hasTiming = true;
+
     if (first) {
-        // First snapshot of the session. resetNetworkHealthSamples() now reads
-        // the new source, so the deltas are seeded from THIS snapshot rather
-        // than from zero — otherwise a reconnect's entire prior packet count
-        // lands in the first loss-window sample and scores the link as a
-        // catastrophe on its first second.
-        m_netState = NetState::Excellent;
-        m_networkQualityScore = 100.0;
-        m_maxPingRtt = 0;
-        resetNetworkHealthSamples();
+        // First snapshot of the session. resetNetworkHealthSamples() (called
+        // from the shared reset) now reads the new source, so the deltas are
+        // seeded from THIS snapshot rather than from zero — otherwise a
+        // reconnect's entire prior packet count lands in the first loss-window
+        // sample and scores the link as a catastrophe on its first second.
+        //
+        // Shared with startNetworkMonitor() rather than open-coded: the two
+        // drifted once, and the field this path had forgotten (m_lastPingRtt)
+        // is invisible on a transport that reports rttMs < 0, so the previous
+        // Flex session's RTT scored the HL2 link with nothing on screen to
+        // contradict it.
+        resetNetworkQualitySession();
     }
 
     if (stats.rttMs >= 0)
@@ -1125,6 +1139,10 @@ void RadioModel::teardownBackend()
     m_backendPanIdByIndex.clear();
     m_backendPanCenterMhz.clear();
     m_backendPanBandwidthMhz.clear();
+    // What the transport could measure was a fact about the backend that just
+    // died, not about the app. A Flex arriving after an HL2 must not inherit
+    // "this wire has no round trip to time".
+    m_backendLinkShape = {};
 }
 
 RadioModel::RadioModel(QObject* parent)
@@ -5616,20 +5634,41 @@ int saturatingInt(quint64 v)
 }
 }  // namespace
 
+void RadioModel::resetNetworkQualitySession()
+{
+    // Everything a new scoring session must forget, in ONE place. Two paths
+    // start a session — startNetworkMonitor() for the Flex ping timer, and the
+    // first backend LinkStats snapshot for a family that has no command plane —
+    // and when this was open-coded in both they drifted: the backend path kept
+    // the previous session's m_lastPingRtt, which evaluateNetworkQuality() then
+    // scored the new link with. A stale WAN RTT against LAN_PING_POOR_MS caps
+    // the target score at 45 and engages the adaptive frame-rate throttle on a
+    // radio that is streaming perfectly, and hasLinkRtt() hides the number, so
+    // nothing on screen contradicts it.
+    m_netState = NetState::Excellent;
+    m_networkQualityScore = 100.0;
+    m_lastPingRtt = 0;
+    m_maxPingRtt = 0;
+    // Pure state, so it is safe on both paths. The MainWindow-side clear that
+    // startNetworkMonitor() emits below is deliberately NOT here: MainWindow
+    // already drops m_adaptiveThrottleActive on the disconnect edge, and the
+    // handler's !active branch re-asserts every pan's display rate — which on
+    // the backend path would fire against LIVE pans (they are published a
+    // second before the first link-stats tick), making the client re-assert
+    // state the radio owns. Principles II/III.
+    m_pendingThrottleLift = false;
+    resetNetworkHealthSamples();
+}
+
 void RadioModel::startNetworkMonitor()
 {
     m_pingTimer.stop();
     m_pingTimer.disconnect();
-    m_netState = NetState::Excellent;
-    m_networkQualityScore = 100.0;
-    resetNetworkHealthSamples();
-    m_lastPingRtt = 0;
-    m_maxPingRtt = 0;
+    resetNetworkQualitySession();
     m_pingMissCount = 0;
     m_pingDisconnectTriggered = false;
     m_lastMultiFlexClientConnectMs = 0;
     m_multiFlexPingGraceUntilMs = 0;
-    m_pendingThrottleLift = false;
     // Safety: ensure MainWindow's m_adaptiveThrottleActive is cleared even if
     // the connectionStateChanged(false) path was somehow skipped.  Pans are not
     // yet rebuilt at this point so the fps-restore loop in the handler is a no-op.
@@ -5854,13 +5893,19 @@ double RadioModel::networkQualityTargetScore(int pingMs) const
         }
     }
 
-    const int jitterMs = audioPacketJitterMs();
-    if (jitterMs >= poorJitterMs) {
-        score = std::min(score, 42.0);
-    } else if (jitterMs >= fairJitterMs) {
-        score = std::min(score, 58.0);
-    } else if (jitterMs >= goodJitterMs) {
-        score = std::min(score, 74.0);
+    // Skipped rather than scored as 0 when the transport has not produced a
+    // delivery-timing window yet: the getter clamps the seam's "not measured"
+    // sentinel to 0 for the charts, and a 0 here is the best possible jitter —
+    // a free pass on the first tick of every backend session.
+    if (hasLinkTiming()) {
+        const int jitterMs = audioPacketJitterMs();
+        if (jitterMs >= poorJitterMs) {
+            score = std::min(score, 42.0);
+        } else if (jitterMs >= fairJitterMs) {
+            score = std::min(score, 58.0);
+        } else if (jitterMs >= goodJitterMs) {
+            score = std::min(score, 74.0);
+        }
     }
 
     return score;
@@ -9678,6 +9723,7 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     // and an assertion that reads it without this would pass on a link nothing
     // measured. Same question the GUI readouts ask before printing "< 1 ms".
     network["rtt_measured"] = hasLinkRtt();
+    network["timing_measured"] = hasLinkTiming();
     network["stream_categories_measured"] = hasStreamCategoryStats();
     network["source"] = usesBackendLinkStats() ? QStringLiteral("backend_link")
                                                : QStringLiteral("vita49_stream");

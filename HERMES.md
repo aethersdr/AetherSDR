@@ -2839,10 +2839,28 @@ transport carrying everything in one stream has no such split, and five rows of
 `0 / 0 packets` read as five dead streams rather than as a distinction that
 does not apply.
 
+`hasLinkTiming()` is the third, and it exists because a backend is `reported`
+from its *first* tick on purpose — otherwise the consumer's first second keeps
+the Flex sources and renders the blank readout this whole path exists to fix.
+But `MetisClient` only fills the gap figures when a publish window closes with
+samples in it, so for about a second `gapMs` is `-1` while `reported` is already
+true. The model clamps that `-1` to `0` so the charts stay numeric, and `0` is
+`< 1 ms` again. Same trap, one field over.
+
 **The rule this generalises to:** when a readout is ported to a transport that
 cannot produce one of its figures, the figure must render as *absent*, not as
 zero. A measurement of nothing and the absence of a measurement are different
 claims about the link, and only one of them is true.
+
+**And the corollary that is easy to miss:** these predicates answer for the
+*wire*, not for the moment. `stopNetworkMonitor()` drops the snapshot on
+disconnect — those counters belong to the session that ended — but "this
+transport has no round trip to time" stays true while the transport is down. A
+predicate derived from the live snapshot alone flips back to the Flex default
+the instant the session ends, and the pane an operator left open goes from
+`n/a` to `< 1 ms` on a radio that is not even connected. `RadioModel` latches
+the transport's *shape* (`BackendLinkShape`) separately from its counters, and
+the shape dies with the backend, not with the session.
 
 ### 21.4 What IS measurable, and how it is scored
 
@@ -2887,6 +2905,11 @@ Against the HL2 at 192.168.1.21, RX-only:
   1 ms, RTT `not measured on this link` in all four places.
 
 `hl2_link_stats_test` covers the seam contract, including the silent-link case
-and the honesty invariant. Per §7 that is necessary and not sufficient — but
-the RTT and category predicates are decisions about what we *refuse* to claim,
-which is one of the few things a fixture can check honestly.
+and the honesty invariant. `hl2_link_stats_model_test` covers the half that is
+downstream of it, because the backend can publish a perfect snapshot while every
+readout still lies: it drives a real `RadioModel` against a fake HL2 and pins the
+readouts leaving their structural zero, the predicates on **both** sides of the
+disconnect edge, and the per-session reset the two scoring-session entry points
+share. Per §7 that is necessary and not sufficient — but the RTT and category
+predicates are decisions about what we *refuse* to claim, which is one of the few
+things a fixture can check honestly.

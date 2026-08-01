@@ -239,12 +239,19 @@ bool MetisClient::start(const Params& params)
 
     // Counters belong to the SESSION, so they are zeroed here rather than in the
     // constructor: a reconnect must not present the previous link's byte totals
-    // as this one's. The endpoint is captured now because it is only knowable
-    // after the bind, and it does not change for the life of the socket.
+    // as this one's.
+    //
+    // The port is knowable now; the ADDRESS is not. The bind above is a wildcard,
+    // so localAddress() answers 0.0.0.0 — which names no interface to an operator
+    // debugging a multi-homed host, where the Flex readout shows a real one in the
+    // same field. Which interface actually reaches the radio is a routing decision
+    // the kernel makes per datagram, and receiveDatagram() already asks for that
+    // metadata, so onReadyRead() upgrades this from the first datagram that
+    // carries a destination. "*" states the wildcard in the meantime rather than
+    // dressing it up as an address.
     m_link = LinkCounters{};
-    m_link.localEndpoint = QStringLiteral("%1:%2")
-                               .arg(m_socket->localAddress().toString())
-                               .arg(m_socket->localPort());
+    m_link.localEndpoint = QStringLiteral("*:%1").arg(m_socket->localPort());
+    m_linkEndpointResolved = false;
     m_linkWindowClock.restart();
     m_sinceLastWakeup.invalidate();
     m_linkWindowWakeups = 0;
@@ -707,7 +714,10 @@ void MetisClient::accountReceiveWakeup()
         m_linkWindowGapMaxUs = std::max(m_linkWindowGapMaxUs, gapUs);
     }
     m_sinceLastWakeup.restart();
+}
 
+void MetisClient::publishLinkCountersIfDue()
+{
     if (m_linkWindowClock.isValid() && m_linkWindowClock.elapsed() < kLinkPublishIntervalMs)
         return;
 
@@ -743,6 +753,20 @@ void MetisClient::onReadyRead()
         // total that silently omits traffic is worse than one that includes a
         // stray discovery reply.
         m_link.rxBytes += static_cast<quint64>(dg.data().size());
+
+        // The local address the kernel actually delivered on, which a wildcard
+        // bind cannot tell us (see start()). Latched once: it is a routing fact
+        // about this socket, and re-testing it per datagram would cost a string
+        // compare on the hot path for an answer that does not change.
+        if (!m_linkEndpointResolved) {
+            const QHostAddress dest = dg.destinationAddress();
+            if (!dest.isNull()) {
+                m_link.localEndpoint = QStringLiteral("%1:%2")
+                                           .arg(dest.toString())
+                                           .arg(m_socket->localPort());
+                m_linkEndpointResolved = true;
+            }
+        }
 
         const auto seq = ep6Seq(bytes);
         if (!seq)
@@ -820,6 +844,12 @@ void MetisClient::onReadyRead()
             emit iqBlocksReady(m_blocks);
         }
     }
+
+    // AFTER the drain, not before it. The gap sample belongs to the wakeup and is
+    // taken at the top, but the byte and packet totals only become true once the
+    // datagrams behind this wakeup have been counted — publishing first shipped a
+    // snapshot that was one full drain out of date.
+    publishLinkCountersIfDue();
 }
 
 }  // namespace AetherSDR::hl2

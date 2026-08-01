@@ -170,13 +170,22 @@ QString buildNetworkTooltip(const RadioModel& model,
         html += networkTooltipRow(QStringLiteral("Current RTT"),
                                   kNetworkNotMeasured);
     }
-    html += networkTooltipRow(QStringLiteral("Network jitter"),
-                              formatNetworkMs(model.audioPacketJitterMs()));
-    html += networkTooltipRow(
-        QStringLiteral("Audio gap"),
-        QStringLiteral("%1 · max %2")
-            .arg(formatNetworkMs(model.audioPacketGapMs()),
-                 formatNetworkMs(model.audioPacketGapMaxMs())));
+    // Same rule, one field over. A backend is `reported` from its first tick on
+    // purpose, but its first delivery-timing window has not closed yet, and the
+    // getters clamp that "not measured" sentinel to 0 for the charts — which
+    // reads here as the best delivery the app can display.
+    if (model.hasLinkTiming()) {
+        html += networkTooltipRow(QStringLiteral("Network jitter"),
+                                  formatNetworkMs(model.audioPacketJitterMs()));
+        html += networkTooltipRow(
+            QStringLiteral("Audio gap"),
+            QStringLiteral("%1 · max %2")
+                .arg(formatNetworkMs(model.audioPacketGapMs()),
+                     formatNetworkMs(model.audioPacketGapMaxMs())));
+    } else {
+        html += networkTooltipRow(QStringLiteral("Network jitter"), kNetworkNotMeasured);
+        html += networkTooltipRow(QStringLiteral("Audio gap"), kNetworkNotMeasured);
+    }
 
     html += networkTooltipSection(QStringLiteral("PACKET INTEGRITY"));
     html += networkTooltipRow(

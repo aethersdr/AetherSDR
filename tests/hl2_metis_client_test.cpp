@@ -109,13 +109,30 @@ int main(int argc, char** argv)
     QSignalSpy linkSpy(&client, &MetisClient::linkCountersUpdated);
     spin(1200);
     check(linkSpy.count() >= 1, "linkCountersUpdated published on its window");
-    const MetisClient::LinkCounters& lc = client.linkCounters();
+    // By value: the accessor is I/O-thread-only and hands out a copy, because a
+    // reference to a struct holding a QString is a refcount race, not a read.
+    const MetisClient::LinkCounters lc = client.linkCounters();
     check(lc.rxPackets > 0, "EP6 packets counted");
     check(lc.rxBytes >= lc.rxPackets * kUsbPacketSize, "received bytes counted");
     // EP2 is paced off a wall clock, so it flows regardless of what comes back.
     check(lc.txPackets > 0 && lc.txBytes > 0, "sent datagrams counted");
     check(lc.drops == 0, "ordered loopback stream loses nothing");
     check(!lc.localEndpoint.isEmpty(), "bound local endpoint captured");
+    // The socket is bound wildcard, so localAddress() is 0.0.0.0 and naming it
+    // would tell an operator nothing about which interface reaches the radio.
+    // The kernel knows, per datagram, and ReceivePacketDestinationAddress is how
+    // we ask — on loopback that resolves to 127.0.0.1. If a platform refuses the
+    // option the endpoint stays "*:<port>", which is at least not a claim.
+    check(!lc.localEndpoint.startsWith(QStringLiteral("0.0.0.0")),
+          "local endpoint is not the wildcard address a bare bind reports");
+    check(lc.localEndpoint.startsWith(QStringLiteral("127.0.0.1:")),
+          "local endpoint resolves to the interface the datagrams arrived on");
+    // Published AFTER the drain that carries them: a snapshot emitted before the
+    // wakeup's own datagrams were counted is one full drain out of date.
+    const auto& published = qvariant_cast<MetisClient::LinkCounters>(
+        linkSpy.at(linkSpy.count() - 1).at(0));
+    check(published.rxPackets > 0,
+          "the published snapshot carries the packets of its own drain");
     // Timed once per socket wakeup, not once per datagram: successive datagrams
     // inside one drain are microseconds apart no matter how the link behaves, so
     // per-datagram timing would report a steady 0 ms straight through a stall.
