@@ -68,7 +68,8 @@ public:
         quint32 iSent{0};        // new I-frames transmitted
         quint32 iResent{0};      // I-frame retransmissions (T1 / REJ recovery)
         quint32 iRcvd{0};        // in-sequence I-frames accepted
-        quint32 iDropped{0};     // out-of-sequence I-frames discarded
+        quint32 iDropped{0};     // out-of-sequence I-frames discarded (real gap)
+        quint32 iDuplicate{0};   // already-received I-frames re-acked (our ack was lost)
         quint32 rrRcvd{0};       // RR received from peer
         quint32 rnrRcvd{0};      // RNR (peer busy) received
         quint32 rejRcvd{0};      // REJ received from peer
@@ -242,6 +243,10 @@ private:
     // the same as "a frame arrived": a peer repeating a stale RR proves nothing
     // and must not be allowed to hold us below N2 forever.
     void noteLinkProgress();
+    // True when N(S) names a frame we have already accepted — the peer's copy
+    // of our acknowledgement was lost. Distinct from a sequence gap, and it
+    // must be answered rather than silently dropped.
+    bool isDuplicateIFrame(int ns) const;
     void recordRttSample(int seq);   // Karn-safe RTT capture on ack
     void logSessionOpen();
     void logSessionClose(bool byPeer);

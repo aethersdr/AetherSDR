@@ -103,6 +103,16 @@ void Ax25Connection::onT3Timeout()
     startT1();
 }
 
+bool Ax25Connection::isDuplicateIFrame(int ns) const
+{
+    // Split the mod-8 sequence ring into "ahead of V(R)" (a real gap — we
+    // missed something and the peer has moved on) and "behind V(R)" (a frame we
+    // already took). The halfway split is the standard rule and holds for any
+    // window size, so it stays correct if MAXFRAME ever rises above 1.
+    const int ahead = (ns - m_vr + 8) % 8;
+    return ahead >= 4;
+}
+
 void Ax25Connection::noteLinkProgress()
 {
     m_retryCount = 0;
@@ -161,8 +171,9 @@ QString Ax25Connection::sessionSummary() const
     const quint32 totalSent = m_stats.iSent + m_stats.iResent;
     return QStringLiteral(
         "durationS=%1 txBytes=%2 rxBytes=%3 throughputBps=%4 iSent=%5 iResent=%6 "
-        "resentPct=%7 iRcvd=%8 iDropped=%9 rejSent=%10 rejRcvd=%11 t1Timeouts=%12 "
-        "t3Polls=%13 rttMinMs=%14 rttAvgMs=%15 rttMaxMs=%16 samples=%17 t1Ms=%18")
+        "resentPct=%7 iRcvd=%8 iDropped=%9 iDuplicate=%19 rejSent=%10 rejRcvd=%11 "
+        "t1Timeouts=%12 t3Polls=%13 rttMinMs=%14 rttAvgMs=%15 rttMaxMs=%16 samples=%17 "
+        "t1Ms=%18")
         .arg(seconds)
         .arg(m_stats.infoBytesSent)
         .arg(m_stats.infoBytesReceived)
@@ -180,7 +191,8 @@ QString Ax25Connection::sessionSummary() const
         .arg(m_stats.averageRttMs())
         .arg(m_stats.rttMaxMs)
         .arg(m_stats.rttSamples)
-        .arg(m_t1Ms);
+        .arg(m_t1Ms)
+        .arg(m_stats.iDuplicate);
 }
 
 void Ax25Connection::logSessionOpen()
@@ -531,6 +543,26 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
                     startT2();
                 }
             }
+        } else if (isDuplicateIFrame(frame.ns)) {
+            // A frame we have ALREADY accepted, sent again. That means our
+            // acknowledgement was lost, not the data — so re-send the ack.
+            //
+            // This case used to fall into the reject-exception branch below and
+            // be answered with silence, which is a guaranteed deadlock: the peer
+            // retransmits on T1, we refuse to answer because N(S) != V(R), it
+            // retransmits again, and the link dies at N2 with both ends
+            // individually behaving "correctly". Observed on the air
+            // 2026-07-31 — one lost RR ended every session at exactly the same
+            // point, with the far end decoding all nine retransmissions
+            // perfectly and deliberately saying nothing.
+            //
+            // Answer immediately rather than deferring via T2: with a
+            // retransmission the peer has finished its burst and is listening
+            // for precisely this.
+            ++m_stats.iDuplicate;
+            emit activity(QStringLiteral("Duplicate I NS=%1 (ack lost) — re-acking N(R)=%2")
+                .arg(frame.ns).arg(m_vr));
+            sendAck(/*pollFinal=*/frame.pollFinal);
         } else {
             // Out of sequence. Send REJ exactly ONCE per gap (reject exception),
             // then discard further out-of-sequence frames SILENTLY — even polled

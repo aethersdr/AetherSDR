@@ -410,6 +410,89 @@ static void testResetDropsSilently()
     CHECK(!link.idlePollArmed(), "and leaves no timer armed");
 }
 
+// THE deadlock. A lost acknowledgement must not be able to kill a link on which
+// every frame is being received perfectly. Reproduces the on-air failure of
+// 2026-07-31: the far end decoded all nine retransmissions at conf ~1.0 and
+// deliberately answered none of them, because N(S) != V(R) put a *duplicate*
+// into the out-of-sequence branch, where the reject exception then silenced it.
+static void testLostAckIsRecoveredNotDeadlocked()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+
+    QVector<Frame> sent;
+    QByteArray received;
+    QObject::connect(&link, &Ax25Connection::sendFrame, [&](const QByteArray& raw) {
+        if (auto f = Frame::decode(raw))
+            sent.append(*f);
+    });
+    QObject::connect(&link, &Ax25Connection::dataReceived,
+                     [&](const QByteArray& d) { received += d; });
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+
+    // Peer's first I-frame, polled. We accept it and acknowledge.
+    sent.clear();
+    link.onFrameReceived(Frame::makeI(call("N0PMS-1"), call("K7ABC"), /*ns=*/0, /*nr=*/0,
+                                      /*pf=*/true, QByteArrayLiteral("greeting")));
+    CHECK(received == QByteArrayLiteral("greeting"), "first copy delivers its data");
+    CHECK(link.recvSeq() == 1, "V(R) advanced");
+    auto acks = [&] {
+        int n = 0;
+        for (const Frame& f : sent)
+            if (f.type == FrameType::RR && f.nr == 1) ++n;
+        return n;
+    };
+    CHECK(acks() == 1, "we acknowledge it");
+
+    // That RR is lost on the air. The peer retransmits the SAME frame four
+    // times, exactly as T1 tells it to. Every one must draw a fresh ack.
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        sent.clear();
+        link.onFrameReceived(Frame::makeI(call("N0PMS-1"), call("K7ABC"), /*ns=*/0, /*nr=*/0,
+                                          /*pf=*/true, QByteArrayLiteral("greeting")));
+        CHECK(acks() == 1,
+              "a retransmitted frame is re-acknowledged, not answered with silence");
+    }
+
+    CHECK(received == QByteArrayLiteral("greeting"),
+          "the duplicate payload is delivered exactly once");
+    CHECK(link.stats().iDuplicate == 4, "duplicates are counted as such");
+    CHECK(link.stats().iDropped == 0, "a duplicate is not a sequence gap");
+    CHECK(link.isConnected(), "the link survives a lost acknowledgement");
+}
+
+// The reject exception must still hold for a REAL gap — that behaviour exists
+// because answering every polled retransmit made a half-duplex link thrash.
+static void testRealGapStillUsesRejectException()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+
+    QVector<Frame> sent;
+    QObject::connect(&link, &Ax25Connection::sendFrame, [&](const QByteArray& raw) {
+        if (auto f = Frame::decode(raw))
+            sent.append(*f);
+    });
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+
+    // V(R) is 0; the peer's frame 0 was lost and it sends 1, 2, 3 — a real gap.
+    sent.clear();
+    int rejCount = 0;
+    for (int ns = 1; ns <= 3; ++ns) {
+        link.onFrameReceived(Frame::makeI(call("N0PMS-1"), call("K7ABC"), ns, 0,
+                                          /*pf=*/true, QByteArrayLiteral("x")));
+    }
+    for (const Frame& f : sent)
+        if (f.type == FrameType::REJ) ++rejCount;
+    CHECK(rejCount == 1, "exactly one REJ per gap, not one per frame");
+    CHECK(link.stats().iDropped == 3, "gap frames are dropped");
+    CHECK(link.stats().iDuplicate == 0, "and are not mistaken for duplicates");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -427,6 +510,8 @@ int main(int argc, char** argv)
     testRttSamplingExcludesRetransmits();
     testSecondDisconnectDropsTheLink();
     testResetDropsSilently();
+    testLostAckIsRecoveredNotDeadlocked();
+    testRealGapStillUsesRejectException();
 
     if (g_failures == 0)
         std::fprintf(stderr, "ax25_link_timing_test: all checks passed\n");
