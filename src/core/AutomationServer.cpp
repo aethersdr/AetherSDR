@@ -461,6 +461,11 @@ QJsonObject describeWidget(const QWidget* w)
         if (gl.isValid()) {
             o[QStringLiteral("gaugeLabel")] = gl.toString();
             o[QStringLiteral("gaugeValue")] = w->property("gaugeValue").toDouble();
+            // gaugeFraction is the DERIVED state — the fill actually painted,
+            // after ballistics. Every other field here is an INPUT, and the
+            // inputs read correct even while the bar does not, so an assertion
+            // over them alone cannot see a stale fill (#3845, #4636).
+            o[QStringLiteral("gaugeFraction")] = w->property("gaugeFraction").toDouble();
             QJsonObject range;
             range[QStringLiteral("min")] = w->property("gaugeMin").toDouble();
             range[QStringLiteral("max")] = w->property("gaugeMax").toDouble();

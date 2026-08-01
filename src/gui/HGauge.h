@@ -48,15 +48,19 @@ public:
         setFixedHeight(24);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-        const float initial = qBound(
-            0.0f, (0.0f - m_min) / (m_max - m_min), 1.0f);
-        m_smooth.setTarget(initial);
+        m_smooth.setTarget(fractionFor(m_value));
         m_smooth.snapToTarget();
         m_animTimer.setTimerType(Qt::PreciseTimer);
         m_animTimer.setInterval(kMeterSmootherIntervalMs);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
             if (!m_smooth.tick(m_animElapsed.restart()))
                 m_animTimer.stop();
+            // Republish so gaugeFraction tracks the bar through the sweep, not
+            // just at the setValue/setRange call that started it — otherwise
+            // the one property that reports DRAWN state would itself go stale
+            // mid-animation, which is the defect class it exists to expose.
+            // No-op unless AETHER_AUTOMATION is set.
+            publishAutomationState();
             update();
         });
         publishAutomationState();
@@ -69,18 +73,22 @@ public:
         update();
     }
 
-    // The fraction of the bar actually filled — what paintEvent multiplies by
-    // the bar width, after ballistics. Distinct from value()/min()/max(): those
-    // are the INPUTS, this is the derived state that gets drawn, and the two
-    // can disagree (see setRange). Exposed so that divergence is assertable
-    // without pixel-reading.
+    // The normalised [0,1] fill fraction, after ballistics. Distinct from
+    // value()/min()/max(): those are the INPUTS, this is the derived state that
+    // gets drawn, and the two can disagree (see setRange). Exposed so that
+    // divergence is assertable without pixel-reading.
+    //
+    // This is what paintEvent multiplies by the bar width for a normal gauge
+    // and for setFillFromRight(). On a setReversed() gauge (PhoneCwApplet's
+    // compression bar) the mapping is inverted at paint time — min means FULL —
+    // so the painted width there is 1.0f - filledFraction(). Assert
+    // accordingly; the fraction itself is always value-normalised.
     float filledFraction() const { return m_smooth.value(); }
 
     void setValue(float v) {
         if (qFuzzyCompare(m_value, v)) return;
         m_value = v;
-        m_smooth.setTarget(
-            qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.setTarget(fractionFor(v));
         if (!m_smooth.needsAnimation()) {
             if (m_animTimer.isActive()) m_animTimer.stop();
             update();
@@ -96,8 +104,7 @@ public:
     void setValueImmediate(float v) {
         if (m_animTimer.isActive()) m_animTimer.stop();
         m_value = v;
-        m_smooth.setTarget(
-            qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.setTarget(fractionFor(v));
         m_smooth.snapToTarget();
         publishAutomationState();
         update();
@@ -156,9 +163,19 @@ public:
         // the new scale indefinitely, misreporting RF output by hundreds of
         // watts. Snapped, not animated: the axis moved, the signal did not,
         // so sweeping the needle would show a change that never happened.
-        m_smooth.setTarget(
-            qBound(0.0f, (m_value - m_min) / (m_max - m_min), 1.0f));
+        //
+        // Precondition: m_value is already in the NEW axis's units. A caller
+        // that changes units as well as bounds (MeterApplet's °C/°F toggle)
+        // must still follow with setValueImmediate to convert it — this
+        // re-map fixes the axis, it cannot know the value moved too. That
+        // pairing is now belt-and-braces rather than load-bearing: both
+        // update() calls coalesce into one repaint, so the intermediate
+        // fraction never reaches the screen.
+        m_smooth.setTarget(fractionFor(m_value));
         m_smooth.snapToTarget();
+        // Belt-and-braces: the smoother is at target, so the animation
+        // callback would stop the timer on its own next tick. Stopping here
+        // just saves that tick and its repaint — no case depends on it.
         if (m_animTimer.isActive()) m_animTimer.stop();
         publishAutomationState();
         update();
@@ -329,6 +346,15 @@ protected:
     }
 
 private:
+    // Map a physical value onto the normalised [0,1] axis fraction the
+    // smoother and paintEvent work in. Every site that moves the fill must
+    // agree on this — the constructor, setValue, setValueImmediate and
+    // setRange. setRange's re-map exists because for a long time it was the
+    // one site that didn't, so keep the arithmetic in exactly one place.
+    float fractionFor(float v) const {
+        return qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f);
+    }
+
     // ── Automation-bridge introspection ───────────────────────────────────
     // HGauge is custom-painted and has no Q_OBJECT, so its label/value/scale
     // are invisible to the automation bridge's dumpTree. Mirror the state into
@@ -342,6 +368,11 @@ private:
         if (!kAutomation) return;
         setProperty("gaugeLabel", m_label);
         setProperty("gaugeValue", m_value);
+        // The DERIVED state — see filledFraction(). Every property above and
+        // below reads correct while the bar paints something else, so without
+        // this a bridge assertion reports a healthy gauge at the exact moment
+        // it is misreading by hundreds of watts. (#3845)
+        setProperty("gaugeFraction", m_smooth.value());
         setProperty("gaugeMin", m_min);
         setProperty("gaugeMax", m_max);
         setProperty("gaugeRedStart", m_redStart);

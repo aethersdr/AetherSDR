@@ -433,6 +433,7 @@ Each `<node>`:
   "displayFloorDbm": -99.17,               // SpectrumWidget only: display floor
   "gaugeLabel": "71.3°C",                  // HGauge only: centred bar label (live overlay text)
   "gaugeValue": 71.3,                      // HGauge only: current numeric value
+  "gaugeFraction": 0.594,                  // HGauge only: the fill actually PAINTED (derived)
   "gaugeRange": { "min": 0, "max": 120, "redStart": 70, "yellowStart": 55 },  // HGauge only: scale + zones
   "gaugeTicks": "0,30,55,70,90,120",       // HGauge only: comma-joined tick labels
   "sliceId": 0,                            // present on widgets tagged with a slice
@@ -498,6 +499,20 @@ present.
   switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
   (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
   screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
+- `gaugeFraction` — the `[0,1]` fill an `HGauge` **actually paints**, after
+  ballistics. Every field above it is an *input*; this is the *derived* state,
+  and the two can disagree. That is not hypothetical: until #4636, `setRange()`
+  moved the axis without re-mapping the fill, so a gauge on a steady reading
+  painted the old fraction against the new scale indefinitely — an ACOM
+  reflected-power bar showed **206 W for 120 W** while `gaugeValue`, `gaugeMin`
+  and `gaugeMax` all read correct, so a `dumpTree` assertion passed with the
+  defect fully present. Prefer `gaugeFraction` whenever you are asserting what
+  the operator can *see*; use `gaugeValue` for what the widget was *told*.
+  Two caveats: it tracks the animation, so read it once the bar has settled
+  (`setValueImmediate` and `setRange` snap; `setValue` sweeps over
+  ~30 ms attack / 180 ms release), and on a **reversed** gauge
+  (`setReversed`, e.g. the compression bar) the painted width is
+  `1 - gaugeFraction` because min means a full bar there.
 - `cursor` — the widget's mouse-cursor **shape name**, reported only when the
   widget explicitly owns a cursor (`WA_SetCursor`); inheriting widgets omit it.
   Lets a driver assert **hover affordance** — a clickable control carries

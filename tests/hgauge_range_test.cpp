@@ -13,6 +13,7 @@
 #include "HGauge.h"
 
 #include <QApplication>
+#include <QtGlobal>
 
 #include <cmath>
 #include <cstdio>
@@ -37,6 +38,13 @@ QVector<HGauge::Tick> noTicks() { return {}; }
 
 int main(int argc, char** argv)
 {
+    // publishAutomationState() caches the gate in a function-local static on
+    // first use, and the first use is the first HGauge constructor — so this
+    // has to happen before any gauge exists. Set here rather than as a CMake
+    // test property so running the binary directly still exercises the
+    // bridge-visibility half.
+    qputenv("AETHER_AUTOMATION", "1");
+
     QApplication app(argc, argv);
 
     // ── the reported case: steady carrier, axis grows ────────────────────
@@ -94,12 +102,61 @@ int main(int argc, char** argv)
     // The axis moved; the signal did not. A sweep would render a change that
     // never happened, so the new fraction has to be live immediately rather
     // than after the ballistics settle.
+    //
+    // Driven through setValue() rather than setValueImmediate(), so the re-map
+    // lands on a gauge with a sweep genuinely IN FLIGHT. With setValueImmediate
+    // the smoother is already settled and this case degenerates into a copy of
+    // the first one; the in-flight path is the only behaviour this change
+    // alters beyond the steady-reading case.
     {
         HGauge g(0.0f, 150.0f, 114.0f, "", "", noTicks());
-        g.setValueImmediate(120.0f);
+        g.setValueImmediate(30.0f);
+        g.setValue(120.0f);          // animating 20% -> 80%, not yet arrived
+        checkNear(g.filledFraction(), 0.2f,
+                  "still mid-sweep before the range change");
+
         g.setRange(0.0f, 257.0f, 190.0f, noTicks());
         checkNear(g.filledFraction(), 120.0f / 257.0f,
                   "the new fraction is immediate, not animated toward");
+    }
+
+    // ── a reversed gauge's fill is the COMPLEMENT of the fraction ────────
+    // setReversed() (PhoneCwApplet's compression bar) inverts the mapping at
+    // paint time — min means a full bar. filledFraction() stays
+    // value-normalised, so anything asserting on the painted width has to take
+    // 1 - filledFraction(). Pinned because the accessor's doc comment is the
+    // only thing that says so.
+    {
+        HGauge g(0.0f, 20.0f, 15.0f, "", "", noTicks());
+        g.setReversed(true);
+        g.setValueImmediate(5.0f);
+        checkNear(g.filledFraction(), 0.25f,
+                  "a reversed gauge reports the value fraction, not the fill");
+        checkNear(1.0f - g.filledFraction(), 0.75f,
+                  "the painted width of a reversed gauge is its complement");
+
+        // The re-map is unit-agnostic: it works on a reversed gauge too.
+        g.setRange(0.0f, 40.0f, 30.0f, noTicks());
+        checkNear(g.filledFraction(), 0.125f,
+                  "a reversed gauge re-maps on a range change like any other");
+    }
+
+    // ── the bridge sees the DERIVED state, not just the inputs ───────────
+    // The whole point of #3845: gaugeValue/gaugeMin/gaugeMax all read correct
+    // throughout a stale window, so a bridge assertion over them passes with
+    // the defect fully present. gaugeFraction is what makes it visible.
+    // (Requires AETHER_AUTOMATION, set as a test property in CMakeLists.txt.)
+    {
+        HGauge g(0.0f, 150.0f, 114.0f, "", "", noTicks());
+        g.setValueImmediate(120.0f);
+        checkNear(g.property("gaugeFraction").toFloat(), 0.8f,
+                  "gaugeFraction is published for the bridge");
+
+        g.setRange(0.0f, 257.0f, 190.0f, noTicks());
+        checkNear(g.property("gaugeValue").toFloat(), 120.0f,
+                  "gaugeValue still reads correct across the range change");
+        checkNear(g.property("gaugeFraction").toFloat(), 120.0f / 257.0f,
+                  "gaugeFraction follows the axis, so the bridge can see it");
     }
 
     // ── a genuine new reading still works afterwards ─────────────────────

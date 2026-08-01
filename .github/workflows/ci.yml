@@ -106,10 +106,18 @@ jobs:
       # arm64 / Linux arm64 — see #4559). CMakeLists.txt sets it as a test
       # property too; it is repeated here so the requirement is legible at the
       # call site rather than only in the build system.
-      - name: Test cross-needle meter geometry
+      #
+      # hgauge_range_test joins it for the same reason (#4636): HGauge is a
+      # SHARED widget — MeterApplet, AcomApplet and PhoneCwApplet all draw on
+      # it — and the defect it pins (a range change leaving the painted fill on
+      # the old axis) was invisible to every value/min/max assertion in the
+      # tree, which is how it shipped in AcomApplet and stayed there. It is
+      # plain float arithmetic, verified identical on Windows/MSVC, macOS
+      # arm64 and Linux/GCC, so gating it on Linux alone is enough.
+      - name: Test meter geometry and gauge scaling
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -R "cross_needle_meter_test" --output-on-failure
+        run: ctest --test-dir build -R "cross_needle_meter_test|hgauge_range_test" --output-on-failure
 
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
