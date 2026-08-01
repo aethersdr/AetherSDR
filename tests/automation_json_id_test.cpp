@@ -103,6 +103,19 @@ int main(int argc, char** argv)
         };
     });
 
+    // targettune HARD-REQUIRES its handler — doTargetTune() errors out without
+    // one — so installing it is what makes a refusal distinguishable from
+    // "handler unavailable". As with tune, the app installs this unconditionally
+    // at session setup (MainWindow_Session.cpp:1939).
+    int targetTuneCalls = 0;
+    server.setTargetTuneHandler([&](double mhz) {
+        ++targetTuneCalls;
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("targetTune"), mhz},
+        };
+    });
+
     const QString serverName = QStringLiteral("aether-json-id-test-%1")
                                    .arg(QCoreApplication::applicationPid());
     check(server.start(serverName), "automation server starts");
@@ -153,6 +166,147 @@ int main(int argc, char** argv)
                    "near-integer numeric id is not rounded up to a slice");
     expectRejected(tuneRequest(0.9999999), integerError,
                    "near-integer numeric id is not rounded down to a slice");
+
+    // ---- #4550: the MHz-value contract, shared by every verb taking MHz ----
+    //
+    // `tune`, `targettune` and `pan center` route their value through one
+    // helper (AutomationServer.cpp, refuseUntunableMhz), so the contract is
+    // asserted once against a verb parameter rather than once per verb. That is
+    // the point of the shared helper and the point of this loop: if a verb ever
+    // stops using it, or the thresholds drift apart again, it shows up as one
+    // verb failing a case its siblings pass.
+    //
+    // Handlers for `tune` and `targettune` ARE installed above, exactly as
+    // MainWindow_Session.cpp installs them in the shipping app. That matters —
+    // the guard is only worth anything if it runs BEFORE the dispatch — so
+    // every rejection case also asserts the handler counter did not move.
+    auto verbRequest = [](const QString& verb, const QString& value) {
+        // `pan center` is one verb spelled as two fields. Hiding that here
+        // keeps every case below identical across all three verbs.
+        if (verb == QLatin1String("pan center")) {
+            return QJsonObject{{QStringLiteral("cmd"), QStringLiteral("pan")},
+                               {QStringLiteral("action"), QStringLiteral("center")},
+                               {QStringLiteral("value"), value}};
+        }
+        return QJsonObject{{QStringLiteral("cmd"), verb},
+                           {QStringLiteral("value"), value}};
+    };
+    // `matches` is a predicate on the error text, so one helper serves the cases
+    // that pin an exact message, a prefix, or a fragment. `handlerCounter` is
+    // null for a verb with no handler indirection (`pan center`).
+    auto expectVerbRejected = [&](const QString& verb, const QString& value,
+                                  auto&& matches, int* handlerCounter,
+                                  const QString& description) {
+        const int before = handlerCounter ? *handlerCounter : 0;
+        const QJsonObject response = client.request(verbRequest(verb, value));
+        const QString error = response.value(QStringLiteral("error")).toString();
+        const QByteArray desc = description.toUtf8();
+        check(!response.value(QStringLiteral("ok")).toBool()
+                  && matches(error)
+                  && (!handlerCounter || *handlerCounter == before),
+              desc.constData());
+    };
+    auto expectVerbAccepted = [&](const QString& verb, const QString& value,
+                                  int* handlerCounter,
+                                  const QString& description) {
+        const int before = handlerCounter ? *handlerCounter : 0;
+        const QJsonObject response = client.request(verbRequest(verb, value));
+        const QByteArray desc = description.toUtf8();
+        check(response.value(QStringLiteral("ok")).toBool()
+                  && (!handlerCounter || *handlerCounter == before + 1),
+              desc.constData());
+    };
+    auto exactly = [](const QString& text) {
+        return [text](const QString& error) { return error == text; };
+    };
+    auto startingWith = [](const QString& prefix) {
+        return [prefix](const QString& error) { return error.startsWith(prefix); };
+    };
+
+    struct MhzVerb { const char* name; int* calls; };
+    const MhzVerb kMhzVerbs[] = {
+        {"tune", &handlerCalls},
+        {"targettune", &targetTuneCalls},
+        {"pan center", nullptr},  // no handler indirection
+    };
+
+    for (const MhzVerb& v : kMhzVerbs) {
+        const QString verb = QString::fromLatin1(v.name);
+        const QString at = verb + QStringLiteral(": ");
+
+        // The original report: an Hz value is far outside any band, the radio
+        // ignores it, and the verb used to answer ok:true with the request
+        // echoed back.
+        expectVerbRejected(verb, QStringLiteral("14200000"),
+                           startingWith(verb + QStringLiteral(" takes MHz, not Hz")),
+                           v.calls, at + QStringLiteral("20m in Hz is refused, not applied"));
+        // The case a 1 THz threshold let through: 500000 is under 1e6, so it
+        // fell past the looser guard and became a 500000 MHz request — the
+        // silent no-op this refusal exists to prevent.
+        expectVerbRejected(verb, QStringLiteral("500000"),
+                           startingWith(verb + QStringLiteral(" takes MHz, not Hz")),
+                           v.calls, at + QStringLiteral("500 kHz in Hz is refused too"));
+
+        // Non-finite. QString::toDouble() happily parses "nan" and "inf", and
+        // NaN fails EVERY comparison (NaN <= 0, NaN < floor and NaN > ceiling
+        // are all false), so without an explicit isfinite check it sails
+        // through every guard and reaches the radio. Refused by name, with the
+        // message about the value itself rather than a unit mistake it isn't.
+        const auto finiteError = exactly(
+            verb + QStringLiteral(" requires a positive finite frequency in MHz"));
+        for (const QString& nonFinite : {QStringLiteral("nan"), QStringLiteral("NaN"),
+                                         QStringLiteral("inf"), QStringLiteral("-inf")}) {
+            expectVerbRejected(verb, nonFinite, finiteError, v.calls,
+                               at + nonFinite + QStringLiteral(" is refused by the finite check"));
+        }
+
+        // Floor. Nothing below what any supported radio tunes should reach the
+        // radio; 0.001 matches the floor typed frequency entry applies to the
+        // same value (VfoWidget / RxApplet), so the two paths agree.
+        expectVerbRejected(verb, QStringLiteral("1e-300"),
+                           exactly(verb + QStringLiteral(" requires at least 0.001 MHz — got 1e-300")),
+                           v.calls, at + QStringLiteral("a sub-floor frequency is refused"));
+
+        // The ambiguous window (ceiling..300 GHz): could be an Hz mistake OR a
+        // real millimetre-wave MHz value (the 122.25 GHz allocation). Refused,
+        // but the message must present both readings instead of confidently
+        // asserting the wrong one ("did you mean 0.122250?" to a 122 GHz user).
+        expectVerbRejected(verb, QStringLiteral("122250"),
+                           [](const QString& error) {
+                               return !error.contains(QStringLiteral("did you mean"))
+                                      && error.contains(QStringLiteral("millimetre-wave"));
+                           },
+                           v.calls,
+                           at + QStringLiteral("122.25 GHz is refused without misdiagnosing it as Hz"));
+
+        // A rejected value must be quoted back as sent. Rounding it to whole
+        // MHz made everything in (105000, 105000.5) report as "got 105000,
+        // above the 105000 MHz ceiling" — a message that contradicts itself, in
+        // the branch that exists to stop this guard asserting things that
+        // aren't true.
+        expectVerbRejected(verb, QStringLiteral("105000.4"),
+                           [](const QString& error) {
+                               return error.contains(QStringLiteral("got 105000.4,"));
+                           },
+                           v.calls,
+                           at + QStringLiteral("a value just over the ceiling is quoted back unrounded"));
+
+        // ...and neither bound may refuse anything real. 0.001 MHz is 1 kHz,
+        // below every amateur allocation including the VLF experiments at
+        // ~8.3 kHz; 10368.1 is the 3cm calling frequency, the top of the band
+        // table. Both have to keep working.
+        expectVerbAccepted(verb, QStringLiteral("0.001"), v.calls,
+                           at + QStringLiteral("the floor value itself is accepted"));
+        expectVerbAccepted(verb, QStringLiteral("10368.1"), v.calls,
+                           at + QStringLiteral("the top of the band table is accepted"));
+        // kHz-for-MHz (14200 = 20m in kHz, or 14.2 GHz in MHz) deliberately
+        // passes: the value is indistinguishable from a legitimate transverter
+        // request in the headroom the ceiling protects. Pinned as a DECISION,
+        // not an omission — if this starts rejecting, the transverter range
+        // broke.
+        expectVerbAccepted(verb, QStringLiteral("14200"), v.calls,
+                           at + QStringLiteral("kHz-for-MHz passes (indistinguishable from 14.2 GHz)"));
+    }
 
     server.stop();
     return failures == 0 ? 0 : 1;

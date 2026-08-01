@@ -17,7 +17,8 @@
 // while started, which requires a live slice and therefore a live backend),
 // and the daxAudioReady feed is connected on runningChanged(true) and torn
 // down on runningChanged(false). The engine itself ignores PCM whose
-// channel differs from the bound slice's live daxChannel().
+// channel differs from the bound slice's live daxChannel(), and PCM whose
+// slice id differs from the bound slice on the seam-native feed.
 
 #include "MainWindow.h"
 
@@ -48,6 +49,14 @@ void MainWindow::setupAetherClock()
                 ps->releaseDaxChannel(ch, PanadapterStream::DaxConsumer::Clock);
         });
 
+    // Whether this radio has a DAX plane at all. Resolved at call time for the
+    // same reason as the provider above — no backend exists at construction.
+    // Gates start()'s "no DAX channel assigned" warning, which is a correct
+    // diagnosis on a Flex and a misleading one on a backend that demodulates
+    // in-process and feeds feedRxSliceAudio() instead.
+    m_clockEngine->setDaxAvailabilityProvider(
+        [this] { return m_radioModel.hasDaxStreams(); });
+
     connect(m_clockEngine, &AetherClockEngine::runningChanged,
             this, [this](bool running) {
                 // The engine is the slice-binding authority; mirror it into
@@ -61,9 +70,29 @@ void MainWindow::setupAetherClock()
                             ps, &PanadapterStream::daxAudioReady,
                             m_clockEngine, &AetherClockEngine::feedRxAudio,
                             Qt::QueuedConnection);
-                } else if (m_clockDaxConn) {
-                    disconnect(m_clockDaxConn);
-                    m_clockDaxConn = {};
+                    // Seam-native per-slice audio (MainWindow_Session.cpp:1811
+                    // feeds TciServer from the same signal for the same
+                    // reason). A backend that demodulates in-process has no
+                    // PanadapterStream, so the connect above binds nothing and
+                    // the engine would never see a sample. A Flex never emits
+                    // this signal, so there is no double-feed and the Flex path
+                    // is unchanged; the engine's own slice filter does the rest.
+                    if (!m_clockSliceAudioConn)
+                        m_clockSliceAudioConn = connect(
+                            &m_radioModel,
+                            &RadioModel::backendSliceAudioFrameReady,
+                            m_clockEngine,
+                            &AetherClockEngine::feedRxSliceAudio,
+                            Qt::QueuedConnection);
+                } else {
+                    if (m_clockDaxConn) {
+                        disconnect(m_clockDaxConn);
+                        m_clockDaxConn = {};
+                    }
+                    if (m_clockSliceAudioConn) {
+                        disconnect(m_clockSliceAudioConn);
+                        m_clockSliceAudioConn = {};
+                    }
                 }
             });
 

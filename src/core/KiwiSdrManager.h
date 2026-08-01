@@ -26,6 +26,11 @@ struct KiwiSdrAntennaProfile {
     // stream itself always keeps flowing during TX; this only opens the
     // transmit gate at the audio mix). Default off: muted during TX.
     bool keepAudioDuringTx{false};
+    // Hold the post-TX unmute for the receiver's stream latency so the
+    // resume lands on audio received after unkey (suppresses hearing your
+    // own delayed TX tail on an in-range receiver). No effect when
+    // keepAudioDuringTx is set.
+    bool resumeAudioAfterTxDelay{false};
     bool waterfallAutoScale{true};
     int waterfallMinDbm{-110};
     int waterfallMaxDbm{-10};

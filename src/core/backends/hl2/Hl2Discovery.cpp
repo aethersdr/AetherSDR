@@ -1,6 +1,8 @@
 #include "core/backends/hl2/Hl2Discovery.h"
 
 #include "core/AppSettings.h"
+
+#include <QJsonObject>
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include <QNetworkDatagram>
@@ -63,11 +65,66 @@ QString Hl2Discovery::nicknameSettingsKey(const QString& serial)
          + QString(serial).replace(kIllegal, QStringLiteral("_"));
 }
 
-QString Hl2Discovery::effectiveNickname(const QString& serial, const QString& fallback)
+namespace {
+
+QString identityFamily(const QString& family)
 {
-    const QString custom =
-        AppSettings::instance().value(nicknameSettingsKey(serial)).toString().trimmed();
+    // Legacy keys never carried a family; every producer was an HL2.
+    return family.isEmpty() ? QStringLiteral("hl2") : family.toLower();
+}
+
+constexpr char kIdentityFeature[] = "Identity";
+constexpr char kNicknameField[] = "nickname";
+
+} // namespace
+
+QString Hl2Discovery::effectiveNickname(const QString& family,
+                                        const QString& serial,
+                                        const QString& fallback)
+{
+    auto& settings = AppSettings::instance();
+    const QString fam = identityFamily(family);
+    QString custom = settings
+                         .radioFeature(fam, serial,
+                                       QString::fromLatin1(kIdentityFeature))
+                         .value(QLatin1String(kNicknameField))
+                         .toString()
+                         .trimmed();
+    if (custom.isEmpty()) {
+        // One-shot migration from the legacy sanitized flat key (RFC #4603
+        // PR 3): adopt it into the scoped document, then drop the flat key.
+        const QString legacyKey = nicknameSettingsKey(serial);
+        custom = settings.value(legacyKey).toString().trimmed();
+        if (!custom.isEmpty()) {
+            // setNickname() removes the legacy key and commits — one write.
+            setNickname(fam, serial, custom);
+        }
+    }
     return custom.isEmpty() ? fallback : custom;
+}
+
+void Hl2Discovery::setNickname(const QString& family, const QString& serial,
+                               const QString& name)
+{
+    auto& settings = AppSettings::instance();
+    const QString fam = identityFamily(family);
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        settings.removeRadioFeature(fam, serial,
+                                    QString::fromLatin1(kIdentityFeature));
+    } else {
+        settings.setRadioFeature(
+            fam, serial, QString::fromLatin1(kIdentityFeature), 1,
+            QJsonObject{{QLatin1String(kNicknameField), trimmed}});
+    }
+    // A cleared name must not resurrect from the legacy key either.
+    settings.remove(nicknameSettingsKey(serial));
+    settings.save();
+}
+
+bool Hl2Discovery::hasCustomNickname(const QString& family, const QString& serial)
+{
+    return !effectiveNickname(family, serial, QString()).isEmpty();
 }
 
 bool Hl2Discovery::nicknameLivesOnRadio(const RadioInfo& info)
@@ -165,7 +222,7 @@ void Hl2Discovery::onReadyRead()
         info.serial   = macToSerial(reply->mac);
         // An HL2 has no on-radio name store; show the operator's custom nickname
         // (keyed by MAC/serial in AppSettings) if one is set, else the model name.
-        info.nickname = effectiveNickname(info.serial, info.model);
+        info.nickname = effectiveNickname(QStringLiteral("hl2"), info.serial, info.model);
         info.version  = QString::number(reply->gatewareVersion);
         // A bare revision number is not self-describing in a status bar.
         info.versionLabel = QStringLiteral("Gateware");

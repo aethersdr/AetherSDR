@@ -1,0 +1,69 @@
+name: Colour Ratchet
+
+# Hardcoded-colour counts may not rise above the PR's BASE (RFC #3076 / #4569).
+#
+# The problem it solves: colour REFERENCES are down ~22% against the documented
+# baseline while UNIQUE colours went UP ~105 — new one-offs are minted faster
+# than old ones collapse, because nothing enforces the taxonomy. Every migration
+# PR was uphill against a slope that kept regenerating.
+#
+# The gate is a DELTA, not a stored constant. An earlier revision compared the
+# tree against a COLOUR_BASELINE recorded in the tool; that cannot work, because
+# main gains colours from unrelated UI merges and the constant goes stale within
+# hours of being written. Worse, an absolute ceiling means that once main drifts
+# above it, EVERY src/-touching PR fails — including ones that REMOVE colours.
+# Scanning the PR tree and its base in the same run answers the question we
+# actually care about ("did THIS PR add colours?") and has nothing to go stale.
+#
+# Stage 1 gates on COUNTS. The tool also reports, without gating, exactly which
+# colours the PR introduces — that is the stage-2 set signal, and promoting it
+# to a gate is a one-line change in audit_colours.py once the contributor-
+# experience call has been made.
+#
+# Stdlib-only and no build, so it gates on src/ + the tool + this file.
+
+on:
+  pull_request:
+    branches: ["**"]
+    paths:
+      - "src/**"
+      - "tools/audit_colours.py"
+      - ".github/workflows/colour-ratchet.yml"
+
+# Auto-cancel superseded runs. Matches ci.yml / codeql.yml / engine-boundary.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  colour-ratchet:
+    name: Hardcoded-colour count
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Needed to materialise the base commit as a second worktree below.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      # A worktree rather than a second actions/checkout: the base tree is only
+      # read by a text scanner, so there is no reason to pay for a second full
+      # clone of the repository.
+      - name: Materialise the PR base
+        run: git worktree add /tmp/colour-base "origin/${{ github.base_ref }}"
+
+      - name: Check hardcoded-colour counts against the PR base
+        run: |
+          python tools/audit_colours.py \
+            --src src \
+            --compare-src /tmp/colour-base/src \
+            --summary-only \
+            --strict

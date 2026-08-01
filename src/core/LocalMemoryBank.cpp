@@ -1,11 +1,13 @@
 #include "core/LocalMemoryBank.h"
 
+#include "core/AppSettings.h"
 #include "core/LocalMemoryStore.h"
 #include "core/LogManager.h"
 #include "core/backends/MemoryWireCodec.h"
 
 #include <QDateTime>
-#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 namespace AetherSDR {
 
@@ -56,7 +58,38 @@ void LocalMemoryBank::load()
     if (m_loaded)
         return;
 
-    const LocalMemoryStore::ParseResult parsed = LocalMemoryStore::load(m_filePath);
+    // The document is the bank's home (RFC #4603 PR 6). The legacy file is a
+    // one-time import source, consulted only while no document exists, and
+    // left FROZEN afterwards — the document's existence is the migration
+    // marker, matching the frozen-XML contract the settings store itself uses.
+    int storedRowVersion = 0;
+    const QJsonObject doc = AppSettings::instance().radioFeatureExact(
+        LocalMemoryStore::documentFamily(), QString(),
+        LocalMemoryStore::documentFeature(), &storedRowVersion);
+
+    LocalMemoryStore::ParseResult parsed;
+    bool importedFromLegacy = false;
+    if (!doc.isEmpty()) {
+        if (storedRowVersion > LocalMemoryStore::kFormatVersion) {
+            // The ROW version guards too, not just the envelope's own body
+            // version (PR #4623 review, nigelfenton's probe): a future build
+            // that bumps the column while keeping the envelope shape must get
+            // the same read-only refusal, or this build overwrites a document
+            // it cannot fully represent. Belt and braces with parse()'s body
+            // check below.
+            parsed.unreadable = true;
+            parsed.errors << QStringLiteral(
+                "memory bank row schema %1 is newer than this build's %2")
+                                 .arg(storedRowVersion)
+                                 .arg(LocalMemoryStore::kFormatVersion);
+        } else {
+            parsed = LocalMemoryStore::parse(
+                QJsonDocument(doc).toJson(QJsonDocument::Compact));
+        }
+    } else {
+        parsed = LocalMemoryStore::load(m_filePath);
+        importedFromLegacy = parsed.overwritable() && !parsed.memories.isEmpty();
+    }
     m_entries = parsed.memories;
     m_dirty = false;
 
@@ -76,20 +109,32 @@ void LocalMemoryBank::load()
     m_loaded = true;
     m_writable = parsed.overwritable();
     // Baseline for the concurrent-writer check in flush().
-    rememberFileState();
+    rememberDocumentState();
 
     if (!parsed.ok()) {
         m_lastError = parsed.errors.join(QStringLiteral("; "));
         qCWarning(lcProtocol).noquote()
-            << "LocalMemoryBank: problems reading" << m_filePath << "—" << m_lastError
+            << "LocalMemoryBank: problems reading the memory bank —" << m_lastError
             << (m_writable ? "(bank is still writable)"
                            : "(bank is READ-ONLY; edits will be refused)");
         return;
     }
 
+    if (importedFromLegacy) {
+        // Claim the legacy channels into the document now, so the migration
+        // is not contingent on the operator making an edit first. The legacy
+        // file stays untouched as a downgrade snapshot.
+        m_dirty = true;
+        flush();
+        qCInfo(lcProtocol).noquote()
+            << "LocalMemoryBank: imported" << m_entries.size()
+            << "memories from the legacy file" << m_filePath
+            << "into the settings store (file left frozen)";
+    }
+
     m_lastError.clear();
     qCInfo(lcProtocol).noquote()
-        << "LocalMemoryBank: loaded" << m_entries.size() << "memories from" << m_filePath;
+        << "LocalMemoryBank: loaded" << m_entries.size() << "memories";
 }
 
 int LocalMemoryBank::allocateSlot() const
@@ -263,76 +308,83 @@ void LocalMemoryBank::flush()
     // Writing would destroy it.
     if (!m_writable) {
         qCWarning(lcProtocol).noquote()
-            << "LocalMemoryBank: refusing to overwrite an unreadable bank at" << m_filePath;
+            << "LocalMemoryBank: refusing to overwrite an unreadable bank";
         return;
     }
 
-    // Somebody else wrote the file since we read it.
+    // Somebody else wrote the document since we read it.
     //
     // The bank is replaced WHOLESALE and read once per process, so a second
-    // instance sharing the same config dir (two AetherSDR windows, a test
+    // instance sharing the same settings store (two AetherSDR windows, a test
     // instance on the same $HOME) would have its channels silently discarded by
     // whichever process saved last. Refusing is deliberately not a merge: which
     // side wins per slot is a design decision, not something to infer here. This
     // turns silent loss into a visible, recoverable error — the entries stay in
     // memory and dirty, and the operator is told rather than finding out later.
     if (foreignWriteDetected()) {
-        m_lastError = QString("The memory file at %1 was changed by another "
-                              "program or window since it was read. Nothing was "
-                              "saved, so neither copy is lost — reopen the memory "
-                              "panel to pick up the other changes.")
-                          .arg(m_filePath);
+        m_lastError = QStringLiteral(
+            "The memory bank was changed by another program or window since "
+            "it was read. Nothing was saved, so neither copy is lost — reopen "
+            "the memory panel to pick up the other changes.");
         qCWarning(lcProtocol).noquote() << "LocalMemoryBank:" << m_lastError;
         emit saveFailed(m_lastError);
         return;   // stays dirty
     }
 
-    QString error;
-    const QString savedAt = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    if (!LocalMemoryStore::save(m_filePath, m_entries, savedAt, &error)) {
-        m_lastError = error;
-        qCWarning(lcProtocol).noquote() << "LocalMemoryBank: save failed —" << error;
-        emit saveFailed(error);
-        // Stay dirty: the next edit (or flush) retries. A transient failure —
-        // a config dir that is briefly unwritable — must not cost the operator
-        // every channel they saved since.
+    // savedAt uses millisecond precision: it doubles as the foreign-write
+    // baseline, and two same-second writes must not read as one.
+    const QString savedAt =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    const QJsonObject envelope =
+        QJsonDocument::fromJson(LocalMemoryStore::serialize(m_entries, savedAt))
+            .object();
+    if (!AppSettings::instance().setRadioFeature(
+            LocalMemoryStore::documentFamily(), QString(),
+            LocalMemoryStore::documentFeature(),
+            LocalMemoryStore::kFormatVersion, envelope)) {
+        m_lastError = QStringLiteral("the settings store refused the write");
+        qCWarning(lcProtocol).noquote()
+            << "LocalMemoryBank: save failed —" << m_lastError;
+        emit saveFailed(m_lastError);
+        // Stay dirty: the next edit (or flush) retries. A transient failure
+        // must not cost the operator every channel they saved since.
         return;
     }
 
     m_dirty = false;
     m_lastError.clear();
-    // Our own write moved the mtime; re-baseline or the NEXT flush would mistake
-    // it for someone else's.
-    rememberFileState();
+    // Our own write moved savedAt; re-baseline or the NEXT flush would
+    // mistake it for someone else's.
+    m_seenSavedAt = savedAt;
     qCDebug(lcProtocol).noquote()
-        << "LocalMemoryBank: saved" << m_entries.size() << "memories to" << m_filePath;
+        << "LocalMemoryBank: saved" << m_entries.size() << "memories";
 }
 
-void LocalMemoryBank::rememberFileState()
+void LocalMemoryBank::rememberDocumentState()
 {
-    const QFileInfo info(m_filePath);
-    m_seenExists = info.exists();
-    m_seenMtime = m_seenExists ? info.lastModified() : QDateTime();
-    m_seenSize = m_seenExists ? info.size() : -1;
+    m_seenSavedAt = AppSettings::instance()
+                        .radioFeatureExact(LocalMemoryStore::documentFamily(),
+                                           QString(),
+                                           LocalMemoryStore::documentFeature())
+                        .value(QStringLiteral("savedAt"))
+                        .toString();
 }
 
 bool LocalMemoryBank::foreignWriteDetected() const
 {
-    const QFileInfo info(m_filePath);
-    // Appearing counts: we read "no file, empty bank", so a file that exists now
-    // holds channels somebody else created, and our empty-ish bank would erase
-    // them. Disappearing does not — a deleted bank is nothing to preserve, and
+    const QString current =
+        AppSettings::instance()
+            .radioFeatureExact(LocalMemoryStore::documentFamily(), QString(),
+                               LocalMemoryStore::documentFeature())
+            .value(QStringLiteral("savedAt"))
+            .toString();
+    // A document that APPEARED counts (we read "no document, empty bank", so
+    // one that exists now holds channels somebody else created); a document
+    // that vanished does not — a deleted bank is nothing to preserve, and
     // refusing there would strand the operator's edits with nowhere to go.
-    if (!info.exists())
+    if (current.isEmpty())
         return false;
-    if (!m_seenExists)
-        return true;
-    // Size as well as mtime: a coarse filesystem timestamp can collide on two
-    // writes inside the same tick, and a channel edit almost always changes the
-    // length. Neither is a substitute for a lock, and this does not claim to be
-    // one — it catches the realistic case (a human editing in two windows),
-    // not a deliberate race.
-    return info.lastModified() != m_seenMtime || info.size() != m_seenSize;
+    return current != m_seenSavedAt;
 }
 
 }  // namespace AetherSDR

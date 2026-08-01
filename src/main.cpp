@@ -1,7 +1,13 @@
 #include "gui/MainWindow.h"
 #include "gui/ConnectionPanel.h"
+#include "gui/FramelessMessageBox.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/SettingsBootstrap.h"
+#include "core/SettingsCredentialPolicy.h"
+#include "core/SettingsDatabase.h"
+#include "core/SettingsPaths.h"
+#include "core/SettingsSanitizer.h"
 #include "models/Nr2SettingsModel.h"
 #include "core/AutomationBridgeSettings.h"
 #include "core/GpuSelector.h"
@@ -89,8 +95,142 @@ static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const 
     AetherSDR::LogManager::instance().enqueueMessage(type, ctx, msg);
 }
 
+// ── `AetherSDR --config` — settings CLI (RFC #4603 proposal D MVO) ───────────
+// Show/create/delete/export settings and exit, before any GUI initialization.
+// This is the recovery path when a stored value prevents the GUI from starting
+// (e.g. a broken off-screen geometry): it needs a console, not a window.
+// Note: a concurrently RUNNING AetherSDR holds its own in-memory cache and
+// will not see CLI edits until restarted.
+static int runConfigCli(int argc, char* argv[])
+{
+    QCoreApplication app(argc, argv);
+    QCoreApplication::setApplicationName(QStringLiteral("AetherSDR"));
+    QCoreApplication::setOrganizationName(QStringLiteral("AetherSDR"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(AETHERSDR_VERSION));
+
+    const QStringList args = QCoreApplication::arguments();
+    const QString op = args.value(2);
+    const QString key = args.value(3);
+    auto usage = [] {
+        std::fputs(
+            "usage: AetherSDR --config <command>\n"
+            "  list [prefix]      print key<TAB>value for every setting (optionally\n"
+            "                     only keys starting with prefix)\n"
+            "  get <key>          print the value (exit 2 if the key is absent)\n"
+            "  set <key> <value>  create or change a setting\n"
+            "  unset <key>        delete a setting\n"
+            "  export             sanitized dump of the whole store (secrets\n"
+            "                     redacted; diagnostic output, not a backup)\n"
+            "  features [family]  list radio-scoped feature documents\n"
+            "                     (sanitized; written by the app's own\n"
+            "                     features — HL2 state, nicknames, band stacks)\n"
+            "  path               print the settings database path\n",
+            stderr);
+        return 1;
+    };
+
+    if (op == QStringLiteral("path")) {
+        std::printf("%s\n", qPrintable(AetherSDR::SettingsPaths::databasePath()));
+        return 0;
+    }
+
+    auto& settings = AetherSDR::AppSettings::instance();
+    settings.load();  // runs the one-time XML import exactly like the GUI would
+    const QString notice = settings.loadNotice();
+    if (!notice.isEmpty()) {
+        std::fprintf(stderr, "notice: %s\n", qPrintable(notice));
+    }
+
+    if (op == QStringLiteral("list")) {
+        const QString prefix = args.value(3);
+        QStringList keys = settings.allKeysForDiagnostics();
+        keys.sort();
+        for (const QString& k : keys) {
+            if (!prefix.isEmpty() && !k.startsWith(prefix)) {
+                continue;
+            }
+            std::printf("%s\t%s\n", qPrintable(k),
+                        qPrintable(settings.value(k).toString()));
+        }
+        return 0;
+    }
+    if (op == QStringLiteral("get")) {
+        if (key.isEmpty()) {
+            return usage();
+        }
+        if (!settings.contains(key)) {
+            std::fprintf(stderr, "%s: no such key\n", qPrintable(key));
+            return 2;
+        }
+        std::printf("%s\n", qPrintable(settings.value(key).toString()));
+        return 0;
+    }
+    if (op == QStringLiteral("export")) {
+        std::printf("%s", qPrintable(AetherSDR::SettingsSanitizer::dump()));
+        return 0;
+    }
+    if (op == QStringLiteral("features")) {
+        const QString family = args.value(3);
+        const auto rows = settings.radioFeaturesForDiagnostics();
+        for (const auto& row : rows) {
+            if (!family.isEmpty()
+                && !row.first.startsWith(family + QLatin1Char('/'))) {
+                continue;
+            }
+            std::printf("%s\t%s\n", qPrintable(row.first),
+                        qPrintable(AetherSDR::SettingsSanitizer::redactedValue(
+                            row.first, row.second)));
+        }
+        return 0;
+    }
+    if (op == QStringLiteral("set") || op == QStringLiteral("unset")) {
+        if (key.isEmpty() || (op == QStringLiteral("set") && args.size() < 5)) {
+            return usage();
+        }
+        // The credential policy applies to the CLI too (PR #4612 review):
+        // creating a credential row would undo the exodus this store ships
+        // with. unset stays allowed — deleting a credential is always fine.
+        if (op == QStringLiteral("set")
+            && AetherSDR::SettingsSanitizer::isSecretKey(key)) {
+            std::fprintf(stderr,
+                         "refusing: '%s' is a credential-shaped key, and "
+                         "credentials are never stored in the settings "
+                         "database (RFC #4603). Use the app's own UI, which "
+                         "stores it in the OS keychain.\n",
+                         qPrintable(key));
+            return 1;
+        }
+        if (op == QStringLiteral("set")) {
+            settings.setValue(key, args.value(4));
+        } else {
+            settings.remove(key);
+        }
+        settings.save();
+        // Evidence over assertion: confirm the row really persisted by
+        // reading it back from the database file, not the cache.
+        QString persisted;
+        const bool present = AetherSDR::SettingsDatabase::readAppValueFromFile(
+            AetherSDR::SettingsPaths::databasePath(), key, persisted);
+        const bool ok = op == QStringLiteral("set")
+                            ? (present && persisted == args.value(4))
+                            : !present;
+        if (!ok) {
+            std::fprintf(stderr, "error: change did not persist (see warnings "
+                                 "above — store may be read-only)\n");
+            return 1;
+        }
+        std::printf("ok\n");
+        return 0;
+    }
+    return usage();
+}
+
 int main(int argc, char* argv[])
 {
+    if (argc >= 2 && qstrcmp(argv[1], "--config") == 0) {
+        return runConfigCli(argc, argv);
+    }
+
     // ── Pre-QApplication environment setup ────────────────────────────────
 
     // AETHER_NO_GPU: runtime toggle to force software OpenGL rendering.
@@ -146,38 +286,17 @@ int main(int argc, char* argv[])
 
     // Apply saved UI scale factor BEFORE QApplication is created.
     // QT_SCALE_FACTOR must be set before Qt initializes the display.
-    // We read the settings file directly (can't use AppSettings or
-    // QStandardPaths before QApplication exists).
+    // SettingsBootstrap reads the SQLite store read-only (or the frozen
+    // pre-upgrade XML on the very first launch after the upgrade) without
+    // constructing the AppSettings singleton (RFC #4603).
     {
-#ifdef Q_OS_MAC
-        QString settingsPath = QDir::homePath() + "/Library/Preferences/AetherSDR/AetherSDR.settings";
-#elif defined(Q_OS_WIN)
-        // AppSettings uses GenericConfigLocation (%LOCALAPPDATA%) + "/AetherSDR".
-        // QStandardPaths isn't available before QApplication, so we reproduce
-        // the path manually using the LOCALAPPDATA env var.
-        QString settingsPath = QDir::fromNativeSeparators(qEnvironmentVariable("LOCALAPPDATA"))
-                               + "/AetherSDR/AetherSDR.settings";
-#else
-        QString settingsPath = QDir::homePath() + "/.config/AetherSDR/AetherSDR.settings";
-#endif
-        QFile f(settingsPath);
-        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QByteArray data = f.readAll();
-            // AppSettings XML format: <UiScalePercent>125</UiScalePercent>
-            QByteArray tag = "<UiScalePercent>";
-            int idx = data.indexOf(tag);
-            if (idx >= 0) {
-                idx += tag.size();
-                int end = data.indexOf('<', idx);
-                if (end > idx) {
-                    int pct = data.mid(idx, end - idx).trimmed().toInt();
-                    // Always set — even at 100% — so a restarted child process
-                    // overrides any QT_SCALE_FACTOR it inherited from its parent.
-                    if (pct > 0)
-                        qputenv("QT_SCALE_FACTOR", QByteArray::number(pct / 100.0, 'f', 2));
-                }
-            }
-        }
+        const int pct =
+            AetherSDR::SettingsBootstrap::readValue(QStringLiteral("UiScalePercent"))
+                .trimmed().toInt();
+        // Always set — even at 100% — so a restarted child process overrides
+        // any QT_SCALE_FACTOR it inherited from its parent.
+        if (pct > 0)
+            qputenv("QT_SCALE_FACTOR", QByteArray::number(pct / 100.0, 'f', 2));
     }
 
 #ifdef Q_OS_MAC
@@ -492,6 +611,21 @@ int main(int argc, char* argv[])
     {
         AetherSDR::MainWindow window;
         window.show();
+
+        // Settings-store notices a user must see (RFC #4603): a backup was
+        // restored after corruption, a newer-schema store opened read-only, or
+        // older-version changes were not carried forward. One-shot, after the
+        // window is up so the box has a parent and never blocks startup.
+        {
+            const QString settingsNotice =
+                AetherSDR::AppSettings::instance().loadNotice();
+            if (!settingsNotice.isEmpty()) {
+                QTimer::singleShot(0, &window, [&window, settingsNotice] {
+                    AetherSDR::FramelessMessageBox::warning(
+                        &window, QStringLiteral("Settings"), settingsNotice);
+                });
+            }
+        }
 
         // Agent-drivable automation bridge (#3646, Phase 0). Off in production;
         // starts only when AETHER_AUTOMATION is set. AETHER_AUTOMATION_SOCKET

@@ -62,6 +62,14 @@ public:
     void setDaxChannelProvider(std::function<void(int)> acquire,
                                std::function<void(int)> release);
 
+    // Radio DAX-availability hook — reports whether the connected radio
+    // exposes a DAX plane at all (RadioCapabilities::hasDaxStreams, routed in
+    // by the wiring layer). A backend that demodulates in-process has none and
+    // drives feedRxSliceAudio() instead, so start() must not warn there about
+    // an unassigned DAX channel. Unset defaults to "DAX exists", which keeps
+    // the Flex path and existing callers byte-unchanged.
+    void setDaxAvailabilityProvider(std::function<bool()> hasDaxStreams);
+
     // Host-clock READ hook (UTC ms since epoch). Defaults to
     // QDateTime::currentMSecsSinceEpoch. Tests inject a fake clock. The
     // engine never writes the OS clock.
@@ -114,6 +122,14 @@ public slots:
     // seam. Samples whose channel differs from the bound slice's live
     // daxChannel() are ignored.
     void feedRxAudio(int channel, const QByteArray& pcm);
+
+    // Per-slice PCM ingest — the seam-native counterpart of feedRxAudio(),
+    // with the identical payload contract (float32 interleaved stereo,
+    // native-endian, 24 kHz). For backends that demodulate in-process and so
+    // have no DAX channel to key on: the sender names the slice directly, so
+    // this filters on the bound slice id and carries no channel semantics.
+    // Payload for any other slice is ignored.
+    void feedRxSliceAudio(int sliceId, const QByteArray& pcm);
 
 signals:
     void runningChanged(bool running);

@@ -159,28 +159,56 @@ QVector<float> NoiseMixer::applyNotch(const QVector<float>& in, double fHz, doub
 // ---- generators ---------------------------------------------------------------
 void NoiseMixer::genCw(const ChannelState& c, float* out)
 {
-    // A keyed CW id (dit/dah pattern) with raised-cosine edges (no key clicks).
+    // Keys the CW id in real Morse — 18 WPM, standard 1/3/7-dit
+    // element/character/word spacing, raised-cosine edges (no key clicks) — so
+    // the demo CW channel is decodable by ear, by CwDecoder, or by an external
+    // decoder fed over TCI. The schedule is built from kMsg, so a longer id
+    // (e.g. "CQ CQ DE AETHER") is a one-line change.
     const double hz = c.hz > 0 ? c.hz : 700.0;
     const double wpm = 18.0, dit = 1.2 / wpm;
-    static const int elems[] = {1, 3, 1, 1, 3, 0, 0};  // ·—·· + gaps
-    double total = 0.0;
-    for (int e : elems) total += (e ? e : 1) * dit;
+    struct Span { double on, off; };            // one key-down interval, in dits
+    struct Schedule { std::vector<Span> spans; double total = 0.0; };
+    static const Schedule sched = [] {
+        static const char* kMsg = "L";              // ·—·· — the original id
+        auto code = [](char ch) -> const char* {
+            switch (ch) {
+                case 'A': return ".-";   case 'C': return "-.-.";
+                case 'D': return "-..";  case 'E': return ".";
+                case 'H': return "...."; case 'L': return ".-..";
+                case 'Q': return "--.-"; case 'R': return ".-.";
+                case 'T': return "-";
+                default:  return "";
+            }
+        };
+        Schedule s;
+        double t = 0.0;
+        for (const char* p = kMsg; *p; ++p) {
+            if (*p == ' ') { t += 4.0; continue; }     // char gap 3 + 4 = 7-dit word gap
+            for (const char* e = code(*p); *e; ++e) {
+                const double dur = (*e == '-') ? 3.0 : 1.0;
+                s.spans.push_back({t, t + dur});
+                t += dur + 1.0;                        // element + 1-dit element gap
+            }
+            t += 2.0;                                  // element gap 1 + 2 = 3-dit char gap
+        }
+        s.total = t + 4.0;                             // loop restart = 7-dit word gap
+        return s;
+    }();
+    const int nSpans = static_cast<int>(sched.spans.size());
     for (int i = 0; i < kFrameLen; ++i) {
         const double tt = static_cast<double>(m_cwPhase + i) / kSampleRate;
-        const double pos = std::fmod(tt, total);
-        double acc = 0.0, key = 0.0;
-        for (int e : elems) {
-            const double dur = (e ? e : 1) * dit;
-            if (pos >= acc && pos < acc + dur) {
-                if (e) {
-                    key = 1.0;
-                    const double edge = 0.005, into = pos - acc, left = acc + dur - pos;
-                    if (into < edge)      key = 0.5 - 0.5 * std::cos((kTwoPi / 2.0) * into / edge);
-                    else if (left < edge) key = 0.5 - 0.5 * std::cos((kTwoPi / 2.0) * left / edge);
-                }
-                break;
-            }
-            acc += dur;
+        const double pos = std::fmod(tt, sched.total * dit);
+        if (pos < m_cwPos) m_cwSpan = 0;               // new message cycle
+        m_cwPos = pos;
+        while (m_cwSpan < nSpans && pos >= sched.spans[m_cwSpan].off * dit) ++m_cwSpan;
+        double key = 0.0;
+        if (m_cwSpan < nSpans && pos >= sched.spans[m_cwSpan].on * dit) {
+            const double start = sched.spans[m_cwSpan].on * dit;
+            const double end   = sched.spans[m_cwSpan].off * dit;
+            key = 1.0;
+            const double edge = 0.005, into = pos - start, left = end - pos;
+            if (into < edge)      key = 0.5 - 0.5 * std::cos((kTwoPi / 2.0) * into / edge);
+            else if (left < edge) key = 0.5 - 0.5 * std::cos((kTwoPi / 2.0) * left / edge);
         }
         out[i] = static_cast<float>(key * std::sin(kTwoPi * hz * tt));
     }

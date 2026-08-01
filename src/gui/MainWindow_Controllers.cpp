@@ -292,8 +292,10 @@ void MainWindow::showFlexControlDialog()
             if (m_radioSetupDialog)
                 m_radioSetupDialog->setFlexControlConnectionStatus(false);
             QMetaObject::invokeMethod(m_flexControl, [this] {
-                if (m_flexControl->isOpen())
-                    m_flexControl->close();
+                // Unconditional: after a port drop the driver is closed but
+                // still retrying, and only close() stops it wanting the port
+                // back. close() is idempotent when already closed. (#4574)
+                m_flexControl->close();
             });
 #endif
         });

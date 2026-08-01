@@ -9,6 +9,7 @@
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
 #include "core/AppSettings.h"
+#include "core/RadioStateMemory.h"  // RFC #4603 typed restore handoff
 #include "core/CwTrace.h"
 #include "core/DigitalVoiceModeRegistry.h"
 #include "core/DigitalVoiceWaveformProcess.h"
@@ -416,6 +417,68 @@ QJsonObject clientInfoToJson(quint32 handle,
 // family string to its IRadioBackend. "flex" (the default, and any unrecognized
 // value) preserves the historical hard-wired FlexBackend; "hl2" selects the
 // Hermes-Lite 2 backend. A fuller step-3 registry supersedes this later.
+
+// RFC #4603 proposal B: hand the remembered operating state to a backend
+// whose declared ClientSettingsDomains make the client its memory. Called
+// immediately before connectRadio(); a backend with an empty declaration
+// (Flex, Sim) never sees restored state — the radio-authoritative policy
+// (Constitution II/III) is structurally untouched.
+// RFC #4603 PR 3: the debounced store write. Gated by the same predicate as
+// the restore path — capability-shaped, never family-shaped. `force` is the
+// disconnect-flush path: isConnected() is already false there, but the
+// backend still holds the session's final state and the scope still resolves
+// to that radio's identity.
+void RadioModel::persistOperatingState(bool force)
+{
+    m_operatingStateSaveTimer.stop();
+    m_operatingStateMaxWaitTimer.stop();
+    if (!m_backend || (!force && !isConnected())) {
+        return;
+    }
+    const RadioCapabilities caps = m_backend->capabilities();
+    if (!RadioStateMemory::shouldEngage(caps)) {
+        return;
+    }
+    RadioStateMemory::store(settingsScope(), caps,
+                            m_backend->currentOperatingState());
+}
+
+void RadioModel::flushPendingOperatingState()
+{
+    // Only when something is actually pending: a disconnect with no unsaved
+    // edits must not rewrite the document (and a Flex/Sim backend never has
+    // a pending timer to begin with).
+    if (!m_operatingStateSaveTimer.isActive()
+        && !m_operatingStateMaxWaitTimer.isActive()) {
+        return;
+    }
+    persistOperatingState(true);
+}
+
+void RadioModel::handRestoredStateToBackend(const QString& serial)
+{
+    if (!m_backend) {
+        return;
+    }
+    const RadioCapabilities caps = m_backend->capabilities();
+    if (!RadioStateMemory::shouldEngage(caps)) {
+        return;
+    }
+    // Stop any capture pending from a previous same-family session: the
+    // flush-on-disconnect already persisted it under the OLD radio's scope,
+    // and a stale timer crossing the swap would write radio A's snapshot
+    // under radio B's identity (PR #4619 review, Ozy311 finding 1).
+    m_operatingStateSaveTimer.stop();
+    m_operatingStateMaxWaitTimer.stop();
+
+    const RestoredRadioState state =
+        RadioStateMemory::load(RadioSettingsScope(m_family, serial), caps);
+    // UNCONDITIONALLY — an empty state is the reset that stops a same-family
+    // backend reuse leaking radio A's maps and live members into radio B
+    // ("this radio has no memory" is information, not a no-op).
+    m_backend->applyRestoredState(state);
+}
+
 std::unique_ptr<IRadioBackend> RadioModel::makeBackend(const QString& family)
 {
     if (family.compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0)
@@ -749,6 +812,26 @@ void RadioModel::setupBackend(const QString& family)
     // signal to bind to and cannot observe a stale picture.
     connect(m_backend.get(), &IRadioBackend::capabilitiesChanged, this,
             [this] { publishCapabilities(isConnected()); });
+
+    // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend that
+    // declares client-owned settings domains reports state movement; one
+    // debounced store per burst of changes. Engagement is capability-shaped —
+    // for an empty declaration (Flex, Sim) the signal is never emitted AND
+    // the store call is gated again in persistOperatingState().
+    connect(m_backend.get(), &IRadioBackend::operatingStateChanged, this,
+            [this] {
+        m_operatingStateSaveTimer.start();
+        if (!m_operatingStateMaxWaitTimer.isActive()) {
+            m_operatingStateMaxWaitTimer.start();
+        }
+    });
+    // Flush the pending capture BEFORE the rest of the disconnect teardown
+    // touches identity — this connection is made first, and same-thread
+    // signal delivery runs slots in connection order, so the scope still
+    // resolves to the radio the pending edits belong to (PR #4619 review:
+    // the last tune before Disconnect was exactly the state being lost).
+    connect(m_backend.get(), &IRadioBackend::disconnected, this,
+            &RadioModel::flushPendingOperatingState);
 
     // Keying and tune from the GUI.
     //
@@ -1430,6 +1513,18 @@ RadioModel::RadioModel(QObject* parent)
             [this](const QString&) { updateOperatorTransmit(); });
 
     m_reconnectTimer.setInterval(5000);
+    // RFC #4603 PR 3: one settings write per burst of operating-state
+    // changes — trailing debounce plus a max-wait so continuous tuning still
+    // persists periodically instead of restarting the window forever
+    // (PR #4619 review).
+    m_operatingStateSaveTimer.setSingleShot(true);
+    m_operatingStateSaveTimer.setInterval(2000);
+    connect(&m_operatingStateSaveTimer, &QTimer::timeout, this,
+            [this] { persistOperatingState(false); });
+    m_operatingStateMaxWaitTimer.setSingleShot(true);
+    m_operatingStateMaxWaitTimer.setInterval(10000);
+    connect(&m_operatingStateMaxWaitTimer, &QTimer::timeout, this,
+            [this] { persistOperatingState(false); });
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
         if (!m_intentionalDisconnect && !m_lastInfo.address.isNull()) {
             qCDebug(lcProtocol) << "RadioModel: auto-reconnecting to" << m_lastInfo.address.toString();
@@ -1444,6 +1539,7 @@ RadioModel::RadioModel(QObject* parent)
                 req.host   = m_lastInfo.address.toString();
                 req.port   = m_lastInfo.port;
                 req.serial = m_lastInfo.serial;
+                handRestoredStateToBackend(req.serial);
                 m_backend->connectRadio(req);
             }
         } else {
@@ -2452,6 +2548,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         req.host   = info.address.toString();
         req.port   = info.port;
         req.serial = info.serial;
+        handRestoredStateToBackend(req.serial);
         m_backend->connectRadio(req);
     }
 }

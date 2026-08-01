@@ -14,6 +14,7 @@
 #include "core/backends/MeterDef.h"
 #include "core/backends/ProfileDelta.h"
 #include "core/backends/RadioCapabilities.h"
+#include "core/backends/RestoredRadioState.h"
 #include "core/backends/RadioDelta.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
@@ -85,7 +86,23 @@ public:
     virtual bool ownsRxAudio() const { return false; }
 
     // ---- connection lifecycle ----
+    // Typed restore handoff (RFC #4603 proposal B): called by RadioModel
+    // BEFORE connectRadio(), and only when this backend's declared
+    // clientSettingsDomains is non-empty. The backend stashes what it wants
+    // and applies it during connect/initial-push, validating its own
+    // extension document at this boundary (Principle VII). Default no-op —
+    // a radio-authoritative backend (Flex) never sees restored state.
+    virtual void applyRestoredState(const RestoredRadioState& state)
+    {
+        Q_UNUSED(state);
+    }
     virtual void connectRadio(const RadioConnectRequest& request) = 0;
+    // The capture half of RadioStateMemory (RFC #4603 PR 3): a backend whose
+    // declared clientSettingsDomains is non-empty reports its operating state
+    // here on demand, and emits operatingStateChanged() (see signals) when it
+    // moves. RadioModel debounces the signal and persists the snapshot via
+    // RadioStateMemory::store — the backend never touches the settings store.
+    virtual RestoredRadioState currentOperatingState() const { return {}; }
     virtual void disconnectRadio() = 0;
     virtual bool isConnected() const = 0;
 
@@ -486,6 +503,11 @@ signals:
     // range/step are family-specific and reported via RadioCapabilities). The
     // backend decodes it from vendor status; RadioModel drives the pan.
     void panRfGainChanged(const QString& panId, int gain);
+    // Operating state moved (frequency, mode, passband, rate, gain, drive) —
+    // fetch it with currentOperatingState(). Emitted only by backends with a
+    // non-empty clientSettingsDomains declaration; rate-limiting is the
+    // subscriber's job (RadioModel debounces).
+    void operatingStateChanged();
 
     // The RF-gain range and step this pan actually offers, in dB.
     //

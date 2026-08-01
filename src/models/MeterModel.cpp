@@ -221,7 +221,10 @@ void MeterModel::removeMeter(int index)
     if (index == m_hwAlcIdx)     m_hwAlcIdx = -1;
     if (index == m_swAlcIdx)     m_swAlcIdx = -1;
     if (index == m_paTempIdx)    m_paTempIdx = -1;
-    if (index == m_supplyIdx)    m_supplyIdx = -1;
+    if (index == m_supplyIdx) {
+        m_supplyIdx = -1;
+        m_hasSupplyVoltsValue = false;   // the sample cannot outlive its meter
+    }
     if (index == m_ampFwdPwrIdx) m_ampFwdPwrIdx = -1;
     if (index == m_ampSwrIdx)    m_ampSwrIdx = -1;
     if (index == m_ampTempIdx)   m_ampTempIdx = -1;
@@ -310,6 +313,7 @@ void MeterModel::clear()
     m_swAlcIdx = -1;
     m_paTempIdx = -1;
     m_supplyIdx = -1;
+    m_hasSupplyVoltsValue = false;
     m_ampFwdPwrIdx = -1;
     m_ampSwrIdx = -1;
     m_ampTempIdx = -1;
@@ -641,6 +645,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             hwChanged = true;
         } else if (idx == m_supplyIdx) {
             m_supplyVolts = v;  // "+13.8A" = supply voltage at point A (before fuse)
+            m_hasSupplyVoltsValue = true;   // a SAMPLE, not just a definition
             hwChanged = true;
         } else if (idx == m_tgxlFwdIdx) {
             m_tgxlFwdPwr = std::pow(10.0f, v / 10.0f) / 1000.0f;

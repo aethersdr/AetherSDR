@@ -8,6 +8,112 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Theme fallback colours corrected on themes that predate the token (#3184)
+
+- **Slice colours A–H and `color.accent.dim` now match the bundled themes.**
+  AetherSDR compiles a copy of the default theme into the binary as a fallback
+  for tokens a theme file doesn't define. That table was maintained by hand and
+  had drifted: it said slice A was red (`#ff4040`) while both bundled themes say
+  cyan (`#00d4ff`), and eight more slice colours disagreed the same way. If your
+  theme predates the slice tokens you will see the corrected — cyan — palette.
+  Themes that define their own slice colours are unaffected.
+
+- **24 tokens that had no compiled fallback at all now have one.** The dimmed
+  slice colours, the highlight and disabled-button colours, and all six
+  waterfall colormap gradients previously resolved to *transparent* on a theme
+  that predated them. On such a theme the waterfall could render with no
+  colormap; it now falls back to the bundled Default Dark gradients.
+
+- The table is generated from `resources/themes/default-dark.json` by
+  `tools/gen_theme_seed.py`, so the two can no longer disagree.
+
+### Fixed
+
+- **The Display ▸ WtrFall Rate slider ran backwards on the Hermes-Lite 2 and
+  the demo rig.** The control is a rate — 1 slow, 100 fast — but it travels
+  under FlexRadio's `line_duration` wire name, which is typed as milliseconds.
+  On a radio whose waterfall this client paces itself, the number was read
+  literally, so 1 gave the fastest scroll and 100 the slowest. 100 is the
+  default, which meant every HL2 session started on the slowest setting at
+  about 10 rows/second. The slider now runs the right way and is linear in
+  rows per second: 0.2 rows/s at the bottom, and at the top the waterfall
+  simply tracks the panadapter's frame rate (which Display ▸ FFT FPS owns) —
+  measured at 25 rows/s on a real HL2. Half-way up the slider is now half
+  speed, which it never was. FlexRadio radios are unaffected: their own
+  display engine has always done this conversion. (#4606)
+
+- **Adaptive network throttling sped the waterfall up on a bad connection.**
+  The same unit confusion, one layer up: the throttle converted its frame-rate
+  cap straight into a duration and sent it as a rate, so a "Poor" 4 fps cap
+  asked for the *fastest* waterfall setting available. Worse network, faster
+  waterfall. It now converts through the same law the display uses. (#4606)
+
+- **The waterfall Black Level button offered a hardware mode on radios that
+  have no such thing.** `HW` hands the black-level decision to the radio, which
+  only FlexRadio hardware computes. On a Hermes-Lite 2, selecting it sent a
+  command nowhere and left the waterfall waiting for a level that never
+  arrived — the button moved, the setting stuck, the picture did not change.
+  The button now cycles `Off ↔ SW` on radios without it, and `SW` (this
+  client's own noise-floor estimate, available on every radio) is what runs.
+  If you chose `HW` on a FlexRadio, that choice is **remembered, not
+  overwritten**: connect an HL2 and the button reads `SW`, reconnect the Flex
+  and it is back on `HW` without you re-selecting it. (#4606)
+
+- **FlexControl now recovers on its own after losing its USB port.** The knob
+  driver had no error handling at all: if the serial port dropped — a USB
+  glitch, a driver reset, the host reclaiming the device — nothing noticed, and
+  the knob stayed dead for the rest of the session. It now detects the error,
+  releases the port, and re-detects the device every couple of seconds until it
+  comes back (re-detecting rather than reusing the old name, since a replug can
+  hand the device a different COM port). Disconnecting from AetherControl or
+  turning FlexControl off in Radio Setup still stops it for good. Enabling the
+  **Ext Devices** log category now also shows the serial error at the moment
+  the port drops, instead of silence. (#4574)
+
+### Client settings store moved to SQLite (RFC #4603, phase 1)
+
+- **Settings now live in a SQLite database** (`AetherSDR.db` in the config
+  folder) instead of the XML file. The switch is automatic and verified on
+  first launch; your old `AetherSDR.settings` stays in place untouched, so
+  rolling back to an older release keeps the settings you had at upgrade
+  time (changes made after the upgrade stay with the new version).
+- **Safer storage**: transactional saves (no more full-file rewrites),
+  startup integrity checks, automatic verified backups, and quarantine +
+  restore if the store is ever damaged — with a notice telling you which
+  backup was used. Reset Settings now writes a final backup before wiping.
+- **Credentials are never stored in settings anymore.** The MQTT password,
+  automation-bridge token, and remote-ASR API key move to your OS keychain
+  automatically during the upgrade.
+- **New `--config` command line**: `aethersdr --config list|get|set|unset|
+  export|path` inspects or repairs settings without starting the GUI —
+  the escape hatch when a broken stored value prevents startup.
+- **New Settings Browser** (Settings ▸ Settings Browser…): browse and edit
+  the whole settings store — app keys, the station section, and each
+  radio's stored feature documents — with live filtering, guarded
+  editing (True/False picker, JSON validation, confirmations), and a
+  sanitized diagnostic export. Credential-shaped values are masked and
+  read-only; a store from a newer version browses read-only.
+- Fixes a latent threading race in the settings core (#4602).
+
+### Fixed
+
+- **Frameless window no longer drifts down the screen on Windows (#4328)** —
+  with **Frameless Window** enabled, AetherSDR reopened a title-bar height
+  below where you left it, so a window parked at the top of the screen had to
+  be nudged back up every launch. Qt was reserving room for a title bar the
+  custom frame does not have. The window now reopens exactly where you left
+  it, keeps its full size if you had it filling the screen, and stays put
+  through Minimal Mode round trips.
+- **Copy Assist no longer freezes the app on first use on macOS (#4535)** —
+  turning on ASR could hang the entire interface, on one Intel MacBook Pro for
+  over 75 minutes, with a force-quit as the only way out. The speech-recognition
+  engine was asking macOS to compile its GPU shaders the first time it looked
+  for a graphics card, and on some Intel Macs Apple's shader compiler never
+  finishes. Those shaders are now compiled when AetherSDR is built, so nothing
+  is compiled on your machine and the panel opens immediately. Apple Silicon
+  Macs also stop paying a several-second delay the first time ASR touches the
+  GPU on each cold start.
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

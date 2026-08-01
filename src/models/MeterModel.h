@@ -161,6 +161,17 @@ public:
 
     // Convenience: supply voltage (Volts, from "+13.8A" meter — measurement point A, before fuse).
     float supplyVolts() const { return m_supplyVolts; }
+    // Whether a supply-voltage SAMPLE has actually arrived — not merely
+    // whether the radio declared the meter. The distinction is load-bearing:
+    // m_supplyIdx is set when the meter DEFINITION lands, while m_supplyVolts
+    // stays at its 0.0f initialiser until a "+13.8A" VALUE packet lands, and
+    // hwTelemetryChanged fires on every PA-temperature tick in between because
+    // one signal reports both halves. Keying on the index would therefore let
+    // a PATEMP tick in that window repaint the initialiser as "0.00 V" —
+    // exactly the fabricated reading this accessor exists to prevent. Same
+    // shape as m_hasCompPeakValue above. Lets a caller tell "the rail reads
+    // zero" from "no rail reading has arrived".
+    bool hasSupplyVoltage() const { return m_hasSupplyVoltsValue; }
 
 signals:
     // Emitted when the S-meter value changes (dBm).
@@ -295,6 +306,9 @@ private:
     float m_swAlc{0.0f};
     float m_paTemp{0.0f};
     float m_supplyVolts{0.0f};
+    // Set when a "+13.8A" value packet lands, cleared wherever m_supplyIdx is,
+    // so it can never outlive the meter it describes. See hasSupplyVoltage().
+    bool m_hasSupplyVoltsValue{false};
     float m_ampFwdPwr{0.0f};
     float m_ampSwr{1.0f};
     float m_ampTemp{0.0f};
