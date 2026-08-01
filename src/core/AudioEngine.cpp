@@ -8825,25 +8825,19 @@ void AudioEngine::pumpWsprBeacon()
     constexpr qint64 kMaximumCatchUpFrames = WsprBeacon::kFramesPerSymbol / 2;
     const int frames = static_cast<int>(
         std::min(dueFrames, kMaximumCatchUpFrames));
-    m_wsprInt16Scratch.resize(
-        frames * 2 * static_cast<int>(sizeof(int16_t)));
+    // Straight to float. This used to generate int16 and divide by 32768 right
+    // back into float, which bought nothing and cost an undithered
+    // quantization of a pure tone — the one signal for which quantization
+    // error is harmonically correlated rather than noise-like.
+    m_wsprFloatScratch.resize(
+        frames * 2 * static_cast<int>(sizeof(float)));
     // process() leaves the buffer untouched if the beacon was stopped from the
     // GUI thread since the isActive() check above, and QByteArray::resize does
     // not initialize the bytes it adds. Clear first so a stop landing inside
     // that window can never put uninitialized memory on the air.
-    m_wsprInt16Scratch.fill('\0');
+    m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
-        reinterpret_cast<int16_t*>(m_wsprInt16Scratch.data()), frames, 2);
-
-    const int sampleCount = frames * 2;
-    m_wsprFloatScratch.resize(
-        sampleCount * static_cast<int>(sizeof(float)));
-    const auto* input =
-        reinterpret_cast<const int16_t*>(m_wsprInt16Scratch.constData());
-    auto* output = reinterpret_cast<float*>(m_wsprFloatScratch.data());
-    for (int i = 0; i < sampleCount; ++i) {
-        output[i] = input[i] / 32768.0f;
-    }
+        reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
     feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
     m_wsprPumpedFrames += frames;
 }

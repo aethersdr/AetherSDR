@@ -578,6 +578,12 @@ private:
     // drained by onTrackedWidgetDestroyed.
     struct TrackedWidget {
         QString             stylesheetTemplate;
+        // Exactly the QSS *we* last pushed onto the widget.  If the widget's
+        // current stylesheet still equals this, nobody has overridden us and
+        // a re-resolve is safe.  If it differs, a caller set its own sheet
+        // afterwards — per-slice badge colours, TX indicator state, RADE SNR
+        // colour — and re-resolving would silently wipe it.  See eventFilter.
+        QString             appliedStylesheet;
         QStringList         tokens;
         QList<ThemeRegion>  regions;
     };
