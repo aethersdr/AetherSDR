@@ -43,6 +43,8 @@ int hidKbdToLinuxKey(unsigned char keycode)
     }
 }
 
+constexpr const wchar_t* kProductMatch = L"Ulanzi Dial";
+
 } // namespace
 
 UlanziDialWindowsManager::UlanziDialWindowsManager(QObject* parent)
@@ -180,7 +182,7 @@ void UlanziDialWindowsManager::handleReport(OpenDevice& dev,
         const bool nowCtrl  = (mod      & 0x01) || (mod      & 0x10);
         const bool prevCtrl = (prevMod & 0x01) || (prevMod & 0x10);
         if (nowCtrl != prevCtrl)
-            emitKeyTransition(LeftCtrl, nowCtrl ? 1 : 0);
+            emitKeyTransition(UlanziKey::LeftCtrl, nowCtrl ? 1 : 0);
         // Pressed-keys diff: keys 2..7.
         auto contains = [](const QVector<unsigned char>& r, unsigned char k) -> bool {
             for (int i = 2; i < r.size() && i < 8; ++i)

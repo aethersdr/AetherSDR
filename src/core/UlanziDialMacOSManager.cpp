@@ -43,6 +43,19 @@ int hidKbdToLinuxKey(int usage)
     }
 }
 
+// Build a matching dictionary so IOHIDManager only surfaces our dial,
+// not every keyboard on the machine.  Match by product-name substring
+// "Ulanzi Dial".
+CFMutableDictionaryRef makeMatchDict()
+{
+    CFMutableDictionaryRef d = CFDictionaryCreateMutable(
+        kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFStringRef product = CFSTR("Ulanzi Dial");
+    CFDictionarySetValue(d, CFSTR(kIOHIDProductKey), product);
+    return d;
+}
+
 } // namespace
 
 UlanziDialMacOSManager::UlanziDialMacOSManager(QObject* parent)
