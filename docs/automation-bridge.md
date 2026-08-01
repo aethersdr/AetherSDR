@@ -1090,7 +1090,9 @@ transverter could plausibly need still passes. It is deliberately not
 auto-corrected: `14200000` would have to mean 14.2 MHz here and something else
 in every other frequency verb.
 
-Four refusals guard the value, and the wording differs on purpose:
+Four refusals guard the value, and the wording differs on purpose. The same
+four — same thresholds, one shared helper, the verb's own name in the message
+— also guard [`targettune`](#targettune) and [`pan center`](#pan):
 
 | input | reply |
 |---|---|
@@ -1129,6 +1131,18 @@ sweep guards.
 → {"cmd":"targettune","value":"146.520"}
 ← {"ok":true,"targetTune":146.52,"sliceId":0,"letter":"A"}
 ```
+
+**The value is MHz.** The [four refusals listed under `tune`](#tune) apply here
+unchanged — same thresholds, same shared helper, `targettune` in the message:
+
+```json
+→ {"cmd":"targettune","value":"14200000"}
+← {"ok":false,"error":"targettune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)"}
+```
+
+`ok:true` carries the same caveat as `tune`: it is an acknowledgement that the
+request was accepted and dispatched, not a confirmation that the radio landed
+there. Read the frequency back with [`get slices`](#get) if you need to know.
 
 ### `memory`
 Recall a radio memory through `MainWindow::activateMemorySpot()`, including its
@@ -1633,7 +1647,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `action` | `value` | effect |
 |---|---|---|
 | `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
-| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
 
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`

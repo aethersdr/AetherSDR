@@ -300,7 +300,7 @@ duplicate to Qt. The same shape exists on the spectrum side.
 | `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
 
 The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
-`engine-boundary.yml`, `--strict`) by three ratchets:
+`static-checks.yml`, `--strict`) by three ratchets:
 - **EB1** — no `core/`/`models/` file may include a `gui/` header (now
   zero; any finding is an error).
 - **EB2** — no `core/`/`models/` file may use QtWidgets (a shrinking
@@ -372,7 +372,7 @@ you:
   empties). The set only shrinks — never add a stem or a row to make a
   build pass. If EB3 blocks you and the include is genuinely unavoidable,
   that's a design conversation for a maintainer, not a baseline edit.
-- **`src/gui/**` is in the CI trigger** for `engine-boundary.yml` now
+- **`src/gui/**` is in the CI trigger** for `static-checks.yml` now
   (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
   still caught.
 
@@ -792,7 +792,7 @@ on every value-change method, `QAccessibleInterface` subclass for any
 with `QPushButton` or add keyboard activation).
 
 CI enforcement: [`tools/check_a11y.py`](tools/check_a11y.py) runs on every
-PR via [`.github/workflows/a11y-check.yml`](.github/workflows/a11y-check.yml)
+PR via [`.github/workflows/static-checks.yml`](.github/workflows/static-checks.yml)
 and emits inline diff annotations for the patterns above. Warning-only
 (`exit 0`); never blocks a build.
 

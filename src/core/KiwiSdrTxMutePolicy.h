@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 // KiwiSDR transmit-mute latch (fork feature: warm Kiwi audio through TX).
@@ -99,5 +100,77 @@ struct KiwiSdrTxMaskWatchdog {
         return armedEpoch == epoch && maskedNow;
     }
 };
+
+// Hold time for "Resume audio after TX delay": how long the transmit gate
+// stays closed past unkey so the resume lands on audio the Kiwi received
+// AFTER the transmission ended, instead of replaying the operator's own
+// delayed TX tail. Two additive components: the ingest lag (the
+// receive-sync estimate measures when Kiwi audio ARRIVES relative to the
+// Flex stream; without one, the sync base latency stands in as a proxy)
+// plus the engine-applied presentation holdback for this source, which
+// delays playback beyond arrival. The guard covers what neither can see
+// (the Flex chain's own absolute latency plus websocket bunching).
+constexpr int kKiwiSdrResumeHoldGuardMs = 250;
+constexpr int kKiwiSdrResumeHoldMinMs = 250;
+constexpr int kKiwiSdrResumeHoldMaxMs = 6000;
+
+inline int kiwiSdrResumeHoldMs(bool estimateValid, int estimateOffsetMs,
+                               int fallbackLatencyMs,
+                               int appliedPresentationDelayMs)
+{
+    const int base = estimateValid ? std::max(estimateOffsetMs, 0)
+                                   : std::max(fallbackLatencyMs, 0);
+    return std::clamp(base + std::max(appliedPresentationDelayMs, 0)
+                          + kKiwiSdrResumeHoldGuardMs,
+                      kKiwiSdrResumeHoldMinMs, kKiwiSdrResumeHoldMaxMs);
+}
+
+// Which ingest-lag figure the hold above is entitled to use. Split out of the
+// caller because it is a decision, not arithmetic: getting it wrong does not
+// fail anything, it just silently changes how long the operator's audio stays
+// muted. A receive-sync offset only describes the ONE profile it was measured
+// against, and only while that measurement still holds the lock the sync
+// engine itself demands before acting on it — everything else falls back to
+// the caller's proxy.
+struct KiwiSdrResumeHoldSyncInputs {
+    bool isSyncTarget{false};       // this profile is the sync delay target
+    bool syncEnabled{false};
+    bool autoAssist{false};         // AutoAssist mode (false => Manual)
+    bool estimateValid{false};
+    bool estimateHeld{false};
+    float estimateConfidence{0.0f};
+    float autoLockConfidence{0.0f};
+    int estimateOffsetMs{0};        // positive delays Flex relative to Kiwi
+    int manualOffsetMs{0};
+};
+
+struct KiwiSdrResumeHoldIngestLag {
+    bool valid{false};
+    int offsetMs{0};
+};
+
+inline KiwiSdrResumeHoldIngestLag kiwiSdrResumeHoldIngestLag(
+    const KiwiSdrResumeHoldSyncInputs& in)
+{
+    if (!in.isSyncTarget || !in.syncEnabled) {
+        return {};
+    }
+    if (in.autoAssist) {
+        // Same condition ReceivePresentationSync applies before it will act
+        // on an estimate: held, or confident enough to lock.
+        if (in.estimateValid
+            && (in.estimateHeld
+                || in.estimateConfidence >= in.autoLockConfidence)) {
+            return {true, in.estimateOffsetMs};
+        }
+        return {};
+    }
+    // Manual: a negative or zero offset says the Kiwi is EARLIER than the
+    // Flex stream, which tells us nothing about its ingest lag.
+    if (in.manualOffsetMs > 0) {
+        return {true, in.manualOffsetMs};
+    }
+    return {};
+}
 
 } // namespace AetherSDR

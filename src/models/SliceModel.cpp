@@ -601,6 +601,16 @@ void SliceModel::setSquelch(bool on, int level)
     emit squelchChanged(on, level);
 }
 
+void SliceModel::setManualSquelch(bool on, int level)
+{
+    setSquelch(on, level);
+    // Kiwi/external-receive slices already track their own level via
+    // m_externalReceiveSquelchLevel (setSquelch's early-return branch
+    // above) — nothing else to record here.
+    if (!m_externalReceiveAudioReplacement)
+        setManualSquelchLevel(level);
+}
+
 void SliceModel::setExternalReceiveAutoSquelch(bool on)
 {
     if (m_externalReceiveAutoSquelch == on) {
@@ -1367,8 +1377,19 @@ void SliceModel::applyChanges(const SliceDelta& d)
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
         if (d.squelchOn.has_value())
             m_squelchOn = *d.squelchOn;
-        if (d.squelchLevel.has_value())
+        if (d.squelchLevel.has_value()) {
             m_squelchLevel = *d.squelchLevel;
+            // Adopt the echoed level as the operator's manual choice only
+            // when the surface owning this slice's SQL mode says it is one
+            // (see setSquelchEchoIsManual) — an Auto-computed level, or the
+            // level carried by an Off-mode push, would otherwise silently
+            // overwrite the threshold the operator actually chose (#4592).
+            // External-receive (Kiwi) slices keep their level in
+            // m_externalReceiveSquelchLevel and never read the Flex manual
+            // memory, so exclude them here exactly as setManualSquelch does.
+            if (m_squelchEchoIsManual && !m_externalReceiveAudioReplacement)
+                setManualSquelchLevel(*d.squelchLevel);
+        }
         emit squelchChanged(m_squelchOn, m_squelchLevel);
     }
     if (d.ritOn.has_value() || d.ritFreq.has_value()) {

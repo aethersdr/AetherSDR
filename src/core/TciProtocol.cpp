@@ -2,6 +2,7 @@
 #include "TciProtocol.h"
 #include "AppSettings.h"
 #include "TciRoutingState.h"
+#include "TciTrxMap.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/PanadapterModel.h"
@@ -60,9 +61,11 @@ long long TciProtocol::mhzToHz(double mhz)
     return static_cast<long long>(std::round(mhz * 1e6));
 }
 
-TciProtocol::TciProtocol(RadioModel* model, TciRoutingState* routingState)
+TciProtocol::TciProtocol(RadioModel* model, TciRoutingState* routingState,
+                         const TciTrxMap* trxMap)
     : m_model(model)
     , m_routingState(routingState)
+    , m_trxMap(trxMap)
 {}
 
 // ── Mode conversion ────────────────────────────────────────────────────────
@@ -99,6 +102,8 @@ QString TciProtocol::tciToSmartSDR(const QString& mode)
 
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
+    if (m_trxMap)
+        return m_trxMap->sliceForTrx(m_model, trx);
     return resolveSliceForTrx(m_model, trx);
 }
 
@@ -165,7 +170,8 @@ int TciProtocol::txSliceTrxOrNone(RadioModel* model)
 
 int TciProtocol::txTrx() const
 {
-    const int trx = txSliceTrxOrNone(m_model);
+    const int trx = m_trxMap ? m_trxMap->txSliceTrxOrNone(m_model)
+                             : txSliceTrxOrNone(m_model);
     return trx < 0 ? 0 : trx;  // request/response wire needs a concrete index
 }
 
@@ -212,7 +218,10 @@ QString TciProtocol::generateInitBurst()
     burst += QStringLiteral("if_limits:-48000,48000;");
 
     const auto slices = m_model ? m_model->slices() : QList<SliceModel*>{};
-    int trxCount = slices.size();
+    // #4567: with stable bindings, a transient hole (band-change settle
+    // window) must not advertise a count below an index a client is using —
+    // the map reports 1 + the highest trx in use instead of the list size.
+    int trxCount = m_trxMap ? m_trxMap->trxCount(m_model) : slices.size();
     if (trxCount < 1) trxCount = 1;
     burst += QStringLiteral("trx_count:%1;").arg(trxCount);
     // `channels_count` (plural).  The TCI Protocol PDF spec lists this
@@ -255,7 +264,8 @@ QString TciProtocol::generateInitBurst()
     // state machine).
     if (m_model) {
         for (auto* s : slices) {
-            int trx = tciTrxForSlice(m_model, s);
+            int trx = m_trxMap ? m_trxMap->trxForSlice(m_model, s)
+                               : tciTrxForSlice(m_model, s);
             const long long hz = mhzToHz(s->frequency());
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
             SliceModel* txVfo = sliceForVfo(trx, 1);

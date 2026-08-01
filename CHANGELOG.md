@@ -8,6 +8,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Theme fallback colours corrected on themes that predate the token (#3184)
+
+- **Slice colours A–H and `color.accent.dim` now match the bundled themes.**
+  AetherSDR compiles a copy of the default theme into the binary as a fallback
+  for tokens a theme file doesn't define. That table was maintained by hand and
+  had drifted: it said slice A was red (`#ff4040`) while both bundled themes say
+  cyan (`#00d4ff`), and eight more slice colours disagreed the same way. If your
+  theme predates the slice tokens you will see the corrected — cyan — palette.
+  Themes that define their own slice colours are unaffected.
+
+- **24 tokens that had no compiled fallback at all now have one.** The dimmed
+  slice colours, the highlight and disabled-button colours, and all six
+  waterfall colormap gradients previously resolved to *transparent* on a theme
+  that predated them. On such a theme the waterfall could render with no
+  colormap; it now falls back to the bundled Default Dark gradients.
+
+- The table is generated from `resources/themes/default-dark.json` by
+  `tools/gen_theme_seed.py`, so the two can no longer disagree.
+
+### Fixed
+
+- **FlexControl now recovers on its own after losing its USB port.** The knob
+  driver had no error handling at all: if the serial port dropped — a USB
+  glitch, a driver reset, the host reclaiming the device — nothing noticed, and
+  the knob stayed dead for the rest of the session. It now detects the error,
+  releases the port, and re-detects the device every couple of seconds until it
+  comes back (re-detecting rather than reusing the old name, since a replug can
+  hand the device a different COM port). Disconnecting from AetherControl or
+  turning FlexControl off in Radio Setup still stops it for good. Enabling the
+  **Ext Devices** log category now also shows the serial error at the moment
+  the port drops, instead of silence. (#4574)
+
 ### Client settings store moved to SQLite (RFC #4603, phase 1)
 
 - **Settings now live in a SQLite database** (`AetherSDR.db` in the config
@@ -42,6 +74,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   custom frame does not have. The window now reopens exactly where you left
   it, keeps its full size if you had it filling the screen, and stays put
   through Minimal Mode round trips.
+- **Copy Assist no longer freezes the app on first use on macOS (#4535)** —
+  turning on ASR could hang the entire interface, on one Intel MacBook Pro for
+  over 75 minutes, with a force-quit as the only way out. The speech-recognition
+  engine was asking macOS to compile its GPU shaders the first time it looked
+  for a graphics card, and on some Intel Macs Apple's shader compiler never
+  finishes. Those shaders are now compiled when AetherSDR is built, so nothing
+  is compiled on your machine and the panel opens immediately. Apple Silicon
+  Macs also stop paying a several-second delay the first time ASR touches the
+  GPU on each cold start.
+- **Manual squelch is remembered per slice again, on every path (#4592)** —
+  each slice keeps its own manual squelch threshold, but only the RX applet
+  was keeping that memory current. Setting the level any other way — from a
+  non-active slice's own VFO flag, a MIDI or controller squelch knob, or from
+  the radio itself (your own edit on another client, or the radio's session
+  restore) — left the remembered value stale, so the next time you cycled the
+  SQL button that stale value was pushed back to the radio and quietly undid
+  what you had set. Every route now keeps the live level and the remembered
+  one together, and levels the radio reports back update it too — except while
+  Auto is computing them, so Auto's tracking of the noise floor no longer
+  overwrites the threshold you chose by hand. Switching squelch off and back
+  on returns you to your own level rather than the Auto margin.
+- **Squelch is no longer saved between sessions (#4592)** — squelch belongs to
+  the radio, and AetherSDR was also keeping its own copy. On a FLEX that copy
+  was never read back — the radio reports the real level on every connect — so
+  it only added a settings write each time you moved the slider, and risked
+  fighting the radio on reconnect. New slices now start from the radio's own
+  level, and the leftover setting is removed from existing installs on first
+  launch.
 - **Ulanzi Dial buttons can now hold PTT and key CW, and remember what you
   mapped them to (#4611)** — a dial button set to **PTT (Hold)** or a CW key
   did nothing at all, because only the button-down half of each press was

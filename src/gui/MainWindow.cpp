@@ -1007,7 +1007,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
             if (radioInfo.address.isNull()) {
                 setPanadapterConnectionAnimation(false);
                 m_connPanel->setStatusText("Select a radio to reconnect");
-                m_connPanel->show();
+                showConnectionDialog();
                 return;
             }
 
@@ -1123,6 +1123,19 @@ MainWindow::MainWindow(QWidget* parent)
             for (const QChar letter : {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'})
                 s.remove(QString("SliceAudioMuted_%1").arg(letter));
             s.setValue("SliceAudioMutedMigratedV0999", "True");
+            s.save();
+        }
+
+        // One-shot migration: remove the dead LastManualSquelchLevel key.
+        // #4592 moved manual squelch memory onto SliceModel (radio-
+        // authoritative — AGENTS.md "do NOT persist") and stopped writing
+        // this key, but existing installs kept the orphaned row, which is
+        // now operator-visible via --config list / the Settings Browser
+        // (#4603) — maintainer-flagged on the #4604 review as an optional
+        // cleanup.
+        if (!s.contains("LastManualSquelchLevelMigratedV4604")) {
+            s.remove("LastManualSquelchLevel");
+            s.setValue("LastManualSquelchLevelMigratedV4604", "True");
             s.save();
         }
     }
@@ -2945,16 +2958,19 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         const QString fcPort = fcs.value("FlexControlPort").toString();
         const bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
         QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
+            // close() is called unconditionally, never gated on isOpen(): after
+            // a port drop the driver is closed but still *wants* the port and is
+            // retrying, and close() is the only thing that clears that. Gating
+            // on isOpen() would let the driver reclaim a device the operator
+            // had just switched off here. close() is idempotent. (#4574)
             if (fcOpen) {
                 if (fcPort.isEmpty()) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                 } else if (!m_flexControl->isOpen() || m_flexControl->portName() != fcPort) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                     m_flexControl->open(fcPort);
                 }
-            } else if (m_flexControl->isOpen()) {
+            } else {
                 m_flexControl->close();
             }
             m_flexControl->setInvertDirection(fcInvert);
@@ -3006,17 +3022,17 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         QString fcPort = fcs.value("FlexControlPort").toString();
         bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
         QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
+            // Unconditional close() — see the matching comment on the
+            // serialSettingsChanged path above. (#4574)
             if (fcOpen) {
                 if (fcPort.isEmpty()) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                 } else if (!m_flexControl->isOpen() || m_flexControl->portName() != fcPort) {
-                    if (m_flexControl->isOpen())
-                        m_flexControl->close();
+                    m_flexControl->close();
                     m_flexControl->open(fcPort);
                 }
             } else {
-                if (m_flexControl->isOpen()) m_flexControl->close();
+                m_flexControl->close();
             }
             m_flexControl->setInvertDirection(fcInvert);
         });
@@ -3465,12 +3481,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
     {
         const QList<SliceModel*> slices = m_radioModel.slices();
         for (int i = 0; i < slices.size(); ++i) {
-            const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + i));
+            const QString key = DaxRestorePolicy::keyForIndex(i);
             if (slices[i]->daxChannel() > 0) {
                 s.setValue(key, QString::number(slices[i]->daxChannel()));
             } else {
                 s.remove(key);
             }
+        }
+        // #4558: also drop keys beyond the slice count at quit, so a config
+        // poisoned by an earlier multi-slice quit self-heals instead of staying
+        // armed forever. Both preconditions — connected AND holding a populated
+        // slice list — are load-bearing; DaxRestorePolicy::staleKeysToPrune()
+        // carries why, and the unit test pins both.
+        for (const QString& key :
+             DaxRestorePolicy::staleKeysToPrune(m_radioModel.isConnected(),
+                                                slices.size())) {
+            s.remove(key);
         }
     }
 
@@ -3778,19 +3804,22 @@ void MainWindow::showConnectionDialog()
     if (!screen)
         screen = QApplication::primaryScreen();
 
-    const QSize dlgSize = m_connPanel->size();
-    QPoint pos(labelCenter.x() - dlgSize.width() / 2,
-               statusBarTop.y() - dlgSize.height() - 8);
+    m_connPanel->fitToScreen(screen);
+    // Frame coordinates throughout: QWidget::move() positions a top-level
+    // widget by its frame top-left, so anchoring on the client rect would leave
+    // the window a title bar lower than intended. screenFitFrameSize() is the
+    // same arithmetic constrainedFrameTopLeft() clamps with — one source, so
+    // the anchor and the clamp cannot drift apart.
+    const QSize frameSize = m_connPanel->screenFitFrameSize();
+    QPoint frameTopLeft(labelCenter.x() - frameSize.width() / 2,
+                        statusBarTop.y() - frameSize.height() - 8);
 
     if (screen) {
-        const QRect available = screen->availableGeometry();
-        const int maxX = available.left() + available.width() - dlgSize.width();
-        const int maxY = available.top() + available.height() - dlgSize.height();
-        pos.setX(qMax(available.left(), qMin(pos.x(), maxX)));
-        pos.setY(qMax(available.top(), qMin(pos.y(), maxY)));
+        frameTopLeft = m_connPanel->constrainedFrameTopLeft(
+            frameTopLeft, screen->availableGeometry());
     }
 
-    m_connPanel->move(pos);
+    m_connPanel->move(frameTopLeft);
     m_connPanel->show();
     m_connPanel->raise();
     m_connPanel->activateWindow();
@@ -4290,14 +4319,10 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    // Height floor comes from the panel itself — its "Connect by IP" page grew a
-    // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
-    // page (the Advanced disclosure fell outside the mode stack). Open at
-    // exactly that floor, not floor + slack: the panel reclaims height it set
-    // itself when a page shrinks, and it can only tell its own sizing from an
-    // operator's drag if the two agree to start with.
-    m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
-    m_connPanel->resize(760, m_connPanel->minimumHeight());
+    // Sizing belongs to the panel now. It sets these same two values in its own
+    // constructor and then adjusts them per screen in fitToScreen(), which
+    // every show path here runs first — a hardcoded pair at this level went
+    // stale the moment the panel gained a row, and that is what #4515 was.
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -5378,6 +5403,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (connected) {
         m_terminalConnectionError.clear();
         m_suppressStartupPanLayoutRearrange = false;
+        // #4558: open the last-session DAX restore window for this connect's
+        // slice enumeration only (see DaxRestorePolicy.h). The primary close is
+        // the first live slice removal; the settle timer is belt-and-braces for
+        // a session that never removes one, and 10 s clears a slow WAN/SmartLink
+        // status trickle with a wide margin. The generation it carries keeps a
+        // previous connect's pending timeout from closing this window.
+        m_daxRestore.onConnected();
+        const int daxGen = m_daxRestore.generation();
+        QTimer::singleShot(10000, this, [this, daxGen]() {
+            m_daxRestore.onSettleTimeout(daxGen);
+        });
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
         m_radioVersionLabel->setText(statusBarVersionText(
@@ -5633,6 +5669,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
     } else {
         stopDigitalVoiceService(false);
 
+        // #4558: the restore window cannot span a disconnect — the next connect
+        // reopens it for its own enumeration. Disconnect teardown does not emit
+        // sliceRemoved, so without this the window would stay armed until the
+        // settle timer happened to fire.
+        m_daxRestore.onDisconnected();
+
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
         // stay connected through brief reconnects, higher channels stop cleanly.
         applyCatPortCount();  // catPortTargetCount() returns 1 when !connected
@@ -5821,7 +5863,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 s.remove("LastConnectedRadioSerial");
                 s.remove("LastRoutedRadioIp");
                 s.save();
-                m_connPanel->show();
+                showConnectionDialog();
             });
             m_reconnectDlg->show();
         }

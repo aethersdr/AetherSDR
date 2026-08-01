@@ -13,6 +13,7 @@
 
 #include <QAbstractItemView>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QInputDialog>
 #include <QMenu>
 #include <QFrame>
@@ -22,8 +23,11 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPainter>
+#include <QScrollArea>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStyle>
 #include <QTcpSocket>
 #include <QHostInfo>
 #include <QUdpSocket>
@@ -31,6 +35,7 @@
 #include <QDeadlineTimer>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QWindow>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -274,11 +279,34 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     outer->addWidget(titleBar);
 
     auto* content = new QWidget(this);
+    content->setObjectName(QStringLiteral("connectionBodyContent"));
     auto* root = new QVBoxLayout(content);
-    root->setContentsMargins(12, 12, 12, 12);
+    // No right margin: the 12 px band on that edge belongs to the scroll area
+    // (see bodyContainer below), so adding one here would inset the body 24 px
+    // from the right against 12 px on the left and 12 px on the footer.
+    root->setContentsMargins(12, 12, 0, 10);
     root->setSpacing(10);
     m_rootLayout = root;
-    outer->addWidget(content, 1);
+    m_bodyContent = content;
+
+    auto* bodyScroll = new QScrollArea(this);
+    bodyScroll->setObjectName(QStringLiteral("connectionBodyScrollArea"));
+    bodyScroll->setAccessibleName(tr("Connection options"));
+    bodyScroll->setWidgetResizable(true);
+    bodyScroll->setFrameShape(QFrame::NoFrame);
+    bodyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    bodyScroll->setWidget(content);
+    m_bodyScroll = bodyScroll;
+
+    // Keep the scrollbars clear of FramelessResizer's edge-grab zone. The
+    // fixed footer already carries its own inset; the scrolling body needs one
+    // too because QScrollArea places its vertical bar at its outer edge.
+    auto* bodyContainer = new QWidget(this);
+    auto* bodyContainerLayout = new QVBoxLayout(bodyContainer);
+    bodyContainerLayout->setContentsMargins(0, 0, 12, 0);
+    bodyContainerLayout->setSpacing(0);
+    bodyContainerLayout->addWidget(bodyScroll);
+    outer->addWidget(bodyContainer, 1);
 
     auto* titleLabel = new QLabel("Connect to a Radio", this);
     AetherSDR::ThemeManager::instance().applyStyleSheet(titleLabel, "QLabel { color: {{color.text.primary}}; font-size: 18px; font-weight: bold; "
@@ -553,8 +581,9 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // Baseline floor for the collapsed page. The rows and the result line carry
     // explicit minimums of their own, but a word-wrapped QLabel under-reports
     // its height, so without this the surrounding layout can still hand the
-    // group less than it needs and Qt overlaps children rather than growing the
-    // dialog. refitToContent() covers the taller states (Advanced expanded).
+    // group less than it needs and Qt overlaps children. The taller states
+    // (Advanced expanded) are covered by the enclosing QScrollArea, which never
+    // gives the body less than qSmartMinSize() and scrolls the difference.
     manualGroup->setMinimumHeight(240);
     auto* manualGroupLayout = new QVBoxLayout(manualGroup);
     manualGroupLayout->setContentsMargins(12, 14, 12, 12);
@@ -758,7 +787,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_disconnectBtn->setAccessibleName(tr("Disconnect from radio"));
     m_disconnectBtn->setVisible(false);
     footerRow->addWidget(m_disconnectBtn, 0, Qt::AlignRight);
-    root->addLayout(footerRow);
+
+    auto* footer = new QWidget(this);
+    footer->setObjectName(QStringLiteral("connectionFooter"));
+    footer->setLayout(footerRow);
+    footerRow->setContentsMargins(12, 0, 12, 12);
+    outer->addWidget(footer);
 
     // Family first: applySavedSourceSelection() may override it with the
     // per-address choice remembered for whichever recent IP we preselect.
@@ -855,16 +889,13 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         updateSmartLinkUi();
     });
 
-    // The manual page is the tallest of the three: two label+field rows, the
-    // action row, a reserved result line, and the Advanced disclosure. A dialog
-    // restored at the old 660 px height clipped the bottom of that page, so
-    // hold a floor that fits it. Everything above the stack is fixed-height, so
-    // this is the page height plus the surrounding chrome.
-    // Derive the height floor from the built layout rather than hardcoding it:
-    // the manual page is the tallest of the three and it grew a Radio type row,
-    // and a stale pixel count here is exactly what let the rows overlap before.
-    // refitToContent() raises it again if the page later gets taller.
+    // Settle the body layout so preferredClientHeight() has a real answer the
+    // first time fitToScreen() asks for one. The height floor this used to set
+    // is gone: the manual page is still the tallest of the three, but overflow
+    // now belongs to the scroll area rather than to the top-level minimum.
     refitToContent();
+    setMinimumSize(kSafeMinimumWidth, kSafeMinimumHeight);
+    resize(kPreferredWidth, kPreferredHeight);
 
     setConnected(false);
     setCurrentMode(LocalMode);
@@ -889,9 +920,161 @@ void ConnectionPanel::setFramelessMode(bool on)
     if (m_titleBar)
         m_titleBar->setVisible(on);
     if (m_rootLayout)
-        m_rootLayout->setContentsMargins(12, on ? 10 : 12, 12, 12);
-    if (wasVisible)
+        m_rootLayout->setContentsMargins(12, on ? 10 : 12, 0, 10);
+    if (wasVisible) {
+        // Turning decorations back on wraps a native frame — a title bar and
+        // borders, ~24-31 px on Windows — around a client rect that was sized
+        // for a frameless window. Without a re-fit that pushes the frame, and
+        // the footer pinned at its bottom, straight back under the taskbar:
+        // #4515 again, reached through View -> Frameless Window instead of
+        // through a connect.
+        fitAndClampToScreen();
         show();
+    }
+}
+
+bool ConnectionPanel::event(QEvent* e)
+{
+    switch (e->type()) {
+    // A fit is only valid for the screen, DPI and font metrics it was made
+    // under. #4515 asks for it to be redone when any of those change beneath an
+    // open window — dragged to a shorter monitor, scaling changed in Display
+    // settings, UI font swapped. Deferred by one turn of the event loop because
+    // the children have not re-laid-out by the time these arrive, so a fit
+    // computed here would use the outgoing metrics.
+    case QEvent::ScreenChangeInternal:
+    case QEvent::ApplicationFontChange:
+    case QEvent::FontChange:
+    case QEvent::StyleChange:
+        if (isVisible()) {
+            QTimer::singleShot(0, this, [this] {
+                if (isVisible())
+                    fitAndClampToScreen();
+            });
+        }
+        break;
+    default:
+        break;
+    }
+    return QWidget::event(e);
+}
+
+QScreen* ConnectionPanel::screenFitTarget(QScreen* preferredScreen) const
+{
+    QScreen* targetScreen = preferredScreen;
+    if (!targetScreen && windowHandle()) {
+        targetScreen = windowHandle()->screen();
+    }
+    if (!targetScreen && parentWidget()) {
+        targetScreen = parentWidget()->screen();
+    }
+    if (!targetScreen) {
+        targetScreen = QGuiApplication::primaryScreen();
+    }
+    return targetScreen;
+}
+
+int ConnectionPanel::preferredClientHeight() const
+{
+    if (!m_bodyContent || !m_bodyScroll) {
+        return kPreferredHeight;
+    }
+    // Everything in `outer` except the scroll area — the title bar when it is
+    // shown, the fixed footer always. Taking it as a difference rather than
+    // summing the two widgets keeps this correct without duplicating which of
+    // them is visible in which frameless mode.
+    const int chromeHeight = sizeHint().height() - m_bodyScroll->sizeHint().height();
+    return qMax(kPreferredHeight, chromeHeight + m_bodyContent->sizeHint().height());
+}
+
+void ConnectionPanel::fitToScreen(QScreen* preferredScreen)
+{
+    QScreen* targetScreen = screenFitTarget(preferredScreen);
+    if (!targetScreen) {
+        return;
+    }
+
+    // Realise the native window before measuring. QWindow::frameMargins() is
+    // only populated once the platform window exists, so on the very first open
+    // an un-created panel falls back to the style estimate — which on Windows,
+    // the platform #4515 was reported on, is roughly a title bar short.
+    if (!windowHandle()) {
+        (void)winId();
+    }
+
+    const QRect available = targetScreen->availableGeometry();
+    const QMargins frameMargins = screenFitFrameMargins();
+
+    const int maximumClientWidth =
+        qMax(1, available.width() - frameMargins.left() - frameMargins.right());
+    const int maximumClientHeight =
+        qMax(1, available.height() - frameMargins.top() - frameMargins.bottom());
+    setMinimumSize(qMin(kSafeMinimumWidth, maximumClientWidth),
+                   qMin(kSafeMinimumHeight, maximumClientHeight));
+
+    // Shrinking is the invariant: the frame must fit the work area whatever the
+    // operator wants. Growing is a courtesy, so it only applies to a height
+    // this function chose — otherwise a dialog dragged short on a big screen
+    // would spring back every time it was reopened.
+    int targetHeight = qMin(height(), maximumClientHeight);
+    if (height() == m_autoFitHeight) {
+        targetHeight = qBound(qMin(kSafeMinimumHeight, maximumClientHeight),
+                              preferredClientHeight(),
+                              maximumClientHeight);
+    }
+    resize(qMin(width(), maximumClientWidth), targetHeight);
+    m_autoFitHeight = height();
+}
+
+void ConnectionPanel::fitAndClampToScreen(QScreen* preferredScreen)
+{
+    QScreen* targetScreen = screenFitTarget(preferredScreen);
+    if (!targetScreen) {
+        return;
+    }
+    fitToScreen(targetScreen);
+    // pos() on a window is its frame top-left, the same space
+    // constrainedFrameTopLeft() works in, so this is a no-op when the window
+    // already fits and a pull-back-inside when it does not.
+    move(constrainedFrameTopLeft(pos(), targetScreen->availableGeometry()));
+}
+
+QMargins ConnectionPanel::screenFitFrameMargins() const
+{
+    QMargins frameMargins;
+    if (windowHandle()) {
+        frameMargins = windowHandle()->frameMargins();
+    }
+    if (frameMargins.isNull()
+        && !windowFlags().testFlag(Qt::FramelessWindowHint)) {
+        const int border =
+            style()->pixelMetric(QStyle::PM_DefaultFrameWidth, nullptr, this);
+        const int titleHeight =
+            style()->pixelMetric(QStyle::PM_TitleBarHeight, nullptr, this);
+        frameMargins = QMargins(border, titleHeight, border, border);
+    }
+    return frameMargins;
+}
+
+QSize ConnectionPanel::screenFitFrameSize() const
+{
+    const QMargins frameMargins = screenFitFrameMargins();
+    return QSize(width() + frameMargins.left() + frameMargins.right(),
+                 height() + frameMargins.top() + frameMargins.bottom());
+}
+
+QPoint ConnectionPanel::constrainedFrameTopLeft(
+    const QPoint& preferredFrameTopLeft,
+    const QRect& availableGeometry) const
+{
+    const QSize frameSize = screenFitFrameSize();
+    const int maxX =
+        availableGeometry.left() + availableGeometry.width() - frameSize.width();
+    const int maxY =
+        availableGeometry.top() + availableGeometry.height() - frameSize.height();
+    return QPoint(
+        qMax(availableGeometry.left(), qMin(preferredFrameTopLeft.x(), maxX)),
+        qMax(availableGeometry.top(), qMin(preferredFrameTopLeft.y(), maxY)));
 }
 
 void ConnectionPanel::setConnected(bool connected)
@@ -899,6 +1082,14 @@ void ConnectionPanel::setConnected(bool connected)
     m_connected = connected;
     m_disconnectBtn->setVisible(connected);
     updateActionState();
+    // Showing the Disconnect button is the one moment the fixed footer changes
+    // height, so it is the one moment a fit made earlier stops being right —
+    // and it is exactly when #4515 was reported. Cheap: fitToScreen() only
+    // grows from a height it chose itself, and the clamp is a no-op for a
+    // window already inside the work area.
+    if (isVisible()) {
+        fitAndClampToScreen();
+    }
 }
 
 void ConnectionPanel::setStatusText(const QString& text)
@@ -1187,9 +1378,10 @@ void ConnectionPanel::updateManualAdvancedVisibility()
 
     // Expanding the Advanced section is the biggest single height change this
     // page has, and it happens on its own whenever a saved source path goes
-    // stale — the exact VPN case this feature exists for. Without this the
-    // group is handed less room than it needs and the "Radio type"/"Radio IP"
-    // rows overlap their own labels.
+    // stale — the exact VPN case this feature exists for. The extra height goes
+    // into the scroll range now, not into the top-level minimum; this only
+    // re-activates the body layout so the new hint is published immediately
+    // rather than on the next spontaneous relayout.
     refitToContent();
 }
 
@@ -1509,11 +1701,6 @@ void ConnectionPanel::setSmartLinkClient(SmartLinkClient* client)
 
     client->tryAutoLogin();
     updateSmartLinkUi();
-}
-
-bool ConnectionPanel::event(QEvent* e)
-{
-    return QWidget::event(e);
 }
 
 void ConnectionPanel::paintEvent(QPaintEvent*)
@@ -1837,31 +2024,14 @@ void ConnectionPanel::probeRadio(const QString& ip)
 
 void ConnectionPanel::refitToContent()
 {
-    if (!layout())
+    if (!m_rootLayout)
         return;
 
-    // minimumSize() is the layout's own answer to "how small can this get
-    // before children start overlapping", so it already accounts for whichever
-    // page is current and whether the Advanced section is expanded. Deriving
-    // the floor beats a hardcoded pixel count, which would go stale the moment
-    // the page gains a row or the operator runs a larger UI font.
-    layout()->activate();
-    const int needed = layout()->minimumSize().height();
-    if (needed <= 0)
-        return;
-
-    setMinimumHeight(needed);
-
-    // Grow whenever the current page needs it. Shrink only back to a height we
-    // set ourselves — otherwise collapsing the Advanced section would discard a
-    // size the operator chose by dragging the window. Without the shrink the
-    // dialog keeps the taller size and leaves a band of dead space.
-    const bool grow    = height() < needed;
-    const bool reclaim = height() > needed && height() == m_autoFitHeight;
-    if (grow || reclaim) {
-        resize(width(), needed);
-        m_autoFitHeight = needed;
-    }
+    // The body owns overflow now. Refresh its geometry so expanding Advanced or
+    // wrapping a result message extends the scroll range instead of increasing
+    // the top-level minimum past the screen's available height.
+    m_rootLayout->invalidate();
+    m_rootLayout->activate();
 }
 
 void ConnectionPanel::resetManualConnectButton()
