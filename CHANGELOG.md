@@ -10,6 +10,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **The aarch64 (Raspberry Pi / ARM) AppImage now ships Qt 6.8.3 LTS and
+  GPU spectrum rendering (#4670).** It was the only release artifact still
+  building against the distro's Qt — 6.4.2, while x86_64, macOS and Windows all
+  pinned 6.8.3 — because Qt published no prebuilt ARM64 Linux binaries when that
+  split was made. Qt has shipped them since 6.7, so the ARM build now takes the
+  same aqtinstall recipe as everything else. The visible consequence is the
+  renderer: 6.4.2 sat below the Qt 6.7 floor for `QRhiWidget`, so the ARM
+  AppImage silently fell back to the CPU `QPainter` spectrum path. On 6.8.3 it
+  renders through QRhi like every other platform. If a GPU or driver renders the
+  spectrum incorrectly, `AETHER_NO_GPU=1` forces software OpenGL without a
+  rebuild.
+
+  The Qt bump raises the aarch64 AppImage's glibc floor to 2.38 (Qt's arm64
+  binaries are built on Ubuntu 24.04). Raspberry Pi OS **Trixie** (glibc 2.41)
+  is the supported Pi baseline; Bookworm (2.36) cannot run it — as was already
+  the case for the 2.39-floored builds this replaces.
+
 - **The TCI PTT slice-routing decision is now logged (#4547).** Reports of TCI
   keying the wrong slice have been arriving without logs because there were
   none to send: the server logged audio, IQ, DAX and client connections, but

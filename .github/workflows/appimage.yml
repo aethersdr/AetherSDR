@@ -20,6 +20,7 @@ jobs:
             qt_arch: linux_gcc_64
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
             gpu_spectrum: 'ON'  # unchanged: Qt 6.8.3 already enabled it here
+            glslc_source: lunarg
           # Stays on noble, and must. Qt builds its linux_arm64 desktop binaries
           # on Ubuntu 24.04 (the packages are literally named
           # Linux-Ubuntu_24_04-GCC-...-AARCH64), and the shipped libQt6Gui.so.6
@@ -31,15 +32,22 @@ jobs:
             arch: aarch64
             qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
-            # require_gpu is whisper's Vulkan ASR backend and stays OFF — that
-            # is a separate stack (glslc, ggml-vulkan) from spectrum rendering.
-            require_gpu: 'OFF'  # ARM/Pi ships CPU-only ASR (no Vulkan expected)
+            # require_gpu is the RELEASE GUARD, not the enable switch: it makes a
+            # missing GPU toolchain fatal at configure time. ENABLE_ASR_VULKAN
+            # defaults ON on non-Apple, so aarch64 has been building ggml-vulkan
+            # all along from noble's own glslc — the v26.7.4.1 release log says
+            # "ASR: Vulkan GPU backend enabled (glslc: /bin/glslc)". It stays OFF
+            # here only because arm64 GPU support is best-effort: whether any
+            # given ARM host has a Vulkan driver worth using is not something a
+            # release should hard-fail on. Do not read this as "no Vulkan".
+            require_gpu: 'OFF'  # best-effort ASR GPU on ARM, not a hard requirement
             # QRhi spectrum rendering, ON deliberately. It was impossible on
             # aarch64 until now purely because Ubuntu's Qt 6.4.2 sits below the
             # 6.7 QRhiWidget floor — the CPU QPainter fallback was a symptom of
             # the stale Qt, not a choice about ARM. Qt 6.8.3 clears that floor,
             # so the Pi gets the same renderer as every other platform.
             gpu_spectrum: 'ON'
+            glslc_source: apt
 
     runs-on: ${{ matrix.runner }}
 
@@ -60,8 +68,8 @@ jobs:
       # x86_64 stays on jammy deliberately: it keeps the AppImage's glibc floor
       # low enough for older distros, so bumping the runner would trade this
       # breakage for a wider, quieter one.
-      - name: Add LunarG Vulkan SDK repository (Ubuntu 22.04)
-        if: matrix.runner == 'ubuntu-22.04'
+      - name: Add LunarG Vulkan SDK repository (jammy)
+        if: matrix.glslc_source == 'lunarg'
         run: |
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
             | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
@@ -94,22 +102,23 @@ jobs:
       #
       # This workflow only runs on tag pushes, so a break here is invisible
       # until release day — hence the explicit assertions on both legs.
-      # Gated on require_gpu, not just the runner name. glslc exists solely for
-      # whisper's Vulkan backend, and aarch64 is CPU-only (require_gpu OFF), so
-      # it was installing a shader compiler it never uses. Gating on the actual
-      # dependency also stops the `!= 'ubuntu-22.04'` leg from being a proxy for
-      # "noble" — that equivalence holds only by accident of the current matrix,
-      # and it silently breaks the moment any jammy-family runner is added
-      # (jammy does not package glslc at all, which is why the LunarG leg
-      # below exists).
-      - name: Install glslc (non-jammy GPU runners)
-        if: matrix.require_gpu == 'ON' && matrix.runner != 'ubuntu-22.04'
+      #
+      # BOTH legs need glslc; only the source differs, which is what the
+      # glslc_source matrix key names. Gating on the runner label instead made
+      # `!= 'ubuntu-22.04'` a proxy for "noble" that holds only by accident of
+      # the current matrix and breaks the moment another jammy-family runner is
+      # added. Do NOT gate this on require_gpu: that flag is the release guard
+      # (fatal-if-missing), not the enable switch — ENABLE_ASR_VULKAN defaults
+      # ON everywhere non-Apple, so gating glslc on require_gpu would silently
+      # drop ggml-vulkan from the aarch64 AppImage with a green build.
+      - name: Install glslc from apt (noble and newer)
+        if: matrix.glslc_source == 'apt'
         run: |
           sudo apt-get install -y glslc
           glslc --version
 
-      - name: Install glslc + SDK headers from LunarG (Ubuntu 22.04)
-        if: matrix.require_gpu == 'ON' && matrix.runner == 'ubuntu-22.04'
+      - name: Install glslc + SDK headers from LunarG (jammy)
+        if: matrix.glslc_source == 'lunarg'
         run: |
           sudo apt-get install -y shaderc vulkan-headers
           glslc --version
@@ -135,13 +144,16 @@ jobs:
       # -source repo at all. 6.8.3 is the newest 6.8 LTS with prebuilt binaries
       # under the open-source licence, which is what every other artifact pins.
       #
-      # The aarch64 AppImage's glibc floor is set by Qt, not by the runner: the
-      # arm64 6.8.3 tree needs GLIBC_2.38, so the floor is 2.38 wherever it is
-      # built. Target check against that: Pi OS Trixie is glibc 2.41 (Debian 13,
-      # Mesa 25.0.7) and runs it; Pi OS Bookworm is 2.36 and cannot. Bookworm is
-      # not a regression here — today's aarch64 AppImage builds on noble and
-      # already floors at 2.39 — but it does mean Trixie is the supported Pi
-      # baseline, and that should stay true when this Qt pin moves.
+      # The aarch64 AppImage's glibc floor has two contributors. Qt sets the hard
+      # lower bound: the arm64 6.8.3 tree needs GLIBC_2.38 (readelf -V on the
+      # shipped libQt6Gui.so.6), so no runner choice can take it below that. The
+      # app's own objects then link against the builder's glibc on top, so the
+      # artifact assembled on noble floors at 2.39. Target check against that: Pi
+      # OS Trixie is glibc 2.41 (Debian 13, Mesa 25.0.7) and runs it; Pi OS
+      # Bookworm is 2.36 and cannot. Bookworm is not a regression here — today's
+      # aarch64 AppImage already builds on noble and already floors at 2.39 — but
+      # it does mean Trixie is the supported Pi baseline, and that should stay
+      # true when this Qt pin moves.
       - name: Install Qt 6.8.3 LTS via aqtinstall
         run: |
           pip3 install aqtinstall
@@ -201,9 +213,11 @@ jobs:
         run: bash scripts/setup/setup-qtkeychain.sh
 
       - name: Configure
-        shell: bash
         run: |
-          # pipefail so a cmake failure still fails the step through the tee.
+          # Without pipefail the step's exit status is tee's, so a cmake failure
+          # would look green. Set it in the script rather than via `shell: bash`
+          # (which also implies -eo pipefail) so the guard is self-contained and
+          # survives anyone editing the step's shell.
           set -o pipefail
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \

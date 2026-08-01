@@ -216,7 +216,15 @@ cmake --build build --target AetherSDR
 
 ### Qt 6.7+ for GPU Spectrum Rendering
 
-GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater. If your distribution ships with an older version (e.g., Ubuntu 24.04, Debian 12, or Mint 21–22 include Qt 6.4.2), the build system automatically disables GPU rendering and falls back to the CPU-based `QPainter` path. (Release binaries ship Qt 6.8.3 LTS; the 6.7 floor is the source-build minimum for QRhi.)
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater. If your distribution ships with an older version (e.g., Ubuntu 24.04, Debian 12, or Mint 21–22 include Qt 6.4.2), the build system automatically disables GPU rendering and falls back to the CPU-based `QPainter` path. (Release binaries ship Qt 6.8.3 LTS — the aarch64 AppImage included — so every release binary renders via QRhi; the 6.7 floor is the source-build minimum.)
+
+Going the other way, `AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
+
+```bash
+AETHER_NO_GPU=1 ./AetherSDR-*.AppImage
+```
+
+That is the escape hatch if a GPU or driver renders the spectrum incorrectly — worth trying first on Raspberry Pi and other systems whose Mesa driver is newer than its hardware.
 
 To use GPU acceleration on these systems, install Qt 6.7+ manually:
 
