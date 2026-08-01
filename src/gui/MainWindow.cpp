@@ -11,6 +11,7 @@
 #include "MainWindow.h"
 
 #include "MainWindowHelpers.h"
+#include "WindowGeometryRestore.h"
 
 #include "CwDecodeSettings.h"
 #include "DisplaySettings.h"
@@ -25,6 +26,7 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistController.h"
@@ -322,15 +324,101 @@ void reserveStatusBarStackWidth(QWidget* stack, const QStringList& samples, int 
     stack->setMinimumWidth(qMax(minimumWidth, statusBarCompactTextWidth(samples, 16)));
 }
 
+// The station label's resting type size. Single-token values keep it.
+constexpr int kStationFontPx = 21;
+
+// Property carrying the size the label is currently styled at, so the
+// stylesheet is only re-applied when it actually changes.
+constexpr char kStationFontPxProperty[] = "aetherStationFontPx";
+
+QString statusBarStationLabelStyle(int fontPx)
+{
+    return QStringLiteral(
+        "QLabel { color: {{color.text.primary}}; font-size: %1px; "
+        "background: {{color.background.0}}; "
+        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }")
+        .arg(fontPx);
+}
+
+// Floor for the shrink below. Smaller than this stops reading as the station
+// identity and starts reading as one more compact telemetry label (those are
+// 12px), so a name that will not fit even here is elided instead.
+constexpr int kStationMinFontPx = 15;
+
+// Text width a multi-word nickname may occupy before it is shrunk. This is a
+// layout budget, not a measurement of any particular string: the station box
+// is centred between the radio-info stack and the GPS/reference stack, and at
+// full size a two-word nickname pushes into the latter. Against our HL2 this
+// resolves to kStationMinFontPx for "Hermes-Lite 2".
+constexpr int kStationWideTextBudgetPx = 105;
+
+// The largest size in [kStationMinFontPx, kStationFontPx] at which the text
+// still fits the budget on ONE line. Returns the floor when nothing fits;
+// stationFittedText() then elides at that size.
+int stationFittedFontPx(const QString& text)
+{
+    for (int px = kStationFontPx; px >= kStationMinFontPx; --px) {
+        QFont candidate = QApplication::font();
+        candidate.setPixelSize(px);
+        if (QFontMetrics(candidate).horizontalAdvance(text)
+                <= kStationWideTextBudgetPx) {
+            return px;
+        }
+    }
+    return kStationMinFontPx;
+}
+
+// One line, elided only if it still overruns the budget at the floor size.
+QString stationFittedText(const QString& text, int fontPx)
+{
+    QFont font = QApplication::font();
+    font.setPixelSize(fontPx);
+    const QFontMetrics metrics(font);
+    if (metrics.horizontalAdvance(text) <= kStationWideTextBudgetPx) {
+        return text;
+    }
+    return metrics.elidedText(text, Qt::ElideRight, kStationWideTextBudgetPx);
+}
+
+// A callsign or a radio nickname. Single-token values (N0CALL, ANT1-AV640,
+// 70CM-RXA-XVTR) render at kStationFontPx, byte-identical to before. A value
+// containing whitespace is shrunk to fit on ONE line instead of widening the
+// status bar, down to kStationMinFontPx, eliding below that.
+//
+// WHITESPACE IS THE TRIGGER, NOT WIDTH, and that is not a detail: what
+// distinguishes the two is that the HL2 has no operator-set nickname, so
+// Hl2Discovery::effectiveNickname() substitutes the model string — two words
+// — while every real callsign and Flex nickname is a single token.
+//
+// A width threshold cannot be used in its place: measured at kStationFontPx on
+// real radios, "ANT1-AV640" occupies 157px against "Hermes-Lite 2" at 170px.
+// The two are 13px apart, so any budget low enough to shrink the HL2 name
+// would shrink the Flex one almost as far.
 bool setStatusBarStationText(QLabel* label, const QString& text)
 {
     if (!label) {
         return false;
     }
 
+    const QString trimmed = text.trimmed();
+    // std::any_of over QChar::isSpace rather than a QRegularExpression: this is
+    // reached from the MeterModel::hwTelemetryChanged handler, so a per-call
+    // pattern compile would land on every PA-temperature delta.
+    const bool multiWord = std::any_of(trimmed.cbegin(), trimmed.cend(),
+                                       [](QChar c) { return c.isSpace(); });
+    const int fontPx = multiWord ? stationFittedFontPx(trimmed) : kStationFontPx;
+    const QString rendered =
+        multiWord ? stationFittedText(trimmed, fontPx) : text;
+
     bool changed = false;
-    if (label->text() != text) {
-        label->setText(text);
+    if (label->property(kStationFontPxProperty).toInt() != fontPx) {
+        label->setProperty(kStationFontPxProperty, fontPx);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            label, statusBarStationLabelStyle(fontPx));
+        changed = true;
+    }
+    if (label->text() != rendered) {
+        label->setText(rendered);
         changed = true;
     }
     label->ensurePolished();
@@ -340,6 +428,17 @@ bool setStatusBarStationText(QLabel* label, const QString& text)
         changed = true;
     }
     return changed;
+}
+
+// "Gateware 75" on a radio that supplies a label, "4.2.20.41343" on one that
+// does not. The caller never asks which family it is talking to — the word
+// arrives from the backend, so a future Icom/Yaesu gets this for free.
+QString statusBarVersionText(const QString& label, const QString& version)
+{
+    if (version.isEmpty() || label.isEmpty()) {
+        return version;
+    }
+    return QStringLiteral("%1 %2").arg(label, version);
 }
 
 QString vfoFrequencyText(double mhz)
@@ -908,7 +1007,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
             if (radioInfo.address.isNull()) {
                 setPanadapterConnectionAnimation(false);
                 m_connPanel->setStatusText("Select a radio to reconnect");
-                m_connPanel->show();
+                showConnectionDialog();
                 return;
             }
 
@@ -1582,7 +1681,8 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_radioInfoLabel && !m_radioModel.model().isEmpty())
             m_radioInfoLabel->setText(m_radioModel.model());
         if (m_radioVersionLabel && !m_radioModel.version().isEmpty())
-            m_radioVersionLabel->setText(m_radioModel.version());
+            m_radioVersionLabel->setText(statusBarVersionText(
+                m_radioModel.versionLabel(), m_radioModel.version()));
         // The station/nickname label is set once in onConnectionStateChanged, but
         // the nickname can land afterwards via a radio-status delta — for a real
         // radio the async "info" reply corrects it, and for the demo SimBackend
@@ -1946,7 +2046,25 @@ MainWindow::MainWindow(QWidget* parent)
         m_lastPaTempC = paTemp;
         m_hasPaTempTelemetry = true;
         updatePaTempLabel();
-        m_supplyVoltLabel->setText(QString("%1 V").arg(supplyVolts, 0, 'f', 2));
+        // A bare dash, never a zero, for a rail the radio has not reported —
+        // the rule the Radio Health dialog already applies to its registers.
+        // No unit either: the unit belongs to the value, and there is no
+        // value, so "— V" would still be asserting a reading in volts. This
+        // signal fires when EITHER half of the hardware telemetry changes, so
+        // on a radio that reports PA temperature and no supply rail (HL2:
+        // PATEMP, no "+13.8A") every temperature tick used to repaint the
+        // 0.0f initialiser formatted to two decimals — indistinguishable from
+        // a measurement.
+        //
+        // Independent of hasSupplyVoltageTelemetry on purpose: that capability
+        // decides whether the OPERATOR IS OFFERED the readout, this decides
+        // what the readout may claim. A backend that declares the rail but has
+        // not yet received a meter definition is still not entitled to print a
+        // number. Same separation as the DAX capability and its crash guard.
+        m_supplyVoltLabel->setText(
+            m_radioModel.meterModel().hasSupplyVoltage()
+                ? QString("%1 V").arg(supplyVolts, 0, 'f', 2)
+                : QStringLiteral("—"));
 
         // Update station label (nickname arrives via status after connect)
         const QString nick = m_radioModel.nickname();
@@ -2136,6 +2254,11 @@ MainWindow::MainWindow(QWidget* parent)
     if (!geomB64.isEmpty()) {
         m_startupGeometryForFirstShow = QByteArray::fromBase64(geomB64.toLatin1());
         if (!m_startupGeometryForFirstShow.isEmpty()) {
+            // No #4328 re-anchor here on purpose: the window is not mapped yet,
+            // so the custom frame's real margins are not in effect.  showEvent()
+            // always schedules reapplyStartupGeometryAfterShow() while this blob
+            // is non-empty, and that pass supersedes this placement before the
+            // user ever sees it.
             restoreGeometry(m_startupGeometryForFirstShow);
         }
     }
@@ -2975,7 +3098,14 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    restoreGeometry(m_startupGeometryForFirstShow);
+    //
+    // Then undo Qt's phantom-caption clamp now the window is mapped and the custom
+    // frame's real (zero) top margin applies.  A false return means Qt itself
+    // refused the blob — most often its large-screen-variation bail — and in
+    // that case the saved rect is exactly what we must not force. (#4328)
+    if (restoreGeometry(m_startupGeometryForFirstShow)) {
+        reanchorCustomFrameGeometry(m_startupGeometryForFirstShow);
+    }
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a
@@ -3000,6 +3130,63 @@ void MainWindow::reapplyStartupGeometryAfterShow()
         move(available.center().x() - width() / 2,
              available.center().y() - height() / 2);
     }
+}
+
+void MainWindow::reanchorCustomFrameGeometry(const QByteArray& geometryBlob)
+{
+#ifdef Q_OS_WIN
+    // Call this after every restoreGeometry() on this window, never instead of
+    // one.  Qt's restore runs the saved rect through checkRestoredGeometry(),
+    // which reserves PM_TitleBarHeight above the top edge and shaves
+    // 2 + PM_TitleBarHeight off a window that would otherwise fill the work
+    // area — both correct for a native caption, both pure loss once
+    // WM_NCCALCSIZE has taken ours away.  The result is a title-bar-sized gap
+    // above the window (#4328), and a matching one below it for anyone who
+    // sized the window to their screen.  Re-run the clamp here without the
+    // caption term.  See src/gui/WindowGeometryRestore.h for the arithmetic.
+    if (!mainWindowCustomFrameEnabled()) {
+        return;  // native caption present — Qt's reservation is honest.
+    }
+
+    SavedWindowGeometry saved;
+    if (!parseSavedWindowGeometry(geometryBlob, &saved)) {
+        return;
+    }
+
+    // Read the saved state, not the live one.  Qt applies the maximized and
+    // fullscreen rects without the clamp, so there is nothing to undo — and
+    // reading windowState() instead would make this depend on whether the
+    // platform has finished applying it yet.
+    //
+    // Known limitation: a session that exits maximized still restores DOWN
+    // into the clamped normalGeometry Qt stored, so the gap reappears on the
+    // first un-maximize and closeEvent() then saves it.  Fixing that means
+    // re-applying the saved normal rect on the WindowStateChange out of
+    // maximized, which is a bigger change to a state machine that also carries
+    // the minimal-mode guards — deliberately out of scope here.
+    if (saved.maximized || saved.fullScreen) {
+        return;
+    }
+
+    // Prefer the screen the user actually left the window on; if that monitor
+    // is gone, fall back to wherever Qt just put us.  Either way the rect is
+    // clamped into that screen's work area, so the custom title bar — the only
+    // mouse drag handle a frameless window has — can never land under a
+    // taskbar that moved or appeared between sessions.
+    const QScreen* target = QGuiApplication::screenAt(saved.normalRect.center());
+    if (!target) {
+        target = screen();
+    }
+    if (!target) {
+        return;
+    }
+
+    // setGeometry() rather than move(): the custom frame's margins are zero, so
+    // frame rect == client rect, and the size has to go back too.
+    setGeometry(clampFrameToWorkArea(saved.normalRect, target->availableGeometry()));
+#else
+    Q_UNUSED(geometryBlob);
+#endif
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -3205,6 +3392,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     m_tgxlConn.disconnect();
     m_pgxlConn.disconnect();
 
+    // Same event-loop reasoning: the operating-state capture flush normally
+    // rides the queued backend disconnected() signal, which never lands
+    // during close (two queued hops through the HL2 I/O thread). Flush
+    // explicitly while the scope still resolves to the connected radio, so
+    // the last tune/drive edit before quit is remembered (RFC #4603 PR 3;
+    // PR #4619 review).
+    m_radioModel.flushPendingOperatingState();
+
     // Same reason as the TGXL/PGXL sockets above: the D-STAR helper is stopped
     // by the queued RadioModel::connectionStateChanged(false) handler, which
     // does not run during close (the event loop isn't pumped here). Without an
@@ -3283,12 +3478,22 @@ void MainWindow::closeEvent(QCloseEvent* event)
     {
         const QList<SliceModel*> slices = m_radioModel.slices();
         for (int i = 0; i < slices.size(); ++i) {
-            const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + i));
+            const QString key = DaxRestorePolicy::keyForIndex(i);
             if (slices[i]->daxChannel() > 0) {
                 s.setValue(key, QString::number(slices[i]->daxChannel()));
             } else {
                 s.remove(key);
             }
+        }
+        // #4558: also drop keys beyond the slice count at quit, so a config
+        // poisoned by an earlier multi-slice quit self-heals instead of staying
+        // armed forever. Both preconditions — connected AND holding a populated
+        // slice list — are load-bearing; DaxRestorePolicy::staleKeysToPrune()
+        // carries why, and the unit test pins both.
+        for (const QString& key :
+             DaxRestorePolicy::staleKeysToPrune(m_radioModel.isConnected(),
+                                                slices.size())) {
+            s.remove(key);
         }
     }
 
@@ -3596,19 +3801,22 @@ void MainWindow::showConnectionDialog()
     if (!screen)
         screen = QApplication::primaryScreen();
 
-    const QSize dlgSize = m_connPanel->size();
-    QPoint pos(labelCenter.x() - dlgSize.width() / 2,
-               statusBarTop.y() - dlgSize.height() - 8);
+    m_connPanel->fitToScreen(screen);
+    // Frame coordinates throughout: QWidget::move() positions a top-level
+    // widget by its frame top-left, so anchoring on the client rect would leave
+    // the window a title bar lower than intended. screenFitFrameSize() is the
+    // same arithmetic constrainedFrameTopLeft() clamps with — one source, so
+    // the anchor and the clamp cannot drift apart.
+    const QSize frameSize = m_connPanel->screenFitFrameSize();
+    QPoint frameTopLeft(labelCenter.x() - frameSize.width() / 2,
+                        statusBarTop.y() - frameSize.height() - 8);
 
     if (screen) {
-        const QRect available = screen->availableGeometry();
-        const int maxX = available.left() + available.width() - dlgSize.width();
-        const int maxY = available.top() + available.height() - dlgSize.height();
-        pos.setX(qMax(available.left(), qMin(pos.x(), maxX)));
-        pos.setY(qMax(available.top(), qMin(pos.y(), maxY)));
+        frameTopLeft = m_connPanel->constrainedFrameTopLeft(
+            frameTopLeft, screen->availableGeometry());
     }
 
-    m_connPanel->move(pos);
+    m_connPanel->move(frameTopLeft);
     m_connPanel->show();
     m_connPanel->raise();
     m_connPanel->activateWindow();
@@ -4108,14 +4316,10 @@ void MainWindow::buildUI()
     m_connPanel->setWindowTitle("Connect to Radio");
     m_connPanel->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    // Height floor comes from the panel itself — its "Connect by IP" page grew a
-    // Radio type row, so a hardcoded 580/660 here clipped the bottom of that
-    // page (the Advanced disclosure fell outside the mode stack). Open at
-    // exactly that floor, not floor + slack: the panel reclaims height it set
-    // itself when a page shrinks, and it can only tell its own sizing from an
-    // operator's drag if the two agree to start with.
-    m_connPanel->setMinimumSize(640, m_connPanel->minimumHeight());
-    m_connPanel->resize(760, m_connPanel->minimumHeight());
+    // Sizing belongs to the panel now. It sets these same two values in its own
+    // constructor and then adjusts them per screen in fitToScreen(), which
+    // every show path here runs first — a hardcoded pair at this level went
+    // stale the moment the panel gained a row, and that is what #4515 was.
     m_connPanel->hide();
 
     // CWX panel — left of spectrum, hidden by default
@@ -4173,10 +4377,9 @@ void MainWindow::buildUI()
             entry.wnbLevel = pan->wnbLevel();
         }
 
-        BandStackSettings::instance().addEntry(m_radioModel.serial(), entry);
-        BandStackSettings::instance().save();
+        BandStackSettings::instance().addEntry(m_radioModel.settingsScope(), entry);
         m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.serial(), m_bandPlanMgr);
+            m_radioModel.settingsScope(), m_bandPlanMgr);
     });
     connect(bsPanel, &BandStackPanel::recallRequested, this,
             [this](const BandStackEntry& e) {
@@ -4240,53 +4443,47 @@ void MainWindow::buildUI()
     });
     connect(bsPanel, &BandStackPanel::removeRequested, this,
             [this](int index) {
-        BandStackSettings::instance().removeEntry(m_radioModel.serial(), index);
-        BandStackSettings::instance().save();
+        BandStackSettings::instance().removeEntry(m_radioModel.settingsScope(), index);
         m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.serial(), m_bandPlanMgr);
+            m_radioModel.settingsScope(), m_bandPlanMgr);
     });
 
     // Clear All — with confirmation to avoid accidental loss during contests
     connect(bsPanel, &BandStackPanel::clearAllRequested, this, [this]() {
-        if (BandStackSettings::instance().entries(m_radioModel.serial()).isEmpty())
+        if (BandStackSettings::instance().entries(m_radioModel.settingsScope()).isEmpty())
             return;
         auto answer = QMessageBox::question(
             this, "Clear All Bookmarks",
             "Remove all band stack bookmarks?",
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) return;
-        BandStackSettings::instance().clearAllEntries(m_radioModel.serial());
-        BandStackSettings::instance().save();
+        BandStackSettings::instance().clearAllEntries(m_radioModel.settingsScope());
         m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.serial(), m_bandPlanMgr);
+            m_radioModel.settingsScope(), m_bandPlanMgr);
     });
 
     // Clear band bookmarks (from grouped header right-click)
     connect(bsPanel, &BandStackPanel::clearBandRequested, this,
             [this](double lowMhz, double highMhz) {
         BandStackSettings::instance().clearBandEntries(
-            m_radioModel.serial(), lowMhz, highMhz);
-        BandStackSettings::instance().save();
+            m_radioModel.settingsScope(), lowMhz, highMhz);
         m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.serial(), m_bandPlanMgr);
+            m_radioModel.settingsScope(), m_bandPlanMgr);
     });
 
     // Group by band toggle
     connect(bsPanel, &BandStackPanel::groupByBandChanged, this, [](bool grouped) {
         BandStackSettings::instance().setGroupByBand(grouped);
-        BandStackSettings::instance().save();
     });
 
     // Auto-expiry setting changed
     connect(bsPanel, &BandStackPanel::autoExpiryChanged, this, [](int minutes) {
         BandStackSettings::instance().setAutoExpiryMinutes(minutes);
-        BandStackSettings::instance().save();
     });
 
     // Auto-save dwell setting changed
     connect(bsPanel, &BandStackPanel::autoSaveDwellChanged, this, [this](int seconds) {
         BandStackSettings::instance().setAutoSaveDwellSeconds(seconds);
-        BandStackSettings::instance().save();
         if (!m_bsAutoSaveTimer) return;
         if (seconds <= 0) {
             m_bsAutoSaveTimer->stop();
@@ -4307,11 +4504,10 @@ void MainWindow::buildUI()
         if (m_radioModel.serial().isEmpty()) return;
         qint64 maxAge = static_cast<qint64>(minutes) * 60 * 1000;
         int removed = BandStackSettings::instance().removeExpiredEntries(
-            m_radioModel.serial(), maxAge);
+                    m_radioModel.settingsScope(), maxAge);
         if (removed > 0) {
-            BandStackSettings::instance().save();
             m_panStack->bandStackPanel()->loadBookmarks(
-                m_radioModel.serial(), m_bandPlanMgr);
+                m_radioModel.settingsScope(), m_bandPlanMgr);
         }
     });
 
@@ -4334,7 +4530,7 @@ void MainWindow::buildUI()
 
         // Skip if any existing entry is within ±100 Hz on this radio
         // (avoids re-stacking the exact same station after a brief retune).
-        auto existing = BandStackSettings::instance().entries(m_radioModel.serial());
+        auto existing = BandStackSettings::instance().entries(m_radioModel.settingsScope());
         for (const auto& e : existing) {
             if (std::abs(e.frequencyMhz - freqMhz) < 0.0001) return;
         }
@@ -4368,7 +4564,7 @@ void MainWindow::buildUI()
             }
             if (autoCount >= kMaxAutoPerBand && oldestAutoIdx >= 0) {
                 BandStackSettings::instance().removeEntry(
-                    m_radioModel.serial(), oldestAutoIdx);
+                    m_radioModel.settingsScope(), oldestAutoIdx);
             }
         }
 
@@ -4392,10 +4588,9 @@ void MainWindow::buildUI()
             entry.wnbOn = pan->wnbActive();
             entry.wnbLevel = pan->wnbLevel();
         }
-        BandStackSettings::instance().addEntry(m_radioModel.serial(), entry);
-        BandStackSettings::instance().save();
+        BandStackSettings::instance().addEntry(m_radioModel.settingsScope(), entry);
         m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.serial(), m_bandPlanMgr);
+            m_radioModel.settingsScope(), m_bandPlanMgr);
     });
     refreshMemoryBrowsePanel();
 
@@ -4641,8 +4836,9 @@ void MainWindow::buildUI()
     hbox->addStretch(1);
 
     m_stationNickLabel = new QLabel("N0CALL");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_stationNickLabel, "QLabel { color: {{color.text.primary}}; font-size: 21px; background: {{color.background.0}}; "
-        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_stationNickLabel, statusBarStationLabelStyle(kStationFontPx));
+    m_stationNickLabel->setProperty(kStationFontPxProperty, kStationFontPx);
     m_stationNickLabel->setAlignment(Qt::AlignCenter);
     m_stationNickLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     setStatusBarStationText(m_stationNickLabel, m_stationNickLabel->text());
@@ -5204,9 +5400,21 @@ void MainWindow::onConnectionStateChanged(bool connected)
     if (connected) {
         m_terminalConnectionError.clear();
         m_suppressStartupPanLayoutRearrange = false;
+        // #4558: open the last-session DAX restore window for this connect's
+        // slice enumeration only (see DaxRestorePolicy.h). The primary close is
+        // the first live slice removal; the settle timer is belt-and-braces for
+        // a session that never removes one, and 10 s clears a slow WAN/SmartLink
+        // status trickle with a wide margin. The generation it carries keeps a
+        // previous connect's pending timeout from closing this window.
+        m_daxRestore.onConnected();
+        const int daxGen = m_daxRestore.generation();
+        QTimer::singleShot(10000, this, [this, daxGen]() {
+            m_daxRestore.onSettleTimeout(daxGen);
+        });
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
-        m_radioVersionLabel->setText(m_radioModel.version());
+        m_radioVersionLabel->setText(statusBarVersionText(
+            m_radioModel.versionLabel(), m_radioModel.version()));
         setStatusBarStationText(m_stationLabel, m_radioModel.nickname());
         updateStatusBarMinimumWidth();
         m_connStatusLabel->setText("Connected");
@@ -5263,10 +5471,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         int expiryMin = BandStackSettings::instance().autoExpiryMinutes();
         if (expiryMin > 0) {
             qint64 maxAge = static_cast<qint64>(expiryMin) * 60 * 1000;
-            if (BandStackSettings::instance().removeExpiredEntries(
-                    m_radioModel.serial(), maxAge) > 0) {
-                BandStackSettings::instance().save();
-            }
+            BandStackSettings::instance().removeExpiredEntries(
+                m_radioModel.settingsScope(), maxAge);
         }
         BandStackPanel* bandStackPanel =
             m_panStack ? m_panStack->bandStackPanel() : nullptr;
@@ -5282,7 +5488,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // while the radio finishes pushing initial slice/pan state.
         m_bsConnectGraceUntilMs = QDateTime::currentMSecsSinceEpoch() + 5000;
         if (bandStackPanel) {
-            bandStackPanel->loadBookmarks(m_radioModel.serial(), m_bandPlanMgr);
+            bandStackPanel->loadBookmarks(
+                m_radioModel.settingsScope(), m_bandPlanMgr);
         }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();
@@ -5458,6 +5665,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
 #endif
     } else {
         stopDigitalVoiceService(false);
+
+        // #4558: the restore window cannot span a disconnect — the next connect
+        // reopens it for its own enumeration. Disconnect teardown does not emit
+        // sliceRemoved, so without this the window would stay armed until the
+        // settle timer happened to fire.
+        m_daxRestore.onDisconnected();
 
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
         // stay connected through brief reconnects, higher channels stop cleanly.
@@ -5647,7 +5860,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 s.remove("LastConnectedRadioSerial");
                 s.remove("LastRoutedRadioIp");
                 s.save();
-                m_connPanel->show();
+                showConnectionDialog();
             });
             m_reconnectDlg->show();
         }
@@ -6029,10 +6242,10 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
                 emit bandStackRestoreStarting(slicePanId);
                 clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
                 m_bandSettings.setCurrentBand(memoryBand);
-                noteBandRecallForPan(slicePanId);
                 // #4142: during the profile-load hold a bare sendCommand()
                 // band= write is silently destroyed and the recall lands on
-                // the wrong band stack. requestPanBand defers it instead.
+                // the wrong band stack. requestPanBand defers it instead; the
+                // dispatch signal starts the reconstruction guard at replay.
                 m_radioModel.requestPanBand(slicePanId, stackKeyResult.key);
                 QTimer::singleShot(300, this, [this, slicePanId]() {
                     reassertUnmutedSliceAudioForPan(slicePanId);
@@ -6223,6 +6436,42 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // equalizer the operator has.
     if (m_appletPanel) {
         m_appletPanel->setHardwareEqVisible(radioSideDsp);
+    }
+
+    // ── PA supply voltage: the lower row of the status bar's PA stack ───────
+    //
+    // m_supplyVoltLabel ONLY. m_paTempLabel and the paVbox around them are left
+    // alone deliberately: an HL2 reports PA temperature genuinely, so hiding the
+    // stack would delete a working readout in order to suppress a broken
+    // sibling. The one being suppressed is fed from the Flex-named "+13.8A"
+    // meter, and MeterModel emits hwTelemetryChanged whenever EITHER half
+    // changes — so on a radio that reports only PA temperature the volts half
+    // arrives as its 0.0f initialiser on every tick.
+    if (m_supplyVoltLabel) {
+        m_supplyVoltLabel->setVisible(!connected || caps.hasSupplyVoltageTelemetry);
+        if (!connected) {
+            // Drop the previous session's readings instead of leaving them on
+            // screen with no radio attached — the same "do not assert what the
+            // radio did not report" rule this gate exists for. MeterModel::clear()
+            // resets the underlying sentinels, but no further hwTelemetryChanged
+            // arrives after a disconnect to repaint either label, so the text has
+            // to be dropped here or a Flex's last rail voltage survives its own
+            // disconnect. Each row reuses its own established no-value rendering:
+            // a bare dash for the rail, "PA --" for the temperature.
+            m_supplyVoltLabel->setText(QStringLiteral("—"));
+            m_hasPaTempTelemetry = false;
+            updatePaTempLabel();
+        }
+        // Republishing the minimum width cannot currently matter here, and the
+        // call is kept only so the gate stays correct if that stops being true:
+        // paStack's minimum is PINNED by reserveTelemetryStack() with a
+        // "99.99 V" sample, so hiding one of its children leaves
+        // m_statusBarContainer->minimumSizeHint() unchanged, and
+        // updateStatusBarMinimumWidth() only ever READS that hint. So no stale
+        // minimum, gap or clipped size grip is reachable today — and the HL2
+        // reclaims no width from the hidden row either, nor would it:
+        // "PA 248.0°F" is the wider sample.
+        updateStatusBarMinimumWidth();
     }
 
     // ── Flex platform features that are not DSP ─────────────────────────────
@@ -6460,11 +6709,11 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     emit bandStackRestoreStarting(slice->panId());
     clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
     m_bandSettings.setCurrentBand(targetBand);
-    noteBandRecallForPan(slice->panId());
     // #4142: the cross-band typed tune is the reported bug's worst variant —
     // the `slice tune` half survives the hold while a bare sendCommand()
     // band= write is silently destroyed, so the slice lands outside the pan.
-    // requestPanBand defers the band-stack swap and replays it band-first.
+    // requestPanBand defers the band-stack swap and replays it band-first; the
+    // dispatch signal starts the reconstruction guard at replay.
     m_radioModel.requestPanBand(slice->panId(), stackKeyResult.key);
     QTimer::singleShot(300, this, [this, panId = slice->panId()]() {
         reassertUnmutedSliceAudioForPan(panId);
@@ -6698,8 +6947,16 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // (m_updatingFromModel is set in the activeChanged handler). During profile
     // recall, RadioModel's profile-load hold suppresses this radio write so we
     // do not dirty the radio's restoring GUIClient session.
-    if (sliceId != prevId && !m_updatingFromModel)
+    if (sliceId != prevId && !m_updatingFromModel) {
+        // setActive() emits activeChanged(true) synchronously before the wire
+        // write (#3854 optimistic edge), re-entering the activeChanged handler
+        // for a selection we are already performing. Mark the slice so that
+        // handler can drop exactly this echo and nothing else.
+        const int previousEdgeSliceId = m_optimisticActiveEdgeSliceId;
+        m_optimisticActiveEdgeSliceId = sliceId;
         s->setActive(true);
+        m_optimisticActiveEdgeSliceId = previousEdgeSliceId;
+    }
 
     // Update RX EQ filter-cutoff guides whenever the active slice swaps —
     // the new slice may have a different mode / filter shape.
@@ -7913,8 +8170,12 @@ void MainWindow::toggleMinimalMode(bool on)
 
         QByteArray geom = QByteArray::fromBase64(
             s.value("MinimalModeGeometry", "").toByteArray());
-        if (!geom.isEmpty())
-            restoreGeometry(geom);
+        // Re-anchor as well as restore: this window is already mapped, so Qt
+        // reapplies its caption-reserving clamp on every entry and the #4328
+        // gap would come straight back on one Ctrl+M round trip — then stick,
+        // because closeEvent() saves whatever origin is current.
+        if (!geom.isEmpty() && restoreGeometry(geom))
+            reanchorCustomFrameGeometry(geom);
 
         // Defer clearing the guard so any AppKit-deferred WindowStateChange
         // queued by the showNormal() / setFixedWidth() calls above is drained
@@ -7970,12 +8231,17 @@ void MainWindow::toggleMinimalMode(bool on)
         // Restore full geometry
         QByteArray geom = QByteArray::fromBase64(
             s.value("FullModeGeometry", "").toByteArray());
-        if (!geom.isEmpty())
-            restoreGeometry(geom);
+        const bool restored = !geom.isEmpty() && restoreGeometry(geom);
 
         // Belt-and-suspenders: if FullModeGeometry encoded a state, ensure
         // we land windowed.
         showNormal();
+
+        // After showNormal(), not before: leaving maximized drops us onto Qt's
+        // clamped normal geometry, which is the rect that carries the #4328
+        // phantom-caption offset.  Re-anchoring first would just be undone.
+        if (restored)
+            reanchorCustomFrameGeometry(geom);
     }
 
     s.setValue("MinimalModeEnabled", on ? "True" : "False");
@@ -8103,8 +8369,21 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     if (!sw) return;
 
     auto* pan = m_radioModel.panadapter(s->panId());
-    const double bandwidthMhz = pan ? pan->bandwidthMhz() : m_radioModel.panBandwidthMhz();
+    // A kiwi-display pan centers with the WIDGET's live span and no radio
+    // write: its radio-side geometry froze at kiwi assignment (#3825/#4081),
+    // so the model bandwidth is stale the moment the operator zooms — pairing
+    // the new center with it would snap the zoom back — see PanRecenterPolicy.
+    const bool kiwiDisplayActive = kiwiSdrPanDisplaysKiwi(s->panId());
+    const double bandwidthMhz = PanRecenterPolicy::recenterBandwidthMhz(
+        kiwiDisplayActive, sw->bandwidthMhz(),
+        pan ? pan->bandwidthMhz() : m_radioModel.panBandwidthMhz());
     const double targetMhz = (centerMhz > 0.0) ? centerMhz : s->frequency();
+    // Keep the view's low edge >= 0 Hz. The non-kiwi path clamps via
+    // requestPanCenter -> applyTuneCenteringWrite, but a kiwi-display pan renders
+    // widget-local with no radio echo to correct a negative edge, so a wide span
+    // on an LF/VLF/MW slice (0.137 - 0.25 = -0.113 MHz) would draw off-screen.
+    // Matches std::max(center, bw/2) in the sibling recenter paths.
+    const double viewCenterMhz = std::max(targetMhz, bandwidthMhz / 2.0);
 
     if (m_panStack) {
         if (auto* applet = m_panStack->panadapter(s->panId()))
@@ -8117,7 +8396,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // exactly what projects honest tiles into a lying frame and bakes black rows
     // into waterfall history. requestPanCenter() defers and replays it instead.
     bool centerDeferred = false;
-    if (forceRadioCenter && m_radioModel.isConnected()) {
+    if (!kiwiDisplayActive && forceRadioCenter && m_radioModel.isConnected()) {
         centerDeferred = !m_radioModel.requestPanCenter(s->panId(), targetMhz);
     }
 
@@ -8126,7 +8405,7 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // deferred, in which case the pan must keep showing truthful spectrum for the
     // span the radio still has.
     if (!centerDeferred) {
-        sw->setFrequencyRange(targetMhz, bandwidthMhz);
+        sw->setFrequencyRange(viewCenterMhz, bandwidthMhz);
     }
     pushSliceFrequencyToOverlays(s, targetMhz);
 
@@ -8442,6 +8721,57 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
 
             qDebug() << "applyPanLayout: layout" << layoutId
                      << "complete, total pans:" << m_panStack->count();
+        });
+        return;
+    }
+
+    // A backend that owns its own receivers creates them at the SEAM.
+    //
+    // The Flex wire text below goes nowhere on such a radio, and — the part that
+    // actually breaks this — its completion callback never runs either. The
+    // recursion is driven FROM that callback, so it stopped dead after the first
+    // iteration: no pans, no error, no log line past "creating N more".
+    //
+    // That is what made "Add Panadapter → pick a layout" silently do nothing on
+    // a Hermes-Lite 2 while the bridge's `pan create` worked, because that goes
+    // through RadioModel::createPanadapter() and this path talks to the wire
+    // directly.
+    //
+    // The seam create is synchronous, so there is no reply to wait for. Which
+    // pan is new is found by DIFFING rather than parsing a create reply: the
+    // backend numbers its own pans and skips retired numbers after a close.
+    if (!m_radioModel.usesFlexCommandPlane()) {
+        QSet<QString> before;
+        for (auto* p : m_panStack->allApplets())
+            before.insert(p->panId());
+        for (auto* p : m_radioModel.panadapters())
+            if (p) before.insert(p->panId());
+
+        m_radioModel.createPanadapter();
+
+        QString createdId;
+        for (auto* p : m_radioModel.panadapters()) {
+            if (p && !before.contains(p->panId())) {
+                createdId = p->panId();
+                break;
+            }
+        }
+        if (createdId.isEmpty()) {
+            // The backend refused — receiver count, or the link budget at this
+            // span. It has already logged which; surface it and stop rather than
+            // recursing against a limit that will refuse every remaining pan.
+            qWarning() << "applyPanLayout: backend declined pan"
+                       << (created + 1) << "of" << total;
+            showPanadapterSliceCapacityMessage();
+            return;
+        }
+        panIds->append(createdId);
+        qDebug() << "applyPanLayout: created pan" << (created + 1) << "of" << total
+                 << "id:" << createdId;
+        // Same inter-create delay as the Flex path. Adding a receiver restarts
+        // the EP6 stream, so back-to-back creates would stack restarts.
+        QTimer::singleShot(200, this, [this, layoutId, total, panIds, created]() {
+            createPansSequentially(layoutId, total, panIds, created + 1);
         });
         return;
     }

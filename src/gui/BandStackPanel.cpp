@@ -169,10 +169,10 @@ QString BandStackPanel::bandNameForFrequency(double freqMhz)
     return "Other";
 }
 
-void BandStackPanel::loadBookmarks(const QString& radioSerial, const BandPlanManager* bpm)
+void BandStackPanel::loadBookmarks(const RadioSettingsScope& scope, const BandPlanManager* bpm)
 {
     clear();
-    const auto entries = BandStackSettings::instance().entries(radioSerial);
+    const auto entries = BandStackSettings::instance().entries(scope);
     for (int i = 0; i < entries.size(); ++i) {
         const BandStackEntry& entry = entries[i];
         Bookmark bm;

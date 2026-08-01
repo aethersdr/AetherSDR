@@ -627,11 +627,14 @@ void TxApplet::syncAtuIndicators()
     }
 }
 
-void TxApplet::updateMeters(float fwdPower, float swr)
+void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
 {
     m_smoothedPower = fwdPower;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
-    static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+    // Absent SWR parks the gauge at its 1.0 rest position; a raw 0.0 would
+    // read as an off-scale value, and holding the last ratio is exactly the
+    // stale display #4533 removed.
+    static_cast<HGauge*>(m_swrGauge)->setValue(swrValid ? swr : 1.0f);
 }
 
 void TxApplet::updatePeakPower(float fwdPowerInstant)

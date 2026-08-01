@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QStringList>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -74,6 +75,22 @@ int main(int argc, char** argv)
     // returns sane values from seedBuiltinDefaults().
     auto& tm = ThemeManager::instance();
     EXPECT_TRUE(tm.color("color.accent").isValid());
+
+    // NOTE on testing the SEED itself: not from THIS target. This binary links
+    // resources.qrc, so the constructor loads Default Dark immediately after
+    // seeding and the JSON overwrites every token the seed set — a wrong seed is
+    // invisible here. That invisibility is what let the seed drift unnoticed for
+    // months (#3184).
+    //
+    // It is NOT invisible everywhere. tests/theme_seed_test.cpp links
+    // ThemeManager + ThemeSeedGenerated WITHOUT the theme resource, which is the
+    // resource-missing fallback path #3184 named, and asserts the seeded values
+    // through the ordinary public API. Those assertions fail against the old
+    // hand-written table. Put seed assertions there, not here.
+    //
+    // Two other layers back it up: tools/gen_theme_seed.py --check asserts the
+    // generated table matches the bundled JSON token-for-token, and the
+    // theme-seed CI gate runs it on every PR touching either side.
 
     // ── Default Dark loads from :/themes/ via setActiveTheme ──
     // The shipped resource theme should be in availableThemes(); switching
@@ -824,6 +841,389 @@ int main(int argc, char** argv)
         EXPECT_EQ(rt.family, QString("Inter"));
         EXPECT_EQ(rt.size,   13);
         EXPECT_EQ(rt.color.name().toLower(), QString("#aabbcc"));
+    }
+
+    // ---- round-trip correctness (#3184) ----
+    //
+    // Three independent losses, each silent: the file still loads, so nothing
+    // announces that something went missing.
+    {
+        // (1) A radial gradient must keep its CENTRE across save + reload.
+        //
+        // The writer emitted centerX/centerY as two scalars; the reader only
+        // looked for a "center" ARRAY, so the centre silently reverted to the
+        // {0.5, 0.5} default. `radius` used the same key on both sides and DID
+        // survive, which made the loss look like a half-working feature.
+        ThemeGradient g;
+        g.type   = ThemeGradient::Radial;
+        g.center = QPointF(0.2, 0.8);      // deliberately not the 0.5,0.5 default
+        g.radius = 0.7;
+        g.stops  = { {0.0, QColor("#000000")}, {1.0, QColor("#ffffff")} };
+        tm.setGradient("color.test.radial", g);
+
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Radial Round Trip"));
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("Radial Round Trip"));
+
+        const ThemeGradient rt = tm.gradient("color.test.radial");
+        EXPECT_EQ(rt.type, ThemeGradient::Radial);
+        EXPECT_TRUE(qFuzzyCompare(rt.center.x(), 0.2));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.center.y(), 0.8));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.radius,     0.7));
+    }
+
+    {
+        // (2) The reader still accepts the OLD centerX/centerY shape, so a
+        // theme written by a pre-fix build keeps its gradient instead of being
+        // stranded at the default.
+        QTemporaryDir legacyDir;
+        EXPECT_TRUE(legacyDir.isValid());
+        const QString path = legacyDir.filePath(QStringLiteral("legacy.json"));
+        QFile f(path);
+        EXPECT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(R"({
+          "schemaVersion": 2, "name": "Legacy Centre",
+          "scopes": { "root": { "tokens": {
+            "color.test.legacy": { "type": "radial-gradient", "angle": 180,
+              "centerX": 0.25, "centerY": 0.75, "radius": 0.6,
+              "stops": [ {"at":0.0,"color":"#000000"}, {"at":1.0,"color":"#ffffff"} ] }
+          } } } })");
+        f.close();
+
+        QString impErr;
+        const QString name = tm.importThemeFromFile(path, &impErr);
+        EXPECT_EQ(name, QString("Legacy Centre"));
+        EXPECT_TRUE(impErr.isEmpty());
+
+        const ThemeGradient lg = tm.gradient("color.test.legacy");
+        EXPECT_TRUE(qFuzzyCompare(lg.center.x(), 0.25));
+        EXPECT_TRUE(qFuzzyCompare(lg.center.y(), 0.75));
+    }
+
+    {
+        // (3) Exporting the ACTIVE theme must not drop scoped tokens.
+        //
+        // The old export walked m_tokens, which is a reference into the ROOT
+        // SCOPE ONLY — every child scope lives in the scope tree and was simply
+        // absent. It wrote a flat top-level "tokens" object, which the reader's
+        // legacy fallback still accepts, so the file loaded cleanly and had
+        // quietly lost its per-applet overrides.
+        // Fork first: a built-in can't be re-imported by name (importThemeFromFile
+        // refuses to shadow one), and the re-import below is the assertion that
+        // actually matters.
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Export Round Trip"));
+        tm.setColor(QStringLiteral("applet/tx"),
+                    QStringLiteral("color.slider.foreground"),
+                    QColor("#123456"));
+
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        const QString out = tmp.filePath(QStringLiteral("exported.json"));
+        QString err;
+        EXPECT_TRUE(tm.exportThemeToFile(tm.activeTheme(), out, &err));
+
+        QFile ef(out);
+        EXPECT_TRUE(ef.open(QIODevice::ReadOnly));
+        const QJsonObject doc = QJsonDocument::fromJson(ef.readAll()).object();
+        ef.close();
+
+        // Schema-2 shape, not the flat legacy dump.
+        EXPECT_TRUE(doc.contains("scopes"));
+        const QJsonObject root = doc.value("scopes").toObject()
+                                    .value("root").toObject();
+        // The scoped override survived the export.
+        const QJsonObject applet = root.value("scopes").toObject()
+                                       .value("applet").toObject();
+        const QJsonObject tx = applet.value("scopes").toObject()
+                                     .value("tx").toObject();
+        EXPECT_EQ(tx.value("tokens").toObject()
+                    .value("color.slider.foreground").toString().toLower(),
+                  QString("#123456"));
+
+        // applet/rx was NOT overwritten above, so it still carries the bundled
+        // theme's ALIAS — the shape every scoped token actually ships in. An
+        // exported document that has scopes but no `primitives` is WORSE than
+        // one that has neither: the alias survives into the file, finds no
+        // palette on import, and resolveAlias() hands QColor the literal
+        // "{color.green.500}". Pin both halves.
+        const QJsonObject rx = applet.value("scopes").toObject()
+                                     .value("rx").toObject();
+        EXPECT_EQ(rx.value("tokens").toObject()
+                    .value("color.slider.foreground").toString(),
+                  QString("{color.green.500}"));
+        EXPECT_TRUE(doc.contains("primitives"));
+
+        // The assertion that inspecting JSON can't make: import the file back
+        // and read through the resolving API. Fails with an invalid QColor if
+        // `primitives` ever goes missing again, whatever the JSON looks like.
+        QString impErr;
+        const QString reimported = tm.importThemeFromFile(out, &impErr);
+        EXPECT_TRUE(!reimported.isEmpty());
+        EXPECT_TRUE(impErr.isEmpty());
+        const QColor rxSlider = tm.colorAt(QStringLiteral("applet/rx"),
+                                           QStringLiteral("color.slider.foreground"));
+        EXPECT_TRUE(rxSlider.isValid());
+        EXPECT_EQ(rxSlider.name().toLower(), QString("#4dd87a"));  // {color.green.500}
+        EXPECT_EQ(tm.colorAt(QStringLiteral("applet/tx"),
+                             QStringLiteral("color.slider.foreground"))
+                    .name().toLower(),
+                  QString("#123456"));
+    }
+
+    {
+        // (4) A radial gradient stored as a PRIMITIVE keeps its centre and
+        // radius too.
+        //
+        // The primitives palette had its own hand-rolled gradient writer that
+        // emitted type/angle/stops only — no centre, no radius, for either
+        // gradient type. Same loss as the scope-level one a tier down, and one
+        // the reader cannot recover from: there is no centerX in the file to
+        // fall back to either. Both tiers now share gradientToJson().
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        QTemporaryDir pdir;
+        EXPECT_TRUE(pdir.isValid());
+        const QString ppath = pdir.filePath(QStringLiteral("prim-radial.json"));
+        QFile pf(ppath);
+        EXPECT_TRUE(pf.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        pf.write(R"({
+          "schemaVersion": 2, "name": "Primitive Radial",
+          "primitives": {
+            "gradient.spot": { "type": "radial-gradient", "angle": 0,
+              "center": [0.3, 0.7], "radius": 0.9,
+              "stops": [ {"at":0.0,"color":"#112233"}, {"at":1.0,"color":"#445566"} ] }
+          },
+          "scopes": { "root": { "tokens": {
+            "color.test.spot": "{gradient.spot}"
+          } } } })");
+        pf.close();
+
+        QString pErr;
+        EXPECT_EQ(tm.importThemeFromFile(ppath, &pErr), QString("Primitive Radial"));
+        EXPECT_TRUE(qFuzzyCompare(tm.gradient("color.test.spot").center.x(), 0.3));
+
+        // Re-save through the writer and reload: centre and radius must still
+        // be there. Before the shared writer both reverted to the {0.5, 0.5}
+        // / 0.5 defaults on exactly this hop.
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Primitive Radial Saved"));
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("Primitive Radial Saved"));
+
+        const ThemeGradient rt = tm.gradient("color.test.spot");
+        EXPECT_EQ(rt.type, ThemeGradient::Radial);
+        EXPECT_TRUE(qFuzzyCompare(rt.center.x(), 0.3));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.center.y(), 0.7));   // was 0.5 before the fix
+        EXPECT_TRUE(qFuzzyCompare(rt.radius,     0.9));   // was 0.5 before the fix
+    }
+
+    {
+        // (5) cssFragment() warns for an unknown token — once per theme.
+        //
+        // The warning IS the fix, so the warning is what has to be pinned.
+        // LogManager installs a message handler, so it never reaches stderr;
+        // capture it directly.
+        static QStringList s_captured;
+        static QtMessageHandler s_prev = nullptr;
+        s_captured.clear();
+        s_prev = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+                // Match the probe token itself, not merely "unknown token": a
+                // theme switch reapplies every tracked stylesheet, so a
+                // pre-existing template typo would otherwise inflate the count.
+                if (type == QtWarningMsg
+                    && msg.contains("color.definitely.not.a.token"))
+                    s_captured << msg;
+                if (s_prev) s_prev(type, ctx, msg);
+            });
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.cssFragment("color.definitely.not.a.token").isEmpty());
+        EXPECT_EQ(s_captured.size(), 1);
+
+        // Warned once — resolveFor() runs on every tracked-stylesheet reapply,
+        // so an unguarded warning would flood the log.
+        for (int i = 0; i < 5; ++i) tm.cssFragment("color.definitely.not.a.token");
+        EXPECT_EQ(s_captured.size(), 1);
+
+        // ...but once per THEME, not once per process: switching themes must
+        // re-arm it, or a token only the incoming theme is missing goes
+        // unreported because some earlier theme already burned the one warning.
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        tm.cssFragment("color.definitely.not.a.token");
+        EXPECT_EQ(s_captured.size(), 2);
+
+        qInstallMessageHandler(s_prev);
+    }
+
+    {
+        // (6) Importing a file this build just wrote must not warn that the
+        // file comes from a newer build. The guard tested schemaVersion > 1
+        // while both write paths emit 2, so every ordinary save/export round
+        // trip tripped it — and a warning that fires on the common case
+        // trains operators to ignore the real one.
+        static QStringList s_verWarnings;
+        static QtMessageHandler s_verPrev = nullptr;
+        s_verWarnings.clear();
+        s_verPrev = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
+                if (type == QtWarningMsg && msg.contains("newer than this build"))
+                    s_verWarnings << msg;
+                if (s_verPrev) s_verPrev(type, ctx, msg);
+            });
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("Version Guard Fork"));
+        QTemporaryDir vdir;
+        EXPECT_TRUE(vdir.isValid());
+        const QString vout = vdir.filePath(QStringLiteral("version-guard.json"));
+        QString vErr;
+        EXPECT_TRUE(tm.exportThemeToFile(tm.activeTheme(), vout, &vErr));
+
+        QString vImpErr;
+        EXPECT_TRUE(!tm.importThemeFromFile(vout, &vImpErr).isEmpty());
+        EXPECT_EQ(s_verWarnings.size(), 0);
+
+        qInstallMessageHandler(s_verPrev);
+    }
+
+    // ---- reset-to-factory follows the ACTIVE theme's base (#3184) ----
+    //
+    // The factory snapshot was hardcoded to default-dark.json, so pressing
+    // "Reset to default" while editing Default Light restored the DARK value.
+    // That is wrong for most of the root tokens the two bundled themes
+    // share — including color.background.0, which flipped a near-white
+    // background to near-black.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QColor darkBg     = tm.factoryColor("color.background.0");
+        const QColor darkAccent = tm.factoryColor("color.accent");
+        EXPECT_EQ(darkBg.name().toLower(),     QString("#0f0f1a"));
+        EXPECT_EQ(darkAccent.name().toLower(), QString("#00b4d8"));
+
+        // Switching base must RE-snapshot, not serve the previous one.
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        const QColor lightBg     = tm.factoryColor("color.background.0");
+        const QColor lightAccent = tm.factoryColor("color.accent");
+        EXPECT_EQ(lightBg.name().toLower(),     QString("#f5f5f8"));
+        EXPECT_EQ(lightAccent.name().toLower(), QString("#0088b0"));
+
+        // And back again — proves the snapshot isn't a one-shot latch.
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_EQ(tm.factoryColor("color.background.0").name().toLower(),
+                  QString("#0f0f1a"));
+    }
+
+    // ---- a USER theme resets to the base it descends from, and keeps
+    //      doing so after the operator edits the discriminating token ----
+    //
+    // This is the branch that carries the risk: the two built-ins are exact
+    // name matches, a fork is not. The base is decided once at load — from
+    // recorded parentage where we have it, from background luminance where we
+    // don't — because the thing that reads it is the Reset button, and the
+    // operator presses Reset exactly when a value is already wrong. Deriving
+    // it live meant a fork of Light whose background had been dragged dark
+    // reclassified as dark, and then Reset handed back DARK values for that
+    // token and every other one for the rest of the session.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Light"));
+        EXPECT_TRUE(tm.saveCurrentThemeAs("My Light Fork"));
+        EXPECT_EQ(tm.activeTheme(), QString("My Light Fork"));
+
+        // A pristine fork of Light resets to LIGHT.
+        EXPECT_EQ(tm.factoryColor("color.background.0").name().toLower(),
+                  QString("#f5f5f8"));
+        EXPECT_EQ(tm.factoryColor("color.accent").name().toLower(),
+                  QString("#0088b0"));
+
+        // Now break the very token the fallback discriminator reads. The
+        // baseline must NOT move: this is the state someone is in when they
+        // reach for Reset.
+        tm.setColor(QStringLiteral("color.background.0"), QColor("#101018"));
+        EXPECT_EQ(tm.factoryColor("color.background.0").name().toLower(),
+                  QString("#f5f5f8"));   // was #0f0f1a before this fix
+        EXPECT_EQ(tm.factoryColor("color.accent").name().toLower(),
+                  QString("#0088b0"));   // was #00b4d8 before this fix
+
+        // Parentage is recorded on disk, so it survives a reload rather than
+        // being re-guessed from the (now dark) background.
+        EXPECT_TRUE(tm.saveActiveTheme());
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("My Light Fork"));
+        EXPECT_EQ(tm.factoryColor("color.background.0").name().toLower(),
+                  QString("#f5f5f8"));
+
+        // A theme with no recorded parentage — the shape of every user theme
+        // written before the field existed — still classifies by luminance,
+        // which is right for a pristine file.
+        QTemporaryDir legacyFork;
+        EXPECT_TRUE(legacyFork.isValid());
+        const QString lfPath = legacyFork.filePath(QStringLiteral("lf.json"));
+        QFile lf(lfPath);
+        EXPECT_TRUE(lf.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        lf.write(R"({
+          "schemaVersion": 2, "name": "Legacy Light Fork",
+          "scopes": { "root": { "tokens": {
+            "color": { "background": { "0": "#f0f0f4" } }
+          } } } })");
+        lf.close();
+        QString lfErr;
+        const QString lfName = tm.importThemeFromFile(lfPath, &lfErr);
+        EXPECT_EQ(lfName, QString("Legacy Light Fork"));
+        EXPECT_EQ(tm.factoryColor("color.accent").name().toLower(),
+                  QString("#0088b0"));   // light base, inferred
+    }
+
+    // ---- a theme name that becomes a filename can't carry path structure ----
+    //
+    // importThemeFromFile() already refused separators; the two entry points
+    // where the OPERATOR types the name did not, so the name went straight into
+    // a path and could write outside the themes directory.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QString before = tm.activeTheme();
+
+        EXPECT_TRUE(!tm.saveCurrentThemeAs(QStringLiteral("../escape")));
+        EXPECT_TRUE(!tm.saveCurrentThemeAs(QStringLiteral("sub/dir")));
+        EXPECT_TRUE(!tm.saveCurrentThemeAs(QStringLiteral("back\\slash")));
+        // A refused save must not have switched the active theme.
+        EXPECT_EQ(tm.activeTheme(), before);
+        // Not in the theme list either.
+        EXPECT_TRUE(!tm.availableThemes().contains(QStringLiteral("../escape")));
+
+        // A legitimate name still works — the guard rejects separators, not
+        // ordinary punctuation.
+        EXPECT_TRUE(tm.saveCurrentThemeAs(QStringLiteral("Nigel's Theme (v2)")));
+        EXPECT_TRUE(tm.availableThemes().contains(QStringLiteral("Nigel's Theme (v2)")));
+
+        // Rename is the other filename-building entry point.
+        EXPECT_TRUE(!tm.renameTheme(QStringLiteral("Nigel's Theme (v2)"),
+                                    QStringLiteral("../escaped")));
+        EXPECT_TRUE(tm.availableThemes().contains(QStringLiteral("Nigel's Theme (v2)")));
+
+        // The rest of the "typed name becomes a filename" class, rejected on
+        // every platform because a theme file is portable — the name is typed
+        // on one OS and the file gets opened on another.
+        QString why;
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("C:tricky"), &why));
+        EXPECT_TRUE(!why.isEmpty());          // every refusal explains itself
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("CON")));
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("com1")));
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("NUL.backup")));
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("trailing.")));
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("new\nline")));
+        EXPECT_TRUE(!ThemeManager::isValidThemeName(QStringLiteral("   ")));
+        // ...and the ordinary names that must keep working.
+        EXPECT_TRUE(ThemeManager::isValidThemeName(QStringLiteral("Nigel's Theme (v2)")));
+        EXPECT_TRUE(ThemeManager::isValidThemeName(QStringLiteral("Contest — 40m")));
+        EXPECT_TRUE(ThemeManager::isValidThemeName(QStringLiteral("v1.2 draft")));
+        EXPECT_TRUE(ThemeManager::isValidThemeName(QStringLiteral("CONTEST")));  // not CON
+
+        // A name is trimmed ONCE and the trimmed form is what reaches disk and
+        // the theme list — no key with a trailing space that Win32 would strip
+        // off the filename.
+        EXPECT_TRUE(tm.saveCurrentThemeAs(QStringLiteral("  Padded Name  ")));
+        EXPECT_TRUE(tm.availableThemes().contains(QStringLiteral("Padded Name")));
+        EXPECT_EQ(tm.activeTheme(), QString("Padded Name"));
     }
 
     // Restore Default Dark for any future test additions below.

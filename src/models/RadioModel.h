@@ -2,6 +2,7 @@
 
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
+#include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
@@ -13,8 +14,10 @@
 #include "core/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
+#include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
 #include "core/DigitalVoiceWaveformTelemetry.h"
 #include <QThread>
+#include <optional>
 #include "SliceModel.h"
 #include "MeterModel.h"
 #include "PanadapterModel.h"
@@ -133,6 +136,10 @@ public:
     QString name()    const { return m_name; }
     QString model()   const { return m_model; }
     QString version() const { return m_version; }
+    // Backend-supplied word for what `version` IS ("Gateware" on an HL2),
+    // empty when the bare value speaks for itself. Display only — version()
+    // stays the unadorned token that rigctl and the bridge serve.
+    QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
     bool fullDuplexEnabled() const { return m_fullDuplex; }
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
@@ -223,7 +230,23 @@ public:
     QString gpsNtpServerAddress() const;
 
     // Max slices reported by radio
-    int maxSlices() const { return m_maxSlices; }
+    int maxSlices() const {
+        // Same authority rule as maxPanadapters(): a backend that reports its
+        // own slice capacity knows its radio, and m_maxSlices is either a
+        // FlexLib model-table estimate or a Flex `slices=N` status — neither of
+        // which a Hermes-Lite 2 ever produces, so it sat at the 2-slice default
+        // regardless of how many receivers the board actually has.
+        //
+        // TciServer's own comment recorded the consequence: "maxSlices() is the
+        // model-string-derived Flex estimate (2 by default), not the backend's
+        // own maxSlices, so a single-slice HL2 looks like it has room."
+        if (!m_flexBackend && m_backend) {
+            const int reported = m_backend->capabilities().maxSlices;
+            if (reported > 0)
+                return reported;
+        }
+        return m_maxSlices;
+    }
     static int maxSlicesForModel(const QString& model);
 
     // Per-model feature flags from the central ModelCapabilities table.
@@ -312,6 +335,20 @@ public:
     // instead of 4.  Examples: FLEX-6700 -> 8; 6600/6500/8600/AU-520/ML/CL -> 4;
     // 6300/6400/8400/AU-510/RT-2122 -> 2.
     int maxPanadapters() const {
+        // A backend that reports its own capability is the AUTHORITY for its
+        // radio. capabilitiesFor() is a FlexLib platform table keyed by model
+        // string (Principle I) and has nothing true to say about a non-Flex
+        // radio — "Hermes-Lite 2" simply falls through it to the 2-pan default,
+        // which then refused a third receiver on a board that reported four.
+        //
+        // This is consulted by more than one caller (the GUI's Add Panadapter,
+        // the automation bridge's `pan create`), which is exactly why it is
+        // fixed here rather than at either call site.
+        if (!m_flexBackend && m_backend) {
+            const int reported = m_backend->capabilities().maxPanadapters;
+            if (reported > 0)
+                return reported;
+        }
         return capabilitiesFor(m_model).maxSlices;
     }
 
@@ -412,6 +449,34 @@ public:
     void loadGlobalProfile(const QString& name);
     void buildBackend();   // RFC #4288 Route A: create + wire m_backend (Sim/Flex)
     void resetPanState();
+
+    // True when a text command issued through sendCmd() can actually reach the
+    // radio. False for a backend that owns no RadioConnection (HL2 and any
+    // other family that takes typed intents through the IRadioBackend seam) —
+    // there, Flex wire text has nowhere to go and is dropped at the sink.
+    bool hasCommandPlane() const { return m_wanConn != nullptr || m_connection != nullptr; }
+
+    // ── Local memory bank (radios with no memory slots of their own) ─────────
+    //
+    // Answer a `memory …` command out of the local bank. Returns the sequence
+    // number sendCmd() would have returned (non-zero — sendCommand() reads that
+    // as "dispatched"), or nullopt when the command is not one the bank owns
+    // and must take its normal path.
+    // (spelled out rather than the ResponseCallback alias — that is declared
+    // further down this class.)
+    std::optional<quint32> tryLocalMemoryCommand(
+        const QString& command, const RadioConnection::ResponseCallback& cb);
+    // Settle which store owns the memory cache for the session being started:
+    // the local bank, or the radio's own slots.
+    void syncMemoryStoreForSession();
+    // Push the loaded bank into m_memories, emitting per-slot memoryChanged so
+    // the browse panel and the panadapter memory-spot feed populate exactly as
+    // they do from a Flex's memory-status dump.
+    void publishLocalMemories();
+    // Apply a stored channel to the active slice. This is what `memory apply`
+    // does on a Flex; with no radio to do it, the model drives SliceModel's
+    // operator-issue setters so the change routes through the backend seam.
+    void recallLocalMemory(int index);
     void createAudioStream();
     bool ensureDaxTxStream(DaxTxRequestReason reason);
     bool prepareWsprTransmit();
@@ -449,6 +514,15 @@ public:
     // Memory channel cache
     const QMap<int, MemoryEntry>& memories() const { return m_memories; }
     void handleMemoryStatus(int index, const QMap<QString, QString>& kvs);
+
+    // True when memory channels live in a file on THIS host rather than in the
+    // radio — the HL2/Kiwi/demo case, and the disconnected case. Driven by
+    // RadioCapabilities::persistsMemories, so a new backend gets the local bank
+    // by default rather than writing channels into a radio that drops them.
+    bool usesLocalMemoryBank() const;
+    // The bank itself, for the automation bridge and tests. Empty and unread
+    // until the first local memory command or connect.
+    LocalMemoryBank& localMemoryBank() { return m_localMemories; }
     bool    lowLatencyDigital()        const { return m_lowLatencyDigital; }
     bool    hasStaticIp()     const { return m_hasStaticIp; }
     QString staticIp()        const { return m_staticIp; }
@@ -762,6 +836,11 @@ signals:
     // 24 kHz stereo float32 — the format AudioEngine::feedAudioData expects.
     // Flex never emits this; its audio arrives on the PanadapterStream path.
     void backendAudioFrameReady(const QByteArray& pcm);
+    // ONE slice's demodulated audio, relayed from IRadioBackend. The per-slice
+    // counterpart of backendAudioFrameReady, which is the mixed speaker feed.
+    // Only a backend that demodulates in this process emits it; Flex per-slice
+    // audio arrives as DAX channels instead.
+    void backendSliceAudioFrameReady(int sliceId, const QByteArray& pcm);
 
     // ── The normalized demodulated-RX-audio bus ────────────────────────────
     //
@@ -945,6 +1024,21 @@ public:
     bool sendCommand(const QString& cmd);
     // Backend family currently in use ("flex", "hl2", "kiwi", ...).
     QString family() const { return m_family; }
+
+    // Flush any pending operating-state capture immediately (RFC #4603 PR 3).
+    // PUBLIC because MainWindow::closeEvent() must call it explicitly: quit
+    // tears down without pumping the event loop, so the queued
+    // disconnect→flush path never runs there (PR #4619 review — same class
+    // as the explicit TGXL/D-STAR teardown in closeEvent).
+    void flushPendingOperatingState();
+
+    // The (family, radio) handle into the radio-scoped feature-document store
+    // (RFC #4603). Identity is the family's canonical serial (Flex serial /
+    // HL2 MAC); an unconnected model yields a family-wide scope.
+    RadioSettingsScope settingsScope() const
+    {
+        return RadioSettingsScope(m_family, serial());
+    }
     // True when the radio speaks the SmartSDR text-command plane — the only
     // family where sendCmd() reaches anything and a command has a response to
     // await. Every other backend takes typed intents through the IRadioBackend
@@ -1132,6 +1226,8 @@ private:
     // RadioConnection/PanadapterStream grabs) stays behind a dynamic_cast adapter
     // in the ctor, so a non-Flex backend simply skips it.
     static std::unique_ptr<IRadioBackend> makeBackend(const QString& family);
+    void handRestoredStateToBackend(const QString& serial);  // RFC #4603
+    void persistOperatingState(bool force = false);          // RFC #4603 PR 3
 
     // aetherd Gap B: build/destroy the backend for a radio family. The backend
     // follows the radio the operator picks in the connection manager, so these
@@ -1179,9 +1275,56 @@ private:
     // spectra through IRadioBackend (HL2). Kept on RadioModel because such a
     // backend has no PanadapterModel yet, and the neutral waterfall rows still
     // need frequency edges.
-    double  m_backendPanCenterMhz{0.0};
-    double  m_backendPanBandwidthMhz{0.0};
+    // Per-pan, keyed by NEUTRAL pan index, because a backend may run several
+    // receivers at once (HL2 runs up to four). These were single scalars while
+    // only one non-Flex pan could exist, which quietly made every extra pan's
+    // waterfall scale against the FIRST pan's band edges.
+    QHash<int, double> m_backendPanCenterMhz;
+    QHash<int, double> m_backendPanBandwidthMhz;
     quint32 m_backendWfTimecode{0};
+
+    // Backend pan id ("hl2-2") -> neutral pan index, allocated in first-seen
+    // order. The backend's ids are OPAQUE here: RadioModel must not parse a
+    // family's naming scheme, and a backend must not have to know about the
+    // 0xE1000000 stream-id space. This table is the translation between them.
+    QHash<QString, int> m_backendPanIndex;
+    // The inverse, for commands going DOWN. Filled alongside the forward map.
+    QHash<int, QString> m_backendPanIdByIndex;
+    // Allocate (or recall) the neutral index for a backend pan id.
+    int neutralPanIndexFor(const QString& backendPanId);
+    // Resolve a BACKEND-namespaced pan id to its PanadapterModel, translating
+    // through the neutral index. Every IRadioBackend pan signal must use this
+    // rather than resolvePan(), whose active-pan fallback silently misdirects a
+    // multi-pan backend's updates. See the definition.
+public:
+    // Test hooks for the backend<->model pan-id mapping.
+    //
+    // Exposed because the property they pin is exactly the one that broke: the
+    // mapping was built in ONE direction, so every pan signal arrived correctly
+    // and every pan COMMAND was refused by a backend that could not resolve the
+    // model's id. A round-trip assertion is the cheapest thing that fails when
+    // half of a two-way mapping goes missing.
+    int panIndexForBackendIdForTest(const QString& backendPanId)
+    {
+        return neutralPanIndexFor(backendPanId);
+    }
+    QString backendPanIdForTest(const QString& modelPanId) const
+    {
+        return backendPanIdFor(modelPanId);
+    }
+    static QString neutralPanIdStringForTest(int panIdx);
+
+private:
+    PanadapterModel* resolveBackendPan(const QString& backendPanId);
+    // Connect a slice's operator-issued AUDIO and TX-slice intents to the
+    // backend seam. Must be called from EVERY site that constructs a
+    // SliceModel — see the definition for why that is not a style preference.
+    void wireSliceAudioIntentsToBackend(SliceModel* s);
+    // Translate a MODEL pan id to the backend's own id for a command going down
+    // the seam. The inverse of resolveBackendPan(); both are needed or the
+    // mapping is one-way and every pan command addresses a pan the backend
+    // cannot resolve. Identity for Flex.
+    QString backendPanIdFor(const QString& modelPanId) const;
 
     // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
     //
@@ -1233,6 +1376,7 @@ private:
     QStringList m_declaredBands;    // optional "bands=" declaration (see declaredBands())
     int         m_maxSlices{4};
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
+    QString     m_versionLabel;     // display-only word for it (Gateware on an HL2)
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")
     float       m_paTemp{0.0f};
     float       m_txPower{0.0f};
@@ -1469,6 +1613,19 @@ private:
     quint32 m_staleSessionOwnHandle{0};
     quint32 m_ownSessionHandle{0};   // this session's handle, set at registration
     QMap<int, MemoryEntry> m_memories;
+    // Backing store for m_memories when the radio has no memory slots of its
+    // own. It is always constructed but only read/written on that path, so a
+    // Flex session never touches the file.
+    LocalMemoryBank m_localMemories;
+    // Does the radio THIS SESSION belongs to own its memory slots? Latched on the
+    // connect edge and held across an unexpected drop, because isConnected()
+    // alone cannot tell "never connected" from "the link blipped and a reconnect
+    // is armed" — and during a blip the Memory dialog stays fully usable, so an
+    // Add would be answered by the host bank, reported as saved, then wiped by
+    // syncMemoryStoreForSession() on reconnect, leaving a phantom channel in
+    // memories.json that reappears on every later disconnect. Cleared only when
+    // the session really ends. See usesLocalMemoryBank().
+    bool        m_sessionRadioOwnsMemories{false};
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
     bool        m_profileDatabaseImporting{false};
@@ -1555,6 +1712,13 @@ private:
     // while the radio is still booting and would otherwise spam the UI.
     bool      m_rebootInProgress{false};
     QTimer    m_reconnectTimer;
+    // RFC #4603 PR 3: debounces operatingStateChanged into one store write.
+    // The companion max-wait timer guarantees a sustained burst (continuous
+    // tuning) still stores at least every interval; the disconnect path
+    // flushes whatever is pending (PR #4619 review — the state most likely
+    // to be lost was the operator's last edit before disconnecting).
+    QTimer    m_operatingStateSaveTimer;
+    QTimer    m_operatingStateMaxWaitTimer;
 
     // ── Network quality monitor ──
     void startNetworkMonitor();

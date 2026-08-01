@@ -27,7 +27,6 @@ public:
         QString detail;
 
         bool accepted() const { return action == Action::ContinueHandshake; }
-        bool automaticRetryAllowed() const { return accepted(); }
     };
 
     void begin()
@@ -73,6 +72,12 @@ public:
         m_radioErrorDetail.clear();
     }
 
+    // Observed only by gui_client_registration_state_test since #4563 removed
+    // the AwaitingReply guard that was production's last reader. Kept
+    // deliberately: Registered and Rejected are what make this a state machine
+    // rather than a pair of booleans, and the tests pin the transitions that
+    // #4560 turned out to depend on. Do not delete it as unused without
+    // replacing what it documents.
     Phase phase() const { return m_phase; }
 
 private:

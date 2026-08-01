@@ -12,7 +12,7 @@
 // This measures the achieved rate at every rate the gateware offers, by feeding
 // wall-clock-paced EP6-shaped blocks and counting the spectra that come out.
 #include "core/backends/hl2/Hl2RxDsp.h"
-#include "core/backends/hl2/MetisProtocol.h"   // kSamplesPerPacket
+#include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -64,11 +64,11 @@ static int spectraIn(int rateHz, int requestedFps, double seconds,
     // shaper itself reads. Batch per 5 ms tick so the loop is affordable at
     // 384 kHz (3048 blocks/second).
     const double blocksPerSecond =
-        static_cast<double>(rateHz) / static_cast<double>(kSamplesPerPacket);
+        static_cast<double>(rateHz) / static_cast<double>(kEp6BlockSamples);
     QElapsedTimer clock;
     clock.start();
     double delivered = 0.0;
-    std::vector<std::complex<float>> blk(kSamplesPerPacket);
+    std::vector<std::complex<float>> blk(kEp6BlockSamples);
     long long n = 0;
     while (clock.elapsed() < static_cast<qint64>(seconds * 1000.0)) {
         const double due = blocksPerSecond * (clock.elapsed() / 1000.0);

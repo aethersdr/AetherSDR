@@ -42,3 +42,6 @@ third_party/sherpa-onnx-*.tar.bz2
 # preview, so a committed copy is wrong for everybody else. `.claude/commands/`
 # IS tracked — those are shared project skills — so ignore just this file.
 .claude/launch.json
+
+# macOS Finder metadata
+.DS_Store

@@ -55,11 +55,22 @@ public:
     // "radio name" command), so the operator's custom name is persisted
     // client-side, keyed by the radio's stable MAC, and read back here at
     // discovery time. Shared with RadioSetupDialog so both sides agree on the key.
+    // LEGACY key builder — kept only for the one-shot migration below and its
+    // regression test. New storage is the (family, serial, "Identity") feature
+    // document in radio_settings (RFC #4603 PR 3), where the raw MAC is a
+    // legal identity and no sanitizing is needed.
     static QString nicknameSettingsKey(const QString& serial);
-    // The nickname to show for this serial: the saved custom name, or a default
-    // when none is set. Centralises the "custom or fall back" rule.
-    static QString effectiveNickname(const QString& serial,
+    // The nickname to show for this radio: the saved custom name, or a default
+    // when none is set. Centralises the "custom or fall back" rule, and
+    // performs the one-shot legacy-flat-key -> feature-document migration.
+    // `family` is the radio's family string (empty is normalized to "hl2",
+    // the only family that ever produced legacy keys).
+    static QString effectiveNickname(const QString& family, const QString& serial,
                                      const QString& fallback);
+    // Store (or clear, with an empty name) the client-side nickname.
+    static void setNickname(const QString& family, const QString& serial,
+                            const QString& name);
+    static bool hasCustomNickname(const QString& family, const QString& serial);
     // True when this radio stores its own name (FlexRadio's "radio name"
     // command), so the client must NOT keep a second copy. False for every
     // family without an on-radio store — HL2, the sim, any future backend —

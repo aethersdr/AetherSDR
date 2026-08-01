@@ -1,6 +1,9 @@
 #include "models/MeterModel.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QVector>
 
 #include <cmath>
@@ -221,7 +224,8 @@ void testDirectionalPowerUsesDirectReflectedMeter()
     QObject::connect(&model, &MeterModel::directionalPowerMetersChanged,
                      [&emitted, &forwardWatts, &reflectedWatts, &swr,
                       &reflectedPowerMeasured](float forward, float reflected,
-                                               float ratio, bool measured) {
+                                               float ratio, bool /*swrValid*/,
+                                               bool measured) {
         emitted = true;
         forwardWatts = forward;
         reflectedWatts = reflected;
@@ -355,6 +359,255 @@ void testForwardPowerJustAboveTheThresholdStaysSmoothed()
            keyed > 4.0f && after > 0.01f);
 }
 
+// Find a meter entry by name in the allMeters() array.
+QJsonObject meterNamed(const QJsonArray& all, const QString& name)
+{
+    for (const auto& v : all) {
+        const QJsonObject o = v.toObject();
+        if (o.value(QStringLiteral("name")).toString() == name)
+            return o;
+    }
+    return {};
+}
+
+// #4533: SWR is derived from forward/reflected power, so once the TX meters go
+// stale it is a leftover from the previous transmit, not a measurement. Showing
+// it as live sends the operator hunting a non-existent antenna fault.
+void testSwrIsLiveWhileTxMetersAreFresh()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.updateValues({8, 10}, {rawDb(30.0f), rawDb(2.88f)});
+
+    const QJsonObject swr = meterNamed(model.allMeters(), QStringLiteral("SWR"));
+    report("MeterModel reports SWR as live immediately after a TX sample",
+           swr.value(QStringLiteral("has_value")).toBool()
+               && nearlyEqual(static_cast<float>(swr.value(QStringLiteral("value")).toDouble()),
+                              2.88f)
+               && model.swrIfLive().has_value());
+}
+
+// The GUI reads SWR from the SIGNALS, not from allMeters(). Gating only the
+// array left the displayed value untouched — an HL2 showed 255.99 on screen
+// while the meter list correctly reported no value. Assert the signals too.
+void testStaleSwrIsNotEmittedToConsumers()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    float txSwr = -1.0f;
+    float dirSwr = -1.0f;
+    bool txSwrValid = false;
+    bool dirSwrValid = false;
+    QObject::connect(&model, &MeterModel::txMetersChanged,
+                     [&txSwr, &txSwrValid](float, float swr, bool valid) {
+        txSwr = swr; txSwrValid = valid;
+    });
+    QObject::connect(&model, &MeterModel::directionalPowerMetersChanged,
+                     [&dirSwr, &dirSwrValid](float, float, float swr,
+                                             bool valid, bool) {
+        dirSwr = swr; dirSwrValid = valid;
+    });
+
+    // A real transmit — forward power AND a ratio in the same packet. Both
+    // signals must carry the measured value.
+    model.updateValues({8, 10}, {rawDb(36.5f), rawDb(2.5f)});
+    const bool liveOk = nearlyEqual(txSwr, 2.5f) && nearlyEqual(dirSwr, 2.5f);
+
+    // Now the case that reached the screen: the carrier stops, so forward power
+    // reads 0 dBm, and the radio keeps chattering a saturated SWR — 255.99, the
+    // ratio of two noise samples — with no power behind it.
+    model.updateValues({8, 10}, {rawDb(0.0f), rawDb(255.99f)});
+
+    report("MeterModel does not emit a saturated SWR with no forward power (txMetersChanged)",
+           liveOk && txSwr < 100.0f && !txSwrValid);
+    report("MeterModel does not emit a saturated SWR with no forward power (directional)",
+           liveOk && dirSwr < 100.0f && !dirSwrValid);
+}
+
+// The configuration the review found uncovered (#4536 blocker 1): a backend
+// that declares FWDPWR but NEVER publishes it — the HL2, whose forward counts
+// are uncalibrated so it deliberately sends only TX:SWR, itself gated at the
+// source on real drive. Its SWR must publish as VALID on its own freshness:
+// the earlier forward-power gate zeroed it forever, hiding a real mismatch on
+// the one backend whose SWR is most trustworthy.
+void testSwrWithoutForwardPowerBackendIsValid()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));   // declared, never sent
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    float txSwr = -1.0f;
+    bool  txSwrValid = false;
+    QObject::connect(&model, &MeterModel::txMetersChanged,
+                     [&txSwr, &txSwrValid](float, float swr, bool valid) {
+        txSwr = swr; txSwrValid = valid;
+    });
+
+    // HL2 keyed into a genuine 3:1 mismatch: SWR arrives, FWDPWR never does.
+    model.updateValues({10}, {rawDb(3.0f)});
+
+    report("HL2-shaped backend (SWR, no FWDPWR ever) publishes a VALID SWR",
+           txSwrValid && nearlyEqual(txSwr, 3.0f)
+               && model.swrIfLive().has_value());
+
+    // And the same reading goes ABSENT once the sample itself ages out.
+    model.setLastSwrUpdateMsForTest(
+        QDateTime::currentMSecsSinceEpoch() - MeterModel::kTxMeterStaleMs - 1);
+    report("HL2-shaped backend SWR goes absent when the sample ages",
+           !model.swrIfLive().has_value());
+}
+
+void testSwrIsSuppressedOnceTxMetersGoStale()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.updateValues({8, 10}, {rawDb(30.0f), rawDb(2.88f)});
+
+    // Age the TX meters past the staleness window without sleeping.
+    model.setLastTxMeterUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    // SWR gates on its own stamp now (#4536) — age it in step.
+    model.setLastSwrUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+
+    const QJsonObject swr = meterNamed(model.allMeters(), QStringLiteral("SWR"));
+    report("MeterModel suppresses a stale SWR reading (has_value=false, age=-1)",
+           swr.value(QStringLiteral("has_value")).toBool() == false
+               && swr.value(QStringLiteral("value")).isNull()
+               && swr.value(QStringLiteral("age_ms")).toInt() == -1
+               && !model.swrIfLive().has_value());
+}
+
+// metersForSource() is a second view of the same model, and it duplicated
+// allMeters()' loop WITHOUT the gate — so a `tx`-source query answered
+// has_value=true for the very meter `all` reported as absent. Two views of one
+// model disagreeing about one reading is the disagreement #4533 was filed about,
+// so both have to answer the same way.
+void testStaleSwrIsAlsoSuppressedInMetersForSource()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(8, "FWDPWR", "dBm"));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.updateValues({8, 10}, {rawDb(30.0f), rawDb(2.88f)});
+    model.setLastTxMeterUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    // SWR gates on its own stamp now (#4536) — age it in step.
+    model.setLastSwrUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+
+    const QJsonObject fromAll =
+        meterNamed(model.allMeters(), QStringLiteral("SWR"));
+    const QJsonArray txSource = model.metersForSource(QStringLiteral("TX-"), 8);
+    const QJsonObject fromSource =
+        meterNamed(txSource, QStringLiteral("SWR"));
+
+    report("MeterModel suppresses a stale SWR in metersForSource too",
+           // Guard against a vacuous pass: the query must actually have matched.
+           !txSource.isEmpty()
+               && fromSource.value(QStringLiteral("has_value")).toBool() == false
+               && fromSource.value(QStringLiteral("value")).isNull()
+               && fromSource.value(QStringLiteral("age_ms")).toInt() == -1
+               // and the two views agree, which is the actual invariant
+               && fromSource.value(QStringLiteral("has_value"))
+                      == fromAll.value(QStringLiteral("has_value")));
+}
+
+// The suppression must be specific to SWR — a receive meter that has nothing to
+// do with the transmit path must keep reporting while the radio is idle.
+void testStaleTxMetersDoNotSuppressReceiveMeters()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(3, 0));
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.updateValues({3, 10}, {rawDb(-64.0f), rawDb(2.88f)});
+    model.setLastTxMeterUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    // SWR gates on its own stamp now (#4536) — age it in step.
+    model.setLastSwrUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+
+    const QJsonArray all = model.allMeters();
+    const QJsonObject swr = meterNamed(all, QStringLiteral("SWR"));
+    const QJsonObject lvl = meterNamed(all, QStringLiteral("LEVEL"));
+
+    report("MeterModel keeps receive meters live when the TX meters are stale",
+           swr.value(QStringLiteral("has_value")).toBool() == false
+               && lvl.value(QStringLiteral("has_value")).toBool() == true);
+}
+
+// The freshness flag the support-bundle snapshot publishes must agree with the
+// SWR gate it is meant to explain.
+//
+// RadioModel::troubleshootingSnapshot() reports tx_forward_power_w (which holds
+// its last smoothed value) next to tx_swr (which goes null once the TX meters
+// go stale), and qualifies the pair with tx_meters_fresh. If that flag could
+// ever read true while swrIfLive() returned nullopt, the caveat would be absent
+// exactly when it is needed and the reader would take the held wattage for a
+// live one. Both derive from hasRecentTxMeters(kTxMeterStaleMs); this pins that
+// they cannot disagree. (#4533 review)
+// Suppression must not LATCH. After a stale window, the next SWR sample has to
+// restore liveness — that is the property an operator depends on the first time
+// they key up following a long receive period, and it is the one direction the
+// other tests never exercise: they start fresh and go stale, never the reverse.
+//
+// Without this, a regression that suppressed SWR permanently once it had aged
+// out would still pass every other case here. (#4536 review)
+void testSwrRecoversAfterAFreshSampleFollowsAStaleWindow()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+
+    model.updateValues({10}, {rawDb(2.88f)});
+    const bool liveBefore = model.swrIfLive().has_value();
+
+    // Age it past the window, the way a long receive period would.
+    model.setLastTxMeterUpdateMsForTest(
+        QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    model.setLastSwrUpdateMsForTest(
+        QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    const bool suppressedWhileStale = !model.swrIfLive().has_value();
+    const QJsonObject staleEntry = meterNamed(model.allMeters(), QStringLiteral("SWR"));
+    const bool arrayAbsentWhileStale =
+        !staleEntry.value(QStringLiteral("has_value")).toBool();
+
+    // Key up again: one fresh sample, nothing else changed.
+    model.updateValues({10}, {rawDb(1.42f)});
+
+    const auto recovered = model.swrIfLive();
+    const QJsonObject liveEntry = meterNamed(model.allMeters(), QStringLiteral("SWR"));
+
+    report("MeterModel restores SWR liveness when a fresh sample follows a stale window",
+           liveBefore && suppressedWhileStale && arrayAbsentWhileStale
+               && recovered.has_value() && nearlyEqual(*recovered, 1.42f)
+               && liveEntry.value(QStringLiteral("has_value")).toBool()
+               && nearlyEqual(
+                      static_cast<float>(liveEntry.value(QStringLiteral("value")).toDouble()),
+                      1.42f));
+}
+
+void testSwrLivenessAgreesWithTxMeterFreshness()
+{
+    MeterModel model;
+    model.defineMeter(txMeter(10, "SWR", "SWR"));
+    model.updateValues({10}, {rawDb(2.88f)});
+
+    const bool freshWhileLive = model.hasRecentTxMeters(MeterModel::kTxMeterStaleMs);
+    const bool haveSwrWhileLive = model.swrIfLive().has_value();
+
+    model.setLastTxMeterUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+    // SWR gates on its own stamp now (#4536) — age it in step.
+    model.setLastSwrUpdateMsForTest(QDateTime::currentMSecsSinceEpoch() - (MeterModel::kTxMeterStaleMs + 500));
+
+    const bool freshWhenStale = model.hasRecentTxMeters(MeterModel::kTxMeterStaleMs);
+    const bool haveSwrWhenStale = model.swrIfLive().has_value();
+
+    report("MeterModel TX-meter freshness and SWR liveness agree in both directions",
+           freshWhileLive && haveSwrWhileLive
+               && !freshWhenStale && !haveSwrWhenStale);
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -376,6 +629,14 @@ int main(int argc, char** argv)
     testForwardPowerDoesNotLingerAcrossRepeatedNoCarrierSamples();
     testForwardPowerStillSmoothsRealReadings();
     testForwardPowerJustAboveTheThresholdStaysSmoothed();
+    testSwrIsLiveWhileTxMetersAreFresh();
+    testSwrIsSuppressedOnceTxMetersGoStale();
+    testStaleSwrIsNotEmittedToConsumers();
+    testSwrWithoutForwardPowerBackendIsValid();
+    testStaleSwrIsAlsoSuppressedInMetersForSource();
+    testStaleTxMetersDoNotSuppressReceiveMeters();
+    testSwrRecoversAfterAFreshSampleFollowsAStaleWindow();
+    testSwrLivenessAgreesWithTxMeterFreshness();
 
     return g_failed == 0 ? 0 : 1;
 }

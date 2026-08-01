@@ -109,6 +109,13 @@ int main(int argc, char** argv)
                                 "has been reached\n")
                                 .arg(sequence)
                                 .toUtf8());
+                        socket->flush();
+                        socket->disconnectFromHost();
+                        // This session is over. Without the break the loop keeps
+                        // parsing buffered lines and ends with flush() on a
+                        // closing socket, so a reply to a pipelined command would
+                        // be dropped silently rather than failing visibly.
+                        break;
                     } else if (command.startsWith(QStringLiteral("client gui "))) {
                         guiRegistrationAccepted = true;
                         socket->write(
@@ -151,8 +158,18 @@ int main(int argc, char** argv)
               return registrationFailureSpy.count() == 1 && !model.isConnected();
           }, 5000),
           "rejected GUI registration tears down the connected TCP session");
-    check(errorSpy.count() == 1,
-          "rejected GUI registration emits a user-facing connection error");
+    check(registrationFailureSpy.count() == 1,
+          "rejected GUI registration emits one terminal failure");
+    // FIRST emission, not merely "some emission". The prompt TCP close this test
+    // now provokes legitimately adds a socket error of its own, so the count can
+    // no longer be pinned at 1 — but the property that matters is unchanged: the
+    // operator is told the REGISTRATION reason, not a bare transport failure. A
+    // regression that emitted "Connection closed by peer" first and the
+    // registration detail second would satisfy a bare count check. (#4563 review)
+    check(!errorSpy.isEmpty()
+              && errorSpy.first().at(0).toString().contains(
+                     QStringLiteral("GUI client registration failed")),
+          "the first user-facing error names the registration failure, not the socket");
     check(connectionSpy.count() >= 2
               && connectionSpy.first().at(0).toBool()
               && !connectionSpy.last().at(0).toBool(),

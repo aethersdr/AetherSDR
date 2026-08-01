@@ -39,6 +39,7 @@ public:
     // the widest span it will offer, and never writes it.
     static bool lowBandwidth();
 
+
 private:
     static QJsonObject readObj();
 };

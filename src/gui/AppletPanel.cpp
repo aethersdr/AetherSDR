@@ -1475,6 +1475,12 @@ void AppletPanel::setDaxStreamsVisible(bool visible)
                               QStringLiteral("Applet_DAX"), visible);
     applyCapabilityVisibility(QStringLiteral("IQ"),
                               QStringLiteral("Applet_IQ"), visible);
+    // The AetherClock applet is NOT a DAX tile — it stays visible on every
+    // radio — but its DAX chooser and no-DAX banner are the same capability.
+    // Forwarded directly rather than through applyCapabilityVisibility, which
+    // persists an Applet_* preference and hides a whole tile.
+    if (m_aetherClockApplet)
+        m_aetherClockApplet->setDaxControlsVisible(visible);
 }
 
 void AppletPanel::setHardwareEqVisible(bool visible)

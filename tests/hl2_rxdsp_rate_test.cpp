@@ -13,7 +13,7 @@
 // rate, against the same tone.
 
 #include "core/backends/hl2/Hl2RxDsp.h"
-#include "core/backends/hl2/MetisProtocol.h"   // kSamplesPerPacket
+#include "core/backends/hl2/MetisProtocol.h"   // kEp6BlockSamples
 
 #include <QCoreApplication>
 
@@ -77,12 +77,12 @@ static float demodPeakAt(int rateHz, std::size_t* outBlockSamples,
     const double f = 1000.0;
     const int total = rateHz / 2;
     std::vector<std::complex<float>> blk;
-    blk.reserve(kSamplesPerPacket);
+    blk.reserve(kEp6BlockSamples);
     for (int n = 0; n < total; ++n) {
         const double ph = 2.0 * kPi * f * n / rateHz;
         blk.emplace_back(0.3f * static_cast<float>(std::cos(ph)),
                          0.3f * static_cast<float>(-std::sin(ph)));
-        if (static_cast<int>(blk.size()) == kSamplesPerPacket) {
+        if (static_cast<int>(blk.size()) == kEp6BlockSamples) {
             dsp.processIqBlock(blk);
             blk.clear();
         }

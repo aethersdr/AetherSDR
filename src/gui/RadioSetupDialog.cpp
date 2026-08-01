@@ -1076,7 +1076,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
             const RadioInfo info = m_model->lastRadioInfo();
             if (!hl2::Hl2Discovery::nicknameLivesOnRadio(info))
                 initialNickname = hl2::Hl2Discovery::effectiveNickname(
-                    info.serial, info.model.isEmpty() ? m_model->name() : info.model);
+                    info.family, info.serial,
+                    info.model.isEmpty() ? m_model->name() : info.model);
         }
         m_nicknameEdit = new QLineEdit(initialNickname);
         m_nicknameEdit->setStyleSheet(kEditStyle);
@@ -1108,11 +1109,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
             if (hl2::Hl2Discovery::nicknameLivesOnRadio(info)) {
                 m_model->sendCommand("radio name " + m_nicknameEdit->text());
             } else {
-                AppSettings::instance().setValue(
-                    hl2::Hl2Discovery::nicknameSettingsKey(info.serial),
-                    m_nicknameEdit->text().trimmed());
-                // Commit now; don't rely on the shutdown save to carry it.
-                AppSettings::instance().save();
+                // Commits eagerly inside; don't rely on the shutdown save.
+                hl2::Hl2Discovery::setNickname(info.family, info.serial,
+                                               m_nicknameEdit->text());
             }
         });
         connect(m_callsignEdit, &QLineEdit::editingFinished, this, [this] {
@@ -4120,6 +4119,25 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 rowLayout->addWidget(keepTxAudioCheck, 5, 0, 1, 2,
                                      Qt::AlignLeft);
 
+                auto* resumeDelayCheck = new QCheckBox;
+                resumeDelayCheck->setText("Resume audio after TX delay");
+                resumeDelayCheck->setChecked(profile.resumeAudioAfterTxDelay);
+                resumeDelayCheck->setEnabled(!profile.keepAudioDuringTx);
+                resumeDelayCheck->setAccessibleName(
+                    "Resume KiwiSDR audio after transmit delay");
+                resumeDelayCheck->setToolTip(
+                    "After unkeying, wait out this receiver's stream delay "
+                    "before unmuting, so you rejoin on audio received after "
+                    "your transmission ended instead of hearing your own "
+                    "delayed TX tail.\nNo effect while \"Keep audio during "
+                    "TX\" is on.");
+                AetherSDR::ThemeManager::instance().applyStyleSheet(
+                    resumeDelayCheck,
+                    "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+                    + kCheckBoxIndicator);
+                rowLayout->addWidget(resumeDelayCheck, 6, 0, 1, 2,
+                                     Qt::AlignLeft);
+
                 const bool activeSession =
                     kiwiState == KiwiSdrClient::State::Connecting
                     || kiwiState == KiwiSdrClient::State::Waiting
@@ -4141,7 +4159,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 kiwiRowsLayout->addWidget(rowFrame);
 
                 auto updateProfile = [this, profile, nameEdit, endpointEdit,
-                                      autoCheck, keepTxAudioCheck] {
+                                      autoCheck, keepTxAudioCheck,
+                                      resumeDelayCheck] {
                     const QString name = nameEdit->text().trimmed();
                     const QString endpoint =
                         KiwiSdrClient::normalizeEndpoint(endpointEdit->text());
@@ -4164,6 +4183,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     updated.endpoint = endpoint;
                     updated.autoConnect = autoCheck->isChecked();
                     updated.keepAudioDuringTx = keepTxAudioCheck->isChecked();
+                    updated.resumeAudioAfterTxDelay =
+                        resumeDelayCheck->isChecked();
                     m_kiwiSdrManager->updateProfile(updated);
                 };
                 connect(nameEdit, &QLineEdit::editingFinished,
@@ -4182,6 +4203,11 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 connect(autoCheck, &QCheckBox::toggled,
                         this, [updateProfile](bool) { updateProfile(); });
                 connect(keepTxAudioCheck, &QCheckBox::toggled,
+                        this, [updateProfile, resumeDelayCheck](bool on) {
+                    resumeDelayCheck->setEnabled(!on);
+                    updateProfile();
+                });
+                connect(resumeDelayCheck, &QCheckBox::toggled,
                         this, [updateProfile](bool) { updateProfile(); });
                 connect(connectButton, &QPushButton::clicked,
                         this, [this, profile, activeSession] {

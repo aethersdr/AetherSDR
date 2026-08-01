@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFlags>
 #include <QString>
 #include <QVector>
 #include <QVariantMap>
@@ -66,11 +67,67 @@ struct RadioCapabilities {
     // non-Flex backend must NOT open the mic on connect. (#4449 review)
     bool hostModulates = false;
 
+    // The RADIO stores memory channels and re-dumps them on connect. True for a
+    // Flex, whose memory slots live in the radio and are shared by every client
+    // attached to it; false for a direct-sampling or receiver-only backend (HL2,
+    // Kiwi, demo) that has nowhere to put them.
+    //
+    // False is the load-bearing default: a backend that says nothing gets the
+    // client-side memory bank, so an operator's channels survive rather than
+    // being written into a radio that silently drops them. A backend only sets
+    // this true when it can prove the radio gives the slots back.
+    bool persistsMemories = false;
+
+    // Domains of OPERATING STATE this client persists and restores because the
+    // radio cannot (RFC #4603 proposal B). Constitution Principle III assigns
+    // persistence authority per value, not per family — so this is a typed set,
+    // not a boolean: a family may persist some domains on-radio and rely on the
+    // client for others (cf. persistsMemories above, the pattern this follows).
+    //
+    // EMPTY IS THE LOAD-BEARING DEFAULT: a backend that declares nothing gets
+    // NOTHING restored. For a radio that persists its own state (Flex), that is
+    // exactly the Constitution II/III rule — the client must never re-assert
+    // radio-owned values (#2465/#4126/#4261). A backend only declares a domain
+    // when the radio genuinely has no memory of it, making the client the
+    // radio's memory (HL2: "the radio reports no VFO, so the app is
+    // authoritative and must push").
+    //
+    // Restore NEVER keys transmit (Principle VI): TxSetpoints covers setpoint
+    // values (drive levels) only — the TX gate is untouched by any of this.
+    enum class ClientSettingsDomain : quint32 {
+        Tuning      = 1u << 0,  // RF frequency + demod mode
+        Passband    = 1u << 1,  // filter low/high edges
+        SpanRate    = 1u << 2,  // span / IQ sample rate
+        RfGain      = 1u << 3,  // LNA/preamp gain (per band — see RFC PR 3)
+        TxSetpoints = 1u << 4,  // TX drive setpoints (per band); never keying
+        Memories    = 1u << 5,  // host-side memory bank documents (#4590 fold-in)
+    };
+    Q_DECLARE_FLAGS(ClientSettingsDomains, ClientSettingsDomain)
+    ClientSettingsDomains clientSettingsDomains;   // default: empty — restore nothing
+
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
     bool hasTuner = false;         // antenna tuner / ATU
     bool hasAmplifier = false;     // integrated or controllable PA
     bool hasExtendedDsp = false;   // extended firmware DSP filters (NRS/RNN/NRF)
+
+    // The radio reports the PA supply-voltage rail as telemetry — the value the
+    // status bar renders directly under the PA temperature. A radio that never
+    // reports the rail declares false and that readout goes away, instead of
+    // formatting an initialiser to two decimals so it reads as a measurement.
+    //
+    // Named for the TELEMETRY, not for the PA and not for the brand. "Does it
+    // have a Flex PA" is the wrong axis: an HL2 has a PA and reports no supply
+    // rail, and an IC-7610 would be the same. What actually varies between
+    // families is whether the radio reports the voltage — which is exactly the
+    // question the label needs answered.
+    //
+    // NOT hasAmplifier, despite the adjacency. That field means "integrated or
+    // controllable PA", nothing reads it (see radio-capabilities-map.md, where
+    // it sits under the fields no consumer reads — the AMP applet runs off
+    // TunerModel::presenceChanged), and the HL2 declares it false while
+    // genuinely having a PA. It already means something other than this.
+    bool hasSupplyVoltageTelemetry = false;
 
     // The RADIO stores named configuration profiles (global / TX / mic) that a
     // client can list, load and save. The seam already carries ProfileDelta and
@@ -150,5 +207,7 @@ struct RadioCapabilities {
     // invokeExtension(ns, …).
     QVector<QString> extensionNamespaces;
 };
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(RadioCapabilities::ClientSettingsDomains)
 
 }  // namespace AetherSDR

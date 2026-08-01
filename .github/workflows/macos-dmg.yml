@@ -116,6 +116,17 @@ jobs:
           key: ccache-macos-${{ matrix.label }}
           max-size: 500M
 
+      - name: Ensure offline Metal toolchain
+        # The ASR Metal kernels are compiled at build time (#4535), and this job
+        # configures with REQUIRE_ASR_GPU=ON, which makes a missing offline Metal
+        # compiler a hard configure failure rather than a silent fallback to the
+        # runtime-compile path. Xcode 16 bundles the component (probe succeeds,
+        # step is a no-op); Xcode 26 ships it as a separate download, so this is
+        # what keeps a runner-image bump from breaking a release tag build.
+        run: |
+          xcrun -sdk macosx metal --version >/dev/null 2>&1 || \
+            sudo xcodebuild -downloadComponent MetalToolchain
+
       - name: Configure
         run: |
           if [ "${{ matrix.label }}" = "intel" ]; then
