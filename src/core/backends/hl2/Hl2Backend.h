@@ -514,6 +514,16 @@ private:
     static constexpr int kLnaGainMinDb  = -12;
     static constexpr int kLnaGainMaxDb  = 48;
     static constexpr int kLnaGainStepDb = 1;
+
+    // The TX passband's ceiling: Nyquist of the TX AUDIO rate, which is
+    // AudioEngine's 24 kHz — NOT of the 48 kHz EP2 rate. The modulator
+    // interpolates, so what bounds the passband is what the input can carry.
+    //
+    // One constant because setTxFilter() and applyRestoredState() must agree:
+    // a restore bound looser than the setter's would admit a persisted value the
+    // operator could not have produced, and a tighter one would silently discard
+    // a setting they did.
+    static constexpr int kTxAudioMaxHz = 12000;
 };
 
 }  // namespace AetherSDR::hl2

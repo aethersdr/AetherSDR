@@ -748,6 +748,10 @@ void RadioModel::setupBackend(const QString& family)
             return;
         m_slices.removeAll(s);
         qCDebug(lcProtocol) << "RadioModel: backend slice removed" << sliceId;
+        // Removing the transmit slice moves transmit without any slice delta to
+        // announce it, so the TX-waveform meter binding has to be recomputed
+        // here as well as on sliceChanged.
+        m_meterModel.setActiveTxSlice(activeTxSliceNum());
         emit sliceRemoved(sliceId);
         emit slotOccupancyChanged(sliceId);
         s->deleteLater();
@@ -976,11 +980,28 @@ void RadioModel::setupBackend(const QString& family)
             wireSliceAudioIntentsToBackend(s);
             m_slices.append(s);
             s->applyChanges(mapped);
+            m_meterModel.setActiveTxSlice(activeTxSliceNum());
             emit sliceAdded(s);
             return;
         }
         if (s) {
             s->applyChanges(mapped);
+            // Which slice owns transmit decides which TX-waveform meters resolve
+            // — MeterModel::compPeakIndexForActiveTxSlice() keys the compression
+            // meter off it, and it initialises to -1 meaning "none".
+            //
+            // The five existing calls all live in handleSliceStatus(), the Flex
+            // TEXT status path, which a seam backend never reaches. So on any
+            // non-Flex family m_activeTxSlice stayed -1 forever: TX:COMPPEAK was
+            // defined, its value arrived and was stored, and nothing ever read it
+            // because no index resolved. The gauge sat at zero while the
+            // compressor behind it was working.
+            //
+            // Unconditional rather than gated on delta.txSlice: setActiveTxSlice()
+            // early-returns when the value is unchanged, and the transmit slice
+            // can also move because a slice was REMOVED, which carries no delta
+            // at all.
+            m_meterModel.setActiveTxSlice(activeTxSliceNum());
         }
     });
 

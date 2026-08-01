@@ -475,6 +475,7 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
     // incremental status — only in the initial full dump on connect.
     m_speechProcEnable = on;
     emit micStateChanged();
+    emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_enable=%1").arg(on ? 1 : 0));
 }
 
@@ -485,6 +486,7 @@ void TransmitModel::setSpeechProcessorLevel(int level)
     level = qBound(0, level, 2);
     m_speechProcLevel = level;
     emit micStateChanged();
+    emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_level=%1").arg(level));
 }
 

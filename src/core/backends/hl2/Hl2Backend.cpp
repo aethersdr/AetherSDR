@@ -2414,11 +2414,8 @@ std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
 // business deciding.
 void Hl2Backend::setTxFilter(int lowHz, int highHz)
 {
-    // Nyquist of the TX AUDIO rate, not of the 48 kHz EP2 rate. The modulator
-    // interpolates, so the ceiling is set by what the input can carry.
-    const int maxHz = m_txDsp ? (24000 / 2) : 12000;
-    lowHz = std::clamp(lowHz, 0, maxHz - 50);
-    highHz = std::clamp(highHz, lowHz + 50, maxHz);
+    lowHz = std::clamp(lowHz, 0, kTxAudioMaxHz - 50);
+    highHz = std::clamp(highHz, lowHz + 50, kTxAudioMaxHz);
 
     m_txFilterFromOperator = true;
     m_txFilterLowHz = lowHz;
@@ -2440,6 +2437,11 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
         QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
             Q_ARG(double, static_cast<double>(applyLo)),
             Q_ARG(double, static_cast<double>(applyHi)));
+
+    // Client-authoritative state moved, so the capture half has to know — the
+    // radio will never report this back, and without the hook the setting only
+    // reaches disk if some OTHER setter happens to fire before the session ends.
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setTxPower(int percent)
@@ -2658,6 +2660,14 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_sampleRateHz = 48000;       // construction default — radio B must not
                                   // inherit radio A's span (PR #4619 review)
     m_currentBandKey.clear();
+    // Same rule for the TX passband: a same-family swap must not carry radio A's
+    // eSSB cuts onto radio B. Back to virgin defaults, which for this pair means
+    // "the operator has chosen nothing" — so effectiveTxPassband() resumes
+    // deriving from the mode until either a restore or the operator says
+    // otherwise.
+    m_txFilterFromOperator = false;
+    m_txFilterLowHz = 300;
+    m_txFilterHighHz = 2700;
 
     RestoredRadioState valid;
     if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)
@@ -2702,6 +2712,31 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     for (auto it = driveByBand.constBegin(); it != driveByBand.constEnd(); ++it)
         m_driveByBand.insert(it.key(), qBound(0, it.value().toInt(), 100));
 
+    // The TX passband. Validated as a PAIR and adopted only if the pair is
+    // sane — a half-restored passband would be a value the operator never
+    // chose, which is exactly what this boundary exists to refuse. Both keys
+    // must be present for the same reason: one edge restored against the other
+    // edge's mode default is not the setting that was saved.
+    //
+    // The bounds are the modulator's, matching setTxFilter(): 24 kHz TX audio
+    // gives a 12 kHz ceiling, and the edges must stay 50 Hz apart. A document
+    // that fails this is dropped whole, leaving m_txFilterFromOperator false so
+    // the mode derivation stays in charge.
+    if (txSetpoints.contains(QStringLiteral("filterLowHz"))
+        && txSetpoints.contains(QStringLiteral("filterHighHz")))
+    {
+        const int lowHz = txSetpoints.value(QStringLiteral("filterLowHz")).toInt();
+        const int highHz = txSetpoints.value(QStringLiteral("filterHighHz")).toInt();
+        if (lowHz >= 0 && highHz <= kTxAudioMaxHz && lowHz + 50 <= highHz) {
+            m_txFilterLowHz = lowHz;
+            m_txFilterHighHz = highHz;
+            m_txFilterFromOperator = true;
+        } else {
+            qCWarning(lcHl2) << "HL2 restore: dropping out-of-range TX passband"
+                             << lowHz << ".." << highHz;
+        }
+    }
+
     m_restoredState = valid;
     m_haveRestoredState = true;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
@@ -2740,6 +2775,32 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     QJsonObject txSetpoints{{QStringLiteral("driveByBand"), driveByBand}};
     if (m_driveDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("defaultPercent"), m_driveDefaultPercent);
+
+    // The operator's TX passband — the Phone applet's low-cut / high-cut.
+    //
+    // FLAT, not per-band or per-mode, unlike the drive and LNA maps beside it.
+    // That is a deliberate difference and worth stating, because the neighbours
+    // set the opposite expectation.
+    //
+    // The control is ONE pair of sliders. Persisting it per band or per mode
+    // would make those sliders move on their own: change band without touching
+    // them and the displayed cut points would jump to that band's remembered
+    // pair. That is the same class of surprise as a mode change silently
+    // replacing the passband, which is the bug m_txFilterFromOperator exists to
+    // prevent — reintroducing it on a different axis would be a poor trade.
+    //
+    // Per-mode specifically buys nothing here: effectiveTxPassband() only honours
+    // the override for USB and LSB, and an operator's voice is the same voice on
+    // both. What genuinely varies between a ragchew and a DX pileup is the whole
+    // audio chain, not one filter pair, and mic profiles are the surface for that.
+    //
+    // ONLY WRITTEN ONCE THE OPERATOR HAS CHOSEN. Persisting the mode-derived
+    // default would make the next connect look like an operator override and
+    // permanently suppress the per-mode derivation.
+    if (m_txFilterFromOperator) {
+        txSetpoints.insert(QStringLiteral("filterLowHz"), m_txFilterLowHz);
+        txSetpoints.insert(QStringLiteral("filterHighHz"), m_txFilterHighHz);
+    }
     state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
                                   {QStringLiteral("txSetpoints"), txSetpoints}};
     state.extensionSchemaVersion = 1;

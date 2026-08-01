@@ -662,7 +662,7 @@ bool MainWindow::hostModulatesTxAudio() const
     return caps.hostModulates && caps.canTransmit;
 }
 
-void MainWindow::applySpeechProcessorToClientComp()
+void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
 {
     if (!m_audio || !hostModulatesTxAudio())
         return;
@@ -674,13 +674,19 @@ void MainWindow::applySpeechProcessorToClientComp()
     const bool on = tx.speechProcessorEnable();
     const int level = qBound(0, tx.speechProcessorLevel(), 2);
 
-    // Only rewrite the compressor's shape when the operator actually chose a
-    // different level, or switched PROC on. Pushing the preset on every state
-    // change would stomp the strip's settings whenever anything else in
-    // TransmitModel emitted micStateChanged.
+    // THE PRESET IS WRITTEN ONLY FOR OPERATOR INTENT — a PROC or NOR/DX/DX+ move
+    // the operator actually made — and never for state merely observed.
+    //
+    // The compressor is shared with the Aetherial strip, so writing the preset
+    // replaces the threshold/ratio/makeup the operator may have dialled in
+    // there. Gating on "did the state change" instead of "did the operator ask"
+    // gets this exactly backwards: the 20 Hz mirror below reports a
+    // strip-originated enable back into TransmitModel, which would arrive here
+    // as an off->on transition and overwrite the operator's settings as a direct
+    // result of them switching their own compressor on. (#4609 review)
     const bool levelChanged = level != m_lastAppliedProcLevel;
     const bool switchedOn = on && !m_lastAppliedProcEnable;
-    if (on && (levelChanged || switchedOn)) {
+    if (operatorIntent && on && (levelChanged || switchedOn)) {
         // NOR / DX / DX+. Progressively lower thresholds and higher ratios, with
         // makeup chosen to keep the average level rising with the setting rather
         // than merely squashing peaks — "more processing" has to sound louder or
@@ -792,31 +798,78 @@ void MainWindow::wireHostModulatedVoiceChain()
     connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
             this, [this] { applyGraphicEqToClientEq(false); });
 
-    // Operator -> DSP. micStateChanged is the notification TransmitModel already
-    // emits for PROC (its setters update optimistically because a Flex never
-    // echoes these two in incremental status), so no new signal is needed.
+    // Operator -> DSP.
+    //
+    // TWO signals, and the split is load-bearing. speechProcessorCommandIssued
+    // is the operator actually moving PROC, and only that is allowed to write
+    // the NOR/DX/DX+ preset over the shared compressor's settings.
+    // micStateChanged is any state movement at all — including the mirror below
+    // reporting a strip-originated enable — and may only sync the enable flag.
+    connect(&m_radioModel.transmitModel(),
+            &TransmitModel::speechProcessorCommandIssued, this,
+            [this] { applySpeechProcessorToClientComp(true); });
     connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
-            this, &MainWindow::applySpeechProcessorToClientComp);
+            this, [this] { applySpeechProcessorToClientComp(false); });
 
-    // Re-push on connect. The capability is not known until a backend attaches,
-    // so a PROC state restored from settings before that would have been
-    // dropped by the hostModulatesTxAudio() guard above.
+    // ── Connection edges ────────────────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        if (!connected)
+        if (connected && hostModulatesTxAudio()) {
+            // Re-push on connect: the capability is unknown until a backend
+            // attaches, so anything restored from settings before that was
+            // dropped by the guard inside each apply.
+            //
+            // The cache is reset first so the preset is genuinely re-applied
+            // rather than skipped as unchanged from a previous session's radio,
+            // and this counts as operator intent because the state being pushed
+            // IS the operator's own saved choice.
+            m_lastAppliedProcLevel = -1;
+            m_lastAppliedProcEnable = false;
+            applySpeechProcessorToClientComp(true);
+            // The EQ had no equivalent, so a settings-restored EQ that emitted
+            // its state before the backend existed never reached ClientEq until
+            // the operator happened to touch a slider. (#4609 review)
+            applyGraphicEqToClientEq(true);
+            applyGraphicEqToClientEq(false);
+            m_hostVoiceChainTimer.start();
             return;
-        // Force the preset to be re-applied rather than trusting the cache from
-        // a previous session's radio.
-        m_lastAppliedProcLevel = -1;
-        m_lastAppliedProcEnable = false;
-        applySpeechProcessorToClientComp();
+        }
+
+        m_hostVoiceChainTimer.stop();
+
+        // UNWIND ON A FAMILY SWAP, or the Flex exclusion holds per-call and
+        // leaks across sessions.
+        //
+        // Move the graphic EQ on an HL2, disconnect, then connect a Flex in the
+        // same process: every apply now returns early because the family uses
+        // the Flex command plane, but ClientEq still holds the eight peaking
+        // filters and is still ENABLED — so the radio's hardware EQ and ours
+        // both apply. That is the double-equalization the design note says
+        // cannot happen, displaced in time rather than in one slider movement.
+        // Same shape for ClientComp and PROC. (#4609 review)
+        //
+        // Bypass, not clear: the operator's bands and the strip's compressor
+        // settings stay exactly as they were, so reconnecting the HL2 restores
+        // them on the connect edge above. Disabling is what takes them out of
+        // circuit; erasing them would lose work.
+        if (m_audio && m_radioModel.usesFlexCommandPlane()) {
+            if (auto* eqTx = m_audio->clientEqTx())   eqTx->setEnabled(false);
+            if (auto* eqRx = m_audio->clientEqRx())   eqRx->setEnabled(false);
+            if (auto* comp = m_audio->clientCompTx()) comp->setEnabled(false);
+            if (m_appletPanel) {
+                if (auto* t = m_appletPanel->clientEqTxApplet())   t->refreshEnableFromEngine();
+                if (auto* t = m_appletPanel->clientEqRxApplet())   t->refreshEnableFromEngine();
+                if (auto* t = m_appletPanel->clientCompTxApplet()) t->refreshEnableFromEngine();
+            }
+        }
     });
 
     // DSP -> meter, and DSP -> operator.
     //
     // ClientComp has no change notification — every other consumer polls it on a
     // timer (ClientCompApplet::tickMeter) — so this does too, at the same 20 Hz
-    // the compression gauge is fed at elsewhere.
+    // the compression gauge is fed at elsewhere. Started and stopped on the
+    // connection edge above rather than running for the process lifetime.
     m_hostVoiceChainTimer.setInterval(50);
     connect(&m_hostVoiceChainTimer, &QTimer::timeout, this, [this] {
         if (!m_audio || !hostModulatesTxAudio())
@@ -835,14 +888,12 @@ void MainWindow::wireHostModulatedVoiceChain()
             qBound(0.0f, reduction, 25.0f));
 
         // Mirror the strip back onto PROC, so toggling the compressor there
-        // does not leave the button lying. applySpeechProcessorState() does not
-        // emit commandReady, so this cannot loop back out as a command; it does
-        // emit micStateChanged, which re-enters applySpeechProcessorToClientComp
-        // once and settles because the value now matches.
+        // does not leave the button lying. applySpeechProcessorState() emits
+        // micStateChanged but NOT speechProcessorCommandIssued, so this settles
+        // in one pass and can never be mistaken for the operator moving PROC.
         m_radioModel.transmitModel().applySpeechProcessorState(
             comp->isEnabled(), m_radioModel.transmitModel().speechProcessorLevel());
     });
-    m_hostVoiceChainTimer.start();
 }
 
 } // namespace AetherSDR

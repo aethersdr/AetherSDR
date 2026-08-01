@@ -484,7 +484,9 @@ private:
     // MainWindow_Session.cpp tests before opening the mic.
     bool hostModulatesTxAudio() const;
     // Push the operator's PROC state onto the shared client compressor.
-    void applySpeechProcessorToClientComp();
+    // operatorIntent gates the NOR/DX/DX+ preset write: only a PROC move the
+    // operator actually made may overwrite the strip's compressor settings.
+    void applySpeechProcessorToClientComp(bool operatorIntent);
     // Push the 8-band graphic EQ onto the shared ClientEq. transmit selects the
     // TX or RX instance.
     void applyGraphicEqToClientEq(bool transmit);
