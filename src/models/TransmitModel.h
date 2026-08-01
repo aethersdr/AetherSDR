@@ -239,6 +239,17 @@ public:
     void setMicAcc(bool on);
     void setSpeechProcessorEnable(bool on);
     void setSpeechProcessorLevel(int level);
+    // Adopt speech-processor state that did NOT come from this model — the
+    // client-side compressor on a host-modulating backend, where PROC drives our
+    // own DSP and the operator can also reach that same compressor through the
+    // Aetherial strip.
+    //
+    // Updates the state and notifies the UI WITHOUT emitting commandReady, which
+    // is the whole point: the setters above are operator INTENT and must stay
+    // that way (Principle II), so an observer that mirrored engine state back
+    // through them would echo our own state as a fresh command and, with the
+    // strip on the other end, oscillate. Returns true when something changed.
+    bool applySpeechProcessorState(bool on, int level);
     void setDax(bool on);
     void setSbMonitor(bool on);
     void setMonGainSb(int gain);
@@ -303,6 +314,21 @@ signals:
     // instead of phoneStateChanged for slot work that should NOT run on
     // every VOX/CW/dexp/mic-boost/etc. status update.
     void txFilterCutoffChanged(int lowHz, int highHz);
+    // The operator asked for a TX passband. OPERATOR INTENT ONLY — applyStatus()
+    // never emits this — so a backend that modulates on this host can bind to it
+    // and drive its own modulator without echoing radio state back as a command
+    // (Principle II). Distinct from txFilterCutoffChanged, which also fires when
+    // a Flex's own status moves the value.
+    void txFilterCommandIssued(int lowHz, int highHz);
+    // The operator moved PROC or its NOR/DX/DX+ level. OPERATOR INTENT ONLY,
+    // for the same reason as txFilterCommandIssued — and here the distinction is
+    // what protects the operator's own work: the client compressor these drive is
+    // shared with the Aetherial strip, and its NOR/DX/DX+ presets overwrite the
+    // strip's threshold/ratio/makeup. Keying the preset write off micStateChanged
+    // instead would let the strip's OWN enable toggle read as an off->on
+    // transition and overwrite the settings the operator had just dialled in
+    // there. applySpeechProcessorState() never emits this.
+    void speechProcessorCommandIssued(bool on, int level);
     // Fires only when cwPitch actually changes. Use this instead of
     // phoneStateChanged for slot work that should NOT run on every
     // VOX/CW/dexp/mic-boost/etc. status update (e.g. #4423 KiwiSDR BFO sync).

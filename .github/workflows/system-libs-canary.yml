@@ -1,0 +1,158 @@
+name: System Libraries Canary
+
+# Builds AetherSDR against Debian sid's system packages instead of the vendored
+# third_party snapshots, to catch upstream API/ABI drift before it reaches a
+# distro packager.
+#
+# NOT a per-PR job (#4655). It was the single most expensive thing in ci.yml at
+# a 31 min mean, and it is `continue-on-error` by design — a rolling-release
+# canary that is deliberately allowed to fail, so it never gated a merge and no
+# contributor was ever asked to act on it. Paying 31 runner-minutes on every PR
+# for a signal nobody is blocked on is the wrong trade; sid moves on its own
+# schedule, not on ours, so a nightly cadence samples it at least as well.
+#
+# `continue-on-error` is intentionally NOT carried over. Its original purpose
+# was to stop sid churn blocking unrelated PRs — off the PR path that rationale
+# is gone, and a canary that always reports green is not a canary. A red run
+# here means "sid changed under us", which is exactly the notification we want.
+# It is not a required status check, so a failure blocks nothing.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'third_party/**'
+      # tests/ is in scope because this job runs a plain `cmake --build build`,
+      # and the test executables are part of the default target — an ABI break
+      # against a new sid package that only surfaces in a test TU would
+      # otherwise wait for the nightly cron instead of failing on the merge
+      # that caused it.
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/system-libs-canary.yml'
+  schedule:
+    # 04:00 UTC daily — sid's own archive publishes several times a day, and an
+    # overnight slot keeps this off the same runner pool as working-hours PRs.
+    - cron: '0 4 * * *'
+  # Manual trigger for "did that dependency bump actually land in sid yet?"
+  workflow_dispatch:
+
+# Every trigger resolves to main (or a manual dispatch on it), so each run gets
+# its own group via the run_id suffix and nothing is cancelled. Kept in the same
+# shape as ci.yml / codeql.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check-system-libs-linux:
+    runs-on: ubuntu-latest
+    container: debian:sid
+
+    env:
+      CCACHE_DIR: /ccache
+      # 1000M, matching ci.yml's build. This was 500M on the assumption that
+      # ENABLE_RADE=OFF plus system libraries replacing vendored third_party
+      # builds meant materially less compiling. The first real run disproved
+      # that: 1678 cacheable calls here against 1980 in ci.yml's build — 15%
+      # fewer, not a different order of magnitude — and the working set filled
+      # 98.33% of the 500M cap in that single run.
+      #
+      # A cap that sits on the working set is worse than a smaller cache:
+      # entries are evicted before the next run can reuse them, so the hit rate
+      # stays pinned near its cold value instead of climbing. ci.yml's build
+      # settles at ~0.5 GB against 1000M and stays healthy; this tree needs the
+      # same headroom. Verify from the "ccache stats" step rather than assuming:
+      # a "Cache size" line near 100% means this needs raising again.
+      CCACHE_MAXSIZE: 1000M
+      # NOT the default (mtime). sid reinstalls the toolchain from apt on every
+      # run, so the compiler binary's identity is the one input that genuinely
+      # could go stale here — hash its contents rather than trusting size+mtime.
+      # This is the narrow risk that actually exists; see the cache step below.
+      CCACHE_COMPILERCHECK: content
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install main dependencies
+        run: |
+          apt -U install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            pkgconf \
+            qt6-base-dev \
+            qt6-multimedia-dev \
+            qt6-serialbus-dev \
+            qt6-websockets-dev \
+            qtkeychain-qt6-dev \
+            libfftw3-dev \
+            libopus-dev \
+            qt6-shadertools-dev \
+            qt6-base-private-dev \
+            libhidapi-dev \
+            libonnxruntime-dev \
+            libpipewire-0.3-dev
+
+      - name: Install system library replacements
+        run: |
+          apt -U install -y --no-install-recommends \
+            libmspack-dev \
+            librtmidi-dev \
+            libasound2-dev \
+            zlib1g-dev \
+            libmosquitto-dev \
+            libliquid-dev \
+            libwhisper-dev
+
+      # ccache IS safe here, despite the intuition that a canary wants a
+      # from-scratch build. ccache is content-addressed: direct mode hashes the
+      # source plus a manifest of every included header's contents, so the
+      # moment sid ships a new Qt or glibc header the affected entries stop
+      # matching and those TUs recompile. It cannot serve a stale object for
+      # changed input — that is the whole basis of the tool.
+      #
+      # Nor does it weaken the ABI half of the job: ccache never caches LINKING,
+      # and a symbol that changed or vanished in a rebuilt system library fails
+      # at link on every run regardless of hit rate.
+      #
+      # The one input that could genuinely go stale is the compiler itself,
+      # since apt reinstalls it from sid each run — hence
+      # CCACHE_COMPILERCHECK=content above rather than the default mtime check.
+      #
+      # Expect lumpy hit rates: a toolchain or Qt6 bump in sid invalidates
+      # broadly, which is correct behaviour rather than a cache failure.
+      - name: Install ccache
+        run: apt -U install -y --no-install-recommends ccache
+
+      - name: Cache ccache objects
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          key: ccache-sid-canary-${{ github.run_id }}
+          restore-keys: |
+            ccache-sid-canary-
+
+      - name: Configure
+        run: |
+          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Zero ccache stats
+        run: ccache --zero-stats
+
+      - name: Build
+        run: |
+          cmake --build build -j$(nproc)
+
+      # Same reason as the equivalent steps in ci.yml: #1963 disabled the
+      # Windows compiler cache for three months because nothing surfaced the
+      # hit rate. A "Hits 0" line here means the launcher was dropped.
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats

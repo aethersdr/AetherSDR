@@ -1,4 +1,9 @@
 #include "core/KiwiSdrTxMutePolicy.h"
+// The resume hold has to add the presentation holdback the audio engine
+// really applies, which is routed here — so the two are pinned together.
+#include "core/ReceivePresentationSync.h"
+
+#include <QString>
 
 #include <iostream>
 
@@ -149,6 +154,166 @@ int main()
                      "old epoch stays invalid across episodes");
         ok &= expect(watchdog.shouldExpire(watchdog.epoch, true),
                      "new episode's own epoch expires normally");
+    }
+
+    {
+        // Resume-hold computation ("Resume audio after TX delay").
+        using AetherSDR::kiwiSdrResumeHoldMs;
+        using AetherSDR::kKiwiSdrResumeHoldGuardMs;
+        using AetherSDR::kKiwiSdrResumeHoldMinMs;
+        using AetherSDR::kKiwiSdrResumeHoldMaxMs;
+
+        ok &= expect(kiwiSdrResumeHoldMs(true, 500, 520, 0)
+                         == 500 + kKiwiSdrResumeHoldGuardMs,
+                     "valid estimate: offset + guard");
+        ok &= expect(kiwiSdrResumeHoldMs(true, 500, 520, 520)
+                         == 500 + 520 + kKiwiSdrResumeHoldGuardMs,
+                     "applied presentation holdback adds to the hold");
+        ok &= expect(kiwiSdrResumeHoldMs(false, 0, 520, 520)
+                         == 520 + 520 + kKiwiSdrResumeHoldGuardMs,
+                     "no estimate: base latency proxy + holdback + guard");
+        ok &= expect(kiwiSdrResumeHoldMs(true, -300, 520, 0)
+                         == kKiwiSdrResumeHoldMinMs,
+                     "negative estimate clamps to minimum hold");
+        ok &= expect(kiwiSdrResumeHoldMs(true, -300, 520, -100)
+                         == kKiwiSdrResumeHoldMinMs,
+                     "negative holdback is ignored, clamps to minimum");
+        ok &= expect(kiwiSdrResumeHoldMs(true, 10000, 520, 0)
+                         == kKiwiSdrResumeHoldMaxMs,
+                     "huge estimate clamps to maximum hold");
+        ok &= expect(kiwiSdrResumeHoldMs(true, 3000, 520, 5000)
+                         == kKiwiSdrResumeHoldMaxMs,
+                     "estimate + holdback together clamp to maximum");
+        ok &= expect(kiwiSdrResumeHoldMs(false, 0, 0, 0)
+                         == kKiwiSdrResumeHoldMinMs,
+                     "zero fallback clamps to minimum hold");
+    }
+
+    {
+        // Which ingest-lag figure the hold is entitled to use. This is the
+        // decision half of "Resume audio after TX delay" — a wrong answer
+        // here does not fail anything at runtime, it just silently mutes the
+        // operator for the wrong length of time, so every branch is pinned.
+        using AetherSDR::KiwiSdrResumeHoldSyncInputs;
+        using AetherSDR::kiwiSdrResumeHoldIngestLag;
+
+        // A locked AutoAssist estimate, measured against this very profile.
+        KiwiSdrResumeHoldSyncInputs locked;
+        locked.isSyncTarget = true;
+        locked.syncEnabled = true;
+        locked.autoAssist = true;
+        locked.estimateValid = true;
+        locked.estimateConfidence = 0.8f;
+        locked.autoLockConfidence = 0.35f;
+        locked.estimateOffsetMs = 900;
+
+        auto lag = kiwiSdrResumeHoldIngestLag(locked);
+        ok &= expect(lag.valid && lag.offsetMs == 900,
+                     "AutoAssist, confident estimate on the target: used");
+
+        // The sync engine acts on a HELD estimate even below the lock
+        // threshold; the hold must make the same call, or it would flip
+        // between measured and proxy on every over while sync itself holds.
+        auto held = locked;
+        held.estimateConfidence = 0.05f;
+        held.estimateHeld = true;
+        lag = kiwiSdrResumeHoldIngestLag(held);
+        ok &= expect(lag.valid && lag.offsetMs == 900,
+                     "AutoAssist, held estimate below threshold: still used");
+
+        auto lowConfidence = locked;
+        lowConfidence.estimateConfidence = 0.34f;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(lowConfidence).valid,
+                     "AutoAssist, unheld estimate under lock: falls back");
+
+        auto invalid = locked;
+        invalid.estimateValid = false;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(invalid).valid,
+                     "AutoAssist, invalid estimate: falls back");
+
+        // The measurement describes ONE profile's chain. A second Kiwi is a
+        // different network path entirely — this is the guard whose absence
+        // would hand every profile the target's ingest lag.
+        auto otherProfile = locked;
+        otherProfile.isSyncTarget = false;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(otherProfile).valid,
+                     "not the sync target: estimate does not apply");
+
+        auto syncOff = locked;
+        syncOff.syncEnabled = false;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(syncOff).valid,
+                     "receive sync disabled: estimate does not apply");
+
+        // Manual mode: the operator's own offset, but only when it says the
+        // Kiwi arrives LATE. Zero or negative describes the other direction
+        // and carries no ingest-lag information.
+        KiwiSdrResumeHoldSyncInputs manual;
+        manual.isSyncTarget = true;
+        manual.syncEnabled = true;
+        manual.autoAssist = false;
+        manual.manualOffsetMs = 1200;
+        lag = kiwiSdrResumeHoldIngestLag(manual);
+        ok &= expect(lag.valid && lag.offsetMs == 1200,
+                     "Manual, positive offset on the target: used");
+
+        auto manualZero = manual;
+        manualZero.manualOffsetMs = 0;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(manualZero).valid,
+                     "Manual, zero offset: falls back");
+
+        auto manualNegative = manual;
+        manualNegative.manualOffsetMs = -400;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(manualNegative).valid,
+                     "Manual, negative offset: falls back");
+
+        // Mode discipline: a stale AutoAssist estimate must not leak into
+        // Manual mode, and a manual offset must not leak into AutoAssist.
+        auto manualWithStaleEstimate = manual;
+        manualWithStaleEstimate.estimateValid = true;
+        manualWithStaleEstimate.estimateConfidence = 0.9f;
+        manualWithStaleEstimate.autoLockConfidence = 0.35f;
+        manualWithStaleEstimate.estimateOffsetMs = 900;
+        lag = kiwiSdrResumeHoldIngestLag(manualWithStaleEstimate);
+        ok &= expect(lag.valid && lag.offsetMs == 1200,
+                     "Manual mode ignores the AutoAssist estimate");
+
+        auto autoWithManualOffset = locked;
+        autoWithManualOffset.estimateValid = false;
+        autoWithManualOffset.manualOffsetMs = 1200;
+        ok &= expect(!kiwiSdrResumeHoldIngestLag(autoWithManualOffset).valid,
+                     "AutoAssist mode ignores the manual offset");
+    }
+
+    {
+        // The holdback fed to the hold must be the one the MIX applies —
+        // i.e. whatever AudioEngine::setReceivePresentationDelays() derives
+        // through receivePresentationExternalKiwiDelayMs() (that routing
+        // itself is pinned in receive_presentation_sync_test). Under
+        // AutoAssist a non-target source is played with NO holdback, so
+        // sourcing the figure anywhere else runs the hold long and swallows
+        // real post-TX audio instead of the operator's own tail.
+        using AetherSDR::kiwiSdrResumeHoldMs;
+        using AetherSDR::kKiwiSdrResumeHoldGuardMs;
+        using AetherSDR::receivePresentationExternalKiwiDelayMs;
+
+        const QString target = QStringLiteral("profile-A");
+        const QString other = QStringLiteral("profile-B");
+        constexpr int kEngineKiwiDelayMs = 900;
+        constexpr int kFallbackBaseMs = 360;
+
+        ok &= expect(kiwiSdrResumeHoldMs(
+                         false, 0, kFallbackBaseMs,
+                         receivePresentationExternalKiwiDelayMs(
+                             target, target, kEngineKiwiDelayMs))
+                         == kFallbackBaseMs + kEngineKiwiDelayMs
+                             + kKiwiSdrResumeHoldGuardMs,
+                     "sync target: hold covers the holdback it is played at");
+        ok &= expect(kiwiSdrResumeHoldMs(
+                         false, 0, kFallbackBaseMs,
+                         receivePresentationExternalKiwiDelayMs(
+                             other, target, kEngineKiwiDelayMs))
+                         == kFallbackBaseMs + kKiwiSdrResumeHoldGuardMs,
+                     "non-target: hold adds no phantom holdback");
     }
 
     if (!ok) {

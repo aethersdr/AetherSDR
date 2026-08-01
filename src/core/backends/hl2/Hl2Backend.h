@@ -13,6 +13,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <deque>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR::hl2 {
@@ -81,6 +82,7 @@ public:
     void setKeying(bool key) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz) override;
     void setTxPower(int percent) override;
+    void setTxFilter(int lowHz, int highHz) override;
     // No default argument here on purpose: defaults on virtuals bind statically,
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
@@ -95,8 +97,13 @@ public:
                          const QVariant& arg) override;
 
     HealthSnapshot healthSnapshot() const override;
+    LinkStats linkStats() const override;
 
 private:
+    // Publish linkStats() on the fixed cadence the seam promises. Driven by a
+    // timer here rather than by MetisClient's receive path so the tick survives
+    // the radio going silent — which is the case the heartbeat has to detect.
+    void publishLinkStats();
     // Re-select the companion filter board's band filter for the current slice
     // frequency. Idempotent and change-gated, so it is safe to call from every
     // path that can move the dial.
@@ -406,6 +413,19 @@ private:
     // MetisClient::droppedPackets(): that object lives on the I/O thread, and
     // healthSnapshot() is read from the GUI thread.
     quint64 m_drops = 0;
+    // Transport counters, mirrored onto THIS thread from
+    // MetisClient::linkCountersUpdated for the same reason m_drops is.
+    //
+    // Held as the SEAM's type rather than the client's: MetisClient is only
+    // forward-declared here, so a nested type of it cannot be a member, and
+    // translating at the receive lambda (where MetisClient.h is included) keeps
+    // the wire-shape-to-seam-shape mapping in exactly one place.
+    LinkStats m_link;
+    QTimer* m_linkStatsTimer = nullptr;
+    // rxPackets as of the PREVIOUS tick. The difference is the only thing that
+    // can answer "is the radio still sending", which a cumulative total cannot.
+    quint64 m_linkRxPacketsAtLastTick = 0;
+    static constexpr int kLinkStatsIntervalMs = 1000;
     bool m_adcOverload = false;
     bool m_keyed = false;
     bool m_tuning = false;
@@ -431,6 +451,36 @@ private:
     // internal application must neither bootstrap the operator baseline nor
     // record into the per-band map — only OPERATOR intent does that.
     bool m_applyingBandMemory = false;
+
+    // The operator's TX passband, once they have set one, and the flag that says
+    // they have.
+    //
+    // The flag is the load-bearing half. defaultTxPassbandForMode() is re-pushed
+    // on every mode set and every transmit-slice move — deliberately, so a fresh
+    // session is sideband- and mode-correct from the first key — and it has no
+    // way to tell "nobody has chosen" from "the operator chose 300..2700". Without
+    // this, an eSSB passband survives until the next mode change and is then
+    // silently replaced by the voice default, which looks like the control
+    // working and then randomly forgetting.
+    bool m_txFilterFromOperator = false;
+    int m_txFilterLowHz = 300;
+    int m_txFilterHighHz = 2700;
+
+    // Loudest microphone peak of the current transmission, in dBFS, so setKeying()
+    // can tell at unkey whether the operator spent the whole of it below the ALC's
+    // hold threshold — the one case where holding the gain leaves them quiet
+    // rather than merely stopping the stage pumping. -140 is the floor
+    // Hl2TxDsp::micPeak reports for silence, and means "nothing measured yet".
+    float m_txMicPeakMaxDbfs = -140.0f;
+
+    // The passband to push at the modulator for `mode`: the operator's if they
+    // have chosen one, otherwise that mode's default.
+    std::pair<int, int> effectiveTxPassband(const QString& mode) const;
+    // Apply that passband AND announce it as a TransmitDelta, so the Phone
+    // applet's cut readout matches what the transmitter is running rather than
+    // what was last asked for. See the definition for why setTxFilter() is the
+    // one push that does not go through here.
+    void pushTxPassband(const QString& mode);
     // Tune-carrier amplitude, full scale into the modulator. Actual radiated
     // power is governed by the TX drive register, which is where an operator
     // sets it; scaling here as well would make the power control non-linear for
@@ -494,6 +544,16 @@ private:
     static constexpr int kLnaGainMinDb  = -12;
     static constexpr int kLnaGainMaxDb  = 48;
     static constexpr int kLnaGainStepDb = 1;
+
+    // The TX passband's ceiling: Nyquist of the TX AUDIO rate, which is
+    // AudioEngine's 24 kHz — NOT of the 48 kHz EP2 rate. The modulator
+    // interpolates, so what bounds the passband is what the input can carry.
+    //
+    // One constant because setTxFilter() and applyRestoredState() must agree:
+    // a restore bound looser than the setter's would admit a persisted value the
+    // operator could not have produced, and a tighter one would silently discard
+    // a setting they did.
+    static constexpr int kTxAudioMaxHz = 12000;
 };
 
 }  // namespace AetherSDR::hl2

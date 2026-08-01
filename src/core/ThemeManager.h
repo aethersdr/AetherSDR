@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QMutex>
 #include <QSet>
 #include <QColor>
 #include <QFont>
@@ -331,26 +332,38 @@ public:
     // on the next reapplyAllTrackedStyleSheets() pass.
     QString     resolveFor(const QWidget* widget, const QString& stylesheetTemplate) const;
 
-    // Factory-default lookups — read from a one-shot snapshot of the
-    // bundled `:/themes/default-dark.json` so every Reset-to-default
-    // affordance in the editor restores the canonical value.  Each
-    // returns a sentinel (empty / invalid / 0 / -1) when the token has
-    // no factory baseline — callers should check before using.
+    // Factory-default lookups — read from a snapshot of the bundled theme
+    // the ACTIVE theme descends from (`default-light.json` when editing a
+    // light theme, `default-dark.json` otherwise), so every Reset-to-default
+    // affordance in the editor restores the canonical value *for that base*.
+    // The snapshot re-loads when the active theme changes base.  Each returns
+    // a sentinel (empty / invalid / 0 / -1) when the token has no factory
+    // baseline — callers should check before using.
     ThemeGradient factoryGradient(const QString& token) const;
     QColor        factoryColor(const QString& token) const;
     int           factorySizing(const QString& token) const;     // -1 = none
     QString       factoryString(const QString& token) const;
     bool          hasFactoryValue(const QString& token) const;
 
-    // Theme-file management — Delete / Rename for the user's saved
-    // themes living under ~/.config/AetherSDR/themes/.  Both refuse
-    // on built-in themes (those live inside the Qt resource bundle
-    // and aren't deletable).  Delete switches the active theme back
-    // to "Default Dark" before unlinking so the UI doesn't render
-    // half-blank during the file removal.
+    // Theme-file management — Delete / Rename for the user's saved themes
+    // living under QStandardPaths::GenericConfigLocation + "/AetherSDR/themes"
+    // (`~/.config/...` on Linux, `%LOCALAPPDATA%` on Windows, `~/Library/
+    // Preferences` on macOS).  Both refuse on built-in themes (those live
+    // inside the Qt resource bundle and aren't deletable).  Delete switches
+    // the active theme back to "Default Dark" before unlinking so the UI
+    // doesn't render half-blank during the file removal.
     bool        deleteTheme(const QString& name);
     bool        renameTheme(const QString& oldName, const QString& newName);
     bool        isBuiltInTheme(const QString& name) const;
+
+    // Is this a name we can turn into a theme FILE?  saveCurrentThemeAs() and
+    // renameTheme() both enforce it and both REFUSE rather than substitute,
+    // because at those two entry points the operator typed the name.  Public
+    // so the editor can check before it asks and report the actual reason —
+    // a refusal the UI can only describe as "couldn't write the file" is worse
+    // than useless, it sends the operator to check directory permissions.
+    // `reason` (optional) receives operator-facing text.
+    static bool isValidThemeName(const QString& name, QString* reason = nullptr);
 
     bool        saveCurrentThemeAs(const QString& newThemeName);
 
@@ -433,6 +446,16 @@ private:
     // are not committed (the previously-active theme stays loaded).
     bool loadThemeFromPath(const QString& path);
 
+    // Assemble the v2 theme document (schemaVersion + metadata + primitives
+    // palette + nested scope tree) for the live theme state.  THE single
+    // document builder: writeThemeFile() and exportThemeToFile() both go
+    // through it so the two can't emit structurally different files.  In
+    // particular `primitives` and `scopes` can only ever travel together —
+    // scope tokens hold `{primitive.key}` aliases verbatim, so scopes without
+    // the palette they point into load as invalid colours.
+    QJsonObject themeDocumentJson(const QString& themeName,
+                                  const QString& description) const;
+
     // Serialize the current scope tree into AetherSDR's v2 theme JSON
     // (primitives + nested scopes) and write it to `path`.  Shared by
     // saveCurrentThemeAs (new user copy) and saveActiveTheme (rewrite
@@ -443,6 +466,19 @@ private:
     // Built-in compiled-in defaults so a totally missing theme file
     // still produces a usable UI.  Populated in the constructor.
     void seedBuiltinDefaults();
+    // Generated from resources/themes/default-dark.json by
+    // tools/gen_theme_seed.py; defined in ThemeSeedGenerated.cpp. Never edit
+    // that file by hand — regenerate it. (#3184)
+    void seedGeneratedDefaults();
+    // Seed one token into a scope, creating the scope if needed.
+    //
+    // Exists so the generated translation unit never has to see ThemeScope,
+    // whose definition is private to ThemeManager.cpp. Silent by design: this
+    // runs during construction, before any consumer could be connected, so
+    // emitting themeChanged() per token would be both pointless and 128 signals
+    // deep. The public setColor()/setSizing() overloads are the notifying path.
+    void seedScopedToken(const QString& containerPath,
+                         const QString& token, const QVariant& value);
 
     // Scope-tree helpers.
     //   * `scopeForPath(path)`   — returns the scope at `path` (nullptr
@@ -491,13 +527,42 @@ private:
     QSet<QString>                    m_declaredContainers;
     QString m_activeTheme;
 
-    // Factory-default snapshot, loaded once from `:/themes/default-dark.json`
-    // at construction.  Drives the gradient editor's "Reset to default"
-    // button.  Lazy-initialised so a totally missing resource bundle
-    // doesn't take the whole singleton down.
+    // Tokens already warned about by cssFragment(), so a stylesheet typo is
+    // reported once rather than on every theme change and every tracked-
+    // stylesheet reapply.  Cleared on every theme load, so the warning tracks
+    // the theme it's about instead of latching for the process.  Mutable
+    // because cssFragment() is const; the mutex guards only this set, which is
+    // the whole of ThemeManager's locking — every other member is
+    // main-thread-only, as resolveFor()'s callers all terminate in
+    // QWidget::setStyleSheet.
+    mutable QSet<QString>            m_warnedUnknownTokens;
+    mutable QMutex                   m_unknownTokenMutex;
+
+    // Factory-default snapshot of whichever bundled theme the active theme
+    // descends from (see factoryBaselinePath()).  Drives every "Reset to
+    // default" affordance in the editor.  Lazy-initialised so a totally
+    // missing resource bundle doesn't take the whole singleton down, and
+    // latched only on a SUCCESSFUL load so one failed read doesn't disable
+    // Reset for the rest of the process.
     mutable QHash<QString, QVariant> m_factoryTokens;
     mutable bool m_factoryLoaded{false};
+    // Which bundled theme the current snapshot came from, so a Dark -> Light
+    // switch re-snapshots instead of serving the previous base's values.
+    mutable QString m_factoryBaselinePath;
     void ensureFactoryLoaded() const;
+    // Bundled theme the active theme's "factory default" should come from.
+    QString factoryBaselinePath() const;
+
+    // "Default Light" / "Default Dark" — the bundled theme the ACTIVE theme is
+    // a descendant of.  Decided once per theme load by resolveThemeBase() and
+    // then held constant, because the thing that reads it is the Reset button
+    // and the operator presses Reset when a value is already wrong: deriving
+    // it from live token state lets a light theme whose background has been
+    // dragged dark reclassify itself, and then Reset hands back dark values.
+    QString m_activeThemeBase;
+    // From recorded parentage (`baseTheme` in the document) where present,
+    // falling back to the freshly-loaded background's luminance where not.
+    QString resolveThemeBase(const QJsonObject& root) const;
 
     // Smart-invalidation hint — set transiently by setColor / setGradient
     // / setSizing / setString to the token that just changed, then
@@ -513,6 +578,12 @@ private:
     // drained by onTrackedWidgetDestroyed.
     struct TrackedWidget {
         QString             stylesheetTemplate;
+        // Exactly the QSS *we* last pushed onto the widget.  If the widget's
+        // current stylesheet still equals this, nobody has overridden us and
+        // a re-resolve is safe.  If it differs, a caller set its own sheet
+        // afterwards — per-slice badge colours, TX indicator state, RADE SNR
+        // colour — and re-resolving would silently wipe it.  See eventFilter.
+        QString             appliedStylesheet;
         QStringList         tokens;
         QList<ThemeRegion>  regions;
     };

@@ -22,6 +22,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMap>
 #include <QStandardPaths>
 #include <QXmlStreamWriter>
@@ -521,6 +523,9 @@ void testNewerSchemaOpensReadOnly()
     expect(dbRow(QStringLiteral("FromTheFuture"), value)
                && value == QStringLiteral("yes"),
            "a newer-schema database is never written by an older binary");
+    expect(!settings.storeWritable(),
+           "storeWritable() reports the read-only session, so the Settings "
+           "Browser disables its edit affordances");
 }
 
 void testDirtyRowSaves()
@@ -631,6 +636,139 @@ void testNicknameKeySurvivesDisk()
            "a cleared nickname stays cleared");
 }
 
+// The AppSettings surface the Settings Browser rides on (RFC #4603 PR 5):
+// station-row deletion, the structured radio_settings enumeration, and the
+// writability probe. Exercised through reset()+load() round-trips so every
+// claim is about the persisted file, not the in-memory cache.
+void testBrowserApi()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    expect(settings.storeWritable(),
+           "a freshly loaded healthy store reports writable");
+
+    // removeStationValue: the deletion must reach the station_settings rows.
+    settings.setStationValue(QStringLiteral("BrowserKeep"), QStringLiteral("k"));
+    settings.setStationValue(QStringLiteral("BrowserDrop"), QStringLiteral("d"));
+    settings.save();
+    settings.removeStationValue(QStringLiteral("BrowserDrop"));
+    settings.save();
+    settings.reset();
+    settings.load();
+    expect(settings.stationValue(QStringLiteral("BrowserKeep")).toString()
+               == QStringLiteral("k"),
+           "an untouched station sibling survives the removal save");
+    expect(settings.stationValue(QStringLiteral("BrowserDrop"),
+                                 QStringLiteral("<absent>"))
+                   .toString()
+               == QStringLiteral("<absent>"),
+           "a removed station key is deleted from the persisted rows");
+
+    // Structured enumeration: coordinates come back as data, and the
+    // family-wide row keeps its "" radioId (the display layer, not the API,
+    // owns the "(family-wide)" label).
+    settings.setRadioFeature(QStringLiteral("hl2"),
+                             QStringLiteral("AA:BB:CC:DD:EE:22"),
+                             QStringLiteral("BrowserProbe"), 3,
+                             QJsonObject{{QStringLiteral("x"), 1}});
+    settings.setRadioFeature(QStringLiteral("hl2"), QString(),
+                             QStringLiteral("BrowserProbe"), 3,
+                             QJsonObject{{QStringLiteral("x"), 2}});
+    bool exactSeen = false;
+    bool familySeen = false;
+    const auto entries = settings.radioFeatureEntriesForDiagnostics();
+    for (const auto& entry : entries) {
+        if (entry.family != QStringLiteral("hl2")
+            || entry.feature != QStringLiteral("BrowserProbe")) {
+            continue;
+        }
+        if (entry.radioId == QStringLiteral("AA:BB:CC:DD:EE:22")) {
+            exactSeen = entry.schemaVersion == 3
+                        && entry.value.contains(QStringLiteral("\"x\""));
+        } else if (entry.radioId.isEmpty()) {
+            familySeen = true;
+        }
+    }
+    expect(exactSeen,
+           "the structured enumeration returns the per-radio row with its "
+           "schema version and document");
+    expect(familySeen,
+           "the family-wide default row enumerates with an empty radioId");
+
+    // The formatted diagnostics view is derived from the same enumeration.
+    bool formattedSeen = false;
+    const auto formatted = settings.radioFeaturesForDiagnostics();
+    for (const auto& pair : formatted) {
+        if (pair.first == QStringLiteral("hl2/AA:BB:CC:DD:EE:22/BrowserProbe@v3")) {
+            formattedSeen = true;
+        }
+    }
+    expect(formattedSeen,
+           "the display-string diagnostics stay in lockstep with the "
+           "structured enumeration");
+
+    // The Settings Browser's masking parity (PR #4631 review): the SAME
+    // predicate that drives recursive display redaction must drive
+    // editability, or an operator edits a "[REDACTED]" buffer and saves it
+    // over the live secret. Pin the predicate on nigelfenton's bench probe
+    // shape — a credential field nested inside an innocuously-named doc.
+    const QJsonObject probeDoc{
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("nested"),
+         QJsonObject{{QStringLiteral("AsrRemoteApiKey"),
+                      QStringLiteral("sk-live-SUPERSECRET")}}}};
+    expect(SettingsSanitizer::containsSecretField(probeDoc),
+           "containsSecretField finds a credential field at depth");
+    expect(!SettingsSanitizer::containsSecretField(
+               QJsonObject{{QStringLiteral("frequencyHz"), 7100000},
+                           {QStringLiteral("mode"), QStringLiteral("CW")}}),
+           "containsSecretField stays quiet on a clean operating-state doc");
+    // And the two stay in agreement: whatever the display path would mask,
+    // the editability predicate must flag (break one on purpose and this
+    // pair diverges).
+    const QString probeJson = QString::fromUtf8(
+        QJsonDocument(probeDoc).toJson(QJsonDocument::Compact));
+    const QString redacted =
+        SettingsSanitizer::redactedValue(QStringLiteral("CopyAssist"), probeJson);
+    expect(redacted.contains(QStringLiteral("[REDACTED]"))
+               && !redacted.contains(QStringLiteral("SUPERSECRET")),
+           "display redaction masks the nested field the predicate flagged");
+
+    // Cache-vs-disk verification (PR #4631 review, NF0T): a failed save()
+    // deliberately KEEPS the change in memory for retry, so a cache re-read
+    // is not evidence of persistence. The browser's verification therefore
+    // reads the database file. Falsifiable by construction — the control
+    // below proves the cache would have lied.
+    settings.setValue(QStringLiteral("DiskProbe"), QStringLiteral("committed"));
+    settings.save();
+    QString disk;
+    expect(settings.readAppRowFromDisk(QStringLiteral("DiskProbe"), disk)
+               && disk == QStringLiteral("committed"),
+           "a committed app row reads back from the database file");
+    expect(!settings.readAppRowFromDisk(QStringLiteral("NeverWritten"), disk),
+           "a key that was never written is absent from the file");
+
+    // The control: mutate the cache WITHOUT saving. The cache now reports
+    // the new value (what the old verification read) while the file still
+    // holds the old one (what the browser now reads).
+    settings.setValue(QStringLiteral("DiskProbe"), QStringLiteral("uncommitted"));
+    expect(settings.value(QStringLiteral("DiskProbe")).toString()
+               == QStringLiteral("uncommitted"),
+           "control: the cache reports an unsaved change as current");
+    expect(settings.readAppRowFromDisk(QStringLiteral("DiskProbe"), disk)
+               && disk == QStringLiteral("committed"),
+           "the file still holds the last COMMITTED value — a cache read "
+           "would have reported an unwritten change as saved");
+
+    settings.setStationValue(QStringLiteral("DiskProbeStation"),
+                             QStringLiteral("s1"));
+    settings.save();
+    expect(settings.readStationRowFromDisk(QStringLiteral("DiskProbeStation"),
+                                           disk)
+               && disk == QStringLiteral("s1"),
+           "a committed station row reads back from the database file");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -680,6 +818,8 @@ int main(int argc, char** argv)
         testThreeDSliceDepthDefaultAndOptIn();
     } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
         testNicknameKeySurvivesDisk();
+    } else if (scenario == QStringLiteral("browser-api")) {
+        testBrowserApi();
     } else {
         std::fprintf(stderr, "unknown scenario: %s\n", argv[1]);
         return 2;

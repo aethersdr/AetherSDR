@@ -22,6 +22,7 @@
 #include "core/ReceivePresentationSync.h"
 #include "gui/BandRecallSelectionGuard.h"  // band-recall slice-selection window
 #include "gui/CenterLockRebindTracker.h"
+#include "gui/DaxRestorePolicy.h"       // #4558 last-session DAX restore window
 #include "gui/KiwiRebindTracker.h"      // #4158 band-recall Kiwi re-bind policy
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
@@ -74,6 +75,8 @@
 #include <QMainWindow>
 #include <QSplitter>
 #include <QPointer>
+
+class QMessageBox;
 #include <QLabel>
 #include <QList>
 #include <QMenu>
@@ -111,6 +114,7 @@ class ConnectionPanel;
 class ContributeDialog;
 class TitleBar;
 class KiwiSdrManager;
+struct KiwiSdrAntennaProfile;
 class SpectrumWidget;
 class SpectrumOverlayMenu;
 class IRadioBackend;
@@ -122,6 +126,7 @@ class BandPlanManager;
 class NetworkDiagnosticsHistory;
 class WhatsNewDialog;
 class ProfileManagerDialog;
+class SettingsBrowserDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
@@ -373,7 +378,7 @@ private:
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
     // as pans appear, and those sites must seed a new menu with the current
     // value — the same reason applyTuningRangeToOverlayMenu() exists.
-    void applyRadioSideDspToOverlayMenu(SpectrumOverlayMenu* menu) const;
+    void applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const;
 
     // AppSettings key for a pan's persisted RF gain, scoped by radio FAMILY.
     //
@@ -473,6 +478,22 @@ private:
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
+    // Binds the Flex-shaped voice controls — PROC and its NOR/DX/DX+ level — to
+    // the client-side compressor on a backend that modulates on this host, and
+    // publishes that compressor's gain reduction as the TX:COMPPEAK meter.
+    // MainWindow_DspApplets.cpp.
+    void wireHostModulatedVoiceChain();
+    // True when the connected radio modulates on this host, so the Flex command
+    // plane is not where the TX audio chain lives. Same capability pair
+    // MainWindow_Session.cpp tests before opening the mic.
+    bool hostModulatesTxAudio() const;
+    // Push the operator's PROC state onto the shared client compressor.
+    // operatorIntent gates the NOR/DX/DX+ preset write: only a PROC move the
+    // operator actually made may overwrite the strip's compressor settings.
+    void applySpeechProcessorToClientComp(bool operatorIntent);
+    // Push the 8-band graphic EQ onto the shared ClientEq. transmit selects the
+    // TX or RX instance.
+    void applyGraphicEqToClientEq(bool transmit);
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
     void refreshKiwiSdrAppletReceivers();
@@ -486,6 +507,25 @@ private:
     bool kiwiSdrTransmitMuteRequired() const;
     void syncKiwiSdrTransmitMute();
     void refreshKiwiSdrVirtualAudioControls();
+    void refreshKiwiSdrResumeHolds();
+    // Everything the resume hold needs that does NOT vary per profile.
+    // Resolving the sync target walks slices and the audio delay walks the
+    // sync engine, so a sweep over every profile resolves them once instead
+    // of once per profile — this runs on every key-down edge, which under CW
+    // break-in is once per element.
+    struct KiwiSdrResumeHoldContext {
+        ReceivePresentationSettings sync;
+        QString syncTargetProfileId;  // receiveSyncDelayKiwiProfileId()
+        QString delayKiwiProfileId;   // as handed to the audio engine:
+                                      // the target under AutoAssist, else empty
+        int kiwiAudioDelayMs{0};      // as handed to the audio engine
+    };
+    KiwiSdrResumeHoldContext kiwiSdrResumeHoldContext() const;
+    int kiwiSdrResumeHoldMsForProfile(
+        const KiwiSdrAntennaProfile& profile) const;
+    int kiwiSdrResumeHoldMsForProfile(
+        const KiwiSdrAntennaProfile& profile,
+        const KiwiSdrResumeHoldContext& context) const;
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     // Worker for the above. selectSlice=false suppresses the active-slice steal
     // for automatic re-arms (band-recall finish, #4158 recreation re-bind).
@@ -650,6 +690,12 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void reapplyStartupGeometryAfterShow();
+    // Undo Qt's caption-reserving restore clamp for the Windows custom frame,
+    // which has no caption to reserve for.  Call after every successful
+    // restoreGeometry() on this window, passing the same blob; a no-op off
+    // Windows, without the custom frame, or for a maximized/fullscreen blob.
+    // (#4328 — see src/gui/WindowGeometryRestore.h.)
+    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -881,6 +927,20 @@ private:
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
+    // The one live QSO-recorder notice, if any (#4629 review). Held so a
+    // repeating condition raises the existing dialog instead of stacking a new
+    // one on top — QMessageBox::warning() spins a nested event loop, so a
+    // stacked run is both unclosable-feeling and re-entrant. QPointer because
+    // the box is WA_DeleteOnClose and may vanish without telling us.
+    QPointer<QMessageBox> m_recorderNotice;
+    QString               m_recorderNoticeKey;
+    // Show a non-blocking recorder notice, deduped on `key`. Non-blocking is
+    // the load-bearing part: the blocking form stalls the caller, which for
+    // this signal is either the automation bridge's reply path or the MOX
+    // handler mid-transmission.
+    void showRecorderNotice(const QString& key,
+                            const QString& title,
+                            const QString& text);
     std::unique_ptr<AutomationServer> m_automation;  // agent bridge (#3646); nullptr when off
     ClientPuduMonitor* m_finalMonitor{nullptr};
     AudioOutputRouter* m_outputRouter{nullptr};   // registry for output-following sinks (#3306)
@@ -1091,6 +1151,10 @@ private:
 #endif
     QTimer                     m_dialCoalesceTimer;
     int                        m_dialPendingSteps{0};
+    QSet<QString>              m_dialActiveMidiGates;
+    // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
+    // dial release cannot un-key a PTT the keyboard is still holding.
+    bool                       m_dialPttHoldActive{false};
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};
     QTimer               m_midiTuneIdleTimer;
@@ -1222,6 +1286,7 @@ private:
 #endif
     QPointer<WaveformsDialog> m_waveformsDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;
+    QPointer<SettingsBrowserDialog> m_settingsBrowserDialog;
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
     QPointer<MidiMappingDialog> m_midiDialog;
@@ -1416,6 +1481,13 @@ private:
     // User layout choices should suppress startup rearrange, but still allow
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
+    // #4558: the last-session DAX restore (#1221) may only apply during the
+    // slice enumeration that follows a connect — a slice recreated mid-session
+    // has current state that last-session keys must never override. The window
+    // and the quit-time key prune are pure logic in DaxRestorePolicy.h (which
+    // carries the full reasoning and is covered by dax_restore_policy_test);
+    // this member is just the live instance.
+    DaxRestorePolicy m_daxRestore;
     QTimer* m_heartbeatMissTimer{nullptr}; // fires every 1.5s to detect missed discovery beats
     QTimer* m_bsExpiryTimer{nullptr};    // band-stack bookmark auto-expiry, started on connect only (#1471)
     QTimer* m_bsAutoSaveTimer{nullptr};  // band-stack dwell auto-save (single-shot per dwell window)
@@ -1483,6 +1555,22 @@ private:
     };
     SwrSweepState m_swrSweep;
     QTimer m_swrSweepTimer;
+    // Polls the shared client compressor for the TX:COMPPEAK meter and mirrors
+    // its enable state back onto PROC. ClientComp has no change notification.
+    QTimer m_hostVoiceChainTimer;
+    // Last PROC state pushed onto that compressor, so the NOR/DX/DX+ presets are
+    // only written when the operator actually changed the level (they overwrite
+    // the Aetherial strip's compressor settings, which share the object).
+    bool m_lastAppliedProcEnable{false};
+    int  m_lastAppliedProcLevel{-1};
+    // True once a Flex-shaped voice control has actually written into the shared
+    // ClientEq/ClientComp, so those objects hold OUR layout rather than the
+    // Aetherial strip's. Both directions need it (core/HostVoiceChainPolicy.h):
+    // the connect-time re-push must not put EqualizerModel's all-zero
+    // construction default over the strip's PERSISTED bands, and the family-swap
+    // unwind must not disable a Flex operator's own strip settings on a session
+    // that never went near a host-modulating backend.
+    bool m_hostVoiceChainOwned{false};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)

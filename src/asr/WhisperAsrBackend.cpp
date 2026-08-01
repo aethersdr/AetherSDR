@@ -9,6 +9,10 @@
 #include <ggml-backend.h>
 #include <whisper.h>
 
+#ifdef Q_OS_MACOS
+#include <sys/sysctl.h>
+#endif
+
 namespace AetherSDR {
 
 Q_LOGGING_CATEGORY(lcAsrWhisper, "aether.asr.whisper")
@@ -23,6 +27,61 @@ int chooseThreadCount()
         return 4;
     }
     return std::clamp(hw, 1, 4);
+}
+
+// Whether this host may enumerate Metal at all.
+//
+// The hazard being avoided is #4535: Apple's *runtime* shader compiler
+// (newLibraryWithSource) can live-lock on Intel-GPU Macs — measured at no
+// completion in 75 minutes on a Radeon Pro 560X — and ggml reaches it from
+// plain device enumeration. So on a build that embeds the shader SOURCE, Intel
+// Macs must not enumerate Metal: the first ggml touch would hang the caller.
+//
+// A build that embeds a precompiled .metallib (AETHER_ASR_METAL_PRECOMPILED,
+// the default and what every release ships) cannot reach that compiler at all,
+// so the gate is not needed and is not applied — an Intel Mac gets whatever
+// Metal device ggml enumerates, and ggml's own per-op capability checks decide
+// what actually runs on it. Keeping the gate on that build would withdraw the
+// GPU from Metal3-class AMD hardware (Vega II, W5700X, 5700XT) purely on
+// vendor, which is a policy nobody measured.
+//
+// Checked via hardware sysctl rather than build arch so an x86_64 build under
+// Rosetta still sees the real GPU. AETHER_ASR_FORCE_METAL=1 overrides, for
+// diagnostics.
+bool asrMetalUsableHost()
+{
+#if defined(Q_OS_MACOS) && !defined(AETHER_ASR_METAL_PRECOMPILED)
+    int isArm64 = 0;
+    size_t size = sizeof(isArm64);
+    if (sysctlbyname("hw.optional.arm64", &isArm64, &size, nullptr, 0) != 0) {
+        isArm64 = 0; // key absent = pre-Apple-Silicon macOS
+    }
+    if (isArm64 == 1) {
+        return true;
+    }
+    // Test the override only once the host is known NOT to be Apple Silicon, so
+    // the log line describes what actually happened. (Checking it first made an
+    // Apple Silicon run with the variable set announce a "non-Apple-Silicon
+    // host".)
+    if (qEnvironmentVariableIsSet("AETHER_ASR_FORCE_METAL")) {
+        static const bool logged = [] {
+            qCInfo(lcAsrWhisper) << "AETHER_ASR_FORCE_METAL set - offering Metal despite non-Apple-Silicon host";
+            return true;
+        }();
+        Q_UNUSED(logged)
+        return true;
+    }
+    static const bool logged = [] {
+        qCInfo(lcAsrWhisper) << "Intel Mac on a source-embed build - ASR is CPU-only "
+                                "(Metal not offered; rebuild with the offline Metal "
+                                "toolchain to enable it)";
+        return true;
+    }();
+    Q_UNUSED(logged)
+    return false;
+#else
+    return true;
+#endif
 }
 } // namespace
 
@@ -165,6 +224,10 @@ std::function<std::unique_ptr<IAsrBackend>()> whisperAsrBackendFactory(const QSt
 
 std::vector<AsrGpuDevice> asrGpuDevices()
 {
+    if (!asrMetalUsableHost()) {
+        return {};
+    }
+
     // Enumerate GPU + integrated-GPU devices in the same order whisper's
     // gpu_device indexes them (see whisper_backend_init_gpu).
     std::vector<AsrGpuDevice> devices;

@@ -999,6 +999,84 @@ have exposed the bug was the one that always looked fine.
   the same class of silent defect as the `CW` gap in §16.7. Left unmapped rather
   than guessed at; WDSP has no RTTY mode, so it needs a deliberate decision.
 
+### 14.9 The voice chain: what persists per radio, and what does not
+
+The Flex-shaped voice controls — the 8-band EQ applet, PROC with its
+NOR/DX/DX+ level, and the Phone applet's TX low-cut/high-cut — all emit command
+plane verbs that reach nothing here. They are wired instead to the DSP this host
+already runs on transmit audio: `ClientEq` and `ClientComp`, which `AudioEngine`
+applies before `submitTxAudio` ever sees a sample.
+
+**Two of those three persist in different scopes, and that is deliberate.** It
+looks like an inconsistency, so it is written down here rather than left for
+someone to "fix".
+
+| Control | Backing object | Persistence scope |
+|---|---|---|
+| TX low-cut / high-cut | `Hl2TxDsp` passband | **Per radio**, `ext.txSetpoints` in the RFC #4603 operating-state document |
+| PROC + NOR/DX/DX+ | `ClientComp` (shared) | **Per client** — the app-global audio-chain settings |
+| 8-band EQ | `ClientEq` (shared) | **Per client** — same |
+
+The TX cut points are per radio because they are a *radio* setpoint in exactly
+the sense the rest of `OperatingState` is: they live in the backend, they are
+pushed at the modulator, and nothing but this client remembers them. Leaving
+them in bare members while frequency, mode, passband, span, per-band LNA and
+drive all restored around them was the asymmetry the per-domain design exists to
+prevent.
+
+PROC and the EQ are per client because the objects underneath them are the
+operator's **audio chain**, not the radio's state — the same `ClientEq` and
+`ClientComp` the Aetherial strip edits, with their own app-global persistence
+that predates all of this. Two HL2s therefore share one PROC configuration while
+each keeps its own drive and LNA maps. That is the intended reading: an
+operator's voice processing is a property of their microphone, their room and
+their voice, none of which change when they switch radios.
+
+The consequence to know before changing any of it: because the EQ applet and
+PROC write into the *same* `ClientEq`/`ClientComp` as the strip, the two
+surfaces are two views of one object. Moving a graphic-EQ slider replaces the
+strip's band layout in slots 0..7, and toggling the strip's compressor lights
+PROC. Only a PROC move the operator actually made writes the NOR/DX/DX+ preset
+over the strip's compressor settings — that gate is
+`TransmitModel::speechProcessorCommandIssued`, and keying it off the broader
+`micStateChanged` instead is a bug that overwrites the operator's own work at
+the moment they enable their own compressor.
+
+The TX cut points are **flat**, not per band or per mode, unlike the drive and
+LNA maps beside them in the same extension document. There is one pair of
+sliders in the Phone applet; persisting per band would make them move on their
+own at every band change, which is the same surprise as a mode change silently
+replacing the passband — the thing `m_txFilterFromOperator` exists to prevent.
+
+The cut points apply to **SSB voice only** — `effectiveTxPassband()` — so a
+"shape my voice" slider cannot set the CW keying envelope's bandwidth or widen a
+digital mode past what the far-end decoder expects. The transmitter's actual
+passband is echoed upward as a `TransmitDelta` on every mode change,
+transmit-slice move and connect (`pushTxPassband()`), so the applet's readout
+tracks what the modulator is running instead of what was last asked for. The one
+push that does not echo is `setTxFilter()` itself: outside SSB, snapping the
+readout back to the mode default would make the operator's next nudge compute
+from that default and quietly overwrite the eSSB pair they had just set.
+
+### 14.10 Two surfaces, one object: who may write
+
+`ClientEq` and `ClientComp` **persist**; `EqualizerModel` and `TransmitModel` do
+not. That asymmetry is the whole reason `core/HostVoiceChainPolicy.h` exists, and
+both ways of getting it wrong shipped as far as review:
+
+- A connect edge that re-pushes the Flex-shaped controls unconditionally is
+  pushing their *construction defaults* — eight bands at 0 dB, every enable
+  false — because on this radio there is no `eq`/`transmit` status to populate
+  them. That lands on the operator's saved Aetherial strip layout, at every
+  connect, for someone who never opened the applet.
+- An unwind that fires on the family check alone fires on a plain **Flex**
+  connect too (`hostModulates` is false there), switching off that operator's own
+  RX EQ, TX EQ and compressor on a session with no HL2 in it.
+
+So both turn on one bit: has the operator actually moved a Flex-shaped control in
+this process? Nothing else distinguishes "re-apply their own choice" from
+"overwrite work this code never made".
+
 ---
 
 ## 15. Panadapter span and display rate
@@ -1124,9 +1202,10 @@ Two details that are load-bearing:
   this shaper exists to remove. Feeding the window bounds that cost to a single
   block (2.6 ms / 0.3 ms) and the frame stays contiguous either way, because no
   sample is ever discarded. `hl2_spectrum_rate_test` measures the spread.
-- **The waterfall keeps a second gate** in `RadioModel`, because
-  `line_duration` is a separate and slower control. A plain drop, not a
-  coalesce — frames are already scarce by the time they arrive.
+- **The waterfall keeps a second gate** in `RadioModel`, because the waterfall
+  rate is a separate and normally slower control. A plain drop, not a coalesce —
+  frames are already scarce by the time they arrive. **The gate paces on a
+  cadence derived from the rate, never on the rate value itself** — see 15.2.2.
 
 The accepted trade: at 384 kHz and 25 fps the FFT sees a 2.7 ms window every
 40 ms, so a signal landing entirely between two displayed frames is not seen.
@@ -1143,14 +1222,16 @@ catch up) hits the target average but can burst after a stall. Undershooting a
 display rate by 6% is invisible; a burst is the thing this cap exists to
 prevent, so the rounding stays.
 
-Measured on the real HL2 at 580 kHz AM, `line_duration` 100 ms:
+Measured on the real HL2 at 580 kHz AM, waterfall rate 100 — *before* #4606, so
+the gate was still reading that 100 as 100 ms:
 
 | Span | Pan | Waterfall |
 |---|---|---|
 | 384 kHz | 23.4 fps | 10.1 rows/s |
 | 48 kHz | ~25 fps | 10.0 rows/s |
 
-An 8x spread across the zoom range, gone.
+An 8x spread across the zoom range, gone. The 10 rows/s column is the inverted
+gate described in 15.2.2; at rate 100 the waterfall now tracks the pan.
 
 Those two rows were measured on hardware against the intended design, and are
 what exposed the first implementation as wrong: it could not produce the 48 kHz
@@ -1159,6 +1240,117 @@ the table's own numbers are what made the discrepancy visible rather than
 plausible. `hl2_spectrum_rate_test` now pins it offline, wall-clock paced, at
 every rate the gateware offers — 23-24 fps for a 25 fps request with a ~4%
 spread across the zoom range, against ~35% before the fix.
+
+### 15.2.2 The waterfall rate is a rate, not a duration
+
+The Display->Waterfall Rate control is a **1..100 rate: low is slow, high is
+fast**. That direction was measured on real Flex hardware (#3104, issue #3070)
+and it is what the slider label, the time-scale drag and SpectrumWidget's time
+axis all assume.
+
+The trap is the name it travels under. Flex calls the wire parameter
+`line_duration` and FlexLib types it as milliseconds, so the field that carries
+this rate through `PanadapterModel` is still called `waterfallLineDuration()`.
+A backend with no radio-side display engine has to pace waterfall rows itself,
+and `RadioModel::onBackendSpectrumFrame` used to read that field literally — as
+a millisecond interval. The control therefore ran **backwards on the HL2**:
+
+| Rate | Gate before #4606 | Result | After #4606 |
+|---|---|---|---|
+| 1 (slowest) | 1 ms | ~25 rows/s — the fastest | 5 s/row |
+| 100 (fastest, default) | 100 ms | 10 rows/s — the slowest | ungated, ~25 rows/s |
+
+**Do not read `waterfallLineDuration()` as milliseconds.** It is a rate; convert
+through `src/core/WaterfallRate.h`.
+
+#### Two producers, two laws
+
+The conversion is not one function, and the reason is worth stating because the
+first cut of #4606 got it wrong in a way that built and passed:
+
+- **`flex*`** — a Flex's display engine owns the conversion. We do not choose
+  that law and only know it by measurement (#3104's 16-point curve). It is
+  steeply log-shaped: rate 50 is 677 ms/row, rate 80 is 81, and it saturates
+  flat from 93 up where the radio is already producing rows as fast as the
+  panadapter makes frames. Used to *ask* a Flex for a cadence, and to seed the
+  time axis before real row timestamps arrive.
+- **`local*`** — this host, for a backend that streams raw spectra. Here the law
+  **is** ours, so it is linear in rows per second between 0.2 and 25: rate 50 is
+  half the speed of rate 100, which is the only property an operator can predict
+  without measuring.
+
+Reusing the Flex curve for the local pacer looked like consistency and was
+measured on the HL2 as an unusable control — rate 50 gave 1.5 rows/s and nothing
+moved usefully until about 70, because 70% of the slider was spent inside the
+bottom 5% of the speed range. The two laws disagree by more than 10x in the
+middle of the control, which is also why `SpectrumWidget` is told which one
+applies (`setWfRateShapedLocally`, from `RadioModel::shapesDisplayRatesLocally`)
+rather than assuming.
+
+At the top of the control the local gate is **lifted entirely** rather than set
+to 40 ms. At `kMax` the operator is asking for the fastest the display can go,
+and the honest ceiling there is the pan's own frame rate — which Display->FFT
+FPS already owns. A fixed 40 ms gate would both drop rows from a 25 fps stream
+on rounding and silently cap a pan the operator had set to 60.
+
+Measured on the real HL2 at 96 kHz span, 25 fps pan:
+
+| Rate | Predicted | Measured |
+|---|---|---|
+| 1 | 0.20 rows/s | 0.20 rows/s |
+| 10 | 2.45 rows/s | 2.47 rows/s |
+| 25 | 6.21 rows/s | 6.19 rows/s |
+| 50 | 12.47 rows/s | 12.52 rows/s |
+| 80 | 19.99 rows/s | 20.01 rows/s |
+| 100 | pan fps | 24.61 rows/s (pan 24.61) |
+
+`waterfall_rate_test` pins the direction, the monotonicity, both endpoints, and
+that the slider midpoint is the speed midpoint — the property whose absence was
+the second bug.
+
+### 15.2.3 There is no hardware black level to select
+
+The Display panel's **Black Level** button cycles the waterfall floor source:
+`Off` (manual level), `SW` (this client's noise-floor estimate), `HW` (the
+radio's own per-tile level). HW is a Flex feature — `display panafall set <id>
+auto_black=1` makes the radio compute a level and embed it in each waterfall
+tile.
+
+The HL2 has no such thing. Selecting HW there sent a command to a command plane
+that does not exist, and left `SpectrumWidget` waiting for a per-tile level that
+never arrives — HERMES §17's failure shape again: the button moves, the setting
+persists, the picture is unchanged.
+
+HW is now gated on `RadioCapabilities::hasRadioSideWaterfallAutoBlack`, so on the
+HL2 the button cycles `Off <-> SW`.
+
+**The gate is a MASK, not a rewrite**, and that distinction is the whole design.
+`DisplayWfAutoBlackRadioSide` is the operator's stored *intent*; the capability
+decides what is *in effect*. On the HL2 the button reads SW, the SW estimate
+runs, and `auto_black` is never sent — while the stored value is untouched, so
+plugging the Flex back in restores HW by itself.
+
+The first cut coerced instead: it forced the mode to SW *and emitted the normal
+change signals*, which land in `SpectrumWidget::setWfAutoBlackRadioSide()` and
+write AppSettings. One session on an HL2 then permanently deleted a Flex user's
+HW preference, and switching back gave them SW with no record they had ever
+chosen otherwise. A capability gate must never mutate stored intent — the
+capabilities map's own rule 2 ("restore the permissive value on disconnect")
+only makes sense if the gate is presentation state that can come *back*.
+
+The seam:
+
+| | Read | Persists |
+|---|---|---|
+| `wfAutoBlackRadioSide()` | intent — menu seeding, settings | yes |
+| `effectiveWfAutoBlackRadioSide()` | intent ∧ capability — rendering, radio pushes | no |
+| `setRadioSideAutoBlackAvailable()` | the mask | **no** |
+
+A deliberate click on the HL2 *does* overwrite the stored intent, and that is
+correct: the operator made a real choice on a real radio.
+
+**SW is not gated and must never be**, on any backend. On a radio reporting
+false it is the only automatic floor the operator has.
 
 ### 15.3 hpsdrsim cannot reproduce this
 
@@ -2755,3 +2947,161 @@ confirming it (§7, and the wrong-sideband account in §14.6).
 - **None of it is automated yet.** Hardware verification does not survive a
   refactor; §20.15 lists the invariants to turn into certification cases so that
   it does.
+
+## 21. The network readouts, on a radio with no command plane
+
+The heartbeat dot in the title bar sat amber for a whole HL2 session. The
+status-bar `Network:` field was blank. Opening Network Diagnostics on a radio
+that was streaming 12.8 Mbps flawlessly showed 0 kbps, 0 packets, 0 bytes, and
+`Off`.
+
+None of that was a bug in those readouts. Every one of them was reading the
+Flex stack directly.
+
+### 21.1 The shape of the problem
+
+Three widgets, one root cause:
+
+| Readout | Source it read | On an HL2 |
+|---|---|---|
+| Title-bar heartbeat | `RadioModel::pingReceived`, emitted from the TCP `ping` reply | never fires |
+| Status-bar `Network:` | `networkQualityChanged`, emitted from `evaluateNetworkQuality()` | early-returned on `!m_panStream` |
+| Diagnostics pane | `RadioModel` getters, each `m_panStream ? … : 0` | structural zero |
+
+`startNetworkMonitor()` is called from exactly one place — the Flex `client
+gui` reply handler. A family that reaches `onConnected()` through the
+`IRadioBackend` seam never runs it, so the ping timer never starts, the score
+is never computed, and `m_netState` stays `Off` for the life of the session.
+
+The fix is not to make HL2 answer pings. It has nothing to answer them with
+(§21.3). The fix is that **the counters have to come from whoever owns the
+socket**, which is the backend.
+
+### 21.2 `IRadioBackend::LinkStats` — the seam addition
+
+A neutral transport snapshot, published on a fixed cadence:
+
+```
+MetisClient::LinkCounters   (I/O thread, published ~1 Hz from the receive path)
+  → Hl2Backend              (mirrored onto the GUI thread, like m_drops already was)
+    → linkStatsUpdated()    (fixed 1 Hz timer — NOT the receive path)
+      → RadioModel          (feeds the SAME scorer the Flex path uses)
+```
+
+Three decisions in there are load-bearing:
+
+**`reported` defaults to false.** A backend that does not override
+`linkStats()` sends nothing, and every consumer keeps its existing source. That
+is what makes this additive — the Flex path never sees a `LinkStats` at all,
+and `usesBackendLinkStats()` is `!m_panStream && m_linkStats.reported`, so both
+halves must be true before any fallback engages.
+
+**The publish timer lives in `Hl2Backend`, not in `MetisClient`.** The tick has
+to keep coming *after the radio goes quiet*, because "nothing arrived this
+second" is the observation the heartbeat's alarm path is waiting for. A
+backend that emits only on receive can never report its own silence. So
+`MetisClient` publishes counters from the receive path (and stops when EP6
+stops), and `Hl2Backend`'s own timer turns the frozen counter into
+`alive = false`.
+
+**`alive` is a per-tick difference, not a cumulative total.** `rxPackets`
+alone cannot distinguish a dead link from reading the same counter twice.
+
+### 21.3 There is no RTT, and saying so is the whole point
+
+Protocol 1 is a one-way stream. EP2 goes out on a wall clock, EP6 comes back
+free-running, and **no frame in either direction answers a specific frame in
+the other**. There is no round trip to time.
+
+The trap is that `lastPingRtt()` answers `0` when nothing measured it, and
+`formatNetworkMs(0)` renders `< 1 ms`. Left alone, the diagnostics pane would
+have advertised the best latency the app can display, from a measurement that
+never happened — and the *chart* would have drawn a confident flat 0 ms trace
+under the real ones, which is more believable than the number.
+
+So `LinkStats::rttMs` is `-1` for "not measured", `RadioModel::hasLinkRtt()`
+is the predicate every RTT surface asks first, and there are four of them:
+the status-bar tooltip, the Connection Details rows, the Latency tile, and the
+latency *series* — which is omitted from the graph rather than zeroed.
+
+`hasStreamCategoryStats()` is the same idea for the per-stream Audio/FFT/
+Waterfall/Meter/DAX breakdown. That is a property of the VITA-49 multiplex,
+where each category is a separately-sequenced stream sharing one socket. A
+transport carrying everything in one stream has no such split, and five rows of
+`0 / 0 packets` read as five dead streams rather than as a distinction that
+does not apply.
+
+`hasLinkTiming()` is the third, and it exists because a backend is `reported`
+from its *first* tick on purpose — otherwise the consumer's first second keeps
+the Flex sources and renders the blank readout this whole path exists to fix.
+But `MetisClient` only fills the gap figures when a publish window closes with
+samples in it, so for about a second `gapMs` is `-1` while `reported` is already
+true. The model clamps that `-1` to `0` so the charts stay numeric, and `0` is
+`< 1 ms` again. Same trap, one field over.
+
+**The rule this generalises to:** when a readout is ported to a transport that
+cannot produce one of its figures, the figure must render as *absent*, not as
+zero. A measurement of nothing and the absence of a measurement are different
+claims about the link, and only one of them is true.
+
+**And the corollary that is easy to miss:** these predicates answer for the
+*wire*, not for the moment. `stopNetworkMonitor()` drops the snapshot on
+disconnect — those counters belong to the session that ended — but "this
+transport has no round trip to time" stays true while the transport is down. A
+predicate derived from the live snapshot alone flips back to the Flex default
+the instant the session ends, and the pane an operator left open goes from
+`n/a` to `< 1 ms` on a radio that is not even connected. `RadioModel` latches
+the transport's *shape* (`BackendLinkShape`) separately from its counters, and
+the shape dies with the backend, not with the session.
+
+### 21.4 What IS measurable, and how it is scored
+
+Delivery timing, and it is timed **once per socket wakeup, not once per
+datagram**. A wakeup drains everything queued behind it, so successive
+datagrams inside one drain are microseconds apart no matter how badly the link
+is behaving — per-datagram timing reports a rock-steady 0 ms straight through a
+stall that silenced the audio.
+
+From that: `meanGapMs` and `maxGapMs` over the publish window, and jitter as
+their difference — the *spread* of delivery. On a healthy link that is a
+fraction of a millisecond; a congested one stalls and resumes, which is exactly
+what the operator hears. Sequence gaps come from the EP6 counter that already
+existed.
+
+Those feed `evaluateNetworkQuality()` unchanged, so `Fair` means the same thing
+to the operator on either radio.
+
+### 21.5 A Flex bug the HL2 work exposed
+
+`stopNetworkMonitor()` set `m_netState = Off` and emitted nothing. The
+status-bar field is written *only* from `networkQualityChanged`, and every
+emitter of that signal hangs off the ping/transport path being torn down — so
+the last quality the link ever had stayed on screen after disconnect. A
+disconnected radio reading `Excellent`, until the next connection happened to
+overwrite it.
+
+Pre-existing on the Flex path, invisible there only because nobody looked at
+the field after disconnecting. It is fixed for both families in
+`stopNetworkMonitor()`.
+
+### 21.6 Verified on hardware
+
+Against the HL2 at 192.168.1.21, RX-only:
+
+- Heartbeat samples `#20c060` green at ~1 Hz with idle grey between — no amber.
+  (Sampled by grabbing the title bar 40× at 50 ms and reading the dot pixel;
+  the green flash is a 100 ms window in a 1 s beat, so a single screenshot
+  catches it about one time in ten.)
+- Status bar `Network: [Excellent]` while connected, `[Off]` after disconnect.
+- 353 544 EP6 packets, 0 sequence gaps, 12.8 Mbps RX / 3.2 Mbps TX, arrival gap
+  1 ms, RTT `not measured on this link` in all four places.
+
+`hl2_link_stats_test` covers the seam contract, including the silent-link case
+and the honesty invariant. `hl2_link_stats_model_test` covers the half that is
+downstream of it, because the backend can publish a perfect snapshot while every
+readout still lies: it drives a real `RadioModel` against a fake HL2 and pins the
+readouts leaving their structural zero, the predicates on **both** sides of the
+disconnect edge, and the per-session reset the two scoring-session entry points
+share. Per §7 that is necessary and not sufficient — but the RTT and category
+predicates are decisions about what we *refuse* to claim, which is one of the few
+things a fixture can check honestly.

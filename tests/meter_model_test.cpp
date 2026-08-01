@@ -150,6 +150,50 @@ void testZeroSourceCompPeakUsesSliceContext()
            model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 15.0f));
 }
 
+// ONE modulator, however many receivers: the gauge must follow transmit.
+//
+// The HL2 shape — a single SLC def at sourceIndex 0 and a single implicit-source
+// COMPPEAK, which defineMeter() therefore files under implicit slice 0. Move
+// transmit to the second receiver (the VFO widget, the RX applet and the
+// cycle-TX shortcut all do) and m_activeTxSlice becomes 1, the by-slice lookup
+// misses, and the compression gauge went dead for a compressor that was still
+// working (#4609 review). Delete the single-implicit-entry fallback in
+// compPeakIndexForActiveTxSlice() and this fails.
+void testSingleImplicitCompPeakFollowsTransmitToAnySlice()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(1, 0));
+    model.defineMeter(txMeter(8, "COMPPEAK", "dB", 0));
+
+    model.setActiveTxSlice(0);
+    model.updateValues({8}, {rawDb(6.0f)});
+    report("a single implicit COMPPEAK resolves on the manifest's own slice",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 6.0f));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({8}, {rawDb(9.0f)});
+    report("a single implicit COMPPEAK follows transmit onto another slice",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 9.0f));
+}
+
+// ...and the fallback stays narrow. A radio that declares COMPPEAK per
+// TX-waveform slice is answering "which transmitter" for itself, so an implicit
+// meter alongside it must not be volunteered for a slice it was not filed under
+// — that would point the gauge at the wrong transmitter, which is worse than a
+// gauge that reads zero.
+void testImplicitCompPeakIsNotVolunteeredWhenAnExplicitMapExists()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(15, 0));
+    model.defineMeter(txMeter(23, "COMPPEAK", "dB", 8));   // explicit, slice 0
+    model.defineMeter(slcMeter(37, 1));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({23}, {rawDb(12.0f)});
+    report("an explicit per-waveform COMPPEAK map is never second-guessed",
+           !model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 0.0f));
+}
+
 void testSparseSliceIdsUseManifestDerivedWaveformBase()
 {
     MeterModel model;
@@ -610,6 +654,116 @@ void testSwrLivenessAgreesWithTxMeterFreshness()
 
 } // namespace
 
+
+// --- TX-filter taps (#4649) -------------------------------------------------
+
+// Regression guard for the bug that would have shipped: the check used to also
+// require SC_MIC, which is the PC/remote-audio entry point ONLY. A hardware mic
+// (BAL/LINE/ACC) joins the chain later via the CODEC ADC and never registers
+// there, so requiring it silently disabled the whole feature for every operator
+// on a real microphone. The filter taps alone must be sufficient.
+void testTxFilterLevelsDoNotRequireScMic()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(txMeter(29, "SC_FILT_1", "dBFS"));
+    model.defineMeter(txMeter(32, "SC_FILT_2", "dBFS"));
+    model.setActiveTxSlice(0);
+
+    // No SC_MIC meter defined at all, and none ever published.
+    model.updateValues({29, 32}, {rawDb(-8.0f), rawDb(-70.0f)});
+
+    report("TX filter levels are usable without SC_MIC (hardware-mic operators)",
+           model.hasTxFilterLevels()
+               && nearlyEqual(model.scFilt1(), -8.0f)
+               && nearlyEqual(model.scFilt2(), -70.0f));
+}
+
+// SC_FILT_1 publishes at 20 fps and SC_FILT_2 at 10, so emitting on whichever
+// arrives would hand a consumer one fresh value and a partner up to 100 ms old.
+// Publication is tied to the slower tap; a lone SC_FILT_1 update must stay quiet.
+void testTxFilterLevelsPublishOnTheSlowerTap()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(txMeter(29, "SC_FILT_1", "dBFS"));
+    model.defineMeter(txMeter(32, "SC_FILT_2", "dBFS"));
+    model.setActiveTxSlice(0);
+
+    int emissions = 0;
+    QObject::connect(&model, &MeterModel::txFilterLevelsChanged,
+                     &model, [&emissions](float, float) { ++emissions; });
+
+    model.updateValues({29}, {rawDb(-8.0f)});          // fast tap alone
+    const bool quietOnFastTap = (emissions == 0);
+
+    model.updateValues({32}, {rawDb(-70.0f)});         // slow tap closes the pair
+    const bool emitsOnSlowTap = (emissions == 1);
+
+    report("TX filter levels publish on the slower tap only",
+           quietOnFastTap && emitsOnSlowTap);
+}
+
+// A radio can publish one TX waveform meter block per active slice. Keying a
+// single index per meter would be last-definition-wins, and the TX-filter check
+// would silently watch some other slice's filter.
+void testActiveTxSliceSelectsTxFilterTaps()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(slcMeter(11, 1));
+    model.defineMeter(txMeter(29, "SC_FILT_1", "dBFS", 8));
+    model.defineMeter(txMeter(32, "SC_FILT_2", "dBFS", 8));
+    model.defineMeter(txMeter(59, "SC_FILT_1", "dBFS", 9));
+    model.defineMeter(txMeter(62, "SC_FILT_2", "dBFS", 9));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({29, 32, 59, 62},
+                       {rawDb(-1.0f), rawDb(-2.0f), rawDb(-8.0f), rawDb(-70.0f)});
+
+    report("active TX slice selects its own TX filter taps",
+           model.hasTxFilterLevels()
+               && nearlyEqual(model.scFilt1(), -8.0f)
+               && nearlyEqual(model.scFilt2(), -70.0f));
+}
+
+// The stored levels describe one slice's chain. After a slice change a
+// comparison must not straddle the two.
+void testChangingActiveTxSliceDropsStaleFilterLevels()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(slcMeter(11, 1));
+    model.defineMeter(txMeter(29, "SC_FILT_1", "dBFS", 8));
+    model.defineMeter(txMeter(32, "SC_FILT_2", "dBFS", 8));
+    model.setActiveTxSlice(0);
+    model.updateValues({29, 32}, {rawDb(-8.0f), rawDb(-70.0f)});
+    const bool hadLevels = model.hasTxFilterLevels();
+
+    model.setActiveTxSlice(1);
+
+    report("changing the active TX slice drops stale filter levels",
+           hadLevels && !model.hasTxFilterLevels());
+}
+
+// Removing either tap must invalidate the pair rather than leave a level
+// describing a meter that no longer exists.
+void testRemovingATxFilterTapInvalidatesThePair()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(txMeter(29, "SC_FILT_1", "dBFS"));
+    model.defineMeter(txMeter(32, "SC_FILT_2", "dBFS"));
+    model.setActiveTxSlice(0);
+    model.updateValues({29, 32}, {rawDb(-8.0f), rawDb(-70.0f)});
+    const bool hadLevels = model.hasTxFilterLevels();
+
+    model.removeMeter(32);
+
+    report("removing a TX filter tap invalidates the pair",
+           hadLevels && !model.hasTxFilterLevels());
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -619,6 +773,8 @@ int main(int argc, char** argv)
     testCompPeakClampsToGaugeRange();
     testActiveTxSliceSelectsCompPeak();
     testZeroSourceCompPeakUsesSliceContext();
+    testSingleImplicitCompPeakFollowsTransmitToAnySlice();
+    testImplicitCompPeakIsNotVolunteeredWhenAnExplicitMapExists();
     testSparseSliceIdsUseManifestDerivedWaveformBase();
     testAfterEqAndScMicDoNotAffectCompression();
     testRemovingCompPeakMarksCompressionUnavailable();
@@ -637,6 +793,12 @@ int main(int argc, char** argv)
     testStaleTxMetersDoNotSuppressReceiveMeters();
     testSwrRecoversAfterAFreshSampleFollowsAStaleWindow();
     testSwrLivenessAgreesWithTxMeterFreshness();
+
+    testTxFilterLevelsDoNotRequireScMic();
+    testTxFilterLevelsPublishOnTheSlowerTap();
+    testActiveTxSliceSelectsTxFilterTaps();
+    testChangingActiveTxSliceDropsStaleFilterLevels();
+    testRemovingATxFilterTapInvalidatesThePair();
 
     return g_failed == 0 ? 0 : 1;
 }

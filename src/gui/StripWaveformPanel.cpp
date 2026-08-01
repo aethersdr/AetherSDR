@@ -106,11 +106,11 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
         m_windowSlider->setValue(savedSec);
     }
     applyWindowSec(savedSec);
-    // 90 Hz repaint rate so the long-window scroll reads as smooth
-    // motion.  The engine's post-chain scope tap fires up to ~125 Hz
-    // (kTxPostChainEmitMinIntervalMs = 8 ms) so the widget always
-    // has fresh data on every frame.
-    m_waveform->setRefreshRateHz(90);
+    // Match the standalone WAVE applet's 25 Hz cadence. WaveformWidget is
+    // QRhi-backed and shares the GUI/render thread with the panadapter; the
+    // previous 90 Hz target starved waterfall rendering as this panel widened
+    // (#4616).
+    m_waveform->setRefreshRateHz(25);
     // Default render path — pinned TX in the constructor so the
     // initial paint is consistent.  showForRx() flips the pin and
     // re-wires the source tap to the RX-side scope signal.

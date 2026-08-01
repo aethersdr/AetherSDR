@@ -46,7 +46,7 @@ int main()
     report("throttle active: pre-cap value reported again IS applied",
            applyThrottledDisplayReport(true, 15, 25) == true);
 
-    // Line-duration uses the same gate with adaptiveWfMsForCap() as the cap.
+    // Line-duration uses the same gate with adaptiveWfRateForCap() as the cap.
     report("line-duration: cap echo suppressed",
            applyThrottledDisplayReport(true, 67, 67) == false);
     report("line-duration: profile change (!= cap) applied",
