@@ -24,14 +24,15 @@ jobs:
             arch: aarch64
             qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
-            require_gpu: 'OFF'  # ARM/Pi ships CPU-only (no Vulkan expected)
-            # Explicitly OFF rather than left to the default. AETHER_GPU_SPECTRUM
-            # defaults ON and auto-disables only below Qt 6.7, so the 6.4.2 ->
-            # 6.8.3 bump would otherwise switch QRhi spectrum rendering on for
-            # every Pi user as a silent side effect of a Qt upgrade. Enabling it
-            # on ARM is a real feature change that wants testing on actual
-            # Pi/Mesa V3D hardware; it belongs in its own PR, not in this one.
-            gpu_spectrum: 'OFF'
+            # require_gpu is whisper's Vulkan ASR backend and stays OFF — that
+            # is a separate stack (glslc, ggml-vulkan) from spectrum rendering.
+            require_gpu: 'OFF'  # ARM/Pi ships CPU-only ASR (no Vulkan expected)
+            # QRhi spectrum rendering, ON deliberately. It was impossible on
+            # aarch64 until now purely because Ubuntu's Qt 6.4.2 sits below the
+            # 6.7 QRhiWidget floor — the CPU QPainter fallback was a symptom of
+            # the stale Qt, not a choice about ARM. Qt 6.8.3 clears that floor,
+            # so the Pi gets the same renderer as every other platform.
+            gpu_spectrum: 'ON'
 
     runs-on: ${{ matrix.runner }}
 
@@ -191,7 +192,10 @@ jobs:
         run: bash scripts/setup/setup-qtkeychain.sh
 
       - name: Configure
+        shell: bash
         run: |
+          # pipefail so a cmake failure still fails the step through the tee.
+          set -o pipefail
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
@@ -203,7 +207,25 @@ jobs:
             -DAETHER_GPU_SPECTRUM=${{ matrix.gpu_spectrum }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
-            -DCMAKE_PREFIX_PATH="$QT_ROOT"
+            -DCMAKE_PREFIX_PATH="$QT_ROOT" 2>&1 | tee configure.log
+
+      # AETHER_GPU_SPECTRUM=ON is a request, not a guarantee: CMake silently
+      # flips it back OFF if Qt6GuiPrivate can't be located, and CMakeLists.txt
+      # calls out aqtinstall by name as a layout that ships the private QtGui
+      # headers on disk while omitting the Qt6GuiPrivate CMake package — which
+      # is exactly what both legs of this matrix now use. Without this check a
+      # release could quietly ship the CPU QPainter fallback while the workflow
+      # stayed green, which is the failure mode this repo keeps getting bitten
+      # by. Assert on the configure output instead of trusting the flag.
+      - name: Assert GPU spectrum rendering actually enabled
+        if: matrix.gpu_spectrum == 'ON'
+        run: |
+          grep -q "GPU spectrum rendering enabled" configure.log || {
+            echo "ERROR: -DAETHER_GPU_SPECTRUM=ON but CMake disabled it. Relevant output:"
+            grep -i "GPU spectrum\|Qt6GuiPrivate\|private headers" configure.log || true
+            exit 1
+          }
+          grep "GPU spectrum rendering enabled" configure.log
 
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(nproc)
