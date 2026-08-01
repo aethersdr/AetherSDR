@@ -23,6 +23,12 @@ on:
     paths:
       - 'src/**'
       - 'third_party/**'
+      # tests/ is in scope because this job runs a plain `cmake --build build`,
+      # and the test executables are part of the default target — an ABI break
+      # against a new sid package that only surfaces in a test TU would
+      # otherwise wait for the nightly cron instead of failing on the merge
+      # that caused it.
+      - 'tests/**'
       - 'CMakeLists.txt'
       - '.github/workflows/system-libs-canary.yml'
   schedule:

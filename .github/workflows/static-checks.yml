@@ -8,7 +8,8 @@ name: Static Checks
 # collapsed into one, and three status rows collapsed into one.
 #
 # Adding a gate here is a `run:` step, not a new file. Keep that property —
-# #4585's colour ratchet belongs as a step below, not as a fourth workflow.
+# #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
+# deleted, rather than left as a fourth near-identical workflow.
 #
 # None of these were required status checks, so consolidating them does not
 # touch branch protection (required contexts are build / check-windows /
@@ -26,6 +27,7 @@ on:
     paths:
       - "src/**"
       - "resources/themes/**"
+      - "tools/audit_colours.py"
       - "tools/check_a11y.py"
       - "tools/check_engine_boundary.py"
       - "tools/check_theme_seed.py"
@@ -90,6 +92,27 @@ jobs:
       - name: Theme seed vs bundled JSON
         if: ${{ !cancelled() }}
         run: python tools/check_theme_seed.py --strict
+
+      # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
+      # above the PR's base. The gate is a DELTA rather than a stored constant:
+      # main gains colours from unrelated UI merges, so a frozen baseline goes
+      # stale within hours, and an absolute ceiling fails every src/-touching PR
+      # once main drifts past it — including PRs that REMOVE colours.
+      #
+      # Folded in from colour-ratchet.yml per #4657. It relies on this job's
+      # fetch-depth: 0 to materialise the base commit, which the a11y step below
+      # already required — so sharing the runner costs one step and saves a
+      # whole checkout. A worktree rather than a second actions/checkout: the
+      # base tree is only ever read by a text scanner.
+      - name: Hardcoded-colour ratchet
+        if: ${{ !cancelled() }}
+        run: |
+          git worktree add /tmp/colour-base "origin/${{ github.base_ref }}"
+          python tools/audit_colours.py \
+            --src src \
+            --compare-src /tmp/colour-base/src \
+            --summary-only \
+            --strict
 
       # ── Accessibility: warnings only, never fails the job (see docs/a11y.md).
       # Scoped to src/gui/ files changed by this PR rather than the whole tree.

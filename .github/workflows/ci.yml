@@ -38,7 +38,16 @@ jobs:
     # the cache and the compiler side.
     env:
       CCACHE_DIR: /ccache
-      CCACHE_MAXSIZE: 1500M
+      # Sized from measurement, not guesswork: a full cold build of this
+      # configuration settles at ~0.5 GB. 1000M leaves headroom without wasting
+      # budget — and budget pressure here is about entry COUNT, not entry size,
+      # because the cache key carries github.run_id so every run writes a fresh
+      # entry. An oversized cap multiplies what each of those costs against the
+      # repo's 10 GB ceiling and risks LRU-evicting the Qt / FFTW / DeepFilterNet
+      # entries the other jobs depend on. (check-macos runs at 500M, but on a
+      # lighter configuration — no ENABLE_NVIDIA_AFX, no second liquid-dsp
+      # build tree.)
+      CCACHE_MAXSIZE: 1000M
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -86,11 +95,6 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
-      # Mirrors check-windows' "sccache stats" step, and exists for the same
-      # reason: #1963 disabled the Windows compiler cache for three months
-      # without anyone noticing, because nothing made the hit rate visible.
-      # A "Hits 0" line here means the launcher was dropped — read it before
-      # believing any wall-clock claim about this job.
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
       # liquid-static target (separate build dir, opt-in flag) so a bitrotted
