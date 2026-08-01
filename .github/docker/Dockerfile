@@ -2,6 +2,11 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Links this package to the repository on GHCR, which is what makes the
+# repo's GITHUB_TOKEN able to pull it. Without the label the package is
+# unattached: private and unreachable from CI, with no in-repo fix.
+LABEL org.opencontainers.image.source=https://github.com/aethersdr/AetherSDR
+
 # Build dependencies for AetherSDR CI
 # Must include everything CMakeLists.txt can find_package() for
 RUN apt-get update && apt-get install -y \
