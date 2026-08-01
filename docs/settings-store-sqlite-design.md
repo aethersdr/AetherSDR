@@ -186,7 +186,14 @@ worker-thread event-loop code is fine — that is precisely the #4602 case.
 
 ## Testing
 
-`tests/app_settings_safety_test.cpp` — 15 one-process-per-scenario cases
+`tests/settings_browser_dialog_test.cpp` drives the real Settings Browser
+widget for the guarantees the automation bridge cannot reach (it has no
+double-click or key-injection verb): masked rows are read-only with a clean
+control row that stays editable, `cellActivated` is structurally unconnected
+(so no style can pop the modal on a single click), and an unparseable
+document is labelled rather than rendered as empty with Edit disabled.
+
+`tests/app_settings_safety_test.cpp` — 17 one-process-per-scenario cases
 (CMake `foreach`) covering the matrix above; `tests/TestSettingsProfile.h`
 still provides isolation. The migration was additionally soak-tested against
 a real 391-key production settings file with a key-for-key parity diff

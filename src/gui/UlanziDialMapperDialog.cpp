@@ -3,6 +3,7 @@
 #include "UlanziDialMapperDialog.h"
 #include "core/AppSettings.h"
 #include "core/ShortcutManager.h"
+#include "core/UlanziDialMappings.h"
 #ifdef HAVE_MIDI
 #include "core/MidiControlManager.h"
 #endif
@@ -297,14 +298,20 @@ void UlanziDialMapperDialog::buildPills()
             }
         }
 
-        // MIDI Toggle/Trigger params — only the discrete-event types
-        // make sense on a button.  Continuous params would need a
+        // MIDI Toggle/Trigger/Gate params — only the discrete-event and gate
+        // types make sense on a button.  Continuous params would need a
         // rotary, which is intentionally not bound here.
 #ifdef HAVE_MIDI
         if (m_midi) {
             for (const auto& mp : m_midi->params()) {
                 if (mp.type != MidiParamType::Toggle &&
-                    mp.type != MidiParamType::Trigger) continue;
+                    mp.type != MidiParamType::Trigger &&
+                    mp.type != MidiParamType::Gate) continue;
+                // The CW keying actions are registered in BOTH registries under
+                // the same id.  Offering them twice would give the operator two
+                // dropdown entries that do the same thing by different code
+                // paths, so the shortcut entry (already listed) is the one.
+                if (m_shortcuts && m_shortcuts->action(mp.id)) continue;
                 p.combo->addItem(QStringLiteral("[MIDI %1] %2").arg(mp.category, mp.displayName),
                                  QStringLiteral("midi:%1").arg(mp.id));
             }
@@ -451,9 +458,34 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
     // the dial body so the spatial mapping is conveyed by adjacency.
 }
 
-QString UlanziDialMapperDialog::actionSettingsKey(const QString& pillId)
+QStringList UlanziDialMapperDialog::allPillIds()
 {
-    return QStringLiteral("UlanziDial/action/%1").arg(pillId);
+    QStringList ids;
+    ids.reserve(kPillCount);
+    for (int i = 0; i < kPillCount; ++i)
+        ids.append(QString::fromLatin1(kPillSpecs[i].id));
+    return ids;
+}
+
+void UlanziDialMapperDialog::migrateLegacyMappings()
+{
+    UlanziDialMappings::migrateLegacyKeys(allPillIds());
+}
+
+QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
+{
+    // The document is authoritative; an absent entry means "built-in default".
+    // Legacy flat keys are not consulted here — migrateLegacyMappings() has
+    // already claimed and deleted them at startup.
+    const QString bound = UlanziDialMappings::actionForPill(pillId);
+    if (!bound.isEmpty())
+        return bound;
+    return defaultActionForPill(pillId);
+}
+
+void UlanziDialMapperDialog::setActionForPill(const QString& pillId, const QString& actionId)
+{
+    UlanziDialMappings::setActionForPill(pillId, actionId);
 }
 
 QString UlanziDialMapperDialog::defaultActionForPill(const QString& pillId)
@@ -477,24 +509,24 @@ QString UlanziDialMapperDialog::pillForSignature(const QString& signature)
 
 void UlanziDialMapperDialog::loadActions()
 {
-    auto& s = AppSettings::instance();
+    m_isLoading = true;
     for (int i = 0; i < m_pills.size(); ++i) {
         if (!m_pills[i].combo) continue;
-        const QString actionId =
-            s.value(actionSettingsKey(m_pills[i].id),
-                    m_pills[i].defaultAction).toString();
+        const QString actionId = actionForPill(m_pills[i].id);
         const int idx = m_pills[i].combo->findData(actionId);
         if (idx >= 0) m_pills[i].combo->setCurrentIndex(idx);
     }
+    m_isLoading = false;
 }
 
 void UlanziDialMapperDialog::saveAction(int pillIndex)
 {
+    if (m_isLoading) return;
     if (pillIndex < 0 || pillIndex >= m_pills.size()) return;
     const Pill& p = m_pills[pillIndex];
     if (!p.combo) return;
     const QString actionId = p.combo->currentData().toString();
-    AppSettings::instance().setValue(actionSettingsKey(p.id), actionId);
+    setActionForPill(p.id, actionId);
 }
 
 void UlanziDialMapperDialog::refreshPillLabel(int /*pillIndex*/)

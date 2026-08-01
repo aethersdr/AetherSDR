@@ -2,6 +2,8 @@
 #include <QtGlobal>
 #ifdef Q_OS_MAC
 
+#include "core/UlanziChordDecoder.h"
+
 #include <QObject>
 #include <QString>
 
@@ -46,9 +48,9 @@ private:
     QString m_deviceName;
     bool m_anyOpen{false};
 
-    bool m_ctrlDown{false};
-    int  m_lastNonModKey{-1};
-    bool m_prevsongAlongsideCtrl{false};
+    // Chord assembly and signature formatting are shared with the Linux and
+    // Windows backends (ulanzi_chord_decoder_test covers all three).
+    UlanziChordDecoder m_decoder;
 
     // Static C-API callback shims forward to the instance via context.
     static void hidValueCb(void* ctx, int /*result*/, void* /*sender*/, void* value);

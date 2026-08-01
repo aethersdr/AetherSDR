@@ -52,31 +52,56 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
 
     // Negotiate the output format via the shared factory (#3306). The Quindar
     // tone is generated in Float, so walk only the Float rungs of the ladder —
-    // which now gives this sink, in one place, the per-OS preferred rate plus
-    // the 44.1 kHz and device-preferredFormat fallbacks it previously lacked (it
+    // which gives this sink, in one place, the per-OS preferred rate plus the
+    // 44.1 kHz and device-preferredFormat fallbacks it previously lacked (it
     // failed outright on a 44.1k-only output, with only 48k + preferred tried).
+    //
+    // Each rung is tried with a real QAudioSink::start(), not
+    // isFormatSupported() (#4641): on Windows/WASAPI that query answers
+    // against the shared-mode mix format and false-negatives on class-
+    // compliant multichannel USB interfaces (Akai EIE and similar) that
+    // accept the format fine once actually opened — matches AudioEngine's
+    // RX sink, which never trusted the query to begin with.
     QStringList attemptedFormats;
     QAudioFormat fmt;
-    bool haveFormat = false;
+    QString lastOpenError;
     const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
         dev, AudioFormatNegotiator::Direction::Output,
         AudioFormatNegotiator::ResamplerPolicy::RegenerateAtRate);
     for (const QAudioFormat& cand : ladder) {
         if (cand.sampleFormat() != QAudioFormat::Float)
             continue;   // the tone is generated in Float
+
+        // onTimerTick() assumes a stereo frame layout, so pin the channel
+        // count here (matches CwSidetoneQAudioSink) rather than trusting
+        // the ladder to keep returning 2ch for every rung.
+        QAudioFormat c = cand;
+        c.setChannelCount(2);
         attemptedFormats << QStringLiteral("%1Hz %2ch Float")
-            .arg(cand.sampleRate()).arg(cand.channelCount());
-        if (dev.isFormatSupported(cand)) {
-            fmt = cand;
-            haveFormat = true;
-            if (cand.sampleRate() != 48000) {
-                fallbackOccurred = true;
-                fallbackReasons << QStringLiteral("negotiated %1Hz Float").arg(cand.sampleRate());
-            }
-            break;
+            .arg(c.sampleRate()).arg(c.channelCount());
+
+        auto* sink = new QAudioSink(dev, c, this);
+        // Match CwSidetoneQAudioSink's 50 ms buffer — required to keep
+        // Pulse/PipeWire push-mode happy.  Net latency ~25 ms; fine for
+        // 250 ms Quindar tones.
+        sink->setBufferSize(c.bytesForDuration(50'000));
+        QIODevice* io = sink->start();
+        if (!io) {
+            lastOpenError = QString::number(static_cast<int>(sink->error()));
+            delete sink;
+            continue;
         }
+
+        fmt = c;
+        m_sink = sink;
+        m_device = io;
+        if (c.sampleRate() != 48000) {
+            fallbackOccurred = true;
+            fallbackReasons << QStringLiteral("negotiated %1Hz Float").arg(c.sampleRate());
+        }
+        break;
     }
-    if (!haveFormat) {
+    if (!m_sink) {
         qCWarning(lcAudio) << "QuindarLocalSink: device supports no Float stereo rate"
                            << dev.description();
         AudioSummaryLogger::OpenFailureSummary failure;
@@ -84,35 +109,14 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
         failure.backend = QStringLiteral("QAudioSink");
         failure.deviceDescription = dev.description();
         failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
-        failure.failureReason = QStringLiteral("no Float stereo rung supported in the negotiation ladder");
+        failure.failureReason = lastOpenError.isEmpty()
+            ? QStringLiteral("no Float stereo rung supported in the negotiation ladder")
+            : QStringLiteral("QAudioSink::start returned null (error %1)").arg(lastOpenError);
         failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
         AudioSummaryLogger::logOpenFailure(failure);
         return false;
     }
     m_actualRate = fmt.sampleRate();
-
-    m_sink = new QAudioSink(dev, fmt, this);
-    // Match CwSidetoneQAudioSink's 50 ms buffer — required to keep
-    // Pulse/PipeWire push-mode happy.  Net latency ~25 ms; fine for
-    // 250 ms Quindar tones.
-    const int bytesPerFrame = fmt.channelCount() * sizeof(float);
-    m_sink->setBufferSize(50 * fmt.sampleRate() / 1000 * bytesPerFrame);
-    m_device = m_sink->start();
-    if (!m_device) {
-        qCWarning(lcAudio) << "QuindarLocalSink: failed to start sink";
-        AudioSummaryLogger::OpenFailureSummary failure;
-        failure.path = QStringLiteral("Quindar local sink");
-        failure.backend = QStringLiteral("QAudioSink");
-        failure.deviceDescription = dev.description();
-        failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
-        failure.failureReason = QStringLiteral("QAudioSink::start returned null (error %1)")
-            .arg(static_cast<int>(m_sink->error()));
-        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
-        AudioSummaryLogger::logOpenFailure(failure);
-        delete m_sink;
-        m_sink = nullptr;
-        return false;
-    }
     m_tone = tone;
 
     if (!m_timer) {

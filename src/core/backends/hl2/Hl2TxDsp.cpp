@@ -184,6 +184,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono)
     m_iq.clear();
     m_iq.reserve(consumed * static_cast<std::size_t>(m_upsample));
     float peak = 0.0f;
+    float postAlcPeak = 0.0f;
 
     // ---- ALC: bring speech up to something that actually modulates ----
     //
@@ -206,15 +207,26 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono)
             // signal got louder) so overshoot is corrected immediately.
             const double blockSec = static_cast<double>(consumed)
                                   / static_cast<double>(m_config.inputSampleRateHz);
-            const double tau = (target < m_alcGain) ? m_config.alcAttackSec
-                                                    : m_config.alcReleaseSec;
-            const double a = 1.0 - std::exp(-blockSec / std::max(1e-6, tau));
-            m_alcGain += a * (target - m_alcGain);
+            const bool reducing = target < m_alcGain;
+            // Hold the gain through pauses rather than winding it up on room
+            // noise. Reduction is never held — see alcHoldBelowDbfs.
+            const double holdThreshold =
+                std::pow(10.0, m_config.alcHoldBelowDbfs / 20.0);
+            if (reducing || blockPeak >= holdThreshold) {
+                const double tau = reducing ? m_config.alcAttackSec
+                                            : m_config.alcReleaseSec;
+                const double a = 1.0 - std::exp(-blockSec / std::max(1e-6, tau));
+                m_alcGain += a * (target - m_alcGain);
+            }
         }
-        emit alcGain(static_cast<float>(alcGainDb()));
     } else {
         m_alcGain = 1.0;
     }
+    // Published unconditionally, including when the ALC is off and the answer
+    // is a flat 0 dB. The TX:ALC meter is fed from this, and a meter that stops
+    // updating reads as a stuck needle rather than as "no gain is being
+    // applied" — the same reason the mic peak below is not gated either.
+    emit alcGain(static_cast<float>(alcGainDb()));
 
     for (std::size_t s = 0; s < consumed; ++s) {
         // Mic peak is measured BEFORE the ALC, deliberately.
@@ -231,6 +243,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono)
         // distortion across the band rather than merely clipping our own audio.
         const float in = std::clamp(static_cast<float>(preAlc * m_alcGain),
                                     -1.0f, 1.0f);
+        postAlcPeak = std::max(postAlcPeak, std::fabs(in));
 
         for (int u = 0; u < m_upsample; ++u) {
             // Zero-stuff: only the first sub-sample carries energy. The bandpass
@@ -281,6 +294,9 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono)
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);
+    // POST-ALC level, which is a different question and needs its own meter:
+    // how close to full modulation the signal reaching the wire actually is.
+    emit alcPeak(postAlcPeak > 0.0f ? 20.0f * std::log10(postAlcPeak) : -140.0f);
 }
 
 }  // namespace AetherSDR::hl2

@@ -14,7 +14,7 @@ namespace AetherSDR {
 //
 // So: apply a reported value iff it is valid (> 0) and it is not exactly the
 // value we are currently capping to.  `cappedValue` is the throttle's cap for
-// this field (the fps cap, or adaptiveWfMsForCap() for line duration); it is
+// this field (the fps cap, or adaptiveWfRateForCap() for line duration); it is
 // only consulted while `throttleActive`.  Pure so it is unit-tested directly.
 inline bool applyThrottledDisplayReport(bool throttleActive,
                                         int cappedValue,

@@ -43,10 +43,16 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
     // Negotiate the output format via the shared factory (#3306, Phase 6c). The
     // sidetone generator retunes to the negotiated rate (RegenerateAtRate) and
     // the tick handles both Float and Int16, so we walk the default Float-first
-    // ladder — Int16 is the VB-Audio / Int16-only-WASAPI fallback (#2629) — and
-    // take the first rung the device supports. The factory supplies the per-OS
-    // preferred rate plus the 44.1k and preferredFormat fallbacks in one place.
-    QAudioFormat fmt;
+    // ladder — Int16 is the VB-Audio / Int16-only-WASAPI fallback (#2629). The
+    // factory supplies the per-OS preferred rate plus the 44.1k and
+    // preferredFormat fallbacks in one place.
+    //
+    // Each rung is tried with a real QAudioSink::start(), not
+    // isFormatSupported() (#4641): on Windows/WASAPI that query answers
+    // against the shared-mode mix format and false-negatives on class-
+    // compliant multichannel USB interfaces (Akai EIE and similar) that
+    // accept the format fine once actually opened — matches AudioEngine's
+    // RX sink, which never trusted the query to begin with.
     int chosenRate = 0;
     QAudioFormat::SampleFormat chosenFmt = QAudioFormat::Unknown;
     const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
@@ -57,12 +63,24 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
         c.setChannelCount(2);
         if (c.sampleFormat() != QAudioFormat::Float && c.sampleFormat() != QAudioFormat::Int16)
             continue;   // the sidetone tick only knows Float / Int16
-        if (dev.isFormatSupported(c)) {
-            fmt = c;
-            chosenRate = c.sampleRate();
-            chosenFmt = c.sampleFormat();
-            break;
+
+        auto* sink = new QAudioSink(dev, c, this);
+        // 50 ms buffer — Pulse/PipeWire happily honour ≥40 ms; <30 ms causes
+        // pull-mode Idle/Active flapping and audible chop.  Real perceived
+        // latency stays low (~25 ms typical) because we keep the buffer about
+        // half-full via the 2 ms timer, not because the buffer itself is small.
+        sink->setBufferSize(c.bytesForDuration(50'000));
+        QIODevice* io = sink->start();
+        if (!io) {
+            delete sink;
+            continue;
         }
+
+        chosenRate = c.sampleRate();
+        chosenFmt = c.sampleFormat();
+        m_sink = sink;
+        m_device = io;
+        break;
     }
     if (chosenRate == 0) {
         qCWarning(lcAudio) << "CwSidetoneQAudioSink: no supported float/int16-stereo rate on device"
@@ -83,30 +101,8 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
             : m_fallbackReason + QStringLiteral("; ") + detail;
     }
 
-    m_sink = new QAudioSink(dev, fmt, this);
-    // 50 ms buffer — Pulse/PipeWire happily honour ≥40 ms; <30 ms causes
-    // pull-mode Idle/Active flapping and audible chop.  Real perceived
-    // latency stays low (~25 ms typical) because we keep the buffer about
-    // half-full via the 2 ms timer, not because the buffer itself is small.
-    constexpr int kSidetoneBufferMs = 50;
-    const int sampleBytes = (chosenFmt == QAudioFormat::Float)
-                                ? static_cast<int>(sizeof(float))
-                                : static_cast<int>(sizeof(int16_t));
-    const int sidetoneBufBytes =
-        chosenRate * 2 * sampleBytes * kSidetoneBufferMs / 1000;
-    m_sink->setBufferSize(sidetoneBufBytes);
-
     m_generator = generator;
     m_generator->setSampleRateHz(chosenRate);
-
-    m_device = m_sink->start();
-    if (!m_device) {
-        qCWarning(lcAudio) << "CwSidetoneQAudioSink: sink failed to start at" << chosenRate;
-        delete m_sink;
-        m_sink = nullptr;
-        m_generator = nullptr;
-        return false;
-    }
 
     if (!m_timer) {
         m_timer = new QTimer(this);

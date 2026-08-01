@@ -889,45 +889,121 @@ void testResourceAndConstruction() {
     report("SWR contour ink survives applet-size downsampling",
            geometry.swrStyle.guideWidth >= 3.0);
 
-    QFont wideSwrLabelFont = swrLabelFont;
-    wideSwrLabelFont.setStretch(175);
-    const QFontMetricsF wideSwrLabelMetrics(wideSwrLabelFont);
-    QVector<QRectF> wideLabelRects;
-    bool fontChangeRepositionedLabels = false;
-    bool wideLabelBoxesSeparated = true;
-    bool wideLabelBoxesClearMask = true;
-    for (int index = 0; index < geometry.swrGuides.size(); ++index) {
-        const CrossNeedleMeterGeometry::SwrGuide &guide = geometry.swrGuides[index];
-        const QPointF center =
-            geometry.swrGuideLabelCenter(guide, wideSwrLabelFont);
-        fontChangeRepositionedLabels =
-            fontChangeRepositionedLabels ||
-            std::hypot(center.x() - labelCenters[index].x(),
-                       center.y() - labelCenters[index].y()) > 0.01;
-        const QString display = guide.displayLabel == QStringLiteral("infinity")
-                                    ? QString::fromUtf8("\xe2\x88\x9e")
-                                    : guide.displayLabel;
-        QRectF box =
-            wideSwrLabelMetrics.boundingRect(display).adjusted(-3.0, -2.0, 3.0, 2.0);
-        box.moveCenter(center);
-        wideLabelBoxesClearMask =
-            wideLabelBoxesClearMask &&
-            box.bottom() + 3.0 < maskBoundaryYAtX(geometry, box.left()) &&
-            box.bottom() + 3.0 < maskBoundaryYAtX(geometry, box.center().x()) &&
-            box.bottom() + 3.0 < maskBoundaryYAtX(geometry, box.right());
-        wideLabelRects.append(box);
-    }
-    for (int first = 0; first < wideLabelRects.size(); ++first) {
-        for (int second = first + 1; second < wideLabelRects.size(); ++second) {
-            wideLabelBoxesSeparated =
-                wideLabelBoxesSeparated &&
-                !wideLabelRects[first].intersects(wideLabelRects[second]);
+    // #4274 regression guard, reformulated (#4559). The design promises that
+    // the rendered font PARTICIPATES in placement: the font sizes the label
+    // box, the box decides collisions, and a collision forces a reposition.
+    // It does NOT promise that a particular font tweak moves a label — on
+    // this face every 175%-stretched box still cleared at its base anchor,
+    // so the old fixed-stretch "something must move" assertion tested a
+    // coincidence of clearance, not the contract, and failed on a healthy
+    // build. Stretch is also the wrong lever for a portable assertion: how
+    // far a given stretch widens the box — or whether the host's fallback
+    // font honors it at all — is a property of the runner's font stack, not
+    // of Qt, so no fixed stretch discriminates the defect everywhere. Grow
+    // the SIZE instead (honored by every engine) until a collision must
+    // occur. The #4274 bug (placement cache not keyed by the font) can never
+    // move a label at ANY size, so this still discriminates the original
+    // regression — while a healthy build must eventually reposition, and
+    // must stay collision-free when it does.
+    double firstMovingScale = 0.0;
+    double largestPlaceableScale = 0.0;
+    bool movingLayoutSeparated = true;
+    bool movingLayoutClearsMask = true;
+    bool baselineWideSeparated = true;
+    bool baselineWideClearsMask = true;
+    bool baselineWideMeasured = false;
+    for (double scale : {1.5, 2.0, 3.0, 4.0}) {
+        QFont wideSwrLabelFont = swrLabelFont;
+        if (wideSwrLabelFont.pixelSize() > 0) {
+            wideSwrLabelFont.setPixelSize(
+                int(std::lround(wideSwrLabelFont.pixelSize() * scale)));
+        } else {
+            wideSwrLabelFont.setPointSizeF(wideSwrLabelFont.pointSizeF() * scale);
+        }
+        const QFontMetricsF wideSwrLabelMetrics(wideSwrLabelFont);
+        bool moved = false;
+        bool usable = true;
+        bool separated = true;
+        bool clearsMask = true;
+        QVector<QRectF> rects;
+        for (int index = 0; index < geometry.swrGuides.size(); ++index) {
+            const CrossNeedleMeterGeometry::SwrGuide &guide = geometry.swrGuides[index];
+            const QPointF center =
+                geometry.swrGuideLabelCenter(guide, wideSwrLabelFont);
+            if (std::isnan(center.x()) || std::isnan(center.y())) {
+                usable = false;   // no collision-free layout at this width
+                break;
+            }
+            moved = moved ||
+                    std::hypot(center.x() - labelCenters[index].x(),
+                               center.y() - labelCenters[index].y()) > 0.01;
+            const QString display = guide.displayLabel == QStringLiteral("infinity")
+                                        ? QString::fromUtf8("\xe2\x88\x9e")
+                                        : guide.displayLabel;
+            QRectF box = wideSwrLabelMetrics.boundingRect(display)
+                             .adjusted(-3.0, -2.0, 3.0, 2.0);
+            box.moveCenter(center);
+            clearsMask =
+                clearsMask &&
+                box.bottom() + 3.0 < maskBoundaryYAtX(geometry, box.left()) &&
+                box.bottom() + 3.0 < maskBoundaryYAtX(geometry, box.center().x()) &&
+                box.bottom() + 3.0 < maskBoundaryYAtX(geometry, box.right());
+            rects.append(box);
+        }
+        for (int first = 0; first < rects.size(); ++first) {
+            for (int second = first + 1; second < rects.size(); ++second) {
+                separated = separated && !rects[first].intersects(rects[second]);
+            }
+        }
+        if (usable) {
+            largestPlaceableScale = scale;
+            if (!baselineWideMeasured) {
+                // The original companion promise, unchanged in spirit: at a
+                // merely-larger font the layout is still collision-free and
+                // above the mask. Taken from the first PLACEABLE rung rather
+                // than from 1.5x specifically, so a face whose 1.5x ring does
+                // not fit still measures this instead of passing vacuously.
+                // When that rung is also the one that moves — which is what
+                // happens everywhere measured so far (first_moving_scale=1.5)
+                // — this is the same layout the moving assertion checks, not
+                // an independent second sample; the unscaled ring is pinned
+                // by the 1x assertions above.
+                baselineWideMeasured = true;
+                baselineWideSeparated = separated;
+                baselineWideClearsMask = clearsMask;
+            }
+        }
+        if (usable && moved) {
+            firstMovingScale = scale;
+            // The reposition exists to preserve exactly these properties.
+            movingLayoutSeparated = separated;
+            movingLayoutClearsMask = clearsMask;
+            break;
         }
     }
-    report("SWR label placement cache is keyed by the rendered font",
-           fontChangeRepositionedLabels);
+    // largest_placeable_scale separates the two ways this can go red: a
+    // placement that never consulted the font (every rung placeable, none
+    // moved) from a face that simply cannot host an enlarged ring at all
+    // (nothing placeable) — which would otherwise be misreported as the
+    // former.
+    report("SWR label placement consults the rendered font once sizes collide",
+           firstMovingScale > 0.0,
+           "first_moving_scale=" + std::to_string(firstMovingScale) +
+               " largest_placeable_scale=" +
+               std::to_string(largestPlaceableScale) +
+               (largestPlaceableScale > 0.0
+                    ? " (0 moving = placement never consulted the font)"
+                    : " (nothing placeable above 1x — the ladder never "
+                      "exercised the contract)"));
     report("wider rendered-font SWR labels remain collision-free",
-           wideLabelBoxesSeparated && wideLabelBoxesClearMask);
+           baselineWideMeasured && baselineWideSeparated &&
+               baselineWideClearsMask && movingLayoutSeparated &&
+               movingLayoutClearsMask,
+           "baseline_measured=" + std::to_string(baselineWideMeasured) +
+               " baseline_sep=" + std::to_string(baselineWideSeparated) +
+               " baseline_mask=" + std::to_string(baselineWideClearsMask) +
+               " moving_sep=" + std::to_string(movingLayoutSeparated) +
+               " moving_mask=" + std::to_string(movingLayoutClearsMask));
 
     bool maskSymmetric = true;
     for (int i = 0; i < geometry.mask.boundary.size(); ++i) {
@@ -1346,13 +1422,37 @@ void testWidgetStateAndRender() {
           graphProbeRadial * (forwardScale.radius - meter.geometry().scaleStyle.separatorInset)) *
          0.4)
             .toPoint();
-    const QColor classicSeparator = rendered.pixelColor(separatorProbe);
-    const QColor uplightSeparator = uplightRendered.pixelColor(separatorProbe);
+    // #4246's promise is that the uplight separator has NO white backing.
+    // A single antialiased pixel sampled at 0.4x scale sat within +/-26 of
+    // the old fixed 120-unit margin and flapped with unrelated theme changes
+    // (#4559: failing on 2026-07-28's main, passing after the theme-seed
+    // PRs). Probe the brightest pixel of a 3x3 neighborhood instead — the
+    // white backing, when present, dominates a local maximum long before it
+    // survives single-pixel downsample dilution — and assert both halves of
+    // the actual claim: classic's backing is markedly brighter, and
+    // uplight's brightest neighbor is nowhere near white.
+    const auto brightestSum = [](const QImage &image, const QPoint &at) {
+        int best = 0;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                const QPoint p(at.x() + dx, at.y() + dy);
+                if (!image.rect().contains(p)) {
+                    continue;
+                }
+                const QColor c = image.pixelColor(p);
+                best = std::max(best, c.red() + c.green() + c.blue());
+            }
+        }
+        return best;
+    };
+    const int classicSeparatorPeak = brightestSum(rendered, separatorProbe);
+    const int uplightSeparatorPeak = brightestSum(uplightRendered, separatorProbe);
     report("uplight graph separator no longer creates a white backing",
-           classicSeparator.red() + classicSeparator.green() + classicSeparator.blue() >
-               uplightSeparator.red() + uplightSeparator.green() + uplightSeparator.blue() + 120,
-           "classic=" + classicSeparator.name().toStdString() +
-               " uplight=" + uplightSeparator.name().toStdString());
+           classicSeparatorPeak > uplightSeparatorPeak + 60 &&
+               uplightSeparatorPeak < 600,
+           "classic_peak=" + std::to_string(classicSeparatorPeak) +
+               " uplight_peak=" + std::to_string(uplightSeparatorPeak) +
+               " (needs classic > uplight+60 and uplight < 600)");
 
     meter.setFaceTheme(CrossNeedleMeterWidget::FaceTheme::GraphiteDark);
     const QImage darkRendered = renderWidget(meter);

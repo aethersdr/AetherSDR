@@ -1,0 +1,182 @@
+name: Static Checks
+
+# One runner for every stdlib-only Python gate (#4655). Replaces a11y-check.yml,
+# engine-boundary.yml and theme-seed-check.yml, which were three separate
+# workflows each doing ubuntu-latest -> checkout -> setup-python -> run one
+# script. Combined they were ~2.7 runner-minutes, so this is not a cost fix:
+# it is three copies of the same pin/concurrency/permissions boilerplate
+# collapsed into one, and three status rows collapsed into one.
+#
+# Adding a gate here is a `run:` step, not a new file. Keep that property —
+# #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
+# deleted, rather than left as a fourth near-identical workflow.
+#
+# None of these were required status checks, so consolidating them does not
+# touch branch protection (required contexts are build / check-windows /
+# check-macos).
+
+on:
+  pull_request:
+    branches: ["**"]
+    # Union of what the three workflows gated on, widened to src/** rather than
+    # the old src/{gui,core,models} enumeration. The scripts are seconds each
+    # and now share one runner, so a broader trigger is cheaper than a precise
+    # one — and ci.yml's own history (see the check-windows comment) is a long
+    # record of hand-maintained path allow-lists leaking. a11y-check.yml
+    # previously had NO paths filter at all and ran on docs-only PRs.
+    paths:
+      - "src/**"
+      - "resources/themes/**"
+      - "tools/audit_colours.py"
+      - "tools/check_a11y.py"
+      - "tools/check_engine_boundary.py"
+      - "tools/check_theme_seed.py"
+      - "tools/gen_theme_seed.py"
+      - ".github/workflows/static-checks.yml"
+
+# Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
+# workflow: the run_id suffix and the main guard never trigger here (ref is
+# always refs/pull/N/merge), kept identical to ci.yml/codeql.yml for uniformity.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# contents: read for checkout; pull-requests: write only for the a11y summary
+# comment (which is continue-on-error — fork PRs get a read-only token and the
+# inline annotations appear either way). Declaring contents explicitly matters:
+# per GitHub's "specify any -> unspecified default to none" rule, the old
+# a11y-check.yml's lone `pull-requests: write` silently dropped contents to
+# none, and only worked because the repo is public.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Required by the a11y step's `git diff origin/<base>...HEAD`.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      # ── aetherd-migration ratchet (docs/aetherd-headless-engine-design.md §10)
+      #   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on
+      #             the UI: no gui/ header includes, no QtWidgets.
+      #   EB3     — no file ABOVE the radio seam (src/gui/ + src/core/ +
+      #             src/models/, excluding the backend tree) may include a
+      #             VENDOR header; the wire is reached only through
+      #             IRadioBackend (RFC step 2.4).
+      # Known legacy offenders are tracked in tools/check_engine_boundary.py and
+      # warn without blocking; NEW violations fail (--strict). Baselines only
+      # shrink. Full-tree scan, stdlib-only.
+      - name: Engine/UI dependency direction
+        run: python tools/check_engine_boundary.py --strict
+
+      # ── ThemeManager::seedBuiltinDefaults() compiles a copy of the default
+      # theme into the binary. It is GENERATED (tools/gen_theme_seed.py emits
+      # src/core/ThemeSeedGenerated.cpp from resources/themes/default-dark.json),
+      # so the two can no longer drift apart — but someone can still edit the
+      # bundled theme without regenerating, or hand-edit the "DO NOT EDIT" file.
+      # This fails on either (--strict).
+      #
+      # `!cancelled()` so a failure in the step above still lets this one report:
+      # seeing every gate's verdict in one run is the point of sharing a job.
+      - name: Theme seed vs bundled JSON
+        if: ${{ !cancelled() }}
+        run: python tools/check_theme_seed.py --strict
+
+      # ── Hardcoded-colour ratchet (#4569, RFC #3076). Counts may not rise
+      # above the PR's base. The gate is a DELTA rather than a stored constant:
+      # main gains colours from unrelated UI merges, so a frozen baseline goes
+      # stale within hours, and an absolute ceiling fails every src/-touching PR
+      # once main drifts past it — including PRs that REMOVE colours.
+      #
+      # Folded in from colour-ratchet.yml per #4657. It relies on this job's
+      # fetch-depth: 0 to materialise the base commit, which the a11y step below
+      # already required — so sharing the runner costs one step and saves a
+      # whole checkout. A worktree rather than a second actions/checkout: the
+      # base tree is only ever read by a text scanner.
+      - name: Hardcoded-colour ratchet
+        if: ${{ !cancelled() }}
+        run: |
+          git worktree add /tmp/colour-base "origin/${{ github.base_ref }}"
+          python tools/audit_colours.py \
+            --src src \
+            --compare-src /tmp/colour-base/src \
+            --summary-only \
+            --strict
+
+      # ── Accessibility: warnings only, never fails the job (see docs/a11y.md).
+      # Scoped to src/gui/ files changed by this PR rather than the whole tree.
+      - name: Get changed src/gui/ files
+        if: ${{ !cancelled() }}
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -E '^src/gui/.*\.(cpp|h)$' \
+            > /tmp/changed_gui_files.txt || true
+          echo "Changed src/gui files:"
+          cat /tmp/changed_gui_files.txt || echo "(none)"
+
+      - name: Qt accessibility static analysis
+        id: a11y
+        if: ${{ !cancelled() }}
+        run: |
+          FILES=$(cat /tmp/changed_gui_files.txt | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "No src/gui/ files changed -- skipping."
+            echo "findings=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          python tools/check_a11y.py $FILES | tee /tmp/a11y_output.txt
+          COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || true)
+          echo "findings=$COUNT" >> $GITHUB_OUTPUT
+
+      # Post a summary comment so the finding count is visible at the PR top
+      # level (the per-line annotations appear on the diff itself).
+      # continue-on-error: true because fork PRs have a read-only GITHUB_TOKEN
+      # and the comment step would otherwise fail -- the inline annotations
+      # appear on the diff regardless.
+      #
+      # NOTE: this workflow intentionally does NOT auto-apply the
+      # aetherclaude-eligible label. Per AGENTS.md and CONSTITUTION.md
+      # (Principle X), that label is the issue-level claim mechanism that
+      # gates AetherClaude implementation work — applying it to PRs would
+      # repurpose the label off-spec and trigger AetherClaude to write
+      # remediation patches on community contributors' open PRs without
+      # their consent. Accessibility remediation should be picked up via a
+      # follow-up issue (e.g. #3288), not by side-effect of opening a PR.
+      - name: Comment with accessibility summary
+        if: ${{ !cancelled() && steps.a11y.outputs.findings != '0' && steps.a11y.outputs.findings != '' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SUMMARY=$(grep -E "(Files scanned|Files with findings|Total findings)" \
+            /tmp/a11y_output.txt | sed 's/^/> /' || echo "")
+          cat > /tmp/a11y_comment.md << COMMENTEOF
+          ## Accessibility check findings
+
+          This PR touches \`src/gui/\` files with **${{ steps.a11y.outputs.findings }}** accessibility issue(s).
+          Full details appear as inline annotations on the diff above.
+
+          ${SUMMARY}
+
+          See [\`docs/a11y.md\`](docs/a11y.md) for the canonical
+          Qt patterns (\`setAccessibleName\`, \`QAccessibleValueChangeEvent\`,
+          \`QAccessibleInterface\` subclasses, etc.). Structural remediation
+          (keyboard navigation, custom \`QAccessibleInterface\` subclasses)
+          is tracked in #3288.
+
+          *Findings are warnings only — the build is not blocked.*
+          COMMENTEOF
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body-file /tmp/a11y_comment.md

@@ -475,6 +475,7 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
     // incremental status — only in the initial full dump on connect.
     m_speechProcEnable = on;
     emit micStateChanged();
+    emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_enable=%1").arg(on ? 1 : 0));
 }
 
@@ -485,7 +486,20 @@ void TransmitModel::setSpeechProcessorLevel(int level)
     level = qBound(0, level, 2);
     m_speechProcLevel = level;
     emit micStateChanged();
+    emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_level=%1").arg(level));
+}
+
+bool TransmitModel::applySpeechProcessorState(bool on, int level)
+{
+    level = qBound(0, level, 2);
+    if (m_speechProcEnable == on && m_speechProcLevel == level) {
+        return false;
+    }
+    m_speechProcEnable = on;
+    m_speechProcLevel = level;
+    emit micStateChanged();
+    return true;
 }
 
 void TransmitModel::setDax(bool on)
@@ -596,24 +610,41 @@ void TransmitModel::setDexpLevel(int level)
     emit commandReady(QString("transmit set compander_level=%1").arg(level));
 }
 
+// The TX passband setters all take the same shape: bound, adopt OPTIMISTICALLY,
+// announce the intent, and emit the Flex verb.
+//
+// The optimistic adoption is what makes these work on a radio that modulates on
+// this host. A Flex echoes `transmit` status and applyStatus() writes the state
+// back, so the local fields could be left alone; a host-modulating backend never
+// echoes anything, so without this the operator drags the low-cut slider, the
+// verb goes nowhere, no status returns, and the control springs back — while the
+// modulator keeps whatever passband its mode default gave it. Same pattern, and
+// the same reason, as setSpeechProcessorEnable() above.
+//
+// txFilterCommandIssued is OPERATOR INTENT only — applyStatus() must never emit
+// it — so a backend can bind to it without echoing radio state back as a fresh
+// command (Principle II).
 void TransmitModel::setTxFilterLow(int hz)
 {
-    hz = qBound(0, hz, 10000);
-    emit commandReady(QString("transmit set filter_low=%1 filter_high=%2")
-                      .arg(hz).arg(m_txFilterHigh));
+    setTxFilter(qBound(0, hz, 10000), m_txFilterHigh);
 }
 
 void TransmitModel::setTxFilterHigh(int hz)
 {
-    hz = qBound(0, hz, 10000);
-    emit commandReady(QString("transmit set filter_low=%1 filter_high=%2")
-                      .arg(m_txFilterLow).arg(hz));
+    setTxFilter(m_txFilterLow, qBound(0, hz, 10000));
 }
 
 void TransmitModel::setTxFilter(int lowHz, int highHz)
 {
     lowHz = qBound(0, lowHz, 9950);
     highHz = qBound(lowHz + 50, highHz, 10000);
+    if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
+        m_txFilterLow = lowHz;
+        m_txFilterHigh = highHz;
+        emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
+        emit phoneStateChanged();
+    }
+    emit txFilterCommandIssued(lowHz, highHz);
     emit commandReady(QString("transmit set filter_low=%1 filter_high=%2")
                       .arg(lowHz).arg(highHz));
 }

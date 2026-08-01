@@ -36,6 +36,7 @@
 #include "MidiMappingDialog.h"
 #include "ProfileImportExportDialog.h"
 #include "ProfileManagerDialog.h"
+#include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
 #include "TxBandDialog.h"
 #include "UlanziDialMapperDialog.h"
@@ -616,6 +617,13 @@ void MainWindow::buildMenuBar()
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
     connect(dspAction, &QAction::triggered, this, [this] {
         ensureAetherDspDialog();
+    });
+
+    auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
+    settingsBrowserAction->setMenuRole(QAction::NoRole);  // "Settings" in the
+                                                          // title — macOS #883
+    connect(settingsBrowserAction, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_settingsBrowserDialog);
     });
     // RX chain DSP tile double-click also opens the full AetherDSP
     // Settings dialog — same entry point as the Settings menu action.

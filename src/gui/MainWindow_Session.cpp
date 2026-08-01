@@ -360,7 +360,7 @@ void MainWindow::wireDiscovery()
             reconnectDialog->close();
             reconnectDialog->deleteLater();
         }
-        m_connPanel->show();
+        showConnectionDialog();
     });
     connect(&m_smartLink, &SmartLinkClient::serverConnected,
             this, [this] {
@@ -676,6 +676,10 @@ void MainWindow::wireRadioModel()
             this, &MainWindow::onSliceAdded);
     connect(&m_radioModel, &RadioModel::sliceRemoved,
             this, &MainWindow::onSliceRemoved);
+    // Start the reconstruction window at actual dispatch, not at UI intent:
+    // requestPanBand() can defer behind a profile-load hold.
+    connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
+            this, &MainWindow::noteBandRecallForPan);
     connect(&m_radioModel, &RadioModel::panBandAboutToDispatch,
             this, &MainWindow::prepareKiwiSdrBandRecallForPan);
     connect(&m_radioModel, &RadioModel::panBandDispatchFailed,
@@ -686,6 +690,12 @@ void MainWindow::wireRadioModel()
         // generation-guarded grace timer — don't clear it here or a concurrent
         // recall's #4158/Center Lock window could be torn down early.
         finishPreparedKiwiSdrBandRecallForPan(panId);
+        // The slice-selection window is the exception: it gates radio-driven
+        // selection, so leaving it armed would suppress reveal and the active
+        // echo for 1500 ms with no reconstruction to protect. cancelArm() undoes
+        // only this recall's arm — a still-live window from an earlier
+        // successful recall on the same pan is restored, not dropped.
+        m_bandRecallSelection.cancelArm(panId);
     });
     // Re-bind a KiwiSDR replacement across a band-stack slice recreation (#4158).
     // A band recall DROPS then RE-CREATES the slice (same id, new band). The
@@ -1313,7 +1323,7 @@ void MainWindow::wirePanLifecycle()
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->wfStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    if (sw->wfAutoBlack() && sw->wfAutoBlackRadioSide()) {
+                    if (sw->wfAutoBlack() && sw->effectiveWfAutoBlackRadioSide()) {
                         // Feed the radio's per-tile auto-black level straight to
                         // the renderer only when the user selected radio-side
                         // auto-black (radio-authoritative low/black point).
@@ -1337,7 +1347,8 @@ void MainWindow::wirePanLifecycle()
             m_radioModel.setWaterfallColorGain(sw->wfColorGain());
             m_radioModel.setWaterfallBlackLevel(sw->wfBlackLevel());
             m_radioModel.setWaterfallAutoBlack(sw->wfAutoBlack());
-            m_radioModel.setWaterfallAutoBlackSource(sw->wfAutoBlackRadioSide());
+            m_radioModel.setWaterfallAutoBlackSource(
+                sw->effectiveWfAutoBlackRadioSide());
             // Restore saved WNB and RF gain
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
@@ -1416,7 +1427,7 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 menu->setDeclaredBands(m_radioModel.declaredBands());
                 applyTuningRangeToOverlayMenu(menu);
-                applyRadioSideDspToOverlayMenu(menu);
+                applyRadioSideDspToPanDisplay(sw);
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 // Re-push authoritative geometry when a gesture that was

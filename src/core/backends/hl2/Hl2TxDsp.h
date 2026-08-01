@@ -60,6 +60,28 @@ public:
         double alcMaxGainDb = 40.0;    // do not amplify a silent room forever
         double alcAttackSec = 0.005;   // catch a syllable's onset
         double alcReleaseSec = 0.500;  // slow enough not to pump between words
+
+        // Below this input peak the ALC HOLDS its gain instead of continuing to
+        // raise it. This is what stops the stage behaving like a second
+        // compressor once the operator has an explicit one.
+        //
+        // Without it, every pause between words is a signal to keep increasing
+        // gain — up to alcMaxGainDb, which is 40 dB — so room noise, mic hiss
+        // and the shack fan are lifted to the same target peak as speech, and
+        // the next syllable arrives into a stage that has to attack 40 dB back
+        // down. That is audible as pumping, and it gets worse, not better, when
+        // the operator enables the speech processor: the compressor raises the
+        // average level, the ALC re-levels it away, and the two chase each
+        // other. Holding through pauses leaves the ALC doing the one job it is
+        // needed for — makeup gain for a quiet mic, without which speech at
+        // around -32 dBFS barely modulates — and stops it re-deciding that job
+        // during silence.
+        //
+        // NOT a gate: nothing is muted, and gain REDUCTION is never held off
+        // (see processAudioBlock), because an ALC that cannot pull down on a
+        // transient is a splatter generator. This only suppresses the *upward*
+        // move while the input is too quiet to be speech.
+        double alcHoldBelowDbfs = -45.0;
     };
 
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
@@ -82,6 +104,11 @@ signals:
     void iqReady(const std::vector<std::complex<float>>& iq);   // at outputSampleRateHz
     void micPeak(float dbfs);                                   // post-gain, pre-modulation
     void alcGain(float db);                                     // ALC gain applied
+    // Post-ALC, post-limit peak in dBFS — the level actually handed to the
+    // modulator. A LEVEL, not a gain: this is what an ALC meter shows, and it
+    // moves opposite to alcGain (the harder the ALC works on a quiet mic, the
+    // closer to full scale this sits).
+    void alcPeak(float dbfs);
 
 private:
     void designFilters();

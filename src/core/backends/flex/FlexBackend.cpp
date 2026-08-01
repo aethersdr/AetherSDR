@@ -157,6 +157,10 @@ RadioCapabilities FlexBackend::capabilities() const
     // NR/NB/ANF/NRL/ANFL/ANFT, the APD predistorter and the wideband noise
     // blanker all run in the radio's firmware, driven by command-plane verbs.
     caps.hasRadioSideDsp = true;
+    // The radio embeds a per-tile black level in the waterfall stream when
+    // asked (`display panafall set <id> auto_black=1`), so HW is a real
+    // choice on the Display panel's Black Level button.
+    caps.hasRadioSideWaterfallAutoBlack = true;
     caps.hasWaveforms = true;            // installable SmartSDR waveforms
     caps.hasMultiClientSessions = true;  // multiFLEX
     // GPSDO / on-board GNSS, reported through the `gps` status.
@@ -169,7 +173,8 @@ RadioCapabilities FlexBackend::capabilities() const
     //     fact, which is what the capability seam is for and all a backend can
     //     honestly assert before any status has arrived;
     //   - hasGpsHardware(): "does THIS unit have it" — model name (8400/8600/
-    //     AU-) OR a live `gps` status that is not "Not Present".
+    //     AU-), a live oscillator presence flag, OR a `gps` status that is not
+    //     "Not Present".
     //
     // Do not narrow this to the model-name test to match. That clause is one
     // half of an OR: a FLEX-6700 with an optional GPSDO installed answers true
@@ -177,12 +182,8 @@ RadioCapabilities FlexBackend::capabilities() const
     // exactly those radios — a regression in the opposite direction from the one
     // it would appear to fix.
     //
-    // Consequence, and it is pre-existing rather than introduced by the
-    // capability gate: a GPSDO-less 6000-series still shows the GPS button
-    // reading [Waiting] forever, because this flag alone gates it. Fixing that
-    // means the gate consulting both — see the follow-up issue; it is not a
-    // one-line change, because the gate's test helper mirrors
-    // `!connected || declared` exactly.
+    // MainWindow therefore combines this family declaration with
+    // RadioModel::hasGpsHardware() while connected.
     caps.hasGpsLocation = true;
     // The radio owns the memory slots and re-dumps them on every connect, so
     // the client must NOT keep a local bank for a Flex — two stores that both

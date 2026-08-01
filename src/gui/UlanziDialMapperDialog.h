@@ -59,10 +59,19 @@ public:
     // device event maps to.  Returns empty string if no pill claims it.
     static QString pillForSignature(const QString& signature);
 
-    // AppSettings key for the user-chosen action on a given pill.  Used
-    // both by the dialog (to load/save the combo selection) and by
-    // MainWindow's dispatcher (to look up what to do on press).
-    static QString actionSettingsKey(const QString& pillId);
+    // Every pill id, in dial-layout order.
+    static QStringList allPillIds();
+
+    // One-shot claim of the pre-#4611 flat keys into the mappings document.
+    // Call once at controller-wiring time, before any lookup.
+    static void migrateLegacyMappings();
+
+    // The action bound to a pill, falling back to defaultActionForPill() when
+    // the mappings document has no entry for it.
+    static QString actionForPill(const QString& pillId);
+
+    // Bind an action to a pill and persist immediately.
+    static void setActionForPill(const QString& pillId, const QString& actionId);
 
     // Built-in default action for a pill (e.g. "shortcut:mox_toggle"),
     // used by MainWindow's dispatcher as the AppSettings fallback so
@@ -113,6 +122,7 @@ private:
     MidiControlManager*  m_midi{nullptr};
     UlanziDialCanvas*    m_canvas{nullptr};
     QList<Pill> m_pills;
+    bool m_isLoading{false};
 
     QLabel* m_statusLabel{nullptr};
     QLabel* m_lastEventLabel{nullptr};

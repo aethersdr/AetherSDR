@@ -3,6 +3,7 @@
 
 #include "EvdevEncoderManager.h"
 #include "core/LogManager.h"
+#include "core/UlanziChordDecoder.h"
 
 #include <QDir>
 #include <QFile>
@@ -32,25 +33,6 @@ const QStringList& supportedNames()
     return names;
 }
 
-// Map kernel key codes that we treat as the rotary axis.  These are the
-// codes we observed Ulanzi Dial firmware emitting per detent.
-constexpr int kRotaryCwKey  = KEY_VOLUMEUP;
-constexpr int kRotaryCcwKey = KEY_VOLUMEDOWN;
-
-// Friendly signature for a bare (non-chord) key event.  Used both as
-// AppSettings binding key and as a label in the Learn-mode UI.
-QString bareKeySignature(int keycode)
-{
-    switch (keycode) {
-        case KEY_PLAYPAUSE:    return QStringLiteral("KEY_PLAYPAUSE");
-        case KEY_MUTE:         return QStringLiteral("KEY_MUTE");
-        case KEY_PREVIOUSSONG: return QStringLiteral("KEY_PREVIOUSSONG");
-        case KEY_NEXTSONG:     return QStringLiteral("KEY_NEXTSONG");
-        default:
-            return QStringLiteral("KEY_%1").arg(keycode);
-    }
-}
-
 // Read an input device's name from sysfs (e.g. "Ulanzi Dial Keyboard").  The
 // sysfs `name` attribute is world-readable, so this works even when we lack
 // permission to open the /dev/input/event* node itself — which is exactly how
@@ -61,21 +43,6 @@ QString sysfsInputName(const QString& eventNode)
     if (f.open(QIODevice::ReadOnly))
         return QString::fromUtf8(f.readAll()).trimmed();
     return {};
-}
-
-QString chordSignature(int keycode, bool withPreviousSong)
-{
-    QString letter;
-    switch (keycode) {
-        case KEY_V: letter = QStringLiteral("V"); break;
-        case KEY_C: letter = QStringLiteral("C"); break;
-        case KEY_Y: letter = QStringLiteral("Y"); break;
-        case KEY_Z: letter = QStringLiteral("Z"); break;
-        default:    letter = QStringLiteral("KEY_%1").arg(keycode); break;
-    }
-    if (withPreviousSong)
-        return QStringLiteral("Ctrl+%1+KEY_PREVIOUSSONG").arg(letter);
-    return QStringLiteral("Ctrl+%1").arg(letter);
 }
 
 } // namespace
@@ -213,9 +180,7 @@ void EvdevEncoderManager::closeFd()
         const QString name = m_deviceName;
         m_deviceName.clear();
         m_devicePath.clear();
-        m_ctrlDown = false;
-        m_lastNonModKey = -1;
-        m_prevsongAlongsideCtrl = false;
+        m_decoder.reset();
         if (!name.isEmpty())
             emit connectionChanged(false, name);
     }
@@ -229,80 +194,31 @@ void EvdevEncoderManager::onReadable()
         ssize_t n = ::read(m_fd, ev, sizeof(ev));
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-            // ENODEV typically means the BT dial disconnected.
             if (errno == ENODEV) {
                 qCInfo(lcDevices) << "EvdevEncoderManager: device removed";
-                closeFd();
-                m_rescanTimer->start();  // wait for hot-plug re-add
-                return;
+            } else {
+                qCWarning(lcDevices) << "EvdevEncoderManager: read failed on" << m_devicePath
+                                     << std::strerror(errno);
             }
-            qCWarning(lcDevices) << "EvdevEncoderManager: read err"
-                                 << std::strerror(errno);
             closeFd();
+            m_rescanTimer->start();
             return;
         }
-        if (n == 0) break;
-        const int count = static_cast<int>(n / sizeof(input_event));
-        for (int i = 0; i < count; ++i) {
-            const struct input_event& e = ev[i];
-            if (e.type != EV_KEY) continue;
-
-            const int keycode = e.code;
-            const int value   = e.value;  // 0 = release, 1 = press, 2 = autorepeat
-
-            // Rotary: emit a tick per press or autorepeat tick.  The
-            // ~30 Hz autorepeat rate from the dial firmware gives a
-            // natural acceleration feel under continuous rotation.
-            if (keycode == kRotaryCwKey) {
-                if (value == 1 || value == 2) emit tuneSteps(+1);
-                continue;
-            }
-            if (keycode == kRotaryCcwKey) {
-                if (value == 1 || value == 2) emit tuneSteps(-1);
-                continue;
-            }
-
-            // Modifier state for chord assembly.
-            if (keycode == KEY_LEFTCTRL || keycode == KEY_RIGHTCTRL) {
-                m_ctrlDown = (value != 0);
-                if (!m_ctrlDown) {
-                    // Ctrl released — chord window closing.  Reset
-                    // compound flags so the next chord starts clean.
-                    m_lastNonModKey = -1;
-                    m_prevsongAlongsideCtrl = false;
-                }
-                continue;
-            }
-
-            // PREVIOUSSONG can arrive alongside a Ctrl chord (Mode Cycle
-            // emits Ctrl+Y+KEY_PREVIOUSSONG as a compound).  Track that
-            // it was present during a chord window so we can emit the
-            // compound signature.
-            if (keycode == KEY_PREVIOUSSONG && m_ctrlDown && value == 1) {
-                m_prevsongAlongsideCtrl = true;
-                continue;
-            }
-            if (keycode == KEY_PREVIOUSSONG && m_ctrlDown && value == 0) {
-                // chord-window release; handled when Ctrl + non-mod release
-                continue;
-            }
-
-            // Bare key press/release (no Ctrl).
-            if (!m_ctrlDown) {
-                if (value == 1 || value == 0) {
-                    emit buttonEvent(bareKeySignature(keycode), value);
-                }
-                continue;
-            }
-
-            // Ctrl is down — this is a chord.
-            if (value == 1) {
-                m_lastNonModKey = keycode;
-                emit buttonEvent(chordSignature(keycode, m_prevsongAlongsideCtrl), 1);
-            } else if (value == 0 && keycode == m_lastNonModKey) {
-                emit buttonEvent(chordSignature(keycode, m_prevsongAlongsideCtrl), 0);
-                m_lastNonModKey = -1;
-                m_prevsongAlongsideCtrl = false;
+        if (n == 0) {
+            qCInfo(lcDevices) << "EvdevEncoderManager: EOF on" << m_devicePath;
+            closeFd();
+            m_rescanTimer->start();
+            return;
+        }
+        const size_t count = static_cast<size_t>(n) / sizeof(struct input_event);
+        for (size_t i = 0; i < count; ++i) {
+            if (ev[i].type != EV_KEY) continue;
+            // value: 0 = release, 1 = press, 2 = autorepeat
+            for (const auto& out : m_decoder.feed(ev[i].code, ev[i].value)) {
+                if (out.kind == UlanziChordDecoder::Event::Kind::Tune)
+                    emit tuneSteps(out.tuneSteps);
+                else
+                    emit buttonEvent(out.signature, out.action);
             }
         }
     }
