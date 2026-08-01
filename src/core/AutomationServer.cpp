@@ -553,8 +553,17 @@ QJsonObject describeWidget(const QWidget* w)
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {
-        if (auto* cw = qobject_cast<const QWidget*>(child))
+        if (auto* cw = qobject_cast<const QWidget*>(child)) {
+            // A child that is itself a window (a floated pan's
+            // PanFloatingWindow is a Qt::Window parented to MainWindow for
+            // z-order/lifetime) is already enumerated by doDumpTree()'s
+            // topLevelWidgets() loop. Describing it here too serialized the
+            // whole window twice, so every widget inside a floated pan
+            // appeared as a duplicate — two VfoWidgets for one slice.
+            if (cw->isWindow())
+                continue;
             kids.append(describeWidget(cw));
+        }
     }
 
     if (auto* menu = qobject_cast<const QMenu*>(w)) {
