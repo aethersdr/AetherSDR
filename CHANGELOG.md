@@ -8,6 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix(rx): per-slice manual squelch memory survives every path, and stops
+  being persisted client-side (#4592, follow-up to #4461 / #3326)** — #4461
+  moved the manual squelch threshold onto `SliceModel`, but only `RxApplet`
+  maintained it. Any other writer — a non-active slice's own VFO flag, a
+  MIDI/controller-mapped squelch knob, or a status echo from the radio (your
+  own edit, another Multi-Flex client, or the radio's session restore) — left
+  the memory stale, so the next SQL mode cycle silently pushed the stale value
+  back to the radio and undid the setting.
+
+  Manual squelch input now goes through a single `SliceModel::setManualSquelch()`
+  entry point that moves the live level and the remembered one together, and
+  radio status echoes update the memory too — gated so that Auto-mode's
+  per-tick computed levels, and the level carried by an Off-mode push, can't
+  pose as a threshold you chose.
+
+  `LastManualSquelchLevel` is also gone. Squelch is radio-authoritative and
+  must not be persisted client-side; on a FLEX every full slice status carries
+  `squelch_level`, so the setting was never read back and only added a settings
+  write per level change. New slices seed from the radio's own status, and a
+  one-shot migration retires the orphaned row from existing installs.
+
 ## [v26.7.4.1] — 2026-07-27
 
 ### Hotfix: TCI rig control restored for WSJT-X and control surfaces

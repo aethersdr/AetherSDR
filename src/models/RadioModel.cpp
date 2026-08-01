@@ -8211,6 +8211,10 @@ void RadioModel::handleSliceStatus(int id,
             // is no client-side last-used value to fall back to (#4592).
             // Either way this is only a starting point, not a live shared
             // value; each slice's own threshold is independent from here on.
+            // applyChanges() below maintains the same memory from every
+            // subsequent echo (the gate defaults open for a slice with no
+            // surface attached), so this seed is the explicit belt to that
+            // braces — it pins the value before any UI can observe the slice.
             bool haveRadioLevel = false;
             const int radioLevel =
                 kvs.value(QStringLiteral("squelch_level")).toInt(&haveRadioLevel);

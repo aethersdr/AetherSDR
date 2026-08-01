@@ -133,13 +133,23 @@ public:
     // the active slice doesn't pull in another slice's threshold (#3326).
     int     manualSquelchLevel() const { return m_manualSquelchLevel; }
     void    setManualSquelchLevel(int level) { m_manualSquelchLevel = qBound(0, level, 100); }
-    // Whether Auto squelch currently owns this slice's level (driven by
-    // RxApplet::sqlAutoChanged). Gates applyChanges()'s radio-status-echo
-    // path so an Auto-computed level echoed back by the radio doesn't
-    // overwrite the operator's last manual choice (#4592) — the same
-    // silent-overwrite class #3326 fixed, reached via the status-echo path
-    // instead of a direct client write.
-    void    setAutoSquelchActive(bool active) { m_autoSquelchActive = active; }
+    // Whether a radio-echoed squelch_level for this slice should be taken as
+    // the operator's manual choice.  Driven by whichever surface owns the
+    // slice's SQL mode (RxApplet), and true only while that mode is Manual:
+    //   Manual — the echo is a genuine manual level (the operator's own
+    //            edit, another Multi-Flex client, or session restore) and
+    //            must update the manual memory.
+    //   Auto   — the level is algorithm-computed and re-pushed every tick.
+    //   Off    — the mode push sends sqlManualLevel(), but nothing keeps a
+    //            disabled squelch's level pinned, so an echo here is not a
+    //            threshold the operator chose either.
+    // Adopting the last two would silently overwrite the threshold the
+    // operator actually chose (#4592) — the same silent-overwrite class
+    // #3326 fixed, reached via the status-echo path rather than a direct
+    // client write.  Defaults true so a slice with no surface attached (a
+    // non-active VFO flag, a slice reclaimed from a previous session) still
+    // tracks genuine manual changes — the leak #4592 part 1 set out to close.
+    void    setSquelchEchoIsManual(bool isManual) { m_squelchEchoIsManual = isManual; }
     bool    ritOn()       const { return m_ritOn; }
     int     ritFreq()     const { return m_ritFreq; }
     bool    xitOn()       const { return m_xitOn; }
@@ -489,7 +499,7 @@ private:
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
     int     m_manualSquelchLevel{20};
-    bool    m_autoSquelchActive{false};
+    bool    m_squelchEchoIsManual{true};
     int     m_stepHz{100};
     QVector<int> m_stepList;
     bool    m_ritOn{false};

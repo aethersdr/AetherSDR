@@ -1460,22 +1460,32 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 
     // Auto state is client-side only; tell the spectrum-side algorithm to
     // start or stop driving the level.
-    if (wasAuto != nowAuto) {
+    if (wasAuto != nowAuto)
         emit sqlAutoChanged(nowAuto);
-        // Keep the slice's own Auto flag in sync so its radio-status-echo
-        // handler knows whether an incoming level is Auto-computed or the
-        // operator's manual choice (#4592).
-        if (m_slice) m_slice->setAutoSquelchActive(nowAuto);
-    }
+
+    // Re-gate the slice's status-echo handler on EVERY mode change, not only
+    // the Auto edges: an echoed level counts as the operator's manual choice
+    // only while we are in Manual.  Gating on `wasAuto != nowAuto` alone
+    // would miss Off↔Manual entirely (wasAuto == nowAuto there), and would
+    // leave the gate open across Auto→Off — the leg every return from Auto
+    // to Manual goes through, since cycleSqlMode() runs Off→Manual→Auto→Off
+    // (#4592).
+    if (m_slice) m_slice->setSquelchEchoIsManual(m == SqlMode::Manual);
 
     // Manual / Auto both want the radio squelch ON. Use the same model-backed
     // value that applySqlModeVisuals() displays so the first Kiwi command
     // cannot diverge from the slider/overlay before the operator drags it.
+    //
+    // Only Auto sends the dB margin: it is a 5–20 dB offset from the noise
+    // floor, not a 0–100 threshold.  Since #4592 dropped the client-side
+    // copy, the radio's own squelch_level is the only surviving record of
+    // the operator's manual threshold across a reconnect — writing the
+    // margin there on the way to Off would destroy it (Principle II).
     if (propagateToRadio && m_slice) {
         const bool sqOn = (m != SqlMode::Off);
-        const int level = (m == SqlMode::Manual)
-            ? sqlManualLevel()
-            : autoSqlMarginDb();
+        const int level = (m == SqlMode::Auto)
+            ? autoSqlMarginDb()
+            : sqlManualLevel();
         m_slice->setSquelch(sqOn, level);
     }
 }
@@ -1870,7 +1880,7 @@ void RxApplet::setKiwiSdrManager(KiwiSdrManager* manager)
                 applySqlModeVisuals();
                 emit sqlModeChanged(static_cast<int>(m_sqlMode));
                 emit sqlAutoChanged(m_sqlMode == SqlMode::Auto);
-                m_slice->setAutoSquelchActive(m_sqlMode == SqlMode::Auto);
+                m_slice->setSquelchEchoIsManual(m_sqlMode == SqlMode::Manual);
             }
         });
     }
@@ -2317,11 +2327,11 @@ void RxApplet::connectSlice(SliceModel* s)
     }
     emit sqlModeChanged(static_cast<int>(m_sqlMode));
     emit sqlAutoChanged(m_sqlMode == SqlMode::Auto);
-    // Explicit re-sync on every (re)attach, not just on an actual mode
-    // transition — setSqlMode() above only flips this when wasAuto !=
-    // nowAuto, but a freshly connected slice needs it set correctly
-    // regardless (#4592).
-    s->setAutoSquelchActive(m_sqlMode == SqlMode::Auto);
+    // Explicit re-sync on every (re)attach: setSqlMode() above is a no-op
+    // when the mode it computed already matches m_sqlMode, so a freshly
+    // connected slice can arrive with the gate at its class default rather
+    // than this applet's actual mode (#4592).
+    s->setSquelchEchoIsManual(m_sqlMode == SqlMode::Manual);
     emit squelchStateChanged(s->receiveSquelchOn(), s->receiveSquelchLevel());
     // AF gain → radio's per-slice audio_level
     {
@@ -2450,13 +2460,13 @@ void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
     m_savedSquelchOn = false;
-    // Nothing is driving Auto for this slice once it's no longer attached
-    // (review on #4592) — leaving the flag set would permanently deafen a
-    // later-reclaimed or reattached slice to genuine manual echoes, the
-    // same silent-overwrite class in the opposite direction. Clearing it
-    // matches SliceModel's own class default (false), the safe assumption
-    // when no UI is actively tracking this slice's SQL mode.
-    s->setAutoSquelchActive(false);
+    // No surface owns this slice's SQL mode once it's detached (review on
+    // #4592), so fall back to the class default: treat echoes as manual.
+    // Leaving the gate closed would permanently deafen a later-reclaimed or
+    // reattached slice to genuine manual changes — the same silent-overwrite
+    // class in the opposite direction, and precisely the non-active-slice
+    // leak #4592 part 1 set out to close.
+    s->setSquelchEchoIsManual(true);
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────

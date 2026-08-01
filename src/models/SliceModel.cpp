@@ -1364,13 +1364,15 @@ void SliceModel::applyChanges(const SliceDelta& d)
             m_squelchOn = *d.squelchOn;
         if (d.squelchLevel.has_value()) {
             m_squelchLevel = *d.squelchLevel;
-            // A radio-echoed level reflects the operator's manual choice
-            // (their own edit, another Multi-Flex client, session restore)
-            // unless Auto is actively driving this slice — Auto recomputes
-            // and pushes a level every algorithm tick, and treating that
-            // echo as "manual" would silently overwrite the last threshold
-            // the operator actually chose by hand (#4592).
-            if (!m_autoSquelchActive)
+            // Adopt the echoed level as the operator's manual choice only
+            // when the surface owning this slice's SQL mode says it is one
+            // (see setSquelchEchoIsManual) — an Auto-computed level, or the
+            // level carried by an Off-mode push, would otherwise silently
+            // overwrite the threshold the operator actually chose (#4592).
+            // External-receive (Kiwi) slices keep their level in
+            // m_externalReceiveSquelchLevel and never read the Flex manual
+            // memory, so exclude them here exactly as setManualSquelch does.
+            if (m_squelchEchoIsManual && !m_externalReceiveAudioReplacement)
                 setManualSquelchLevel(*d.squelchLevel);
         }
         emit squelchChanged(m_squelchOn, m_squelchLevel);

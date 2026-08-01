@@ -69,7 +69,7 @@ int main(int argc, char** argv)
     }
 
     // ── Manual -> Auto -> Manual round-trip via applyChanges(), gated by
-    // setAutoSquelchActive() (the "second door" #1 could still leak
+    // setSquelchEchoIsManual() (the "second door" #1 could still leak
     // through: a radio-status echo of an Auto-computed level). While Auto
     // is active, the echoed level must not overwrite the manual memory;
     // once Auto ends, the operator's last manual choice must still be
@@ -79,26 +79,94 @@ int main(int argc, char** argv)
         s.setManualSquelch(true, 45);
         EXPECT_EQ(s.manualSquelchLevel(), 45);
 
-        s.setAutoSquelchActive(true);  // RxApplet transitions to Auto
+        s.setSquelchEchoIsManual(false);  // RxApplet transitions to Auto
         s.applyChanges(delta([](SliceDelta& d) {
             d.squelchOn = true; d.squelchLevel = 8;  // Auto's computed level, echoed back
         }));
         EXPECT_EQ(s.squelchLevel(), 8);
         EXPECT_EQ(s.manualSquelchLevel(), 45);  // must survive the Auto echo
 
-        s.setAutoSquelchActive(false);  // RxApplet transitions back to Manual
+        s.setSquelchEchoIsManual(true);  // RxApplet transitions back to Manual
         EXPECT_EQ(s.manualSquelchLevel(), 45);  // still the value to restore
 
-        // Clearing the flag must genuinely re-enable echo-driven updates,
+        // Re-opening the gate must genuinely re-enable echo-driven updates,
         // not just leave the old value sitting there unchanged — otherwise
-        // a slice stuck with the flag never cleared (the bug review found
-        // in RxApplet::disconnectSlice(), which now clears it) would look
+        // a slice stuck with the gate never re-opened (the bug review found
+        // in RxApplet::disconnectSlice(), which now restores it) would look
         // identical to this test up to this point. A fresh echo at a new
         // level proves the gate is actually open again.
         s.applyChanges(delta([](SliceDelta& d) {
             d.squelchOn = true; d.squelchLevel = 60;
         }));
         EXPECT_EQ(s.manualSquelchLevel(), 60);
+    }
+
+    // ── The full SQL mode cycle, driven the way RxApplet drives it.
+    //
+    // The gate above is only as good as the mode machine that sets it, and
+    // that machine is the part a SliceModel-only test can't see: an earlier
+    // version of this fix gated on "is Auto active" at the Auto edges only,
+    // which left the gate OPEN across Auto->Off — the leg every return from
+    // Auto to Manual passes through, since cycleSqlMode() runs
+    // Off->Manual->Auto->Off. The Off push then supplied a level the
+    // operator never chose and the echo adopted it as the manual memory.
+    //
+    // SqlModeMachine mirrors the two lines of RxApplet::setSqlMode() that
+    // matter (gate, then propagate) so that regression is pinned here rather
+    // than only in a GUI target this test can't link. The manual level (45)
+    // is deliberately NOT equal to the Auto margin (10): with the two equal,
+    // a clobbered memory and a correct one are indistinguishable, which is
+    // exactly why the original bug survived both review and a live radio test.
+    {
+        enum class SqlMode { Off, Manual, Auto };
+        struct SqlModeMachine {
+            SliceModel* slice;
+            SqlMode     mode = SqlMode::Off;
+            int         marginDb = 10;      // AppSettings "AutoSqlMarginDb"
+
+            void setSqlMode(SqlMode m) {
+                if (m == mode) return;
+                mode = m;
+                // RxApplet::setSqlMode() — re-gate on every mode change.
+                slice->setSquelchEchoIsManual(m == SqlMode::Manual);
+                // …then push to the radio; only Auto sends the dB margin.
+                const bool on = (m != SqlMode::Off);
+                const int level = (m == SqlMode::Auto)
+                    ? marginDb
+                    : slice->manualSquelchLevel();
+                slice->setSquelch(on, level);
+                // The radio echoes back what it now holds.
+                SliceDelta d;
+                d.squelchOn = on;
+                d.squelchLevel = slice->squelchLevel();
+                slice->applyChanges(d);
+            }
+            // RxApplet::cycleSqlMode(): Off -> Manual -> Auto -> Off.
+            void cycle() {
+                setSqlMode(mode == SqlMode::Off    ? SqlMode::Manual
+                         : mode == SqlMode::Manual ? SqlMode::Auto
+                                                   : SqlMode::Off);
+            }
+        };
+
+        SliceModel s(6);
+        SqlModeMachine rx{&s};
+
+        rx.setSqlMode(SqlMode::Manual);
+        s.setManualSquelch(true, 45);            // operator drags the slider
+        EXPECT_EQ(s.manualSquelchLevel(), 45);
+
+        rx.cycle();                              // Manual -> Auto
+        s.setSquelch(true, 8);                   // an algorithm tick
+        s.applyChanges(delta([](SliceDelta& d) { d.squelchOn = true; d.squelchLevel = 8; }));
+        EXPECT_EQ(s.manualSquelchLevel(), 45);
+
+        rx.cycle();                              // Auto -> Off
+        EXPECT_EQ(s.manualSquelchLevel(), 45);   // the leg that used to clobber
+
+        rx.cycle();                              // Off -> Manual
+        EXPECT_EQ(s.manualSquelchLevel(), 45);
+        EXPECT_EQ(s.squelchLevel(), 45);         // and the radio gets it back
     }
 
     // ── A genuine echo while NOT in Auto (the operator's own edit reaching
@@ -115,8 +183,10 @@ int main(int argc, char** argv)
     }
 
     // ── External-receive-replacement (KiwiSDR) slices manage their own
-    // level independently (m_externalReceiveSquelchLevel) — setManualSquelch
-    // must not touch the Flex manual memory for them.
+    // level independently (m_externalReceiveSquelchLevel) — neither
+    // setManualSquelch() nor the applyChanges() echo path may touch the Flex
+    // manual memory for them. Both halves of that exclusion are asserted:
+    // they disagreed once, and only the setManualSquelch half was covered.
     {
         SliceModel s(5);
         s.setExternalReceiveAudioReplacementMute(true);
@@ -124,6 +194,14 @@ int main(int argc, char** argv)
         s.setManualSquelch(true, 77);
         EXPECT_EQ(s.manualSquelchLevel(), before);
         EXPECT_EQ(s.receiveSquelchLevel(), 77);
+
+        // The underlying Flex slice keeps reporting its own squelch_level
+        // while Kiwi audio replaces its receive path; that echo is about a
+        // level the operator isn't looking at on this surface.
+        s.applyChanges(delta([](SliceDelta& d) {
+            d.squelchOn = true; d.squelchLevel = 33;
+        }));
+        EXPECT_EQ(s.manualSquelchLevel(), before);
     }
 
     if (g_failures == 0) {
