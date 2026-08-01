@@ -2720,6 +2720,11 @@ void MainWindow::wireExternalControllers()
             m_dialCoalesceTimer.start();
     });
 
+    // One-shot claim of the pre-#4611 flat mapping keys, before the first
+    // lookup.  AGENTS.md "Settings Migration": run once at feature startup,
+    // not on every access.
+    UlanziDialMapperDialog::migrateLegacyMappings();
+
     connect(m_dialBackend, &UlanziDialBackend::buttonEvent,
             this, [this](const QString& signature, int action) {
         // Look up which pill this hardware signature is bound to (the
@@ -2747,14 +2752,27 @@ void MainWindow::wireExternalControllers()
             // handlers because keyboard shortcuts drive them via press + release
             // event filters. Handle press (action == 1) and release (action == 0)
             // explicitly here.
+            //
+            // Deliberately WITHOUT handlePttHoldShortcut()'s textEntryCaptured()
+            // and m_keyboardShortcutsEnabled gates: those exist so a keystroke
+            // being typed into a field can't key the radio.  A dedicated dial
+            // button carries no such ambiguity, and gating it would make the
+            // hardware PTT stop working whenever a text field had focus.
             if (id == QLatin1String(kPttHoldActionId)) {
                 if (!m_radioModel.isConnected()) return;
                 if (action == 1 && !m_pttHoldActive) {
                     m_pttHoldActive = true;
+                    m_dialPttHoldActive = true;
                     m_radioModel.transmitModel().requestPttOn(TransmitModel::PttSource::Mox);
-                } else if (action == 0 && m_pttHoldActive) {
-                    m_pttHoldActive = false;
-                    m_radioModel.transmitModel().requestPttOff(TransmitModel::PttSource::Mox);
+                } else if (action == 0 && m_dialPttHoldActive) {
+                    // Release only what the dial itself keyed: a dial button
+                    // coming up must not drop a PTT the keyboard is still
+                    // holding down.  The fail-safe covers a lost dial release.
+                    m_dialPttHoldActive = false;
+                    if (m_pttHoldActive) {
+                        m_pttHoldActive = false;
+                        m_radioModel.transmitModel().requestPttOff(TransmitModel::PttSource::Mox);
+                    }
                 }
                 return;
             }
@@ -2821,13 +2839,16 @@ void MainWindow::wireExternalControllers()
         qDebug() << "Ulanzi Dial:" << (connected ? "connected" : "disconnected") << name;
         if (!connected) {
 #ifdef HAVE_MIDI
-            for (const QString& id : m_dialActiveMidiGates) {
+            // Snapshot and clear before driving any setter: the set must not be
+            // live while the setters run.
+            const QSet<QString> heldGates = m_dialActiveMidiGates;
+            m_dialActiveMidiGates.clear();
+            for (const QString& id : heldGates) {
                 const auto* p = m_midiControl ? m_midiControl->findParam(id) : nullptr;
                 if (p && p->setter) {
                     p->setter(p->rangeMin);
                 }
             }
-            m_dialActiveMidiGates.clear();
 #endif
             failSafeMomentaryKeyingToRx("ulanzi disconnect");
         }

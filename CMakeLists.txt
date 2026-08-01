@@ -2272,6 +2272,10 @@ endif()
 # platforms.  See #3232 for the design.
 target_sources(aethercore PRIVATE
     src/core/UlanziDialBackend.h    # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
+    src/core/UlanziChordDecoder.cpp # chord decode shared by all three backends (ulanzi_chord_decoder_test)
+    src/core/UlanziChordDecoder.h
+    src/core/UlanziDialMappings.cpp # pill->action document owner (ulanzi_mapping_migration_test)
+    src/core/UlanziDialMappings.h
     src/core/backends/IRadioBackend.h)  # aetherd RFC step 2.1: radio-facing seam (§5.5); header-only Q_OBJECT
 target_sources(AetherSDR PRIVATE
     src/gui/UlanziDialMapperDialog.cpp
@@ -4778,6 +4782,25 @@ add_executable(midi_relative_cc_decoder_test
 target_include_directories(midi_relative_cc_decoder_test PRIVATE src)
 add_test(NAME midi_relative_cc_decoder_test COMMAND midi_relative_cc_decoder_test)
 
+add_executable(ulanzi_chord_decoder_test
+    tests/ulanzi_chord_decoder_test.cpp
+    src/core/UlanziChordDecoder.cpp
+)
+target_include_directories(ulanzi_chord_decoder_test PRIVATE src)
+target_link_libraries(ulanzi_chord_decoder_test PRIVATE Qt6::Core)
+add_test(NAME ulanzi_chord_decoder_test COMMAND ulanzi_chord_decoder_test)
+
+add_executable(ulanzi_mapping_migration_test
+    tests/ulanzi_mapping_migration_test.cpp
+    src/core/UlanziDialMappings.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/LogManager.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(ulanzi_mapping_migration_test PRIVATE src tests)
+target_link_libraries(ulanzi_mapping_migration_test PRIVATE Qt6::Core)
+add_test(NAME ulanzi_mapping_migration_test COMMAND ulanzi_mapping_migration_test)
+
 add_executable(transmit_model_test
     tests/transmit_model_test.cpp
     src/models/TransmitModel.cpp
@@ -5026,6 +5049,7 @@ endif()
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     slice_label_test
+    ulanzi_mapping_migration_test
     theme_manager_test
     panadapter_message_overlay_test
     app_settings_safety_test

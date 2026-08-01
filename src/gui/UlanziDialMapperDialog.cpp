@@ -2,8 +2,8 @@
 
 #include "UlanziDialMapperDialog.h"
 #include "core/AppSettings.h"
-#include "core/LogManager.h"
 #include "core/ShortcutManager.h"
+#include "core/UlanziDialMappings.h"
 #ifdef HAVE_MIDI
 #include "core/MidiControlManager.h"
 #endif
@@ -14,8 +14,6 @@
 #include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
@@ -309,6 +307,11 @@ void UlanziDialMapperDialog::buildPills()
                 if (mp.type != MidiParamType::Toggle &&
                     mp.type != MidiParamType::Trigger &&
                     mp.type != MidiParamType::Gate) continue;
+                // The CW keying actions are registered in BOTH registries under
+                // the same id.  Offering them twice would give the operator two
+                // dropdown entries that do the same thing by different code
+                // paths, so the shortcut entry (already listed) is the one.
+                if (m_shortcuts && m_shortcuts->action(mp.id)) continue;
                 p.combo->addItem(QStringLiteral("[MIDI %1] %2").arg(mp.category, mp.displayName),
                                  QStringLiteral("midi:%1").arg(mp.id));
             }
@@ -455,68 +458,34 @@ void UlanziDialCanvas::paintEvent(QPaintEvent*)
     // the dial body so the spatial mapping is conveyed by adjacency.
 }
 
-QString UlanziDialMapperDialog::rootSettingsKey()
+QStringList UlanziDialMapperDialog::allPillIds()
 {
-    return QStringLiteral("UlanziDialMappings");
+    QStringList ids;
+    ids.reserve(kPillCount);
+    for (int i = 0; i < kPillCount; ++i)
+        ids.append(QString::fromLatin1(kPillSpecs[i].id));
+    return ids;
 }
 
-QString UlanziDialMapperDialog::actionSettingsKey(const QString& pillId)
+void UlanziDialMapperDialog::migrateLegacyMappings()
 {
-    return QStringLiteral("UlanziDial_action_%1").arg(pillId);
+    UlanziDialMappings::migrateLegacyKeys(allPillIds());
 }
 
 QString UlanziDialMapperDialog::actionForPill(const QString& pillId)
 {
-    auto& s = AppSettings::instance();
-    const QByteArray raw = s.value(rootSettingsKey(), QStringLiteral("{}")).toString().toUtf8();
-    QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
-    if (err.error == QJsonParseError::NoError && doc.isObject()) {
-        const QJsonObject obj = doc.object();
-        if (obj.contains(pillId)) {
-            return obj.value(pillId).toString();
-        }
-    } else if (!raw.isEmpty() && raw != "{}") {
-        qCWarning(lcDevices) << "Ulanzi Dial: corrupted settings JSON under" << rootSettingsKey()
-                             << err.errorString() << "— falling back to defaults";
-    }
-    // One-shot migration: if legacy per-pill flat key exists (underscore or slash form),
-    // adopt into JSON document, remove the flat keys, and persist so the JSON document alone is authoritative.
-    const QString legacyKey = actionSettingsKey(pillId);
-    const QString legacySlashKey = QStringLiteral("UlanziDial/action/%1").arg(pillId);
-    if (s.contains(legacyKey) || s.contains(legacySlashKey)) {
-        const QString legacyVal = s.contains(legacyKey) ? s.value(legacyKey).toString() : s.value(legacySlashKey).toString();
-        if (s.contains(legacyKey)) s.remove(legacyKey);
-        if (s.contains(legacySlashKey)) s.remove(legacySlashKey);
-        setActionForPill(pillId, legacyVal);
-        return legacyVal;
-    }
+    // The document is authoritative; an absent entry means "built-in default".
+    // Legacy flat keys are not consulted here — migrateLegacyMappings() has
+    // already claimed and deleted them at startup.
+    const QString bound = UlanziDialMappings::actionForPill(pillId);
+    if (!bound.isEmpty())
+        return bound;
     return defaultActionForPill(pillId);
 }
 
 void UlanziDialMapperDialog::setActionForPill(const QString& pillId, const QString& actionId)
 {
-    auto& s = AppSettings::instance();
-    const QByteArray raw = s.value(rootSettingsKey(), QStringLiteral("{}")).toString().toUtf8();
-    QJsonParseError err;
-    const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
-    QJsonObject obj;
-    if (err.error == QJsonParseError::NoError && doc.isObject()) {
-        obj = doc.object();
-    } else if (!raw.isEmpty() && raw != "{}") {
-        qCWarning(lcDevices) << "Ulanzi Dial: corrupted settings JSON under" << rootSettingsKey()
-                             << err.errorString() << "— resetting mappings object";
-    }
-    obj.insert(pillId, actionId);
-    const QString jsonStr = QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact));
-    s.setValue(rootSettingsKey(), jsonStr);
-    s.save();
-
-    QString readBack;
-    if (!s.readAppRowFromDisk(rootSettingsKey(), readBack) || readBack != jsonStr) {
-        qCWarning(lcDevices) << "Ulanzi Dial: failed to persist action mapping for pill"
-                             << pillId << "under" << rootSettingsKey();
-    }
+    UlanziDialMappings::setActionForPill(pillId, actionId);
 }
 
 QString UlanziDialMapperDialog::defaultActionForPill(const QString& pillId)

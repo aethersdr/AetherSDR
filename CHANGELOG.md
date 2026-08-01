@@ -42,11 +42,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   custom frame does not have. The window now reopens exactly where you left
   it, keeps its full size if you had it filling the screen, and stays put
   through Minimal Mode round trips.
-- **fix(ulanzi): one-shot settings migration and fail-safe key release (#4611)** —
-  Migrate legacy flat `UlanziDial_action_*` settings keys into the `UlanziDialMappings`
-  JSON document on first read and delete the flat keys so JSON config remains the sole
-  source of truth. Added persistence write verification and release-fail-safe guarantees
-  on dial disconnection.
+- **Ulanzi Dial buttons can now hold PTT and key CW, and remember what you
+  mapped them to (#4611)** — a dial button set to **PTT (Hold)** or a CW key
+  did nothing at all, because only the button-down half of each press was
+  being read; the button-up that should un-key never arrived. Press-and-hold
+  now works for PTT, the straight key, both paddles, and held MIDI actions.
+  Releases are honoured even when the dial reports the button and its modifier
+  out of order, and holding two side buttons at once no longer leaves the
+  first one stuck down — so the transmitter always comes back to receive. If
+  the dial disconnects mid-transmission, everything it was holding is released
+  immediately. Your button mappings also survive a restart now; existing ones
+  are carried over automatically the first time you run this version, and a
+  mapping you clear stays cleared.
 
 ## [v26.7.4.1] — 2026-07-27
 

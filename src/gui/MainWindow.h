@@ -1099,6 +1099,9 @@ private:
     QTimer                     m_dialCoalesceTimer;
     int                        m_dialPendingSteps{0};
     QSet<QString>              m_dialActiveMidiGates;
+    // True while the DIAL is holding PTT.  Distinct from m_pttHoldActive so a
+    // dial release cannot un-key a PTT the keyboard is still holding.
+    bool                       m_dialPttHoldActive{false};
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};
     QTimer               m_midiTuneIdleTimer;

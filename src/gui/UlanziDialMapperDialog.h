@@ -59,18 +59,18 @@ public:
     // device event maps to.  Returns empty string if no pill claims it.
     static QString pillForSignature(const QString& signature);
 
-    // AppSettings root key for all Ulanzi Dial mappings ("UlanziDialMappings").
-    static QString rootSettingsKey();
+    // Every pill id, in dial-layout order.
+    static QStringList allPillIds();
 
-    // Legacy per-pill AppSettings key (e.g. "UlanziDial_action_top_left").
-    // Retained as migration source for legacy flat-key settings.
-    static QString actionSettingsKey(const QString& pillId);
+    // One-shot claim of the pre-#4611 flat keys into the mappings document.
+    // Call once at controller-wiring time, before any lookup.
+    static void migrateLegacyMappings();
 
-    // Returns the active action ID for a pill (checking JSON config, migrating
-    // legacy flat keys on first read, and falling back to defaultActionForPill).
+    // The action bound to a pill, falling back to defaultActionForPill() when
+    // the mappings document has no entry for it.
     static QString actionForPill(const QString& pillId);
 
-    // Binds an action ID to a pill in AppSettings JSON and persists immediately.
+    // Bind an action to a pill and persist immediately.
     static void setActionForPill(const QString& pillId, const QString& actionId);
 
     // Built-in default action for a pill (e.g. "shortcut:mox_toggle"),
