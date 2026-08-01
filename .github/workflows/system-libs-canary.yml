@@ -55,10 +55,20 @@ jobs:
 
     env:
       CCACHE_DIR: /ccache
-      # Smaller than ci.yml's build (1000M): this tree is configured with
-      # ENABLE_RADE=OFF and system libraries in place of several vendored
-      # third_party builds, so it compiles less.
-      CCACHE_MAXSIZE: 500M
+      # 1000M, matching ci.yml's build. This was 500M on the assumption that
+      # ENABLE_RADE=OFF plus system libraries replacing vendored third_party
+      # builds meant materially less compiling. The first real run disproved
+      # that: 1678 cacheable calls here against 1980 in ci.yml's build — 15%
+      # fewer, not a different order of magnitude — and the working set filled
+      # 98.33% of the 500M cap in that single run.
+      #
+      # A cap that sits on the working set is worse than a smaller cache:
+      # entries are evicted before the next run can reuse them, so the hit rate
+      # stays pinned near its cold value instead of climbing. ci.yml's build
+      # settles at ~0.5 GB against 1000M and stays healthy; this tree needs the
+      # same headroom. Verify from the "ccache stats" step rather than assuming:
+      # a "Cache size" line near 100% means this needs raising again.
+      CCACHE_MAXSIZE: 1000M
       # NOT the default (mtime). sid reinstalls the toolchain from apt on every
       # run, so the compiler binary's identity is the one input that genuinely
       # could go stale here — hash its contents rather than trusting size+mtime.
