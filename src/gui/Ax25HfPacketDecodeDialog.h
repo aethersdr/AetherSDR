@@ -118,6 +118,15 @@ protected:
 private:
     void setModemProfile(Ax25ModemProfile profile, bool persist);
     void setDecodeEnabled(bool enabled);
+    // True when the backend runs the modulator on this host (HL2) rather than
+    // taking modulator input from a Flex DAX stream. Such a radio has no DAX
+    // TX stream to wait for and no `transmit dax` setting to change.
+    bool hostModulatesTx() const;
+    // Fail a TX that is waiting on a DAX stream which never arrives. The
+    // `stream create` reply is asynchronous and its failure path only logs, so
+    // without this a backend that drops the command leaves the TX — and every
+    // frame queued behind it — hung until the window closes.
+    void armTxStreamWaitTimeout();
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);

@@ -8453,6 +8453,27 @@ void AudioEngine::setRadeMode(bool on)
 
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
 {
+    // A host-modulating backend (HL2) runs the modulator on THIS host and has
+    // no Flex TX stream id — the AFSK belongs in the final-monitor tap, not in
+    // VITA-49 packets aimed at a Flex. Gating on m_txStreamId here silently
+    // discarded every AX.25 frame on such a radio, the same class of bug that
+    // made WSJT-X key the rig and transmit silence (see setHostModulation()
+    // and feedDaxTxAudioInternal()).
+    //
+    // forceRadioDaxRoute is irrelevant on this arm — the host-modulation branch
+    // returns before the route choice — but it is passed for symmetry with the
+    // WSPR pump, which feeds the same entry point with pre-shaped tones.
+    //
+    // No PTT gate here: Hl2Backend::submitTxAudio drops audio unless keyed, so
+    // the gate lives with the consumer. m_transmitting is decoded from Flex
+    // interlock status a host-modulating radio never sends, so testing it would
+    // discard everything.
+    if (m_hostModulation) {
+        feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
+                               /*forceRadioDaxRoute=*/true);
+        return;
+    }
+
     if (m_txStreamId == 0) return;
 
     // Gate modem audio on PTT (prevents radio pre-buffer build-up)

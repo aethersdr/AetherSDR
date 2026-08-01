@@ -153,6 +153,10 @@ constexpr int kTxChunkMs = 20;
 // radio's DAX TX buffer depth. Raise if clipping persists; lower if the FIFO
 // overflows.
 constexpr int kTxLeadBufferMs = 120;
+// How long a transmit may wait for a DAX TX stream before giving up. Generous
+// against a slow Flex `stream create` round trip, short enough that a backend
+// which silently drops the command does not strand the TX queue.
+constexpr int kTxStreamWaitTimeoutMs = 5000;
 
 constexpr const char* kAetherModemStyle = R"(
 QWidget {
@@ -1947,17 +1951,48 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
         .arg(tx.rmsDbfs, 0, 'f', 1)
         .arg(tx.peakDbfs, 0, 'f', 1));
 
-    if (m_audio->txStreamId() == 0) {
+    // A host-modulating backend (HL2) runs the modulator on this host: there is
+    // no DAX stream to create, and asking for one is worse than pointless. Its
+    // command sink drops `stream create type=dax_tx`, the create fails in the
+    // same millisecond, and ensureDaxTxStream() has already returned true
+    // optimistically — so the failure was only ever logged and this TX waited
+    // for a stream that could never arrive. Observed 2026-07-31 on the HL2:
+    // PTT never keyed, 181 audio chunks never sent, and the 11 frames queued
+    // behind it were dropped when the window closed. Same lesson the WSPR
+    // beacon learned in RadioModel::prepareWsprTransmit().
+    if (!hostModulatesTx() && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
         appendSystemLine(QStringLiteral("Requesting DAX TX stream for AetherModem TX."));
         qCInfo(lcAx25) << "AX.25 TX requesting DAX TX stream";
-        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::AetherModemAx25Tx))
+        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::AetherModemAx25Tx)) {
             finishTransmit(true, QStringLiteral("DAX TX stream policy rejected stream creation"));
+            return;
+        }
+        // The create reply is asynchronous and its failure path only logs, so
+        // nothing else would ever end this wait. Fail fast instead of hanging
+        // the queue behind a stream that is not coming.
+        armTxStreamWaitTimeout();
         return;
     }
 
     beginTransmitWhenReady();
+}
+
+bool Ax25HfPacketDecodeDialog::hostModulatesTx() const
+{
+    return m_radio && m_radio->backendCapabilities().hostModulates;
+}
+
+void Ax25HfPacketDecodeDialog::armTxStreamWaitTimeout()
+{
+    QTimer::singleShot(kTxStreamWaitTimeoutMs, this, [this] {
+        if (!m_txPendingStream)
+            return; // the stream arrived (or the TX ended some other way)
+        finishTransmit(true, QStringLiteral(
+            "DAX TX stream did not arrive within %1 ms — this radio may have no "
+            "DAX transport").arg(kTxStreamWaitTimeoutMs));
+    });
 }
 
 #ifdef HAVE_MQTT
@@ -2017,7 +2052,8 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         finishTransmit(true, QStringLiteral("audio engine or radio model disappeared before TX"));
         return;
     }
-    if (m_audio->txStreamId() == 0) {
+    const bool hostModulated = hostModulatesTx();
+    if (!hostModulated && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
         return;
@@ -2032,18 +2068,31 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
     m_txPendingStream = false;
     m_txActive = true;
     m_txPreviousAudioDaxMode = m_audio->isDaxTxMode();
-    m_txPreviousTransmitDax = txModel.daxOn();
     m_txRestoreAudioDaxMode = true;
-    m_txRestoreTransmitDax = true;
 
+    // Local DAX TX mode is what keeps the microphone off the wire while we are
+    // modulating, so it applies on every family. `transmit dax` does not: it
+    // tells a FLEX to take its modulator input from the DAX stream instead of
+    // the mic jacks, and a radio with no on-radio modulator has no such choice
+    // to make. Setting it on a host-modulating backend is dropped by the
+    // command plane anyway, and latching the restore flag for a setting we
+    // never changed would hand back a stale value on unkey.
     m_audio->setDaxTxMode(true);
-    txModel.setDax(true);
-    appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; DAX TX stream 0x%2.")
-        .arg(transmitSliceSummary())
-        .arg(m_audio->txStreamId(), 0, 16));
+    if (!hostModulated) {
+        m_txPreviousTransmitDax = txModel.daxOn();
+        m_txRestoreTransmitDax = true;
+        txModel.setDax(true);
+    }
+
+    const QString route = hostModulated
+        ? QStringLiteral("host-modulated (no DAX stream)")
+        : QStringLiteral("DAX TX stream 0x%1").arg(m_audio->txStreamId(), 0, 16);
+    appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; %2.")
+        .arg(transmitSliceSummary(), route));
     qCInfo(lcAx25).noquote()
-        << QStringLiteral("AX.25 TX start stream=0x%1 %2 chunks=%3 daxSettleMs=%4 leadMs=%5 tailMs=%6")
-            .arg(m_audio->txStreamId(), 0, 16)
+        << QStringLiteral("AX.25 TX start route=%1 %2 chunks=%3 daxSettleMs=%4 leadMs=%5 tailMs=%6")
+            .arg(hostModulated ? QStringLiteral("hostModulated")
+                               : QStringLiteral("dax:0x%1").arg(m_audio->txStreamId(), 0, 16))
             .arg(transmitSliceSummary())
             .arg(m_txChunkCount)
             .arg(kTxDaxSettleMs)
