@@ -2055,6 +2055,15 @@ AutomationServer::AutomationServer(QObject* parent)
 AutomationServer::~AutomationServer()
 {
     stop();
+#ifdef HAVE_WEBSOCKETS
+    // The QWebSockets are parented to this and Qt reaps them, but the
+    // TciSimClient structs that own their bookkeeping are raw and are otherwise
+    // only freed on the `tci stop` path — so any simulator still running at
+    // shutdown leaks one. Harmless at process exit in the app; not harmless in
+    // tests, which run this class under ASAN.
+    qDeleteAll(m_tciSims);
+    m_tciSims.clear();
+#endif
 }
 
 bool AutomationServer::start(const QString& serverName)
@@ -3077,8 +3086,12 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                                          a.value);
             });
 
+        // The help below is one string literal on purpose, with nothing between
+        // the aliases and it: tools/gen_bridge_docs.py matches a single quoted
+        // help field directly after `{aliases},`, so either a comment there or
+        // adjacent-literal concatenation drops this row from the verb table.
         add("tci", {},
-            "tci start|status|stop|send|trace|routes — TCI simulator and protocol diagnostics",
+            "tci start|status|stop|send|trace|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
                 if (a.action.isEmpty()) {
@@ -8653,7 +8666,8 @@ QJsonObject AutomationServer::doDss(const QString& action,
 // client simulator (#3305/#4009/#3913). `send`, `trace`, and `routes` expose
 // deterministic protocol diagnostics without adding test commands to TCI.
 #ifdef HAVE_WEBSOCKETS
-void AutomationServer::appendTciTrace(const QString& direction, const QString& text)
+void AutomationServer::appendTciTrace(const QString& direction,
+                                      const QString& client, const QString& text)
 {
     if (!m_tciTraceEnabled) {
         return;
@@ -8672,6 +8686,7 @@ void AutomationServer::appendTciTrace(const QString& direction, const QString& t
             ++m_tciTraceSeq,
             m_tciTraceClock.elapsed(),
             direction,
+            client,
             normalized + QLatin1Char(';'),
         });
         while (m_tciTrace.size() > kTciTraceMax) {
@@ -8680,13 +8695,100 @@ void AutomationServer::appendTciTrace(const QString& direction, const QString& t
     }
 }
 
-void AutomationServer::sendTciSimText(const QString& text)
+void AutomationServer::sendTciSimText(TciSimClient* sim, const QString& text)
 {
-    if (!m_tciSim) {
+    if (!sim || !sim->socket) {
         return;
     }
-    appendTciTrace(QStringLiteral("client->server"), text);
-    m_tciSim->sendTextMessage(text);
+    appendTciTrace(QStringLiteral("client->server"), sim->id, text);
+    sim->socket->sendTextMessage(text);
+}
+
+AutomationServer::TciSimClient* AutomationServer::tciSimById(const QString& id) const
+{
+    for (TciSimClient* sim : m_tciSims) {
+        if (sim && sim->id == id) {
+            return sim;
+        }
+    }
+    return nullptr;
+}
+
+QJsonObject AutomationServer::tciSimStatus(const TciSimClient* sim) const
+{
+    if (!sim) {
+        return QJsonObject{{QStringLiteral("running"), false}};
+    }
+    QJsonObject o{
+        {QStringLiteral("id"), sim->id},
+        {QStringLiteral("running"), sim->socket != nullptr},
+        {QStringLiteral("profile"), sim->profile},
+        {QStringLiteral("receiver"), sim->receiver},
+        {QStringLiteral("connected"),
+            sim->socket && sim->socket->state() == QAbstractSocket::ConnectedState},
+        {QStringLiteral("ready"), sim->ready},
+        {QStringLiteral("audioStarted"), sim->audioStarted},
+        {QStringLiteral("iqStarted"), sim->iqStarted},
+        {QStringLiteral("binaryFrames"), sim->binaryFrames},
+        {QStringLiteral("iqFrames"), sim->iqFrames},
+        {QStringLiteral("binaryBytes"), sim->binaryBytes},
+        {QStringLiteral("textMessages"), sim->textMsgs},
+        {QStringLiteral("msSinceLastFrame"),
+            (sim->lastFrameMs >= 0 && sim->timer.isValid())
+                ? sim->timer.elapsed() - sim->lastFrameMs : -1},
+    };
+    if (!sim->closeReason.isEmpty()) {
+        o[QStringLiteral("closeReason")] = sim->closeReason;
+    }
+    return o;
+}
+
+void AutomationServer::tciSimTeardown(TciSimClient* sim, bool abrupt)
+{
+    if (!sim) {
+        return;
+    }
+    // Null the socket BEFORE abort()/close(). abort() emits
+    // QWebSocket::disconnected synchronously (same-thread direct delivery),
+    // re-entering the disconnected lambda; if the socket were still set there
+    // it would deleteLater()+null it and the deleteLater() below would fire on
+    // a dangling pointer. Nulling first makes the lambda's guard fail so it
+    // no-ops and teardown is owned here (#4017).
+    QWebSocket* socket = sim->socket;
+    const bool wasAudioStarted = sim->audioStarted;
+    const bool wasIqStarted = sim->iqStarted;
+    sim->socket = nullptr;
+    sim->ready = false;
+    sim->audioStarted = false;
+    sim->iqStarted = false;
+    if (!socket) {
+        return;
+    }
+    if (abrupt) {
+        socket->abort();
+    } else {
+        if (wasAudioStarted) {
+            const QString stop
+                = QStringLiteral("audio_stop:%1;").arg(sim->receiver);
+            appendTciTrace(QStringLiteral("client->server"), sim->id, stop);
+            socket->sendTextMessage(stop);
+        }
+        if (wasIqStarted) {
+            const QString stop = QStringLiteral("iq_stop:%1;").arg(sim->receiver);
+            appendTciTrace(QStringLiteral("client->server"), sim->id, stop);
+            socket->sendTextMessage(stop);
+        }
+        socket->close();
+    }
+    // Sever the socket's signals before handing it to deleteLater(). Every one
+    // of its lambdas captures `sim` by pointer, and the caller deletes `sim` as
+    // soon as this returns while the socket itself lives until the event loop
+    // reaps it — so any late disconnected/textMessageReceived would run against
+    // freed memory. In practice DeferredDelete wins that race and it does not
+    // fire, but the safety would be Qt's event ordering rather than anything
+    // stated here. Make it structural instead.
+    QObject::disconnect(socket, nullptr, this, nullptr);
+    socket->deleteLater();
 }
 
 QJsonObject AutomationServer::tciTraceSnapshot(int limit) const
@@ -8702,6 +8804,7 @@ QJsonObject AutomationServer::tciTraceSnapshot(int limit) const
             {QStringLiteral("seq"), static_cast<qint64>(entry.seq)},
             {QStringLiteral("elapsedMs"), entry.elapsedMs},
             {QStringLiteral("direction"), entry.direction},
+            {QStringLiteral("client"), entry.client},
             {QStringLiteral("text"), entry.text},
         });
     }
@@ -8729,36 +8832,73 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     Q_UNUSED(value);
     return err(QStringLiteral("TCI is not built into this binary (HAVE_WEBSOCKETS off)"));
 #else
-    const auto status = [this]() {
-        QJsonObject o{{QStringLiteral("ok"), true},
-                      {QStringLiteral("running"), m_tciSim != nullptr}};
-        if (m_tciSim) {
-            o[QStringLiteral("connected")]    = m_tciSim->state() == QAbstractSocket::ConnectedState;
-            o[QStringLiteral("ready")]        = m_tciSimReady;
-            o[QStringLiteral("audioStarted")] = m_tciSimAudioStarted;
-            o[QStringLiteral("iqStarted")]    = m_tciSimIqStarted;
-            o[QStringLiteral("profile")]      = m_tciSimProfile;
+    // `@id` selects one simulated client. Absent, single-client commands act on
+    // the only running client (or the default id), which keeps every existing
+    // single-sim invocation working unchanged. TCI commands never begin with
+    // '@', so the prefix cannot collide with a payload.
+    const auto takeSimId = [this](QString& rest) -> QString {
+        const QString trimmed = rest.trimmed();
+        if (trimmed.startsWith(QLatin1Char('@'))) {
+            const QString id = trimmed.section(QLatin1Char(' '), 0, 0).mid(1);
+            rest = trimmed.section(QLatin1Char(' '), 1).trimmed();
+            return id;
         }
-        o[QStringLiteral("binaryFrames")] = m_tciSimBinaryFrames;
-        o[QStringLiteral("iqFrames")]     = m_tciSimIqFrames;
-        o[QStringLiteral("binaryBytes")]  = m_tciSimBinaryBytes;
-        o[QStringLiteral("textMessages")] = m_tciSimTextMsgs;
-        o[QStringLiteral("msSinceLastFrame")] =
-            (m_tciSimLastFrameMs >= 0 && m_tciSimTimer.isValid())
-                ? m_tciSimTimer.elapsed() - m_tciSimLastFrameMs : -1;
-        if (!m_tciSimCloseReason.isEmpty())
-            o[QStringLiteral("closeReason")] = m_tciSimCloseReason;
+        rest = trimmed;
+        if (m_tciSims.size() == 1 && m_tciSims.first()) {
+            return m_tciSims.first()->id;
+        }
+        return QString::fromLatin1(kTciSimDefaultId);
+    };
+
+    const auto statusAll = [this]() {
+        QJsonArray clients;
+        for (const TciSimClient* sim : m_tciSims) {
+            clients.append(tciSimStatus(sim));
+        }
+        QJsonObject o{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("running"), !m_tciSims.isEmpty()},
+            {QStringLiteral("clientCount"), clients.size()},
+            {QStringLiteral("clients"), clients},
+        };
+        // Single-client shape stays flat so existing assertions keep reading
+        // `connected`/`audioStarted`/`iqFrames` off the top-level object.
+        if (m_tciSims.size() == 1 && m_tciSims.first()) {
+            const QJsonObject one = tciSimStatus(m_tciSims.first());
+            for (auto it = one.begin(); it != one.end(); ++it) {
+                o[it.key()] = it.value();
+            }
+            o[QStringLiteral("ok")] = true;
+        }
         return o;
     };
 
-    if (normalizedAction == QLatin1String("status"))
-        return status();
+    if (normalizedAction == QLatin1String("status")) {
+        QString rest = value;
+        const QString trimmed = rest.trimmed();
+        if (trimmed.startsWith(QLatin1Char('@'))) {
+            const QString id = takeSimId(rest);
+            TciSimClient* sim = tciSimById(id);
+            if (!sim) {
+                return err(QStringLiteral("no TCI simulator '%1'").arg(id));
+            }
+            QJsonObject o = tciSimStatus(sim);
+            o[QStringLiteral("ok")] = true;
+            return o;
+        }
+        return statusAll();
+    }
 
     if (normalizedAction == QLatin1String("send")) {
-        if (!m_tciSim || m_tciSim->state() != QAbstractSocket::ConnectedState) {
-            return err(QStringLiteral("TCI simulator is not connected"));
+        QString command = value;
+        const QString simId = takeSimId(command);
+        TciSimClient* sim = tciSimById(simId);
+        if (!sim || !sim->socket
+            || sim->socket->state() != QAbstractSocket::ConnectedState) {
+            return err(QStringLiteral("TCI simulator '%1' is not connected")
+                           .arg(simId));
         }
-        QString command = value.trimmed();
+        command = command.trimmed();
         if (command.isEmpty()) {
             return err(QStringLiteral("tci send requires a command"));
         }
@@ -8769,10 +8909,11 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         if (!command.endsWith(QLatin1Char(';'))) {
             command += QLatin1Char(';');
         }
-        sendTciSimText(command);
+        sendTciSimText(sim, command);
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("action"), QStringLiteral("send")},
+            {QStringLiteral("client"), sim->id},
             {QStringLiteral("command"), command},
             {QStringLiteral("traceSeq"), static_cast<qint64>(m_tciTraceSeq)},
         };
@@ -8834,140 +8975,196 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     }
 
     if (normalizedAction == QLatin1String("start")) {
-        if (m_tciSim)
-            return err(QStringLiteral("tci sim already running — `tci stop` first"));
+        // `tci start [sdc] [port] [@id] [rx=<n>]` — every token optional and
+        // order-independent apart from the historical `[sdc] [port]` prefix, so
+        // the pre-#4547 spellings still parse exactly as before.
+        QString id;
+        int receiver = 0;
+        bool sdcProfile = false;
+        QString portText;
         const QStringList options = value.simplified().split(
             QLatin1Char(' '), Qt::SkipEmptyParts);
-        const bool sdcProfile = !options.isEmpty()
-            && options.first().compare(QLatin1String("sdc"), Qt::CaseInsensitive) == 0;
-        const QString portText = sdcProfile
-            ? (options.size() >= 2 ? options.at(1) : QString())
-            : (options.isEmpty() ? QString() : options.first());
+        for (const QString& opt : options) {
+            if (opt.compare(QLatin1String("sdc"), Qt::CaseInsensitive) == 0) {
+                sdcProfile = true;
+            } else if (opt.startsWith(QLatin1Char('@'))) {
+                id = opt.mid(1);
+            } else if (opt.startsWith(QLatin1String("rx="), Qt::CaseInsensitive)) {
+                bool okRx = false;
+                const int parsed = opt.mid(3).toInt(&okRx);
+                if (!okRx || parsed < 0) {
+                    return err(QStringLiteral("tci start rx= must be >= 0"));
+                }
+                receiver = parsed;
+            } else if (portText.isEmpty()) {
+                portText = opt;
+            }
+        }
+        if (id.isEmpty()) {
+            id = QString::fromLatin1(kTciSimDefaultId);
+        }
+        if (id.size() > 32 || !std::all_of(id.cbegin(), id.cend(), [](QChar c) {
+                return c.isLetterOrNumber() || c == QLatin1Char('-')
+                    || c == QLatin1Char('_');
+            })) {
+            return err(QStringLiteral("tci start @id must be 1-32 alphanumerics"));
+        }
+        if (TciSimClient* existing = tciSimById(id)) {
+            if (existing->socket) {
+                return err(QStringLiteral(
+                    "tci sim '%1' already running — `tci stop @%1` first").arg(id));
+            }
+            // A server-side close already reaped the socket in the disconnected
+            // lambda below, leaving a dead slot behind. Recycle it rather than
+            // refusing the restart — refusing is exactly the failure #4017
+            // fixed, and matching on the id alone reintroduced it once the sims
+            // became a list instead of a single nulled member.
+            m_tciSims.removeOne(existing);
+            delete existing;
+        }
         bool okPort = false;
         int port = portText.toInt(&okPort);
         if (!okPort || port <= 0)
             port = AppSettings::instance().value("TciPort", "50001").toInt();
-        m_tciSimProfile = sdcProfile ? QStringLiteral("sdc") : QStringLiteral("wsjtx");
-        m_tciSimReady = false;
-        m_tciSimAudioStarted = false;
-        m_tciSimIqStarted = false;
-        m_tciSimBinaryFrames = 0;
-        m_tciSimIqFrames = 0;
-        m_tciSimBinaryBytes = 0;
-        m_tciSimTextMsgs = 0;
-        m_tciSimLastFrameMs = -1;
-        m_tciSimCloseReason.clear();
-        m_tciSimTimer.start();
-        m_tciSim = new QWebSocket(QStringLiteral("aether-automation-tci-sim"),
-                                  QWebSocketProtocol::VersionLatest, this);
-        connect(m_tciSim, &QWebSocket::textMessageReceived,
-                this, [this](const QString& msg) {
-            ++m_tciSimTextMsgs;
-            appendTciTrace(QStringLiteral("server->client"), msg);
-            if (m_tciSimReady) return;
+
+        auto* sim = new TciSimClient;
+        sim->id = id;
+        sim->profile = sdcProfile ? QStringLiteral("sdc") : QStringLiteral("wsjtx");
+        sim->receiver = receiver;
+        sim->timer.start();
+        sim->socket = new QWebSocket(
+            QStringLiteral("aether-automation-tci-sim-%1").arg(id),
+            QWebSocketProtocol::VersionLatest, this);
+        m_tciSims.append(sim);
+
+        connect(sim->socket, &QWebSocket::textMessageReceived,
+                this, [this, sim](const QString& msg) {
+            ++sim->textMsgs;
+            appendTciTrace(QStringLiteral("server->client"), sim->id, msg);
+            if (sim->ready) return;
             const QStringList cmds = msg.split(QLatin1Char(';'));
             for (const QString& c : cmds) {
                 if (c.trimmed() == QLatin1String("ready")) {
-                    m_tciSimReady = true;
-                    if (m_tciSimProfile == QLatin1String("sdc")) {
-                        sendTciSimText(QStringLiteral("iq_samplerate:96000;"));
-                        sendTciSimText(QStringLiteral("audio_samplerate:24000;"));
-                        sendTciSimText(QStringLiteral("iq_start:0;"));
-                        m_tciSimIqStarted = true;
+                    sim->ready = true;
+                    // The declared receiver is what binds this client to a
+                    // slice (#4547) — it is the whole point of running two.
+                    if (sim->profile == QLatin1String("sdc")) {
+                        sendTciSimText(sim, QStringLiteral("iq_samplerate:96000;"));
+                        sendTciSimText(sim, QStringLiteral("audio_samplerate:24000;"));
+                        sendTciSimText(sim,
+                            QStringLiteral("iq_start:%1;").arg(sim->receiver));
+                        sim->iqStarted = true;
                         qCInfo(lcAutomation)
-                            << "tci sim: ready received — SDC IQ negotiation sent";
+                            << "tci sim" << sim->id
+                            << ": ready received — SDC IQ negotiation sent, receiver"
+                            << sim->receiver;
                     } else {
-                        sendTciSimText(QStringLiteral("audio_samplerate:48000;"));
-                        sendTciSimText(QStringLiteral("audio_start:0;"));
-                        m_tciSimAudioStarted = true;
+                        sendTciSimText(sim, QStringLiteral("audio_samplerate:48000;"));
+                        sendTciSimText(sim,
+                            QStringLiteral("audio_start:%1;").arg(sim->receiver));
+                        sim->audioStarted = true;
                         qCInfo(lcAutomation)
-                            << "tci sim: ready received — WSJT-X audio_start sent";
+                            << "tci sim" << sim->id
+                            << ": ready received — WSJT-X audio_start sent, receiver"
+                            << sim->receiver;
                     }
                     break;
                 }
             }
         });
-        connect(m_tciSim, &QWebSocket::binaryMessageReceived,
-                this, [this](const QByteArray& b) {
-            ++m_tciSimBinaryFrames;
-            m_tciSimBinaryBytes += b.size();
-            m_tciSimLastFrameMs = m_tciSimTimer.elapsed();
+        connect(sim->socket, &QWebSocket::binaryMessageReceived,
+                this, [sim](const QByteArray& b) {
+            ++sim->binaryFrames;
+            sim->binaryBytes += b.size();
+            sim->lastFrameMs = sim->timer.elapsed();
             constexpr int kTciTypeOffset = 6 * static_cast<int>(sizeof(quint32));
             if (b.size() >= kTciTypeOffset + static_cast<int>(sizeof(quint32))) {
                 quint32 type = 0;
                 std::memcpy(&type, b.constData() + kTciTypeOffset, sizeof(type));
                 if (type == 0) {
-                    ++m_tciSimIqFrames;
+                    ++sim->iqFrames;
                 }
             }
         });
-        connect(m_tciSim, &QWebSocket::disconnected, this, [this]() {
-            if (m_tciSimCloseReason.isEmpty())
-                m_tciSimCloseReason = QStringLiteral("server closed");
-            // Tear down so `tci status` reports running=false and a later
-            // `tci start` isn't rejected as "already running" after a
-            // server/radio-side close (PR #4017 review item 5). The stop path
-            // nulls m_tciSim before its own close lands — only reap here when
-            // the disconnect came from the socket we still track.
+        connect(sim->socket, &QWebSocket::disconnected, this, [this, sim]() {
+            if (sim->closeReason.isEmpty())
+                sim->closeReason = QStringLiteral("server closed");
+            // Reap so `tci status` reports running=false and a later start is
+            // not rejected as "already running" after a server/radio-side close
+            // (PR #4017 review item 5). tciSimTeardown() nulls the socket before
+            // its own close lands — only reap here when the disconnect came from
+            // the socket still tracked.
             if (auto* sock = qobject_cast<QWebSocket*>(sender());
-                    sock && sock == m_tciSim) {
-                m_tciSim->deleteLater();
-                m_tciSim = nullptr;
-                m_tciSimReady = false;
-                m_tciSimAudioStarted = false;
-                m_tciSimIqStarted = false;
-                qCInfo(lcAutomation) << "tci sim: torn down after server-side close"
-                                     << m_tciSimCloseReason;
+                    sock && sock == sim->socket) {
+                sim->socket->deleteLater();
+                sim->socket = nullptr;
+                sim->ready = false;
+                sim->audioStarted = false;
+                sim->iqStarted = false;
+                qCInfo(lcAutomation) << "tci sim" << sim->id
+                                     << ": torn down after server-side close"
+                                     << sim->closeReason;
             }
         });
-        m_tciSim->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
-        qCInfo(lcAutomation) << "tci sim: connecting to ws://127.0.0.1:" << port;
+        sim->socket->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+        qCInfo(lcAutomation) << "tci sim" << id << ": connecting to ws://127.0.0.1:"
+                             << port << "receiver" << receiver;
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("action"), QStringLiteral("start")},
-                           {QStringLiteral("profile"), m_tciSimProfile},
+                           {QStringLiteral("client"), id},
+                           {QStringLiteral("profile"), sim->profile},
+                           {QStringLiteral("receiver"), receiver},
                            {QStringLiteral("port"), port}};
     }
 
     if (normalizedAction == QLatin1String("stop")) {
-        if (!m_tciSim)
-            return err(QStringLiteral("tci sim is not running"));
-        const bool abrupt = value.trimmed().compare(QLatin1String("abrupt"),
-                                                    Qt::CaseInsensitive) == 0;
-        QJsonObject o = status();
-        m_tciSimCloseReason = abrupt ? QStringLiteral("client abort (abrupt)")
-                                     : QStringLiteral("client stop");
-        // Null m_tciSim BEFORE abort()/close(). abort() emits QWebSocket::
-        // disconnected synchronously (same-thread direct delivery), re-entering
-        // the disconnected lambda; if m_tciSim were still set there it would
-        // deleteLater()+null it, and the deleteLater() below would then fire on
-        // a dangling pointer. Nulling first makes the lambda's sock==m_tciSim
-        // guard fail so it no-ops, and we own the teardown here (#4017).
-        QWebSocket* sim = m_tciSim;
-        const bool wasAudioStarted = m_tciSimAudioStarted;
-        const bool wasIqStarted = m_tciSimIqStarted;
-        m_tciSim = nullptr;
-        m_tciSimReady = false;
-        m_tciSimAudioStarted = false;
-        m_tciSimIqStarted = false;
-        if (abrupt) {
-            sim->abort();
-        } else {
-            if (wasAudioStarted)
-                appendTciTrace(QStringLiteral("client->server"),
-                    QStringLiteral("audio_stop:0;"));
-            if (wasIqStarted)
-                appendTciTrace(QStringLiteral("client->server"),
-                    QStringLiteral("iq_stop:0;"));
-            if (wasAudioStarted)
-                sim->sendTextMessage(QStringLiteral("audio_stop:0;"));
-            if (wasIqStarted)
-                sim->sendTextMessage(QStringLiteral("iq_stop:0;"));
-            sim->close();
+        QString rest = value;
+        const QString trimmed = rest.trimmed();
+        const bool stopAll
+            = trimmed.startsWith(QLatin1String("all"), Qt::CaseInsensitive);
+        if (stopAll) {
+            rest = trimmed.section(QLatin1Char(' '), 1).trimmed();
         }
-        sim->deleteLater();
-        o[QStringLiteral("action")] = QStringLiteral("stop");
-        o[QStringLiteral("abrupt")] = abrupt;
-        qCInfo(lcAutomation) << "tci sim: stopped" << (abrupt ? "(abrupt)" : "(graceful)");
+        const QString simId = stopAll ? QString() : takeSimId(rest);
+        const bool abrupt = rest.trimmed().compare(QLatin1String("abrupt"),
+                                                   Qt::CaseInsensitive) == 0;
+        if (m_tciSims.isEmpty()) {
+            return err(QStringLiteral("tci sim is not running"));
+        }
+
+        QJsonArray stopped;
+        const QList<TciSimClient*> targets = stopAll
+            ? m_tciSims
+            : QList<TciSimClient*>{ tciSimById(simId) };
+        if (!stopAll && !targets.first()) {
+            return err(QStringLiteral("no TCI simulator '%1'").arg(simId));
+        }
+        for (TciSimClient* sim : targets) {
+            if (!sim) continue;
+            sim->closeReason = abrupt ? QStringLiteral("client abort (abrupt)")
+                                      : QStringLiteral("client stop");
+            QJsonObject one = tciSimStatus(sim);
+            tciSimTeardown(sim, abrupt);
+            stopped.append(one);
+            m_tciSims.removeOne(sim);
+            delete sim;
+            qCInfo(lcAutomation) << "tci sim: stopped"
+                                 << (abrupt ? "(abrupt)" : "(graceful)");
+        }
+        QJsonObject o{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("action"), QStringLiteral("stop")},
+            {QStringLiteral("abrupt"), abrupt},
+            {QStringLiteral("stopped"), stopped},
+            {QStringLiteral("running"), !m_tciSims.isEmpty()},
+        };
+        // Keep the single-client flat shape for existing callers.
+        if (stopped.size() == 1) {
+            const QJsonObject one = stopped.first().toObject();
+            for (auto it = one.begin(); it != one.end(); ++it) {
+                if (!o.contains(it.key())) o[it.key()] = it.value();
+            }
+        }
         return o;
     }
 

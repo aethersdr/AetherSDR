@@ -22,6 +22,11 @@ RangeSlider::RangeSlider(int min, int max, int low, int high,
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setFocusPolicy(Qt::StrongFocus);
     setAccessibleName(label.isEmpty() ? tr("Range slider") : label);
+
+    m_accessibilityTimer.setSingleShot(true);
+    m_accessibilityTimer.setInterval(kAccessibilityAnnouncementIntervalMs);
+    connect(&m_accessibilityTimer, &QTimer::timeout,
+            this, &RangeSlider::publishAccessibleAnnouncement);
 }
 
 void RangeSlider::setLow(int v)
@@ -30,8 +35,7 @@ void RangeSlider::setLow(int v)
     if (v == m_low) return;
     m_low = v;
     update();
-    QAccessibleValueChangeEvent ev(this, tr("Low %1%2").arg(m_low).arg(m_unit));
-    QAccessible::updateAccessibility(&ev);
+    scheduleAccessibleAnnouncement(tr("Low %1%2").arg(m_low).arg(m_unit));
     emit rangeChanged(m_low, m_high);
 }
 
@@ -41,9 +45,46 @@ void RangeSlider::setHigh(int v)
     if (v == m_high) return;
     m_high = v;
     update();
-    QAccessibleValueChangeEvent ev(this, tr("High %1%2").arg(m_high).arg(m_unit));
-    QAccessible::updateAccessibility(&ev);
+    scheduleAccessibleAnnouncement(tr("High %1%2").arg(m_high).arg(m_unit));
     emit rangeChanged(m_low, m_high);
+}
+
+void RangeSlider::scheduleAccessibleAnnouncement(const QString& text)
+{
+    m_pendingAccessibleText = text;
+    if (hasFocus() && QAccessible::isActive() && !m_accessibilityTimer.isActive()) {
+        m_accessibilityTimer.start();
+    }
+}
+
+void RangeSlider::announceAccessibleNow(const QString& text)
+{
+    // Handle-focus moves are discrete, user-triggered events, not high-rate
+    // updaters. Cancel any pending value announcement and publish immediately,
+    // then record it as the last published text so the debounce's dedup stays
+    // coherent. Routing these through the timer instead lets a following arrow
+    // key overwrite the pending text, silently dropping the focus move.
+    m_accessibilityTimer.stop();
+    m_pendingAccessibleText = text;
+    if (!hasFocus() || !QAccessible::isActive()) {
+        return;
+    }
+    m_lastAccessibleText = text;
+    QAccessibleValueChangeEvent ev(this, text);
+    QAccessible::updateAccessibility(&ev);
+}
+
+void RangeSlider::publishAccessibleAnnouncement()
+{
+    if (!hasFocus() || !QAccessible::isActive()) {
+        return;
+    }
+    if (m_pendingAccessibleText == m_lastAccessibleText) {
+        return;
+    }
+    m_lastAccessibleText = m_pendingAccessibleText;
+    QAccessibleValueChangeEvent ev(this, m_pendingAccessibleText);
+    QAccessible::updateAccessibility(&ev);
 }
 
 void RangeSlider::setRange(int min, int max)
@@ -191,17 +232,15 @@ bool RangeSlider::event(QEvent* e)
         if (ke->key() == Qt::Key_Tab && m_focused == Handle::Low) {
             m_focused = Handle::High;
             update();
-            QAccessibleValueChangeEvent ev(
-                this, tr("High handle focused, %1%2").arg(m_high).arg(m_unit));
-            QAccessible::updateAccessibility(&ev);
+            announceAccessibleNow(
+                tr("High handle focused, %1%2").arg(m_high).arg(m_unit));
             return true;
         }
         if (ke->key() == Qt::Key_Backtab && m_focused == Handle::High) {
             m_focused = Handle::Low;
             update();
-            QAccessibleValueChangeEvent ev(
-                this, tr("Low handle focused, %1%2").arg(m_low).arg(m_unit));
-            QAccessible::updateAccessibility(&ev);
+            announceAccessibleNow(
+                tr("Low handle focused, %1%2").arg(m_low).arg(m_unit));
             return true;
         }
     }
@@ -246,6 +285,12 @@ void RangeSlider::focusInEvent(QFocusEvent* e)
 
 void RangeSlider::focusOutEvent(QFocusEvent* e)
 {
+    // Values can move while unfocused with no announcement (the schedule and
+    // publish gates both require focus). Forget the last published text so a
+    // value that wandered away and back is not mistaken for "unchanged" and
+    // silently swallowed by the dedup on the next focused change.
+    m_accessibilityTimer.stop();
+    m_lastAccessibleText.clear();
     update();
     QWidget::focusOutEvent(e);
 }

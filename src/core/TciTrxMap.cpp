@@ -44,26 +44,51 @@ int TciTrxMap::trxForSlice(RadioModel* model, const SliceModel* slice) const
     return TciProtocol::tciTrxForSlice(model, slice);
 }
 
+SliceModel* TciTrxMap::boundSliceForTrx(RadioModel* model, int trx,
+                                        bool& bound) const
+{
+    bound = false;
+    if (!model) {
+        return nullptr;
+    }
+    for (auto it = m_trxBySliceId.cbegin(); it != m_trxBySliceId.cend(); ++it) {
+        if (it.value() != trx)
+            continue;
+        bound = true;
+        if (SliceModel* s = model->slice(it.key()))
+            return s;
+        // Bound but not live (band-change settle window). The binding is
+        // held because this slice is expected back; answering positionally
+        // would route an inbound command to whichever slice happens to sit
+        // at that index — the very re-pointing #4567 is about, inside the
+        // one window a band-changing client is most likely to send
+        // commands. Refuse until the recreate reclaims the number or the
+        // deferred release frees it; callers already treat a null slice
+        // as "unknown receiver" and drop the command (#4577 review).
+        return nullptr;
+    }
+    return nullptr;
+}
+
 SliceModel* TciTrxMap::sliceForTrx(RadioModel* model, int trx) const
 {
-    if (model) {
-        for (auto it = m_trxBySliceId.cbegin(); it != m_trxBySliceId.cend(); ++it) {
-            if (it.value() != trx)
-                continue;
-            if (SliceModel* s = model->slice(it.key()))
-                return s;
-            // Bound but not live (band-change settle window). The binding is
-            // held because this slice is expected back; answering positionally
-            // would route an inbound command to whichever slice happens to sit
-            // at that index — the very re-pointing #4567 is about, inside the
-            // one window a band-changing client is most likely to send
-            // commands. Refuse until the recreate reclaims the number or the
-            // deferred release frees it; callers already treat a null slice
-            // as "unknown receiver" and drop the command (#4577 review).
-            return nullptr;
-        }
+    bool bound = false;
+    if (SliceModel* s = boundSliceForTrx(model, trx, bound); bound) {
+        return s;
     }
     return TciProtocol::resolveSliceForTrx(model, trx);
+}
+
+SliceModel* TciTrxMap::sliceForTrxStrict(RadioModel* model, int trx) const
+{
+    // Shares the bound lookup with sliceForTrx() on purpose: that path is the
+    // fail-closed one, and a duplicated copy of it would drift. Only the
+    // unbound fallback differs — no first-slice guess under PTT (#4547).
+    bool bound = false;
+    if (SliceModel* s = boundSliceForTrx(model, trx, bound); bound) {
+        return s;
+    }
+    return TciProtocol::resolveSliceForTrxStrict(model, trx);
 }
 
 int TciTrxMap::txSliceTrxOrNone(RadioModel* model) const

@@ -351,7 +351,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator plus ordered protocol and route diagnostics. |
+| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator (multi-client via `@id` / `rx=N`) plus ordered protocol and route diagnostics. |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -2165,6 +2165,42 @@ tci trace export /tmp/tci-trace.json
 tci routes
 ```
 
+### Multiple simulated clients
+
+Several simulators can run at once, so a test can stand up the two-WSJT-X
+shape #4547 is about: two instances, one per slice, each declaring its own
+receiver. `@id` names a client and `rx=N` sets the receiver it declares in
+`audio_start` (and `iq_start` on the `sdc` profile). Both are optional —
+every single-client spelling above behaves exactly as before, under the
+default id `a`.
+
+```text
+tci start @a rx=0            # WSJT-X instance on receiver 0
+tci start @b rx=1            # WSJT-X instance on receiver 1
+tci send @b trx:0,true,tci   # key from B — B's declared receiver decides the slice
+tci status                   # clientCount + a per-client array
+tci status @b                # one client
+tci stop @a abrupt           # tear down one; the other keeps running
+tci stop all                 # tear down every client
+```
+
+`@id` must be 1–32 alphanumerics (`-` and `_` allowed) and must be unique
+among running clients; starting a duplicate is refused rather than leaking a
+socket. TCI commands never begin with `@`, so the prefix cannot collide with
+a payload. Trace entries carry a `client` field, so a two-client transcript
+stays readable.
+
+The receiver each client declares is not cosmetic: it is the only per-client
+signal the TCI wire carries, and it is what decides which slice that client's
+PTT keys (see [TCI Receiver Index Policy](architecture/tci-receivers.md)).
+Every WSJT-X instance addresses `trx:0` regardless, so a two-client test that
+does not set distinct `rx=` values is not testing routing at all.
+
+**A two-slice radio is required to exercise this end to end.** The demo
+(`SimBackend`) advertises a single slice, so it can host two TCI clients but
+cannot show them keying different slices; that half needs real hardware or a
+multi-slice backend.
+
 `send` writes one raw client WebSocket frame, adding a final semicolon when
 needed. Embedded CR/LF and commands over 4096 characters are rejected.
 `trace start` resets sequence numbering and captures every semicolon-delimited
@@ -2798,7 +2834,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
-| `tci` | — | tci start\|status\|stop\|send\|trace\|routes — TCI simulator and protocol diagnostics |
+| `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

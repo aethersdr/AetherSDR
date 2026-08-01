@@ -1167,6 +1167,64 @@ SliceModel* TciServer::sliceForTrx(int trx) const
     return m_trxMap.sliceForTrx(m_model, trx);
 }
 
+SliceModel* TciServer::sliceForTrxStrict(int trx) const
+{
+    // Goes through the SAME trx map as sliceForTrx() above (#4567), not
+    // TciProtocol's positional statics. If PTT resolved positionally while
+    // every other command followed the stable binding, a band-stack recreate
+    // would key whichever slice happened to sit at the requested index — on
+    // the one path where being wrong puts RF on the wrong band and antenna.
+    return m_trxMap.sliceForTrxStrict(m_model, trx);
+}
+
+int TciServer::effectiveTrx(QWebSocket* client, int requestedTrx) const
+{
+    // Every WSJT-X instance in TCI/ESDR3 mode addresses trx 0, so with two
+    // instances on two slices the wire request carries nothing that tells them
+    // apart and both resolve to the same receiver (#4547). The one per-client
+    // signal that does exist is the receiver declared in `audio_start:<n>` —
+    // already parsed and stored per socket — so an instance that started audio
+    // on receiver 1 is operating receiver 1 whatever index it puts on the wire.
+    //
+    // Thetis scopes RX-audio enabled-receiver sets per client while radio state
+    // stays global, so reading the declared receiver as the client's identity
+    // follows the reference implementation. A client that declares no receiver
+    // (`audio_start` with no argument, or control-only) keeps the wire index.
+    // Replies still echo the trx the client sent — the binding changes which
+    // slice is addressed, never the wire shape.
+    //
+    // ONLY trx 0 is redirected. Thetis keeps radio state global and scopes only
+    // the audio set per client, so the declared receiver is evidence of intent,
+    // not an address that outranks one. It is good evidence exactly where the
+    // wire has none: every WSJT-X instance addresses trx 0 whatever receiver it
+    // operates, so trx 0 carries no client intent to override. A non-zero trx is
+    // a deliberate address — a client that declared audio on receiver 0 and then
+    // asks for trx 1 means trx 1, and honouring the declaration there would key
+    // a slice the client never asked for, on that slice's band and antenna.
+    // That is the #4547 defect class, re-entered through its own fix.
+    for (const auto& cs : m_clients) {
+        if (cs.socket == client) {
+            if (cs.audioReceiver < 0 || requestedTrx != 0) {
+                return requestedTrx;
+            }
+            // Log only the divergence. Agreement is the common case and would
+            // be one line per key; a redirect is the whole mechanism, and it is
+            // otherwise invisible — the reply still echoes the requested trx, so
+            // a session transcript cannot show which slice was really addressed.
+            if (cs.audioReceiver != requestedTrx) {
+                qCDebug(lcCat) << "TCI: PTT bound to declared receiver"
+                               << cs.audioReceiver << "over requested trx"
+                               << requestedTrx
+                               << "peer=" << (cs.socket
+                                     ? cs.socket->peerAddress().toString()
+                                     : QStringLiteral("<gone>"));
+            }
+            return cs.audioReceiver;
+        }
+    }
+    return requestedTrx;
+}
+
 const char* TciServer::txRouteOwnerName(TciRoutingState::TxRouteOwner owner)
 {
     switch (owner) {
@@ -1870,6 +1928,17 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
     }
 
     if (m_tciPttClient && m_tciPttClient != client) {
+        // #4547 fix list item 4. TCI PTT has one global owner, so a second
+        // client's key is refused while the first holds it — and refusing it
+        // in silence is what WSJT-X surfaces as "TCI failed to set ptt" with
+        // no cause. Report the actual false state, like every other refusal
+        // path below. This gets more reachable with the routing fix, not less:
+        // binding each client to its own slice is precisely what lets two of
+        // them genuinely contend, where before both were routed onto one slice.
+        qCWarning(lcCat) << "TCI PTT: trx" << request.trx
+                         << "declined - another client holds TCI PTT"
+                         << "peer=" << client->peerAddress().toString();
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
     if (m_tciPttClient == client && m_tciPttRequestedOn) {
@@ -1882,7 +1951,13 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         return;
     }
 
-    SliceModel* rxSlice = sliceForTrx(request.trx);
+    // Strict resolution: this path keys the radio, so an unresolvable receiver
+    // must decline rather than fall back to slices[0] and transmit on a slice
+    // the client never addressed (#4547). Report the actual false state — the
+    // PTT-rejection invariant — so the client gets a cause instead of the
+    // silence WSJT-X surfaces as "TCI failed to set ptt".
+    const int boundTrx = effectiveTrx(client, request.trx);
+    SliceModel* rxSlice = sliceForTrxStrict(boundTrx);
     if (!rxSlice) {
         // Two very different situations reach here and they want different
         // operator responses. TciTrxMap holds a receiver's binding across a
@@ -1891,12 +1966,14 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         // next request succeeds. With no slices at all the session cannot key
         // anything. Naming them apart is the whole point of logging this.
         const bool haveSlices = m_model->isConnected() && !m_model->slices().isEmpty();
-        qCWarning(lcCat) << "TCI PTT: trx" << request.trx
+        qCWarning(lcCat) << "TCI PTT: receiver" << boundTrx
+                         << "(requested trx" << request.trx << ")"
                          << (haveSlices
                                     ? "maps to no live slice (unknown receiver, or its slice is"
-                                      " mid-recreate) - request dropped"
+                                      " mid-recreate) - request declined"
                                     : "cannot be resolved - radio not connected, or no slices"
-                                      " - request dropped");
+                                      " - request declined");
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
     const QVector<TciSliceEndpoint> endpoints = routingEndpoints();
@@ -1940,7 +2017,8 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
     SliceModel* txSlice = m_model->slice(txSliceId);
     if (!txSlice) {
         qCWarning(lcCat).noquote() << "TCI PTT: resolved tx slice" << sliceTag(txSliceId)
-                                   << "does not exist - request dropped";
+                                   << "does not exist - request declined";
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
     const QString inhibitReason = m_model->panTransmitInhibitReason(txSlice->panId());
@@ -1950,6 +2028,7 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         // than one that wraps: this is a translated sentence, not a token.
         qCWarning(lcCat).noquote() << "TCI PTT: slice" << sliceTag(txSliceId)
                                    << "is transmit-inhibited -" << inhibitReason.simplified();
+        replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
 
@@ -1977,6 +2056,18 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
             return;
         }
         if (!socket || !selected || !self->m_model) {
+            // A refused promote used to be near-unreachable: resolvePttSlice()
+            // returned the slice that already held TX, so promoteTxSlice took
+            // its isTxSlice() early return. Honouring the requested slice
+            // (#4547) means real promotions are now attempted, so this path is
+            // live on both planes — a Flex `slice set N tx=1` rejection, and an
+            // HL2 transmitter move the backend declines. Report the actual
+            // false state rather than going silent; silence is what WSJT-X
+            // surfaces as "TCI failed to set ptt" with no cause.
+            if (socket) {
+                self->replyText(socket,
+                    QStringLiteral("trx:%1,false;").arg(request.trx));
+            }
             self->finishRouteTransition(transitionGeneration);
             return;
         }

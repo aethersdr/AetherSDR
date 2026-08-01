@@ -179,6 +179,11 @@ private:
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
+    // No first-slice fallback — for paths that key the radio (#4547).
+    SliceModel* sliceForTrxStrict(int trx) const;
+    // The receiver a client is actually operating: its declared audio_start
+    // receiver when it has one, else the trx it put on the wire (#4547).
+    int effectiveTrx(QWebSocket* client, int requestedTrx) const;
     QVector<TciSliceEndpoint> routingEndpoints() const;
     // Diagnostics helpers for the PTT routing decision log.
     static const char* txRouteOwnerName(TciRoutingState::TxRouteOwner owner);

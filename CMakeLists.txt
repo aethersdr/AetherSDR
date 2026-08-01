@@ -4072,6 +4072,40 @@ add_test(NAME hgauge_range_test COMMAND hgauge_range_test)
 set_tests_properties(hgauge_range_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# RangeSlider accessibility announcements (#4565): arrow-key bursts debounce to
+# one settled announcement, while discrete handle-focus moves announce
+# immediately instead of being swallowed by that debounce.
+add_executable(range_slider_a11y_test
+    tests/range_slider_a11y_test.cpp
+    src/gui/RangeSlider.cpp
+)
+target_include_directories(range_slider_a11y_test PRIVATE src)
+target_link_libraries(range_slider_a11y_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(range_slider_a11y_test PROPERTIES AUTOMOC ON)
+add_test(NAME range_slider_a11y_test COMMAND range_slider_a11y_test)
+set_tests_properties(range_slider_a11y_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# RelayBar accessibility announcements (#4565): an ATU sweep debounces to one
+# settled position, and the last-published value is forgotten on focus loss so
+# a position that moved while unfocused is still announced when it returns.
+# HGauge.h is listed so AUTOMOC picks up RelayBar's Q_OBJECT (header-only class).
+add_executable(relay_bar_a11y_test
+    tests/relay_bar_a11y_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/HGauge.h
+)
+target_include_directories(relay_bar_a11y_test PRIVATE src)
+target_link_libraries(relay_bar_a11y_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(relay_bar_a11y_test PROPERTIES AUTOMOC ON)
+add_test(NAME relay_bar_a11y_test COMMAND relay_bar_a11y_test)
+set_tests_properties(relay_bar_a11y_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # `get rhi` native-widget topology contract (#4339): the native QRhi leaf,
 # ancestor-isolation attribute, and native-ancestor count reported to agents.
 add_executable(native_widget_topology_test
@@ -4595,6 +4629,16 @@ add_executable(demo_backend_swap_test tests/demo_backend_swap_test.cpp)
 target_include_directories(demo_backend_swap_test PRIVATE src)
 target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME demo_backend_swap_test COMMAND demo_backend_swap_test)
+
+add_executable(demo_applet_tooltip_test
+    tests/demo_applet_tooltip_test.cpp
+    src/gui/DemoApplet.cpp
+)
+target_include_directories(demo_applet_tooltip_test PRIVATE src)
+target_link_libraries(demo_applet_tooltip_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME demo_applet_tooltip_test COMMAND demo_applet_tooltip_test)
+set_tests_properties(demo_applet_tooltip_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)

@@ -117,6 +117,90 @@ public:
             && server.m_pendingRouteCommands.first().client == &otherClient;
     }
 
+    // #4547: two WSJT-X instances both address trx 0, so the wire request
+    // cannot tell them apart. The receiver each declared in audio_start does.
+    static bool pttBindsToTheDeclaredAudioReceiver()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket wsjtxA;
+        QWebSocket wsjtxB;
+        QWebSocket controlOnly;
+
+        TciServer::ClientState a;
+        a.socket = &wsjtxA;
+        a.audioEnabled = true;
+        a.audioReceiver = 0;
+        TciServer::ClientState b;
+        b.socket = &wsjtxB;
+        b.audioEnabled = true;
+        b.audioReceiver = 1;
+        TciServer::ClientState c;      // Stream Deck: control only, no audio
+        c.socket = &controlOnly;
+        c.audioReceiver = -1;
+        server.m_clients.append(a);
+        server.m_clients.append(b);
+        server.m_clients.append(c);
+
+        // Both instances put trx 0 on the wire; B is operating receiver 1.
+        return server.effectiveTrx(&wsjtxA, 0) == 0
+            && server.effectiveTrx(&wsjtxB, 0) == 1
+            // ...but ONLY trx 0 is redirected. trx 0 is the ambiguous default
+            // every WSJT-X instance sends whatever receiver it operates, so it
+            // carries no intent to override. A non-zero trx is a deliberate
+            // address: B declared receiver 1 and is honoured when it asks for
+            // trx 0, and still honoured when it explicitly asks for trx 2.
+            // Overriding that would key a slice the client never asked for —
+            // #4547's own defect class, re-entered through its fix.
+            && server.effectiveTrx(&wsjtxB, 2) == 2
+            && server.effectiveTrx(&wsjtxA, 1) == 1
+            // A client that declared none keeps whatever it addresses.
+            && server.effectiveTrx(&controlOnly, 0) == 0
+            && server.effectiveTrx(&controlOnly, 2) == 2
+            // An unknown socket falls back to the wire index rather than
+            // guessing receiver 0.
+            && server.effectiveTrx(nullptr, 3) == 3;
+    }
+
+    // The #4547 / #4567 seam. sliceForTrx() resolves through the stable trx
+    // map; the PTT path must resolve through the SAME map, not TciProtocol's
+    // positional statics. If it did not, a band-stack recreate would key
+    // whichever slice happened to sit at the requested index while every other
+    // command followed the binding — and nothing would catch it: the #4547
+    // tests build no map, the #4567 tests never key.
+    static bool pttResolvesThroughTheStableMap()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString err;
+        model.automationApplySliceFixture(0, QString(), &err);
+        model.automationApplySliceFixture(1, QString(), &err);
+        SliceModel* s0 = model.slice(0);
+        SliceModel* s1 = model.slice(1);
+        if (!s0 || !s1) return false;
+
+        // Bind so the map deliberately DISAGREES with list position: slice id 1
+        // holds receiver 0. That is the state a mid-session recreate produces,
+        // and it is the only state in which a positional resolver is visibly
+        // wrong. (Clear first — the sliceAdded handler already bound these in
+        // creation order.)
+        server.m_trxMap.clear();
+        if (server.m_trxMap.acquire(1) != 0 || server.m_trxMap.acquire(0) != 1) {
+            return false;
+        }
+
+        // Receiver 0 is slice id 1, even though slices()[0] is slice id 0.
+        return server.sliceForTrxStrict(0) == s1
+            && server.sliceForTrxStrict(1) == s0
+            // Guard: if this ever equals the positional answer the seam has
+            // regressed, whatever the first two assertions happen to say.
+            && server.sliceForTrxStrict(0) != s0
+            // And the strict variant still agrees with the lax one wherever
+            // the lax one is not guessing.
+            && server.sliceForTrxStrict(0) == server.sliceForTrx(0);
+    }
+
     static bool routeFailureIsObservable()
     {
         RadioModel model;
@@ -192,13 +276,22 @@ public:
         }
         // Slice ids carry their receiver number, because the wire speaks trx
         // and a reader correlating the two must not have to guess (#4567).
+        //
+        // The resolved slice here is the LIVE transmitter, not the stale cache:
+        // #4547 made the live TX slice outrank a cached route, so the scenario
+        // this fixture builds — a route bound while slice 0 held transmit,
+        // never refreshed after the operator moved transmit to slice 1 — no
+        // longer drags transmit back onto slice 0. The diagnostic's own job is
+        // unchanged and is still what this pins: cachedTx must be sampled
+        // BEFORE the resolve, so it can still show the disagreement (0 vs 1)
+        // that the resolve is about to write away.
         const char* const required[] = {
             "trx=1",
             "rxSlice=1(trx1)",
-            "-> txSlice=0(trx0)",
-            "(NOT the requested slice)",
+            "-> txSlice=1(trx1)",
+            "(the requested slice)",
             "liveTx=1(trx1)",       // transmit is really on slice 1...
-            "cachedTx=0(trx0)",     // ...and the cache still says slice 0
+            "cachedTx=0(trx0)",     // ...and the cache still said slice 0
             "owner=tci-created",
         };
         for (const char* needle : required) {
@@ -208,10 +301,11 @@ public:
                 return false;
             }
         }
-        // And the move away from the slice that actually holds transmit.
-        return !findLine(log, "TCI PTT: transmit will move from slice 1(trx1) "
-                              "to slice 0(trx0)")
-                    .isEmpty();
+        // And transmit does NOT move. This is the #4547 secondary defect in its
+        // literal form: before the fix this logged "transmit will move from
+        // slice 1(trx1) to slice 0(trx0)" and then keyed slice 0's band and
+        // antenna with no operator action.
+        return findLine(log, "TCI PTT: transmit will move from slice").isEmpty();
     }
 
     // The other half of the same defect, and the one that pins the sampling
@@ -241,8 +335,15 @@ public:
         model.setPanTransmitInhibited(s1->panId(), true,
                                       QStringLiteral("inhibited for test"));
 
-        // trx 0 addresses slice 0, which is not the TX slice: the requested
-        // receiver is resolved away onto slice 1. Defect 1 of #4547.
+        // Split is what makes a TX route answer this request at all since
+        // #4547: a bare PTT now keys the slice it names, and the external-TX
+        // branch — the one that writes the live assignment through to the cache
+        // and so is the only branch that can erase the disagreement this test
+        // exists to catch — is reached only when a route actually applies.
+        server.m_routingState.setSplitRequested(true);
+
+        // trx 0 addresses slice 0, which is not the TX slice: with a route
+        // applying, the requested receiver is resolved away onto slice 1.
         const QStringList log = captureCatLog([&] {
             server.handleTrxRequest(&client, TciProtocol::TrxRequest{
                 0, true, QStringLiteral("tci")
@@ -1042,6 +1143,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::deferredAbortIsClientScoped();
     const bool observableFailure
         = AetherSDR::TciServerReviewTest::routeFailureIsObservable();
+    const bool pttBindsReceiver
+        = AetherSDR::TciServerReviewTest::pttBindsToTheDeclaredAudioReceiver();
+    const bool pttUsesStableMap
+        = AetherSDR::TciServerReviewTest::pttResolvesThroughTheStableMap();
     const bool powerRateLimits
         = AetherSDR::TciServerReviewTest::powerBroadcastRateLimits();
     const bool trxCacheHolds
@@ -1083,6 +1188,10 @@ int main(int argc, char** argv)
                 deferredAbort ? "PASS" : "FAIL");
     std::printf("%s  VFO-B route failure is observable\n",
                 observableFailure ? "PASS" : "FAIL");
+    std::printf("%s  PTT binds to the declared audio receiver (#4547)\n",
+                pttBindsReceiver ? "PASS" : "FAIL");
+    std::printf("%s  PTT resolves through the stable trx map (#4547/#4567)\n",
+                pttUsesStableMap ? "PASS" : "FAIL");
     std::printf("%s  drive: rate-limits and de-dups\n",
                 powerRateLimits ? "PASS" : "FAIL");
     std::printf("%s  drive: trx survives a TX-flag clear\n",
@@ -1122,7 +1231,8 @@ int main(int argc, char** argv)
                 "(#4547)\n",
                 routeLogSanitizes ? "PASS" : "FAIL");
 
-    return validProfile && deferredAbort && observableFailure
+    return validProfile && deferredAbort && observableFailure && pttBindsReceiver
+        && pttUsesStableMap
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate

@@ -107,7 +107,7 @@ SliceModel* TciProtocol::sliceForTrx(int trx) const
     return resolveSliceForTrx(m_model, trx);
 }
 
-SliceModel* TciProtocol::resolveSliceForTrx(RadioModel* model, int trx)
+SliceModel* TciProtocol::resolveSliceForTrxStrict(RadioModel* model, int trx)
 {
     if (!model || !model->isConnected()) return nullptr;
     const QList<SliceModel*> slices = model->slices();
@@ -119,7 +119,17 @@ SliceModel* TciProtocol::resolveSliceForTrx(RadioModel* model, int trx)
     for (auto* s : slices) {
         if (s && s->sliceId() == trx) return s;
     }
-    // Fallback: first slice
+    return nullptr;
+}
+
+SliceModel* TciProtocol::resolveSliceForTrx(RadioModel* model, int trx)
+{
+    if (SliceModel* resolved = resolveSliceForTrxStrict(model, trx))
+        return resolved;
+    // Fallback: first slice. Read paths keep the guess (tci-receivers.md
+    // rule 3); keying paths use the strict resolver instead (#4547).
+    if (!model || !model->isConnected()) return nullptr;
+    const QList<SliceModel*> slices = model->slices();
     return slices.isEmpty() ? nullptr : slices.first();
 }
 
