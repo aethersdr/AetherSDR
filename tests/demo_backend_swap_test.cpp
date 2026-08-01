@@ -23,6 +23,7 @@
 //       connection's lifecycle as its own seam signals, so a model that listens to
 //       both hears every connect twice.
 
+#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/sim/SimBackend.h"
@@ -119,6 +120,27 @@ int main(int argc, char** argv)
     check(errSpy.isEmpty(),
           "R2: no connection error within the UDP-health window on the demo");
     check(model.isConnected(), "still connected after the watchdog window");
+
+    // ---- R4: exactly one pan, and it is the wire-claimed one (#4671) ----
+    // SimBackend claims its pan from its own synthetic wire status AND emits the
+    // seam's panCenterBandwidthChanged. The Gap B materialise path treated every
+    // non-Flex backend as wire-less, so the seam edge minted a SECOND, ownerless
+    // pan in the neutral 0xE1000000 space — a ghost "Slice A" the user could
+    // neither use nor delete. Both edges have long arrived by this point in the
+    // test, so a duplicate would be visible here.
+    {
+        const auto pans = model.panadapters();
+        for (const PanadapterModel* p : pans)
+            std::fprintf(stderr, "  pan present: %s\n", qPrintable(p->panId()));
+        check(pans.size() == 1,
+              "R4: the demo session holds exactly one panadapter (no neutral ghost)");
+        bool neutralGhost = false;
+        for (const PanadapterModel* p : pans)
+            if (p->panId().startsWith(QStringLiteral("0xe1"), Qt::CaseInsensitive))
+                neutralGhost = true;
+        check(!neutralGhost,
+              "R4: no pan lives in the neutral 0xE1000000 space on the demo");
+    }
 
     // ---- sim -> flex round trip ----
     model.connectToRadio(flexInfo());

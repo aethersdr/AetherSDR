@@ -601,12 +601,18 @@ void RadioModel::setupBackend(const QString& family)
             m_backendPanBandwidthMhz[panIdx] = bandwidthMhz;
         }
         auto* pan = resolveBackendPan(panId);
-        if (!pan && !m_flexBackend) {
-            // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend.
-            // No Flex "display pan" status exists to create one, so without this
-            // there is no PanadapterModel to route frames to and the UI never
-            // builds a pane — the render path was falling back to the active
-            // spectrum widget, which is null when no pan applet exists.
+        if (!pan && !m_flexBackend && !m_connection) {
+            // aetherd Gap B (Step 2c): materialise the pan for a non-Flex backend
+            // WITHOUT a wire. No Flex "display pan" status exists to create one,
+            // so without this there is no PanadapterModel to route frames to and
+            // the UI never builds a pane — the render path was falling back to the
+            // active spectrum widget, which is null when no pan applet exists.
+            //
+            // The !m_connection gate: a backend that vends its own RadioConnection
+            // (the demo's Route A SimBackend) claims its pans from its own wire
+            // status, so minting a neutral twin here created a second, ownerless
+            // pan applet — the ghost "Slice A" of #4671. Its pans arrive through
+            // the claim path; only truly wire-less backends (HL2) materialise.
             //
             // One pane per backend pan id, so a multi-receiver backend gets a
             // pane each instead of four receivers sharing one.
@@ -7312,6 +7318,15 @@ PanadapterModel* RadioModel::resolveBackendPan(const QString& backendPanId)
     // Flex keeps its existing behaviour: its pan ids ARE the model keys.
     if (m_flexBackend)
         return resolvePan(backendPanId);
+    // A non-Flex backend that vends its own RadioConnection (the demo's Route A
+    // SimBackend) claims pans from its own synthetic wire status, so — exactly
+    // like Flex — its pan ids ARE the model keys. Exact lookup, deliberately NOT
+    // resolvePan(): a geometry edge can outrun the wire claim during connect,
+    // and the active-pan fallback would re-introduce the wrong-pan hazard this
+    // helper exists to prevent. A miss returns null and the caller skips; the
+    // wire claim carries the same values moments later. (#4671)
+    if (m_connection)
+        return panadapter(backendPanId);
     return panadapter(neutralPanIdString(neutralPanIndexFor(backendPanId)));
 }
 
