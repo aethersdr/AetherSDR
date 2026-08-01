@@ -192,15 +192,36 @@ private:
 public:
     // One waterfall row per this many audio frames (see onAudioTick).
     static constexpr int kSpectrumRowEveryNFrames = 9;
-    // The row cadence that follows, in whole ms — what the synthetic connect must
-    // declare as `line_duration`. #4425 made line_duration load-bearing: the
-    // renderer interpolates the waterfall/3D scroll over one line_duration between
-    // rows, so a value that disagrees with the real rate makes every animation cut
-    // off part-way and the display jump. Derived here so the declared value cannot
-    // drift from the emitted one. 9 × 128 / 24000 s = 48 ms.
-    static constexpr int kWaterfallLineDurationMs =
+    // The row cadence that follows, in whole ms: 9 × 128 / 24000 s = 48 ms.
+    //
+    // NOTHING READS THIS, and that is the honest state of it rather than an
+    // oversight to be tidied away. It used to be what the synthetic connect put
+    // on the wire as `line_duration`, back when that field was believed to be
+    // milliseconds; #4606 established that the field is a 1..100 rate, so the
+    // wire now carries kWaterfallRate below and this constant is left as the
+    // written-down derivation of what the demo actually produces. Keep it in
+    // step with kSpectrumRowEveryNFrames — the divergence note under
+    // kWaterfallRate is stated against this number.
+    static constexpr int kWaterfallRowIntervalMs =
         (kSpectrumRowEveryNFrames * NoiseMixer::kFrameLen * 1000)
         / NoiseMixer::kSampleRate;
+    // …and the 1..100 waterfall RATE the synthetic connect declares. The demo
+    // already produces rows at its own cadence, so it asks for the top of the
+    // control — "as fast as frames arrive" — and RadioModel's pacer leaves the
+    // stream ungated. Declaring 48 here was declaring a rate of 48, which under
+    // the real semantics (core/WaterfallRate.h) is about 700 ms per row rather
+    // than 48, and would have gated the demo down to 1.4 rows/s (#4606).
+    //
+    // #4425 is why this matters beyond the pacer: the renderer interpolates the
+    // waterfall/3D scroll over one row interval, so a declared value that
+    // disagrees with the real rate makes every animation cut off part-way and
+    // the display jump — until SpectrumWidget's own measurement takes over.
+    // Note the residual divergence that leaves: the top of the control seeds the
+    // axis at kLocalFastestRowsPerSec (40 ms/row) while the demo really emits
+    // every kWaterfallRowIntervalMs (48 ms), so the first ~1 s of scroll is 17%
+    // fast before measurement takes over. Visible only on the demo rig, and
+    // preferable to re-declaring a rate that would re-gate the stream.
+    static constexpr int kWaterfallRate = 100;
 
 private:
     static constexpr int kPanId = 0;

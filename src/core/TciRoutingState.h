@@ -38,6 +38,12 @@ public:
         TxRouteOwner owner { TxRouteOwner::None };
     };
 
+    // The slice that actually holds transmit right now, straight from the live
+    // endpoint list; -1 when no slice is TX. Public so a caller comparing the
+    // cached route against the live assignment uses this class's own notion of
+    // "the live TX slice" rather than a second copy that can drift from it.
+    static int currentTxSlice(const QVector<TciSliceEndpoint>& endpoints);
+
     RouteDecision resolveVfoB(int rxSliceId, const QVector<TciSliceEndpoint>& endpoints);
     int resolvePttSlice(int rxSliceId, const QVector<TciSliceEndpoint>& endpoints);
 
@@ -71,7 +77,6 @@ public:
 
 private:
     static bool contains(const QVector<TciSliceEndpoint>& endpoints, int sliceId);
-    static int currentTxSlice(const QVector<TciSliceEndpoint>& endpoints);
 
     bool m_splitRequested { false };
     int m_rxSliceId { -1 };

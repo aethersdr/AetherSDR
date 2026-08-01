@@ -284,6 +284,9 @@ void MainWindow::failSafeMomentaryKeyingToRx(const char* reason)
     // lost (focus left the window) would otherwise strand the transmitter. On
     // deactivation force the whole family back to RX. Cheap and safe to call on
     // every deactivation: bail out unless something is actually keyed.
+    // Whoever was holding it, the fail-safe owns the release from here.
+    m_dialPttHoldActive = false;
+
     const bool anyActive = m_pttHoldActive || m_cwStraightKeyActive
         || m_cwLeftPaddleActive || m_cwRightPaddleActive;
     if (!anyActive)

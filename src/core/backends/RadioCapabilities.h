@@ -175,6 +175,24 @@ struct RadioCapabilities {
     // has the base set. A radio with hasRadioSideDsp=false has neither.
     bool hasRadioSideDsp = false;
 
+    // The RADIO computes the waterfall's black level per tile and embeds it in
+    // the waterfall stream, so the client can hand the floor decision to the
+    // hardware instead of estimating it. True for a Flex, which does this on
+    // `display panafall set <id> auto_black=1`.
+    //
+    // The Display panel's "Black Level" button cycles Off -> SW -> HW; HW is
+    // this capability. On a backend without it the cycle is Off <-> SW only,
+    // because HW there is a mode that can never produce a level: the enabling
+    // command reaches no command plane, no tile ever carries a black level, and
+    // the operator is left on a setting that silently does nothing. This is the
+    // display-plane sibling of hasRadioSideDsp — same failure shape (HERMES
+    // §17): the control moves, the setting persists, the picture is unchanged.
+    //
+    // NOT about auto-black as a feature. The client-side (SW) estimate works on
+    // every family and must never be gated on this — on a radio reporting false
+    // it is the only automatic floor the operator has.
+    bool hasRadioSideWaterfallAutoBlack = false;
+
     // The radio accepts installable waveform/mode plugins (SmartSDR waveforms),
     // so a client can offer to manage them.
     bool hasWaveforms = false;

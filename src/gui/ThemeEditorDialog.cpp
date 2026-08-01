@@ -33,12 +33,28 @@
 #include <QPushButton>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QStandardPaths>
+#include <QDir>
 #include <QVBoxLayout>
 #include <QWidget>
 
 namespace AetherSDR {
 
 namespace {
+
+// Where user themes actually live, resolved rather than asserted.  These
+// strings used to say "~/.config/AetherSDR/themes/" everywhere, which is only
+// true on Linux — storage is GenericConfigLocation, so it's %LOCALAPPDATA% on
+// Windows and ~/Library/Preferences on macOS.  A dialog that tells an operator
+// to go check a directory their OS doesn't have is worse than one that says
+// nothing.
+QString userThemesDir()
+{
+    return QDir::toNativeSeparators(
+        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+        + QStringLiteral("/AetherSDR/themes"));
+}
+
 // Build a tiny coloured square QIcon for use as a swatch on a list row.
 // Re-rendered whenever a token's value changes so the swatch tracks the
 // live value.  A 2x2 checkerboard sits under the colour fill so the
@@ -533,6 +549,17 @@ void ThemeEditorDialog::onRenameThemeClicked()
         QLineEdit::Normal, current, &ok).trimmed();
     if (!ok || newName.isEmpty() || newName == current) return;
 
+    // Check the NAME before attempting the rename, so a refusal can say what
+    // was actually wrong.  ThemeManager enforces this too — that's the safety
+    // barrier; this is the diagnosis.  Without it the operator who typed
+    // "HF/Contest" is told the file may be unwriteable and goes looking at
+    // directory permissions.
+    QString why;
+    if (!ThemeManager::isValidThemeName(newName, &why)) {
+        QMessageBox::warning(this, QStringLiteral("Rename failed"), why);
+        return;
+    }
+
     if (!tm.renameTheme(current, newName)) {
         QMessageBox::warning(this, QStringLiteral("Rename failed"),
             QStringLiteral("Could not rename \"%1\" to \"%2\".  A theme with "
@@ -638,10 +665,11 @@ void ThemeEditorDialog::onDeleteThemeClicked()
     const auto reply = QMessageBox::question(this,
         QStringLiteral("Delete theme"),
         QStringLiteral("Permanently delete \"%1\"?\n\n"
-                       "The theme file at "
-                       "~/.config/AetherSDR/themes/%1.json will be removed. "
+                       "The theme file at %2 will be removed. "
                        "The active theme will switch to Default Dark.")
-            .arg(current),
+            .arg(current,
+                 userThemesDir() + QDir::separator()
+                     + current + QStringLiteral(".json")),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (reply != QMessageBox::Yes) return;
 
@@ -678,6 +706,13 @@ void ThemeEditorDialog::onSaveAsClicked()
         QLineEdit::Normal, suggestion, &ok).trimmed();
     if (!ok || name.isEmpty()) return;
 
+    // Name first, so a rejected name is reported as a rejected name.
+    QString why;
+    if (!ThemeManager::isValidThemeName(name, &why)) {
+        QMessageBox::warning(this, QStringLiteral("Save failed"), why);
+        return;
+    }
+
     // Disallow overwriting a built-in (bundled :/themes/*.json) — that
     // would silently shadow it from the user dir which is confusing.
     // User-dir themes can be overwritten freely.
@@ -693,7 +728,7 @@ void ThemeEditorDialog::onSaveAsClicked()
     if (!tm.saveCurrentThemeAs(name)) {
         QMessageBox::warning(this, QStringLiteral("Save failed"),
             QStringLiteral("Could not write the theme file. Check that "
-                           "~/.config/AetherSDR/themes/ is writable."));
+                           "%1 is writable.").arg(userThemesDir()));
         return;
     }
     // saveCurrentThemeAs() makes the new theme active; onActiveThemeChanged
@@ -721,6 +756,16 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
         QLineEdit::Normal, suggestion, &ok).trimmed();
     if (!ok || name.isEmpty()) return;  // user cancelled — buffer stays uncommitted
 
+    // Name first.  This path matters more than the plain Save As: the operator
+    // has a pending token edit stashed in DeferredEdit, and every early return
+    // below drops it.  Being told the real reason is what lets them retype the
+    // name and keep the edit instead of concluding the editor is broken.
+    QString why;
+    if (!ThemeManager::isValidThemeName(name, &why)) {
+        QMessageBox::warning(this, QStringLiteral("Save failed"), why);
+        return;
+    }
+
     // Disallow accidentally writing to another built-in or overwriting
     // an existing user theme without confirmation.
     if (tm.isBuiltInTheme(name)) {
@@ -741,7 +786,7 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
     if (!tm.saveCurrentThemeAs(name)) {
         QMessageBox::warning(this, QStringLiteral("Save failed"),
             QStringLiteral("Could not write the theme file. Check that "
-                           "~/.config/AetherSDR/themes/ is writable."));
+                           "%1 is writable.").arg(userThemesDir()));
         return;
     }
     // saveCurrentThemeAs() has switched the active theme and refreshed

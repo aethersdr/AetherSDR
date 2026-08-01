@@ -537,7 +537,7 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
                              KiwiSdrClient* client) {
             client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
                                     filterHighHz, panId, bandName, cwPitchHz);
-            client->setWaterfallLineDurationMs(lineDurationMs);
+            client->setDisplayWaterfallRate(lineDurationMs);
             if (!panId.isEmpty() && centerMhz > 0.0 && bandwidthMhz > 0.0) {
                 client->setWaterfallView(panId, centerMhz, bandwidthMhz);
             }
@@ -674,7 +674,7 @@ void KiwiSdrManager::updateWaterfallView(int sliceId, const QString& panId,
         Q_UNUSED(c);
         invokeClient(profileId, [panId, centerMhz, bandwidthMhz,
                                  lineDurationMs](KiwiSdrClient* client) {
-            client->setWaterfallLineDurationMs(lineDurationMs);
+            client->setDisplayWaterfallRate(lineDurationMs);
             client->setWaterfallView(panId, centerMhz, bandwidthMhz);
         });
     }
@@ -968,6 +968,8 @@ void KiwiSdrManager::loadSettings()
         p.autoConnect = obj.value(QStringLiteral("autoConnect")).toBool(false);
         p.keepAudioDuringTx =
             obj.value(QStringLiteral("keepAudioDuringTx")).toBool(false);
+        p.resumeAudioAfterTxDelay =
+            obj.value(QStringLiteral("resumeAudioAfterTxDelay")).toBool(false);
         if (obj.contains(QStringLiteral("waterfallMinDbm"))
             || obj.contains(QStringLiteral("waterfallMaxDbm"))) {
             p.waterfallMinDbm = std::clamp(
@@ -1008,6 +1010,8 @@ void KiwiSdrManager::saveSettings() const
         obj.insert(QStringLiteral("endpoint"), normalizedProfileEndpoint(p.endpoint));
         obj.insert(QStringLiteral("autoConnect"), p.autoConnect);
         obj.insert(QStringLiteral("keepAudioDuringTx"), p.keepAudioDuringTx);
+        obj.insert(QStringLiteral("resumeAudioAfterTxDelay"),
+                   p.resumeAudioAfterTxDelay);
         obj.insert(QStringLiteral("waterfallAutoScale"), p.waterfallAutoScale);
         const int waterfallMinDbm = std::clamp(
             p.waterfallMinDbm,

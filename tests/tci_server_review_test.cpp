@@ -13,7 +13,9 @@
 #include <QCoreApplication>
 #include <QEventLoop>
 #include <QJsonObject>
+#include <QLoggingCategory>
 #include <QSet>
+#include <QStringList>
 #include <QTimer>
 #include <QWebSocket>
 
@@ -21,6 +23,49 @@
 
 namespace AetherSDR
 {
+
+namespace
+{
+
+QStringList* g_logSink = nullptr;
+
+void captureLogHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
+{
+    if (g_logSink) {
+        *g_logSink << msg;
+    }
+}
+
+// Collect everything logged while `body` runs. aether.cat defaults to
+// QtWarningMsg, so the info-level route line needs the rule as well as the
+// handler.
+template <typename Body>
+QStringList captureCatLog(Body body)
+{
+    QStringList captured;
+    g_logSink = &captured;
+    const QtMessageHandler previous = qInstallMessageHandler(captureLogHandler);
+    QLoggingCategory::setFilterRules(QStringLiteral("aether.cat.info=true"));
+
+    body();
+
+    QLoggingCategory::setFilterRules(QString());
+    qInstallMessageHandler(previous);
+    g_logSink = nullptr;
+    return captured;
+}
+
+QString findLine(const QStringList& lines, const char* prefix)
+{
+    for (const QString& line : lines) {
+        if (line.startsWith(QLatin1String(prefix))) {
+            return line;
+        }
+    }
+    return QString();
+}
+
+} // namespace
 
 class TciServerReviewTest
 {
@@ -100,9 +145,15 @@ public:
         // Both instances put trx 0 on the wire; B is operating receiver 1.
         return server.effectiveTrx(&wsjtxA, 0) == 0
             && server.effectiveTrx(&wsjtxB, 0) == 1
-            // A declared receiver is the client's identity, so it also wins
-            // over a stale wire index the client may still be sending.
-            && server.effectiveTrx(&wsjtxB, 0) == 1
+            // ...but ONLY trx 0 is redirected. trx 0 is the ambiguous default
+            // every WSJT-X instance sends whatever receiver it operates, so it
+            // carries no intent to override. A non-zero trx is a deliberate
+            // address: B declared receiver 1 and is honoured when it asks for
+            // trx 0, and still honoured when it explicitly asks for trx 2.
+            // Overriding that would key a slice the client never asked for —
+            // #4547's own defect class, re-entered through its fix.
+            && server.effectiveTrx(&wsjtxB, 2) == 2
+            && server.effectiveTrx(&wsjtxA, 1) == 1
             // A client that declared none keeps whatever it addresses.
             && server.effectiveTrx(&controlOnly, 0) == 0
             && server.effectiveTrx(&controlOnly, 2) == 2
@@ -163,6 +214,221 @@ public:
         return !server.m_routingState.splitRequested()
             && snapshot.value(QStringLiteral("lastRouteError")).toString()
                 == QStringLiteral("capacity test");
+    }
+
+    // ── #4547 PTT routing diagnostic ────────────────────────────────────────
+
+    // Two slices, slice 1 holding transmit, and a routing cache still pointing
+    // at slice 0 from when slice 0 was TX. This is the exact state behind the
+    // fldigi capture on #4547: the client addresses the slice that genuinely
+    // has TX, branch 1 of resolvePttSlice is therefore skipped, and the stale
+    // cache drags transmit back to slice 0 — wrong band, wrong antenna.
+    static bool pttRouteFixture(RadioModel& model, TciServer& server)
+    {
+        QString error;
+        if (!model.automationApplySliceFixture(0, QString(), &error)
+            || !model.automationApplySliceFixture(1, QString(), &error)) {
+            std::fprintf(stderr, "ptt route fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        SliceModel* s1 = model.slice(1);
+        if (!s1) {
+            return false;
+        }
+        // The TX flag is radio-authoritative — drive the status path the way
+        // the radio would, rather than calling setTxSlice() (which only sends).
+        SliceDelta txOn;
+        txOn.txSlice = true;
+        s1->applyChanges(txOn);
+
+        // The stale route: bound while slice 0 held transmit, never refreshed.
+        server.m_routingState.bindCreatedRoute(1, 0);
+        return true;
+    }
+
+    // The diagnostic's whole reason to exist is showing the cached route
+    // DISAGREEING with the live TX assignment. Pinned because the sampling
+    // order that makes it possible is load-bearing and invisible:
+    // resolvePttSlice() writes the live assignment through to the cache on its
+    // external-TX branch, so reading cachedTx AFTER the resolve reports the
+    // cache agreeing with liveTx on every path — the line stays plausible and
+    // says nothing. Move those three reads below the resolve and this fails.
+    static bool pttRouteLogExposesStaleCache()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket client;
+        if (!pttRouteFixture(model, server)) {
+            return false;
+        }
+
+        const QStringList log = captureCatLog([&] {
+            server.handleTrxRequest(&client, TciProtocol::TrxRequest{
+                1, true, QStringLiteral("tci")
+            });
+        });
+
+        const QString route = findLine(log, "TCI PTT route:");
+        if (route.isEmpty()) {
+            std::fprintf(stderr, "no TCI PTT route line was logged\n");
+            return false;
+        }
+        // Slice ids carry their receiver number, because the wire speaks trx
+        // and a reader correlating the two must not have to guess (#4567).
+        //
+        // The resolved slice here is the LIVE transmitter, not the stale cache:
+        // #4547 made the live TX slice outrank a cached route, so the scenario
+        // this fixture builds — a route bound while slice 0 held transmit,
+        // never refreshed after the operator moved transmit to slice 1 — no
+        // longer drags transmit back onto slice 0. The diagnostic's own job is
+        // unchanged and is still what this pins: cachedTx must be sampled
+        // BEFORE the resolve, so it can still show the disagreement (0 vs 1)
+        // that the resolve is about to write away.
+        const char* const required[] = {
+            "trx=1",
+            "rxSlice=1(trx1)",
+            "-> txSlice=1(trx1)",
+            "(the requested slice)",
+            "liveTx=1(trx1)",       // transmit is really on slice 1...
+            "cachedTx=0(trx0)",     // ...and the cache still said slice 0
+            "owner=tci-created",
+        };
+        for (const char* needle : required) {
+            if (!route.contains(QLatin1String(needle))) {
+                std::fprintf(stderr, "route line missing %s\n  got: %s\n",
+                             needle, route.toUtf8().constData());
+                return false;
+            }
+        }
+        // And transmit does NOT move. This is the #4547 secondary defect in its
+        // literal form: before the fix this logged "transmit will move from
+        // slice 1(trx1) to slice 0(trx0)" and then keyed slice 0's band and
+        // antenna with no operator action.
+        return findLine(log, "TCI PTT: transmit will move from slice").isEmpty();
+    }
+
+    // The other half of the same defect, and the one that pins the sampling
+    // ORDER. Here the client addresses a slice that is NOT the transmitter, so
+    // resolvePttSlice() takes its external-TX branch — and that branch writes
+    // the live assignment through to the cache (m_txSliceId, m_rxSliceId,
+    // m_owner) before returning. Read cachedTx AFTER the resolve and it always
+    // equals liveTx: the line still prints, still looks reasonable, and has
+    // quietly stopped reporting the disagreement it exists for. That is what
+    // 60b78967 shipped and 0610df79 fixed. Move the three reads below the
+    // resolve and this test fails; the one above it does not.
+    static bool pttRouteLogSamplesCacheBeforeResolve()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket client;
+        if (!pttRouteFixture(model, server)) {
+            return false;
+        }
+        SliceModel* s1 = model.slice(1);
+        if (!s1) {
+            return false;
+        }
+        // Inhibit the slice that holds transmit. The route line is logged
+        // before this guard, so the decision is still fully recorded — and the
+        // request stops here instead of running on into a real key-down.
+        model.setPanTransmitInhibited(s1->panId(), true,
+                                      QStringLiteral("inhibited for test"));
+
+        // Split is what makes a TX route answer this request at all since
+        // #4547: a bare PTT now keys the slice it names, and the external-TX
+        // branch — the one that writes the live assignment through to the cache
+        // and so is the only branch that can erase the disagreement this test
+        // exists to catch — is reached only when a route actually applies.
+        server.m_routingState.setSplitRequested(true);
+
+        // trx 0 addresses slice 0, which is not the TX slice: with a route
+        // applying, the requested receiver is resolved away onto slice 1.
+        const QStringList log = captureCatLog([&] {
+            server.handleTrxRequest(&client, TciProtocol::TrxRequest{
+                0, true, QStringLiteral("tci")
+            });
+        });
+
+        const QString route = findLine(log, "TCI PTT route:");
+        if (route.isEmpty()) {
+            std::fprintf(stderr, "no TCI PTT route line was logged\n");
+            return false;
+        }
+        const char* const required[] = {
+            "trx=0",
+            "rxSlice=0(trx0)",
+            "-> txSlice=1(trx1)",
+            "(NOT the requested slice)",
+            "liveTx=1(trx1)",
+            "cachedTx=0(trx0)",     // post-resolve this reads 1(trx1)
+            "cachedRx=1(trx1)",     // post-resolve this reads 0(trx0)
+            "owner=tci-created",    // post-resolve this reads external
+        };
+        for (const char* needle : required) {
+            if (!route.contains(QLatin1String(needle))) {
+                std::fprintf(stderr, "route line missing %s\n  got: %s\n",
+                             needle, route.toUtf8().constData());
+                return false;
+            }
+        }
+        // The drop reason is stated, and names the slice in both numberings.
+        return !findLine(log, "TCI PTT: slice 1(trx1) is transmit-inhibited - "
+                              "inhibited for test")
+                    .isEmpty();
+    }
+
+    // source= is client-supplied and printed with .noquote(), so without
+    // sanitising, any TCI client could emit a newline and forge a second
+    // "TCI PTT route:" line into the log a reporter attaches to an issue.
+    // Drop the simplified() call and this fails.
+    static bool pttRouteLogSanitizesClientSource()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        QWebSocket client;
+        if (!pttRouteFixture(model, server)) {
+            return false;
+        }
+
+        const QStringList log = captureCatLog([&] {
+            server.handleTrxRequest(&client, TciProtocol::TrxRequest{
+                1, true,
+                QStringLiteral("dax\nTCI PTT route: trx=9 rxSlice=9(trx9)")
+            });
+        });
+
+        int routeLines = 0;
+        for (const QString& line : log) {
+            if (line.contains(QLatin1String("TCI PTT route:"))) {
+                ++routeLines;
+            }
+        }
+        if (routeLines != 1) {
+            std::fprintf(stderr, "expected 1 route line, got %d\n", routeLines);
+            return false;
+        }
+        const QString route = findLine(log, "TCI PTT route:");
+        if (route.contains(QLatin1Char('\n'))) {
+            std::fprintf(stderr, "route line carries an embedded newline: %s\n",
+                         route.toUtf8().constData());
+            return false;
+        }
+        // Neutralised in place and bounded, not silently dropped — the field
+        // is still evidence about which client sent the request. source= is
+        // last on the line, so what follows it is exactly the rendered field.
+        const QString source = route.section(QLatin1String(" source="), 1);
+        if (!source.startsWith(QLatin1String("dax TCI PTT route:"))) {
+            std::fprintf(stderr, "source not neutralised in place: '%s'\n",
+                         source.toUtf8().constData());
+            return false;
+        }
+        if (source.size() > 32) {
+            std::fprintf(stderr, "source not bounded: %lld chars\n",
+                         static_cast<long long>(source.size()));
+            return false;
+        }
+        return true;
     }
 
     // ── #4161 power / flag broadcast internals ──────────────────────────────
@@ -909,6 +1175,12 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::liveSlicesKeepDistinctTrxAfterReconnect();
     const bool heldTrxRefuses
         = AetherSDR::TciServerReviewTest::heldTrxRefusesInsteadOfRepointing();
+    const bool routeLogStaleCache
+        = AetherSDR::TciServerReviewTest::pttRouteLogExposesStaleCache();
+    const bool routeLogSampleOrder
+        = AetherSDR::TciServerReviewTest::pttRouteLogSamplesCacheBeforeResolve();
+    const bool routeLogSanitizes
+        = AetherSDR::TciServerReviewTest::pttRouteLogSanitizesClientSource();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -949,6 +1221,15 @@ int main(int argc, char** argv)
                 vfoConfirmsRefusal ? "PASS" : "FAIL");
     std::printf("%s  vfo: SET still acknowledges a no-op\n",
                 vfoAcksNoOp ? "PASS" : "FAIL");
+    std::printf("%s  PTT route log shows the cache disagreeing with live TX "
+                "(#4547)\n",
+                routeLogStaleCache ? "PASS" : "FAIL");
+    std::printf("%s  PTT route log samples the cache before the resolve "
+                "(#4547)\n",
+                routeLogSampleOrder ? "PASS" : "FAIL");
+    std::printf("%s  PTT route log neutralises a client-supplied source "
+                "(#4547)\n",
+                routeLogSanitizes ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure && pttBindsReceiver
         && pttUsesStableMap
@@ -957,5 +1238,6 @@ int main(int argc, char** argv)
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate
         && trxDistinctReconnect && heldTrxRefuses
         && vfoConfirmsAccepted && vfoConfirmsRefusal && vfoAcksNoOp
+        && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         ? 0 : 1;
 }

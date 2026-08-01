@@ -228,15 +228,23 @@ void ClientPuduMonitor::startPlayback()
     // supplies, in one place, the per-OS preferred rate (Win/Mac 48k to dodge
     // the WASAPI 24k resampler artifacts #2120 — same policy as the RX sink;
     // Linux native 24k) plus the 44.1k and preferredFormat fallbacks the old
-    // hand-rolled ladder enumerated by hand. We walk it with isFormatSupported
-    // (trusted here — that is exactly how #3231's Float-only devices are
-    // detected, by Int16 being correctly rejected).
+    // hand-rolled ladder enumerated by hand.
+    //
+    // Each rung is tried with a real QAudioSink::start(), not
+    // isFormatSupported() (#4641): on Windows/WASAPI that query answers
+    // against the shared-mode mix format and false-negatives on class-
+    // compliant multichannel USB interfaces (Scarlett, Focusrite, Akai EIE)
+    // that accept the format fine once actually opened — see AudioEngine's
+    // RX sink (AudioEngine.cpp) and AudioDeviceNegotiator::probe()'s
+    // isFormatSupportedReliable comment for the same finding. Trusting the
+    // query here meant every rung failed on affected hardware and playback
+    // silently never started.
     QAudioFormat fmt;
     int sinkRate = kSampleRate;
     bool fallbackOccurred = false;
     QStringList fallbackReasons;
     QStringList attemptedFormats;
-    bool haveFormat = false;
+    QString lastOpenError;
     const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
         dev, AudioFormatNegotiator::Direction::Output,
         AudioFormatNegotiator::ResamplerPolicy::PreservePan,
@@ -250,87 +258,76 @@ void ClientPuduMonitor::startPlayback()
         attemptedFormats << QStringLiteral("%1Hz %2ch %3")
             .arg(c.sampleRate()).arg(c.channelCount())
             .arg(AudioSummaryLogger::sampleFormatName(c.sampleFormat()));
-        if (dev.isFormatSupported(c)) {
-            fmt = c;
-            sinkRate = c.sampleRate();
-            haveFormat = true;
-            if (c.sampleRate() != kSampleRate || c.sampleFormat() != QAudioFormat::Int16) {
-                fallbackOccurred = true;
-                fallbackReasons << QStringLiteral("negotiated %1Hz %2")
-                    .arg(sinkRate)
-                    .arg(AudioSummaryLogger::sampleFormatName(c.sampleFormat()));
+
+        // preparePlaybackPcm() resamples from the recorded 24 kHz buffer to
+        // this rung's rate; must run per-rung since the rate varies across
+        // the ladder and the sink is opened in pull mode against the result.
+        if (!preparePlaybackPcm(c.sampleRate())) continue;
+        if (c.sampleFormat() == QAudioFormat::Float) {
+            const int frames = m_playPcm.size() / kBytesPerFrame;
+            QByteArray floatPcm(frames * kChannels * static_cast<int>(sizeof(float)), '\0');
+            const auto* src16 = reinterpret_cast<const int16_t*>(m_playPcm.constData());
+            auto*       dstF  = reinterpret_cast<float*>(floatPcm.data());
+            for (int i = 0; i < frames * kChannels; ++i) {
+                dstF[i] = src16[i] / 32768.0f;
             }
-            break;
+            m_playPcm = std::move(floatPcm);
         }
+
+        // ── QBuffer → QAudioSink (pull mode) ───────────────────────
+        // Sink pulls from QBuffer at its own cadence.  No timer, no
+        // feedDecodedSpeech, no RX-buffer routing — the sink's internal
+        // ring buffer absorbs scheduler jitter so the audio comes out
+        // cleanly on every platform.  When QBuffer hits end-of-data the
+        // sink transitions to IdleState and we stop cleanly.
+        m_playBuffer.close();
+        m_playBuffer.setBuffer(&m_playPcm);
+        if (!m_playBuffer.open(QIODevice::ReadOnly)) continue;
+
+        auto* sink = new QAudioSink(dev, c, this);
+        // Ask for a generous 300 ms internal ring buffer before start().
+        // Qt's defaults are ~40-80 ms which is fine on Linux/macOS but
+        // chops on Windows when the main event loop hiccups (painting,
+        // UI events, GC) — WASAPI shared-mode pulls on a tight 10 ms
+        // schedule and if we miss a refill the device inserts silence.
+        // 300 ms gives ~30 pulls of margin.  Backend may clamp to the
+        // device's period granularity; not an error if the effective
+        // size is slightly smaller.
+        sink->setBufferSize(c.bytesForDuration(300'000));
+        sink->start(&m_playBuffer);
+        if (sink->state() == QAudio::StoppedState && sink->error() != QAudio::NoError) {
+            lastOpenError = QString::number(static_cast<int>(sink->error()));
+            delete sink;
+            m_playBuffer.close();
+            continue;
+        }
+
+        fmt = c;
+        sinkRate = c.sampleRate();
+        m_playSink = sink;
+        if (c.sampleRate() != kSampleRate || c.sampleFormat() != QAudioFormat::Int16) {
+            fallbackOccurred = true;
+            fallbackReasons << QStringLiteral("negotiated %1Hz %2")
+                .arg(sinkRate)
+                .arg(AudioSummaryLogger::sampleFormatName(c.sampleFormat()));
+        }
+        break;
     }
-    if (!haveFormat) {
+    if (!m_playSink) {
         AudioSummaryLogger::OpenFailureSummary failure;
         failure.path = QStringLiteral("Aetherial monitor playback");
         failure.backend = QStringLiteral("QAudioSink");
         failure.deviceDescription = dev.description();
         failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
-        failure.failureReason = QStringLiteral("device supports no rung in the negotiation ladder");
+        failure.failureReason = lastOpenError.isEmpty()
+            ? QStringLiteral("device supports no rung in the negotiation ladder")
+            : QStringLiteral("QAudioSink stopped immediately after start (error %1)").arg(lastOpenError);
         failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
         AudioSummaryLogger::logOpenFailure(failure);
         bail(); return;
     }
-
-    if (!preparePlaybackPcm(sinkRate)) { bail(); return; }
-
-    // If the sink negotiated a non-Int16 format (e.g. Float32 via WASAPI
-    // shared mode), convert the Int16 payload from preparePlaybackPcm()
-    // to the required sample format.  Only Float32 is handled here since
-    // that is the only format preferredFormat() returns in practice on
-    // WASAPI and CoreAudio devices that reject Int16.
-    if (fmt.sampleFormat() == QAudioFormat::Float) {
-        const int frames = m_playPcm.size() / kBytesPerFrame;
-        QByteArray floatPcm(frames * kChannels * static_cast<int>(sizeof(float)), '\0');
-        const auto* src = reinterpret_cast<const int16_t*>(m_playPcm.constData());
-        auto*       dst = reinterpret_cast<float*>(floatPcm.data());
-        for (int i = 0; i < frames * kChannels; ++i) {
-            dst[i] = src[i] / 32768.0f;
-        }
-        m_playPcm = std::move(floatPcm);
-    }
-
-    // ── QBuffer → QAudioSink (pull mode) ───────────────────────────
-    // Sink pulls from QBuffer at its own cadence.  No timer, no
-    // feedDecodedSpeech, no RX-buffer routing — the sink's internal
-    // ring buffer absorbs scheduler jitter so the audio comes out
-    // cleanly on every platform.  When QBuffer hits end-of-data the
-    // sink transitions to IdleState and we stop cleanly.
-    m_playBuffer.close();
-    m_playBuffer.setBuffer(&m_playPcm);
-    if (!m_playBuffer.open(QIODevice::ReadOnly)) { bail(); return; }
-
-    m_playSink = new QAudioSink(dev, fmt, this);
-    // Ask for a generous 300 ms internal ring buffer before start().
-    // Qt's defaults are ~40-80 ms which is fine on Linux/macOS but
-    // chops on Windows when the main event loop hiccups (painting,
-    // UI events, GC) — WASAPI shared-mode pulls on a tight 10 ms
-    // schedule and if we miss a refill the device inserts silence.
-    // 300 ms gives ~30 pulls of margin.  Backend may clamp to the
-    // device's period granularity; not an error if the effective
-    // size is slightly smaller.
-    m_playSink->setBufferSize(fmt.bytesForDuration(300'000));
     connect(m_playSink, &QAudioSink::stateChanged,
             this, &ClientPuduMonitor::onPlaybackSinkState);
-    m_playSink->start(&m_playBuffer);
-    if (m_playSink->state() == QAudio::StoppedState
-        && m_playSink->error() != QAudio::NoError) {
-        AudioSummaryLogger::OpenFailureSummary failure;
-        failure.path = QStringLiteral("Aetherial monitor playback");
-        failure.backend = QStringLiteral("QAudioSink");
-        failure.deviceDescription = dev.description();
-        failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
-        failure.failureReason = QStringLiteral("QAudioSink stopped immediately after start (error %1)")
-            .arg(static_cast<int>(m_playSink->error()));
-        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
-        AudioSummaryLogger::logOpenFailure(failure);
-        delete m_playSink;
-        m_playSink = nullptr;
-        bail(); return;
-    }
     AudioSummaryLogger::AuxiliarySinkSummary summary;
     summary.sinkName = QStringLiteral("Aetherial monitor playback");
     summary.deviceDescription = dev.description();

@@ -325,6 +325,54 @@ int main(int argc, char** argv)
               && !response.value(QStringLiteral("running")).toBool(),
           "tci stop all tears down the remaining simulated client");
 
+    // ── Restart after a server-side close (#4017, regressed by the id list) ──
+    // The disconnected lambda reaps the socket but the client entry survives so
+    // `tci status` can still report closeReason. Keying "already running" off
+    // the id alone therefore refused every restart after the radio or server
+    // dropped the connection — the exact failure #4017 fixed. The start path
+    // must recycle a slot whose socket is gone.
+    response = bridge.request(
+        QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+        + QByteArrayLiteral(" @c"));
+    check(response.value(QStringLiteral("ok")).toBool(),
+          "a client starts for the server-close restart check");
+    check(spinUntil([&fakeTci] { return fakeTci.hasPendingConnections(); }),
+          "it connects to the fake TCI server");
+    QWebSocket* peerC = fakeTci.nextPendingConnection();
+    check(spinUntil([&bridge] {
+        return bridge.request(QByteArrayLiteral("tci status @c"))
+            .value(QStringLiteral("connected")).toBool();
+    }), "it reports connected before the server closes it");
+
+    if (peerC) peerC->close();          // server-side close, not `tci stop`
+    check(spinUntil([&bridge] {
+        return !bridge.request(QByteArrayLiteral("tci status @c"))
+            .value(QStringLiteral("connected")).toBool();
+    }), "the simulator observes the server-side close");
+    check(bridge.request(QByteArrayLiteral("tci status @c"))
+              .value(QStringLiteral("closeReason")).toString()
+              == QStringLiteral("server closed"),
+          "the reaped client keeps its closeReason for diagnosis");
+
+    response = bridge.request(
+        QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+        + QByteArrayLiteral(" @c"));
+    check(response.value(QStringLiteral("ok")).toBool(),
+          "the same id restarts after a server-side close, not 'already running'");
+    check(spinUntil([&fakeTci] { return fakeTci.hasPendingConnections(); }),
+          "the restarted client reconnects");
+    QWebSocket* peerC2 = fakeTci.nextPendingConnection();
+
+    // A LIVE client with the same id is still refused — recycling the dead slot
+    // must not become a way to leak a second socket under one name.
+    check(!bridge.request(
+              QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+              + QByteArrayLiteral(" @c")).value(QStringLiteral("ok")).toBool(),
+          "a live client with the same id is still refused");
+    bridge.request(QByteArrayLiteral("tci stop all"));
+
+    if (peerC) peerC->deleteLater();
+    if (peerC2) peerC2->deleteLater();
     if (peerB) peerB->deleteLater();
     peer->deleteLater();
     fakeTci.close();
