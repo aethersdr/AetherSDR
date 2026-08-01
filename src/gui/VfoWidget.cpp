@@ -2038,7 +2038,7 @@ void VfoWidget::buildTabContent()
             m_apfSlider->setRange(0, 100);
             m_apfSlider->setValue(50);
             applyPrimarySliderStyle(m_apfSlider);
-            m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the peak for better CW selectivity.");
+            m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the peak for better CW selectivity. Enabled when APF is on in the DSP grid.");
             apfVb->addWidget(m_apfSlider, 1);
             m_apfValueLbl = new QLabel("50");
             m_apfValueLbl->setStyleSheet(kLabelStyle);
@@ -2051,6 +2051,11 @@ void VfoWidget::buildTabContent()
                 if (!m_updatingFromModel && m_slice) m_slice->setApfLevel(v);
             });
 
+            // Level is only reachable while the filter is engaged — same rule
+            // as every other DSP parameter. Kept VISIBLE (disabled) in CW so
+            // the control stays discoverable; hiding it was how operators
+            // ended up dragging a live slider into a disengaged filter (#4658).
+            m_apfContainer->setEnabled(false);
             m_apfContainer->hide();
             dspVb->addWidget(m_apfContainer);
         }
@@ -4498,6 +4503,11 @@ void VfoWidget::setSlice(SliceModel* slice)
     connectLeveledDsp(&SliceModel::anflChanged, m_anflBtn, LvlAnfl);
     connectDsp(&SliceModel::anftChanged, m_anftBtn);   // toggle-only, no level
     connectDsp(&SliceModel::apfChanged, m_apfBtn);     // own level row
+    // The level row follows the filter's engagement, radio-echo included —
+    // a slider that talks to a disengaged filter reads as "APF is broken" (#4658).
+    connect(m_slice, &SliceModel::apfChanged, this, [this](bool on) {
+        m_apfContainer->setEnabled(on);
+    });
     connect(m_slice, &SliceModel::apfLevelChanged, this, [this](int v) {
         m_updatingFromModel = true;
         m_apfSlider->setValue(v);
@@ -4948,6 +4958,7 @@ void VfoWidget::syncFromSlice()
         QSignalBlocker sb(m_apfSlider);
         m_apfSlider->setValue(m_slice->apfLevel());
         m_apfValueLbl->setText(QString::number(m_slice->apfLevel()));
+        m_apfContainer->setEnabled(m_slice->apfOn());   // slice-switch sync (#4658)
     }
 
     // DAX
