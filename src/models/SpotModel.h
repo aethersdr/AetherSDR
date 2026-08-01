@@ -21,7 +21,6 @@ struct SpotData {
     QDateTime timestamp;
     int lifetimeSeconds{1800};  // default 30 min
     int priority{0};
-    QString statusFlag;         // contest logger status, e.g. "dupe", "mult", "cq" (#2906)
     qint64 addedMs{0};         // local wall-clock when added
 };
 

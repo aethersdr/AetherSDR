@@ -629,6 +629,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         m_n1mmStartBtn->setText("Start");
         m_n1mmConsole->appendPlainText("--- Stopped ---");
     });
+    connect(n1mmSpotClient, &N1MMSpotClient::bindFailed, this, [this](const QString& err) {
+        m_n1mmStatusLabel->setText("Bind failed");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
+        m_n1mmStartBtn->setText("Start");
+        m_n1mmConsole->appendPlainText(
+            QString("--- Bind failed on port %1: %2 ---").arg(m_n1mmPortSpin->value()).arg(err));
+    });
 
 #ifdef HAVE_WEBSOCKETS
     // ── Live updates from FreeDV client ───────────────────────────────
@@ -1687,7 +1694,8 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
         "compatible N1MMSpot UDP broadcast (default port 12060 — the same port\n"
         "SmartSDR CAT uses, so existing logger configurations work unchanged).\n"
         "In N1MM+: Config -> Configure Ports... -> Broadcast Data -> check\n"
-        "\"Contact Info\", set this address/port as an additional destination.");
+        "\"Spots\", set this address/port as an additional destination.\n"
+        "(\"Contacts\" broadcasts logged QSOs, not bandmap spots, and is ignored here.)");
     helpLabel->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(helpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     connLayout->addWidget(helpLabel);

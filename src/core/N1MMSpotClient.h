@@ -37,6 +37,10 @@ public slots:
 signals:
     void listening();
     void stopped();
+    // Bind failed — port already taken by SmartSDR CAT or another N1MM
+    // consumer is the common case, and without this the Start button would
+    // just silently stay "Start" with only a log line to explain it.
+    void bindFailed(const QString& error);
     // action == "add": create-or-update the spot keyed by N1MMSpotParser::spotKey(...).
     void spotAdded(const N1mmSpot& spot);
     // action == "delete": remove the spot keyed by spotKey(dxCall, freqMhz).

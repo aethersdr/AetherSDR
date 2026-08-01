@@ -44,8 +44,6 @@ void SpotModel::applySpotStatus(int index, const QMap<QString, QString>& kvs)
             spot.lifetimeSeconds = val.toInt();
         else if (key == "priority")
             spot.priority = val.toInt();
-        else if (key == "status_flag")
-            spot.statusFlag = val;
     }
 
     if (isNew)

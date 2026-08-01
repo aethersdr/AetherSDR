@@ -33,6 +33,7 @@
 #include "models/SpotModel.h"
 
 #include <QDateTime>
+#include <QSet>
 #ifdef HAVE_MQTT
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -423,6 +424,19 @@ void MainWindow::wireSpotSubsystem()
             m_passiveSpotExpiryMs.remove(spotId);
             m_radioModel.spotModel().removeSpot(spotId);
         }
+
+        // N1MM keeps its own key→id map so a re-add updates in place. Drop the
+        // entries whose spots just expired here too, or the map grows for the
+        // life of the session (#2906).
+        if (!m_n1mmSpotIdByKey.isEmpty()) {
+            const QSet<int> expiredIds(expired.cbegin(), expired.cend());
+            for (auto it = m_n1mmSpotIdByKey.begin(); it != m_n1mmSpotIdByKey.end(); ) {
+                if (expiredIds.contains(it.value()))
+                    it = m_n1mmSpotIdByKey.erase(it);
+                else
+                    ++it;
+            }
+        }
     });
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, [this] { m_passiveSpotExpiryMs.clear(); m_n1mmSpotIdByKey.clear(); });
@@ -472,7 +486,6 @@ void MainWindow::wireSpotSubsystem()
         kvs["lifetime_seconds"] = QString::number(lifetimeSec);
         kvs["timestamp"] = QString::number(QDateTime::currentSecsSinceEpoch());
         kvs["color"] = color;
-        kvs["status_flag"] = n1mm.statusFlag;
         if (!n1mm.mode.isEmpty())
             kvs["mode"] = n1mm.mode;
 
@@ -492,17 +505,25 @@ void MainWindow::wireSpotSubsystem()
         }
         m_radioModel.spotModel().applySpotStatus(spotId, kvs);
 
-        const qint64 expiresAt = QDateTime::currentMSecsSinceEpoch()
-                               + qint64(lifetimeSec) * 1000;
-        m_passiveSpotExpiryMs.insert(spotId, expiresAt);
+        // 0 (or negative) means "no expiry" — same convention as
+        // addPassiveSpotToModel and the DX-cluster lifetime helper above.
+        // Inserting unconditionally would make the 1 Hz sweeper delete the
+        // spot on its next tick.
+        if (lifetimeSec > 0) {
+            const qint64 expiresAt = QDateTime::currentMSecsSinceEpoch()
+                                   + qint64(lifetimeSec) * 1000;
+            m_passiveSpotExpiryMs.insert(spotId, expiresAt);
+        }
     });
 
     connect(m_n1mmSpotClient, &N1MMSpotClient::spotDeleted,
             this, [this](const QString& dxCall, double freqMhz) {
         const QString key = N1MMSpotParser::spotKey(dxCall, freqMhz);
-        const int spotId = m_n1mmSpotIdByKey.take(key);
-        if (spotId == 0)
+        const auto it = m_n1mmSpotIdByKey.constFind(key);
+        if (it == m_n1mmSpotIdByKey.constEnd())
             return;
+        const int spotId = it.value();
+        m_n1mmSpotIdByKey.erase(it);
         m_passiveSpotExpiryMs.remove(spotId);
         m_radioModel.spotModel().removeSpot(spotId);
     });

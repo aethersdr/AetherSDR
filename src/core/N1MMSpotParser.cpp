@@ -22,6 +22,12 @@ bool parsePacket(const QByteArray& data, N1mmSpot& outSpot, QString& outAction)
             currentTag = xml.name().toString();
             if (currentTag.compare("spot", Qt::CaseInsensitive) == 0)
                 sawSpotElement = true;
+        } else if (token == QXmlStreamReader::EndElement) {
+            // Without this, stray text between one element closing and the
+            // next opening is appended to the element that just closed —
+            // e.g. junk after </frequency> concatenates onto the number and
+            // makes toDouble() fail on an otherwise-valid packet.
+            currentTag.clear();
         } else if (token == QXmlStreamReader::Characters && !xml.isWhitespace()) {
             const QString text = xml.text().toString();
             if (currentTag.compare("dxcall", Qt::CaseInsensitive) == 0) dxcall += text;

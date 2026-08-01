@@ -52,6 +52,7 @@ void N1MMSpotClient::startListening(quint16 port)
     if (!m_socket->bind(QHostAddress::AnyIPv4, port,
                         QAbstractSocket::ShareAddress | QAbstractSocket::ReuseAddressHint)) {
         qCWarning(lcDxCluster) << "N1MMSpotClient: bind failed:" << m_socket->errorString();
+        emit bindFailed(m_socket->errorString());
         return;
     }
 

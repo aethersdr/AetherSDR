@@ -187,6 +187,24 @@ void testOversizedDatagramDoesNotCrash()
     expectTrue("oversized malformed datagram rejected without crashing", !ok);
 }
 
+void testStrayTextBetweenElements()
+{
+    // currentTag must reset on EndElement, or text sitting between one
+    // element closing and the next opening gets appended to the element that
+    // just closed — here "junk" would land on <frequency>, turning "14025.0"
+    // into "14025.0junk" and failing toDouble() on an otherwise-valid packet.
+    const QByteArray xml =
+        "<spot><dxcall>W1ABC</dxcall><frequency>14025.0</frequency>junk"
+        "<mode>CW</mode></spot>";
+    N1mmSpot spot;
+    QString action;
+    const bool ok = N1MMSpotParser::parsePacket(xml, spot, action);
+    expectTrue("stray text between elements still parses", ok);
+    expectNear("stray text does not corrupt frequency", spot.freqMhz, 14.025);
+    expectEqual("stray text does not corrupt mode", spot.mode, "CW");
+    expectEqual("stray text does not corrupt dxcall", spot.dxCall, "W1ABC");
+}
+
 void testSpotKeyIdentity()
 {
     const QString keyA = N1MMSpotParser::spotKey("AL3CDE", 7.0612);   // 40m
@@ -237,6 +255,7 @@ int main(int argc, char** argv)
     testInvalidActionFails();
     testMalformedXmlFails();
     testOversizedDatagramDoesNotCrash();
+    testStrayTextBetweenElements();
     testSpotKeyIdentity();
     testStatusFlagPriority();
 
