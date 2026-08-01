@@ -43,7 +43,13 @@ bool parsePacket(const QByteArray& data, N1mmSpot& outSpot, QString& outAction)
         }
     }
 
-    if (!sawSpotElement)
+    // The loop also exits on hasError(), so without this a document the reader
+    // gave up on still succeeds as long as <spot>, a dxcall and some digits of
+    // <frequency> arrived first — e.g. a datagram cut mid-number at
+    // "<frequency>140" would yield a marker at 0.140 MHz, on the wrong band and
+    // under the wrong spotKey(). onReadyRead()'s 64 KB cap and ordinary UDP
+    // fragment loss both produce exactly that shape.
+    if (xml.hasError() || !sawSpotElement)
         return false;
 
     dxcall = dxcall.trimmed();

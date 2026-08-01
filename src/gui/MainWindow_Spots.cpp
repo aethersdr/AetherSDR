@@ -528,6 +528,18 @@ void MainWindow::wireSpotSubsystem()
         m_radioModel.spotModel().removeSpot(spotId);
     });
 
+    // Stopping the listener drops its markers. Without this they'd linger for
+    // N1MMSpotLifetimeSec (3 h by default, and forever at 0 = no expiry), long
+    // after the logger feeding them is gone. The other sources don't hit this
+    // because queueSpotCmd gives them the much shorter cluster lifetime.
+    connect(m_n1mmSpotClient, &N1MMSpotClient::stopped, this, [this] {
+        for (auto it = m_n1mmSpotIdByKey.cbegin(); it != m_n1mmSpotIdByKey.cend(); ++it) {
+            m_passiveSpotExpiryMs.remove(it.value());
+            m_radioModel.spotModel().removeSpot(it.value());
+        }
+        m_n1mmSpotIdByKey.clear();
+    });
+
     connect(m_dxCluster, &DxClusterClient::spotReceived,
             this, [queueSpotCmd](const DxSpot& spot) {
         queueSpotCmd(spot, "DXCluster");

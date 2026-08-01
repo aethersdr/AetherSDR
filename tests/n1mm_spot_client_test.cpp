@@ -172,6 +172,30 @@ void testMalformedXmlFails()
                    spot, action));
 }
 
+void testTruncatedMidFrequencyRejected()
+{
+    // The gap the earlier truncation tests missed: they only passed because
+    // their fixtures also lacked a <frequency>. A datagram cut mid-number has
+    // a valid dxcall AND digits, so without an xml.hasError() check it parses
+    // as a real spot at the wrong frequency — "140" → 0.140 MHz, wrong band,
+    // wrong spotKey(). onReadyRead()'s 64 KB cap and UDP fragment loss both
+    // produce this shape.
+    N1mmSpot spot;
+    QString action;
+    expectTrue("truncated mid-frequency rejected",
+               !N1MMSpotParser::parsePacket(
+                   "<spot><dxcall>W1ABC</dxcall><frequency>140", spot, action));
+    expectTrue("truncated mid-frequency with closing tag missing rejected",
+               !N1MMSpotParser::parsePacket(
+                   "<spot><dxcall>W1ABC</dxcall><frequency>14025.0", spot, action));
+    // Truncated after a complete, well-formed frequency element is still a
+    // torn document — the reader flags it and we drop it rather than guess.
+    expectTrue("truncated after complete frequency rejected",
+               !N1MMSpotParser::parsePacket(
+                   "<spot><dxcall>W1ABC</dxcall><frequency>14025.0</frequency>",
+                   spot, action));
+}
+
 void testOversizedDatagramDoesNotCrash()
 {
     // Unterminated <dxcall> swallows 200 KB of filler and the document never
@@ -254,6 +278,7 @@ int main(int argc, char** argv)
     testMissingOrInvalidFrequencyFails();
     testInvalidActionFails();
     testMalformedXmlFails();
+    testTruncatedMidFrequencyRejected();
     testOversizedDatagramDoesNotCrash();
     testStrayTextBetweenElements();
     testSpotKeyIdentity();

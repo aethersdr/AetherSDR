@@ -3663,6 +3663,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             WsjtxClient* wsjtxClient = m_wsjtxClient;
             SpotCollectorClient* spotCollectorClient = m_spotCollectorClient;
             PotaClient* potaClient = m_potaClient;
+            N1MMSpotClient* n1mmSpotClient = m_n1mmSpotClient;
 #ifdef HAVE_WEBSOCKETS
             FreeDvClient* freedvClient = m_freedvClient;
 #endif
@@ -3677,6 +3678,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
                                       Qt::BlockingQueuedConnection);
             QMetaObject::invokeMethod(potaClient, [potaClient] { potaClient->stopPolling(); },
                                       Qt::BlockingQueuedConnection);
+            QMetaObject::invokeMethod(n1mmSpotClient,
+                                      [n1mmSpotClient] { n1mmSpotClient->stopListening(); },
+                                      Qt::BlockingQueuedConnection);
 #ifdef HAVE_WEBSOCKETS
             QMetaObject::invokeMethod(freedvClient,
                                       [freedvClient] { freedvClient->stopConnection(); },
@@ -3687,6 +3691,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             wsjtxClient->deleteLater();
             spotCollectorClient->deleteLater();
             potaClient->deleteLater();
+            n1mmSpotClient->deleteLater();
 #ifdef HAVE_WEBSOCKETS
             freedvClient->deleteLater();
 #endif
@@ -3698,6 +3703,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
             delete m_wsjtxClient;
             delete m_spotCollectorClient;
             delete m_potaClient;
+            delete m_n1mmSpotClient;
 #ifdef HAVE_WEBSOCKETS
             delete m_freedvClient;
 #endif
@@ -3707,6 +3713,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
         m_wsjtxClient = nullptr;
         m_spotCollectorClient = nullptr;
         m_potaClient = nullptr;
+        m_n1mmSpotClient = nullptr;
 #ifdef HAVE_WEBSOCKETS
         m_freedvClient = nullptr;
 #endif
