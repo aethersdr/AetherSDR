@@ -613,8 +613,12 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         spot.source = "N1MM";
         m_spotBatch.append(spot);
     });
+    // The Spot List tab is a chronological log of everything received, across
+    // every source — no source removes rows from it — so a delete drops the
+    // panadapter marker and is recorded here rather than un-logging the spot.
     connect(n1mmSpotClient, &N1MMSpotClient::spotDeleted, this, [this](const QString& dxCall, double freqMhz) {
-        m_n1mmConsole->appendPlainText(QString("--- delete %1 @ %2 MHz ---").arg(dxCall).arg(freqMhz, 0, 'f', 3));
+        m_n1mmConsole->appendPlainText(QString("--- delete %1 @ %2 MHz (panadapter marker removed) ---")
+                                           .arg(dxCall).arg(freqMhz, 0, 'f', 3));
     });
 
     connect(n1mmSpotClient, &N1MMSpotClient::listening, this, [this] {
