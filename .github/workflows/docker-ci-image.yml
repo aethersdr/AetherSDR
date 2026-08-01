@@ -41,7 +41,7 @@ jobs:
         with:
           context: .github/docker
           push: true
-          tags: ghcr.io/ten9876/aethersdr-ci:latest
+          tags: ghcr.io/aethersdr/aethersdr-ci:latest
 
       - name: Update workflow consumers to new digest
         id: pin
@@ -58,12 +58,18 @@ jobs:
           # run swaps the legacy ":latest" reference cleanly.
           # The `[ -f ]` guard lets the loop run cleanly even if a consumer
           # file isn't on main yet (e.g. sanitizers.yml until PR #2866 lands).
+          #
+          # The owner alternation matches the pre-move `ten9876` namespace as
+          # well as the current `aethersdr` one, and always rewrites to the
+          # latter. That way a consumer left on the old namespace by a
+          # long-lived branch is normalised rather than pinned to a digest
+          # under a namespace this token cannot publish to.
           for f in .github/workflows/ci.yml \
                    .github/workflows/codeql.yml \
                    .github/workflows/sanitizers.yml; do
             [ -f "$f" ] || continue
             sed -i -E \
-              "s#(ghcr\.io/ten9876/aethersdr-ci)(@sha256:[a-f0-9]+|:[A-Za-z0-9._-]+)#\1@${DIGEST}#g" \
+              "s#ghcr\.io/(ten9876|aethersdr)/aethersdr-ci(@sha256:[a-f0-9]+|:[A-Za-z0-9._-]+)#ghcr.io/aethersdr/aethersdr-ci@${DIGEST}#g" \
               "$f"
           done
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
@@ -83,7 +89,7 @@ jobs:
             publishing a new CI image from the current
             `.github/docker/Dockerfile`.
 
-            Updates the `ghcr.io/ten9876/aethersdr-ci` reference in
+            Updates the `ghcr.io/aethersdr/aethersdr-ci` reference in
             `ci.yml`, `codeql.yml`, and `sanitizers.yml` (where present) to:
 
                 ${{ steps.pin.outputs.digest }}

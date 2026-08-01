@@ -69,7 +69,7 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    container: ghcr.io/ten9876/aethersdr-ci:latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
 
     strategy:
       matrix:

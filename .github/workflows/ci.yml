@@ -30,7 +30,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: ghcr.io/ten9876/aethersdr-ci:latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
 
     # Explicit CCACHE_DIR: the job runs as root inside a container, so `~`
     # resolves to /root and an actions/cache `path:` of `~/.cache/ccache` would
