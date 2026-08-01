@@ -3078,7 +3078,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("modem", {"aethermodem"},
-            "modem <status|profile hf300|profile vhf1200|on|off> — AetherModem demod profile, RX tap, and decoder health",
+            "modem <status|profile hf300|profile vhf1200|on|off|preamble <flags|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doModemAutomation(QStringLiteral("modem"), a.action, a.value);

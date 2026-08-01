@@ -271,7 +271,7 @@ bool initTxResult(const Ax25DemodConfig& cfg, Ax25TransmitResult& result)
     result.polarity = cfg.polarity;
     result.markHz = cfg.markHz;
     result.spaceHz = cfg.spaceHz;
-    result.preambleFlags = txPreambleFlagsForProfile(cfg.profile);
+    result.preambleFlags = ax25EffectiveTxPreambleFlags(cfg);
     result.postambleFlags = kTxPostambleFlags;
     result.vitaPacketFrames = kTxVitaPacketFrames;
 
@@ -1184,11 +1184,17 @@ int ax25TxPostambleFlags()
     return kTxPostambleFlags;
 }
 
+int ax25EffectiveTxPreambleFlags(const Ax25DemodConfig& cfg)
+{
+    return cfg.txPreambleFlags > 0 ? cfg.txPreambleFlags
+                                   : txPreambleFlagsForProfile(cfg.profile);
+}
+
 ax25::LinkTimingProfile ax25LinkTimingForConfig(const Ax25DemodConfig& cfg,
                                                 int localTxOverheadMs)
 {
     ax25::LinkTimingProfile profile = ax25::LinkTimingProfile::forBaud(cfg.baud);
-    profile.preambleFlags = ax25TxPreambleFlags(cfg.profile);
+    profile.preambleFlags = ax25EffectiveTxPreambleFlags(cfg);
     profile.postambleFlags = ax25TxPostambleFlags();
     if (localTxOverheadMs > 0)
         profile.localTxOverheadMs = localTxOverheadMs;
@@ -1198,7 +1204,9 @@ ax25::LinkTimingProfile ax25LinkTimingForConfig(const Ax25DemodConfig& cfg,
 QString ax25DemodDescription(const Ax25DemodConfig& cfg)
 {
     const int lanes = ax25DemodLaneCount(cfg);
-    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6, %7 lane%8")
+    const int preamble = ax25EffectiveTxPreambleFlags(cfg);
+    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6, %7 lane%8, "
+                          "TXD %9 flags (%10 ms)%11")
         .arg(ax25ModemProfileName(cfg.profile))
         .arg(cfg.sampleRate)
         .arg(cfg.baud)
@@ -1208,7 +1216,10 @@ QString ax25DemodDescription(const Ax25DemodConfig& cfg)
              ? QStringLiteral("Normal")
              : QStringLiteral("Inverted"))
         .arg(lanes)
-        .arg(lanes == 1 ? QString() : QStringLiteral("s"));
+        .arg(lanes == 1 ? QString() : QStringLiteral("s"))
+        .arg(preamble)
+        .arg(cfg.baud > 0 ? preamble * 8 * 1000 / cfg.baud : 0)
+        .arg(cfg.txPreambleFlags > 0 ? QStringLiteral(" [override]") : QString());
 }
 
 Ax25TransmitResult ax25BuildTransmitAudio(

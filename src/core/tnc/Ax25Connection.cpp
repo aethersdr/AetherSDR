@@ -700,10 +700,20 @@ void Ax25Connection::ackUpTo(int nr)
     // REJ-recovery counter.
     if (toAck > 0)
         noteLinkProgress();
-    if (outstanding() == 0)
+    if (outstanding() == 0) {
         stopT1();
-    else
+    } else if (toAck > 0) {
+        // Only a real acknowledgement re-arms T1. Restarting it on a frame that
+        // acknowledged nothing let a peer hold the timer open indefinitely: with
+        // frames still outstanding, every arriving RR — including a stale one,
+        // or the peer's own retransmissions — pushed the deadline out, so a lost
+        // frame could go undetected for far longer than T1. Observed live:
+        // t1Timeouts=0 on a link whose measured round trip was 20.4 s against a
+        // T1 of 12.6 s, which made the retry statistics unusable for tuning.
+        // With no progress we leave the running timer exactly where it is; it
+        // was started when the outstanding frame was sent.
         startT1();
+    }
     armT3IfIdle();
 }
 

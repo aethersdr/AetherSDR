@@ -33,6 +33,13 @@ struct Ax25DemodConfig {
     double spaceHz{1800.0};
     Ax25TonePolarity polarity{Ax25TonePolarity::Normal};
     VhfMode vhfMode{VhfMode::APlus}; // VHF 1200 only; default A+ (Direwolf default)
+    // TXDELAY override in HDLC flags; 0 = use the profile default. On HF 300 the
+    // default 80 flags is 2.13 s — 42% of a data frame and 65% of an
+    // acknowledgement — so it is the largest single term in the airtime budget
+    // and the one worth sweeping on air. Both the modulator and the link-timing
+    // model read it through effectiveTxPreambleFlags(), so T1 tracks it
+    // automatically. See docs/HFMODEM.md §6.8.
+    int txPreambleFlags{0};
 };
 
 struct Ax25DecoderDiagnostics {
@@ -121,6 +128,10 @@ QString ax25DemodDescription(const Ax25DemodConfig& cfg);
 // framing that goes on the air rather than a copy of it.
 int ax25TxPreambleFlags(Ax25ModemProfile profile);
 int ax25TxPostambleFlags();
+// The preamble this config will actually transmit: the operator's override when
+// set, otherwise the profile default. Single source of truth for the modulator
+// and the airtime model alike.
+int ax25EffectiveTxPreambleFlags(const Ax25DemodConfig& cfg);
 // The link-timing profile implied by this modem configuration. `localTxOverheadMs`
 // is the caller's own keying overhead (PTT lead + backend settle + TX tail) —
 // dead air paid on every transmission, so it belongs in the round-trip budget.

@@ -320,6 +320,7 @@ private:
     // TNC Terminal service (connected-mode AX.25 client) and its controls.
     TncTerminal* m_terminal{nullptr};
     QAbstractButton* m_terminalTab{nullptr};
+    QSpinBox* m_terminalTxPreamble{nullptr}; // TXDELAY flags; 0 = profile default
     QLineEdit* m_terminalMyCall{nullptr};
     QLineEdit* m_terminalTarget{nullptr};
     QComboBox* m_terminalHeardCombo{nullptr};

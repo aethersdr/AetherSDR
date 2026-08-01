@@ -124,6 +124,12 @@ constexpr auto kTerminalRetrySecsSetting = "AetherModemTerminalRetrySecs";
 constexpr auto kTerminalMaxTriesSetting = "AetherModemTerminalMaxTries";
 constexpr auto kTerminalPaclenSetting = "AetherModemTerminalPaclen";
 constexpr auto kTerminalLogSetting = "AetherModemTerminalLogEnabled";
+// TXDELAY override in HDLC flags, 0 = the profile default. Exposed because the
+// preamble is the largest single term in the HF airtime budget (2.13 s of every
+// 5.07 s data frame and 3.30 s acknowledgement at 80 flags) and the only way to
+// find the right value is to sweep it on the air against measured frame error
+// rate. A knob rather than a constant so a sweep needs no rebuild per step.
+constexpr auto kTxPreambleFlagsSetting = "AetherModemTxPreambleFlags";
 // 0 = Auto: derive T1 and paclen from the modem profile via Ax25LinkTiming.h.
 // Auto is the default because the previous fixed values (T1 6 s, paclen 128)
 // were sized for 1200-baud VHF and are physically impossible at 300 baud — T1
@@ -1395,6 +1401,11 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
     m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
+    // ax25DemodConfigForProfile() returns profile defaults, so re-apply the
+    // operator's TXDELAY override or switching bands would silently discard it
+    // mid-sweep — and the sweep would be measuring the wrong preamble.
+    if (m_terminalTxPreamble)
+        m_shimConfig.txPreambleFlags = m_terminalTxPreamble->value();
     QMetaObject::invokeMethod(m_shim, [shim = m_shim, cfg = m_shimConfig]() {
         shim->configure(cfg);
     }, Qt::QueuedConnection);
@@ -1459,6 +1470,7 @@ QJsonObject linkSnapshot(const Ax25Connection& link)
         {QStringLiteral("iResent"), int(s.iResent)},
         {QStringLiteral("iRcvd"), int(s.iRcvd)},
         {QStringLiteral("iDropped"), int(s.iDropped)},
+        {QStringLiteral("iDuplicate"), int(s.iDuplicate)},
         {QStringLiteral("rrRcvd"), int(s.rrRcvd)},
         {QStringLiteral("rnrRcvd"), int(s.rnrRcvd)},
         {QStringLiteral("rejRcvd"), int(s.rejRcvd)},
@@ -1472,8 +1484,39 @@ QJsonObject linkSnapshot(const Ax25Connection& link)
         {QStringLiteral("infoBytesSent"), double(s.infoBytesSent)},
         {QStringLiteral("infoBytesReceived"), double(s.infoBytesReceived)},
     };
+    // Frame-error-rate inputs. FER cannot be computed from one side: only the
+    // SENDER knows how many transmissions went out, and only the RECEIVER knows
+    // how many decoded. Each side therefore publishes its own half, and the
+    // pairing is
+    //
+    //     FER = 1 - (peer.rxDecoded / self.txAttempts)
+    //
+    // measured over the same session. Deliberately NOT a single number here: a
+    // side that invented one would be guessing at the other end's count, and
+    // this is the metric the TXDELAY sweep turns on. It is also immune to T1
+    // behaviour — it counts transmissions against decodes and does not care how
+    // long we waited between them, so timing changes cannot skew it.
+    const quint32 txAttempts = s.iSent + s.iResent;
+    const quint32 rxDecoded = s.iRcvd + s.iDuplicate;
+    QJsonObject quality{
+        {QStringLiteral("txAttempts"), int(txAttempts)},
+        {QStringLiteral("rxDecoded"), int(rxDecoded)},
+        // Our retransmissions as a share of everything we sent — a same-side
+        // proxy for loss, but it conflates a lost data frame with a lost ack.
+        {QStringLiteral("retransmitPct"),
+         txAttempts > 0 ? int((100 * s.iResent) / txAttempts) : 0},
+        // Of the frames we decoded, the share that were repeats — i.e. how often
+        // OUR acknowledgement went missing. The one loss figure a single side
+        // can measure honestly.
+        {QStringLiteral("ackLossPct"),
+         rxDecoded > 0 ? int((100 * s.iDuplicate) / rxDecoded) : 0},
+        {QStringLiteral("note"),
+         QStringLiteral("FER = 1 - peer.rxDecoded / self.txAttempts")},
+    };
+
     return QJsonObject{
         {QStringLiteral("state"), QLatin1String(linkStateName(link.state()))},
+        {QStringLiteral("quality"), quality},
         {QStringLiteral("peer"), link.remoteAddress().isValid()
                                      ? link.remoteAddress().toString() : QString()},
         {QStringLiteral("local"), link.localAddress().isValid()
@@ -1546,9 +1589,27 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                     "modem refused to turn %1 — see the AetherModem system log")
                     .arg(on ? QStringLiteral("on") : QStringLiteral("off")));
             }
+        } else if (action == QLatin1String("preamble") || action == QLatin1String("txd")) {
+            // The TXDELAY sweep knob. Driving the spinner rather than the config
+            // directly keeps persistence and the link-timing re-derivation on
+            // the one path a human uses.
+            if (!m_terminalTxPreamble)
+                return automationError(QStringLiteral("TXDELAY control is unavailable"));
+            bool ok = false;
+            const int flags = value.trimmed().toLower() == QLatin1String("auto")
+                ? kTerminalAutoTiming
+                : value.trimmed().toInt(&ok);
+            if (!ok && value.trimmed().toLower() != QLatin1String("auto"))
+                return automationError(QStringLiteral(
+                    "modem preamble expects a flag count or 'auto' (got '%1')").arg(value));
+            if (flags < 0 || flags > 127)
+                return automationError(QStringLiteral(
+                    "TXDELAY flags out of range 0-127 (got %1)").arg(flags));
+            m_terminalTxPreamble->setValue(flags);
+            applyTerminalConfigFromUi(true);
         } else if (!action.isEmpty() && action != QLatin1String("status")) {
             return automationError(QStringLiteral(
-                "unknown modem action '%1' (status|profile|on|off)").arg(action));
+                "unknown modem action '%1' (status|profile|on|off|preamble)").arg(action));
         }
 
         QJsonObject modem{
@@ -1559,6 +1620,14 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
             {QStringLiteral("markHz"), m_shimConfig.markHz},
             {QStringLiteral("spaceHz"), m_shimConfig.spaceHz},
             {QStringLiteral("lanes"), ax25DemodLaneCount(m_shimConfig)},
+            // What the modulator will actually transmit, and what it costs.
+            // Both are what the TXDELAY sweep is varying.
+            {QStringLiteral("preambleFlags"), ax25EffectiveTxPreambleFlags(m_shimConfig)},
+            {QStringLiteral("preambleMs"),
+             m_shimConfig.baud > 0
+                 ? ax25EffectiveTxPreambleFlags(m_shimConfig) * 8 * 1000 / m_shimConfig.baud
+                 : 0},
+            {QStringLiteral("preambleOverridden"), m_shimConfig.txPreambleFlags > 0},
             {QStringLiteral("enabled"), m_enableDecode && m_enableDecode->isChecked()},
             {QStringLiteral("description"), ax25DemodDescription(m_shimConfig)},
         };
@@ -3015,6 +3084,14 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
         if (value > 0 && value < 16)
             m_terminalPaclen->setValue(16);
     });
+    m_terminalTxPreamble = addSpin(QStringLiteral("TXD flags"), 0, 127, kTerminalAutoTiming,
+        QStringLiteral("TXDELAY: leading HDLC flags before every frame. Auto uses the "
+                       "profile default (80 on HF 300 = 2.13 s, 64 on VHF 1200). This is "
+                       "the largest single term in the HF airtime budget — 42% of a data "
+                       "frame and 65% of an ack — so lowering it shortens both directions "
+                       "and reduces the chance of a hit. Too low and the far end's AGC "
+                       "and PLL cannot settle, and it copies nothing."));
+    m_terminalTxPreamble->setSpecialValueText(QStringLiteral("Auto"));
     m_terminalTxTail = addSpin(QStringLiteral("TX Tail ms"), 0, 500, kTxTailDefaultMs,
         QStringLiteral("PTT tail (ms) held after the TX audio before unkey. Lower = we hear "
                        "the peer's next frame sooner on a half-duplex link; too low clips the "
@@ -3122,6 +3199,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
             m_terminalTarget->setText(call);
     });
     for (QSpinBox* spin : {m_terminalRetrySecs, m_terminalMaxTries, m_terminalPaclen,
+                           m_terminalTxPreamble,
                            m_terminalTxTail}) {
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
             applyTerminalConfigFromUi(true);
@@ -3151,6 +3229,8 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
         .value(kTerminalPaclenSetting, kTerminalDefaultPaclen).toInt());
     m_terminalTxTail->setValue(AppSettings::instance()
         .value(kTerminalTxTailSetting, kTxTailDefaultMs).toInt());
+    m_terminalTxPreamble->setValue(AppSettings::instance()
+        .value(kTxPreambleFlagsSetting, kTerminalAutoTiming).toInt());
 
     refreshTerminalHeardCombo();
     return page;
@@ -3182,6 +3262,10 @@ void Ax25HfPacketDecodeDialog::applyTerminalConfigFromUi(bool persist)
         m_txTailMs = m_terminalTxTail->value(); // applies to the next transmission
     if (m_terminalMaxTries)
         m_terminal->setMaxRetries(m_terminalMaxTries->value());
+    // TXDELAY feeds both the modulator and the airtime model, so it has to land
+    // in m_shimConfig before the timing is re-derived below.
+    if (m_terminalTxPreamble)
+        m_shimConfig.txPreambleFlags = m_terminalTxPreamble->value();
     // Re-derive from the profile first (the TX tail above feeds the round-trip
     // budget), then let any explicit override land on top. Auto (0) means "use
     // the model", which is the default and the only sane choice on HF.
@@ -3200,6 +3284,9 @@ void Ax25HfPacketDecodeDialog::applyTerminalConfigFromUi(bool persist)
         if (m_terminalTxTail)
             AppSettings::instance().setValue(kTerminalTxTailSetting,
                 QString::number(m_terminalTxTail->value()));
+        if (m_terminalTxPreamble)
+            AppSettings::instance().setValue(kTxPreambleFlagsSetting,
+                QString::number(m_terminalTxPreamble->value()));
         AppSettings::instance().save();
     }
     refreshTerminalStatus();

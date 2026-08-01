@@ -230,6 +230,97 @@ addressed to our own callsign.
 
 ---
 
+## 5.6 Measured baseline — first working HF session
+
+2026-07-31, HL2 mailbox (KI6BCJ-10) ↔ FlexRadio terminal (KI6BCJ-12), 21.100
+MHz, 5 W. 537 bytes delivered over 330 s. Both sides logging `aether.ax25.link`.
+
+| | mailbox (TX side) | terminal (RX side) |
+| --- | --- | --- |
+| I-frames sent / resent | 9 / 20 | 1 / 0 |
+| I-frames received | 1 | 9 |
+| Duplicates re-acked | 0 | 3 |
+| Sequence gaps dropped | 0 | 0 |
+| T1 timeouts | 21 | 0 |
+| Measured RTT | 6900 / 7424 / 7948 ms | — |
+
+**Frame error rate = 1 − 12/29 = 59%.** The mailbox made 29 I-frame
+transmissions; the terminal decoded 12 of them (9 new + 3 duplicates). Every
+frame arrived *eventually* — nothing was permanently lost — but well over half
+of all transmissions did not decode.
+
+What this settles:
+
+- **Timing is not the problem.** Measured RTT 6.9–7.9 s against T1 12.6 s is
+  36–45% headroom, and the model's 8.4 s estimate is if anything pessimistic.
+  The earlier 11.7 s sample that suggested T1 was too tight was an outlier
+  (almost certainly a T2-deferred ack). The peer-turnaround allowance does
+  **not** need raising.
+- **Pacing is not the problem.** Stretch 0.97–0.99x on the HL2 (max chunk gap
+  46–66 ms) and 0.96–0.97x on the Flex (21–22 ms, zero late chunks), both well
+  inside the 120 ms lead cushion.
+- **Decodes are clean or absent.** Confidence 0.89–1.03 on everything that got
+  through, clustered near 1.0 — the all-or-nothing FCS signature. There is no
+  partial-copy middle ground, which is what makes frame *length* so expensive.
+
+### The airtime budget, at 80 flags / paclen 64
+
+| Component | Data frame | Acknowledgement |
+| --- | ---: | ---: |
+| **Preamble (80 flags)** | **2.13 s (42%)** | **2.13 s (65%)** |
+| Payload + header + FCS | 2.23 s | 0.46 s |
+| Postamble | 0.21 s | 0.21 s |
+| PTT lead + settle + tail | 0.50 s | 0.50 s |
+| **Total** | **5.07 s** | **3.30 s** |
+
+One clean exchange costs 8.4 s to move 64 bytes. Observed throughput was
+1.6 B/s — about 4% of the 300-baud channel — with roughly 168 s of the 330 s
+actually radiating.
+
+### The TXDELAY sweep
+
+The preamble is the largest single term and the only one that shortens **both**
+directions, so it is the first thing to tune. `Ax25DemodConfig::txPreambleFlags`
+(0 = profile default) is now an operator knob — Terminal tab "TXD flags", or
+`modem preamble <flags|auto>` over the bridge — and both the modulator and the
+airtime model read it through `ax25EffectiveTxPreambleFlags()`, so the timers
+re-derive on their own. Verified:
+
+| TXD flags | I-frame airtime | modelled RTT | derived T1 |
+| ---: | ---: | ---: | ---: |
+| 80 (default) | 4577 ms | 8386 ms | 12579 ms |
+| 32 | 3297 ms | 5826 ms | 8739 ms |
+| 24 | 3084 ms | 5400 ms | 8100 ms |
+
+**Protocol.** Sweep 80 → 48 → 32 → 24, two sessions per setting, and score on
+frame error rate — *not* throughput. FER is computed by pairing the two session
+summaries:
+
+```
+FER = 1 − (peer.rxDecoded / self.txAttempts)
+    = 1 − ((peer.iRcvd + peer.iDuplicate) / (self.iSent + self.iResent))
+```
+
+Both halves are in the `link status` verb's `quality` block. FER is the right
+score because it counts transmissions against decodes and is therefore immune
+to T1 behaviour — timing changes cannot skew it, whereas throughput conflates
+everything. At ~29 transmissions per session a single estimate carries roughly
+±10%, hence two sessions per point.
+
+Expected: 32 flags takes an exchange from 8.4 s to ~5.4 s (−36%), and shorter
+frames should lower FER as well, so the two gains compound. Too few flags and
+the far end's AGC and PLL cannot settle and it copies nothing — that floor is
+what the sweep is looking for.
+
+**Change one thing at a time.** Adaptive T1 (§6.6) must wait until the sweep
+is done: it tracks measured RTT, and RTT is dominated by frame airtime, so
+tuning it first would be discarded the moment the preamble moves. It is also
+the one change that could be mistaken for the thing being measured — a T1 that
+runs short retransmits needlessly, which in the logs looks exactly like frame
+loss.
+
+---
+
 ## 6. Roadmap
 
 Ordered by value per unit of risk. Items 1–2 are on this branch.
