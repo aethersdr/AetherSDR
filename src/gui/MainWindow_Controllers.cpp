@@ -1715,7 +1715,7 @@ void MainWindow::registerMidiParams()
     reg("rx.squelch", "Squelch Level", "RX", P::Slider, 0, 100,
         [this](float v) {
             if (auto* s = activeSlice()) {
-                s->setSquelch(s->receiveSquelchOn(), static_cast<int>(v));
+                s->setManualSquelch(s->receiveSquelchOn(), static_cast<int>(v));
             }
         },
         [this]() -> float {

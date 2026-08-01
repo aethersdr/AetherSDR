@@ -2978,6 +2978,18 @@ target_include_directories(slice_model_letter_test PRIVATE src)
 target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
 
+# Per-slice manual squelch memory (#3326 follow-up, #4592) — guards against
+# the cross-slice leak reopening via a caller that forgets to keep the live
+# level and the manual memory in sync, or an Auto-mode echo overwriting it.
+add_executable(slice_model_squelch_memory_test
+    tests/slice_model_squelch_memory_test.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(slice_model_squelch_memory_test PRIVATE src)
+target_link_libraries(slice_model_squelch_memory_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory_test)
+
 # ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.

@@ -1125,6 +1125,19 @@ MainWindow::MainWindow(QWidget* parent)
             s.setValue("SliceAudioMutedMigratedV0999", "True");
             s.save();
         }
+
+        // One-shot migration: remove the dead LastManualSquelchLevel key.
+        // #4592 moved manual squelch memory onto SliceModel (radio-
+        // authoritative — AGENTS.md "do NOT persist") and stopped writing
+        // this key, but existing installs kept the orphaned row, which is
+        // now operator-visible via --config list / the Settings Browser
+        // (#4603) — maintainer-flagged on the #4604 review as an optional
+        // cleanup.
+        if (!s.contains("LastManualSquelchLevelMigratedV4604")) {
+            s.remove("LastManualSquelchLevel");
+            s.setValue("LastManualSquelchLevelMigratedV4604", "True");
+            s.save();
+        }
     }
 
     applyDarkTheme();
