@@ -16,12 +16,22 @@ jobs:
         include:
           - runner: ubuntu-22.04
             arch: x86_64
-            use_aqt: true
+            qt_host: linux
+            qt_arch: linux_gcc_64
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
-          - runner: ubuntu-24.04-arm
+            gpu_spectrum: 'ON'  # unchanged: Qt 6.8.3 already enabled it here
+          - runner: ubuntu-22.04-arm
             arch: aarch64
-            use_aqt: false
+            qt_host: linux_arm64
+            qt_arch: linux_gcc_arm64
             require_gpu: 'OFF'  # ARM/Pi ships CPU-only (no Vulkan expected)
+            # Explicitly OFF rather than left to the default. AETHER_GPU_SPECTRUM
+            # defaults ON and auto-disables only below Qt 6.7, so the 6.4.2 ->
+            # 6.8.3 bump would otherwise switch QRhi spectrum rendering on for
+            # every Pi user as a silent side effect of a Qt upgrade. Enabling it
+            # on ARM is a real feature change that wants testing on actual
+            # Pi/Mesa V3D hardware; it belongs in its own PR, not in this one.
+            gpu_spectrum: 'OFF'
 
     runs-on: ${{ matrix.runner }}
 
@@ -76,14 +86,22 @@ jobs:
       #
       # This workflow only runs on tag pushes, so a break here is invisible
       # until release day — hence the explicit assertions on both legs.
-      - name: Install glslc (Ubuntu 24.04+)
-        if: matrix.runner != 'ubuntu-22.04'
+      # Gated on require_gpu, NOT on the runner name. These used to split on
+      # `runner == 'ubuntu-22.04'` vs `!=`, which silently assumed "not jammy"
+      # meant "noble" — true only while aarch64 was the sole other entry and it
+      # ran ubuntu-24.04-arm. Now that aarch64 is ALSO jammy (ubuntu-22.04-arm),
+      # the `!=` leg would have matched it and run `apt-get install glslc`, a
+      # package jammy does not carry — which is the whole reason the LunarG leg
+      # below exists. glslc is only ever needed for whisper's Vulkan backend, so
+      # require_gpu is the honest gate: aarch64 is CPU-only and needs neither.
+      - name: Install glslc (non-jammy GPU runners)
+        if: matrix.require_gpu == 'ON' && matrix.runner != 'ubuntu-22.04'
         run: |
           sudo apt-get install -y glslc
           glslc --version
 
       - name: Install glslc + SDK headers from LunarG (Ubuntu 22.04)
-        if: matrix.runner == 'ubuntu-22.04'
+        if: matrix.require_gpu == 'ON' && matrix.runner == 'ubuntu-22.04'
         run: |
           sudo apt-get install -y shaderc vulkan-headers
           glslc --version
@@ -96,25 +114,54 @@ jobs:
           grep -q 'VK_EXT_pipeline_robustness' /usr/include/vulkan/vulkan_core.h \
             || { echo "ERROR: Vulkan headers predate VK_EXT_pipeline_robustness — ggml-vulkan will not build"; exit 1; }
 
-      - name: Install system Qt (ARM only)
-        if: matrix.use_aqt == false
-        run: |
-          sudo apt-get install -y qt6-base-dev qt6-multimedia-dev \
-            qt6-websockets-dev qt6-serialport-dev qt6-base-private-dev \
-            qt6-shader-baker qt6-shadertools-dev \
-            libhidapi-dev portaudio19-dev libfftw3-dev
-
-      - name: Install Qt 6.8 LTS via aqtinstall (x86_64)
-        if: matrix.use_aqt == true
+      # Both arches now take aqt. aarch64 used to build against the distro's Qt
+      # because, when the split landed (49ea8a50, 2026-03), Qt published no
+      # prebuilt ARM64 Linux binaries — the commit says exactly that. Qt has
+      # shipped linux_arm64 desktop builds since 6.7, so the reason expired and
+      # nobody re-checked: aarch64 was still on Ubuntu's Qt 6.4.2 while every
+      # other artifact shipped 6.8.3, and README's "Release binaries ship Qt
+      # 6.8.3 LTS" was simply untrue for the Pi build.
+      #
+      # 6.8.7 is not reachable here: Qt's 6.8 LTS goes commercial-only after
+      # 6.8.3, so 6.8.4 is source-only and 6.8.5+ are not published to the open
+      # -source repo at all. 6.8.3 is the newest 6.8 LTS with prebuilt binaries
+      # under the open-source licence, which is what every other artifact pins.
+      #
+      # aarch64 also drops from ubuntu-24.04-arm to ubuntu-22.04-arm. Nothing
+      # needed noble except the newer distro Qt, and jammy lowers the AppImage's
+      # glibc floor from 2.39 to 2.35 — the same floor x86_64 deliberately holds
+      # ("old glibc, new Qt"). That matters most on ARM, where the target is a
+      # Pi that may well be on an older OS than the build runner.
+      - name: Install Qt 6.8.3 LTS via aqtinstall
         run: |
           pip3 install aqtinstall
-          aqt install-qt linux desktop 6.8.3 linux_gcc_64 \
+          aqt install-qt ${{ matrix.qt_host }} desktop 6.8.3 ${{ matrix.qt_arch }} \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
             --outputdir ${{ github.workspace }}/Qt
-          echo "Qt6_DIR=${{ github.workspace }}/Qt/6.8.3/gcc_64/lib/cmake/Qt6" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64" >> $GITHUB_ENV
-          echo "PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/bin:$PATH" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          # aqt lays the install down under <version>/<arch minus the host
+          # prefix>: linux_gcc_64 -> gcc_64, linux_gcc_arm64 -> gcc_arm64.
+          # Derive it instead of hardcoding — FOUR separate steps used to spell
+          # out ".../Qt/6.8.3/gcc_64" by hand, so flipping aarch64 onto aqt
+          # without catching all four would have pointed the ARM build at an
+          # x86_64 Qt. QT_ROOT is exported once and reused everywhere below.
+          QT_DIR="${{ matrix.qt_arch }}"
+          QT_ROOT="${{ github.workspace }}/Qt/6.8.3/${QT_DIR#linux_}"
+          # Assert the layout rather than trusting it: a silently-wrong QT_ROOT
+          # would sail through configure (system Qt would satisfy it) and only
+          # show up as a subtly mis-deployed AppImage.
+          if [ ! -x "$QT_ROOT/bin/qmake" ]; then
+            echo "ERROR: no qmake at $QT_ROOT — aqt layout changed"
+            ls -la "${{ github.workspace }}/Qt/6.8.3/" || true
+            exit 1
+          fi
+          {
+            echo "QT_ROOT=$QT_ROOT"
+            echo "Qt6_DIR=$QT_ROOT/lib/cmake/Qt6"
+            echo "CMAKE_PREFIX_PATH=$QT_ROOT"
+            echo "PATH=$QT_ROOT/bin:$PATH"
+            echo "LD_LIBRARY_PATH=$QT_ROOT/lib:$LD_LIBRARY_PATH"
+          } >> "$GITHUB_ENV"
+          "$QT_ROOT/bin/qmake" -query QT_VERSION
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -145,10 +192,6 @@ jobs:
 
       - name: Configure
         run: |
-          CMAKE_EXTRA=""
-          if [ "${{ matrix.use_aqt }}" = "true" ]; then
-            CMAKE_EXTRA="-DCMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64"
-          fi
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
@@ -157,9 +200,10 @@ jobs:
             -DREQUIRE_ASR_ONNX=ON \
             -DREQUIRE_ASR_SHERPA=ON \
             -DREQUIRE_ASR_GPU=${{ matrix.require_gpu }} \
+            -DAETHER_GPU_SPECTRUM=${{ matrix.gpu_spectrum }} \
             -DMQTT_TLS=OFF \
             -DENABLE_NVIDIA_AFX=ON \
-            $CMAKE_EXTRA
+            -DCMAKE_PREFIX_PATH="$QT_ROOT"
 
       - name: Build Opus (RADE dependency)
         run: cmake --build build --target build_opus -j$(nproc)
@@ -184,14 +228,15 @@ jobs:
               AppDir/usr/bin/
           fi
 
-          # Bundle Qt6 multimedia backend plugin
-          if [ "${{ matrix.use_aqt }}" = "true" ]; then
-            QT_PLUGIN_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/plugins
-          else
-            QT_PLUGIN_PATH=$(qmake6 -query QT_INSTALL_PLUGINS 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/qt6/plugins")
-          fi
+          # Bundle Qt6 multimedia backend plugin. Fourth and last site that
+          # hardcoded the x86_64 Qt path; now derived from QT_ROOT like the rest.
+          QT_PLUGIN_PATH="$QT_ROOT/plugins"
           mkdir -p AppDir/usr/plugins/multimedia
-          cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/ 2>/dev/null || true
+          # No `|| true` here. This used to swallow every failure, so a wrong
+          # plugin path produced an AppImage with no multimedia backend and a
+          # green build — audio would simply not work for users. If the plugins
+          # are missing, that is a broken release and the job should say so.
+          cp -v "$QT_PLUGIN_PATH"/multimedia/* AppDir/usr/plugins/multimedia/
 
           # Bundle essential GStreamer plugins for audio
           GST_PATH=$(pkg-config --variable=pluginsdir gstreamer-1.0 2>/dev/null || echo "/usr/lib/$(uname -m)-linux-gnu/gstreamer-1.0")
@@ -219,11 +264,11 @@ jobs:
           # sanitization windows-installer.yml already applies.
           SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
           export LDAI_OUTPUT="AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
-          if [ "${{ matrix.use_aqt }}" = "true" ]; then
-            export QMAKE=${{ github.workspace }}/Qt/6.8.3/gcc_64/bin/qmake
-          else
-            export QMAKE=$(which qmake6 2>/dev/null || which qmake)
-          fi
+          # linuxdeploy-plugin-qt locates the Qt to bundle via $QMAKE. This is
+          # the third place that used to hardcode the x86_64 ".../gcc_64" path;
+          # it now reuses the QT_ROOT exported by the aqt step, so there is one
+          # source of truth for which Qt gets built AND deployed.
+          export QMAKE="$QT_ROOT/bin/qmake"
           # Let linuxdeploy resolve + bundle the NEEDED libs staged under
           # third_party (outside the standard search path): libqt6keychain.so,
           # libsherpa-onnx-c-api.so, and libonnxruntime.so (the app links sherpa's
