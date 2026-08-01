@@ -3238,6 +3238,36 @@ target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
 target_link_libraries(qso_recorder_slice_lifetime_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_slice_lifetime_test COMMAND qso_recorder_slice_lifetime_test)
 
+# #4629 — the start policy alone. Pure/constexpr, no Qt at all: the radio-side
+# case (which must NEVER be blocked) is also asserted at compile time.
+add_executable(qso_record_start_policy_test
+    tests/qso_record_start_policy_test.cpp
+)
+target_include_directories(qso_record_start_policy_test PRIVATE src)
+add_test(NAME qso_record_start_policy_test COMMAND qso_record_start_policy_test)
+
+# #4629 — the recorder honoring that policy: Client-Side + PC Audio off must
+# create NO FILE (not merely fail to record), radio-side must still start, and a
+# zero-capture recording must raise an error instead of passing for success.
+add_executable(qso_recorder_pc_audio_guard_test
+    tests/qso_recorder_pc_audio_guard_test.cpp
+    src/core/QsoRecorder.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_pc_audio_guard_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_pc_audio_guard_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_pc_audio_guard_test COMMAND qso_recorder_pc_audio_guard_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
@@ -5063,6 +5093,7 @@ set(AETHER_SETTINGS_CONSUMERS
     nr2_settings_model_test
     panadapter_model_rx_antenna_test
     qso_recorder_slice_lifetime_test
+    qso_recorder_pc_audio_guard_test
     band_plan_license_filter_test
     passive_spots_policy_test
     digital_voice_waveform_process_test

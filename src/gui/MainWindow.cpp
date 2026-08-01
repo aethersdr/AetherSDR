@@ -1198,6 +1198,47 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    // A backend that demodulates in-process (HL2, the sim) feeds the recorder
+    // over the seam and never uses `remote_audio_rx`, so the PC Audio guard
+    // below must not apply to it. Read live rather than cached — the sim in
+    // particular does NOT lock PC Audio on (it neither host-modulates nor
+    // transmits), so this is load-bearing, not belt-and-braces. See
+    // QsoRecordStartPolicy.h.
+    m_qsoRecorder->setBackendOwnsRxAudioProvider([this]() {
+        auto* backend = m_radioModel.backend();
+        return backend && backend->ownsRxAudio();
+    });
+
+    // A refused start (#4629). The recorder lives below the UI seam and can only
+    // report the REASON — the wording is ours. Informational only, deliberately:
+    // an "Enable PC Audio and record" action button would flip a setting the
+    // operator turned off on purpose, which is the behaviour #1071 removed.
+    connect(m_qsoRecorder, &QsoRecorder::recordingBlocked, this,
+            [this](AetherSDR::RecordStartDecision reason) {
+        if (reason != AetherSDR::RecordStartDecision::BlockedPcAudioDisabled)
+            return;
+        QMessageBox::warning(this, tr("PC Audio Required for Client-Side Recording"),
+            tr("Client-Side recording captures the same RX audio stream that PC "
+               "Audio uses, so it cannot record while PC Audio is off. No file "
+               "was created.\n\n"
+               "To record while still listening on the radio itself: enable PC "
+               "Audio in the title bar, set master volume to 0, and check that "
+               "Radio Settings → Receive → \"Mute local audio when "
+               "remote\" is Disabled.\n\n"
+               "Or switch to Radio Side recording in Radio Settings → "
+               "Recording. That records on the radio and does not use PC Audio."));
+    });
+
+    // Recorder failures that were previously silent: the directory could not be
+    // created, the file could not be opened, or the recording captured nothing
+    // (#4629). These have been emitted since the feature shipped with NOTHING
+    // connected to them, so every one of them reached the operator as a missing
+    // or empty file and no explanation.
+    connect(m_qsoRecorder, &QsoRecorder::recordingError, this,
+            [this](const QString& error) {
+        QMessageBox::warning(this, tr("QSO Recording"), error);
+    });
+
     // PUDU TX monitor — captures post-PooDoo TX int16 audio, plays
     // back through the RX sink so the user can hear what their chain
     // is producing without keying the radio.  Registered with

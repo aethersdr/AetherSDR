@@ -2417,6 +2417,21 @@ Not a transmit action — no gate.
 `start` / `stop` / `status` (default) / `path` / `dir <path>` (set the output
 directory).
 
+**`start` can be refused** (#4629). Client-Side recording captures the RX audio
+stream that PC Audio creates, so with `PcAudioEnabled=False` there is nothing to
+record and no file is created at all:
+
+```json
+→ {"cmd":"record","action":"start"}
+← {"ok":false,"record":"start","recording":false,"path":"",
+   "reason":"pc-audio-disabled",
+   "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
+```
+
+Enable PC Audio, or switch `RecordingMode` to `Radio` — radio-side recording
+runs on the radio and does not depend on PC Audio. Always check `ok` rather than
+assuming a start succeeded.
+
 ### `station`
 Set this GUI client's **MultiFlex station name** (FlexLib `SetClientStationName`)
 so other clients on the radio see the agent driving. This is per-client and

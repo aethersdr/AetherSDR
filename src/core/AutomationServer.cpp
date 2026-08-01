@@ -5452,13 +5452,32 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
                            {QStringLiteral("dir"), m_qsoRecorder->recordingDir()}};
     }
     if (a == QLatin1String("start")) {
+        // The start can be REFUSED (#4629) — Client-Side mode with PC Audio
+        // disabled has no RX audio stream to record. `ok` already reported that
+        // correctly by reflecting isRecording(), but a bare false told a test
+        // nothing about WHY. Ask the policy first so the reply can name the
+        // cause; this is headless, so the GUI's dialog never appears here.
+        const RecordStartDecision decision = m_qsoRecorder->evaluateStart();
         m_qsoRecorder->startRecording();
-        return QJsonObject{
+        QJsonObject reply{
             {QStringLiteral("ok"), m_qsoRecorder->isRecording()},
             {QStringLiteral("record"), QStringLiteral("start")},
             {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
             {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
         };
+        if (decision == RecordStartDecision::BlockedPcAudioDisabled) {
+            reply.insert(QStringLiteral("reason"),
+                         QStringLiteral("pc-audio-disabled"));
+            reply.insert(QStringLiteral("detail"),
+                         QStringLiteral("Client-Side recording requires PC Audio; "
+                                        "no RX audio stream exists."));
+            // recordingFilePath() falls back to the LAST finalized recording
+            // when no file is open, so a refused start would otherwise hand back
+            // a path to an unrelated earlier WAV — observed live while verifying
+            // this fix. Nothing was created, so report nothing.
+            reply.insert(QStringLiteral("path"), QString());
+        }
+        return reply;
     }
     if (a == QLatin1String("stop")) {
         const int durationSecs = m_qsoRecorder->recordingDurationSecs();

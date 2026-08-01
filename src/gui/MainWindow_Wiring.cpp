@@ -5174,7 +5174,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 m_qsoRecorder->startRecording();
             else
                 m_qsoRecorder->stopRecording();
-            w->setRecordOn(on);  // drive pulse animation for client-side
+            // Follow what the recorder ACTUALLY did, not what was asked (#4629).
+            // startRecording() can refuse (PC Audio off, unwritable directory),
+            // and driving the pulse from `on` latched the button red over a
+            // recording that never began.
+            w->setRecordOn(m_qsoRecorder->isRecording());
         } else {
             if (auto* sl = m_radioModel.slice(sliceId))
                 sl->setRecordOn(on);
