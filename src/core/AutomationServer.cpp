@@ -2508,6 +2508,11 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
     if (name == QLatin1String("gesture")) {
         return normalizedAction == QLatin1String("status");
     }
+    // `modem`/`link` mix introspection with actions that key the radio
+    // (link connect transmits a SABM), so only the status reads are safe here.
+    if (name == QLatin1String("modem") || name == QLatin1String("link")) {
+        return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status");
+    }
     if (name == QLatin1String("tci")) {
         return normalizedAction == QLatin1String("status")
             || normalizedAction == QLatin1String("routes");
@@ -3070,6 +3075,20 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseActionOnly,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doStreams(a.action);
+            });
+
+        add("modem", {"aethermodem"},
+            "modem <status|profile hf300|profile vhf1200|on|off> — AetherModem demod profile, RX tap, and decoder health",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doModemAutomation(QStringLiteral("modem"), a.action, a.value);
+            });
+
+        add("link", {"ax25"},
+            "link <status|connect <call> [via <digi>]|disconnect|mycall <call>|listen <call>|alias <call>|pms on|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doModemAutomation(QStringLiteral("link"), a.action, a.value);
             });
 
         add("memprofile", {},
@@ -9166,6 +9185,20 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
     return err(QStringLiteral(
         "tci requires start|status|stop|send|trace|routes"));
 #endif
+}
+
+QJsonObject AutomationServer::doModemAutomation(const QString& verb,
+                                                const QString& action,
+                                                const QString& value)
+{
+    if (!m_modemAutomationHandler) {
+        // No GUI registered the hook (engine-only build, or the main window has
+        // gone away). Fail closed and say so, rather than reporting success for
+        // work that never happened.
+        return err(QStringLiteral("AetherModem automation is unavailable "
+                                  "(no main window registered the hook)"));
+    }
+    return m_modemAutomationHandler(verb, action.trimmed().toLower(), value.trimmed());
 }
 
 QJsonObject AutomationServer::doStreams(const QString& action)

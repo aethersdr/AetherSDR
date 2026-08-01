@@ -800,6 +800,14 @@ private:
     void showNetworkDiagnosticsDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
+    // Construct the AetherModem window hidden if it does not exist yet, and
+    // return it. The window hosts the KISS TNC, the mailbox, and the terminal,
+    // so the automation bridge has to be able to reach it on a headless box
+    // where nobody ever opened it.
+    Ax25HfPacketDecodeDialog* ensureAx25HfPacketDecodeDialog();
+    // Agent automation bridge entry point for the `modem` and `link` verbs.
+    QJsonObject automationModemCommand(const QString& verb, const QString& action,
+                                       const QString& value);
 #ifdef AETHER_ASR_ENABLED
     void showCopyAssist();
 #endif

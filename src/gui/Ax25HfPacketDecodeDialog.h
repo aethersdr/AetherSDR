@@ -103,6 +103,14 @@ public:
     void setMqttClient(MqttClient* mqtt);
 #endif
 
+    // Agent automation bridge (`modem` and `link` verbs). Drives the same
+    // widgets a human would — the profile radio buttons, the modem enable
+    // checkbox, the terminal's own command parser — so a bridge test exercises
+    // the shipping path rather than a parallel one. `verb` is "modem" or "link";
+    // `action` is already lowercased and trimmed by the server.
+    QJsonObject automationCommand(const QString& verb, const QString& action,
+                                  const QString& value);
+
 protected:
     // Command history (Up/Down) on the terminal input line.
     bool eventFilter(QObject* watched, QEvent* event) override;

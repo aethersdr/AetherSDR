@@ -91,6 +91,11 @@ public:
     void setVerbose(bool on) { m_verbose = on; }
     bool isVerbose() const { return m_verbose; }
 
+    // The underlying data link, read-only — for status snapshots (the agent
+    // automation bridge's `link status` verb) that need the live counters and
+    // RTT samples rather than the formatted STATUS text.
+    const Ax25Connection* link() const { return m_link; }
+
     Mode mode() const { return m_mode; }
     bool isConnected() const;
     bool isConnecting() const { return m_connecting; }

@@ -2537,6 +2537,100 @@ Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
 
 ---
 
+### `modem`
+
+AetherModem demod profile and RX tap. Both verbs here construct the AetherModem
+window **hidden** if it does not exist yet — the window hosts the KISS TNC, the
+mailbox, and the terminal, so a headless soak box never has to open it.
+
+```json
+→ {"cmd":"modem","action":"profile","value":"hf300"}
+← {"ok":true,
+   "modem":{"profile":"300 baud HF","profileId":"Hf300","baud":300,
+            "sampleRate":24000,"markHz":1600,"spaceHz":1800,"lanes":21,
+            "enabled":true,"description":"300 baud HF: 24000 Hz, 300 bps, ..."},
+   "demod":{"rmsDbfs":-21.5,"peakDbfs":-10.1,"clippedPercent":0.0,
+            "markMinusSpaceDb":1.2,"receiveGateOpen":true,
+            "hdlcFrameCandidates":31,"plausibleAx25Candidates":22,
+            "framesAccepted":18,"rejectBadFcs":4,"rejectTooShort":9,
+            "rejectMalformed":0}}
+```
+
+- **`modem status`** (or bare `modem`) — the block above, read-only.
+- **`modem profile hf300|vhf1200`** — switches the demod profile by *clicking
+  the profile radio button*, so the choice persists and the connected-mode link
+  timing is re-derived exactly as it is for a human. Aliases `hf`/`300` and
+  `vhf`/`1200` are accepted.
+- **`modem on` / `modem off`** — start/stop the RX tap. The verb **verifies** the
+  checkbox actually took and returns `ok:false` if the modem refused (no audio
+  engine, no attached slice) rather than reporting success for work that did not
+  happen.
+
+The `demod` block is what separates "no frames because the band is dead" from
+"no frames because the audio tap never started": `receiveGateOpen` plus a
+non-`-120` `rmsDbfs` means audio is arriving, and `rejectBadFcs` climbing while
+`framesAccepted` does not means the decoder is finding structure and losing it
+to bit errors.
+
+### `link`
+
+Connected-mode AX.25: the terminal (calling side) and the Personal Mailbox
+System (answering side). One `link status` returns **both** sides, each with the
+full data-link snapshot.
+
+```json
+→ {"cmd":"link","action":"status"}
+← {"ok":true,
+   "terminal":{"myCall":"KI6BCJ-7","mode":"command","connected":false,
+               "connecting":false,"peer":"","summary":"Disconnected — KI6BCJ-7 ready",
+               "txBytes":0,"rxBytes":0,
+               "link":{"state":"disconnected","peer":"","local":"KI6BCJ-7",
+                       "vs":0,"vr":0,"unacked":0,"sendQueueBytes":0,
+                       "retries":0,"maxRetries":8,"sessionMs":0,
+                       "t1Ms":12579,"t3Ms":125790,"idlePollArmed":false,
+                       "paclen":64,"baud":300,"preambleFlags":80,
+                       "modelIFrameMs":4577,"modelRttMs":8386,
+                       "recommendedT1Ms":12579,"t1TooShort":false,
+                       "rtt":{"samples":0,"lastMs":0,"minMs":0,"avgMs":0,"maxMs":0},
+                       "counters":{"iSent":0,"iResent":0,"iRcvd":0,"iDropped":0,
+                                   "rrRcvd":0,"rnrRcvd":0,"rejRcvd":0,"rejSent":0,
+                                   "rejRecoveries":0,"t1Timeouts":0,"t2Acks":0,
+                                   "t3Polls":0,"frmrRcvd":0,"invalidNr":0,
+                                   "infoBytesSent":0,"infoBytesReceived":0}}},
+   "pms":{"enabled":true,"listen":"KI6BCJ-10","alias":"","callerConnected":false,
+          "caller":"","messages":0,"idleTimeoutMs":600000,
+          "timing":"T1 12579 ms, T3 125 s, paclen 64, idle timeout 10 min",
+          "link":{ ...same shape... }}}
+```
+
+- **`link status`** (or bare `link`) — the block above, read-only.
+- **`link mycall <call>`** — set the terminal callsign (persisted).
+- **`link connect <call> [via <digi>[,<digi>]]`** — dial a BBS. Routed through
+  the terminal's own `CONNECT` parser, so VIA paths and callsign validation
+  behave identically to a typed command. Returns `ok:false` if MYCALL is unset,
+  a session is already up, or the parser rejected the callsign.
+- **`link disconnect`** — graceful DISC.
+- **`link listen <call>` / `link alias <call>`** — the mailbox's listen and
+  vanity callsigns (persisted). The mailbox cannot be enabled without a valid
+  listen callsign.
+- **`link pms on|off`** — start/stop the mailbox. Like `modem on`, this
+  **verifies** the state took: a mailbox with no listen callsign silently
+  unchecks itself, and the verb reports that as an error naming the fix.
+
+**`t1TooShort` is the headline field.** It is true once the link has measured
+round trips at or beyond its own T1 — meaning the timer expires before the ack
+can physically arrive, and no channel improvement will help. It is the same
+verdict the `aether.ax25.link` log marks as `T1_TOO_SHORT`, exposed so a bridge
+test can assert on it directly instead of scraping the log. `modelRttMs` is what
+the airtime model predicts for the current profile and paclen; comparing it with
+`rtt.avgMs` is how you tell whether the model matches the air. See
+[`HFMODEM.md`](HFMODEM.md).
+
+Bare-line forms: `modem profile hf300`, `modem on`, `link status`,
+`link mycall KI6BCJ-7`, `link connect N0BBS-1 via WIDE1-1`, `link pms on`.
+
+---
+
 ## Transmit verbs ⚠️ (gated)
 
 These verbs **key the live transmitter** and are refused unless the app was
@@ -2774,7 +2868,7 @@ lands.
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 55 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 57 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -2818,6 +2912,8 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `panmessage` | — | panmessage <add\|remove\|clear\|list> <pan> [id timeout [tone=…] title\|detail] |
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
+| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off> — AetherModem demod profile, RX tap, and decoder health |
+| `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |

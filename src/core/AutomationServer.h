@@ -273,6 +273,16 @@ public:
     {
         m_sliceReceiveSourceHandler = std::move(handler);
     }
+    // AetherModem hook for the `modem` and `link` verbs — demod profile /
+    // RX tap, and the connected-mode AX.25 terminal + mailbox. The engine stays
+    // gui-free (EB1 boundary): MainWindow registers a lambda that constructs the
+    // AetherModem window headlessly if needed and forwards to it, exactly as the
+    // KISS-TNC-on-startup path does. Arguments are (verb, action, value).
+    void setModemAutomationHandler(
+        std::function<QJsonObject(const QString&, const QString&, const QString&)> handler)
+    {
+        m_modemAutomationHandler = std::move(handler);
+    }
     void setSliceCenterLockHandler(std::function<QJsonObject(int, bool)> handler)
     {
         m_sliceCenterLockHandler = std::move(handler);
@@ -705,6 +715,11 @@ private:
     }
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
+    std::function<QJsonObject(const QString&, const QString&, const QString&)>
+        m_modemAutomationHandler;
+    // Shared body of the `modem` and `link` verbs.
+    QJsonObject doModemAutomation(const QString& verb, const QString& action,
+                                  const QString& value);
     std::function<QJsonObject(int, bool)> m_sliceCenterLockHandler;
     std::function<QJsonObject(int, int, bool)> m_sliceLinkHandler;
     std::function<int(int)> m_sliceLinkPeerQuery;

@@ -96,6 +96,9 @@ public:
     void setLinkProfile(const ax25::LinkTimingProfile& profile);
     // One-line description of the active link timing, for the GUI status panel.
     QString linkSummary() const;
+    // The underlying data link, read-only — for the automation bridge's
+    // `link status` snapshot (live counters and RTT samples).
+    const Ax25Connection* link() const { return m_link; }
 
     // How long a connected caller may sit silent before the mailbox hangs up.
     // The mailbox serves one caller at a time and refuses everyone else with DM

@@ -18,6 +18,7 @@
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "core/tnc/HeardList.h"
 #include "core/tnc/KissTncServer.h"
+#include "core/tnc/Ax25Connection.h" // link snapshots for the automation bridge
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
@@ -1410,6 +1411,291 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
     applyLinkTimingProfile();
     migrateImpossibleTerminalTimers();
     refreshStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Agent automation bridge — `modem` and `link` verbs
+// ---------------------------------------------------------------------------
+
+namespace {
+
+QJsonObject automationError(const QString& message)
+{
+    return QJsonObject{{QStringLiteral("ok"), false},
+                       {QStringLiteral("error"), message}};
+}
+
+const char* linkStateName(Ax25Connection::State state)
+{
+    switch (state) {
+    case Ax25Connection::State::Disconnected:  return "disconnected";
+    case Ax25Connection::State::Connecting:    return "connecting";
+    case Ax25Connection::State::Connected:     return "connected";
+    case Ax25Connection::State::Disconnecting: return "disconnecting";
+    }
+    return "unknown";
+}
+
+// Everything a soak script needs to assert on one side of a link, in one
+// object. The point of exposing measured RTT alongside the configured T1 is
+// that a bridge test can assert on timing directly instead of scraping the
+// aether.ax25.link log — `t1TooShort` is the same verdict the log marks.
+QJsonObject linkSnapshot(const Ax25Connection& link)
+{
+    const auto& s = link.stats();
+    QJsonObject rtt{
+        {QStringLiteral("samples"), int(s.rttSamples)},
+        {QStringLiteral("lastMs"), double(s.rttLastMs)},
+        {QStringLiteral("minMs"), double(s.rttMinMs)},
+        {QStringLiteral("avgMs"), double(s.averageRttMs())},
+        {QStringLiteral("maxMs"), double(s.rttMaxMs)},
+    };
+    QJsonObject counters{
+        {QStringLiteral("iSent"), int(s.iSent)},
+        {QStringLiteral("iResent"), int(s.iResent)},
+        {QStringLiteral("iRcvd"), int(s.iRcvd)},
+        {QStringLiteral("iDropped"), int(s.iDropped)},
+        {QStringLiteral("rrRcvd"), int(s.rrRcvd)},
+        {QStringLiteral("rnrRcvd"), int(s.rnrRcvd)},
+        {QStringLiteral("rejRcvd"), int(s.rejRcvd)},
+        {QStringLiteral("rejSent"), int(s.rejSent)},
+        {QStringLiteral("rejRecoveries"), int(s.rejRecoveries)},
+        {QStringLiteral("t1Timeouts"), int(s.t1Timeouts)},
+        {QStringLiteral("t2Acks"), int(s.t2Acks)},
+        {QStringLiteral("t3Polls"), int(s.t3Polls)},
+        {QStringLiteral("frmrRcvd"), int(s.frmrRcvd)},
+        {QStringLiteral("invalidNr"), int(s.invalidNr)},
+        {QStringLiteral("infoBytesSent"), double(s.infoBytesSent)},
+        {QStringLiteral("infoBytesReceived"), double(s.infoBytesReceived)},
+    };
+    return QJsonObject{
+        {QStringLiteral("state"), QLatin1String(linkStateName(link.state()))},
+        {QStringLiteral("peer"), link.remoteAddress().isValid()
+                                     ? link.remoteAddress().toString() : QString()},
+        {QStringLiteral("local"), link.localAddress().isValid()
+                                      ? link.localAddress().toString() : QString()},
+        {QStringLiteral("vs"), link.sendSeq()},
+        {QStringLiteral("vr"), link.recvSeq()},
+        {QStringLiteral("unacked"), link.unacked()},
+        {QStringLiteral("sendQueueBytes"), link.sendQueueBytes()},
+        {QStringLiteral("retries"), link.retries()},
+        {QStringLiteral("maxRetries"), link.maxRetries()},
+        {QStringLiteral("sessionMs"), double(link.sessionDurationMs())},
+        {QStringLiteral("t1Ms"), link.retryTimeoutMs()},
+        {QStringLiteral("t3Ms"), link.idlePollMs()},
+        {QStringLiteral("idlePollArmed"), link.idlePollArmed()},
+        {QStringLiteral("paclen"), link.paclen()},
+        {QStringLiteral("baud"), link.linkProfile().baud},
+        {QStringLiteral("preambleFlags"), link.linkProfile().preambleFlags},
+        {QStringLiteral("modelIFrameMs"), link.expectedIFrameAirtimeMs()},
+        {QStringLiteral("modelRttMs"), link.expectedRoundTripMs()},
+        {QStringLiteral("recommendedT1Ms"), link.recommendedRetryTimeoutMs()},
+        // True when the link has measured round trips at or beyond its own T1 —
+        // the timer cannot succeed and no channel improvement will help.
+        {QStringLiteral("t1TooShort"),
+         s.rttSamples > 0 && s.averageRttMs() >= link.retryTimeoutMs()},
+        {QStringLiteral("rtt"), rtt},
+        {QStringLiteral("counters"), counters},
+    };
+}
+
+} // namespace
+
+QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
+                                                        const QString& action,
+                                                        const QString& value)
+{
+    const bool isLink = (verb == QLatin1String("link"));
+
+    // ── modem ───────────────────────────────────────────────────────────────
+    if (!isLink) {
+        if (action == QLatin1String("profile")) {
+            const QString name = value.trimmed().toLower();
+            QRadioButton* button = nullptr;
+            if (name == QLatin1String("hf300") || name == QLatin1String("hf")
+                || name == QLatin1String("300"))
+                button = m_hf300Profile;
+            else if (name == QLatin1String("vhf1200") || name == QLatin1String("vhf")
+                     || name == QLatin1String("1200"))
+                button = m_vhf1200Profile;
+            if (!button)
+                return automationError(QStringLiteral(
+                    "modem profile expects hf300 or vhf1200 (got '%1')").arg(value));
+            // Click the radio button rather than calling setModemProfile()
+            // directly: the toggled() handler is what persists the choice and
+            // re-derives the link timing, so driving the widget keeps the bridge
+            // on the same path a human takes.
+            button->setChecked(true);
+        } else if (action == QLatin1String("on") || action == QLatin1String("off")
+                   || action == QLatin1String("enable")
+                   || action == QLatin1String("disable")) {
+            if (!m_enableDecode)
+                return automationError(QStringLiteral("modem enable control is unavailable"));
+            const bool on = (action == QLatin1String("on")
+                             || action == QLatin1String("enable"));
+            m_enableDecode->setChecked(on);
+            // Verify rather than assume: the modem can refuse to start (no
+            // audio engine, no attached slice). Reporting ok for work that did
+            // not happen is worse than reporting the failure.
+            if (m_enableDecode->isChecked() != on) {
+                return automationError(QStringLiteral(
+                    "modem refused to turn %1 — see the AetherModem system log")
+                    .arg(on ? QStringLiteral("on") : QStringLiteral("off")));
+            }
+        } else if (!action.isEmpty() && action != QLatin1String("status")) {
+            return automationError(QStringLiteral(
+                "unknown modem action '%1' (status|profile|on|off)").arg(action));
+        }
+
+        QJsonObject modem{
+            {QStringLiteral("profile"), ax25ModemProfileName(m_shimConfig.profile)},
+            {QStringLiteral("profileId"), profileSettingsValue(m_shimConfig.profile)},
+            {QStringLiteral("baud"), m_shimConfig.baud},
+            {QStringLiteral("sampleRate"), m_shimConfig.sampleRate},
+            {QStringLiteral("markHz"), m_shimConfig.markHz},
+            {QStringLiteral("spaceHz"), m_shimConfig.spaceHz},
+            {QStringLiteral("lanes"), ax25DemodLaneCount(m_shimConfig)},
+            {QStringLiteral("enabled"), m_enableDecode && m_enableDecode->isChecked()},
+            {QStringLiteral("description"), ax25DemodDescription(m_shimConfig)},
+        };
+        // Decoder health, so a soak can tell "no frames because the band is
+        // dead" from "no frames because the audio tap never started".
+        QJsonObject demod{
+            {QStringLiteral("rmsDbfs"), m_lastDiagnostics.rmsDbfs},
+            {QStringLiteral("peakDbfs"), m_lastDiagnostics.peakDbfs},
+            {QStringLiteral("clippedPercent"), m_lastDiagnostics.clippedPercent},
+            {QStringLiteral("markMinusSpaceDb"), m_lastDiagnostics.markMinusSpaceDb},
+            {QStringLiteral("receiveGateOpen"), m_lastDiagnostics.receiveGateOpen},
+            {QStringLiteral("hdlcFrameCandidates"),
+             double(m_lastDiagnostics.hdlcFrameCandidates)},
+            {QStringLiteral("plausibleAx25Candidates"),
+             double(m_lastDiagnostics.plausibleAx25Candidates)},
+            {QStringLiteral("framesAccepted"), double(m_lastDiagnostics.framesAccepted)},
+            {QStringLiteral("rejectBadFcs"), double(m_lastDiagnostics.rejectBadFcs)},
+            {QStringLiteral("rejectTooShort"), double(m_lastDiagnostics.rejectTooShort)},
+            {QStringLiteral("rejectMalformed"), double(m_lastDiagnostics.rejectMalformed)},
+        };
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("modem"), modem},
+                           {QStringLiteral("demod"), demod}};
+    }
+
+    // ── link ────────────────────────────────────────────────────────────────
+    if (!m_terminal)
+        return automationError(QStringLiteral("terminal is unavailable"));
+
+    if (action == QLatin1String("connect")) {
+        if (!m_terminal->hasMyCall())
+            return automationError(QStringLiteral(
+                "set MYCALL before connecting (Terminal tab, or `link mycall`)"));
+        if (m_terminal->isConnected() || m_terminal->isConnecting())
+            return automationError(QStringLiteral("already %1 to %2 — disconnect first")
+                .arg(m_terminal->isConnected() ? QStringLiteral("connected")
+                                               : QStringLiteral("connecting"),
+                     m_terminal->peerCall()));
+        if (value.isEmpty())
+            return automationError(QStringLiteral(
+                "link connect needs a callsign: link connect <call> [via <digi>[,<digi>]]"));
+        // The terminal's own command parser handles VIA paths and callsign
+        // validation. Make sure we are at the command prompt first, or the line
+        // would be sent to a peer as data instead of being interpreted.
+        m_terminal->enterCommandMode();
+        m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(value));
+        if (!m_terminal->isConnected() && !m_terminal->isConnecting()) {
+            // The parser rejected it (bad callsign / bad digipeater); it has
+            // already explained why in the transcript.
+            return automationError(QStringLiteral(
+                "connect to '%1' was rejected — see the terminal transcript").arg(value));
+        }
+    } else if (action == QLatin1String("disconnect")) {
+        if (!m_terminal->isConnected() && !m_terminal->isConnecting())
+            return automationError(QStringLiteral("not connected"));
+        m_terminal->disconnectLink();
+    } else if (action == QLatin1String("mycall")) {
+        if (value.isEmpty())
+            return automationError(QStringLiteral("link mycall needs a callsign"));
+        if (m_terminalMyCall) {
+            m_terminalMyCall->setText(value.trimmed().toUpper());
+            applyTerminalConfigFromUi(true);
+        } else {
+            m_terminal->setMyCall(value);
+        }
+        if (!m_terminal->hasMyCall())
+            return automationError(QStringLiteral("invalid callsign '%1'").arg(value));
+    } else if (action == QLatin1String("listen") || action == QLatin1String("alias")) {
+        // The mailbox cannot be enabled without a valid listen callsign, so a
+        // soak script has to be able to set one.
+        if (!m_pms)
+            return automationError(QStringLiteral("mailbox is unavailable"));
+        const bool isAlias = (action == QLatin1String("alias"));
+        QLineEdit* field = isAlias ? m_pmsAliasCall : m_pmsListenCall;
+        if (!field)
+            return automationError(QStringLiteral("mailbox callsign field is unavailable"));
+        field->setText(value.trimmed().toUpper());
+        applyPmsConfigFromUi(true);
+        if (!isAlias && !m_pms->hasValidAddress()) {
+            return automationError(QStringLiteral(
+                "invalid mailbox listen callsign '%1'").arg(value));
+        }
+    } else if (action == QLatin1String("pms")) {
+        const QString state = value.trimmed().toLower();
+        if (state != QLatin1String("on") && state != QLatin1String("off"))
+            return automationError(QStringLiteral("link pms expects on or off"));
+        if (!m_pmsEnable || !m_pms)
+            return automationError(QStringLiteral("mailbox control is unavailable"));
+        const bool on = (state == QLatin1String("on"));
+        m_pmsEnable->setChecked(on);
+        // The mailbox refuses to come up without a valid listen callsign and
+        // silently unchecks itself. Verify the state actually took, so the verb
+        // cannot report success for a mailbox that is not listening.
+        if (m_pms->isEnabled() != on) {
+            return automationError(QStringLiteral(
+                "mailbox refused to turn %1%2")
+                .arg(on ? QStringLiteral("on") : QStringLiteral("off"),
+                     on && !m_pms->hasValidAddress()
+                         ? QStringLiteral(" — set a listen callsign first "
+                                          "(`link listen <call>`)")
+                         : QStringLiteral(" — see the AetherModem system log")));
+        }
+    } else if (!action.isEmpty() && action != QLatin1String("status")) {
+        return automationError(QStringLiteral(
+            "unknown link action '%1' "
+            "(status|connect|disconnect|mycall|listen|alias|pms)").arg(action));
+    }
+
+    QJsonObject terminal{
+        {QStringLiteral("myCall"), m_terminal->myCall()},
+        {QStringLiteral("mode"), m_terminal->mode() == TncTerminal::Mode::Converse
+                                     ? QStringLiteral("converse") : QStringLiteral("command")},
+        {QStringLiteral("connected"), m_terminal->isConnected()},
+        {QStringLiteral("connecting"), m_terminal->isConnecting()},
+        {QStringLiteral("peer"), m_terminal->peerCall()},
+        {QStringLiteral("summary"), m_terminal->statusSummary()},
+        {QStringLiteral("txBytes"), double(m_terminal->txBytes())},
+        {QStringLiteral("rxBytes"), double(m_terminal->rxBytes())},
+    };
+    if (const Ax25Connection* link = m_terminal->link())
+        terminal.insert(QStringLiteral("link"), linkSnapshot(*link));
+
+    QJsonObject pms;
+    if (m_pms) {
+        pms = QJsonObject{
+            {QStringLiteral("enabled"), m_pms->isEnabled()},
+            {QStringLiteral("listen"), m_pms->listenCallsign()},
+            {QStringLiteral("alias"), m_pms->aliasCallsign()},
+            {QStringLiteral("callerConnected"), m_pms->isCallerConnected()},
+            {QStringLiteral("caller"), m_pms->connectedCaller()},
+            {QStringLiteral("messages"), m_pms->messageCount()},
+            {QStringLiteral("idleTimeoutMs"), m_pms->sessionIdleTimeoutMs()},
+            {QStringLiteral("timing"), m_pms->linkSummary()},
+        };
+        if (const Ax25Connection* link = m_pms->link())
+            pms.insert(QStringLiteral("link"), linkSnapshot(*link));
+    }
+
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("terminal"), terminal},
+                       {QStringLiteral("pms"), pms}};
 }
 
 void Ax25HfPacketDecodeDialog::applyLinkTimingProfile()

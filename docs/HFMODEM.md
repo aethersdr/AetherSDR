@@ -249,13 +249,24 @@ Ordered by value per unit of risk. Items 1–2 are on this branch.
    collects. The measurement had to come first.
 7. ⏳ **Mistuning readout** (§5.3) — small, and immediately useful to an
    operator hunting a marginal HF path.
-8. ⏳ **TX preamble review.** HF's 80 flags is 2.13 s of dead air per frame,
-   the single largest term in the airtime budget. Real HF TNCs use far less.
-   Shortening it would nearly halve frame airtime — but it protects the *far*
-   end's AGC and PLL, so it cannot be changed on our own authority. Needs an
-   A/B against a real BBS before touching, and it is deliberately left alone
-   here: the airtime model reads the constant, so if it ever drops, T1 tracks
-   it automatically.
+8. ⏳ **File transfer — YAPP** (§7). Works without anything below it, but only
+   stops being painful once `MAXFRAME` can exceed 1.
+9. ⏳ **Single-keyup multi-frame TX.** Build several I-frames into one audio
+   burst so `MAXFRAME` can rise above 1. This is the throughput ceiling today:
+   with a window of 1, every frame costs a full radio turnaround. Highest-value
+   change for file transfer, more than the protocol choice.
+10. ⏳ **FEC — IL2P or FX.25.** Reed-Solomon around AX.25 turns marginal frames
+    into good ones instead of retransmitting them. On a long HF session — and
+    on any file transfer, where hundreds of consecutive frames must all pass
+    FCS — this is arguably a prerequisite rather than an enhancement. Same axis
+    as §5.1, one layer down.
+11. ⏳ **TX preamble review.** HF's 80 flags is 2.13 s of dead air per frame,
+    the single largest term in the airtime budget. Real HF TNCs use far less.
+    Shortening it would nearly halve frame airtime — but it protects the *far*
+    end's AGC and PLL, so it cannot be changed on our own authority. Needs an
+    A/B against a real BBS before touching, and it is deliberately left alone
+    here: the airtime model reads the constant, so if it ever drops, T1 tracks
+    it automatically.
 
 ### Deliberately deferred
 
@@ -271,3 +282,86 @@ Ordered by value per unit of risk. Items 1–2 are on this branch.
   alias address, *both* state machines answer the same SABM — two UAs on the
   air, two sessions believing they own the peer, duelling acks. Belongs with
   the autoanswer setting.
+
+## 7. File transfer
+
+**Direction chosen: YAPP**, for both the Terminal and the PMS.
+
+The rationale is interop, not elegance. The Terminal's value is dialing BBSes
+we do not control, and YAPP is what those BBSes speak — it is the native
+binary-transfer protocol of the AX.25 packet BBS world. A protocol of our own
+design would work only against our own mailbox, which is the one case the user
+already has other options for. Implementing YAPP on both sides means the
+Terminal can pull files from real packet BBSes, and other people's terminals
+can transfer against our PMS.
+
+### 7.1 The constraint that governs every decision here
+
+At these speeds **turnarounds dominate, not bit rate.** One HF round trip is
+~8.4 s (§3). A protocol that acknowledges every block therefore moves one
+paclen per round trip:
+
+```
+64 bytes / 8.4 s ≈ 7.6 B/s        against a 37.5 B/s channel
+```
+
+— roughly 80% of the link thrown away on protocol chatter. So the data phase
+must **stream, with no application-layer acknowledgements**, and let AX.25's
+own window carry the reliability.
+
+This is also the whole reason the obvious candidates are wrong:
+
+| Protocol | Verdict |
+| --- | --- |
+| **YAPP** | **Chosen.** Native to AX.25 BBSes, does not re-do error control, interops with stations we do not control. |
+| **XMODEM / YMODEM** | Disqualified. Stop-and-wait: one block per round trip, by construction. |
+| **ZMODEM** | Poor fit. Designed for a full-duplex reliable stream; its ZRPOS rewind fights AX.25's own retransmit, and it degenerates badly on half duplex with multi-second turnarounds. |
+| **Kermit** (long packets + sliding window) | Workable and famously robust, but its value is surviving 7-bit, flow-controlled, lossy paths — none of which apply here. Pays for machinery we do not need. |
+| **FBB B1F/B2F** | Best answer *if* Winlink interop ever becomes a goal for the PMS: compression and resume built in, and it is what Winlink speaks. Worth revisiting as a second protocol, not a replacement for YAPP. |
+
+### 7.2 Do not duplicate the ARQ
+
+`Ax25Connection` already provides reliable, ordered, error-free, 8-bit-clean
+delivery: FCS validation, REJ, sequenced retransmit. Any file protocol that
+brings its own error correction pays twice — two retransmit timers fighting
+each other, and two sets of checksums on a link where every byte costs a third
+of a second. What is genuinely needed on top of AX.25 is only *metadata,
+framing, compression, and resume*. YAPP is a good fit precisely because it was
+designed against this link layer and assumes it.
+
+### 7.3 Open question to settle before implementing
+
+**Read the YAPP spec first.** Its exact acknowledgement discipline in the data
+phase needs verifying: the recollection driving this choice is that YAPP
+streams data blocks rather than acking each one, but that is not verified here,
+and if it does ack per block it collides head-on with §7.1. That single fact
+determines whether YAPP is usable as-is on HF, needs a streaming variant, or
+should be restricted to the VHF profile. Settle it before writing code.
+
+### 7.4 Prerequisites in our code
+
+1. **`sendData()` has no backpressure.** It appends straight into
+   `m_sendBuffer` with no cap, so a 200 KB file means 200 KB queued in RAM
+   draining at ~30 B/s with no clean cancel. Needs a `bytesQueued()` accessor
+   and a ready-for-more signal so the sender paces against the link.
+2. **An explicit binary mode switch.** `PmsMailbox::onLinkData` splits on CR
+   and treats Ctrl-Z (0x1A) as end-of-message; `TncTerminal::sendToPeer` does
+   `toLatin1()` and appends CR. Binary payloads trip all three. A real transfer
+   state that bypasses the line parser is required, on both sides.
+3. **The PMS never sends RNR**, so there is no inbound flow control at all. A
+   sender that outruns us has no way to be told.
+4. **`MAXFRAME = 1`** (§6 item 9) is the throughput ceiling. Transfers work
+   without it; they stop being painful with it.
+
+### 7.5 Design notes for the implementation
+
+- **Block size should equal paclen**, so one transfer block is exactly one
+  I-frame. A loss then retransmits exactly one block, with no fragmentation
+  amplification.
+- **Compression matters more than protocol choice.** At ~30 B/s, deflate's
+  2–4× on text is the single largest win available anywhere in the transfer
+  path — larger than any framing decision.
+- **Resume is not optional on HF.** Sessions die mid-transfer; a transfer that
+  cannot resume from an offset is useless for anything but small files.
+- **CRC per block for detection only**, not recovery — AX.25 already recovers.
+

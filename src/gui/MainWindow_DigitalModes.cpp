@@ -143,6 +143,40 @@ void MainWindow::startKissTncOnStartupIfConfigured()
 #endif
 }
 
+Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
+{
+    if (m_ax25HfPacketDecodeDialog)
+        return m_ax25HfPacketDecodeDialog.data();
+
+    // Construct hidden and persistent, exactly as
+    // startKissTncOnStartupIfConfigured() does. The automation bridge must be
+    // able to drive the modem on a headless soak box where nobody ever opened
+    // the window; the dialog is a service host, not just a view.
+    TncSettings::migrateLegacy();
+    auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
+    dlg->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    m_ax25HfPacketDecodeDialog = dlg;
+    trackPersistentDialog(dlg);
+#ifdef HAVE_MQTT
+    dlg->setMqttClient(m_mqttClient);
+#endif
+    return dlg;
+}
+
+QJsonObject MainWindow::automationModemCommand(const QString& verb,
+                                               const QString& action,
+                                               const QString& value)
+{
+    Ax25HfPacketDecodeDialog* dlg = ensureAx25HfPacketDecodeDialog();
+    if (!dlg) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"), QStringLiteral("could not construct the AetherModem window")}};
+    }
+    return dlg->automationCommand(verb, action, value);
+}
+
 // External-controller methods (FlexControl, HID encoders / RC-28 / TMate 2 /
 // Ulanzi / PowerMate / Shuttle, StreamDeck labels, control-devices snapshot)
 // live in MainWindow_Controllers.cpp (#3351 Phase 1a).

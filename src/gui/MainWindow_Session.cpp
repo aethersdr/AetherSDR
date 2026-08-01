@@ -2155,6 +2155,10 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
     m_automation->setSliceReceiveSourceHandler(
         [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
+    m_automation->setModemAutomationHandler(
+        [this](const QString& verb, const QString& action, const QString& value) {
+            return automationModemCommand(verb, action, value);
+        });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
     m_automation->setSliceLinkHandler(
