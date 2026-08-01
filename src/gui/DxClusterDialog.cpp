@@ -1691,6 +1691,24 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_n1mmPortSpin, 0, 1);
 
+    // Contest spots are long-lived compared with the other feeds (a station
+    // sits on a frequency for hours), so this is minutes rather than the
+    // seconds-scale slider the WSJT-X tab uses. 0 = never expire; the logger's
+    // own "delete" is then the only thing that clears a spot.
+    grid->addWidget(new QLabel("Spot Lifetime:"), 1, 0);
+    m_n1mmLifetimeSpin = new QSpinBox;
+    m_n1mmLifetimeSpin->setRange(0, 1440);
+    m_n1mmLifetimeSpin->setValue(s.value("N1MMSpotLifetimeSec", 10800).toInt() / 60);
+    m_n1mmLifetimeSpin->setSuffix(" min");
+    m_n1mmLifetimeSpin->setSpecialValueText("Never expire");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmLifetimeSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
+    connect(m_n1mmLifetimeSpin, &QSpinBox::valueChanged, this, [](int minutes) {
+        auto& s = AppSettings::instance();
+        s.setValue("N1MMSpotLifetimeSec", minutes * 60);
+        s.save();
+    });
+    grid->addWidget(m_n1mmLifetimeSpin, 1, 1);
+
     connLayout->addLayout(grid);
 
     auto* helpLabel = new QLabel(

@@ -229,6 +229,7 @@ private:
 
     // N1MM/DXLog tab (#2906)
     QSpinBox*       m_n1mmPortSpin;
+    QSpinBox*       m_n1mmLifetimeSpin;
     QPushButton*    m_n1mmStartBtn;
     QPushButton*    m_n1mmAutoStartBtn;
     QLabel*         m_n1mmStatusLabel;
