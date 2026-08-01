@@ -428,7 +428,7 @@ void MainWindow::wireSpotSubsystem()
         // N1MM keeps its own key→id map so a re-add updates in place. Drop the
         // entries whose spots just expired here too, or the map grows for the
         // life of the session (#2906).
-        if (!m_n1mmSpotIdByKey.isEmpty()) {
+        if (!expired.isEmpty() && !m_n1mmSpotIdByKey.isEmpty()) {
             const QSet<int> expiredIds(expired.cbegin(), expired.cend());
             for (auto it = m_n1mmSpotIdByKey.begin(); it != m_n1mmSpotIdByKey.end(); ) {
                 if (expiredIds.contains(it.value()))
@@ -465,6 +465,13 @@ void MainWindow::wireSpotSubsystem()
         return QString();
     };
 
+    // Deliberately not gated on m_radioModel.isConnected() the way queueSpotCmd
+    // is, and deliberately not routed through
+    // SpotCommandPolicy::shouldSendSpotAddCommands(): N1MM markers are
+    // client-side only. The radio has no way to express N1MM's explicit
+    // add/update/delete semantics, so these never become `spot add` commands
+    // and never appear in SmartSDR or other clients — which also means a radio
+    // reconnect must not throw away the logger's bandmap state.
     connect(m_n1mmSpotClient, &N1MMSpotClient::spotAdded,
             this, [this, n1mmColorForStatus](const N1mmSpot& n1mm) {
         if (n1mm.dxCall.trimmed().isEmpty() || n1mm.freqMhz <= 0.0)
@@ -481,10 +488,22 @@ void MainWindow::wireSpotSubsystem()
         kvs["callsign"] = QString(n1mm.dxCall).replace(' ', QChar(0x7f));
         kvs["rx_freq"] = QString::number(n1mm.freqMhz, 'f', 6);
         kvs["tx_freq"] = QString::number(n1mm.freqMhz, 'f', 6);
-        kvs["source"] = "N1MM";
+        // "N1MM-<StationName>" matches what SmartSDR puts in Spot.Source for
+        // logger-fed spots, so a multi-op setup can tell which logger PC a
+        // spot came from — and migrating operators see the source string they
+        // already know. Plain "N1MM" when the logger omits <StationName>.
+        kvs["source"] = n1mm.stationName.isEmpty()
+                      ? QStringLiteral("N1MM")
+                      : QStringLiteral("N1MM-") + n1mm.stationName;
         kvs["spotter_callsign"] = n1mm.spotterCall;
         kvs["lifetime_seconds"] = QString::number(lifetimeSec);
-        kvs["timestamp"] = QString::number(QDateTime::currentSecsSinceEpoch());
+        // Use the logger's own timestamp: it drives the marker's age display
+        // and fade, so stamping "now" would make a station N1MM has held on
+        // its bandmap for hours read as freshly spotted — and would reset the
+        // age on every status re-add (new → dupe, mult flag flipping).
+        kvs["timestamp"] = QString::number(n1mm.timestamp.isValid()
+                                               ? n1mm.timestamp.toSecsSinceEpoch()
+                                               : QDateTime::currentSecsSinceEpoch());
         kvs["color"] = color;
         if (!n1mm.mode.isEmpty())
             kvs["mode"] = n1mm.mode;

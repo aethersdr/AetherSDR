@@ -603,26 +603,46 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         }
     });
 
+    // Unlike the other feeds, an N1MM "add" is usually an *update* — the logger
+    // re-broadcasts a callsign every time its status changes, and re-sends
+    // unchanged entries too. Logging every one would bury the list in
+    // near-identical rows for a single station. Log a row only when the status
+    // actually changes (or the call is new on this band), so the list reads as
+    // that station's status history rather than its broadcast rate. This path
+    // deliberately bypasses queueSpotCmd, so it gets no isDuplicateSpot cover.
     connect(n1mmSpotClient, &N1MMSpotClient::spotAdded, this, [this](const N1mmSpot& n1mm) {
+        const QString key = N1MMSpotParser::spotKey(n1mm.dxCall, n1mm.freqMhz);
+        const auto prev = m_n1mmLastLoggedStatus.constFind(key);
+        if (prev != m_n1mmLastLoggedStatus.constEnd() && prev.value() == n1mm.statusRaw)
+            return;
+        m_n1mmLastLoggedStatus.insert(key, n1mm.statusRaw);
+
         DxSpot spot;
         spot.dxCall = n1mm.dxCall;
         spot.freqMhz = n1mm.freqMhz;
         spot.spotterCall = n1mm.spotterCall;
         spot.comment = n1mm.statusRaw.isEmpty() ? n1mm.comment
                      : (n1mm.comment.isEmpty() ? n1mm.statusRaw : n1mm.comment + " [" + n1mm.statusRaw + "]");
-        spot.source = "N1MM";
+        // Matches the model-side source string (SmartSDR's "N1MM-<StationName>").
+        spot.source = n1mm.stationName.isEmpty()
+                    ? QStringLiteral("N1MM")
+                    : QStringLiteral("N1MM-") + n1mm.stationName;
         m_spotBatch.append(spot);
     });
     // The Spot List tab is a chronological log of everything received, across
     // every source — no source removes rows from it — so a delete drops the
     // panadapter marker and is recorded here rather than un-logging the spot.
     connect(n1mmSpotClient, &N1MMSpotClient::spotDeleted, this, [this](const QString& dxCall, double freqMhz) {
+        // Forget the last-logged status too, so if the logger re-adds this call
+        // on this band it opens a fresh row rather than being suppressed as a
+        // no-change repeat.
+        m_n1mmLastLoggedStatus.remove(N1MMSpotParser::spotKey(dxCall, freqMhz));
         m_n1mmConsole->appendPlainText(QString("--- delete %1 @ %2 MHz (panadapter marker removed) ---")
                                            .arg(dxCall).arg(freqMhz, 0, 'f', 3));
     });
 
     connect(n1mmSpotClient, &N1MMSpotClient::listening, this, [this] {
-        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmPortSpin->value()));
+        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmSpotClient->port()));
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_n1mmStartBtn->setText("Stop");
         m_n1mmConsole->appendPlainText("--- Listening ---");
@@ -638,7 +658,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
         m_n1mmStartBtn->setText("Start");
         m_n1mmConsole->appendPlainText(
-            QString("--- Bind failed on port %1: %2 ---").arg(m_n1mmPortSpin->value()).arg(err));
+            QString("--- Bind failed on port %1: %2 ---").arg(m_n1mmSpotClient->port()).arg(err));
     });
 
 #ifdef HAVE_WEBSOCKETS
@@ -1841,7 +1861,7 @@ void DxClusterDialog::buildN1mmTab(QTabWidget* tabs)
 
     // Update status if already listening
     if (m_n1mmSpotClient->isListening()) {
-        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmPortSpin->value()));
+        m_n1mmStatusLabel->setText(QString("Listening on port %1").arg(m_n1mmSpotClient->port()));
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_n1mmStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_n1mmStartBtn->setText("Stop");
     }

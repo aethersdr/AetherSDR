@@ -1,6 +1,7 @@
 #include "core/N1MMSpotParser.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QString>
 #include <cmath>
 #include <cstdio>
@@ -85,6 +86,36 @@ void testWellFormedAdd()
     expectEqual("statusRaw", spot.statusRaw, "single mult");
     expectEqual("statusFlag normalized to mult", spot.statusFlag, "mult");
     expectTrue("timestamp parsed", spot.timestamp.isValid());
+}
+
+void testTimestampAndStationName()
+{
+    // Both feed user-visible output: the timestamp drives the panadapter
+    // marker's age/fade, and stationName becomes the "N1MM-<StationName>"
+    // source string SmartSDR uses.
+    N1mmSpot spot;
+    QString action;
+    expectTrue("packet parses", N1MMSpotParser::parsePacket(
+                   n1mmPacket("AL3CDE", "7061.2"), spot, action));
+    expectEqual("stationName captured", spot.stationName, "CONTEST-PC");
+    expectEqual("timestamp parsed as UTC",
+                spot.timestamp.toUTC().toString("yyyy-MM-dd HH:mm:ss"),
+                "2026-05-21 17:19:37");
+
+    // A malformed or absent timestamp must leave the field invalid rather
+    // than yielding a bogus date — callers fall back to "now" on !isValid().
+    N1mmSpot noTs;
+    expectTrue("packet without timestamp parses", N1MMSpotParser::parsePacket(
+                   "<spot><dxcall>W1ABC</dxcall><frequency>14025.0</frequency></spot>",
+                   noTs, action));
+    expectTrue("absent timestamp is invalid", !noTs.timestamp.isValid());
+
+    N1mmSpot badTs;
+    expectTrue("packet with unparseable timestamp still parses",
+               N1MMSpotParser::parsePacket(
+                   "<spot><dxcall>W1ABC</dxcall><frequency>14025.0</frequency>"
+                   "<timestamp>not-a-date</timestamp></spot>", badTs, action));
+    expectTrue("unparseable timestamp is invalid", !badTs.timestamp.isValid());
 }
 
 void testWellFormedDelete()
@@ -271,6 +302,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
 
     testWellFormedAdd();
+    testTimestampAndStationName();
     testWellFormedDelete();
     testActionDefaultsToAdd();
     testMissingOptionalFields();

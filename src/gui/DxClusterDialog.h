@@ -4,6 +4,7 @@
 
 #include <QAbstractTableModel>
 #include <QSortFilterProxyModel>
+#include <QHash>
 #include <QSet>
 #include <QVector>
 #include "core/DxClusterClient.h"
@@ -228,12 +229,15 @@ private:
     QPlainTextEdit* m_potaConsole;
 
     // N1MM/DXLog tab (#2906)
-    QSpinBox*       m_n1mmPortSpin;
-    QSpinBox*       m_n1mmLifetimeSpin;
-    QPushButton*    m_n1mmStartBtn;
-    QPushButton*    m_n1mmAutoStartBtn;
-    QLabel*         m_n1mmStatusLabel;
-    QPlainTextEdit* m_n1mmConsole;
+    QSpinBox*       m_n1mmPortSpin{nullptr};
+    QSpinBox*       m_n1mmLifetimeSpin{nullptr};
+    QPushButton*    m_n1mmStartBtn{nullptr};
+    QPushButton*    m_n1mmAutoStartBtn{nullptr};
+    QLabel*         m_n1mmStatusLabel{nullptr};
+    QPlainTextEdit* m_n1mmConsole{nullptr};
+    // spotKey() -> last status logged to the Spot List, so a re-broadcast that
+    // changed nothing doesn't add another row for the same station (#2906).
+    QHash<QString, QString> m_n1mmLastLoggedStatus;
 
 #ifdef HAVE_WEBSOCKETS
     // FreeDV tab — connection controls

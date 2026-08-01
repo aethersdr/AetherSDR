@@ -26,6 +26,9 @@ public:
     void startListening(quint16 port);
     void stopListening();
     bool isListening() const { return m_listening; }
+    // The port actually bound, which is not necessarily what the tab's
+    // spinbox currently reads — the operator can spin it without restarting.
+    quint16 port() const { return m_port; }
 
     QString logFilePath() const;
 
