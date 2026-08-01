@@ -20,7 +20,14 @@ jobs:
             qt_arch: linux_gcc_64
             require_gpu: 'ON'   # x86_64 ships the whisper Vulkan GPU backend
             gpu_spectrum: 'ON'  # unchanged: Qt 6.8.3 already enabled it here
-          - runner: ubuntu-22.04-arm
+          # Stays on noble, and must. Qt builds its linux_arm64 desktop binaries
+          # on Ubuntu 24.04 (the packages are literally named
+          # Linux-Ubuntu_24_04-GCC-...-AARCH64), and the shipped libQt6Gui.so.6
+          # requires GLIBC_2.38 — verified with readelf on the downloaded 6.8.3
+          # arm64 tree. Jammy is 2.35, so building this Qt there cannot work.
+          # The x86_64 leg above CAN sit on jammy because Qt builds its x64
+          # binaries against an older base; the asymmetry is Qt's, not ours.
+          - runner: ubuntu-24.04-arm
             arch: aarch64
             qt_host: linux_arm64
             qt_arch: linux_gcc_arm64
@@ -87,14 +94,14 @@ jobs:
       #
       # This workflow only runs on tag pushes, so a break here is invisible
       # until release day — hence the explicit assertions on both legs.
-      # Gated on require_gpu, NOT on the runner name. These used to split on
-      # `runner == 'ubuntu-22.04'` vs `!=`, which silently assumed "not jammy"
-      # meant "noble" — true only while aarch64 was the sole other entry and it
-      # ran ubuntu-24.04-arm. Now that aarch64 is ALSO jammy (ubuntu-22.04-arm),
-      # the `!=` leg would have matched it and run `apt-get install glslc`, a
-      # package jammy does not carry — which is the whole reason the LunarG leg
-      # below exists. glslc is only ever needed for whisper's Vulkan backend, so
-      # require_gpu is the honest gate: aarch64 is CPU-only and needs neither.
+      # Gated on require_gpu, not just the runner name. glslc exists solely for
+      # whisper's Vulkan backend, and aarch64 is CPU-only (require_gpu OFF), so
+      # it was installing a shader compiler it never uses. Gating on the actual
+      # dependency also stops the `!= 'ubuntu-22.04'` leg from being a proxy for
+      # "noble" — that equivalence holds only by accident of the current matrix,
+      # and it silently breaks the moment any jammy-family runner is added
+      # (jammy does not package glslc at all, which is why the LunarG leg
+      # below exists).
       - name: Install glslc (non-jammy GPU runners)
         if: matrix.require_gpu == 'ON' && matrix.runner != 'ubuntu-22.04'
         run: |
@@ -128,11 +135,13 @@ jobs:
       # -source repo at all. 6.8.3 is the newest 6.8 LTS with prebuilt binaries
       # under the open-source licence, which is what every other artifact pins.
       #
-      # aarch64 also drops from ubuntu-24.04-arm to ubuntu-22.04-arm. Nothing
-      # needed noble except the newer distro Qt, and jammy lowers the AppImage's
-      # glibc floor from 2.39 to 2.35 — the same floor x86_64 deliberately holds
-      # ("old glibc, new Qt"). That matters most on ARM, where the target is a
-      # Pi that may well be on an older OS than the build runner.
+      # The aarch64 AppImage's glibc floor is set by Qt, not by the runner: the
+      # arm64 6.8.3 tree needs GLIBC_2.38, so the floor is 2.38 wherever it is
+      # built. Target check against that: Pi OS Trixie is glibc 2.41 (Debian 13,
+      # Mesa 25.0.7) and runs it; Pi OS Bookworm is 2.36 and cannot. Bookworm is
+      # not a regression here — today's aarch64 AppImage builds on noble and
+      # already floors at 2.39 — but it does mean Trixie is the supported Pi
+      # baseline, and that should stay true when this Qt pin moves.
       - name: Install Qt 6.8.3 LTS via aqtinstall
         run: |
           pip3 install aqtinstall
