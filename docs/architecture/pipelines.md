@@ -122,13 +122,21 @@ rather than invented, because a WSPR frame is judged by decoders we do not own:
 - **A missed boundary truncates the head** of the frame instead of sliding the
   whole transmission later.
 
-Arming also borrows station state that is not slice state and hands it back on
-stop: the transmit passband, the speech processor, the compander and the TX
-equalizer. None of those are bypassed by selecting DIGU, and all of them
-misshape a constant-envelope tone. Mode and both passbands are re-asserted
-immediately before the key, because a cross-band `slice tune` triggers an
-asynchronous band-stack recall that can land after them (§6.2 of the FlexLib
-oracle; #2824), and arming happens up to 120 s ahead of the key.
+The beacon also borrows station state that is not slice state and hands it back
+on stop. Arming takes only the transmit passband. Everything else is taken at
+the KEY, in `reassertBeaconChannel()`: the slice mode, both passbands again, the
+speech processor, the compander, the TX equalizer and VOX. None of the audio
+four is bypassed by selecting DIGU and all of them misshape a constant-envelope
+tone; VOX is taken because it can unkey part-way through a 111.6 s frame.
+
+The key, not arm, is where those belong for one reason: arming happens up to
+120 s ahead of the key — up to ~6 minutes once the permitted deferrals are
+spent — so anything pushed at arm is stale by the time it matters. A cross-band
+`slice tune` triggers an asynchronous band-stack recall that can land after the
+mode and filter sent behind it (§6.2 of the FlexLib oracle; #2824), and another
+client, a band button or a profile load can move the slice in that window. The
+same staleness argument applies to the speech chain, which is additionally why
+a station that is merely *armed* keeps its own audio processing and VOX intact.
 
 TCP COMMAND PIPELINE (bidirectional):
   GUI widget ──→ SliceModel.setXxx() ──→ emit commandReady("slice ...")  [MAIN]

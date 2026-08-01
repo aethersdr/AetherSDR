@@ -342,6 +342,36 @@ void testLateStartSkipsIntoTheFrame()
           "a skipped start is still ramped, not keyed at full amplitude");
 }
 
+// A skip deep enough to land inside the tail region must still end faded.
+//
+// updateBeaconState() cannot produce one — kBeaconMaxSlotLatenessMs caps the
+// skip at 24000 frames against a 2654208-frame message — but start() is public
+// and clamps only to kMessageFrames - 1, so the generator has to be correct on
+// its own terms. If the head ramp took precedence, the envelope would climb for
+// whatever frames remained and the message would then stop dead at that level:
+// a step discontinuity, which is the click the taper exists to remove.
+//
+// Falsifiable by construction: put the `m_framesEmitted < kTaperFrames` branch
+// back in front of the tail branch and this fails at 0.96 of full amplitude,
+// not marginally — the skip below is sized so the head ramp has exactly enough
+// frames to climb back to unity before the message runs out.
+void testSkipIntoTheTailStillFadesOut()
+{
+    constexpr int64_t kRemaining = WsprBeacon::kTaperFrames - 1;   // 277
+    constexpr int64_t kSkip = WsprBeacon::kMessageFrames - kRemaining;
+    const std::vector<float> pcm =
+        generate(uniformSymbols(0), 1500.0, -20.0f, kRemaining,
+                 static_cast<int>(kSkip));
+    constexpr float kAmplitude = 0.1f;   // -20 dBFS
+
+    float peak = 0.0f;
+    for (const float sample : pcm) {
+        peak = std::max(peak, std::abs(sample));
+    }
+    check(peak < kAmplitude * 1e-3f,
+          "a skip into the tail region decays instead of ramping back up");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -354,6 +384,7 @@ int main(int argc, char** argv)
     testToneConventionMatchesWsjtx();
     testFrameEndsAreTapered();
     testLateStartSkipsIntoTheFrame();
+    testSkipIntoTheTailStillFadesOut();
     testIndependentDaxPump();
     if (failures == 0) {
         std::puts("WSPR beacon tests passed");

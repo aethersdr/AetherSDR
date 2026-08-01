@@ -379,6 +379,14 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // was not just loose wording — the generator centred the constellation on
     // it, putting every spot 2.2 Hz below where the same number in WSJT-X
     // would have put it.
+    //
+    // The range stays 1400–1600 because that is WSJT-X's own WSPR range under
+    // the same convention: at the top of it symbol 3 lands at 1604.4 Hz, just
+    // outside the 200 Hz sub-band, exactly as it does there. Narrowing to
+    // 1595.6 would be a defensible change but it would be OURS rather than the
+    // oracle's, and the centred convention this replaces overran the top too
+    // (1600 → 1602.2) while ALSO overrunning the bottom (1400 → 1397.8), which
+    // this fixes.
     m_beaconTone->setToolTip(
         tr("Audio offset above the selected USB dial frequency, at the lowest "
            "of the four tones — the same convention as WSJT-X"));
@@ -389,7 +397,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // Hard-coded at -20 dBFS before this. WSJT-X generates at full scale and
     // attenuates digitally through its Pwr slider (SoundOutput::setAttenuation);
     // the equivalent knob here had no UI at all, so an operator who came out
-    // underdriven had nothing to reach for. Floor of -3 rather than 0 keeps a
+    // underdriven had nothing to reach for. Ceiling of -3 rather than 0 keeps a
     // little headroom ahead of the radio's own TX chain.
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
@@ -754,31 +762,8 @@ bool PskReporterMapDialog::applyBeaconBand()
         m_beaconTxFilterSaved = true;
     }
 
-    // Everything in the speech chain is station-wide and mode-independent: a
-    // Flex does not bypass the speech processor, the compander or the TX
-    // equalizer just because the slice says DIGU. Left on, they operate on a
-    // constant-envelope 4-FSK tone — the compander pumps its level over the
-    // frame, the processor adds intermodulation products either side of the
-    // carrier, and the EQ tilts it — which is precisely why WSJT-X's own
-    // operating guidance is to switch all of it off for digital modes.
-    //
-    // Borrowed and handed back the same way the TX filter already is, because
-    // an operator who beacons once should not find their SSB audio rebuilt.
-    if (!m_beaconTxChainSaved && m_radioModel->usesFlexCommandPlane()) {
-        EqualizerModel& eq = m_radioModel->equalizerModel();
-        m_beaconPrevSpeechProc = tx.speechProcessorEnable();
-        m_beaconPrevCompander = tx.dexpOn();
-        m_beaconPrevVox = tx.voxEnable();
-        m_beaconPrevTxEq = eq.txEnabled();
-        m_beaconTxChainSaved = true;
-        if (m_beaconPrevSpeechProc) tx.setSpeechProcessorEnable(false);
-        if (m_beaconPrevCompander) tx.setDexp(false);
-        // VOX is not audio shaping — it is a second thing that can key and
-        // unkey the transmitter. Ours is a 111.6 s frame held by an explicit
-        // MOX, and a VOX release part-way through would truncate it.
-        if (m_beaconPrevVox) tx.setVoxEnable(false);
-        if (m_beaconPrevTxEq) eq.setTxEnabled(false);
-    }
+    // The speech chain is deliberately NOT borrowed here — it is taken at the
+    // key, in reassertBeaconChannel(). See borrowBeaconSpeechChain().
 
     // Standard WSPR dial frequencies use upper sideband on every band. Keep
     // both the slice display passband and radio TX passband comfortably around
@@ -875,7 +860,55 @@ bool PskReporterMapDialog::reassertBeaconChannel(QString* reason)
     slice->setMode(QStringLiteral("DIGU"));
     slice->setFilterWidth(1200, 1800);
     tx.setTxFilter(1200, 1800);
+    borrowBeaconSpeechChain(tx);
     return true;
+}
+
+// Switch off the station audio processing that would misshape the frame, and
+// remember what to hand back in restoreBorrowedTxState().
+//
+// Everything here is station-wide and mode-independent: a Flex does not bypass
+// the speech processor, the compander or the TX equalizer because a slice says
+// DIGU. Left on, they operate on a constant-envelope 4-FSK tone — the compander
+// pumps its level over the frame, the processor adds intermodulation products
+// either side of the carrier, and the EQ tilts it — which is precisely why
+// WSJT-X's own operating guidance is to switch all of it off for digital modes.
+//
+// Taken at the KEY rather than at arm, for the same reason mode and the
+// passbands are re-asserted here: arming happens up to 120 s before the key,
+// and up to ~6 minutes once the two permitted deferrals are spent. A borrow
+// made at arm is stale by the time it matters — anything that turns the
+// processor back on inside that window transmits through it, which is the
+// "pushed once and never checked" failure this whole function exists to close.
+// Reading the values here also means the saved copy is the operator's real
+// state at key time, so the restore cannot hand back something two minutes old.
+//
+// The secondary benefit is that the operator's own station is untouched while
+// merely armed: a beacon waiting for its slot no longer silently strips the
+// speech processor — or VOX, which would leave a VOX operator's microphone dead
+// with nothing on screen saying why — from a station they are still using.
+//
+// The generated lead-in gives the radio the same settling time these commands'
+// neighbours get; see the note above on how much lead-in that is.
+void PskReporterMapDialog::borrowBeaconSpeechChain(TransmitModel& tx)
+{
+    if (m_beaconTxChainSaved || m_radioModel == nullptr
+        || !m_radioModel->usesFlexCommandPlane()) {
+        return;
+    }
+    EqualizerModel& eq = m_radioModel->equalizerModel();
+    m_beaconPrevSpeechProc = tx.speechProcessorEnable();
+    m_beaconPrevCompander = tx.dexpOn();
+    m_beaconPrevVox = tx.voxEnable();
+    m_beaconPrevTxEq = eq.txEnabled();
+    m_beaconTxChainSaved = true;
+    if (m_beaconPrevSpeechProc) tx.setSpeechProcessorEnable(false);
+    if (m_beaconPrevCompander) tx.setDexp(false);
+    // VOX is not audio shaping — it is a second thing that can key and unkey
+    // the transmitter. Ours is a 111.6 s frame held by an explicit MOX, and a
+    // VOX release part-way through would truncate it.
+    if (m_beaconPrevVox) tx.setVoxEnable(false);
+    if (m_beaconPrevTxEq) eq.setTxEnabled(false);
 }
 
 // Restore the station-wide TX state the beacon borrowed: the transmit

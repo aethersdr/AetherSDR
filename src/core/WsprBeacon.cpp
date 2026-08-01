@@ -287,13 +287,23 @@ float WsprBeacon::nextFrameSample() noexcept
     // is what the envelope below is for. The ramp-up keys off frames emitted
     // and the tail off position within the message: on a late start those
     // differ, and the ramp has to follow the audio, not the symbol clock.
+    //
+    // The tail is tested FIRST so that it always wins. A messageSkipFrames deep
+    // enough to land inside the tail region would otherwise ramp UP over the
+    // few frames left and then stop dead at whatever level it reached — a step
+    // discontinuity, i.e. the exact click this taper exists to prevent. Letting
+    // the tail win leaves such a frame decaying from the seed envelope, so it
+    // ends silent instead. Unreachable from updateBeaconState(), where the skip
+    // is bounded by kBeaconMaxSlotLatenessMs, but start() is public and clamps
+    // only to kMessageFrames - 1. The ordering costs nothing on the reachable
+    // path: there the ramp runs ~24000 frames in, nowhere near the tail region.
     const int64_t framePos =
         static_cast<int64_t>(m_symbolIndex) * kFramesPerSymbol
         + m_framesIntoSymbol;
-    if (m_framesEmitted < kTaperFrames) {
-        m_envelope = std::min(1.0f, m_envelope / kTaperDecayPerFrame);
-    } else if (framePos >= kMessageFrames - kTaperFrames) {
+    if (framePos >= kMessageFrames - kTaperFrames) {
         m_envelope *= kTaperDecayPerFrame;
+    } else if (m_framesEmitted < kTaperFrames) {
+        m_envelope = std::min(1.0f, m_envelope / kTaperDecayPerFrame);
     } else {
         m_envelope = 1.0f;
     }

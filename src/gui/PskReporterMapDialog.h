@@ -19,6 +19,7 @@ class AudioEngine;
 class PropForecastClient;
 class PskReporterClient;
 class RadioModel;
+class TransmitModel;
 
 // PSK Reporter reception map (View menu). Shows who is hearing our
 // callsign, centered on the radio's GPS fix (falling back to the reported
@@ -61,6 +62,10 @@ private:
     // whether the channel is still the one the operator armed. See the
     // definition for why one push at arm time is not enough.
     bool reassertBeaconChannel(QString* reason);
+    // Called from reassertBeaconChannel(), i.e. at the KEY and not at arm, so
+    // the operator's own station keeps its audio processing (and VOX) for the
+    // whole time the beacon is merely waiting for its slot.
+    void borrowBeaconSpeechChain(TransmitModel& tx);
     void restoreBorrowedTxState();
 
     AudioEngine*         m_audioEngine{nullptr};
