@@ -4582,6 +4582,16 @@ target_include_directories(demo_backend_swap_test PRIVATE src)
 target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME demo_backend_swap_test COMMAND demo_backend_swap_test)
 
+add_executable(demo_applet_tooltip_test
+    tests/demo_applet_tooltip_test.cpp
+    src/gui/DemoApplet.cpp
+)
+target_include_directories(demo_applet_tooltip_test PRIVATE src)
+target_link_libraries(demo_applet_tooltip_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME demo_applet_tooltip_test COMMAND demo_applet_tooltip_test)
+set_tests_properties(demo_applet_tooltip_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(hl2_family_transition_test tests/hl2_family_transition_test.cpp)
 target_include_directories(hl2_family_transition_test PRIVATE src)
 target_link_libraries(hl2_family_transition_test PRIVATE aethercore Qt6::Core Qt6::Test)
