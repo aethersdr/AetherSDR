@@ -122,6 +122,12 @@ public:
     // bootstrap path (SettingsBootstrap). Returns true iff the row exists.
     static bool readAppValueFromFile(const QString& path, const QString& key,
                                      QString& value);
+    // Same one-shot read-only fetch for a station_settings row — the
+    // evidence-over-assertion verification read (a failed save() keeps the
+    // change in the CACHE for retry, so only a file read proves persistence).
+    static bool readStationValueFromFile(const QString& path,
+                                         const QString& station,
+                                         const QString& key, QString& value);
 
 private:
     bool exec(const char* sql);

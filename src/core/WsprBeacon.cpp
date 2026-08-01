@@ -12,7 +12,7 @@ namespace {
 
 constexpr uint32_t kPolynomial1 = 0xf2d05351U;
 constexpr uint32_t kPolynomial2 = 0xe4613c47U;
-constexpr float kTwoPi = 6.28318530717958647692f;
+constexpr double kTwoPi = 6.28318530717958647692;
 
 constexpr std::array<uint8_t, WsprBeacon::kSymbolCount> kSync{
     1,1,0,0,0,0,0,0,1,0,0,0,1,1,1,0,0,0,1,0,
@@ -178,19 +178,25 @@ void WsprBeacon::prepare(double sampleRate)
     m_sampleRate = sampleRate > 0.0 ? sampleRate : kSampleRate;
 }
 
-void WsprBeacon::start(const Symbols& symbols, float centerHz, float levelDb,
-                       int preRollFrames)
+void WsprBeacon::start(const Symbols& symbols, double toneZeroHz, float levelDb,
+                       int preRollFrames, int messageSkipFrames)
 {
     m_active.store(false, std::memory_order_release);
     for (int i = 0; i < kSymbolCount; ++i) {
         m_pendingSymbols[i].store(symbols[i], std::memory_order_relaxed);
     }
-    m_pendingCenterHz.store(std::clamp(centerHz, 200.0f, 4000.0f),
-                            std::memory_order_relaxed);
+    m_pendingToneZeroHz.store(std::clamp(toneZeroHz, 200.0, 4000.0),
+                              std::memory_order_relaxed);
     m_pendingLevelDb.store(std::clamp(levelDb, -60.0f, -3.0f),
                            std::memory_order_relaxed);
     m_pendingPreRollFrames.store(std::max(0, preRollFrames),
                                  std::memory_order_relaxed);
+    // Clamped one frame short of the message so a nonsense skip cannot start
+    // an already-complete transmission.
+    m_pendingMessageSkipFrames.store(
+        static_cast<int>(std::clamp<int64_t>(messageSkipFrames, 0,
+                                             kMessageFrames - 1)),
+        std::memory_order_relaxed);
     m_complete.store(false, std::memory_order_relaxed);
     m_currentSymbol.store(-1, std::memory_order_relaxed);
     m_version.fetch_add(1, std::memory_order_release);
@@ -224,58 +230,112 @@ void WsprBeacon::beginPendingTransmission() noexcept
     for (int i = 0; i < kSymbolCount; ++i) {
         m_symbols[i] = m_pendingSymbols[i].load(std::memory_order_relaxed);
     }
-    m_centerHz = m_pendingCenterHz.load(std::memory_order_relaxed);
+    m_toneZeroHz = m_pendingToneZeroHz.load(std::memory_order_relaxed);
     const float levelDb = m_pendingLevelDb.load(std::memory_order_relaxed);
     m_amplitude = std::pow(10.0f, levelDb / 20.0f);
     m_preRollRemaining = m_pendingPreRollFrames.load(std::memory_order_relaxed);
-    m_symbolIndex = 0;
-    m_framesIntoSymbol = 0;
-    m_phase = 0.0f;
+    const int skip =
+        m_pendingMessageSkipFrames.load(std::memory_order_relaxed);
+    m_symbolIndex = skip / kFramesPerSymbol;
+    m_framesIntoSymbol = skip % kFramesPerSymbol;
+    m_framesEmitted = 0;
+    m_phase = 0.0;
+    m_phaseIncrement = 0.0;
+    // One decay step below the first ramp-up step, so frame 0 of the message
+    // starts at about -97.5 dB and reaches unity exactly at frame
+    // kTaperFrames - 1. See kTaperFrames in the header.
+    m_envelope = std::pow(kTaperDecayPerFrame,
+                          static_cast<float>(kTaperFrames));
     m_complete.store(false, std::memory_order_release);
     m_currentSymbol.store(-1, std::memory_order_relaxed);
     m_cachedVersion = m_version.load(std::memory_order_acquire);
 }
 
-void WsprBeacon::process(int16_t* interleaved, int frames, int channels) noexcept
+bool WsprBeacon::beginProcess() noexcept
 {
-    if (interleaved == nullptr || frames <= 0 || channels < 1 || channels > 2
-        || !isActive()) {
-        return;
+    if (!isActive()) {
+        return false;
     }
     const uint64_t version = m_version.load(std::memory_order_acquire);
     if (version != m_cachedVersion) {
         beginPendingTransmission();
     }
+    return true;
+}
 
-    for (int frame = 0; frame < frames; ++frame) {
-        int16_t sample = 0;
-        if (m_preRollRemaining > 0) {
-            --m_preRollRemaining;
-        } else if (m_symbolIndex < kSymbolCount) {
-            m_currentSymbol.store(m_symbolIndex, std::memory_order_relaxed);
-            const float tone = m_centerHz
-                + (static_cast<float>(m_symbols[m_symbolIndex]) - 1.5f)
-                      * kToneSpacingHz;
-            const float phaseIncrement =
-                kTwoPi * tone / static_cast<float>(m_sampleRate);
-            sample = static_cast<int16_t>(std::clamp(
-                std::sin(m_phase) * m_amplitude * 32767.0f,
-                -32768.0f, 32767.0f));
-            m_phase += phaseIncrement;
-            if (m_phase >= kTwoPi) {
-                m_phase -= kTwoPi;
-            }
-            ++m_framesIntoSymbol;
-            if (m_framesIntoSymbol >= kFramesPerSymbol) {
-                m_framesIntoSymbol = 0;
-                ++m_symbolIndex;
-                if (m_symbolIndex >= kSymbolCount) {
-                    m_complete.store(true, std::memory_order_release);
-                    m_currentSymbol.store(kSymbolCount, std::memory_order_relaxed);
-                }
-            }
+float WsprBeacon::nextFrameSample() noexcept
+{
+    if (m_preRollRemaining > 0) {
+        --m_preRollRemaining;
+        return 0.0f;
+    }
+    if (m_symbolIndex >= kSymbolCount) {
+        return 0.0f;
+    }
+
+    m_currentSymbol.store(m_symbolIndex, std::memory_order_relaxed);
+
+    // Tone 0 sits at the requested frequency and the constellation runs
+    // upward from there, exactly as WSJT-X does it — see start()'s comment.
+    const double tone =
+        m_toneZeroHz + static_cast<double>(m_symbols[m_symbolIndex])
+                           * kToneSpacingHz;
+    m_phaseIncrement = kTwoPi * tone / m_sampleRate;
+
+    // Phase is continuous across symbol boundaries (m_phase is never reset),
+    // so the ONLY discontinuities in the whole frame are its two ends — which
+    // is what the envelope below is for. The ramp-up keys off frames emitted
+    // and the tail off position within the message: on a late start those
+    // differ, and the ramp has to follow the audio, not the symbol clock.
+    //
+    // The tail is tested FIRST so that it always wins. A messageSkipFrames deep
+    // enough to land inside the tail region would otherwise ramp UP over the
+    // few frames left and then stop dead at whatever level it reached — a step
+    // discontinuity, i.e. the exact click this taper exists to prevent. Letting
+    // the tail win leaves such a frame decaying from the seed envelope, so it
+    // ends silent instead. Unreachable from updateBeaconState(), where the skip
+    // is bounded by kBeaconMaxSlotLatenessMs, but start() is public and clamps
+    // only to kMessageFrames - 1. The ordering costs nothing on the reachable
+    // path: there the ramp runs ~24000 frames in, nowhere near the tail region.
+    const int64_t framePos =
+        static_cast<int64_t>(m_symbolIndex) * kFramesPerSymbol
+        + m_framesIntoSymbol;
+    if (framePos >= kMessageFrames - kTaperFrames) {
+        m_envelope *= kTaperDecayPerFrame;
+    } else if (m_framesEmitted < kTaperFrames) {
+        m_envelope = std::min(1.0f, m_envelope / kTaperDecayPerFrame);
+    } else {
+        m_envelope = 1.0f;
+    }
+    ++m_framesEmitted;
+
+    const float sample = static_cast<float>(std::sin(m_phase))
+                         * m_amplitude * m_envelope;
+    m_phase += m_phaseIncrement;
+    if (m_phase >= kTwoPi) {
+        m_phase -= kTwoPi;
+    }
+
+    ++m_framesIntoSymbol;
+    if (m_framesIntoSymbol >= kFramesPerSymbol) {
+        m_framesIntoSymbol = 0;
+        ++m_symbolIndex;
+        if (m_symbolIndex >= kSymbolCount) {
+            m_complete.store(true, std::memory_order_release);
+            m_currentSymbol.store(kSymbolCount, std::memory_order_relaxed);
         }
+    }
+    return sample;
+}
 
+void WsprBeacon::process(float* interleaved, int frames, int channels) noexcept
+{
+    if (interleaved == nullptr || frames <= 0 || channels < 1 || channels > 2
+        || !beginProcess()) {
+        return;
+    }
+    for (int frame = 0; frame < frames; ++frame) {
+        const float sample = nextFrameSample();
         interleaved[frame * channels] = sample;
         if (channels == 2) {
             interleaved[frame * channels + 1] = sample;

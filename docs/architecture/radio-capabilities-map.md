@@ -45,7 +45,8 @@ traps and why the DAX crash guard is deliberately *not* the DAX capability.
 | `hasExtendedDsp` | from table | ❌ | ❌ | `RadioModel::hasExtendedDspFilters()` | NRS / RNN / NRF buttons |
 | `hasProfiles` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PROF applet, Profiles menu, Profile Manager, Import/Export |
 | `hasDaxStreams` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | DAX + DAX-IQ applets, Autostart DAX |
-| `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row, the 8-band hardware EQ applet |
+| `hasRadioSideDsp` | ✅ | ❌ | ❌ | `RadioModel::hasRadioSideDsp()` | NR/NB/ANF/NRL/ANFL/ANFT, the APD row, the WNB row |
+| `hasRadioSideWaterfallAutoBlack` | ✅ | ❌ | ❌ | `MainWindow::applyRadioSideDspToPanDisplay` | The HW position of the Display ▸ Black Level button. False cycles Off ↔ SW. **Masks, never rewrites** the stored preference — see below |
 | `hasWaveforms` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | File ▸ Waveforms… |
 | `hasMultiClientSessions` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | Settings ▸ multiFLEX… |
 | `hasSupplyVoltageTelemetry` | ✅ | ❌ | ❌ | `MainWindow::applyCapabilitiesToUi` | PA supply-voltage readout in the status bar |
@@ -64,13 +65,100 @@ play, scattered lambdas are how two callers end up both driving one widget's
 
 The host-side equivalents are *not* gated on it, and must not be: the AetherDSP
 noise modules (NR2/NR4/MNR/BNR/DFNR/RN2) and the Aetherial RX/TX EQ tiles
-(`ceq` / `ceq-rx`, distinct from the `EQ` applet). On a radio reporting
-`hasRadioSideDsp = false` those are the **only** audio DSP the operator has —
-an HL2 uses the Aetherial EQ in place of the radio's hardware EQ — so gating
-them would leave nothing at all.
+(`ceq` / `ceq-rx`). On a radio reporting `hasRadioSideDsp = false` those are the
+**only** audio DSP the operator has, so gating them would leave nothing at all.
 
 The test for whether a control belongs behind this flag is whether its only
 effect is to emit a verb the radio's firmware executes.
+
+**The `EQ` applet used to be behind this flag and no longer is.** It looked like
+it belonged: `EqualizerModel` emits `eq RXsc` / `eq TXsc`, which reach nothing
+without a Flex command plane, so the applet passed the test above. But the test
+asks about the CONTROL, and the conclusion was drawn about the COMMANDS. The
+equalizer those eight sliders ask for exists on every family — `ClientEq` is
+already in both audio paths — so `MainWindow::wireHostModulatedVoiceChain()`
+maps the octave bands onto it for any backend without a Flex command plane, and
+the applet is now unconditionally visible. Hiding it was removing a working
+control rather than an empty one.
+
+The same correction applies to the other Flex-shaped voice controls, none of
+which are capability-gated: PROC and its NOR/DX/DX+ level drive `ClientComp`,
+and the Phone applet's TX low-cut/high-cut reaches a host modulator through
+`IRadioBackend::setTxFilter`.
+
+Two consequences worth knowing. The graphic EQ and the compressor write into the
+**same** `ClientEq`/`ClientComp` objects the Aetherial strip edits, so the two
+surfaces are two views of one object — moving a graphic-EQ slider replaces the
+strip's band layout in slots 0..7, and toggling the strip's compressor lights
+PROC. And on Flex both mappings are skipped, so one slider movement never
+equalizes or compresses twice.
+
+**Which surface may write is its own question, and it is not a capability.**
+`core/HostVoiceChainPolicy.h` answers it, because the family check alone gets it
+wrong in both directions:
+
+- `EqualizerModel` and `TransmitModel` have no persistence — their state arrives
+  from a Flex `eq` / `transmit` status or from an operator move — while
+  `ClientEq` and `ClientComp` *do* persist. So at a connect edge the Flex-shaped
+  models sit at their construction defaults (eight bands at 0 dB, every enable
+  false), and re-pushing them writes those defaults over the operator's saved
+  audio chain.
+- `hostModulates` is false for a Flex, so a plain Flex connect reaches the
+  family-swap unwind too. Disabling the shared objects there switches off the
+  operator's own Aetherial RX EQ, TX EQ and compressor on a session that never
+  went near a host-modulating backend — the gating this document says must not
+  happen, arriving by the back door.
+
+Both predicates therefore turn on whether the operator has actually moved one of
+the Flex-shaped controls in this process.
+`tests/host_voice_chain_policy_test.cpp` pins the truth table.
+
+### What `hasRadioSideWaterfallAutoBlack` must never hide
+
+The same rule one plane over. `SW` — the client-side noise-floor estimate — is
+not gated on it and must not be: on a radio reporting false it is the only
+automatic waterfall floor the operator has, and hiding it would leave only the
+manual slider.
+
+The flag is deliberately separate from `hasRadioSideDsp` rather than riding on
+it. Both describe work the radio does instead of this host, but one is audio DSP
+driven by command-plane verbs and the other is a display-plane computation
+embedded in the waterfall stream. A backend could plausibly have either without
+the other, and merging them would make the first such backend a rewrite.
+
+### A gate masks; it must not write through
+
+`DisplayWfAutoBlackRadioSide` is the operator's **intent**, and the capability
+decides what is **in effect**. `SpectrumWidget` exposes both —
+`wfAutoBlackRadioSide()` for the intent, `effectiveWfAutoBlackRadioSide()` for
+intent ∧ capability — and only a deliberate operator action reaches the setter
+that persists.
+
+The first implementation coerced the mode and let the normal change signals fire,
+which reach `setWfAutoBlackRadioSide()` and write AppSettings. Connecting an HL2
+once then destroyed a Flex user's stored HW preference for good. **Rule 2 above
+implies this generally:** a gate that persists its coercion cannot restore
+anything, so no capability gate may write through to settings.
+
+Note the related gap this exposes, deliberately *not* fixed here: display
+settings are flat `AppSettings` keys scoped by pan index only
+(`SpectrumWidget::settingsKey`), so two radios share one preference. The mask is
+what keeps that from doing damage today — nothing writes through it — but the
+underlying state is still radio-scoped state living in a flat key.
+
+The answer is **not** to mangle the family into the key string. `AGENTS.md`
+§*"Radio-Scoped Feature Documents (`radio_settings`)"* (RFC #4603) is explicit
+that radio-scoped configuration does not go in flat keys: it goes in a versioned
+JSON feature document addressed by `RadioModel::settingsScope()`, read back
+through `scope.feature(...)` at use time. `MainWindow::rfGainSettingsKey` is a
+pre-#4603 precedent and should not be copied into new work.
+
+That also dissolves the objection that used to be recorded here — that
+`SpectrumWidget` loads its settings at construction, before any backend has
+reported a family, so it cannot build a family-scoped key. A feature document is
+read at use time, not baked into a key at construction, so the ordering problem
+does not arise. It is still its own change, and it applies to more than this one
+control.
 
 ## Declared, but the consumer bypasses the seam
 
@@ -103,6 +191,29 @@ These are the ones to check first when something "should have worked". Note the
 pattern in the Flex column: five fields across this table and the one above are
 left at their defaults, and every one of them is correct only by accident or
 inert only by luck. That is the trap in rule 1 above, sitting in the tree.
+
+## Not a capability field, but the same contract
+
+`IRadioBackend::linkStats()` / `linkStatsUpdated()` — the transport counters
+behind the title-bar heartbeat, the status-bar `Network:` field and the whole
+Network Diagnostics pane. Not in `RadioCapabilities` because it carries live
+values rather than a yes/no, but it follows rule 1 in the same shape and belongs
+on the same checklist when you add a backend.
+
+| | Flex | HL2 | Sim |
+|---|:--:|:--:|:--:|
+| overrides `linkStats()` | ❌ | ✅ | ❌ |
+
+`LinkStats::reported` defaults to **false**, and that default is the compatible
+one for once: a backend that says nothing leaves every consumer on the source it
+already had (the Flex `RadioConnection` + `PanadapterStream`). A backend that
+owns its own socket must override it, or its operator gets a connected radio
+reporting 0 kbps.
+
+Within the struct, individual figures a transport cannot measure are `-1`, not
+`0` — `RadioModel::hasLinkRtt()` and `hasStreamCategoryStats()` are the
+predicates the readouts ask before printing. See [`HERMES.md`](../../HERMES.md)
+§21.3 for why a zero there is a claim the app cannot support.
 
 ## Where the values come from
 

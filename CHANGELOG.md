@@ -8,6 +8,128 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **TCI PTT now keys the slice the client asked for (#4547).** Since v26.7.4 no
+  TCI client could activate the slice it named: the requested receiver was
+  discarded on every request whose slice was not already the transmit slice —
+  the common path, not an edge case — so keying stayed pinned to wherever
+  transmit already sat. Before that, in v26.7.3 and earlier, the opposite held:
+  every client's `trx:0` promoted the first slice, so a second WSJT-X instance
+  yanked transmit off the slice the first one was working. Both are fixed. An
+  externally selected transmit slice still answers instead, but only when a
+  route actually applies — split was requested, or VFO B bound a route for that
+  exact receiver — so satellite and cross-band split are preserved.
+
+  Three further faults in the same path go with it. A cached route can no
+  longer outlive the live transmit slice, which previously let a bare keypress
+  move transmit onto a stale slice's **band and antenna** with no operator
+  action. An unresolvable receiver is now declined instead of transmitting on
+  the first slice. And with two clients on one radio, each resolves against the
+  receiver it declared in `audio_start` when it sends the ambiguous `trx:0`
+  that every WSJT-X instance sends — an explicitly addressed receiver is always
+  honoured as sent.
+
+  Every PTT refusal now replies `trx:<n>,false;` instead of returning in
+  silence, including when a second client keys while another already holds TCI
+  PTT. WSJT-X reports those as "TCI failed to set ptt"; they previously arrived
+  with no cause at all.
+
+### Added
+
+- **The TCI PTT slice-routing decision is now logged (#4547).** Reports of TCI
+  keying the wrong slice have been arriving without logs because there were
+  none to send: the server logged audio, IQ, DAX and client connections, but
+  the decision that picks which slice transmits was silent. One line now
+  records the whole decision — the requested receiver, the slice it maps to,
+  the slice that was chosen and whether that is the one asked for, the slice
+  that actually holds transmit, and the cached route it was compared against —
+  which separates the three failure modes behind #4547 that otherwise look
+  identical to an operator. Slice ids are printed with their receiver number
+  (`0(trx0)`) so the line can be read against a client's own transcript.
+
+  It is off by default; turn it on with
+  `QT_LOGGING_RULES="aether.cat.info=true"` before starting AetherSDR, and
+  include the output when reporting a TCI routing problem. Three cases that
+  previously dropped a PTT request with no trace — unresolvable receiver,
+  resolved slice gone, and transmit-inhibited panadapter — now say so at the
+  normal logging level, no rule needed.
+
+### Theme fallback colours corrected on themes that predate the token (#3184)
+
+- **Slice colours A–H and `color.accent.dim` now match the bundled themes.**
+  AetherSDR compiles a copy of the default theme into the binary as a fallback
+  for tokens a theme file doesn't define. That table was maintained by hand and
+  had drifted: it said slice A was red (`#ff4040`) while both bundled themes say
+  cyan (`#00d4ff`), and eight more slice colours disagreed the same way. If your
+  theme predates the slice tokens you will see the corrected — cyan — palette.
+  Themes that define their own slice colours are unaffected.
+
+- **24 tokens that had no compiled fallback at all now have one.** The dimmed
+  slice colours, the highlight and disabled-button colours, and all six
+  waterfall colormap gradients previously resolved to *transparent* on a theme
+  that predated them. On such a theme the waterfall could render with no
+  colormap; it now falls back to the bundled Default Dark gradients.
+
+- The table is generated from `resources/themes/default-dark.json` by
+  `tools/gen_theme_seed.py`, so the two can no longer disagree.
+
+### Fixed
+
+- **The Display ▸ WtrFall Rate slider ran backwards on the Hermes-Lite 2 and
+  the demo rig.** The control is a rate — 1 slow, 100 fast — but it travels
+  under FlexRadio's `line_duration` wire name, which is typed as milliseconds.
+  On a radio whose waterfall this client paces itself, the number was read
+  literally, so 1 gave the fastest scroll and 100 the slowest. 100 is the
+  default, which meant every HL2 session started on the slowest setting at
+  about 10 rows/second. The slider now runs the right way and is linear in
+  rows per second: 0.2 rows/s at the bottom, and at the top the waterfall
+  simply tracks the panadapter's frame rate (which Display ▸ FFT FPS owns) —
+  measured at 25 rows/s on a real HL2. Half-way up the slider is now half
+  speed, which it never was. FlexRadio radios are unaffected: their own
+  display engine has always done this conversion. (#4606)
+
+- **Adaptive network throttling sped the waterfall up on a bad connection.**
+  The same unit confusion, one layer up: the throttle converted its frame-rate
+  cap straight into a duration and sent it as a rate, so a "Poor" 4 fps cap
+  asked for the *fastest* waterfall setting available. Worse network, faster
+  waterfall. It now converts through the same law the display uses. (#4606)
+
+- **The waterfall Black Level button offered a hardware mode on radios that
+  have no such thing.** `HW` hands the black-level decision to the radio, which
+  only FlexRadio hardware computes. On a Hermes-Lite 2, selecting it sent a
+  command nowhere and left the waterfall waiting for a level that never
+  arrived — the button moved, the setting stuck, the picture did not change.
+  The button now cycles `Off ↔ SW` on radios without it, and `SW` (this
+  client's own noise-floor estimate, available on every radio) is what runs.
+  If you chose `HW` on a FlexRadio, that choice is **remembered, not
+  overwritten**: connect an HL2 and the button reads `SW`, reconnect the Flex
+  and it is back on `HW` without you re-selecting it. (#4606)
+
+- **FlexControl now recovers on its own after losing its USB port.** The knob
+  driver had no error handling at all: if the serial port dropped — a USB
+  glitch, a driver reset, the host reclaiming the device — nothing noticed, and
+  the knob stayed dead for the rest of the session. It now detects the error,
+  releases the port, and re-detects the device every couple of seconds until it
+  comes back (re-detecting rather than reusing the old name, since a replug can
+  hand the device a different COM port). Disconnecting from AetherControl or
+  turning FlexControl off in Radio Setup still stops it for good. Enabling the
+  **Ext Devices** log category now also shows the serial error at the moment
+  the port drops, instead of silence. (#4574)
+
+- **Demo mode's CW tone clicked instead of sliding when you moved its pitch
+  slider.** The tone was synthesized from absolute time × the current pitch, so
+  every notch of **CW tone** in the Demo applet jumped the oscillator's phase
+  rather than changing its frequency — a hard click mid-dah, which is exactly
+  the artifact the generator's raised-cosine key edges exist to prevent. The
+  jump grows with how long the session has been running, so after half a minute
+  even a 1 Hz nudge is a full-amplitude step. The tone now accumulates phase per
+  sample, the way the birdie carrier already did, and slides smoothly to the new
+  pitch. Fixed alongside it: three of the mixer's sample counters were 32-bit on
+  Windows and hit undefined behaviour after about 25 hours of unbroken demo
+  audio. Demo mode only — no radio, protocol, or transmit path is involved.
+  (#4618)
+
 ### Client settings store moved to SQLite (RFC #4603, phase 1)
 
 - **Settings now live in a SQLite database** (`AetherSDR.db` in the config
@@ -25,7 +147,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **New `--config` command line**: `aethersdr --config list|get|set|unset|
   export|path` inspects or repairs settings without starting the GUI —
   the escape hatch when a broken stored value prevents startup.
+- **New Settings Browser** (Settings ▸ Settings Browser…): browse and edit
+  the whole settings store — app keys, the station section, and each
+  radio's stored feature documents — with live filtering, guarded
+  editing (True/False picker, JSON validation, confirmations), and a
+  sanitized diagnostic export. Credential-shaped values are masked and
+  read-only; a store from a newer version browses read-only.
 - Fixes a latent threading race in the settings core (#4602).
+
+### Fixed
+
+- **Frameless window no longer drifts down the screen on Windows (#4328)** —
+  with **Frameless Window** enabled, AetherSDR reopened a title-bar height
+  below where you left it, so a window parked at the top of the screen had to
+  be nudged back up every launch. Qt was reserving room for a title bar the
+  custom frame does not have. The window now reopens exactly where you left
+  it, keeps its full size if you had it filling the screen, and stays put
+  through Minimal Mode round trips.
+- **Copy Assist no longer freezes the app on first use on macOS (#4535)** —
+  turning on ASR could hang the entire interface, on one Intel MacBook Pro for
+  over 75 minutes, with a force-quit as the only way out. The speech-recognition
+  engine was asking macOS to compile its GPU shaders the first time it looked
+  for a graphics card, and on some Intel Macs Apple's shader compiler never
+  finishes. Those shaders are now compiled when AetherSDR is built, so nothing
+  is compiled on your machine and the panel opens immediately. Apple Silicon
+  Macs also stop paying a several-second delay the first time ASR touches the
+  GPU on each cold start.
+- **AetherVoice playback, CW sidetone, and Quindar tones now work on class-
+  compliant multichannel USB audio interfaces on Windows (#4641)** — on
+  devices like the Akai EIE, WASAPI's shared-mode format query reported the
+  device as unable to play any of the negotiated formats, even though the
+  same device was already playing RX audio fine. The three affected paths
+  now open the device the same way the RX sink always has: try each
+  candidate format for real and keep the first one that actually starts,
+  instead of asking the query for permission first. Previously, pressing
+  Record in AetherVoice on an affected device would mute audio and silently
+  never play the recording back.
+- **Manual squelch is remembered per slice again, on every path (#4592)** —
+  each slice keeps its own manual squelch threshold, but only the RX applet
+  was keeping that memory current. Setting the level any other way — from a
+  non-active slice's own VFO flag, a MIDI or controller squelch knob, or from
+  the radio itself (your own edit on another client, or the radio's session
+  restore) — left the remembered value stale, so the next time you cycled the
+  SQL button that stale value was pushed back to the radio and quietly undid
+  what you had set. Every route now keeps the live level and the remembered
+  one together, and levels the radio reports back update it too — except while
+  Auto is computing them, so Auto's tracking of the noise floor no longer
+  overwrites the threshold you chose by hand. Switching squelch off and back
+  on returns you to your own level rather than the Auto margin.
+- **Squelch is no longer saved between sessions (#4592)** — squelch belongs to
+  the radio, and AetherSDR was also keeping its own copy. On a FLEX that copy
+  was never read back — the radio reports the real level on every connect — so
+  it only added a settings write each time you moved the slider, and risked
+  fighting the radio on reconnect. New slices now start from the radio's own
+  level, and the leftover setting is removed from existing installs on first
+  launch.
+- **Ulanzi Dial buttons can now hold PTT and key CW, and remember what you
+  mapped them to (#4611)** — a dial button set to **PTT (Hold)** or a CW key
+  did nothing at all, because only the button-down half of each press was
+  being read; the button-up that should un-key never arrived. Press-and-hold
+  now works for PTT, the straight key, both paddles, and held MIDI actions.
+  Releases are honoured even when the dial reports the button and its modifier
+  out of order, and holding two side buttons at once no longer leaves the
+  first one stuck down — so the transmitter always comes back to receive. If
+  the dial disconnects mid-transmission, everything it was holding is released
+  immediately. Your button mappings also survive a restart now; existing ones
+  are carried over automatically the first time you run this version, and a
+  mapping you clear stays cleared.
+- **Screen readers no longer stutter on the ATU relay bars and the CW decoder
+  range sliders (#4565)** — with VoiceOver / NVDA / Orca running, a focused
+  relay bar announced every step of an ATU tune sweep, and the decoder Pitch
+  and WPM sliders announced every repeat of a held arrow key. Both now
+  announce the settled value about ten times a second, matching the S-meter
+  and VFO. Moving between a range slider's low and high handle with Tab still
+  announces immediately, so the handle change is never lost behind a value
+  update, and neither control does any accessibility work when no screen
+  reader is running.
 
 ## [v26.7.4.1] — 2026-07-27
 

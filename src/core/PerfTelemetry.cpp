@@ -66,7 +66,7 @@ void PerfTelemetry::resetForTest()
     m_lastHeartbeatNs = 0;
     m_wasEnabled.store(false, std::memory_order_relaxed);
     m_dragActive.store(false, std::memory_order_relaxed);
-    m_waterfallLineDurationMs.store(0, std::memory_order_relaxed);
+    m_waterfallRate.store(0, std::memory_order_relaxed);
 }
 
 bool PerfTelemetry::enabled() const
@@ -328,9 +328,9 @@ void PerfTelemetry::recordWaterfallRebuild()
     maybeLogSummary(now);
 }
 
-void PerfTelemetry::setWaterfallLineDurationMs(int ms)
+void PerfTelemetry::setWaterfallRate(int rate)
 {
-    m_waterfallLineDurationMs.store(ms, std::memory_order_relaxed);
+    m_waterfallRate.store(rate, std::memory_order_relaxed);
 }
 
 void PerfTelemetry::recordPanCenterCommand()
@@ -576,7 +576,7 @@ void PerfTelemetry::maybeLogSummary(qint64 now)
     const double panCenterCommandRate = static_cast<double>(window.panCenterCommands) / seconds;
     const double waterfallFps = static_cast<double>(window.waterfallFrames) / seconds;
     const double rxKbps = (static_cast<double>(window.udpBytes) * 8.0) / seconds / 1000.0;
-    const int waterfallLineDurationMs = m_waterfallLineDurationMs.load(std::memory_order_relaxed);
+    const int waterfallRate = m_waterfallRate.load(std::memory_order_relaxed);
 
     QStringList fields;
     fields.reserve(45);
@@ -589,7 +589,7 @@ void PerfTelemetry::maybeLogSummary(qint64 now)
            << keyValueMs(QStringLiteral("panAgeP95Ms"), percentile95(std::move(window.panAgeMs)))
            << keyValueMs(QStringLiteral("panUpdateP95Ms"), percentile95(std::move(window.panUpdateMs)))
            << keyValue(QStringLiteral("wfFps"), QString::number(waterfallFps, 'f', 1))
-           << keyValue(QStringLiteral("wfLineMs"), waterfallLineDurationMs)
+           << keyValue(QStringLiteral("wfRate"), waterfallRate)
            << keyValueMs(QStringLiteral("wfAgeP95Ms"), percentile95(std::move(window.waterfallAgeMs)))
            << keyValueMs(QStringLiteral("wfUpdateP95Ms"), percentile95(std::move(window.waterfallUpdateMs)))
            << keyValueMs(QStringLiteral("renderP95Ms"), percentile95(std::move(window.renderMs)))

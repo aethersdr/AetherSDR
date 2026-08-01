@@ -116,6 +116,13 @@ toggle entries in their on-disk JSON still get the canonical look +
 per-applet differentiation.  The bundled themes' JSON re-asserts the
 same values via primitive aliases (idempotent).
 
+> **Since #3184 the seed is GENERATED, not hand-written.**
+> `tools/gen_theme_seed.py` emits `src/core/ThemeSeedGenerated.cpp`
+> from `resources/themes/default-dark.json`, resolving `{primitive}`
+> aliases to concrete values.  Everything above still describes what
+> the seed *contains*; it no longer describes how it gets there.  Add
+> tokens to the JSON and run the generator — never by hand.
+
 ## The helper
 
 [`src/gui/Theme.h`](../../src/gui/Theme.h):
@@ -203,8 +210,11 @@ boxes…):
    (slider + knob PR).
 2. **Match the namespace shape.**  Base tokens + state suffixes,
    with `<tribe>.<property>.<state>` if tribed.
-3. **Seed both layers** (bundled JSON + `seedBuiltinDefaults`) so
-   user themes forked pre-PR still render correctly.
+3. **Add the tokens to the bundled JSON**, then run
+   `python tools/gen_theme_seed.py` and commit the regenerated
+   `src/core/ThemeSeedGenerated.cpp`, so user themes forked pre-PR
+   still render correctly.  Never hand-add to `seedBuiltinDefaults()`
+   — that dual source of truth is what #3184 removed.
 4. **Helper in `Theme.h`** with the tribe enum (if applicable),
    widget-aware resolution via `applyStyleSheet`.
 5. **Document this directory** with the namespace, cascade, helper

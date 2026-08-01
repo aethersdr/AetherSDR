@@ -7,6 +7,7 @@
 #include <QAccessibleWidget>
 #include <QEnterEvent>
 #include <QEvent>
+#include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -403,15 +404,29 @@ public:
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setFocusPolicy(Qt::TabFocus);
         setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
+
+        // Direct hardware state pushes (e.g. TGXL relay updates during an
+        // ATU sweep) arrive unthrottled from the device — debounce the
+        // accessibility announcement so a rapid sweep doesn't turn into an
+        // updateAccessibility() storm. Same pattern as SMeterWidget/VfoWidget
+        // (see docs/a11y.md "Throttle high-rate updaters").
+        m_accessibilityTimer.setSingleShot(true);
+        m_accessibilityTimer.setInterval(kAccessibilityAnnouncementIntervalMs);
+        connect(&m_accessibilityTimer, &QTimer::timeout, this, [this]() {
+            if (!hasFocus() || !QAccessible::isActive()) return;
+            if (m_value == m_lastAccessibleValue) return;
+            m_lastAccessibleValue = m_value;
+            QAccessibleValueChangeEvent event(this, QVariant(m_value));
+            QAccessible::updateAccessibility(&event);
+        });
     }
 
     void setValue(int v) {
         if (m_value == v) return;
         m_value = v;
         update();
-        if (hasFocus()) {
-            QAccessibleValueChangeEvent event(this, QVariant(v));
-            QAccessible::updateAccessibility(&event);
+        if (hasFocus() && QAccessible::isActive() && !m_accessibilityTimer.isActive()) {
+            m_accessibilityTimer.start();
         }
     }
 
@@ -424,6 +439,17 @@ signals:
     void relayAdjusted(int direction);  // +1 scroll up, -1 scroll down
 
 protected:
+    void focusOutEvent(QFocusEvent* e) override {
+        // setValue() is driven by hardware state pushes regardless of focus,
+        // and both the schedule and publish gates require focus — so relay
+        // positions can move unannounced while the bar is not focused. Forget
+        // the last published value so a position that wandered away and back
+        // is not mistaken for "unchanged" and swallowed by the dedup.
+        m_accessibilityTimer.stop();
+        m_lastAccessibleValue = std::numeric_limits<int>::min();
+        QWidget::focusOutEvent(e);
+    }
+
     void keyPressEvent(QKeyEvent* e) override {
         if (!m_scrollEnabled) { QWidget::keyPressEvent(e); return; }
         if (e->key() == Qt::Key_Up || e->key() == Qt::Key_Plus || e->key() == Qt::Key_Right) {
@@ -492,10 +518,14 @@ protected:
     }
 
 private:
+    static constexpr int kAccessibilityAnnouncementIntervalMs = 100;
+
     QString m_label;
     int m_value{0};
     bool m_scrollEnabled{false};
     int m_angleAccum{0};
+    QTimer m_accessibilityTimer;
+    int m_lastAccessibleValue{std::numeric_limits<int>::min()};
 };
 
 } // namespace AetherSDR

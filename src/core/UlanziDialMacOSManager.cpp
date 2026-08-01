@@ -3,6 +3,7 @@
 
 #include "UlanziDialMacOSManager.h"
 #include "core/LogManager.h"
+#include "core/UlanziChordDecoder.h"
 
 #include <QDebug>
 
@@ -12,21 +13,6 @@
 #include <IOKit/hid/IOHIDValue.h>
 #include <IOKit/hid/IOHIDElement.h>
 
-// Linux-style keycode numeric values, mirrored so signatures stay
-// consistent across all three platforms.
-#define KEY_PLAYPAUSE    164
-#define KEY_MUTE         113
-#define KEY_PREVIOUSSONG 165
-#define KEY_NEXTSONG     163
-#define KEY_VOLUMEUP     115
-#define KEY_VOLUMEDOWN   114
-#define KEY_LEFTCTRL     29
-#define KEY_RIGHTCTRL    97
-#define KEY_V            47
-#define KEY_C            46
-#define KEY_Y            21
-#define KEY_Z            44
-
 namespace AetherSDR {
 
 namespace {
@@ -34,12 +20,12 @@ namespace {
 int hidConsumerToLinuxKey(int usage)
 {
     switch (usage) {
-        case 0xCD: return KEY_PLAYPAUSE;
-        case 0xE2: return KEY_MUTE;
-        case 0xB5: return KEY_NEXTSONG;
-        case 0xB6: return KEY_PREVIOUSSONG;
-        case 0xE9: return KEY_VOLUMEUP;
-        case 0xEA: return KEY_VOLUMEDOWN;
+        case 0xCD: return UlanziKey::PlayPause;
+        case 0xE2: return UlanziKey::Mute;
+        case 0xB5: return UlanziKey::NextSong;
+        case 0xB6: return UlanziKey::PreviousSong;
+        case 0xE9: return UlanziKey::VolumeUp;
+        case 0xEA: return UlanziKey::VolumeDown;
         default:   return -1;
     }
 }
@@ -47,40 +33,14 @@ int hidConsumerToLinuxKey(int usage)
 int hidKbdToLinuxKey(int usage)
 {
     switch (usage) {
-        case 0x06: return KEY_C;
-        case 0x19: return KEY_V;
-        case 0x1C: return KEY_Y;
-        case 0x1D: return KEY_Z;
-        case 0xE0: return KEY_LEFTCTRL;
-        case 0xE4: return KEY_RIGHTCTRL;
+        case 0x06: return UlanziKey::C;
+        case 0x19: return UlanziKey::V;
+        case 0x1C: return UlanziKey::Y;
+        case 0x1D: return UlanziKey::Z;
+        case 0xE0: return UlanziKey::LeftCtrl;
+        case 0xE4: return UlanziKey::RightCtrl;
         default:   return -1;
     }
-}
-
-QString bareKeySignature(int keycode)
-{
-    switch (keycode) {
-        case KEY_PLAYPAUSE:    return QStringLiteral("KEY_PLAYPAUSE");
-        case KEY_MUTE:         return QStringLiteral("KEY_MUTE");
-        case KEY_PREVIOUSSONG: return QStringLiteral("KEY_PREVIOUSSONG");
-        case KEY_NEXTSONG:     return QStringLiteral("KEY_NEXTSONG");
-        default:               return QStringLiteral("KEY_%1").arg(keycode);
-    }
-}
-
-QString chordSignature(int keycode, bool withPreviousSong)
-{
-    QString letter;
-    switch (keycode) {
-        case KEY_V: letter = QStringLiteral("V"); break;
-        case KEY_C: letter = QStringLiteral("C"); break;
-        case KEY_Y: letter = QStringLiteral("Y"); break;
-        case KEY_Z: letter = QStringLiteral("Z"); break;
-        default:    letter = QStringLiteral("KEY_%1").arg(keycode); break;
-    }
-    if (withPreviousSong)
-        return QStringLiteral("Ctrl+%1+KEY_PREVIOUSSONG").arg(letter);
-    return QStringLiteral("Ctrl+%1").arg(letter);
 }
 
 // Build a matching dictionary so IOHIDManager only surfaces our dial,
@@ -190,9 +150,7 @@ void UlanziDialMacOSManager::onDeviceRemoval()
     const QString name = m_deviceName;
     m_deviceName.clear();
     m_anyOpen = false;
-    m_ctrlDown = false;
-    m_lastNonModKey = -1;
-    m_prevsongAlongsideCtrl = false;
+    m_decoder.reset();
     emit connectionChanged(false, name);
 }
 
@@ -208,38 +166,11 @@ void UlanziDialMacOSManager::onHidValue(int usagePage, int usage, int value)
 
 void UlanziDialMacOSManager::emitKeyTransition(int linuxKey, int value)
 {
-    if (linuxKey == KEY_VOLUMEUP) {
-        if (value == 1) emit tuneSteps(+1);
-        return;
-    }
-    if (linuxKey == KEY_VOLUMEDOWN) {
-        if (value == 1) emit tuneSteps(-1);
-        return;
-    }
-    if (linuxKey == KEY_LEFTCTRL || linuxKey == KEY_RIGHTCTRL) {
-        m_ctrlDown = (value != 0);
-        if (!m_ctrlDown) { m_lastNonModKey = -1; m_prevsongAlongsideCtrl = false; }
-        return;
-    }
-    if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 1) {
-        m_prevsongAlongsideCtrl = true;
-        return;
-    }
-    if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 0) {
-        return;
-    }
-    if (!m_ctrlDown) {
-        if (value == 1 || value == 0)
-            emit buttonEvent(bareKeySignature(linuxKey), value);
-        return;
-    }
-    if (value == 1) {
-        m_lastNonModKey = linuxKey;
-        emit buttonEvent(chordSignature(linuxKey, m_prevsongAlongsideCtrl), 1);
-    } else if (value == 0 && linuxKey == m_lastNonModKey) {
-        emit buttonEvent(chordSignature(linuxKey, m_prevsongAlongsideCtrl), 0);
-        m_lastNonModKey = -1;
-        m_prevsongAlongsideCtrl = false;
+    for (const auto& out : m_decoder.feed(linuxKey, value)) {
+        if (out.kind == UlanziChordDecoder::Event::Kind::Tune)
+            emit tuneSteps(out.tuneSteps);
+        else
+            emit buttonEvent(out.signature, out.action);
     }
 }
 

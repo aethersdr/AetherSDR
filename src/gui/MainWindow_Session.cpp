@@ -363,7 +363,7 @@ void MainWindow::wireDiscovery()
             reconnectDialog->close();
             reconnectDialog->deleteLater();
         }
-        m_connPanel->show();
+        showConnectionDialog();
     });
     connect(&m_smartLink, &SmartLinkClient::serverConnected,
             this, [this] {
@@ -1353,7 +1353,7 @@ void MainWindow::wirePanLifecycle()
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->wfStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    if (sw->wfAutoBlack() && sw->wfAutoBlackRadioSide()) {
+                    if (sw->wfAutoBlack() && sw->effectiveWfAutoBlackRadioSide()) {
                         // Feed the radio's per-tile auto-black level straight to
                         // the renderer only when the user selected radio-side
                         // auto-black (radio-authoritative low/black point).
@@ -1377,7 +1377,8 @@ void MainWindow::wirePanLifecycle()
             m_radioModel.setWaterfallColorGain(sw->wfColorGain());
             m_radioModel.setWaterfallBlackLevel(sw->wfBlackLevel());
             m_radioModel.setWaterfallAutoBlack(sw->wfAutoBlack());
-            m_radioModel.setWaterfallAutoBlackSource(sw->wfAutoBlackRadioSide());
+            m_radioModel.setWaterfallAutoBlackSource(
+                sw->effectiveWfAutoBlackRadioSide());
             // Restore saved WNB and RF gain
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
@@ -1471,7 +1472,7 @@ void MainWindow::wirePanLifecycle()
                 menu->setRadioCapabilities(m_radioModel.capabilities());
                 menu->setDeclaredBands(m_radioModel.declaredBands());
                 applyTuningRangeToOverlayMenu(menu);
-                applyRadioSideDspToOverlayMenu(menu);
+                applyRadioSideDspToPanDisplay(sw);
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 // Re-push authoritative geometry when a gesture that was

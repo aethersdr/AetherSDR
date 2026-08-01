@@ -241,11 +241,139 @@ int main(int argc, char** argv)
           "observe-only mode blocks tci send");
     automation.setReadOnly(false);
 
-    response = bridge.request(QByteArrayLiteral("tci stop abrupt"));
+    // ── Two WSJT-X instances on two receivers (#4547) ──────────────────
+    // The shape the routing fix exists for: each instance declares its own
+    // receiver in audio_start, which is the only per-client signal the TCI wire
+    // carries. The single-sim spelling above kept working unchanged, which is
+    // the compatibility half of this.
+    response = bridge.request(
+        QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+        + QByteArrayLiteral(" @b rx=1"));
     check(response.value(QStringLiteral("ok")).toBool()
-              && response.value(QStringLiteral("abrupt")).toBool(),
-          "tci stop abrupt tears down the simulator");
+              && response.value(QStringLiteral("client")).toString()
+                  == QStringLiteral("b")
+              && response.value(QStringLiteral("receiver")).toInt() == 1,
+          "a second simulated client starts on its own receiver");
 
+    check(spinUntil([&fakeTci] { return fakeTci.hasPendingConnections(); }),
+          "the second simulator connects to the fake TCI server");
+    QWebSocket* peerB = fakeTci.nextPendingConnection();
+    check(peerB != nullptr, "fake TCI server accepts the second connection");
+
+    QStringList framesB;
+    if (peerB) {
+        QObject::connect(peerB, &QWebSocket::textMessageReceived,
+                         [&framesB](const QString& text) {
+            framesB.append(text);
+        });
+        peerB->sendTextMessage(QStringLiteral(
+            "protocol:ExpertSDR3,2.0;channels_count:2;ready;"));
+        check(spinUntil([&framesB] {
+            return framesB.contains(QStringLiteral("audio_start:1;"));
+        }), "the second client declares receiver 1, not receiver 0");
+    }
+
+    // Starting the same id twice must be refused rather than silently leaking a
+    // socket — the failure mode that made the old single-sim guard necessary.
+    check(!bridge.request(
+              QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+              + QByteArrayLiteral(" @b")).value(QStringLiteral("ok")).toBool(),
+          "starting a duplicate client id is refused");
+
+    // `tci send @b` must reach B's socket and only B's.
+    const int framesABefore = clientFrames.size();
+    response = bridge.request(
+        QByteArrayLiteral("tci send @b trx:0,true,tci"));
+    check(response.value(QStringLiteral("ok")).toBool()
+              && response.value(QStringLiteral("client")).toString()
+                  == QStringLiteral("b"),
+          "tci send @b addresses the named client");
+    check(spinUntil([&framesB] {
+        return framesB.contains(QStringLiteral("trx:0,true,tci;"));
+    }), "the keyed command reaches the second client's socket");
+    check(clientFrames.size() == framesABefore,
+          "the first client's socket sees none of it");
+
+    // The transcript has to stay readable with two clients interleaved.
+    const QJsonArray twoClientEntries = bridge.request(
+        QByteArrayLiteral("tci trace status 200"))
+        .value(QStringLiteral("entries")).toArray();
+    bool sawA = false;
+    bool sawB = false;
+    for (const QJsonValue& v : twoClientEntries) {
+        const QString who = v.toObject().value(QStringLiteral("client")).toString();
+        if (who == QStringLiteral("a")) sawA = true;
+        if (who == QStringLiteral("b")) sawB = true;
+    }
+    check(sawA && sawB, "the trace attributes each frame to its client");
+
+    const QJsonObject bothStatus = bridge.request(QByteArrayLiteral("tci status"));
+    check(bothStatus.value(QStringLiteral("clientCount")).toInt() == 2,
+          "tci status reports both clients");
+
+    // Abrupt teardown of one named client leaves the other running — the reap
+    // path is per-socket, so a shared teardown would have been invisible here.
+    response = bridge.request(QByteArrayLiteral("tci stop @a abrupt"));
+    check(response.value(QStringLiteral("ok")).toBool()
+              && response.value(QStringLiteral("abrupt")).toBool()
+              && response.value(QStringLiteral("running")).toBool(),
+          "tci stop @a abrupt tears down only that client");
+
+    response = bridge.request(QByteArrayLiteral("tci stop all"));
+    check(response.value(QStringLiteral("ok")).toBool()
+              && response.value(QStringLiteral("stopped")).toArray().size() == 1
+              && !response.value(QStringLiteral("running")).toBool(),
+          "tci stop all tears down the remaining simulated client");
+
+    // ── Restart after a server-side close (#4017, regressed by the id list) ──
+    // The disconnected lambda reaps the socket but the client entry survives so
+    // `tci status` can still report closeReason. Keying "already running" off
+    // the id alone therefore refused every restart after the radio or server
+    // dropped the connection — the exact failure #4017 fixed. The start path
+    // must recycle a slot whose socket is gone.
+    response = bridge.request(
+        QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+        + QByteArrayLiteral(" @c"));
+    check(response.value(QStringLiteral("ok")).toBool(),
+          "a client starts for the server-close restart check");
+    check(spinUntil([&fakeTci] { return fakeTci.hasPendingConnections(); }),
+          "it connects to the fake TCI server");
+    QWebSocket* peerC = fakeTci.nextPendingConnection();
+    check(spinUntil([&bridge] {
+        return bridge.request(QByteArrayLiteral("tci status @c"))
+            .value(QStringLiteral("connected")).toBool();
+    }), "it reports connected before the server closes it");
+
+    if (peerC) peerC->close();          // server-side close, not `tci stop`
+    check(spinUntil([&bridge] {
+        return !bridge.request(QByteArrayLiteral("tci status @c"))
+            .value(QStringLiteral("connected")).toBool();
+    }), "the simulator observes the server-side close");
+    check(bridge.request(QByteArrayLiteral("tci status @c"))
+              .value(QStringLiteral("closeReason")).toString()
+              == QStringLiteral("server closed"),
+          "the reaped client keeps its closeReason for diagnosis");
+
+    response = bridge.request(
+        QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+        + QByteArrayLiteral(" @c"));
+    check(response.value(QStringLiteral("ok")).toBool(),
+          "the same id restarts after a server-side close, not 'already running'");
+    check(spinUntil([&fakeTci] { return fakeTci.hasPendingConnections(); }),
+          "the restarted client reconnects");
+    QWebSocket* peerC2 = fakeTci.nextPendingConnection();
+
+    // A LIVE client with the same id is still refused — recycling the dead slot
+    // must not become a way to leak a second socket under one name.
+    check(!bridge.request(
+              QByteArray("tci start ") + QByteArray::number(fakeTci.serverPort())
+              + QByteArrayLiteral(" @c")).value(QStringLiteral("ok")).toBool(),
+          "a live client with the same id is still refused");
+    bridge.request(QByteArrayLiteral("tci stop all"));
+
+    if (peerC) peerC->deleteLater();
+    if (peerC2) peerC2->deleteLater();
+    if (peerB) peerB->deleteLater();
     peer->deleteLater();
     fakeTci.close();
     automation.stop();

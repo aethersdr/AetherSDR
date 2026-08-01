@@ -351,7 +351,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`dss <action>`](#dss) | Inject/read 3D stacked-trace + waterfall scrollback state. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
-| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator plus ordered protocol and route diagnostics. |
+| **DAX / TCI** | [`tci start\|status\|stop\|send\|trace\|routes`](#tci) | TCI client simulator (multi-client via `@id` / `rx=N`) plus ordered protocol and route diagnostics. |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -1078,6 +1078,48 @@ belongs to another client` when another client owns it (Multi-Flex). To
 recenter the *pan* (band change) rather than move the slice within it, use
 [`pan center`](#pan).
 
+**The value is MHz.** Passing Hz is refused rather than converted:
+
+```json
+→ {"cmd":"tune","value":"14200000"}
+← {"ok":false,"error":"tune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)"}
+```
+
+The threshold is 105000 (ten times the top of the band table), so any value a
+transverter could plausibly need still passes. It is deliberately not
+auto-corrected: `14200000` would have to mean 14.2 MHz here and something else
+in every other frequency verb.
+
+Four refusals guard the value, and the wording differs on purpose. The same
+four — same thresholds, one shared helper, the verb's own name in the message
+— also guard [`targettune`](#targettune) and [`pan center`](#pan):
+
+| input | reply |
+|---|---|
+| `> 300000` | `tune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)` |
+| `> 105000`, `<= 300000` | `tune takes MHz — got 122250, above the 105000 MHz ceiling. If that was Hz, resend as 0.122250; if it is a millimetre-wave frequency in MHz, it is beyond what AetherSDR can tune` |
+| `< 0.001` | `tune requires at least 0.001 MHz — got 1e-300` |
+| `nan`, `inf`, `-inf`, `0`, negatives, unparseable | `tune requires a positive finite frequency in MHz` |
+
+The second row exists because that window is genuinely ambiguous — an Hz
+mistake, or a real millimetre-wave allocation (122.25 / 134 / 241 GHz) entered
+correctly in MHz — so the reply offers both readings rather than asserting a
+conversion. `nan` and `inf` get their own row because `"nan"` parses as a number
+and fails every range comparison, so it would otherwise pass the guard entirely.
+
+**kHz-for-MHz is accepted**, not refused: `tune 14200` is indistinguishable from
+a 14.2 GHz transverter request, which is inside the headroom the ceiling exists
+to protect. It reaches the radio and, if 14.2 GHz is out of range, becomes the
+same silent no-op described below — so a client that might send kHz should
+verify with [`get slices`](#get).
+
+Note `ok:true` is an **acknowledgement, not a confirmation** — `tune` echoes the
+frequency you asked for. The slice model records a tune optimistically and the
+radio's own value arrives asynchronously afterwards, so a request the radio
+rejects or clamps still returns `ok:true` with the requested value echoed back.
+Read the frequency back with [`get slices`](#get) if you need to know where the
+radio actually landed.
+
 ### `targettune`
 Tune through the same absolute-target policy used by typed frequency entry and
 other commanded jumps. Unlike `tune`, this can preselect a different band stack
@@ -1089,6 +1131,18 @@ sweep guards.
 → {"cmd":"targettune","value":"146.520"}
 ← {"ok":true,"targetTune":146.52,"sliceId":0,"letter":"A"}
 ```
+
+**The value is MHz.** The [four refusals listed under `tune`](#tune) apply here
+unchanged — same thresholds, same shared helper, `targettune` in the message:
+
+```json
+→ {"cmd":"targettune","value":"14200000"}
+← {"ok":false,"error":"targettune takes MHz, not Hz — got 14200000 (did you mean 14.200000?)"}
+```
+
+`ok:true` carries the same caveat as `tune`: it is an acknowledgement that the
+request was accepted and dispatched, not a confirmation that the radio landed
+there. Read the frequency back with [`get slices`](#get) if you need to know.
 
 ### `memory`
 Recall a radio memory through `MainWindow::activateMemorySpot()`, including its
@@ -1593,7 +1647,7 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 | `action` | `value` | effect |
 |---|---|---|
 | `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
-| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). **MHz, not Hz**: the [four refusals listed under `tune`](#tune) apply here too, with `pan center` in the message. It matters more on this verb — `setPanCenter()` clamps only the low edge, so an unguarded out-of-range centre is stored and advertised over TCI (`dds:`) even though the radio rejects it. |
 | `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
 
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
@@ -2096,6 +2150,42 @@ tci trace export /tmp/tci-trace.json
 tci routes
 ```
 
+### Multiple simulated clients
+
+Several simulators can run at once, so a test can stand up the two-WSJT-X
+shape #4547 is about: two instances, one per slice, each declaring its own
+receiver. `@id` names a client and `rx=N` sets the receiver it declares in
+`audio_start` (and `iq_start` on the `sdc` profile). Both are optional —
+every single-client spelling above behaves exactly as before, under the
+default id `a`.
+
+```text
+tci start @a rx=0            # WSJT-X instance on receiver 0
+tci start @b rx=1            # WSJT-X instance on receiver 1
+tci send @b trx:0,true,tci   # key from B — B's declared receiver decides the slice
+tci status                   # clientCount + a per-client array
+tci status @b                # one client
+tci stop @a abrupt           # tear down one; the other keeps running
+tci stop all                 # tear down every client
+```
+
+`@id` must be 1–32 alphanumerics (`-` and `_` allowed) and must be unique
+among running clients; starting a duplicate is refused rather than leaking a
+socket. TCI commands never begin with `@`, so the prefix cannot collide with
+a payload. Trace entries carry a `client` field, so a two-client transcript
+stays readable.
+
+The receiver each client declares is not cosmetic: it is the only per-client
+signal the TCI wire carries, and it is what decides which slice that client's
+PTT keys (see [TCI Receiver Index Policy](architecture/tci-receivers.md)).
+Every WSJT-X instance addresses `trx:0` regardless, so a two-client test that
+does not set distinct `rx=` values is not testing routing at all.
+
+**A two-slice radio is required to exercise this end to end.** The demo
+(`SimBackend`) advertises a single slice, so it can host two TCI clients but
+cannot show them keying different slices; that half needs real hardware or a
+multi-slice backend.
+
 `send` writes one raw client WebSocket frame, adding a final semicolon when
 needed. Embedded CR/LF and commands over 4096 characters are rejected.
 `trace start` resets sequence numbering and captures every semicolon-delimited
@@ -2362,6 +2452,36 @@ Not a transmit action — no gate.
 
 `start` / `stop` / `status` (default) / `path` / `dir <path>` (set the output
 directory).
+
+**`start` can be refused** (#4629), and no file is created at all when it is.
+Always check `ok` rather than assuming a start succeeded; a refusal carries a
+machine-readable `reason` and a human `detail`, and reports `path` as empty.
+
+`reason: "pc-audio-disabled"` — Client-Side recording captures the RX audio
+stream that PC Audio creates, so with `PcAudioEnabled=False` there is nothing to
+record:
+
+```json
+→ {"cmd":"record","action":"start"}
+← {"ok":false,"record":"start","recording":false,"path":"",
+   "reason":"pc-audio-disabled",
+   "detail":"Client-Side recording requires PC Audio; no RX audio stream exists."}
+```
+
+`reason: "recording-mode-is-radio"` — `RecordingMode` is `Radio`, so the radio
+is the recorder and this verb has nothing local to drive:
+
+```json
+← {"ok":false,"record":"start","recording":false,"path":"",
+   "reason":"recording-mode-is-radio",
+   "detail":"RecordingMode is Radio, so the radio records and no local file is written. Set RecordingMode=Client to drive the client-side recorder."}
+```
+
+This verb **refuses rather than redirecting**. It is documented as driving the
+client-side recorder and returning the path of a local WAV, so silently issuing
+`slice set <n> record=1` instead would be a radio state change from a call that
+promised a local file — and a harness waiting for that file would get a success
+it cannot use. Set `RecordingMode=Client` if you want a local recording.
 
 ### `station`
 Set this GUI client's **MultiFlex station name** (FlexLib `SetClientStationName`)
@@ -2699,7 +2819,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
-| `tci` | — | tci start\|status\|stop\|send\|trace\|routes — TCI simulator and protocol diagnostics |
+| `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |
 | `audioCapture` | — | audioCapture <start\|stop\|status\|read\|probeNr2Stereo\|probeDspStereo> [args] |
 | `txwaterfall` | — | txwaterfall <on\|off> — show keyed TX in the waterfall |
 | `key` | — | key <ptt on\|off \| mox> — semantic keying (TX-gated) |

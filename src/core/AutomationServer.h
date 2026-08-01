@@ -531,8 +531,32 @@ private:
     QJsonObject recordMemorySample();
     QJsonObject doTci(const QString& action, const QString& value);
 #ifdef HAVE_WEBSOCKETS
-    void appendTciTrace(const QString& direction, const QString& text);
-    void sendTciSimText(const QString& text);
+    // One simulated client. Multiple can run at once so an agent can stand up
+    // the two-WSJT-X shape (#4547): each instance declares its own receiver in
+    // audio_start, which is the only per-client signal the TCI wire carries and
+    // therefore what decides which slice its PTT keys.
+    struct TciSimClient {
+        QWebSocket* socket{nullptr};
+        QString id;
+        QString profile{QStringLiteral("wsjtx")};
+        int     receiver{0};        // audio_start:<receiver> / iq_start:<receiver>
+        bool    ready{false};
+        bool    audioStarted{false};
+        bool    iqStarted{false};
+        qint64  binaryFrames{0};
+        qint64  iqFrames{0};
+        qint64  binaryBytes{0};
+        qint64  textMsgs{0};
+        qint64  lastFrameMs{-1};
+        QString closeReason;
+        QElapsedTimer timer;
+    };
+    void appendTciTrace(const QString& direction, const QString& client,
+                        const QString& text);
+    void sendTciSimText(TciSimClient* sim, const QString& text);
+    TciSimClient* tciSimById(const QString& id) const;
+    void tciSimTeardown(TciSimClient* sim, bool abrupt);
+    QJsonObject tciSimStatus(const TciSimClient* sim) const;
     QJsonObject tciTraceSnapshot(int limit = 100) const;
 #endif
     QJsonObject doAudioCapture(const QString& action,
@@ -708,22 +732,14 @@ private:
     // audio profile or an SDC IQ-skimmer profile so agents can exercise both
     // TCI/DAX lifecycles — including abrupt-disconnect reaping — without an
     // external WebSocket client.
-    QWebSocket* m_tciSim{nullptr};
-    bool    m_tciSimReady{false};
-    bool    m_tciSimAudioStarted{false};
-    bool    m_tciSimIqStarted{false};
-    qint64  m_tciSimBinaryFrames{0};
-    qint64  m_tciSimIqFrames{0};
-    qint64  m_tciSimBinaryBytes{0};
-    qint64  m_tciSimTextMsgs{0};
-    qint64  m_tciSimLastFrameMs{-1};
-    QString m_tciSimProfile{QStringLiteral("wsjtx")};
-    QString m_tciSimCloseReason;
-    QElapsedTimer m_tciSimTimer;
+    // Insertion-ordered so `tci status` lists clients the way they were started.
+    QList<TciSimClient*> m_tciSims;
+    static constexpr const char* kTciSimDefaultId = "a";
     struct TciTraceEntry {
         quint64 seq{0};
         qint64 elapsedMs{0};
         QString direction;
+        QString client;     // which simulated client, so a 2-client transcript reads
         QString text;
     };
     std::deque<TciTraceEntry> m_tciTrace;

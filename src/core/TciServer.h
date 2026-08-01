@@ -3,6 +3,7 @@
 
 #include "TciProtocol.h"
 #include "TciRoutingState.h"
+#include "TciTrxMap.h"
 
 #include <QObject>
 #include <QPointer>
@@ -178,7 +179,19 @@ private:
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
     SliceModel* sliceForTrx(int trx) const;
+    // No first-slice fallback — for paths that key the radio (#4547).
+    SliceModel* sliceForTrxStrict(int trx) const;
+    // The receiver a client is actually operating: its declared audio_start
+    // receiver when it has one, else the trx it put on the wire (#4547).
+    int effectiveTrx(QWebSocket* client, int requestedTrx) const;
     QVector<TciSliceEndpoint> routingEndpoints() const;
+    // Diagnostics helpers for the PTT routing decision log.
+    static const char* txRouteOwnerName(TciRoutingState::TxRouteOwner owner);
+    // "<sliceId>(trx<n>)", "<sliceId>(gone)" for a slice that is no longer
+    // live, "none" for a negative id. The wire speaks trx and the router
+    // speaks slice ids; the log has to state both or it cannot be read
+    // against a client transcript.
+    QString sliceTag(int sliceId) const;
     void handleVfoRequest(QWebSocket* client, const TciProtocol::VfoRequest& request);
     void handleSplitRequest(QWebSocket* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request);
@@ -268,6 +281,10 @@ private:
     QMap<int, int>     m_channelTrx;            // DAX channel → last-resolved TCI TRX (routing cache, #3669)
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
+    // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,
+    // released 500 ms after a genuine slice close (recreates reclaim their
+    // number), cleared on disconnect. Injected into every TciProtocol.
+    TciTrxMap m_trxMap;
     struct PendingVfoBCreate
     {
         QPointer<QWebSocket> client;

@@ -47,7 +47,33 @@ QJsonValue redactJsonValue(const QJsonValue& value)
     return value;
 }
 
+bool valueContainsSecretField(const QJsonValue& value)
+{
+    if (value.isObject()) {
+        return containsSecretField(value.toObject());
+    }
+    if (value.isArray()) {
+        const QJsonArray in = value.toArray();
+        for (const QJsonValue& element : in) {
+            if (valueContainsSecretField(element)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 } // namespace
+
+bool containsSecretField(const QJsonObject& doc)
+{
+    for (auto it = doc.constBegin(); it != doc.constEnd(); ++it) {
+        if (isSecretKey(it.key()) || valueContainsSecretField(it.value())) {
+            return true;
+        }
+    }
+    return false;
+}
 
 bool isSecretKey(const QString& key)
 {

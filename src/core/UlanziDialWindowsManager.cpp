@@ -3,28 +3,12 @@
 
 #include "UlanziDialWindowsManager.h"
 #include "core/LogManager.h"
+#include "core/UlanziChordDecoder.h"
 
 #include <QDebug>
 #include <QTimer>
 
 #include <hidapi/hidapi.h>
-
-// Linux keycode numeric values (mirrored here so we don't need Linux
-// headers).  The signature emitted is the canonical Linux-keycode-name
-// string, so the dispatcher in MainWindow and the kPillSpecs table see
-// the same strings regardless of host platform.
-#define KEY_PLAYPAUSE    164
-#define KEY_MUTE         113
-#define KEY_PREVIOUSSONG 165
-#define KEY_NEXTSONG     163
-#define KEY_VOLUMEUP     115
-#define KEY_VOLUMEDOWN   114
-#define KEY_LEFTCTRL     29
-#define KEY_RIGHTCTRL    97
-#define KEY_V            47
-#define KEY_C            46
-#define KEY_Y            21
-#define KEY_Z            44
 
 namespace AetherSDR {
 
@@ -36,12 +20,12 @@ namespace {
 int hidConsumerToLinuxKey(unsigned short consumerUsage)
 {
     switch (consumerUsage) {
-        case 0xCD: return KEY_PLAYPAUSE;
-        case 0xE2: return KEY_MUTE;
-        case 0xB5: return KEY_NEXTSONG;
-        case 0xB6: return KEY_PREVIOUSSONG;
-        case 0xE9: return KEY_VOLUMEUP;
-        case 0xEA: return KEY_VOLUMEDOWN;
+        case 0xCD: return UlanziKey::PlayPause;
+        case 0xE2: return UlanziKey::Mute;
+        case 0xB5: return UlanziKey::NextSong;
+        case 0xB6: return UlanziKey::PreviousSong;
+        case 0xE9: return UlanziKey::VolumeUp;
+        case 0xEA: return UlanziKey::VolumeDown;
         default:   return -1;
     }
 }
@@ -49,40 +33,14 @@ int hidConsumerToLinuxKey(unsigned short consumerUsage)
 int hidKbdToLinuxKey(unsigned char keycode)
 {
     switch (keycode) {
-        case 0x06: return KEY_C;   // HID Keyboard page 0x06 = C
-        case 0x19: return KEY_V;   // 0x19 = V
-        case 0x1C: return KEY_Y;   // 0x1C = Y
-        case 0x1D: return KEY_Z;   // 0x1D = Z
-        case 0xE0: return KEY_LEFTCTRL;
-        case 0xE4: return KEY_RIGHTCTRL;
+        case 0x06: return UlanziKey::C;   // HID Keyboard page 0x06 = C
+        case 0x19: return UlanziKey::V;   // 0x19 = V
+        case 0x1C: return UlanziKey::Y;   // 0x1C = Y
+        case 0x1D: return UlanziKey::Z;   // 0x1D = Z
+        case 0xE0: return UlanziKey::LeftCtrl;
+        case 0xE4: return UlanziKey::RightCtrl;
         default:   return -1;
     }
-}
-
-QString bareKeySignature(int keycode)
-{
-    switch (keycode) {
-        case KEY_PLAYPAUSE:    return QStringLiteral("KEY_PLAYPAUSE");
-        case KEY_MUTE:         return QStringLiteral("KEY_MUTE");
-        case KEY_PREVIOUSSONG: return QStringLiteral("KEY_PREVIOUSSONG");
-        case KEY_NEXTSONG:     return QStringLiteral("KEY_NEXTSONG");
-        default:               return QStringLiteral("KEY_%1").arg(keycode);
-    }
-}
-
-QString chordSignature(int keycode, bool withPreviousSong)
-{
-    QString letter;
-    switch (keycode) {
-        case KEY_V: letter = QStringLiteral("V"); break;
-        case KEY_C: letter = QStringLiteral("C"); break;
-        case KEY_Y: letter = QStringLiteral("Y"); break;
-        case KEY_Z: letter = QStringLiteral("Z"); break;
-        default:    letter = QStringLiteral("KEY_%1").arg(keycode); break;
-    }
-    if (withPreviousSong)
-        return QStringLiteral("Ctrl+%1+KEY_PREVIOUSSONG").arg(letter);
-    return QStringLiteral("Ctrl+%1").arg(letter);
 }
 
 constexpr const wchar_t* kProductMatch = L"Ulanzi Dial";
@@ -162,9 +120,7 @@ void UlanziDialWindowsManager::closeAll()
         m_deviceName.clear();
         emit connectionChanged(false, name);
     }
-    m_ctrlDown = false;
-    m_lastNonModKey = -1;
-    m_prevsongAlongsideCtrl = false;
+    m_decoder.reset();
 }
 
 void UlanziDialWindowsManager::hotplugCheck()
@@ -226,7 +182,7 @@ void UlanziDialWindowsManager::handleReport(OpenDevice& dev,
         const bool nowCtrl  = (mod      & 0x01) || (mod      & 0x10);
         const bool prevCtrl = (prevMod & 0x01) || (prevMod & 0x10);
         if (nowCtrl != prevCtrl)
-            emitKeyTransition(KEY_LEFTCTRL, nowCtrl ? 1 : 0);
+            emitKeyTransition(UlanziKey::LeftCtrl, nowCtrl ? 1 : 0);
         // Pressed-keys diff: keys 2..7.
         auto contains = [](const QVector<unsigned char>& r, unsigned char k) -> bool {
             for (int i = 2; i < r.size() && i < 8; ++i)
@@ -261,39 +217,11 @@ void UlanziDialWindowsManager::handleReport(OpenDevice& dev,
 
 void UlanziDialWindowsManager::emitKeyTransition(int linuxKey, int value)
 {
-    if (linuxKey == KEY_VOLUMEUP) {
-        if (value == 1) emit tuneSteps(+1);
-        return;
-    }
-    if (linuxKey == KEY_VOLUMEDOWN) {
-        if (value == 1) emit tuneSteps(-1);
-        return;
-    }
-    if (linuxKey == KEY_LEFTCTRL || linuxKey == KEY_RIGHTCTRL) {
-        m_ctrlDown = (value != 0);
-        if (!m_ctrlDown) { m_lastNonModKey = -1; m_prevsongAlongsideCtrl = false; }
-        return;
-    }
-    if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 1) {
-        m_prevsongAlongsideCtrl = true;
-        return;
-    }
-    if (linuxKey == KEY_PREVIOUSSONG && m_ctrlDown && value == 0) {
-        return; // chord-window release; handled when Ctrl + non-mod release
-    }
-    if (!m_ctrlDown) {
-        if (value == 1 || value == 0)
-            emit buttonEvent(bareKeySignature(linuxKey), value);
-        return;
-    }
-    // Chord window.
-    if (value == 1) {
-        m_lastNonModKey = linuxKey;
-        emit buttonEvent(chordSignature(linuxKey, m_prevsongAlongsideCtrl), 1);
-    } else if (value == 0 && linuxKey == m_lastNonModKey) {
-        emit buttonEvent(chordSignature(linuxKey, m_prevsongAlongsideCtrl), 0);
-        m_lastNonModKey = -1;
-        m_prevsongAlongsideCtrl = false;
+    for (const auto& out : m_decoder.feed(linuxKey, value)) {
+        if (out.kind == UlanziChordDecoder::Event::Kind::Tune)
+            emit tuneSteps(out.tuneSteps);
+        else
+            emit buttonEvent(out.signature, out.action);
     }
 }
 

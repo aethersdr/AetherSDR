@@ -205,21 +205,26 @@ void PanadapterModel::setAntList(const QStringList& ants)
     }
 }
 
-void PanadapterModel::setWaterfallLineDuration(int ms)
+void PanadapterModel::setWaterfallLineDuration(int rate)
 {
+    // `rate` is the 1..100 waterfall RATE, low slow / high fast — the method and
+    // field keep Flex's `line_duration` wire name because that is what arrives
+    // on the wire, but the VALUE is not milliseconds. See core/WaterfallRate.h.
+    // (#4606)
+    //
     // PerfTelemetry is fed every report (even when unchanged), and
     // waterfallLineDurationReported likewise always fires; the change-gated
     // signal is waterfallLineDurationChanged. Semantics preserved verbatim from
     // the old applyWaterfallStatus.
-    PerfTelemetry::instance().setWaterfallLineDurationMs(ms);
-    if (ms != m_waterfallLineDuration) {
-        m_waterfallLineDuration = ms;
+    PerfTelemetry::instance().setWaterfallRate(rate);
+    if (rate != m_waterfallLineDuration) {
+        m_waterfallLineDuration = rate;
         emit waterfallLineDurationChanged(m_waterfallLineDuration);
     }
-    emit waterfallLineDurationReported(ms);
+    emit waterfallLineDurationReported(rate);
 }
 
-void PanadapterModel::setDisplayRates(int fps, int wfLineDurationMs)
+void PanadapterModel::setDisplayRates(int fps, int wfRate)
 {
     // fps reuses the same reported/changed pair the Flex status path emits, so
     // the widget's existing wiring picks it up with no special case.
@@ -230,8 +235,8 @@ void PanadapterModel::setDisplayRates(int fps, int wfLineDurationMs)
         }
         emit fpsReported(fps);
     }
-    if (wfLineDurationMs > 0) {
-        setWaterfallLineDuration(wfLineDurationMs);
+    if (wfRate > 0) {
+        setWaterfallLineDuration(wfRate);
     }
 }
 

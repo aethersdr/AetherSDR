@@ -1,5 +1,7 @@
 #pragma once
 
+#include "QsoRecordStartPolicy.h"
+
 #include <QAudio>
 #include <QAudioDevice>
 #include <QBuffer>
@@ -11,7 +13,9 @@
 #include <QString>
 #include <QTimer>
 #include <atomic>
+#include <functional>
 #include <mutex>
+#include <optional>
 
 class QAudioSink;
 
@@ -38,6 +42,11 @@ class TransmitModel;
 // Recording triggers:
 //   - Auto: starts when MOX goes true (first TX), stops after idle timeout
 //   - Manual: startRecording() / stopRecording()
+//
+// A start can be REFUSED — see QsoRecordStartPolicy.h. startRecording() then
+// emits recordingBlocked() and creates no file at all. Callers must not assume
+// a start succeeded; check isRecording() (this class lives below the UI seam
+// and cannot show a dialog itself, so the GUI owns the operator-facing message).
 //
 // Output: 24 kHz stereo int16 WAV (matches AudioEngine native format).
 
@@ -82,6 +91,24 @@ public:
     bool isPlaying() const { return m_playing; }
     bool hasLastRecording() const { return !m_lastRecordingPath.isEmpty(); }
 
+    // Answers "does the connected backend demodulate in-process?"
+    // (IRadioBackend::ownsRxAudio) for the start policy. A CALLBACK, not a
+    // cached bool, deliberately: it is read fresh on every start, so a backend
+    // swap cannot leave a stale flag behind — and a stale flag failing open is
+    // the exact shape of #4629. Unset (the default) reads as false, which is
+    // right for a Flex and for no radio at all.
+    void setBackendOwnsRxAudioProvider(std::function<bool()> provider)
+    {
+        m_backendOwnsRxAudio = std::move(provider);
+    }
+
+    // Would startRecording() be allowed right now? Reads the same live settings
+    // and the same provider startRecording() does, so callers that want to ask
+    // BEFORE committing to a UI state change (the automation bridge, wanting a
+    // reason for its reply) get exactly the answer the guard will give. No
+    // side effects.
+    RecordStartDecision evaluateStart() const;
+
     // Path of the in-progress recording (while recording) else the last
     // finalized one; empty if neither. Used by the automation bridge to locate
     // the WAV for capture-file verification.
@@ -117,6 +144,11 @@ signals:
     void recordingStarted(const QString& filePath);
     void recordingStopped(const QString& filePath, int durationSecs);
     void recordingError(const QString& error);
+    // A start was refused before any file was created (#4629). Carries the
+    // REASON, not prose: the operator-facing wording (and its tr()) belongs to
+    // the GUI, and src/core must not depend on QtWidgets — see
+    // .github/workflows/engine-boundary.yml EB1/EB2.
+    void recordingBlocked(AetherSDR::RecordStartDecision reason);
     void playbackStarted();
     void playbackStopped();
     void muteRxRequested(bool mute);  // mute live RX during playback
@@ -125,8 +157,25 @@ private slots:
     void onPlaybackSinkState(QAudio::State state);
 
 private:
+    // Whether finalizeFile() may raise the zero-capture diagnostic. Silent is
+    // for the destructor — see the comment there.
+    enum class FinalizeReport { Diagnose, Silent };
+
+    // Who asked. A refusal is reported EVERY time for a deliberate act (the
+    // operator pressed record and is owed an answer), but only on the first of
+    // a repeating run for auto-record — which retries on every MOX rising edge
+    // and would otherwise raise one notification per key-down for as long as
+    // the condition lasts.
+    enum class StartTrigger { Manual, Auto };
+    void beginRecording(StartTrigger trigger);
+
+    // Last refusal already reported for an auto-record attempt; cleared when a
+    // recording actually starts or the decision changes, so a genuinely new
+    // problem is never swallowed.
+    std::optional<RecordStartDecision> m_lastAutoBlocked;
+
     void startFile();
-    void finalizeFile();
+    void finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
     QString buildFilename() const;
     static QString sanitizeForPath(const QString& s);
     void writeWavHeader();
@@ -171,6 +220,10 @@ private:
     // Thread safety for audio feed paths
     mutable std::mutex  m_writeMutex;
 
+    // See setBackendOwnsRxAudioProvider(). Null until MainWindow installs it,
+    // and null reads as false — the Flex answer, and the safe one.
+    std::function<bool()> m_backendOwnsRxAudio;
+
     // WAV format constants (matching AudioEngine native format)
     static constexpr int SAMPLE_RATE = 24000;
     static constexpr int NUM_CHANNELS = 2;
@@ -179,3 +232,10 @@ private:
 };
 
 } // namespace AetherSDR
+
+// recordingBlocked carries this by value. Every connection today is direct
+// (same thread), which needs no registration — but a queued or cross-thread
+// connection would fail at RUNTIME with an unregistered type, which is a poor
+// way to find out. Declared here rather than in QsoRecordStartPolicy.h so that
+// header stays free of Qt entirely and its unit test can link without it.
+Q_DECLARE_METATYPE(AetherSDR::RecordStartDecision)

@@ -233,6 +233,64 @@ void testCwKeysDecodableMorse()
            text.contains(QStringLiteral("L L L")));
 }
 
+// #4618: the CW tone must be a phase ACCUMULATOR, not sin(2π·hz·t_absolute).
+// With absolute-time synthesis, a live pitch change (setKnob "hz" reaches the
+// mixer via SimBackend's passthrough, and the Demo applet ships that slider)
+// teleports the phase by 2π·Δhz·t — a hard click mid-element that the 5 ms
+// raised-cosine key edges cannot mask.
+//
+// BOTH halves below are load-bearing. Continuity alone is also satisfied by a
+// genCw that ignores c.hz outright — a constant dphi is perfectly smooth — so
+// the frequency half is what pins the knob to the oscillator. Dropping either
+// one lets a broken generator through green.
+void testCwPitchChangeSlidesWithoutClick()
+{
+    // ---- half 1: no phase jump across repeated pitch flips ------------------
+    NoiseMixer mx;
+    mx.setEnabled(Channel::Cw, true);
+
+    // ~5 s, flipping the pitch every 10 frames (64 ms). The "L" id schedule
+    // keys roughly half the time, so dozens of flips land mid-element.
+    QVector<float> audio;
+    for (int f = 0; f < 940; ++f) {
+        if (f % 10 == 0)
+            mx.setKnob(Channel::Cw, QStringLiteral("hz"), (f % 20 == 0) ? 550.0 : 650.0);
+        audio += mx.mixFrame();
+    }
+
+    float amp = 0.0f;
+    for (float v : audio) amp = std::max(amp, std::abs(v));
+
+    // Max slope of a keyed sine at 650 Hz / 24 kHz is amp·2π·650/24000 ≈
+    // 0.17·amp; the raised-cosine key edges are far slower. A phase teleport
+    // produces steps up to 2·amp. Threshold at 0.6·amp cleanly separates them:
+    // measured 0.17·amp with the accumulator, 1.81·amp with absolute time.
+    float worst = 0.0f;
+    for (int i = 1; i < audio.size(); ++i)
+        worst = std::max(worst, std::abs(audio[i] - audio[i - 1]));
+
+    report("cw pitch change keeps the tone phase continuous",
+           amp > 0.0f && worst < 0.6f * amp);
+
+    // ---- half 2: the tone lands ON the commanded pitch ----------------------
+    // Hold each pitch for ~2.1 s and Goertzel BOTH candidates: the commanded
+    // one has to dominate. Measured ≈600x for the real generator and ≈1x for
+    // one that ignores the knob, so 20x sits far from either. The window is
+    // deliberately long — at ~2 s the two candidates are ~200 bins apart, so
+    // keying sidebands can't leak one into the other.
+    auto holdPitch = [](double hz) {
+        NoiseMixer m;
+        m.setEnabled(Channel::Cw, true);
+        m.setKnob(Channel::Cw, QStringLiteral("hz"), hz);
+        return collect(m, 400);
+    };
+    const QVector<float> at550 = holdPitch(550.0);
+    const QVector<float> at650 = holdPitch(650.0);
+    report("cw tone frequency follows the hz knob",
+           magAt(at550, 550.0) > 20.0 * magAt(at550, 650.0) &&
+           magAt(at650, 650.0) > 20.0 * magAt(at650, 550.0));
+}
+
 void testLevelScalesNoiseHeight()
 {
     auto top = [](double lvl) {
@@ -260,6 +318,7 @@ int main(int argc, char** argv)
     testNoiseBlankerKnocksDownImpulses();
     testVoiceChannelSafeWithoutClip();
     testCwKeysDecodableMorse();
+    testCwPitchChangeSlidesWithoutClick();
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES ABOVE");
     return g_failed == 0 ? 0 : 1;
 }
