@@ -10,14 +10,17 @@
 #include <QComboBox>
 #include <QFont>
 #include <QLabel>
+#include <QLayout>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSpacerItem>
 #include <QStyle>
 #include <QToolButton>
 
 #include <cstdio>
+#include <memory>
 #include <string>
 
 using namespace AetherSDR;
@@ -322,29 +325,78 @@ int main(int argc, char** argv)
     // recovers; without the second half a deliberately short window springs
     // back on every reopen.
     //
-    // Run at 150 %, because that is where the fixed 660 px opening height was
-    // short of the body — at 100 % it happens to be enough and growth would go
-    // untested.
     {
-        std::string fontDetail;
-        setScaledApplicationFont(app, originalFont, 1.5, &fontDetail);
         ConnectionPanel growPanel;
         growPanel.setFramelessMode(true);
         growPanel.show();
         QApplication::processEvents();
+
+        // Establish a height owned by fitToScreen(), then make the body's
+        // content-derived target taller by a deterministic amount that still
+        // fits the available screen. Font scaling is not a growth precondition:
+        // available fonts/styles can leave the target exactly at the nominal
+        // 660 px opening height even at 150 % (#4680).
         growPanel.fitToScreen(screen);
         QApplication::processEvents();
-        const int autoHeight = growPanel.height();
+        const int autoFitOwnedHeight = growPanel.height();
         QScrollArea* body = growPanel.findChild<QScrollArea*>(
             QStringLiteral("connectionBodyScrollArea"));
+        QWidget* bodyContent = growPanel.findChild<QWidget*>(
+            QStringLiteral("connectionBodyContent"));
+        const QMargins frameMargins = growPanel.screenFitFrameMargins();
+        const int maximumClientHeight = screen
+            ? screen->availableGeometry().height() - frameMargins.top()
+                - frameMargins.bottom()
+            : 0;
+        const int growthRoom = maximumClientHeight - autoFitOwnedHeight;
+        const int growthDelta = qMin(40, growthRoom);
+        const int rawPreferredHeight = body && bodyContent
+            ? growPanel.sizeHint().height() - body->sizeHint().height()
+                + bodyContent->sizeHint().height()
+            : 0;
+        const int spacerHeight =
+            autoFitOwnedHeight - rawPreferredHeight + growthDelta;
+        report("screen leaves room to exercise automatic growth",
+               body && bodyContent && growthDelta > 0 && spacerHeight > 0,
+               "height=" + std::to_string(autoFitOwnedHeight)
+                   + " rawPreferredHeight=" + std::to_string(rawPreferredHeight)
+                   + " maximumClientHeight=" + std::to_string(maximumClientHeight));
+        std::unique_ptr<QSpacerItem> growthSpacer;
+        if (body && bodyContent && growthDelta > 0 && spacerHeight > 0) {
+            growthSpacer = std::make_unique<QSpacerItem>(
+                0, spacerHeight, QSizePolicy::Minimum, QSizePolicy::Fixed);
+            bodyContent->layout()->addItem(growthSpacer.get());
+            bodyContent->updateGeometry();
+            growPanel.layout()->activate();
+            QApplication::processEvents();
+        }
+
+        growPanel.fitToScreen(screen);
+        QApplication::processEvents();
+        const int grownHeight = growPanel.height();
+        report("auto-sized panel grows from an auto-fit-owned height",
+               grownHeight > autoFitOwnedHeight,
+               "before=" + std::to_string(autoFitOwnedHeight)
+                   + " after=" + std::to_string(grownHeight));
         report("auto-sized panel opens without needing to scroll",
                body && body->verticalScrollBar()->maximum() == 0,
-               "height=" + std::to_string(autoHeight) + " vbarMax="
+               "height=" + std::to_string(grownHeight) + " vbarMax="
                    + std::to_string(body ? body->verticalScrollBar()->maximum() : -1));
-        report("auto-sized panel grows past the nominal opening height",
-               autoHeight > ConnectionPanel::kPreferredHeight,
-               "height=" + std::to_string(autoHeight) + " kPreferredHeight="
-                   + std::to_string(ConnectionPanel::kPreferredHeight));
+
+        // Remove the deterministic content pressure. Because the current
+        // height is one fitToScreen() chose, it may reclaim the unused room.
+        if (bodyContent && growthSpacer) {
+            bodyContent->layout()->removeItem(growthSpacer.get());
+            bodyContent->updateGeometry();
+            growPanel.layout()->activate();
+            QApplication::processEvents();
+        }
+        growPanel.fitToScreen(screen);
+        QApplication::processEvents();
+        report("a height fit-to-screen set is reclaimed toward the body",
+               growPanel.height() == autoFitOwnedHeight,
+               "height=" + std::to_string(growPanel.height())
+                   + " initialAutoHeight=" + std::to_string(autoFitOwnedHeight));
 
         // Simulate the operator dragging it short, then reopening.
         growPanel.resize(growPanel.width(), ConnectionPanel::kSafeMinimumHeight);
@@ -353,15 +405,6 @@ int main(int argc, char** argv)
         report("a height the operator chose survives a re-fit",
                growPanel.height() == ConnectionPanel::kSafeMinimumHeight,
                "height=" + std::to_string(growPanel.height()));
-
-        // A height fitToScreen() itself set is fair game to reclaim.
-        growPanel.resize(growPanel.width(), autoHeight);
-        growPanel.fitToScreen(screen);
-        QApplication::processEvents();
-        report("a height fit-to-screen set is reclaimed toward the body",
-               growPanel.height() == autoHeight,
-               "height=" + std::to_string(growPanel.height())
-                   + " autoHeight=" + std::to_string(autoHeight));
     }
 
     app.setFont(originalFont);
