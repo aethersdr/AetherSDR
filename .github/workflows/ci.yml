@@ -171,19 +171,42 @@ jobs:
   # Caching strategy:
   #   * Qt install        — handled by jurplel/install-qt-action's cache: true
   #   * FFTW3 third_party — actions/cache, keyed on the setup script + version
-  #   * MSVC object files — sccache via GitHub Actions cache backend
+  #   * MSVC object files — sccache over a LOCAL dir, persisted by actions/cache
   #
-  # The old note here claimed "cold cache ~5 min, warm cache ~2-3 min (was ~14
-  # min)". That was measured before #1963 broke the sccache pre-flight (see the
-  # "Test sccache health" step), after which this job compiled from scratch on
-  # every run at a 21 min mean. Do not restore a warm-cache figure to this
-  # comment without measuring it: the "sccache stats" step at the end of this
-  # job prints the real hit rate, and a `Cache hits 0` line there means the
-  # launcher was dropped again.
+  # sccache used to run on the GitHub Actions cache backend
+  # (SCCACHE_GHA_ENABLED), which stores each object as its own cache entry
+  # retrieved by EXACT key. Measured on PR #4683: 716 compile requests, 0 hits,
+  # 0.00% hit rate, with zero read/write errors — the launcher was working and
+  # every single object missed. Dumping all 3.4k repo cache entries and
+  # intersecting the key sets showed why: PR-to-PR the keys are stable
+  # (712 of 717 shared between two PRs), but main's keys overlap a PR's by 0-1.
+  # A PR may only read its base branch's cache, so the one cache a PR *can*
+  # read is the one whose keys never match, and each PR then writes ~717
+  # private entries nobody else can use. That churn alone had the repo at
+  # 9.18 GB of the 10 GB budget across 3471 entries, LRU-evicting the shared
+  # entries and reinforcing the miss.
+  #
+  # The exact-key requirement is what makes that fatal rather than merely
+  # lossy: any key drift is a total miss with no fallback. The Linux build
+  # avoids it by caching a ccache DIRECTORY with prefix `restore-keys:` — it
+  # restores the newest available cache wholesale and lets ccache hash
+  # locally, and measures 96.37% (1989/2064) on the same PR. Windows now uses
+  # that identical shape.
+  #
+  # `Cache hits 0` in the "sccache stats" step below still means the cache is
+  # broken — but check the hit rate before blaming the launcher, since a
+  # working launcher with a cold backend looks the same at a glance and that
+  # is exactly what was mis-diagnosed here before.
   check-windows:
     runs-on: windows-latest
     env:
-      SCCACHE_GHA_ENABLED: 'true'
+      # Local disk cache, not the GHA backend — see the note above. D: is the
+      # fast runner volume and the one the workspace already lives on.
+      SCCACHE_DIR: D:\sccache
+      # Matches ccache's cap on the Linux build, and for the same reason: every
+      # run writes a fresh cache entry, so budget pressure here is about entry
+      # size × count against the repo's 10 GB ceiling.
+      SCCACHE_CACHE_SIZE: 1G
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -219,6 +242,20 @@ jobs:
         shell: pwsh
         run: .\scripts\setup\setup-deepfilter.ps1
 
+      # Restored BEFORE sccache first runs, so the server sees a populated
+      # SCCACHE_DIR when it starts. Exact key never hits (run_id is unique) so
+      # every run writes a fresh entry; restore-keys pulls the most recent
+      # prior one. Same pattern as the Linux build's ccache step — the prefix
+      # fallback is the entire point, since it survives the key drift that made
+      # the exact-key GHA backend miss 100%.
+      - name: Cache sccache objects
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: D:\sccache
+          key: sccache-windows-${{ github.run_id }}
+          restore-keys: |
+            sccache-windows-
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
 
@@ -245,11 +282,12 @@ jobs:
       # zlib is bundled under third_party/zlib (1.3.1) — no vcpkg install
       # needed; CMake builds zlibstatic from source.  (#2651)
 
-      # Verify sccache can actually compile through the backend.  GitHub
-      # Actions Cache occasionally has outages; when that happens, sccache's
-      # GHA backend can't read/write and every compile through sccache
-      # fails.  Pre-flight a tiny test compile so we can fall through to a
-      # plain build instead of failing the whole job.
+      # Verify sccache can actually compile through the backend.  Originally
+      # this guarded against GitHub Actions Cache outages taking the GHA
+      # backend down mid-build; on the local-dir backend the failure modes are
+      # duller (unwritable SCCACHE_DIR, a server that won't start), but the
+      # pre-flight is worth keeping either way — it fails over to a plain
+      # build instead of failing the whole job.
       - name: Test sccache health
         id: sccache_health
         shell: pwsh
@@ -355,7 +393,13 @@ jobs:
 
       - name: sccache stats
         if: always()
-        run: sccache --show-stats
+        # Stop the server after reporting: it holds the cache files open, and
+        # actions/cache archives SCCACHE_DIR in the post-job step. Stopping
+        # first is what guarantees everything this run compiled is flushed to
+        # disk and actually ends up in the saved entry.
+        run: |
+          sccache --show-stats
+          sccache --stop-server
 
   # macOS build check — runs on every PR (no path gating), same rationale
   # as check-windows above.  Catches Q_OS_MAC / CoreAudio / Cocoa-bridge
