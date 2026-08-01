@@ -70,6 +70,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   is compiled on your machine and the panel opens immediately. Apple Silicon
   Macs also stop paying a several-second delay the first time ASR touches the
   GPU on each cold start.
+- **AetherVoice playback, CW sidetone, and Quindar tones now work on class-
+  compliant multichannel USB audio interfaces on Windows (#4641)** — on
+  devices like the Akai EIE, WASAPI's shared-mode format query reported the
+  device as unable to play any of the negotiated formats, even though the
+  same device was already playing RX audio fine. The three affected paths
+  now open the device the same way the RX sink always has: try each
+  candidate format for real and keep the first one that actually starts,
+  instead of asking the query for permission first. Previously, pressing
+  Record in AetherVoice on an affected device would mute audio and silently
+  never play the recording back.
 
 ## [v26.7.4.1] — 2026-07-27
 
