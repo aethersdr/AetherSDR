@@ -1,4 +1,4 @@
-// Waterfall rate → row-cadence laws (#4600) — header-only, pure logic.
+// Waterfall rate → row-cadence laws (#4606) — header-only, pure logic.
 //
 // Two regressions are pinned here.
 //

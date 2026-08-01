@@ -98,12 +98,24 @@ implies this generally:** a gate that persists its coercion cannot restore
 anything, so no capability gate may write through to settings.
 
 Note the related gap this exposes, deliberately *not* fixed here: display
-settings keys are scoped by pan index only (`SpectrumWidget::settingsKey`), not
-by radio family the way `MainWindow::rfGainSettingsKey` is. Two radios share one
-preference. Family-scoping them is the more complete answer, but the widget loads
-its settings at construction — before any backend has reported a family — so it
-cannot build a family-scoped key the way MainWindow can at use time. That is its
-own change, and it applies to more than this one control.
+settings are flat `AppSettings` keys scoped by pan index only
+(`SpectrumWidget::settingsKey`), so two radios share one preference. The mask is
+what keeps that from doing damage today — nothing writes through it — but the
+underlying state is still radio-scoped state living in a flat key.
+
+The answer is **not** to mangle the family into the key string. `AGENTS.md`
+§*"Radio-Scoped Feature Documents (`radio_settings`)"* (RFC #4603) is explicit
+that radio-scoped configuration does not go in flat keys: it goes in a versioned
+JSON feature document addressed by `RadioModel::settingsScope()`, read back
+through `scope.feature(...)` at use time. `MainWindow::rfGainSettingsKey` is a
+pre-#4603 precedent and should not be copied into new work.
+
+That also dissolves the objection that used to be recorded here — that
+`SpectrumWidget` loads its settings at construction, before any backend has
+reported a family, so it cannot build a family-scoped key. A feature document is
+read at use time, not baked into a key at construction, so the ordering problem
+does not arise. It is still its own change, and it applies to more than this one
+control.
 
 ## Declared, but the consumer bypasses the seam
 

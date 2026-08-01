@@ -1640,7 +1640,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         }
     });
     // One click advances the mode: Off → SW → HW → Off, or Off → SW → Off on a
-    // radio that computes no black level of its own (see autoBlackModeCount).
+    // radio that computes no black level of its own (AutoBlackMode::modeCount).
     // In Kiwi mode the same button requests the computed auto floor/ceiling scale.
     connect(m_autoBlackBtn, &QPushButton::clicked, this, [this]() {
         if (m_kiwiWaterfallControlMode) {
@@ -2025,11 +2025,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 // swaps between its manual and auto-offset roles.  When emitSignals is true (a
 // user click) it drives the on/off + client/radio-source signals plus the
 // matching slider-value signal so the renderer and radio both update.
-int SpectrumOverlayMenu::autoBlackModeCount() const
-{
-    return AutoBlackMode::modeCount(m_radioSideAutoBlackAvailable);
-}
-
 int SpectrumOverlayMenu::effectiveAutoBlackMode() const
 {
     // m_autoBlackMode is the operator's stored INTENT and may legitimately hold
@@ -2051,7 +2046,7 @@ void SpectrumOverlayMenu::setRadioSideAutoBlackAvailable(bool available)
     // capability is not a choice the operator made. Coercing through them meant
     // one session on an HL2 permanently deleted a Flex user's HW preference.
     // MainWindow applies the same mask to the widget and to the radio push; all
-    // this has to do is re-render the button. (#4600)
+    // this has to do is re-render the button. (#4606)
     applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);
 }
 
@@ -2071,7 +2066,7 @@ void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
     // into them here would relabel "Auto" as "SW" and jam an out-of-range value
     // into the floor slider.
     //
-    // Until #4600 this could not happen: every caller was either kiwi-guarded or
+    // Until #4606 this could not happen: every caller was either kiwi-guarded or
     // reached only via setKiwiWaterfallControlMode(false). setRadioSideAutoBlack-
     // Available() is a new caller that fires on a capability change regardless of
     // display source, so the guard belongs HERE, at the mutation, rather than at
@@ -2305,7 +2300,7 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
             : "Use the measured noise floor for waterfall black level.");
         // The non-Kiwi wording tracks the capability gate, like the tooltip:
         // announcing a hardware position a screen-reader user cannot reach is
-        // worse than not mentioning it. (#4600)
+        // worse than not mentioning it. (#4606)
         m_autoBlackBtn->setAccessibleDescription(kiwiMode
             ? tr("Applies the computed KiwiSDR waterfall floor and ceiling levels.")
             : (m_radioSideAutoBlackAvailable

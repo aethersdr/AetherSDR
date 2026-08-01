@@ -1144,7 +1144,7 @@ catch up) hits the target average but can burst after a stall. Undershooting a
 display rate by 6% is invisible; a burst is the thing this cap exists to
 prevent, so the rounding stays.
 
-Measured on the real HL2 at 580 kHz AM, waterfall rate 100 — *before* #4600, so
+Measured on the real HL2 at 580 kHz AM, waterfall rate 100 — *before* #4606, so
 the gate was still reading that 100 as 100 ms:
 
 | Span | Pan | Waterfall |
@@ -1177,7 +1177,7 @@ A backend with no radio-side display engine has to pace waterfall rows itself,
 and `RadioModel::onBackendSpectrumFrame` used to read that field literally — as
 a millisecond interval. The control therefore ran **backwards on the HL2**:
 
-| Rate | Gate before #4600 | Result | After #4600 |
+| Rate | Gate before #4606 | Result | After #4606 |
 |---|---|---|---|
 | 1 (slowest) | 1 ms | ~25 rows/s — the fastest | 5 s/row |
 | 100 (fastest, default) | 100 ms | 10 rows/s — the slowest | ungated, ~25 rows/s |
@@ -1188,7 +1188,7 @@ through `src/core/WaterfallRate.h`.
 #### Two producers, two laws
 
 The conversion is not one function, and the reason is worth stating because the
-first cut of #4600 got it wrong in a way that built and passed:
+first cut of #4606 got it wrong in a way that built and passed:
 
 - **`flex*`** — a Flex's display engine owns the conversion. We do not choose
   that law and only know it by measurement (#3104's 16-point curve). It is

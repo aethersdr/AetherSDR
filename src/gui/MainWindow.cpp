@@ -6381,7 +6381,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         menu->setRadioSideDspAvailable(m_radioModel.hasRadioSideDsp());
         // The Black Level button's HW position, which is a radio-side display
         // computation rather than radio-side audio DSP — so it needs its own
-        // capability, not a ride on hasRadioSideDsp. (#4600)
+        // capability, not a ride on hasRadioSideDsp. (#4606)
         menu->setRadioSideAutoBlackAvailable(
             m_radioModel.hasRadioSideWaterfallAutoBlack());
         // The per-pan DAX button and panel, which the capability gate previously
@@ -6407,7 +6407,7 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
     // click. Both already use effectiveWfAutoBlackRadioSide(). Nothing is lost
     // by dropping it here — on a backend the mask applies to there is no Flex
     // command plane for auto_black to reach, and the renderer is gated on the
-    // effective value in intensityToWaterfallLevel(). (#4600)
+    // effective value in intensityToWaterfallLevel(). (#4606)
 }
 
 SliceModel* MainWindow::activeSlice() const

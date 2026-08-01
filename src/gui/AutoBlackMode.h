@@ -8,7 +8,7 @@
 // noise-floor estimate), HW (the radio's per-tile level) — but HW only exists on
 // a radio that computes one (RadioCapabilities::hasRadioSideWaterfallAutoBlack).
 //
-// The design this encodes (#4600): the stored value is the operator's INTENT and
+// The design this encodes (#4606): the stored value is the operator's INTENT and
 // the capability is a MASK over it. Intent is never rewritten by connecting a
 // radio that cannot serve it, so a Flex user who chose HW still has HW after a
 // session on an HL2. Only a deliberate click changes intent.
@@ -74,7 +74,7 @@ inline bool effectiveRadioSide(bool intentRadioSide, bool radioSideAvailable)
 // 0..100 offset into them relabels "Auto" as "SW" and jams an out-of-range value
 // into the floor slider.
 //
-// A predicate rather than a check at each call site: until #4600 every caller
+// A predicate rather than a check at each call site: until #4606 every caller
 // happened to be kiwi-guarded, and the first one that was not shipped the bug.
 inline bool ownsSharedWidgets(bool kiwiWaterfallControlMode)
 {

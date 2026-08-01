@@ -3832,7 +3832,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // `rate` is the 1..100 control value, low slow / high fast — NOT the
     // milliseconds its Flex wire name (`line_duration`) suggests. See
     // core/WaterfallRate.h; reading it as ms is what inverted the slider on the
-    // Hermes-Lite 2 (#4600).
+    // Hermes-Lite 2 (#4606).
     const auto applyWaterfallLineDuration = [this, applet, sw](int rate) {
         const int clampedRate = std::clamp(rate,
                                            AetherSDR::WaterfallRate::kMin,

@@ -1,4 +1,4 @@
-// Waterfall Black Level mode arithmetic (#4600) — header-only, pure logic.
+// Waterfall Black Level mode arithmetic (#4606) — header-only, pure logic.
 //
 // Both bugs pinned here shipped through a full green CI run, because the only
 // coverage of this control was manual. They are:

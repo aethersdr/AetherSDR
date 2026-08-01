@@ -3814,7 +3814,7 @@ bool RadioModel::requestPanBandwidth(const QString& panId, double bandwidthMhz)
 }
 
 bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
-                                        int wfLineDurationMs)
+                                        int wfRate)
 {
     if (panId.isEmpty())
         return false;
@@ -3829,7 +3829,7 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
     if (shapesDisplayRatesLocally()) {
         if (!pan)
             return false;
-        pan->setDisplayRates(fps, wfLineDurationMs);
+        pan->setDisplayRates(fps, wfRate);
         // The FPS half goes DOWN to the backend, which caps its own frame
         // production. Only the waterfall's line_duration is paced up here —
         // see onBackendSpectrumFrame for why the two live in different places.
@@ -3843,10 +3843,11 @@ bool RadioModel::requestPanDisplayRates(const QString& panId, int fps,
         sent = sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fps))
                || sent;
     }
-    if (wfLineDurationMs > 0 && pan && !pan->waterfallId().isEmpty()) {
+    if (wfRate > 0 && pan && !pan->waterfallId().isEmpty()) {
+        // The wire parameter keeps Flex's name; the value is the rate.
         sent = sendCommand(QString("display panafall set %1 line_duration=%2")
                                .arg(pan->waterfallId())
-                               .arg(wfLineDurationMs))
+                               .arg(wfRate))
                || sent;
     }
     return sent;
@@ -4253,7 +4254,7 @@ void RadioModel::applyWaterfallAutoBlack()
     if (activeWfId().isEmpty()) return;
     // …and only when the RADIO can actually do it. m_wfAutoBlackRadioSide is the
     // operator's stored intent, which deliberately survives a session on a radio
-    // that computes no black level (#4600), so the capability has to be ANDed in
+    // that computes no black level (#4606), so the capability has to be ANDed in
     // here too. Belt-and-braces with the GUI's own mask: this is the one place
     // that emits the command, so a caller that reaches it with a stale intent —
     // say a connect-time push that lands before the widget has been told the
@@ -4360,7 +4361,7 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
         // waterfallLineDuration() carries the 1..100 RATE, not milliseconds —
         // low is slow, high is fast (see WaterfallRate.h). Pacing on the raw
         // number ran the control backwards here: rate 1 gated at 1 ms and gave
-        // the full 25 fps, rate 100 gated at 100 ms and gave 10 (#4600).
+        // the full 25 fps, rate 100 gated at 100 ms and gave 10 (#4606).
         const int wfRate = (pan && pan->waterfallLineDuration() > 0)
                                ? pan->waterfallLineDuration()
                                : kBackendDefaultWfRate;
@@ -5870,7 +5871,7 @@ int RadioModel::adaptiveWfRateForCap(int fpsCap) const
     // straight from 1000/fps to the wire treated the rate as milliseconds and
     // inverted the throttle: a Poor-network 4 fps cap produced 250, clamped to
     // 100 — the FASTEST setting — while a mild Good-network 15 fps cap produced
-    // 67, about 4.5 rows/s. Worse network, faster waterfall. (#4600)
+    // 67, about 4.5 rows/s. Worse network, faster waterfall. (#4606)
     //
     // Which law converts depends on who turns the rate into rows: ask a Flex in
     // the units its display engine answers in, and this host in ours.

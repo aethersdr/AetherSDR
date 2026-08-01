@@ -742,8 +742,10 @@ public:
     // addressed to a command interpreter that does not exist on that radio.
     //
     // Returns true when the intent was applied or dispatched.
-    bool requestPanDisplayRates(const QString& panId, int fps,
-                                int wfLineDurationMs);
+    // `wfRate` is the 1..100 waterfall RATE control value, low slow / high
+    // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
+    // See core/WaterfallRate.h. (#4606)
+    bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
     // Effective pan geometry: the deferred pending value if one is queued,
@@ -1336,7 +1338,7 @@ private:
     // operator's sliders. 100 is the top of the 1..100 rate control and matches
     // SpectrumWidget's own m_wfLineDuration default, so a self-shaping backend
     // starts at full speed rather than at the 10 fps the number used to mean
-    // when it was read as milliseconds (#4600).
+    // when it was read as milliseconds (#4606).
     static constexpr int kBackendDefaultWfRate = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;

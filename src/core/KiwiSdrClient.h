@@ -108,7 +108,10 @@ public slots:
                          const QString& bandName, int cwPitchHz);
     void setWaterfallView(const QString& panId, double centerMhz,
                           double bandwidthMhz);
-    void setWaterfallLineDurationMs(int lineDurationMs);
+    // The 1..100 waterfall RATE, low slow / high fast — NOT milliseconds. The
+    // old name said Ms and took a rate; reading it as a duration is what
+    // inverted the control on the HL2. See core/WaterfallRate.h. (#4606)
+    void setWaterfallRate(int rate);
     void setWaterfallDisplayRange(int minDbm, int maxDbm, bool autoScale);
     void requestWaterfallAutoScale();
     void setWaterfallRateOverride(int rate);
@@ -360,7 +363,7 @@ private:
     bool m_lastEmittedWaterfallRangeValid{false};
     bool m_lastEmittedWaterfallAutoRange{false};
     int m_waterfallRateOverride{0};
-    int m_waterfallLineDurationMs{100};
+    int m_waterfallRate{100};
     bool m_waterfallAvailable{true};
     QString m_waterfallAvailabilityDetail;
     int m_waterfallRxChannel{-1};

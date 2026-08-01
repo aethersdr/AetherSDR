@@ -358,11 +358,9 @@ private:
     // radio attached there is nothing to be honest about.
     bool m_radioSideAutoBlackAvailable{true};
     void applyAutoBlackMode(int mode, bool emitSignals);
-    // 3 when the radio computes its own black level (Off/SW/HW), 2 otherwise.
-    int  autoBlackModeCount() const;
     // m_autoBlackMode masked by the capability. The stored field is the
     // operator's intent and may hold HW on a radio that has none; this is what
-    // the button shows and what the app acts on. (#4600)
+    // the button shows and what the app acts on. (#4606)
     int  effectiveAutoBlackMode() const;
     void clearKiwiWaterfallAutoButtonState();
     // Two values backing the single Black slider; the slider shows whichever

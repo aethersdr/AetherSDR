@@ -28,6 +28,13 @@
 //                 Asserted independent of
 //                 hasExtendedDsp — the base set and the extra 8000-series
 //                 filters are two different statements about a radio.
+//   wf auto-black hasRadioSideWaterfallAutoBlack gates ONLY the HW position of
+//                 the Display > Black Level button — the radio's per-tile level
+//                 embedded in the waterfall stream. It must NOT gate the SW
+//                 estimate, which is the only automatic floor an operator has
+//                 on a radio reporting false, and it must go permissive on
+//                 disconnect or the mask could never restore a stashed HW
+//                 intent (docs/architecture/radio-capabilities-map.md). (#4606)
 //   extended DSP  hasExtendedDspFilters() resolves through the BACKEND while
 //                 connected and falls back to the model-name table when not,
 //                 with Flex's answer unchanged on both routes.
@@ -133,6 +140,17 @@ int main(int argc, char** argv)
         // the base one is true — which is exactly why they cannot be merged.
         check(caps.hasRadioSideDsp && !caps.hasExtendedDsp,
               "hasRadioSideDsp and hasExtendedDsp are independent");
+        check(caps.hasRadioSideWaterfallAutoBlack,
+              "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
+        // Separate from hasRadioSideDsp on purpose: one is audio DSP driven by
+        // command-plane verbs, the other a display-plane computation embedded in
+        // the waterfall stream. Both happen to be true on a Flex and false on an
+        // HL2, so the shipped backends cannot demonstrate the independence —
+        // assert it on the struct, which is where merging them would start.
+        RadioCapabilities separate;
+        separate.hasRadioSideDsp = true;
+        check(!separate.hasRadioSideWaterfallAutoBlack,
+              "hasRadioSideDsp does not imply hasRadioSideWaterfallAutoBlack");
     }
 
     // ---- HL2 declares none of them ---------------------------------------
@@ -151,6 +169,8 @@ int main(int argc, char** argv)
               "HL2 declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp,
               "HL2 declares hasRadioSideDsp=false (host runs every noise module)");
+        check(!caps.hasRadioSideWaterfallAutoBlack,
+              "HL2 declares hasRadioSideWaterfallAutoBlack=false (no display engine)");
         check(!caps.hasWaveforms,
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
@@ -192,6 +212,8 @@ int main(int argc, char** argv)
         check(!caps.hasDaxStreams, "Sim declares hasDaxStreams=false");
         check(!caps.hasExtendedDsp, "Sim declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
+        check(!caps.hasRadioSideWaterfallAutoBlack,
+              "Sim declares hasRadioSideWaterfallAutoBlack=false");
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
@@ -217,6 +239,11 @@ int main(int argc, char** argv)
         // and the WNB row.
         check(!model.hasRadioSideDsp(),
               "connected Sim: hasRadioSideDsp() is false, radio DSP hidden");
+        // Same accessor shape for the display-plane flag. False here is what
+        // drops HW from the Black Level cycle; the SW estimate is not gated on
+        // it and stays available, which is why nothing asserts it hidden.
+        check(!model.hasRadioSideWaterfallAutoBlack(),
+              "connected Sim: hasRadioSideWaterfallAutoBlack() is false, HW dropped");
         // The hardware EQ rides the same flag: EqualizerModel emits `eq RXsc`/
         // `eq TXsc`, command-plane verbs that reach nothing here. The Aetherial
         // RX/TX EQ is host-side and deliberately not covered by any capability.
@@ -262,6 +289,14 @@ int main(int argc, char** argv)
               "disconnected: the GPS stack is restored");
         check(model.hasRadioSideDsp(),
               "disconnected: hasRadioSideDsp() goes permissive, radio DSP back");
+        // Load-bearing for the auto-black MASK, not just for tidiness: the mask
+        // never rewrites the stored HW intent, so the only thing that can bring
+        // HW back on the button is this flag going permissive again. If it
+        // stayed false after unplugging an HL2, a Flex user's stashed HW would
+        // be invisible until they reconnected — the exact failure the mask
+        // design exists to prevent. (#4606)
+        check(model.hasRadioSideWaterfallAutoBlack(),
+              "disconnected: hasRadioSideWaterfallAutoBlack() goes permissive, HW back");
     }
 
     // ---- Round-trip back to Flex ------------------------------------------
@@ -277,6 +312,8 @@ int main(int argc, char** argv)
               "round-trip: Flex regains hasDaxStreams after sim -> Flex");
         check(caps.hasRadioSideDsp,
               "round-trip: Flex regains hasRadioSideDsp after sim -> Flex");
+        check(caps.hasRadioSideWaterfallAutoBlack,
+              "round-trip: Flex regains hasRadioSideWaterfallAutoBlack");
         check(caps.hasWaveforms,
               "round-trip: Flex regains hasWaveforms after sim -> Flex");
         check(caps.hasMultiClientSessions,

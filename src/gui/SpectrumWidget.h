@@ -522,7 +522,7 @@ public:
     bool  wfAutoBlackRadioSide() const { return m_wfAutoBlackRadioSide; }
     // What is actually IN EFFECT — intent masked by whether this radio computes
     // a black level at all (RadioCapabilities::hasRadioSideWaterfallAutoBlack).
-    // Read this when rendering, or when telling the radio anything. (#4600)
+    // Read this when rendering, or when telling the radio anything. (#4606)
     bool  effectiveWfAutoBlackRadioSide() const {
         return AutoBlackMode::effectiveRadioSide(m_wfAutoBlackRadioSide,
                                                  m_radioSideAutoBlackAvailable);
@@ -1365,7 +1365,7 @@ private:
     // Whether the attached radio computes a black level at all. Permissive
     // default, like every other capability gate: nothing is attached yet, so
     // there is nothing to be honest about. NEVER persisted — see
-    // effectiveWfAutoBlackRadioSide(). (#4600)
+    // effectiveWfAutoBlackRadioSide(). (#4606)
     bool  m_radioSideAutoBlackAvailable{true};
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
 

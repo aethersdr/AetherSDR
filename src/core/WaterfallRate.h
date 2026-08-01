@@ -15,7 +15,7 @@
 // FlexLib types it as milliseconds, so a backend that shapes its own display
 // rate reads the number literally and paces rows at `value` ms — which runs the
 // control BACKWARDS against every other consumer: 1 becomes the fastest setting
-// and 100 the slowest. That is exactly what the Hermes-Lite 2 did (#4600): rate
+// and 100 the slowest. That is exactly what the Hermes-Lite 2 did (#4606): rate
 // 1 gave 25 fps, rate 100 gave 10 fps.
 //
 // TWO PRODUCERS, TWO LAWS. Which one applies depends on who turns the rate into
@@ -30,7 +30,7 @@
 //            radio-side display engine (HL2, demo). Here the law IS ours, so it
 //            is linear in rows per second: a control called "Rate" should move
 //            in proportion to rate. Reusing the Flex curve here was the first
-//            cut of #4600 and it wasted 70% of the slider — measured on the HL2,
+//            cut of #4606 and it wasted 70% of the slider — measured on the HL2,
 //            rate 50 gave 1.5 rows/s and nothing moved usefully until ~70.
 
 namespace AetherSDR::WaterfallRate {
