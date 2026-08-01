@@ -92,6 +92,26 @@ strip's band layout in slots 0..7, and toggling the strip's compressor lights
 PROC. And on Flex both mappings are skipped, so one slider movement never
 equalizes or compresses twice.
 
+**Which surface may write is its own question, and it is not a capability.**
+`core/HostVoiceChainPolicy.h` answers it, because the family check alone gets it
+wrong in both directions:
+
+- `EqualizerModel` and `TransmitModel` have no persistence — their state arrives
+  from a Flex `eq` / `transmit` status or from an operator move — while
+  `ClientEq` and `ClientComp` *do* persist. So at a connect edge the Flex-shaped
+  models sit at their construction defaults (eight bands at 0 dB, every enable
+  false), and re-pushing them writes those defaults over the operator's saved
+  audio chain.
+- `hostModulates` is false for a Flex, so a plain Flex connect reaches the
+  family-swap unwind too. Disabling the shared objects there switches off the
+  operator's own Aetherial RX EQ, TX EQ and compressor on a session that never
+  went near a host-modulating backend — the gating this document says must not
+  happen, arriving by the back door.
+
+Both predicates therefore turn on whether the operator has actually moved one of
+the Flex-shaped controls in this process.
+`tests/host_voice_chain_policy_test.cpp` pins the truth table.
+
 ## Declared, but the consumer bypasses the seam
 
 | Field | Flex | HL2 | Sim | Problem |

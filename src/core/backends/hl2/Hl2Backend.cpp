@@ -393,7 +393,15 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_metis->queueTxIq(iq);
     });
     connect(m_txDsp, &Hl2TxDsp::micPeak, this,
-            [this](float dbfs) { emit meterUpdate(QStringLiteral("TX:MICPEAK"), dbfs); });
+            [this](float dbfs) {
+        emit meterUpdate(QStringLiteral("TX:MICPEAK"), dbfs);
+        // Loudest thing the operator said this transmission. Evaluated at unkey
+        // (setKeying) against the ALC's hold threshold — a PER-BLOCK test would
+        // fire on every normal transmission, because the pauses between words
+        // are exactly what the hold exists to sit through.
+        if (m_keyed)
+            m_txMicPeakMaxDbfs = std::max(m_txMicPeakMaxDbfs, dbfs);
+    });
     // The post-ALC transmit peak — the level the modulator is actually handing
     // to the wire.
     //
@@ -1544,6 +1552,19 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         qWarning() << "Hl2Backend: TX DSP unavailable —"
                    << QString::fromStdString(txErr) << "(receive is unaffected)";
 
+    // Announce the passband the modulator was just configured with. The Config
+    // above is how the modulator learns it, so this is the echo half only — but
+    // it is the half the operator sees. A restored eSSB 100..4000 reached the
+    // modulator and nothing else: the Phone applet went on showing TransmitModel's
+    // own construction default until the operator happened to press a cut button,
+    // which is a passband readout that disagrees with the transmitter.
+    {
+        TransmitDelta delta;
+        delta.txFilterLow = tc.filterLowHz;
+        delta.txFilterHigh = tc.filterHighHz;
+        emit transmitChanged(delta);
+    }
+
     // ---- and only now, the wire ----
     //
     // Every DSP chain is open and configured, so from the first EP6 packet there
@@ -1732,10 +1753,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
     if (m_txDsp && ddc == m_txDdc) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, wdsp));
-        const auto [txLo, txHi] = effectiveTxPassband(mode);
-        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, static_cast<double>(txLo)),
-            Q_ARG(double, static_cast<double>(txHi)));
+        pushTxPassband(mode);
     }
     emitSliceState(ddc);
     notifyOperatingStateChanged();
@@ -1883,10 +1901,7 @@ void Hl2Backend::setTxSlice(int sliceId)
     if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(r->mode)));
-        const auto [txLo, txHi] = effectiveTxPassband(r->mode);
-        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, static_cast<double>(txLo)),
-            Q_ARG(double, static_cast<double>(txHi)));
+        pushTxPassband(r->mode);
     }
     // The band filter's keyed-TX override follows m_txDdc, so re-evaluate it.
     applyBandFilter("tx slice");
@@ -2172,6 +2187,33 @@ void Hl2Backend::setKeying(bool key)
                           "without AETHER_AUTOMATION_ALLOW_TX";
         return;
     }
+    // THE ALC'S HOLD THRESHOLD IS A SILENT CLIFF, so say when an operator has
+    // fallen off it.
+    //
+    // Below alcHoldBelowDbfs the ALC deliberately stops raising gain — that is
+    // what keeps it from winding up 40 dB on room noise between words and
+    // fighting the speech processor. But a microphone whose PEAKS never reach
+    // the threshold now gets no makeup gain at all where it previously got up to
+    // 40 dB, and "I was quiet on the air" points at nothing. The answer is mic
+    // gain, and the meter that shows it is the one this very peak feeds.
+    //
+    // At unkey, once per transmission, on the main thread: the DSP worker must
+    // not log per block, and a per-block test would fire on every normal
+    // transmission because the pauses between words are what the hold is for.
+    if (m_keyed && !key) {
+        constexpr double kHoldDbfs = Hl2TxDsp::Config{}.alcHoldBelowDbfs;
+        if (m_txMicPeakMaxDbfs > -139.0f
+            && m_txMicPeakMaxDbfs < static_cast<float>(kHoldDbfs)) {
+            qCInfo(lcHl2) << "HL2 TX: microphone peaked at" << m_txMicPeakMaxDbfs
+                          << "dBFS for the whole transmission, below the ALC hold"
+                             " threshold of" << kHoldDbfs
+                          << "dBFS — the ALC held rather than lifting it, so that"
+                             " audio went out quiet. Raise mic gain.";
+        }
+    }
+    if (key)
+        m_txMicPeakMaxDbfs = -140.0f;
+
     m_keyed = key;
     // MUTE RECEIVE AUDIO WHILE TRANSMITTING.
     //
@@ -2403,6 +2445,39 @@ std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
     return defaultTxPassbandForMode(mode);
 }
 
+// Push the effective passband at the modulator AND echo it upward.
+//
+// The echo is what stops the Phone applet's cut readout being a claim about a
+// passband the modulator is not running. TransmitModel adopts the operator's
+// request optimistically — it has to, because a host-modulating backend never
+// echoes status — so after a mode change into CW the applet would still show the
+// eSSB 100..4000 the operator dialled in for SSB while the transmitter ran the
+// 300..900 CW wants. Nothing on screen would say which of the two was real.
+//
+// Same shape, and the same reason, as the per-band drive echo in
+// applyPerBandStateFor(): the backend is authoritative about what it actually
+// applied, and says so as a normalized delta. TransmitModel::applyChanges()
+// deliberately does NOT emit txFilterCommandIssued, so this cannot loop back
+// through RadioModel as a fresh setTxFilter() (pinned by transmit_model_test).
+//
+// This is also what makes a RESTORED passband visible: applyRestoredState()
+// seeds the members, connectRadio() hands them to the modulator through the
+// Config, and without an echo the applet showed its own construction default
+// until the operator happened to touch a button.
+void Hl2Backend::pushTxPassband(const QString& mode)
+{
+    const auto [lo, hi] = effectiveTxPassband(mode);
+    if (m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
+            Q_ARG(double, static_cast<double>(lo)),
+            Q_ARG(double, static_cast<double>(hi)));
+    }
+    TransmitDelta delta;
+    delta.txFilterLow = lo;
+    delta.txFilterHigh = hi;
+    emit transmitChanged(delta);
+}
+
 // The Phone applet's TX low-cut / high-cut.
 //
 // eSSB works here and needs nothing special: the modulator's bandpass is
@@ -2430,6 +2505,13 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
     // directly here would bypass the mode rule that every other call site
     // honours, and the setting would apply immediately in CW and then correct
     // itself on the next mode change.
+    //
+    // The one push that does NOT go through pushTxPassband(), because it must not
+    // echo. In SSB the echo would be value-identical and pointless; outside it,
+    // snapping the applet back to the mode default would make the operator's NEXT
+    // nudge compute from that default and quietly overwrite the eSSB pair this
+    // call just remembered. The mode-change echo below is what makes the readout
+    // honest, without a path that can eat the setting.
     const Receiver* txRx = rx(m_txDdc);
     const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
     const auto [applyLo, applyHi] = effectiveTxPassband(txMode);

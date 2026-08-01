@@ -438,6 +438,43 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- the restored passband is ANNOUNCED, not just applied --------------
+    //
+    // The modulator learns it from Hl2TxDsp::Config at connect, and nothing else
+    // did: TransmitModel — and therefore the Phone applet's cut readout — went on
+    // showing its own construction default until the operator happened to press a
+    // cut button, so the number on screen disagreed with the transmitter. The
+    // backend is authoritative about what it actually applied and has to say so
+    // (#4609 review). Same normalized-delta echo as the per-band drive beside it.
+    {
+        hl2::Hl2Backend backend;
+        int echoedLow = -1;
+        int echoedHigh = -1;
+        QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                         [&](const TransmitDelta& d) {
+            if (d.txFilterLow)  echoedLow = *d.txFilterLow;
+            if (d.txFilterHigh) echoedHigh = *d.txFilterHigh;
+        });
+
+        RestoredRadioState state;
+        state.extensionSchemaVersion = 1;
+        state.extension = QJsonObject{
+            {QStringLiteral("txSetpoints"),
+             QJsonObject{{QStringLiteral("filterLowHz"), 100},
+                         {QStringLiteral("filterHighHz"), 4000}}}};
+        backend.applyRestoredState(state);
+
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        check(echoedLow == 100 && echoedHigh == 4000,
+              "the restored TX passband is echoed upward at connect");
+        backend.disconnectRadio();
+    }
+
     // ---- a same-family swap must not carry radio A's cuts onto radio B ----
     {
         hl2::Hl2Backend backend;

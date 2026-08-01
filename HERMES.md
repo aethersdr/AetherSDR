@@ -1048,6 +1048,35 @@ sliders in the Phone applet; persisting per band would make them move on their
 own at every band change, which is the same surprise as a mode change silently
 replacing the passband — the thing `m_txFilterFromOperator` exists to prevent.
 
+The cut points apply to **SSB voice only** — `effectiveTxPassband()` — so a
+"shape my voice" slider cannot set the CW keying envelope's bandwidth or widen a
+digital mode past what the far-end decoder expects. The transmitter's actual
+passband is echoed upward as a `TransmitDelta` on every mode change,
+transmit-slice move and connect (`pushTxPassband()`), so the applet's readout
+tracks what the modulator is running instead of what was last asked for. The one
+push that does not echo is `setTxFilter()` itself: outside SSB, snapping the
+readout back to the mode default would make the operator's next nudge compute
+from that default and quietly overwrite the eSSB pair they had just set.
+
+### 14.10 Two surfaces, one object: who may write
+
+`ClientEq` and `ClientComp` **persist**; `EqualizerModel` and `TransmitModel` do
+not. That asymmetry is the whole reason `core/HostVoiceChainPolicy.h` exists, and
+both ways of getting it wrong shipped as far as review:
+
+- A connect edge that re-pushes the Flex-shaped controls unconditionally is
+  pushing their *construction defaults* — eight bands at 0 dB, every enable
+  false — because on this radio there is no `eq`/`transmit` status to populate
+  them. That lands on the operator's saved Aetherial strip layout, at every
+  connect, for someone who never opened the applet.
+- An unwind that fires on the family check alone fires on a plain **Flex**
+  connect too (`hostModulates` is false there), switching off that operator's own
+  RX EQ, TX EQ and compressor on a session with no HL2 in it.
+
+So both turn on one bit: has the operator actually moved a Flex-shaped control in
+this process? Nothing else distinguishes "re-apply their own choice" from
+"overwrite work this code never made".
+
 ---
 
 ## 15. Panadapter span and display rate

@@ -44,6 +44,7 @@
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
+#include "core/HostVoiceChainPolicy.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -716,6 +717,16 @@ void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
     m_lastAppliedProcEnable = on;
     m_lastAppliedProcLevel = level;
 
+    // OPERATOR INTENT ONLY claims the shared compressor.
+    //
+    // The observe path reaches here too, from the 20 Hz mirror below reporting a
+    // STRIP-originated enable. That must not count: claiming ownership from it
+    // would arm the family-swap unwind against settings this code never made, so
+    // the operator's own strip compressor would be switched off the next time
+    // they connected a Flex. See core/HostVoiceChainPolicy.h.
+    if (operatorIntent)
+        m_hostVoiceChainOwned = true;
+
     // The strip's own compressor tile reads its checked state from the engine,
     // so it has to be told the object underneath it changed.
     if (m_appletPanel && m_appletPanel->clientCompTxApplet())
@@ -779,6 +790,17 @@ void MainWindow::applyGraphicEqToClientEq(bool transmit)
         eq->setActiveBandCount(EqualizerModel::BandCount);
     eq->setEnabled(enabled);
 
+    // The graphic EQ now owns slots 0..7 of a shared object. Both the
+    // connect-time re-push and the family-swap unwind key off this — see
+    // core/HostVoiceChainPolicy.h for why neither may act without it.
+    //
+    // Unconditional here, unlike the compressor's operator-intent gate above:
+    // every path into this function is already operator intent. On a
+    // host-modulating backend EqualizerModel only moves when a slider does
+    // (there is no `eq` status to observe), and the one caller that is not a
+    // slider — the connect edge — is itself gated on this flag.
+    m_hostVoiceChainOwned = true;
+
     // The strip's own EQ tile reads its checked state from the engine.
     if (m_appletPanel) {
         auto* tile = transmit ? m_appletPanel->clientEqTxApplet()
@@ -814,23 +836,35 @@ void MainWindow::wireHostModulatedVoiceChain()
     // ── Connection edges ────────────────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        if (connected && hostModulatesTxAudio()) {
+        const bool hostModulates = hostModulatesTxAudio();
+
+        if (connected && hostModulates) {
             // Re-push on connect: the capability is unknown until a backend
-            // attaches, so anything restored from settings before that was
-            // dropped by the guard inside each apply.
+            // attaches, so anything the operator set before that was dropped by
+            // the guard inside each apply.
+            //
+            // ONLY WHAT THE OPERATOR ACTUALLY MOVED — hostVoiceChainRepushAllowed
+            // is what makes that true, and the reasoning is in
+            // core/HostVoiceChainPolicy.h. Neither EqualizerModel nor
+            // TransmitModel persists, so on a host-modulating backend both sit at
+            // their construction defaults here (eight bands at 0 dB, both enables
+            // false, processor off) while ClientEq and ClientComp DO persist.
+            // Pushing unconditionally therefore writes defaults over the
+            // operator's saved Aetherial strip layout at every connect, for
+            // someone who has never opened either applet. (#4609 review)
             //
             // The cache is reset first so the preset is genuinely re-applied
             // rather than skipped as unchanged from a previous session's radio,
             // and this counts as operator intent because the state being pushed
-            // IS the operator's own saved choice.
-            m_lastAppliedProcLevel = -1;
-            m_lastAppliedProcEnable = false;
-            applySpeechProcessorToClientComp(true);
-            // The EQ had no equivalent, so a settings-restored EQ that emitted
-            // its state before the backend existed never reached ClientEq until
-            // the operator happened to touch a slider. (#4609 review)
-            applyGraphicEqToClientEq(true);
-            applyGraphicEqToClientEq(false);
+            // IS the operator's own choice.
+            if (hostVoiceChainRepushAllowed(connected, hostModulates,
+                                            m_hostVoiceChainOwned)) {
+                m_lastAppliedProcLevel = -1;
+                m_lastAppliedProcEnable = false;
+                applySpeechProcessorToClientComp(true);
+                applyGraphicEqToClientEq(true);
+                applyGraphicEqToClientEq(false);
+            }
             m_hostVoiceChainTimer.start();
             return;
         }
@@ -848,14 +882,33 @@ void MainWindow::wireHostModulatedVoiceChain()
         // cannot happen, displaced in time rather than in one slider movement.
         // Same shape for ClientComp and PROC. (#4609 review)
         //
+        // Bounded to that case by the ownership term. hostModulates is false for
+        // a Flex, so a plain Flex connect — and every Flex disconnect — reaches
+        // here too, and unbounded this switched off the operator's own Aetherial
+        // RX EQ, TX EQ and compressor on a session that never went near an HL2.
+        //
         // Bypass, not clear: the operator's bands and the strip's compressor
-        // settings stay exactly as they were, so reconnecting the HL2 restores
-        // them on the connect edge above. Disabling is what takes them out of
-        // circuit; erasing them would lose work.
-        if (m_audio && m_radioModel.usesFlexCommandPlane()) {
+        // settings stay exactly as they were. Disabling is what takes them out
+        // of circuit; erasing them would lose work.
+        //
+        // Ownership is dropped with them, so this fires ONCE per HL2->Flex
+        // transition. The invariant is discharged at that point, and an operator
+        // who deliberately switches the strip back on mid-Flex-session must not
+        // find it switched off again on the next connection edge — the tiles are
+        // theirs, and fighting them over it would be worse than the double-EQ
+        // this guards. The cost is that a later HL2 reconnect does not re-apply
+        // the graphic EQ until a slider moves, which is where it was before any
+        // of this existed.
+        if (m_audio
+            && hostVoiceChainUnwindRequired(connected, hostModulates,
+                                            m_radioModel.usesFlexCommandPlane(),
+                                            m_hostVoiceChainOwned)) {
             if (auto* eqTx = m_audio->clientEqTx())   eqTx->setEnabled(false);
             if (auto* eqRx = m_audio->clientEqRx())   eqRx->setEnabled(false);
             if (auto* comp = m_audio->clientCompTx()) comp->setEnabled(false);
+            // Out of circuit and no longer ours: a second Flex connect must not
+            // disable them again after the operator has switched them back on.
+            m_hostVoiceChainOwned = false;
             if (m_appletPanel) {
                 if (auto* t = m_appletPanel->clientEqTxApplet())   t->refreshEnableFromEngine();
                 if (auto* t = m_appletPanel->clientEqRxApplet())   t->refreshEnableFromEngine();

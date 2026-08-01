@@ -150,6 +150,50 @@ void testZeroSourceCompPeakUsesSliceContext()
            model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 15.0f));
 }
 
+// ONE modulator, however many receivers: the gauge must follow transmit.
+//
+// The HL2 shape — a single SLC def at sourceIndex 0 and a single implicit-source
+// COMPPEAK, which defineMeter() therefore files under implicit slice 0. Move
+// transmit to the second receiver (the VFO widget, the RX applet and the
+// cycle-TX shortcut all do) and m_activeTxSlice becomes 1, the by-slice lookup
+// misses, and the compression gauge went dead for a compressor that was still
+// working (#4609 review). Delete the single-implicit-entry fallback in
+// compPeakIndexForActiveTxSlice() and this fails.
+void testSingleImplicitCompPeakFollowsTransmitToAnySlice()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(1, 0));
+    model.defineMeter(txMeter(8, "COMPPEAK", "dB", 0));
+
+    model.setActiveTxSlice(0);
+    model.updateValues({8}, {rawDb(6.0f)});
+    report("a single implicit COMPPEAK resolves on the manifest's own slice",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 6.0f));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({8}, {rawDb(9.0f)});
+    report("a single implicit COMPPEAK follows transmit onto another slice",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 9.0f));
+}
+
+// ...and the fallback stays narrow. A radio that declares COMPPEAK per
+// TX-waveform slice is answering "which transmitter" for itself, so an implicit
+// meter alongside it must not be volunteered for a slice it was not filed under
+// — that would point the gauge at the wrong transmitter, which is worse than a
+// gauge that reads zero.
+void testImplicitCompPeakIsNotVolunteeredWhenAnExplicitMapExists()
+{
+    MeterModel model;
+    model.defineMeter(slcMeter(15, 0));
+    model.defineMeter(txMeter(23, "COMPPEAK", "dB", 8));   // explicit, slice 0
+    model.defineMeter(slcMeter(37, 1));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({23}, {rawDb(12.0f)});
+    report("an explicit per-waveform COMPPEAK map is never second-guessed",
+           !model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 0.0f));
+}
+
 void testSparseSliceIdsUseManifestDerivedWaveformBase()
 {
     MeterModel model;
@@ -619,6 +663,8 @@ int main(int argc, char** argv)
     testCompPeakClampsToGaugeRange();
     testActiveTxSliceSelectsCompPeak();
     testZeroSourceCompPeakUsesSliceContext();
+    testSingleImplicitCompPeakFollowsTransmitToAnySlice();
+    testImplicitCompPeakIsNotVolunteeredWhenAnExplicitMapExists();
     testSparseSliceIdsUseManifestDerivedWaveformBase();
     testAfterEqAndScMicDoNotAffectCompression();
     testRemovingCompPeakMarksCompressionUnavailable();

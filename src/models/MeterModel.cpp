@@ -428,7 +428,30 @@ int MeterModel::compPeakIndexForActiveTxSlice() const
     const int txSource = activeTxWaveformSourceIndex();
     if (txSource >= 0 && m_compPeakIdxByTxSource.contains(txSource))
         return m_compPeakIdxByTxSource.value(txSource);
-    return m_compPeakIdxBySlice.value(m_activeTxSlice, -1);
+    const int bySlice = m_compPeakIdxBySlice.value(m_activeTxSlice, -1);
+    if (bySlice >= 0)
+        return bySlice;
+
+    // ONE transmitter, and transmit is not on the slice the manifest filed the
+    // meter under.
+    //
+    // A Flex declares COMPPEAK per TX-waveform slice, so the explicit map above
+    // answers and this never runs. A backend with a single modulator however
+    // many receivers it runs (HL2) declares ONE implicit-source COMPPEAK, and
+    // defineMeter() files it under implicitTxWaveformSliceIndex() — the
+    // manifest's SLC sourceIndex, which is 0 — while m_activeTxSlice follows
+    // whichever receiver currently owns transmit. Move transmit to the second
+    // receiver and the lookup above misses, so the compression gauge went dead
+    // for a compressor that was still working (#4609 review).
+    //
+    // Deliberately narrow. With an explicit per-waveform map present, or more
+    // than one implicit entry, "which slice" is a real question and answering it
+    // by picking the only entry would point the gauge at the wrong transmitter.
+    if (m_activeTxSlice >= 0 && m_compPeakIdxByTxSource.isEmpty()
+        && m_compPeakIdxBySlice.size() == 1) {
+        return m_compPeakIdxBySlice.constBegin().value();
+    }
+    return -1;
 }
 
 void MeterModel::logCompressionMeterMap(const MeterDef& def) const

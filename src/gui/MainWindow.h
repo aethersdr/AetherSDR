@@ -1515,6 +1515,14 @@ private:
     // the Aetherial strip's compressor settings, which share the object).
     bool m_lastAppliedProcEnable{false};
     int  m_lastAppliedProcLevel{-1};
+    // True once a Flex-shaped voice control has actually written into the shared
+    // ClientEq/ClientComp, so those objects hold OUR layout rather than the
+    // Aetherial strip's. Both directions need it (core/HostVoiceChainPolicy.h):
+    // the connect-time re-push must not put EqualizerModel's all-zero
+    // construction default over the strip's PERSISTED bands, and the family-swap
+    // unwind must not disable a Flex operator's own strip settings on a session
+    // that never went near a host-modulating backend.
+    bool m_hostVoiceChainOwned{false};
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)

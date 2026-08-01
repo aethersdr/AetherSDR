@@ -29,10 +29,16 @@
 //                 Asserted on the CAPABILITY, so this stays true of any future
 //                 family that reports no supply rail.
 //   radio DSP     hasRadioSideDsp gates the radio's own NR/NB/ANF/NRL/ANFL/
-//                 ANFT, the APD row, the WNB row and the 8-band hardware EQ
-//                 applet. It must NOT gate the host-side equivalents — the
-//                 AetherDSP modules and the Aetherial RX/TX EQ — which are the
-//                 only audio DSP an operator has on a radio reporting false.
+//                 ANFT, the APD row and the WNB row. It must NOT gate the
+//                 host-side equivalents — the AetherDSP modules and the
+//                 Aetherial RX/TX EQ — which are the only audio DSP an operator
+//                 has on a radio reporting false. The 8-band EQ applet was on
+//                 this list until #4609 mapped its octave bands onto ClientEq
+//                 for any backend without a Flex command plane; the control is
+//                 no longer empty there, so it is no longer gated. WHICH of the
+//                 two surfaces onto that shared ClientEq/ClientComp may write is
+//                 a separate question, answered by core/HostVoiceChainPolicy.h
+//                 and pinned by tests/host_voice_chain_policy_test.cpp.
 //                 Asserted independent of
 //                 hasExtendedDsp — the base set and the extra 8000-series
 //                 filters are two different statements about a radio.

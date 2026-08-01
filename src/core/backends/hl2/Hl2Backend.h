@@ -448,9 +448,21 @@ private:
     int m_txFilterLowHz = 300;
     int m_txFilterHighHz = 2700;
 
+    // Loudest microphone peak of the current transmission, in dBFS, so setKeying()
+    // can tell at unkey whether the operator spent the whole of it below the ALC's
+    // hold threshold — the one case where holding the gain leaves them quiet
+    // rather than merely stopping the stage pumping. -140 is the floor
+    // Hl2TxDsp::micPeak reports for silence, and means "nothing measured yet".
+    float m_txMicPeakMaxDbfs = -140.0f;
+
     // The passband to push at the modulator for `mode`: the operator's if they
     // have chosen one, otherwise that mode's default.
     std::pair<int, int> effectiveTxPassband(const QString& mode) const;
+    // Apply that passband AND announce it as a TransmitDelta, so the Phone
+    // applet's cut readout matches what the transmitter is running rather than
+    // what was last asked for. See the definition for why setTxFilter() is the
+    // one push that does not go through here.
+    void pushTxPassband(const QString& mode);
     // Tune-carrier amplitude, full scale into the modulator. Actual radiated
     // power is governed by the TX drive register, which is where an operator
     // sets it; scaling here as well would make the power control non-linear for

@@ -4812,6 +4812,11 @@ add_executable(kiwi_sdr_tx_mute_policy_test
 )
 target_include_directories(kiwi_sdr_tx_mute_policy_test PRIVATE src)
 add_test(NAME kiwi_sdr_tx_mute_policy_test COMMAND kiwi_sdr_tx_mute_policy_test)
+add_executable(host_voice_chain_policy_test
+    tests/host_voice_chain_policy_test.cpp
+)
+target_include_directories(host_voice_chain_policy_test PRIVATE src)
+add_test(NAME host_voice_chain_policy_test COMMAND host_voice_chain_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
