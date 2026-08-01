@@ -209,7 +209,7 @@ find-and-replace across a version bump silently corrupts them.
 
 ## CI/CD Workflow
 
-CI runs in Docker image `ghcr.io/ten9876/aethersdr-ci:latest` (~3.5 min builds).
+CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest` (~5 min builds).
 **If you add a new `find_package(...)` to CMakeLists.txt, also add the
 corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait

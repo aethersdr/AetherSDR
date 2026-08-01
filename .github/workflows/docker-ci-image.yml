@@ -9,9 +9,12 @@ on:
 
 # Least privilege: publishing the image is all this workflow does. It used to
 # also open a PR pinning the consumers to the new digest, which needed
-# contents: write and pull-requests: write — see the note below for why that
-# was removed.
+# contents: WRITE and pull-requests: write — see the note below for why that
+# was removed. contents drops to read rather than disappearing: naming any
+# permission sets every unnamed one to `none`, and actions/checkout needs to
+# read the repo.
 permissions:
+  contents: read        # actions/checkout
   packages: write       # docker/build-push-action: push the image
 
 # Serialize concurrent runs so a Dockerfile push landing during a manual
@@ -67,9 +70,18 @@ jobs:
         with:
           context: .github/docker
           push: true
-          tags: ghcr.io/aethersdr/aethersdr-ci:latest
+          # Consumers track :latest (see the note above), but every build also
+          # gets an immutable sha- tag. That restores the part of digest
+          # pinning that was actually worth having — a way to name and go back
+          # to one exact image — without the auto-PR machinery that could never
+          # work. To bisect a toolchain regression, point a job at
+          # :sha-<commit> temporarily.
+          tags: |
+            ghcr.io/aethersdr/aethersdr-ci:latest
+            ghcr.io/aethersdr/aethersdr-ci:sha-${{ github.sha }}
 
       - name: Report published digest
         run: |
-          echo "Published ghcr.io/aethersdr/aethersdr-ci:latest"
+          echo "Published ghcr.io/aethersdr/aethersdr-ci"
+          echo "  tags:   latest, sha-${{ github.sha }}"
           echo "  digest: ${{ steps.build.outputs.digest }}"
