@@ -12,7 +12,7 @@
     {"low": 3.510, "high": 3.560, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 3.560, "high": 3.570, "label": "CW", "license": "", "color": "#3060ff"},
     {"low": 3.570, "high": 3.600, "label": "NB DIGI", "license": "", "color": "#c03030"},
-    {"low": 3.600, "high": 3.620, "label": "DIGI", "license": "", "color": "#c03030"},
+    {"low": 3.600, "high": 3.620, "label": "ALL", "license": "", "color": "#ff8000"},
     {"low": 3.620, "high": 3.800, "label": "ALL", "license": "", "color": "#ff8000"},
 
     {"low": 5.3515, "high": 5.354, "label": "CW/NB", "license": "", "color": "#3060ff"},

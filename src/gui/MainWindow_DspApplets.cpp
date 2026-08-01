@@ -42,6 +42,9 @@
 #include "core/AetherDspModePolicy.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/ClientComp.h"
+#include "core/ClientEq.h"
+#include "core/HostVoiceChainPolicy.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -630,6 +633,319 @@ void MainWindow::wireDspApplets()
             default:
                 break;
         }
+    });
+}
+
+// ── The speech processor on a host-modulating backend ───────────────────────
+//
+// PROC and its NOR/DX/DX+ level are Flex-shaped controls: TransmitModel turns
+// them into `transmit set speech_processor_enable=` / `_level=`, which reach
+// nothing on a radio with no Flex command plane. On a backend that modulates
+// here, the compressor those controls are asking for is the one already running
+// in AudioEngine's TX chain — the mic path applies it before the audio ever
+// reaches submitTxAudio — so this binds the controls to it rather than adding a
+// second compressor behind the same button.
+//
+// IT IS THE SAME ClientComp THE AETHERIAL STRIP EDITS, deliberately. That means
+// the two surfaces are two views of one object: moving the PROC slider rewrites
+// the strip's threshold/ratio/makeup, and toggling the compressor in the strip
+// lights PROC. Chosen over a private second instance so an operator cannot end
+// up with two compressors in series without either UI admitting it. The cost is
+// that the level presets below overwrite whatever the strip was set to, which
+// is why they are applied only on a level CHANGE or an off->on transition and
+// not on every state push.
+
+bool MainWindow::hostModulatesTxAudio() const
+{
+    // The same capability pair MainWindow_Session.cpp tests before opening the
+    // mic: a backend host-modulates only if it says so AND may transmit.
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    return caps.hostModulates && caps.canTransmit;
+}
+
+void MainWindow::applySpeechProcessorToClientComp(bool operatorIntent)
+{
+    if (!m_audio || !hostModulatesTxAudio())
+        return;
+    ClientComp* comp = m_audio->clientCompTx();
+    if (!comp)
+        return;
+
+    const auto& tx = m_radioModel.transmitModel();
+    const bool on = tx.speechProcessorEnable();
+    const int level = qBound(0, tx.speechProcessorLevel(), 2);
+
+    // THE PRESET IS WRITTEN ONLY FOR OPERATOR INTENT — a PROC or NOR/DX/DX+ move
+    // the operator actually made — and never for state merely observed.
+    //
+    // The compressor is shared with the Aetherial strip, so writing the preset
+    // replaces the threshold/ratio/makeup the operator may have dialled in
+    // there. Gating on "did the state change" instead of "did the operator ask"
+    // gets this exactly backwards: the 20 Hz mirror below reports a
+    // strip-originated enable back into TransmitModel, which would arrive here
+    // as an off->on transition and overwrite the operator's settings as a direct
+    // result of them switching their own compressor on. (#4609 review)
+    const bool levelChanged = level != m_lastAppliedProcLevel;
+    const bool switchedOn = on && !m_lastAppliedProcEnable;
+    if (operatorIntent && on && (levelChanged || switchedOn)) {
+        // NOR / DX / DX+. Progressively lower thresholds and higher ratios, with
+        // makeup chosen to keep the average level rising with the setting rather
+        // than merely squashing peaks — "more processing" has to sound louder or
+        // the control reads as broken.
+        //
+        // Deliberately gentler than a Flex's own speech processor: this stage
+        // feeds the modulator's ALC, which applies its own makeup gain on top
+        // (Hl2TxDsp::Config). Matching Flex numbers here would compress twice.
+        struct Preset { float thresholdDb; float ratio; float makeupDb; };
+        static constexpr Preset kPresets[3] = {
+            { -18.0f, 2.5f,  4.0f },   // NOR
+            { -24.0f, 4.0f,  8.0f },   // DX
+            { -30.0f, 6.0f, 12.0f },   // DX+
+        };
+        const Preset& p = kPresets[level];
+        comp->setThresholdDb(p.thresholdDb);
+        comp->setRatio(p.ratio);
+        comp->setMakeupDb(p.makeupDb);
+        // Fast enough to catch a syllable, slow enough not to pump on speech.
+        comp->setAttackMs(5.0f);
+        comp->setReleaseMs(120.0f);
+        comp->setKneeDb(6.0f);
+    }
+    if (comp->isEnabled() != on)
+        comp->setEnabled(on);
+
+    m_lastAppliedProcEnable = on;
+    m_lastAppliedProcLevel = level;
+
+    // OPERATOR INTENT ONLY claims the shared compressor.
+    //
+    // The observe path reaches here too, from the 20 Hz mirror below reporting a
+    // STRIP-originated enable. That must not count: claiming ownership from it
+    // would arm the family-swap unwind against settings this code never made, so
+    // the operator's own strip compressor would be switched off the next time
+    // they connected a Flex. See core/HostVoiceChainPolicy.h.
+    if (operatorIntent)
+        m_hostVoiceChainOwned = true;
+
+    // The strip's own compressor tile reads its checked state from the engine,
+    // so it has to be told the object underneath it changed.
+    if (m_appletPanel && m_appletPanel->clientCompTxApplet())
+        m_appletPanel->clientCompTxApplet()->refreshEnableFromEngine();
+}
+
+// ── The 8-band graphic EQ on a host-modulating backend ──────────────────────
+//
+// EqualizerModel emits `eq TXsc 63Hz=…` / `eq RXsc …`, which a radio with no
+// Flex command plane never receives. The equalizer those sliders are asking for
+// is ClientEq, already in both audio paths — TX through
+// AudioEngine::applyClientTxDspInt16, RX through processMixedRxAudioData.
+//
+// THE OCTAVE BANDS OCCUPY ClientEq SLOTS 0..7, which are the same slots the
+// Aetherial strip's editor uses, because these are the same ClientEq objects the
+// strip edits. Writing them replaces whatever layout the strip had there —
+// including its high-pass and shelves — with eight fixed peaking filters. That
+// is inherent in the two surfaces sharing one equalizer, and it is why this only
+// writes on an actual EQ-applet change rather than continuously: an operator who
+// never touches the graphic EQ keeps the strip's layout untouched.
+//
+// Q of 1.4 is one octave between -3 dB points, which matches the 63/125/250/…
+// octave spacing. A higher Q leaves gaps between the bands where the response
+// returns to flat; a lower one makes adjacent sliders fight.
+void MainWindow::applyGraphicEqToClientEq(bool transmit)
+{
+    // Flex is excluded: there the sliders reach the radio's own 8-band hardware
+    // EQ through the command plane, and mapping them onto ClientEq as well would
+    // equalize twice for one slider movement.
+    if (!m_audio || m_radioModel.usesFlexCommandPlane())
+        return;
+    ClientEq* eq = transmit ? m_audio->clientEqTx() : m_audio->clientEqRx();
+    if (!eq)
+        return;
+
+    const auto& model = m_radioModel.equalizerModel();
+    const bool enabled = transmit ? model.txEnabled() : model.rxEnabled();
+
+    // Centres in Hz, matching EqualizerModel::Band order exactly. Kept here as
+    // numbers rather than parsed from bandKey() so a protocol-string change
+    // cannot silently retune the filters.
+    static constexpr float kCentresHz[EqualizerModel::BandCount] = {
+        63.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f
+    };
+
+    for (int i = 0; i < EqualizerModel::BandCount; ++i) {
+        const auto band = static_cast<EqualizerModel::Band>(i);
+        const int gainDb = transmit ? model.txBand(band) : model.rxBand(band);
+        ClientEq::BandParams p;
+        p.freqHz = kCentresHz[i];
+        p.gainDb = static_cast<float>(gainDb);
+        p.q = 1.4f;
+        p.type = ClientEq::FilterType::Peak;
+        // A 0 dB band still runs, and must: leaving it disabled would make the
+        // slider's return to centre a different operation from never having
+        // moved it, and the two have to sound identical.
+        p.enabled = true;
+        eq->setBand(i, p);
+    }
+    if (eq->activeBandCount() < EqualizerModel::BandCount)
+        eq->setActiveBandCount(EqualizerModel::BandCount);
+    eq->setEnabled(enabled);
+
+    // The graphic EQ now owns slots 0..7 of a shared object. Both the
+    // connect-time re-push and the family-swap unwind key off this — see
+    // core/HostVoiceChainPolicy.h for why neither may act without it.
+    //
+    // Unconditional here, unlike the compressor's operator-intent gate above:
+    // every path into this function is already operator intent. On a
+    // host-modulating backend EqualizerModel only moves when a slider does
+    // (there is no `eq` status to observe), and the one caller that is not a
+    // slider — the connect edge — is itself gated on this flag.
+    m_hostVoiceChainOwned = true;
+
+    // The strip's own EQ tile reads its checked state from the engine.
+    if (m_appletPanel) {
+        auto* tile = transmit ? m_appletPanel->clientEqTxApplet()
+                              : m_appletPanel->clientEqRxApplet();
+        if (tile)
+            tile->refreshEnableFromEngine();
+    }
+}
+
+void MainWindow::wireHostModulatedVoiceChain()
+{
+    // The graphic EQ. Bound on BOTH state signals rather than on a capability
+    // check at wiring time, because the capability is not known until a backend
+    // attaches; applyGraphicEqToClientEq() re-checks on every call.
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::txStateChanged,
+            this, [this] { applyGraphicEqToClientEq(true); });
+    connect(&m_radioModel.equalizerModel(), &EqualizerModel::rxStateChanged,
+            this, [this] { applyGraphicEqToClientEq(false); });
+
+    // Operator -> DSP.
+    //
+    // TWO signals, and the split is load-bearing. speechProcessorCommandIssued
+    // is the operator actually moving PROC, and only that is allowed to write
+    // the NOR/DX/DX+ preset over the shared compressor's settings.
+    // micStateChanged is any state movement at all — including the mirror below
+    // reporting a strip-originated enable — and may only sync the enable flag.
+    connect(&m_radioModel.transmitModel(),
+            &TransmitModel::speechProcessorCommandIssued, this,
+            [this] { applySpeechProcessorToClientComp(true); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::micStateChanged,
+            this, [this] { applySpeechProcessorToClientComp(false); });
+
+    // ── Connection edges ────────────────────────────────────────────────────
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool connected) {
+        const bool hostModulates = hostModulatesTxAudio();
+
+        if (connected && hostModulates) {
+            // Re-push on connect: the capability is unknown until a backend
+            // attaches, so anything the operator set before that was dropped by
+            // the guard inside each apply.
+            //
+            // ONLY WHAT THE OPERATOR ACTUALLY MOVED — hostVoiceChainRepushAllowed
+            // is what makes that true, and the reasoning is in
+            // core/HostVoiceChainPolicy.h. Neither EqualizerModel nor
+            // TransmitModel persists, so on a host-modulating backend both sit at
+            // their construction defaults here (eight bands at 0 dB, both enables
+            // false, processor off) while ClientEq and ClientComp DO persist.
+            // Pushing unconditionally therefore writes defaults over the
+            // operator's saved Aetherial strip layout at every connect, for
+            // someone who has never opened either applet. (#4609 review)
+            //
+            // The cache is reset first so the preset is genuinely re-applied
+            // rather than skipped as unchanged from a previous session's radio,
+            // and this counts as operator intent because the state being pushed
+            // IS the operator's own choice.
+            if (hostVoiceChainRepushAllowed(connected, hostModulates,
+                                            m_hostVoiceChainOwned)) {
+                m_lastAppliedProcLevel = -1;
+                m_lastAppliedProcEnable = false;
+                applySpeechProcessorToClientComp(true);
+                applyGraphicEqToClientEq(true);
+                applyGraphicEqToClientEq(false);
+            }
+            m_hostVoiceChainTimer.start();
+            return;
+        }
+
+        m_hostVoiceChainTimer.stop();
+
+        // UNWIND ON A FAMILY SWAP, or the Flex exclusion holds per-call and
+        // leaks across sessions.
+        //
+        // Move the graphic EQ on an HL2, disconnect, then connect a Flex in the
+        // same process: every apply now returns early because the family uses
+        // the Flex command plane, but ClientEq still holds the eight peaking
+        // filters and is still ENABLED — so the radio's hardware EQ and ours
+        // both apply. That is the double-equalization the design note says
+        // cannot happen, displaced in time rather than in one slider movement.
+        // Same shape for ClientComp and PROC. (#4609 review)
+        //
+        // Bounded to that case by the ownership term. hostModulates is false for
+        // a Flex, so a plain Flex connect — and every Flex disconnect — reaches
+        // here too, and unbounded this switched off the operator's own Aetherial
+        // RX EQ, TX EQ and compressor on a session that never went near an HL2.
+        //
+        // Bypass, not clear: the operator's bands and the strip's compressor
+        // settings stay exactly as they were. Disabling is what takes them out
+        // of circuit; erasing them would lose work.
+        //
+        // Ownership is dropped with them, so this fires ONCE per HL2->Flex
+        // transition. The invariant is discharged at that point, and an operator
+        // who deliberately switches the strip back on mid-Flex-session must not
+        // find it switched off again on the next connection edge — the tiles are
+        // theirs, and fighting them over it would be worse than the double-EQ
+        // this guards. The cost is that a later HL2 reconnect does not re-apply
+        // the graphic EQ until a slider moves, which is where it was before any
+        // of this existed.
+        if (m_audio
+            && hostVoiceChainUnwindRequired(connected, hostModulates,
+                                            m_radioModel.usesFlexCommandPlane(),
+                                            m_hostVoiceChainOwned)) {
+            if (auto* eqTx = m_audio->clientEqTx())   eqTx->setEnabled(false);
+            if (auto* eqRx = m_audio->clientEqRx())   eqRx->setEnabled(false);
+            if (auto* comp = m_audio->clientCompTx()) comp->setEnabled(false);
+            // Out of circuit and no longer ours: a second Flex connect must not
+            // disable them again after the operator has switched them back on.
+            m_hostVoiceChainOwned = false;
+            if (m_appletPanel) {
+                if (auto* t = m_appletPanel->clientEqTxApplet())   t->refreshEnableFromEngine();
+                if (auto* t = m_appletPanel->clientEqRxApplet())   t->refreshEnableFromEngine();
+                if (auto* t = m_appletPanel->clientCompTxApplet()) t->refreshEnableFromEngine();
+            }
+        }
+    });
+
+    // DSP -> meter, and DSP -> operator.
+    //
+    // ClientComp has no change notification — every other consumer polls it on a
+    // timer (ClientCompApplet::tickMeter) — so this does too, at the same 20 Hz
+    // the compression gauge is fed at elsewhere. Started and stopped on the
+    // connection edge above rather than running for the process lifetime.
+    m_hostVoiceChainTimer.setInterval(50);
+    connect(&m_hostVoiceChainTimer, &QTimer::timeout, this, [this] {
+        if (!m_audio || !hostModulatesTxAudio())
+            return;
+        ClientComp* comp = m_audio->clientCompTx();
+        if (!comp)
+            return;
+
+        // TX:COMPPEAK wants a POSITIVE amount of compression in dB;
+        // ClientComp reports gain reduction as a value <= 0. Negate, do not
+        // abs(): a positive gainReductionDb would be a bug upstream and
+        // abs() would render it as heavy compression.
+        const float reduction = comp->isEnabled() ? -comp->gainReductionDb() : 0.0f;
+        m_radioModel.meterModel().updateValueByName(
+            QStringLiteral("TX"), QStringLiteral("COMPPEAK"),
+            qBound(0.0f, reduction, 25.0f));
+
+        // Mirror the strip back onto PROC, so toggling the compressor there
+        // does not leave the button lying. applySpeechProcessorState() emits
+        // micStateChanged but NOT speechProcessorCommandIssued, so this settles
+        // in one pass and can never be mistaken for the operator moving PROC.
+        m_radioModel.transmitModel().applySpeechProcessorState(
+            comp->isEnabled(), m_radioModel.transmitModel().speechProcessorLevel());
     });
 }
 

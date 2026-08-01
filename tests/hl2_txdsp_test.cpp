@@ -287,6 +287,65 @@ int main(int argc, char** argv)
         }
     }
 
+    // ── The ALC holds through pauses instead of winding up on room noise ────
+    //
+    // The stage is makeup gain for a quiet mic, and it has to stay that without
+    // also being a second compressor fighting the speech processor. The property
+    // under test: audio too quiet to be speech must NOT be lifted, while audio
+    // loud enough to be speech still is.
+    //
+    // Without the hold, both cases below settle at the same output peak — that
+    // is exactly the failure, because it means the shack fan between words is
+    // being brought to the same level as the operator's voice.
+    {
+        auto settledPeak = [](double amplitude) {
+            Hl2TxDsp tx;
+            Hl2TxDsp::Config cfg;
+            cfg.mode = WdspChannel::Mode::Usb;
+            cfg.alcEnabled = true;
+            std::string err;
+            if (!tx.configure(cfg, &err)) {
+                std::fprintf(stderr, "FAIL: ALC hold configure: %s\n", err.c_str());
+                ++g_failures;
+                return 0.0;
+            }
+            double lastGainDb = 0.0;
+            QObject::connect(&tx, &Hl2TxDsp::alcGain, &tx,
+                             [&lastGainDb](float db) { lastGainDb = db; });
+
+            const int fs = cfg.inputSampleRateHz;
+            const int total = fs * 3;   // long enough for the slow release to settle
+            constexpr std::size_t kChunk = 240;
+            std::vector<float> chunk(kChunk);
+            for (int off = 0; off < total; off += static_cast<int>(kChunk)) {
+                for (std::size_t n = 0; n < kChunk; ++n) {
+                    chunk[n] = static_cast<float>(
+                        amplitude * std::sin(2.0 * M_PI * 1000.0
+                                             * (off + static_cast<int>(n)) / fs));
+                }
+                tx.processAudioBlock(chunk);
+            }
+            return lastGainDb;
+        };
+
+        // -54 dBFS: below the -45 dBFS hold threshold, so this is "the room",
+        // not the operator. The ALC must leave it where it is.
+        const double quietGainDb = settledPeak(0.002);
+        // -34 dBFS: above the threshold and about where real speech sits, per
+        // the measurements in Hl2TxDsp::Config. This must still be lifted.
+        const double speechGainDb = settledPeak(0.02);
+
+        std::fprintf(stderr,
+                     "ALC hold: below-threshold gain %.1f dB, speech-level gain %.1f dB\n",
+                     quietGainDb, speechGainDb);
+        check(quietGainDb < 1.0,
+              "ALC held its gain on audio too quiet to be speech");
+        check(speechGainDb > 20.0,
+              "ALC still lifts audio at speech level");
+        check(speechGainDb > quietGainDb + 20.0,
+              "ALC distinguishes speech from room noise");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_txdsp_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

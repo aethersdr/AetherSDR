@@ -324,6 +324,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // Link lifecycle: first EP6 -> connected; stop -> disconnected.
     connect(m_metis, &MetisClient::linkUp, this, [this] {
         m_connected = true;
+        // Started here rather than in connectRadio(): before the first EP6 there
+        // is no link to describe, and ticking through the connect attempt would
+        // publish a "reported" snapshot of zeros that reads as a dead link
+        // rather than as one that has not come up yet.
+        m_link = LinkStats{};
+        m_linkRxPacketsAtLastTick = 0;
+        m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
         // RadioModel::onConnected() stages every existing model as "previous
@@ -366,6 +373,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
             m_connected = false;
+            m_linkStatsTimer->stop();
             emit disconnected();
         }
     });
@@ -380,6 +388,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // destructor also guards against.
         QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
         m_connected = false;
+        m_linkStatsTimer->stop();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
     });
 
@@ -393,7 +402,25 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_metis->queueTxIq(iq);
     });
     connect(m_txDsp, &Hl2TxDsp::micPeak, this,
-            [this](float dbfs) { emit meterUpdate(QStringLiteral("TX:MICPEAK"), dbfs); });
+            [this](float dbfs) {
+        emit meterUpdate(QStringLiteral("TX:MICPEAK"), dbfs);
+        // Loudest thing the operator said this transmission. Evaluated at unkey
+        // (setKeying) against the ALC's hold threshold — a PER-BLOCK test would
+        // fire on every normal transmission, because the pauses between words
+        // are exactly what the hold exists to sit through.
+        if (m_keyed)
+            m_txMicPeakMaxDbfs = std::max(m_txMicPeakMaxDbfs, dbfs);
+    });
+    // The post-ALC transmit peak — the level the modulator is actually handing
+    // to the wire.
+    //
+    // MeterModel's TX:ALC is a LEVEL in dBFS, not a gain, which is why this is
+    // fed from alcPeak() and not from the alcGain() signal sitting next to it.
+    // alcGain answers "how hard is the ALC working"; the gauge asks "how close
+    // to full modulation am I", and on a chain whose ALC targets 0.85 those two
+    // move in opposite directions.
+    connect(m_txDsp, &Hl2TxDsp::alcPeak, this,
+            [this](float dbfs) { emit meterUpdate(QStringLiteral("TX:ALC"), dbfs); });
 
     connect(m_metis, &MetisClient::telemetryUpdated, this,
             [this](const Hl2Telemetry& t) { publishTelemetry(t); });
@@ -401,6 +428,64 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // without touching an object that lives on the I/O thread.
     connect(m_metis, &MetisClient::dropsUpdated, this,
             [this](quint64 drops) { m_drops = drops; });
+    // Same mirror, for the transport counters linkStats() reports. The wire
+    // shape is translated to the seam shape HERE, so linkStats() is a plain
+    // read of a value that already lives on the reader's thread.
+    connect(m_metis, &MetisClient::linkCountersUpdated, this,
+            [this](const MetisClient::LinkCounters& c) {
+        // `reported` and `alive` are deliberately NOT set here — they are
+        // statements about the connection and the tick, not about the counters,
+        // and both publishers below own them.
+        m_link.rxBytes = static_cast<qint64>(c.rxBytes);
+        m_link.txBytes = static_cast<qint64>(c.txBytes);
+        m_link.rxPackets = c.rxPackets;
+        m_link.rxPacketsLost = c.drops;
+        // Protocol 1 is a one-way stream with no request/response exchange: EP2
+        // goes out on a wall clock and EP6 comes back free-running, and no frame
+        // in either direction answers a specific frame in the other. There is
+        // therefore no round trip to time, and -1 says exactly that rather than
+        // presenting a 0 that every readout formats as "< 1 ms".
+        m_link.rttMs = -1;
+        m_link.gapMs = c.meanGapMs;
+        m_link.gapMaxMs = c.maxGapMs;
+        // Jitter as the SPREAD of delivery within the window. On a stream with
+        // no round trip this is the honest latency-variation figure: a healthy
+        // link delivers on a metronome and reads a fraction of a millisecond,
+        // while a congested one stalls and resumes — which is precisely what the
+        // operator hears. Undefined until a window has closed with samples in it.
+        m_link.jitterMs = (c.maxGapMs >= 0 && c.meanGapMs >= 0)
+                              ? c.maxGapMs - c.meanGapMs
+                              : -1;
+        m_link.localEndpoint = c.localEndpoint;
+    });
+
+    m_linkStatsTimer = new QTimer(this);
+    m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
+    connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
+}
+
+void Hl2Backend::publishLinkStats()
+{
+    LinkStats s = m_link;
+    // The link is REPORTED from the moment we are connected, even before the
+    // first counter snapshot has crossed from the I/O thread. Otherwise the
+    // consumer's first tick sees reported=false, keeps its Flex sources, and
+    // renders the blank readout this whole path exists to fix.
+    s.reported = true;
+    // Fresh packets since the last tick — the transport-level proof of life the
+    // heartbeat runs on. Computed here rather than in linkStats() because the
+    // comparison CONSUMES the previous value, and linkStats() is a const getter
+    // any caller may poll at any rate.
+    s.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
+    m_linkRxPacketsAtLastTick = m_link.rxPackets;
+    emit linkStatsUpdated(s);
+}
+
+IRadioBackend::LinkStats Hl2Backend::linkStats() const
+{
+    LinkStats s = m_link;
+    s.reported = m_connected;
+    return s;
 }
 
 Hl2Backend::Receiver* Hl2Backend::rx(int ddc)
@@ -1191,6 +1276,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // off is what stops them from looking operable; the client-side modules
     // (NR2/NR4/MNR/BNR/DFNR/RN2) are unaffected and remain available.
     c.hasRadioSideDsp = false;
+    // Same reason, on the display plane: nothing in the HL2 computes a
+    // waterfall black level, so the Black Level button's HW position would be
+    // a mode that never produces one. Off <-> SW only. (#4606)
+    c.hasRadioSideWaterfallAutoBlack = false;
     c.hasWaveforms = false;             // no installable plugin surface
     c.hasMultiClientSessions = false;   // one client owns the radio
     c.hasGpsLocation = false;           // no GNSS receiver on the board
@@ -1521,7 +1610,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // or DIGL would otherwise transmit on the upper sideband until the operator
     // happened to change mode.
     {
-        const auto [txLo, txHi] = defaultTxPassbandForMode(txMode);
+        const auto [txLo, txHi] = effectiveTxPassband(txMode);
         tc.filterLowHz  = txLo;
         tc.filterHighHz = txHi;
     }
@@ -1533,6 +1622,19 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     if (!txOk)
         qWarning() << "Hl2Backend: TX DSP unavailable —"
                    << QString::fromStdString(txErr) << "(receive is unaffected)";
+
+    // Announce the passband the modulator was just configured with. The Config
+    // above is how the modulator learns it, so this is the echo half only — but
+    // it is the half the operator sees. A restored eSSB 100..4000 reached the
+    // modulator and nothing else: the Phone applet went on showing TransmitModel's
+    // own construction default until the operator happened to press a cut button,
+    // which is a passband readout that disagrees with the transmitter.
+    {
+        TransmitDelta delta;
+        delta.txFilterLow = tc.filterLowHz;
+        delta.txFilterHigh = tc.filterHighHz;
+        emit transmitChanged(delta);
+    }
 
     // ---- and only now, the wire ----
     //
@@ -1722,10 +1824,7 @@ void Hl2Backend::setSliceMode(int sliceId, const QString& mode)
     if (m_txDsp && ddc == m_txDdc) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, wdsp));
-        const auto [txLo, txHi] = defaultTxPassbandForMode(mode);
-        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, static_cast<double>(txLo)),
-            Q_ARG(double, static_cast<double>(txHi)));
+        pushTxPassband(mode);
     }
     emitSliceState(ddc);
     notifyOperatingStateChanged();
@@ -1873,10 +1972,7 @@ void Hl2Backend::setTxSlice(int sliceId)
     if (m_txDsp) {
         QMetaObject::invokeMethod(m_txDsp, "setMode", Qt::QueuedConnection,
             Q_ARG(WdspChannel::Mode, modeFromString(r->mode)));
-        const auto [txLo, txHi] = defaultTxPassbandForMode(r->mode);
-        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
-            Q_ARG(double, static_cast<double>(txLo)),
-            Q_ARG(double, static_cast<double>(txHi)));
+        pushTxPassband(r->mode);
     }
     // The band filter's keyed-TX override follows m_txDdc, so re-evaluate it.
     applyBandFilter("tx slice");
@@ -2162,6 +2258,33 @@ void Hl2Backend::setKeying(bool key)
                           "without AETHER_AUTOMATION_ALLOW_TX";
         return;
     }
+    // THE ALC'S HOLD THRESHOLD IS A SILENT CLIFF, so say when an operator has
+    // fallen off it.
+    //
+    // Below alcHoldBelowDbfs the ALC deliberately stops raising gain — that is
+    // what keeps it from winding up 40 dB on room noise between words and
+    // fighting the speech processor. But a microphone whose PEAKS never reach
+    // the threshold now gets no makeup gain at all where it previously got up to
+    // 40 dB, and "I was quiet on the air" points at nothing. The answer is mic
+    // gain, and the meter that shows it is the one this very peak feeds.
+    //
+    // At unkey, once per transmission, on the main thread: the DSP worker must
+    // not log per block, and a per-block test would fire on every normal
+    // transmission because the pauses between words are what the hold is for.
+    if (m_keyed && !key) {
+        constexpr double kHoldDbfs = Hl2TxDsp::Config{}.alcHoldBelowDbfs;
+        if (m_txMicPeakMaxDbfs > -139.0f
+            && m_txMicPeakMaxDbfs < static_cast<float>(kHoldDbfs)) {
+            qCInfo(lcHl2) << "HL2 TX: microphone peaked at" << m_txMicPeakMaxDbfs
+                          << "dBFS for the whole transmission, below the ALC hold"
+                             " threshold of" << kHoldDbfs
+                          << "dBFS — the ALC held rather than lifting it, so that"
+                             " audio went out quiet. Raise mic gain.";
+        }
+    }
+    if (key)
+        m_txMicPeakMaxDbfs = -140.0f;
+
     m_keyed = key;
     // MUTE RECEIVE AUDIO WHILE TRANSMITTING.
     //
@@ -2372,6 +2495,106 @@ void Hl2Backend::applyDrive(int percent)
     }
     const int clamped = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
     setTxDriveLevel(clamped * kTxDriveMax / 100);
+}
+
+std::pair<int, int> Hl2Backend::effectiveTxPassband(const QString& mode) const
+{
+    // SSB VOICE ONLY, even though the operator's setting is remembered globally.
+    //
+    // The control this comes from is the PHONE applet's TX low-cut/high-cut, and
+    // it means "shape my voice". Letting it reach CW would set the keying
+    // envelope's bandwidth from a voice slider — an operator who widened to
+    // 100..4000 for eSSB would transmit CW four times wider than the 300..900
+    // the mode wants, and nothing in the phone applet would suggest why. AM/FM
+    // are excluded for the same reason, and the digital modes because their
+    // 150..3000 is chosen to match what the far-end decoder expects rather than
+    // what sounds good.
+    const QString u = mode.toUpper();
+    const bool ssbVoice = u == QLatin1String("USB") || u == QLatin1String("LSB");
+    if (m_txFilterFromOperator && ssbVoice)
+        return {m_txFilterLowHz, m_txFilterHighHz};
+    return defaultTxPassbandForMode(mode);
+}
+
+// Push the effective passband at the modulator AND echo it upward.
+//
+// The echo is what stops the Phone applet's cut readout being a claim about a
+// passband the modulator is not running. TransmitModel adopts the operator's
+// request optimistically — it has to, because a host-modulating backend never
+// echoes status — so after a mode change into CW the applet would still show the
+// eSSB 100..4000 the operator dialled in for SSB while the transmitter ran the
+// 300..900 CW wants. Nothing on screen would say which of the two was real.
+//
+// Same shape, and the same reason, as the per-band drive echo in
+// applyPerBandStateFor(): the backend is authoritative about what it actually
+// applied, and says so as a normalized delta. TransmitModel::applyChanges()
+// deliberately does NOT emit txFilterCommandIssued, so this cannot loop back
+// through RadioModel as a fresh setTxFilter() (pinned by transmit_model_test).
+//
+// This is also what makes a RESTORED passband visible: applyRestoredState()
+// seeds the members, connectRadio() hands them to the modulator through the
+// Config, and without an echo the applet showed its own construction default
+// until the operator happened to touch a button.
+void Hl2Backend::pushTxPassband(const QString& mode)
+{
+    const auto [lo, hi] = effectiveTxPassband(mode);
+    if (m_txDsp) {
+        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
+            Q_ARG(double, static_cast<double>(lo)),
+            Q_ARG(double, static_cast<double>(hi)));
+    }
+    TransmitDelta delta;
+    delta.txFilterLow = lo;
+    delta.txFilterHigh = hi;
+    emit transmitChanged(delta);
+}
+
+// The Phone applet's TX low-cut / high-cut.
+//
+// eSSB works here and needs nothing special: the modulator's bandpass is
+// designed per call (Hl2TxDsp::setFilter re-runs designFilters), the audio
+// arriving from AudioEngine is 24 kHz so anything below ~11 kHz is
+// representable, and the 255-tap Blackman prototype keeps a usable skirt across
+// that range. The upper bound below is the modulator's, not the operator's
+// taste: what belongs on the air is a band-plan question this layer has no
+// business deciding.
+void Hl2Backend::setTxFilter(int lowHz, int highHz)
+{
+    lowHz = std::clamp(lowHz, 0, kTxAudioMaxHz - 50);
+    highHz = std::clamp(highHz, lowHz + 50, kTxAudioMaxHz);
+
+    m_txFilterFromOperator = true;
+    m_txFilterLowHz = lowHz;
+    m_txFilterHighHz = highHz;
+
+    qCInfo(lcHl2) << "HL2: TX passband set to" << lowHz << ".." << highHz << "Hz"
+                  << "(operator override; mode defaults no longer apply)";
+
+    // Push through effectiveTxPassband() rather than the raw values, so a change
+    // made while the transmitter is in CW is REMEMBERED but not applied — it
+    // takes effect when the operator returns to SSB. Pushing lowHz/highHz
+    // directly here would bypass the mode rule that every other call site
+    // honours, and the setting would apply immediately in CW and then correct
+    // itself on the next mode change.
+    //
+    // The one push that does NOT go through pushTxPassband(), because it must not
+    // echo. In SSB the echo would be value-identical and pointless; outside it,
+    // snapping the applet back to the mode default would make the operator's NEXT
+    // nudge compute from that default and quietly overwrite the eSSB pair this
+    // call just remembered. The mode-change echo below is what makes the readout
+    // honest, without a path that can eat the setting.
+    const Receiver* txRx = rx(m_txDdc);
+    const QString txMode = txRx ? txRx->mode : QStringLiteral("USB");
+    const auto [applyLo, applyHi] = effectiveTxPassband(txMode);
+    if (m_txDsp)
+        QMetaObject::invokeMethod(m_txDsp, "setFilter", Qt::QueuedConnection,
+            Q_ARG(double, static_cast<double>(applyLo)),
+            Q_ARG(double, static_cast<double>(applyHi)));
+
+    // Client-authoritative state moved, so the capture half has to know — the
+    // radio will never report this back, and without the hook the setting only
+    // reaches disk if some OTHER setter happens to fire before the session ends.
+    notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setTxPower(int percent)
@@ -2590,6 +2813,14 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_sampleRateHz = 48000;       // construction default — radio B must not
                                   // inherit radio A's span (PR #4619 review)
     m_currentBandKey.clear();
+    // Same rule for the TX passband: a same-family swap must not carry radio A's
+    // eSSB cuts onto radio B. Back to virgin defaults, which for this pair means
+    // "the operator has chosen nothing" — so effectiveTxPassband() resumes
+    // deriving from the mode until either a restore or the operator says
+    // otherwise.
+    m_txFilterFromOperator = false;
+    m_txFilterLowHz = 300;
+    m_txFilterHighHz = 2700;
 
     RestoredRadioState valid;
     if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)
@@ -2634,6 +2865,31 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     for (auto it = driveByBand.constBegin(); it != driveByBand.constEnd(); ++it)
         m_driveByBand.insert(it.key(), qBound(0, it.value().toInt(), 100));
 
+    // The TX passband. Validated as a PAIR and adopted only if the pair is
+    // sane — a half-restored passband would be a value the operator never
+    // chose, which is exactly what this boundary exists to refuse. Both keys
+    // must be present for the same reason: one edge restored against the other
+    // edge's mode default is not the setting that was saved.
+    //
+    // The bounds are the modulator's, matching setTxFilter(): 24 kHz TX audio
+    // gives a 12 kHz ceiling, and the edges must stay 50 Hz apart. A document
+    // that fails this is dropped whole, leaving m_txFilterFromOperator false so
+    // the mode derivation stays in charge.
+    if (txSetpoints.contains(QStringLiteral("filterLowHz"))
+        && txSetpoints.contains(QStringLiteral("filterHighHz")))
+    {
+        const int lowHz = txSetpoints.value(QStringLiteral("filterLowHz")).toInt();
+        const int highHz = txSetpoints.value(QStringLiteral("filterHighHz")).toInt();
+        if (lowHz >= 0 && highHz <= kTxAudioMaxHz && lowHz + 50 <= highHz) {
+            m_txFilterLowHz = lowHz;
+            m_txFilterHighHz = highHz;
+            m_txFilterFromOperator = true;
+        } else {
+            qCWarning(lcHl2) << "HL2 restore: dropping out-of-range TX passband"
+                             << lowHz << ".." << highHz;
+        }
+    }
+
     m_restoredState = valid;
     m_haveRestoredState = true;
     qCInfo(lcHl2) << "HL2 restore: freq" << valid.rfFrequencyHz << "mode"
@@ -2672,6 +2928,32 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     QJsonObject txSetpoints{{QStringLiteral("driveByBand"), driveByBand}};
     if (m_driveDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("defaultPercent"), m_driveDefaultPercent);
+
+    // The operator's TX passband — the Phone applet's low-cut / high-cut.
+    //
+    // FLAT, not per-band or per-mode, unlike the drive and LNA maps beside it.
+    // That is a deliberate difference and worth stating, because the neighbours
+    // set the opposite expectation.
+    //
+    // The control is ONE pair of sliders. Persisting it per band or per mode
+    // would make those sliders move on their own: change band without touching
+    // them and the displayed cut points would jump to that band's remembered
+    // pair. That is the same class of surprise as a mode change silently
+    // replacing the passband, which is the bug m_txFilterFromOperator exists to
+    // prevent — reintroducing it on a different axis would be a poor trade.
+    //
+    // Per-mode specifically buys nothing here: effectiveTxPassband() only honours
+    // the override for USB and LSB, and an operator's voice is the same voice on
+    // both. What genuinely varies between a ragchew and a DX pileup is the whole
+    // audio chain, not one filter pair, and mic profiles are the surface for that.
+    //
+    // ONLY WRITTEN ONCE THE OPERATOR HAS CHOSEN. Persisting the mode-derived
+    // default would make the next connect look like an operator override and
+    // permanently suppress the per-mode derivation.
+    if (m_txFilterFromOperator) {
+        txSetpoints.insert(QStringLiteral("filterLowHz"), m_txFilterLowHz);
+        txSetpoints.insert(QStringLiteral("filterHighHz"), m_txFilterHighHz);
+    }
     state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
                                   {QStringLiteral("txSetpoints"), txSetpoints}};
     state.extensionSchemaVersion = 1;
@@ -2970,6 +3252,23 @@ void Hl2Backend::defineMeters()
         0.0, 100.0,    QStringLiteral("PA temperature"));
     def(6, QStringLiteral("TX"),  QStringLiteral("MICPEAK"), QStringLiteral("dBFS"),
         -100.0, 0.0,   QStringLiteral("Microphone peak"));
+    // The post-ALC transmit level. Named ALC because that is the name MeterModel
+    // binds to its swAlc() accessor, which is what the Phone/CW applet's ALC
+    // gauges read — the meter is defined by what consumes it, not by which stage
+    // happens to produce it.
+    def(7, QStringLiteral("TX"),  QStringLiteral("ALC"),     QStringLiteral("dBFS"),
+        -100.0, 0.0,   QStringLiteral("Post-ALC transmit peak"));
+    // Speech-processor gain reduction, as a POSITIVE amount of compression in
+    // dB — the sign convention MeterModel's COMPPEAK path already expects, and
+    // the opposite of ClientComp::gainReductionDb()'s own (which is <= 0).
+    //
+    // sourceIndex is left at its default 0, which is below MeterModel's
+    // kMinTxWaveformSourceIndex of 8, so this lands in the by-slice map under
+    // the implicit slice rather than the explicit TX-waveform map. That is the
+    // right bucket for a radio with one transmitter: the Flex form of this meter
+    // is per-waveform-slice, and there is no such thing here.
+    def(8, QStringLiteral("TX"),  QStringLiteral("COMPPEAK"), QStringLiteral("dB"),
+        0.0, 25.0,     QStringLiteral("Speech processor compression"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)

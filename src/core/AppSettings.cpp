@@ -985,15 +985,8 @@ QStringList AppSettings::stationKeysForDiagnostics() const
 
 QList<QPair<QString, QString>> AppSettings::radioFeaturesForDiagnostics() const
 {
-    QMutexLocker ioLocker(&m_saveMutex);
     QList<QPair<QString, QString>> out;
-    if (!m_db || !m_db->isOpen()) {
-        return out;
-    }
-    QList<SettingsDatabase::RadioFeatureRow> rows;
-    if (!m_db->listRadioFeatures(rows)) {
-        return out;
-    }
+    const QList<RadioFeatureEntry> rows = radioFeatureEntriesForDiagnostics();
     for (const auto& row : rows) {
         out.append({QStringLiteral("%1/%2/%3@v%4")
                         .arg(row.family,
@@ -1004,6 +997,49 @@ QList<QPair<QString, QString>> AppSettings::radioFeaturesForDiagnostics() const
                     row.value});
     }
     return out;
+}
+
+QList<AppSettings::RadioFeatureEntry>
+AppSettings::radioFeatureEntriesForDiagnostics() const
+{
+    QMutexLocker ioLocker(&m_saveMutex);
+    QList<RadioFeatureEntry> out;
+    if (!m_db || !m_db->isOpen()) {
+        return out;
+    }
+    QList<SettingsDatabase::RadioFeatureRow> rows;
+    if (!m_db->listRadioFeatures(rows)) {
+        return out;
+    }
+    out.reserve(rows.size());
+    for (const auto& row : rows) {
+        out.append({row.family, row.radioId, row.feature, row.schemaVersion,
+                    row.value});
+    }
+    return out;
+}
+
+bool AppSettings::storeWritable() const
+{
+    QReadLocker locker(&m_lock);
+    return m_loadState == LoadState::ReadyToSave;
+}
+
+bool AppSettings::readAppRowFromDisk(const QString& key, QString& value) const
+{
+    return SettingsDatabase::readAppValueFromFile(m_filePath, key, value);
+}
+
+bool AppSettings::readStationRowFromDisk(const QString& key,
+                                         QString& value) const
+{
+    QString station;
+    {
+        QReadLocker locker(&m_lock);
+        station = m_stationName;
+    }
+    return SettingsDatabase::readStationValueFromFile(m_filePath, station, key,
+                                                      value);
 }
 
 // ─── Radio-scoped feature documents (RFC #4603) ──────────────────────────────
@@ -1172,6 +1208,15 @@ void AppSettings::setStationValue(const QString& key, const QVariant& val)
     }
     m_stationSettings.insert(key, str);
     m_dirtyStationKeys.insert(key);
+}
+
+void AppSettings::removeStationValue(const QString& key)
+{
+    QWriteLocker locker(&m_lock);
+    if (m_stationSettings.remove(key) > 0) {
+        m_dirtyStationKeys.insert(key);   // a dirty key absent from the cache
+                                          // becomes a row delete in save()
+    }
 }
 
 QString AppSettings::stationName() const

@@ -2,6 +2,8 @@
 
 #include <QString>
 
+class QJsonObject;
+
 namespace AetherSDR {
 
 // Secret-safe rendering of the settings store for diagnostics (the support
@@ -17,6 +19,13 @@ namespace SettingsSanitizer {
 
 // True when a key/field name looks credential-bearing.
 bool isSecretKey(const QString& key);
+
+// True when the document contains a credential-shaped FIELD at any depth —
+// the editability twin of redactedValue()'s recursive masking. A UI that
+// shows a value redacted must not let the operator edit (and write the
+// redaction placeholder over) the original; this is the one predicate both
+// decisions derive from (PR #4631 review).
+bool containsSecretField(const QJsonObject& doc);
 
 // Redact `value` for display under `key`: whole-value redaction when the key
 // is secret-shaped, recursive field redaction when the value is a JSON

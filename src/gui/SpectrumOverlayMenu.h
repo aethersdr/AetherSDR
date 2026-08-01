@@ -90,6 +90,11 @@ public:
     // backend without DAX simply does not have, so on an HL2 they were live
     // controls wired to nothing.
     void setDaxStreamsAvailable(bool available);
+    // Whether the RADIO computes a per-tile waterfall black level
+    // (RadioCapabilities::hasRadioSideWaterfallAutoBlack). False removes HW from
+    // the Black Level button's cycle and moves off it if it was selected —
+    // the SW estimate is untouched and stays available on every family.
+    void setRadioSideAutoBlackAvailable(bool available);
     void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
@@ -346,8 +351,17 @@ private:
     QPushButton* m_autoBlackBtn{nullptr};
     // Auto-black is a 3-way cycle on one button: 0 = Off, 1 = Auto-C (client
     // noise-floor estimate), 2 = Auto-R (radio per-tile level).
+    // The operator's stored INTENT (0 Off / 1 SW / 2 HW). Keeps HW across a
+    // session on a radio that cannot serve it — see effectiveAutoBlackMode.
     int m_autoBlackMode{1};
+    // Permissive default, matching every other capability gate: with no
+    // radio attached there is nothing to be honest about.
+    bool m_radioSideAutoBlackAvailable{true};
     void applyAutoBlackMode(int mode, bool emitSignals);
+    // m_autoBlackMode masked by the capability. The stored field is the
+    // operator's intent and may hold HW on a radio that has none; this is what
+    // the button shows and what the app acts on. (#4606)
+    int  effectiveAutoBlackMode() const;
     void clearKiwiWaterfallAutoButtonState();
     // Two values backing the single Black slider; the slider shows whichever
     // matches the current AUTO state.  Toggling AUTO swaps the displayed

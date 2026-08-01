@@ -364,5 +364,130 @@ int main(int argc, char** argv)
         backend.disconnectRadio();
     }
 
+    // ---- the TX passband round-trips, and only once chosen ----------------
+    //
+    // The eSSB case the persistence exists for: set cuts, restart, and the
+    // modulator must come back where the operator left it rather than at the
+    // mode default while everything around it restores. (#4609 review)
+    {
+        hl2::Hl2Backend backend;
+        // Nothing chosen yet: the document must NOT carry a passband, or the
+        // next connect would read the mode-derived default as an operator
+        // override and permanently suppress the per-mode derivation.
+        const QJsonObject fresh = backend.currentOperatingState()
+                                      .extension.value(QStringLiteral("txSetpoints"))
+                                      .toObject();
+        check(!fresh.contains(QStringLiteral("filterLowHz"))
+                  && !fresh.contains(QStringLiteral("filterHighHz")),
+              "an untouched TX passband is not persisted as an override");
+
+        backend.setTxFilter(100, 4000);           // eSSB
+        const QJsonObject captured = backend.currentOperatingState()
+                                         .extension.value(QStringLiteral("txSetpoints"))
+                                         .toObject();
+        check(captured.value(QStringLiteral("filterLowHz")).toInt() == 100
+                  && captured.value(QStringLiteral("filterHighHz")).toInt() == 4000,
+              "an operator TX passband is captured into ext.txSetpoints");
+
+        // Round-trip into a fresh backend, as a restart would.
+        hl2::Hl2Backend restored;
+        RestoredRadioState state;
+        state.extensionSchemaVersion = 1;
+        state.extension = QJsonObject{{QStringLiteral("txSetpoints"), captured}};
+        restored.applyRestoredState(state);
+        const QJsonObject back = restored.currentOperatingState()
+                                     .extension.value(QStringLiteral("txSetpoints"))
+                                     .toObject();
+        check(back.value(QStringLiteral("filterLowHz")).toInt() == 100
+                  && back.value(QStringLiteral("filterHighHz")).toInt() == 4000,
+              "the restored TX passband survives into the next session");
+    }
+
+    // ---- the TX passband is a validation boundary too ---------------------
+    {
+        // Validated as a PAIR: a half-present or out-of-range document is
+        // dropped WHOLE, leaving the mode derivation in charge, rather than
+        // restoring one edge against the other's default — a passband the
+        // operator never chose.
+        struct Case { QJsonObject tx; const char* what; };
+        const Case cases[] = {
+            {QJsonObject{{QStringLiteral("filterLowHz"), 100}},
+             "a TX passband missing its high edge is dropped"},
+            {QJsonObject{{QStringLiteral("filterHighHz"), 4000}},
+             "a TX passband missing its low edge is dropped"},
+            {QJsonObject{{QStringLiteral("filterLowHz"), 4000},
+                         {QStringLiteral("filterHighHz"), 100}},
+             "an inverted TX passband is dropped"},
+            {QJsonObject{{QStringLiteral("filterLowHz"), 100},
+                         {QStringLiteral("filterHighHz"), 99000}},
+             "a TX passband above the modulator's ceiling is dropped"},
+            {QJsonObject{{QStringLiteral("filterLowHz"), -500},
+                         {QStringLiteral("filterHighHz"), 2700}},
+             "a negative TX low cut is dropped"},
+        };
+        for (const Case& c : cases) {
+            hl2::Hl2Backend backend;
+            RestoredRadioState state;
+            state.extensionSchemaVersion = 1;
+            state.extension = QJsonObject{{QStringLiteral("txSetpoints"), c.tx}};
+            backend.applyRestoredState(state);
+            const QJsonObject out = backend.currentOperatingState()
+                                        .extension.value(QStringLiteral("txSetpoints"))
+                                        .toObject();
+            check(!out.contains(QStringLiteral("filterLowHz")), c.what);
+        }
+    }
+
+    // ---- the restored passband is ANNOUNCED, not just applied --------------
+    //
+    // The modulator learns it from Hl2TxDsp::Config at connect, and nothing else
+    // did: TransmitModel — and therefore the Phone applet's cut readout — went on
+    // showing its own construction default until the operator happened to press a
+    // cut button, so the number on screen disagreed with the transmitter. The
+    // backend is authoritative about what it actually applied and has to say so
+    // (#4609 review). Same normalized-delta echo as the per-band drive beside it.
+    {
+        hl2::Hl2Backend backend;
+        int echoedLow = -1;
+        int echoedHigh = -1;
+        QObject::connect(&backend, &IRadioBackend::transmitChanged, &backend,
+                         [&](const TransmitDelta& d) {
+            if (d.txFilterLow)  echoedLow = *d.txFilterLow;
+            if (d.txFilterHigh) echoedHigh = *d.txFilterHigh;
+        });
+
+        RestoredRadioState state;
+        state.extensionSchemaVersion = 1;
+        state.extension = QJsonObject{
+            {QStringLiteral("txSetpoints"),
+             QJsonObject{{QStringLiteral("filterLowHz"), 100},
+                         {QStringLiteral("filterHighHz"), 4000}}}};
+        backend.applyRestoredState(state);
+
+        RadioConnectRequest req;
+        req.host = QStringLiteral("192.0.2.1");   // TEST-NET-1, never routable
+        req.port = 1024;
+        req.serial = QStringLiteral("AA:BB:CC:DD:EE:FF");
+        backend.connectRadio(req);
+
+        check(echoedLow == 100 && echoedHigh == 4000,
+              "the restored TX passband is echoed upward at connect");
+        backend.disconnectRadio();
+    }
+
+    // ---- a same-family swap must not carry radio A's cuts onto radio B ----
+    {
+        hl2::Hl2Backend backend;
+        backend.setTxFilter(100, 4000);
+        // RadioModel calls this unconditionally on every engaged connect;
+        // an empty state means "this radio has no memory".
+        backend.applyRestoredState(RestoredRadioState{});
+        const QJsonObject out = backend.currentOperatingState()
+                                    .extension.value(QStringLiteral("txSetpoints"))
+                                    .toObject();
+        check(!out.contains(QStringLiteral("filterLowHz")),
+              "a memoryless radio does not inherit the previous radio's TX cuts");
+    }
+
     return g_failures == 0 ? 0 : 1;
 }

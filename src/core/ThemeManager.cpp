@@ -43,6 +43,14 @@ ThemeGradient parseGradient(const QJsonObject& obj)
         const QJsonArray c = obj.value("center").toArray();
         if (c.size() >= 2) {
             g.center = QPointF(c.at(0).toDouble(0.5), c.at(1).toDouble(0.5));
+        } else if (obj.contains("centerX") || obj.contains("centerY")) {
+            // Recovery path for themes written before the writer was fixed: it
+            // emitted centerX/centerY as two scalars, which this parser never
+            // looked for, so those files load with a lost centre. Accept the
+            // old shape on read so an existing user theme keeps its gradient;
+            // the next save rewrites it as the "center" array.
+            g.center = QPointF(obj.value("centerX").toDouble(0.5),
+                               obj.value("centerY").toDouble(0.5));
         }
         g.radius = obj.value("radius").toDouble(0.5);
     }
@@ -96,6 +104,44 @@ QString colorHexToCssFragment(const QString& hex)
     return QStringLiteral("rgba(%1, %2, %3, %4)")
         .arg(c.red()).arg(c.green()).arg(c.blue())
         .arg(c.alphaF(), 0, 'f', 3);
+}
+
+// The single writer for the gradient JSON shape, and the exact inverse of
+// parseGradient() above.  Both storage tiers route through here — semantic
+// tokens via scopeToJson(), the primitives palette via themeDocumentJson() —
+// because they used to hold one hand-rolled copy each and the copies drifted.
+// The palette's copy emitted type/angle/stops only, so a radial gradient
+// stored as a primitive lost its centre AND radius on every save: the same
+// defect as the scope-level one, a tier down, and one parseGradient()'s
+// centerX/centerY recovery cannot help with because there is no centerX in
+// the file to recover from either.  One writer means the next shape fix can
+// only ever need applying once.
+QJsonObject gradientToJson(const ThemeGradient& g)
+{
+    QJsonObject gj;
+    gj.insert("type", g.type == ThemeGradient::Radial
+                        ? QStringLiteral("radial-gradient")
+                        : QStringLiteral("linear-gradient"));
+    gj.insert("angle", g.angle);
+    if (g.type == ThemeGradient::Radial) {
+        // "center" as a [x, y] ARRAY — the shape the reader parses and this
+        // file's own format comment documents.  This used to write
+        // centerX/centerY as two scalars, which the reader never looks for,
+        // so a radial gradient came back at the {0.5, 0.5} default.
+        // `radius` round-tripped fine, which made the loss look like a
+        // half-working feature rather than a format mismatch.
+        gj.insert("center", QJsonArray{g.center.x(), g.center.y()});
+        gj.insert("radius", g.radius);
+    }
+    QJsonArray stops;
+    for (const auto& s : g.stops) {
+        QJsonObject sj;
+        sj.insert("at",    s.at);
+        sj.insert("color", colorToTokenString(s.color));
+        stops.append(sj);
+    }
+    gj.insert("stops", stops);
+    return gj;
 }
 
 // Recursively walk a JSON object, emitting `category.subkey...leaf = value`
@@ -322,11 +368,15 @@ ThemeManager::ThemeManager()
                               .value("ActiveTheme", "Default Dark").toString();
     if (!setActiveTheme(saved)) {
         // Saved theme is gone (most commonly: user saved a custom theme
-        // via the editor and later removed the file out-of-band).  Don't
-        // limp along on seedBuiltinDefaults() — its scalar-only token set
-        // lacks the waterfall.colormap gradients and the operator gets a
-        // baffling all-grayscale waterfall.  Fall back to "Default Dark"
-        // explicitly so the bundled JSON loads and every token is populated.
+        // via the editor and later removed the file out-of-band).  Fall
+        // back to "Default Dark" explicitly rather than limping along on
+        // the seed: the seed is Default Dark's token set, so a user whose
+        // saved theme was light-derived would silently get a dark UI with
+        // no indication why.  (Before the seed was generated the reason
+        // was starker — it had no waterfall.colormap gradients at all, so
+        // the operator got a baffling all-grayscale waterfall.  #3184
+        // fixed that; the fallback is still right for the theme-identity
+        // reason.)
         qCWarning(lcGui) << "ThemeManager: saved theme" << saved
                           << "is unavailable — falling back to Default Dark";
         if (!setActiveTheme(QStringLiteral("Default Dark"))) {
@@ -337,218 +387,30 @@ ThemeManager::ThemeManager()
     }
 }
 
+void ThemeManager::seedScopedToken(const QString& containerPath,
+                                   const QString& token, const QVariant& value)
+{
+    if (ThemeScope* s = scopeOrCreate(containerPath))
+        s->tokens.insert(token, value);
+}
+
 void ThemeManager::seedBuiltinDefaults()
 {
-    // Compiled-in defaults — the Phase 2 canonical taxonomy from
-    // docs/theming/canonical-tokens.md.  Mirrors default-dark.json so
-    // the UI is usable even with zero theme files on disk.  Kept in sync
-    // with the JSON resource manually; Phase 5's editor will eventually
-    // generate this table from the resource at compile time.
-
-    // Backgrounds (6 tiers).  background.0 is the dominant codebase
-    // QWidget base (#0f0f1a, 84 refs); aligning the canonical token to
-    // that value makes the migration bit-identical at every QWidget
-    // that doesn't paint its own background.
-    m_tokens.insert("color.background.0",        QString("#0f0f1a"));
-    m_tokens.insert("color.background.1",        QString("#1a2a3a"));
-    m_tokens.insert("color.background.2",        QString("#304050"));
-    m_tokens.insert("color.background.3",        QString("#506070"));
-    m_tokens.insert("color.background.tx",       QString("#3a2a0e"));
-    m_tokens.insert("color.background.success",  QString("#006040"));
-    m_tokens.insert("color.background.warning",  QString("#5a3a0a"));
-    m_tokens.insert("color.background.spectrum", QString("#000000"));
-    // App-level backdrop painted by MainWindow itself.  Honours alpha for
-    // the "fade to desktop" experiment — when this token's value is
-    // translucent, the compositor renders the desktop wallpaper through
-    // any pixels the rest of the app didn't claim.  Opaque by default so
-    // existing installs see no visual change.
-    m_tokens.insert("color.background.app",      QString("#0f0f1a"));
-
-    // Accents
-    m_tokens.insert("color.accent",          QString("#00b4d8"));
-    m_tokens.insert("color.accent.bright",   QString("#00c8f0"));
-    m_tokens.insert("color.accent.dim",      QString("#0090e0"));
-    m_tokens.insert("color.accent.warning",  QString("#ffb84d"));
-    m_tokens.insert("color.accent.danger",   QString("#ff4d4d"));
-    m_tokens.insert("color.accent.success",  QString("#4dd87a"));
-
-    // Waterfall LIVE chip — dedicated so the live/history indicator can be
-    // recolored independently of the shared danger/label semantics (#3744).
-    // Defaults mirror the prior shared values (red live, grey history).
-    m_tokens.insert("color.waterfall.live",    QString("#ff4d4d"));
-    m_tokens.insert("color.waterfall.history", QString("#506070"));
-
-    // MOX idle accent — dedicated so the "this is the transmit button" amber
-    // can be recolored independently of the shared button styling (#3663).
-    // Defaults mirror the prior hardcoded literals; the same values seed both
-    // presets, so the appearance is theme-agnostic exactly as before.
-    m_tokens.insert("color.tx.mox.border",       QString("#d08020"));
-    m_tokens.insert("color.tx.mox.text",         QString("#f0c890"));
-    m_tokens.insert("color.tx.mox.border.hover", QString("#e09030"));
-    m_tokens.insert("color.tx.mox.text.hover",   QString("#ffd8a0"));
-
-    // Text (4 tiers — label and disabled distinct for Phase 4 contrast
-    // tuning).  text.primary aligned to the dominant codebase body-text
-    // value (#c8d8e8, 367 refs across applets / dialogs / labels).
-    m_tokens.insert("color.text.primary",   QString("#c8d8e8"));
-    m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
-    m_tokens.insert("color.text.label",     QString("#506070"));
-    m_tokens.insert("color.text.disabled",  QString("#3a4a5a"));
-
-    // Borders
-    m_tokens.insert("color.border.subtle", QString("#1a2330"));
-    m_tokens.insert("color.border.strong", QString("#2a3a4d"));
-    m_tokens.insert("color.border.accent", QString("#00b4d8"));
-    m_tokens.insert("color.border.tx",     QString("#5a4a28"));
-
-    // Meters (paint code only)
-    m_tokens.insert("color.meter.crst",          QString("#ff4d4d"));
-    m_tokens.insert("color.meter.rms",           QString("#00b4d8"));
-    m_tokens.insert("color.meter.thresh",        QString("#ffb84d"));
-    m_tokens.insert("color.meter.peak",          QString("#e6f0fa"));
-    m_tokens.insert("color.meter.gainReduction", QString("#f2c14e"));
-    m_tokens.insert("color.meter.bar.fill",      QString("#405060"));
-    // S-meter needle-pivot moulding cover + warm backlight glow (paint code only).
-    m_tokens.insert("color.meter.pivot.fill",    QString("#050509"));
-    m_tokens.insert("color.meter.pivot.rim",     QString("#3a3e48"));
-    m_tokens.insert("color.meter.pivot.glow",    QString("#ffb060"));
-    // Vertical (bottom→top, angle 0°) green→amber→red ramp painted by
-    // ClientLevelMeter / ClientCompMeter into the level bar.  Seeded so
-    // a missing theme file doesn't fall back to whatever the meter
-    // widgets used to hardcode — the editor expects this token to always
-    // exist as a gradient.
-    {
-        ThemeGradient g;
-        g.type = ThemeGradient::Linear;
-        g.angle = 0.0;
-        g.stops = {
-            {0.00, QColor("#2f9e6a")},
-            {0.55, QColor("#6cc56a")},
-            {0.80, QColor("#e8b94c")},
-            {0.95, QColor("#e8553c")},
-            {1.00, QColor("#f2362a")},
-        };
-        m_tokens.insert("color.meter.bar.fillGradient",
-                        QVariant::fromValue(g));
-    }
-
-    // Spectrum + waterfall (paint code only — gradient waterfall.colormap
-    // lands when gradient-token support follows this PR)
-    m_tokens.insert("color.spectrum.trace",    QString("#00b4d8"));
-    m_tokens.insert("color.spectrum.peakHold", QString("#ffb84d"));
-    m_tokens.insert("color.spectrum.average",  QString("#8ea8c0"));
-    m_tokens.insert("color.spectrum.grid",     QString("#1a2330"));
-
-    // Slice indicators A-H + TX-active highlight.  Preliminary values —
-    // a dedicated slice-colour audit may tune these in a follow-up.
-    m_tokens.insert("color.slice.a",  QString("#ff4040"));
-    m_tokens.insert("color.slice.b",  QString("#ff8c00"));
-    m_tokens.insert("color.slice.c",  QString("#ffd040"));
-    m_tokens.insert("color.slice.d",  QString("#40c060"));
-    m_tokens.insert("color.slice.e",  QString("#00b4d8"));
-    m_tokens.insert("color.slice.f",  QString("#4080ff"));
-    m_tokens.insert("color.slice.g",  QString("#c060ff"));
-    m_tokens.insert("color.slice.h",  QString("#ff60a0"));
-    m_tokens.insert("color.slice.tx", QString("#ff4d4d"));
-
-    // Slider + knob component tokens — seeded so themes that pre-date
-    // the namespace (e.g. user copies forked before this PR) still
-    // resolve the canonical Wave-blue look instead of falling through
-    // to empty QSS.  Default Dark / Default Light's JSON aliases
-    // override these when those themes load.
-    m_tokens.insert("color.slider.background",          QString("#1a2a3a"));
-    m_tokens.insert("color.slider.foreground",          QString("#00b4d8"));
-    m_tokens.insert("color.slider.handle",              QString("#c8d8e8"));
-    m_tokens.insert("color.slider.background.disabled", QString("#1a2330"));
-    m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
-    m_tokens.insert("color.slider.handle.disabled",     QString("#506070"));
-    m_tokens.insert("color.knob.background",            QString("#1a2a3a"));
-    m_tokens.insert("color.knob.foreground",            QString("#0070c0"));
-    m_tokens.insert("color.knob.handle",                QString("#c8d8e8"));
-    m_tokens.insert("color.knob.background.disabled",   QString("#1a2330"));
-    m_tokens.insert("color.knob.foreground.disabled",   QString("#3a4a5a"));
-    m_tokens.insert("color.knob.handle.disabled",       QString("#506070"));
-
-    // Toggle button tribes — three semantic colour families (accent /
-    // success / warning), each providing background.checked /
-    // foreground.checked / border.checked.  Unchecked + disabled state
-    // tokens are shared across tribes.  Sites pick a tribe up-front via
-    // ToggleTribe in Theme.h; the accent tribe additionally carries
-    // per-applet background overrides (TX red / RX green / comp amber)
-    // seeded into the scope tree further down.
-    m_tokens.insert("color.toggle.background",          QString("#1a2a3a"));
-    m_tokens.insert("color.toggle.foreground",          QString("#c8d8e8"));
-    m_tokens.insert("color.toggle.border",              QString("#304050"));
-    m_tokens.insert("color.toggle.background.disabled", QString("#0f0f1a"));
-    m_tokens.insert("color.toggle.foreground.disabled", QString("#3a4a5a"));
-    m_tokens.insert("color.toggle.border.disabled",     QString("#0f0f1a"));
-    m_tokens.insert("color.toggle.accent.background.checked",  QString("#0070c0"));
-    m_tokens.insert("color.toggle.accent.foreground.checked",  QString("#00b4d8"));
-    m_tokens.insert("color.toggle.accent.border.checked",      QString("#00b4d8"));
-    m_tokens.insert("color.toggle.success.background.checked", QString("#006040"));
-    m_tokens.insert("color.toggle.success.foreground.checked", QString("#4dd87a"));
-    m_tokens.insert("color.toggle.success.border.checked",     QString("#4dd87a"));
-    m_tokens.insert("color.toggle.warning.background.checked", QString("#5a3a0a"));
-    m_tokens.insert("color.toggle.warning.foreground.checked", QString("#ffb84d"));
-    m_tokens.insert("color.toggle.warning.border.checked",     QString("#ffb84d"));
-
-    // Font + sizing
-    m_tokens.insert("font.family.ui",        QString("Inter"));
-    m_tokens.insert("font.family.mono",      QString("monospace"));
-    // Bundled DSEG fonts (SIL OFL 1.1) — third_party/dseg/, loaded into
-    // QFontDatabase at app startup so themes can resolve them by family
-    // name without depending on the system having them installed.
-    m_tokens.insert("font.family.segment7",  QString("DSEG7 Modern"));
-    m_tokens.insert("font.family.segment14", QString("DSEG14 Modern"));
-    m_tokens.insert("font.family.weather",   QString("DSEGWeather"));
-    // Widget-class tokens — paint a class of widgets (frequency displays,
-    // temperature readouts) so the operator can swap font families across
-    // all members of the class with one Theme Editor pick.
-    m_tokens.insert("font.family.freq",      QString("DSEG7 Modern"));
-    m_tokens.insert("font.family.temp",      QString("DSEG7 Modern"));
-    m_tokens.insert("font.size.tiny",       9);
-    m_tokens.insert("font.size.small",      10);
-    m_tokens.insert("font.size.normal",     12);
-    m_tokens.insert("font.size.large",      14);
-    m_tokens.insert("sizing.panel.padding",      4);
-    m_tokens.insert("sizing.panel.spacing",      4);
-    m_tokens.insert("sizing.panel.cornerRadius", 4);
-    m_tokens.insert("sizing.border.subtle",      1);
-    m_tokens.insert("sizing.border.strong",      2);
-
-    // Per-applet slider + knob foreground overrides seeded into the
-    // scope tree so user themes that pre-date the v2 scope architecture
-    // (e.g. "My Default Dark" forked before this PR) still get the
-    // visible per-applet differentiation.  Bundled themes' JSON
-    // re-asserts these via {color.red.500} aliases — idempotent and
-    // editable in the Theme Editor.  Raw hex used here so the seeds
-    // don't depend on the primitives palette being loaded yet
-    // (older user themes have no primitives section).
+    // Compiled-in defaults, so the UI is usable with zero theme files on disk.
     //
-    // KEEP IN SYNC: the hex values below mirror the primitives palette
-    // in resources/themes/default-dark.json (color.red.500 / .green.500
-    // / .amber.500).  If those primitives shift, update both sites or
-    // the seeded look will drift from the JSON-defined look on bundled
-    // themes (silently — both layers resolve, the JSON wins, but the
-    // visible vs. seeded values diverge for pre-PR user themes).
-    {
-        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/tx"));
-        s->tokens.insert("color.slider.foreground",                QString("#ff4d4d"));
-        s->tokens.insert("color.knob.foreground",                  QString("#ff4d4d"));
-        s->tokens.insert("color.toggle.accent.background.checked", QString("#ff4d4d"));
-    }
-    {
-        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/rx"));
-        s->tokens.insert("color.slider.foreground",                QString("#4dd87a"));
-        s->tokens.insert("color.knob.foreground",                  QString("#4dd87a"));
-        s->tokens.insert("color.toggle.accent.background.checked", QString("#4dd87a"));
-    }
-    {
-        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/comp"));
-        s->tokens.insert("color.slider.foreground",                QString("#ffb84d"));
-        s->tokens.insert("color.knob.foreground",                  QString("#ffb84d"));
-        s->tokens.insert("color.toggle.accent.background.checked", QString("#ffb84d"));
-    }
+    // The table is GENERATED from resources/themes/default-dark.json — see
+    // src/core/ThemeSeedGenerated.cpp and tools/gen_theme_seed.py. It used to be
+    // maintained by hand, and both failure modes the old comment warned about
+    // had already happened (#3184): 9 tokens had drifted from the JSON, and 24
+    // more were never seeded at all, resolving TRANSPARENT on any theme that
+    // predated them.
+    //
+    // Regenerate with `python tools/gen_theme_seed.py` after editing the bundled
+    // theme; tools/check_theme_seed.py --strict fails the build's PR gate when
+    // the two disagree.  Do NOT hand-add tokens here — that is the dual source
+    // of truth this replaced.  tests/theme_seed_test.cpp pins the seed values
+    // that actually reach m_tokens.
+    seedGeneratedDefaults();
 }
 
 void ThemeManager::scanAvailableThemes()
@@ -653,6 +515,13 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
     // are the floor, the JSON wins where defined.
     m_rootScope->children.clear();
     m_primitives.clear();
+    // Per-theme, not per-process: a token missing only in THIS theme should be
+    // reported again when the operator comes back to it, otherwise the one log
+    // line they need has scrolled away and never reappears.
+    {
+        QMutexLocker lock(&m_unknownTokenMutex);
+        m_warnedUnknownTokens.clear();
+    }
     rebuildScopePathIndex();
     seedBuiltinDefaults();  // resets m_tokens (= root scope tokens) + re-seeds applet/* scope tree
 
@@ -691,7 +560,39 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
     // at construction time and we need those scopes to keep existing
     // so the editor's tree picker can still navigate to them.
     for (const QString& path : m_declaredContainers) scopeOrCreate(path);
+
+    // Decide which bundled theme this one counts as a fork of, ONCE, here —
+    // with the file's own values loaded and no operator edits applied yet.
+    //
+    // This has to be a load-time decision rather than a lookup at Reset time.
+    // The fallback discriminator is background luminance, and the operator
+    // reaches for "Reset to default" precisely when they have just made a
+    // value wrong: classify on the live token and a light theme whose
+    // background has been dragged dark reclassifies as dark, so Reset restores
+    // the DARK value for that token and every other one for the rest of the
+    // session — the exact defect this is meant to fix, self-inflicted.
+    m_activeThemeBase = resolveThemeBase(root);
     return true;
+}
+
+QString ThemeManager::resolveThemeBase(const QJsonObject& root) const
+{
+    // Prefer recorded parentage. saveCurrentThemeAs() stamps the base it forked
+    // from into the document, so for any theme this build wrote there is no
+    // guessing at all.
+    const QString recorded = root.value(QStringLiteral("baseTheme")).toString();
+    if (recorded == QLatin1String("Default Light")
+        || recorded == QLatin1String("Default Dark")) {
+        return recorded;
+    }
+    // No parentage recorded (a bundled theme, a hand-written file, or one
+    // saved by a build predating the field): fall back to the theme's own
+    // background luminance as loaded from disk.
+    const QVariant bg = lookupRaw(QString(),
+                                  QStringLiteral("color.background.0"));
+    const QColor c(bg.toString());
+    if (c.isValid() && c.lightness() > 127) return QStringLiteral("Default Light");
+    return QStringLiteral("Default Dark");
 }
 
 void ThemeManager::readPrimitivesFromJson(const QJsonObject& obj)
@@ -859,12 +760,41 @@ bool ThemeManager::saveActiveTheme()
     return writeThemeFile(m_activeTheme, it.value());
 }
 
+QString ThemeManager::factoryBaselinePath() const
+{
+    // Which bundled theme "factory default" means depends on what the operator
+    // is editing. This used to be hardcoded to default-dark.json, so pressing
+    // "Reset to default" while editing Default Light restored the DARK value —
+    // wrong for most of the root tokens the two themes share, including
+    // color.background.0, which flipped a near-white background to near-black.
+    //
+    // m_activeThemeBase is decided once per theme load (see resolveThemeBase),
+    // from recorded parentage where we have it and from the file's own
+    // background luminance where we don't. Deliberately NOT recomputed here:
+    // this is read from the Reset button, and the operator presses Reset
+    // exactly when a value is wrong — classifying on live state lets a
+    // dragged-dark background on a light theme flip the whole baseline.
+    return m_activeThemeBase == QLatin1String("Default Light")
+               ? QStringLiteral(":/themes/default-light.json")
+               : QStringLiteral(":/themes/default-dark.json");
+}
+
 void ThemeManager::ensureFactoryLoaded() const
 {
-    if (m_factoryLoaded) return;
-    m_factoryLoaded = true;  // one shot — even if loading fails, don't re-try
-    QFile f(QStringLiteral(":/themes/default-dark.json"));
+    // Keyed on the baseline the ACTIVE theme resolves to, not loaded once for
+    // the process: switching Dark -> Light has to re-snapshot, or the editor
+    // keeps offering the previous base's values.
+    const QString wanted = factoryBaselinePath();
+    if (m_factoryLoaded && m_factoryBaselinePath == wanted) return;
+    m_factoryTokens.clear();  // stale entries from the other base must not leak
+
+    QFile f(wanted);
     if (!f.open(QIODevice::ReadOnly)) {
+        // Do NOT latch on failure. The old code set m_factoryLoaded before the
+        // load could fail, so a single miss disabled every Reset affordance for
+        // the rest of the process with nothing in the UI to say why. Leaving
+        // the flag clear costs one failed QFile::open per Reset press and lets
+        // it recover if the resource ever becomes readable.
         qCWarning(lcGui) << "ThemeManager: factory snapshot — failed to open"
                          << f.fileName();
         return;
@@ -916,6 +846,10 @@ void ThemeManager::ensureFactoryLoaded() const
         flattenTokens(root.value("tokens").toObject(), QString(),
                       m_factoryTokens);
     }
+    // Latch only on success — every early return above leaves the flags clear
+    // so the next Reset press retries instead of serving an empty snapshot.
+    m_factoryLoaded       = true;
+    m_factoryBaselinePath = wanted;
 }
 
 ThemeGradient ThemeManager::factoryGradient(const QString& token) const
@@ -1009,11 +943,85 @@ bool ThemeManager::deleteTheme(const QString& name)
     return true;
 }
 
+// A theme name that becomes a filename must not carry path structure — and,
+// because a theme file is portable, must not be a name that only breaks once
+// the file reaches another OS.
+//
+// Checked rather than silently rewritten at the two call sites where the
+// operator TYPED the name: replacing characters would save their theme under a
+// name they did not choose. importThemeFromFile() substitutes instead, and that
+// is right for it — there the name comes from a file's JSON, nobody is
+// watching, and refusing would strand an otherwise-valid import.
+//
+// Every rule below is applied on every platform, deliberately. '\' and ':' are
+// not special on Unix and the reserved device names mean nothing there, but a
+// theme saved on Linux gets opened on Windows, and the failure then belongs to
+// someone who never typed anything.
+//
+// `reason` is filled with operator-facing text — the caller is a dialog, and
+// "we refused, here is why" is the entire justification for refusing rather
+// than substituting. Silently returning false and letting the UI guess is how
+// you end up telling someone to check directory permissions.
+bool ThemeManager::isValidThemeName(const QString& name, QString* reason)
+{
+    auto no = [reason](const QString& why) {
+        if (reason) *reason = why;
+        return false;
+    };
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return no(QStringLiteral("A theme name can't be empty."));
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+        return no(QStringLiteral("A theme name can't contain \"/\" or \"\\\" — "
+                                 "it becomes a filename."));
+    if (trimmed.contains(QLatin1Char(':')))
+        return no(QStringLiteral("A theme name can't contain \":\" — it becomes "
+                                 "a filename, and \":\" is reserved on Windows."));
+    for (const QChar c : trimmed) {
+        if (c.unicode() < 0x20)
+            return no(QStringLiteral("A theme name can't contain control "
+                                     "characters."));
+    }
+    // Win32 strips a trailing dot, so "My Theme." and "My Theme" would collide
+    // on disk while reading as two different themes in the list.
+    if (trimmed.endsWith(QLatin1Char('.')))
+        return no(QStringLiteral("A theme name can't end with \".\"."));
+
+    // Reserved DOS device names: still special on Win32 today, with or without
+    // an extension, so "CON.json" opens the console rather than a file.
+    static const QStringList kReserved = {
+        QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"),
+        QStringLiteral("NUL"),
+        QStringLiteral("COM1"), QStringLiteral("COM2"), QStringLiteral("COM3"),
+        QStringLiteral("COM4"), QStringLiteral("COM5"), QStringLiteral("COM6"),
+        QStringLiteral("COM7"), QStringLiteral("COM8"), QStringLiteral("COM9"),
+        QStringLiteral("LPT1"), QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+        QStringLiteral("LPT4"), QStringLiteral("LPT5"), QStringLiteral("LPT6"),
+        QStringLiteral("LPT7"), QStringLiteral("LPT8"), QStringLiteral("LPT9"),
+    };
+    const QString stem = trimmed.section(QLatin1Char('.'), 0, 0).toUpper();
+    if (kReserved.contains(stem))
+        return no(QStringLiteral("\"%1\" is a name Windows reserves for a "
+                                 "device — pick another.").arg(trimmed));
+
+    if (reason) reason->clear();
+    return true;
+}
+
 bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
 {
     const QString trimmed = newName.trimmed();
     if (oldName.isEmpty() || trimmed.isEmpty()) return false;
     if (oldName == trimmed) return true;  // no-op rename
+    // Becomes a filename below — same rule as saveCurrentThemeAs() and
+    // importThemeFromFile().
+    QString why;
+    if (!isValidThemeName(trimmed, &why)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: refusing name"
+                         << trimmed << "—" << why;
+        return false;
+    }
     if (isBuiltInTheme(oldName)) {
         qCWarning(lcGui) << "ThemeManager::renameTheme: refusing to rename "
                             "built-in theme" << oldName;
@@ -1097,26 +1105,7 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
             else if (ut == QMetaType::Double)  leaf = v.toDouble();
             else if (ut == QMetaType::Bool)    leaf = v.toBool();
             else if (ut == gradMetaId) {
-                const ThemeGradient g = v.value<ThemeGradient>();
-                QJsonObject gj;
-                gj.insert("type", g.type == ThemeGradient::Radial
-                                    ? QStringLiteral("radial-gradient")
-                                    : QStringLiteral("linear-gradient"));
-                gj.insert("angle", g.angle);
-                if (g.type == ThemeGradient::Radial) {
-                    gj.insert("centerX", g.center.x());
-                    gj.insert("centerY", g.center.y());
-                    gj.insert("radius",  g.radius);
-                }
-                QJsonArray stops;
-                for (const auto& s : g.stops) {
-                    QJsonObject sj;
-                    sj.insert("at",    s.at);
-                    sj.insert("color", colorToTokenString(s.color));
-                    stops.append(sj);
-                }
-                gj.insert("stops", stops);
-                leaf = gj;
+                leaf = gradientToJson(v.value<ThemeGradient>());
             }
             else if (ut == fontMetaId) {
                 const ThemeFont f = v.value<ThemeFont>();
@@ -1145,10 +1134,19 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
     return result;
 }
 
-bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
+QJsonObject ThemeManager::themeDocumentJson(const QString& themeName,
+                                            const QString& description) const
 {
-    // v2 schema — primitives map + nested scope tree.  v1 themes loaded
-    // from disk auto-upgrade on first save through this writer.
+    // THE one place a theme document is assembled.  Save and export both come
+    // through here, so they cannot disagree about what a theme file contains —
+    // which they did: export hand-rolled its own document and left out
+    // `primitives`, and scope tokens store `{color.red.500}` aliases verbatim,
+    // so an exported theme carried aliases pointing into a palette that wasn't
+    // in the file.  On import resolveAlias() returned the literal and QColor
+    // got handed "{color.red.500}".
+    //
+    // v2 schema — primitives map + nested scope tree.  v1 themes loaded from
+    // disk auto-upgrade on first save through this writer.
     QJsonObject primitives;
     const int gradMetaId = qMetaTypeId<ThemeGradient>();
     for (auto it = m_primitives.constBegin(); it != m_primitives.constEnd(); ++it) {
@@ -1159,23 +1157,10 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
         else if (ut == QMetaType::Double)  primitives.insert(it.key(), v.toDouble());
         else if (ut == QMetaType::Bool)    primitives.insert(it.key(), v.toBool());
         else if (ut == gradMetaId) {
-            // Same gradient JSON shape as scope-level tokens; the loader
-            // recognises both ambient locations.
-            const ThemeGradient g = v.value<ThemeGradient>();
-            QJsonObject gj;
-            gj.insert("type", g.type == ThemeGradient::Radial
-                                ? QStringLiteral("radial-gradient")
-                                : QStringLiteral("linear-gradient"));
-            gj.insert("angle", g.angle);
-            QJsonArray stops;
-            for (const auto& s : g.stops) {
-                QJsonObject sj;
-                sj.insert("at",    s.at);
-                sj.insert("color", colorToTokenString(s.color));
-                stops.append(sj);
-            }
-            gj.insert("stops", stops);
-            primitives.insert(it.key(), gj);
+            // Literally the same writer the scope tokens use — this used to
+            // be a separate copy that omitted `center` and `radius`, so a
+            // radial gradient in the palette round-tripped to the defaults.
+            primitives.insert(it.key(), gradientToJson(v.value<ThemeGradient>()));
         }
     }
 
@@ -1187,9 +1172,23 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
     doc.insert("name",          themeName);
     doc.insert("author",        QStringLiteral("AetherSDR user"));
     doc.insert("version",       QStringLiteral("1.0"));
-    doc.insert("description",   QStringLiteral("Edited via the Theme Editor."));
+    doc.insert("description",   description);
+    // Recorded parentage: which bundled theme this one descends from, so
+    // "Reset to default" restores the right base without having to guess from
+    // the theme's own colours.  Additive within v2 — older builds ignore an
+    // unknown key, and resolveThemeBase() falls back to luminance when it's
+    // absent, which is every file written before this field existed.
+    if (!m_activeThemeBase.isEmpty())
+        doc.insert("baseTheme", m_activeThemeBase);
     if (!primitives.isEmpty()) doc.insert("primitives", primitives);
     doc.insert("scopes",        scopes);
+    return doc;
+}
+
+bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
+{
+    const QJsonObject doc = themeDocumentJson(
+        themeName, QStringLiteral("Edited via the Theme Editor."));
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1204,7 +1203,25 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
 
 bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
 {
-    if (newThemeName.trimmed().isEmpty()) return false;
+    // Trim ONCE and use the trimmed name for everything below — the guard, the
+    // filename, and the map key.  The old code trimmed only for the emptiness
+    // test, so "My Theme " registered under a key with a trailing space and
+    // wrote "My Theme .json"; Win32 strips trailing spaces from filenames, so
+    // the key and the file on disk would disagree there.  renameTheme() has
+    // always trimmed throughout; match it.
+    const QString name = newThemeName.trimmed();
+    // The name becomes a FILENAME below. importThemeFromFile() already refuses
+    // path separators for exactly this reason ("sanitise so we can't
+    // path-traverse via a malicious name field"), but this entry point — the
+    // editor's Save As, where the operator types the name — did not, so a name
+    // containing a separator wrote outside the themes directory. Same rule,
+    // applied consistently.
+    QString why;
+    if (!isValidThemeName(name, &why)) {
+        qCWarning(lcGui) << "ThemeManager::saveCurrentThemeAs: refusing name"
+                         << newThemeName << "—" << why;
+        return false;
+    }
 
     // Mirror scanAvailableThemes — GenericConfigLocation + "/AetherSDR"
     // keeps the saved theme alongside the existing user-dir layout
@@ -1214,16 +1231,20 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
                             + QStringLiteral("/AetherSDR/themes");
     QDir().mkpath(userDir);
     const QString path = userDir + QLatin1Char('/')
-                       + newThemeName + QStringLiteral(".json");
-    if (!writeThemeFile(newThemeName, path)) return false;
+                       + name + QStringLiteral(".json");
+    if (!writeThemeFile(name, path)) return false;
 
     // Register the new theme in the path map so availableThemes() picks it
     // up immediately, then make it the active theme (loads cleanly from
     // the file we just wrote, so the on-disk shape doubles as a validation
     // check).
-    m_themePaths.insert(newThemeName, path);
-    m_activeTheme = newThemeName;
-    AppSettings::instance().setValue("ActiveTheme", newThemeName);
+    //
+    // m_activeThemeBase is deliberately carried across unchanged: a fork of
+    // Default Light is still a descendant of Default Light, and that is exactly
+    // the parentage writeThemeFile() just stamped into the new file.
+    m_themePaths.insert(name, path);
+    m_activeTheme = name;
+    AppSettings::instance().setValue("ActiveTheme", name);
     AppSettings::instance().save();
     emit themeChanged();
     return true;
@@ -1240,62 +1261,35 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
     if (themeName.isEmpty()) return fail(QStringLiteral("Empty theme name."));
     if (filePath.isEmpty())  return fail(QStringLiteral("Empty file path."));
 
-    // For the *active* theme, the live m_tokens already holds the operator's
-    // session edits — saveCurrentThemeAs uses that snapshot.  For any other
-    // theme, re-read its on-disk JSON so we don't accidentally export the
+    // For the *active* theme, the live scope tree already holds the operator's
+    // session edits — saveCurrentThemeAs serialises the same thing.  For any
+    // other theme, re-read its on-disk JSON so we don't accidentally export the
     // active theme's tokens under a different name.
     QJsonObject doc;
     if (themeName == m_activeTheme) {
-        QJsonObject tokensObj;
-        const int gradMetaId = qMetaTypeId<ThemeGradient>();
-        const int fontMetaId = qMetaTypeId<ThemeFont>();
-        for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
-            const QVariant& v = it.value();
-            const int ut = v.userType();
-            QJsonValue leaf;
-            if (ut == QMetaType::QString)      leaf = v.toString();
-            else if (ut == QMetaType::Int)     leaf = v.toInt();
-            else if (ut == QMetaType::Double)  leaf = v.toDouble();
-            else if (ut == QMetaType::Bool)    leaf = v.toBool();
-            else if (ut == gradMetaId) {
-                const ThemeGradient g = v.value<ThemeGradient>();
-                QJsonObject gj;
-                gj.insert("type", g.type == ThemeGradient::Radial
-                                    ? QStringLiteral("radial-gradient")
-                                    : QStringLiteral("linear-gradient"));
-                gj.insert("angle", g.angle);
-                if (g.type == ThemeGradient::Radial) {
-                    gj.insert("centerX", g.center.x());
-                    gj.insert("centerY", g.center.y());
-                    gj.insert("radius",  g.radius);
-                }
-                QJsonArray stops;
-                for (const auto& s : g.stops) {
-                    QJsonObject sj;
-                    sj.insert("at",    s.at);
-                    sj.insert("color", colorToTokenString(s.color));
-                    stops.append(sj);
-                }
-                gj.insert("stops", stops);
-                leaf = gj;
-            }
-            else if (ut == fontMetaId) {
-                const ThemeFont f = v.value<ThemeFont>();
-                QJsonObject fj;
-                fj.insert("family", f.family);
-                if (f.size > 0)        fj.insert("size",  f.size);
-                if (f.color.isValid()) fj.insert("color", colorToTokenString(f.color));
-                leaf = fj;
-            }
-            else continue;
-            tokensObj.insert(it.key(), leaf);
-        }
-        doc.insert("schemaVersion", 1);
-        doc.insert("name",          themeName);
-        doc.insert("author",        QStringLiteral("AetherSDR user"));
-        doc.insert("version",       QStringLiteral("1.0"));
-        doc.insert("description",   QStringLiteral("Exported via the Theme Editor."));
-        doc.insert("tokens",        tokensObj);
+        // Build the SAME document the save path writes, through the same
+        // function, instead of hand-rolling one here.
+        //
+        // The old code walked m_tokens and wrote a top-level "tokens" object.
+        // But m_tokens is a reference into the ROOT SCOPE only (see the header)
+        // — every child scope lives in m_rootScope/m_scopeByPath and was simply
+        // absent from the export. On the bundled dark theme that silently drops
+        // 9 of 12 scoped tokens: all the per-applet slider/knob/toggle
+        // overrides for applet/tx, applet/rx and applet/comp.
+        //
+        // The file still LOADED (the reader has a legacy flat-"tokens"
+        // fallback), which is what made this invisible: the operator got a
+        // theme file back that opened cleanly and had quietly lost its
+        // per-applet differentiation.
+        //
+        // Sharing themeDocumentJson() rather than just scopeToJson() matters:
+        // scope tokens store `{color.red.500}` ALIASES verbatim, so a document
+        // carrying scopes without the `primitives` palette they point into is
+        // worse than one carrying neither — resolveAlias() hands the literal
+        // back and QColor("{color.red.500}") is invalid. Every one of the nine
+        // scoped tokens on the bundled dark theme is such an alias.
+        doc = themeDocumentJson(themeName,
+                                QStringLiteral("Exported via the Theme Editor."));
     } else {
         const auto pit = m_themePaths.constFind(themeName);
         if (pit == m_themePaths.constEnd())
@@ -1340,9 +1334,15 @@ QString ThemeManager::importThemeFromFile(const QString& filePath,
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(0);
     if (schemaVersion <= 0)
         return fail(QStringLiteral("Missing or invalid schemaVersion — file may not be a theme."));
-    if (schemaVersion > 1) {
+    if (schemaVersion > 2) {
         // Forward-compatible-ish: load anyway, but warn the operator.
         // Unknown tokens round-trip; missing tokens fall back to factory.
+        //
+        // The gate was `> 1`, which is stale: loadThemeFile() has read v2
+        // natively since the scope-tree work, and both the save and export
+        // paths now emit v2 — so every ordinary "export a theme, hand it to
+        // another operator, import it" round trip logged "newer than this
+        // build supports". v2 IS what this build writes.
         qCWarning(lcGui) << "ThemeManager::importThemeFromFile: schemaVersion"
                          << schemaVersion << "is newer than this build supports;"
                          << "loading anyway with unknown tokens preserved.";
@@ -1506,6 +1506,27 @@ QString ThemeManager::cssFragment(const QString& token) const
         if (compound.userType() == qMetaTypeId<ThemeFont>()) {
             const int sz = compound.value<ThemeFont>().size;
             if (sz > 0) return QString::number(sz);
+        }
+    }
+    // Unknown token. The empty string still goes back to resolveFor(), because
+    // substituting a placeholder would be worse — Qt would apply a wrong colour
+    // rather than none — but it must not vanish silently.
+    //
+    // What the caller sees without this: `{{color.acent}}` (typo) resolves to
+    // "", the template becomes `color: ;`, Qt discards the malformed
+    // declaration, and the widget keeps its previous appearance. No error, no
+    // log line, and the theme looks "nearly right" — which is far harder to
+    // diagnose than an obviously missing colour.
+    //
+    // Warned once per token: resolveFor() runs on every theme change and every
+    // tracked-stylesheet reapply, so an unguarded warning would flood the log.
+    {
+        QMutexLocker lock(&m_unknownTokenMutex);
+        if (!m_warnedUnknownTokens.contains(token)) {
+            m_warnedUnknownTokens.insert(token);
+            qCWarning(lcGui) << "ThemeManager: stylesheet references unknown token"
+                             << token << "— it resolves to an empty fragment, so the"
+                             << "declaration using it will be dropped by Qt";
         }
     }
     return QString();
@@ -1675,7 +1696,8 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     // Scope-aware resolve — the widget's container chain decides which
     // overrides apply.  Widgets with no declared ancestor fall through
     // to root scope, matching the historical flat behaviour.
-    widget->setStyleSheet(resolveFor(widget, stylesheetTemplate));
+    const QString resolved = resolveFor(widget, stylesheetTemplate);
+    widget->setStyleSheet(resolved);
 
     // First-time registration: connect to destroyed() so the entry
     // disappears when the widget does, AND install ourselves as an
@@ -1702,21 +1724,85 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     }
     TrackedWidget ctx;
     ctx.stylesheetTemplate = stylesheetTemplate;
+    // Remember what we actually pushed so eventFilter can tell "still ours"
+    // from "somebody set their own sheet afterwards".
+    ctx.appliedStylesheet  = resolved;
     ctx.tokens = extractReferencedTokens(stylesheetTemplate);
     m_trackedWidgets.insert(widget, ctx);
 }
 
 bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
 {
-    if (event->type() == QEvent::ParentChange) {
+    // Polish is delivered to a widget when Qt first prepares it for display —
+    // by which time it IS in its final parent chain, however it got there.
+    //
+    // ParentChange alone is not enough, and #4520 is why: the filter is only
+    // installed on TRACKED widgets, so when an untracked ANCESTOR is reparented
+    // the tracked child inside it hears nothing. Real construction code
+    // produces exactly that shape:
+    //
+    //     stack = new QStackedWidget;    // no parent
+    //     label = new QLabel;            // no parent
+    //     applyStyleSheet(label, ...);   // resolves at ROOT — wrong scope
+    //     stack->addWidget(label);       // ParentChange on the LABEL, but the
+    //                                    // stack is still an orphan
+    //     layout->addWidget(stack);      // ParentChange on the STACK, which is
+    //                                    // untracked → the label never re-resolves
+    //
+    // The label then keeps root-scope values until the next themeChanged(). On
+    // the VFO flag that meant a band change (which destroys and rebuilds the
+    // flag) silently reverted the operator's chosen frequency font, while
+    // touching anything in the Theme Editor appeared to "fix" it.
+    //
+    // Show / ShowToParent are the ones that actually catch it: they arrive when
+    // the widget first becomes visible, by which point it is unavoidably in its
+    // final chain no matter how it got there. Polish alone does NOT rescue this
+    // shape — it fires at most once per widget, and in the stack case above it
+    // is spent before the stack joins its scoped host (drop Show/ShowToParent
+    // and the #4520 regression test goes red). Polish still earns its place: it
+    // is what reaches a QStackedWidget page that is never the *current* one, so
+    // VfoWidget's edit-mode m_freqEdit gets the scoped font too, not just the
+    // visible m_freqLabel. ParentChange stays as the earliest and cheapest
+    // signal for the direct case.
+    //
+    // Cost: ParentChange and Polish are once-ish per widget, but Show and
+    // ShowToParent BOTH fire on every show transition — a VFO flag
+    // collapse/expand (VfoWidget::setCollapsed) bulk-toggles visibility across
+    // the whole subtree, so this is not a rare event. The re-resolve is kept
+    // cheap by the no-op guard below: resolveFor() is a regex pass over a short
+    // template, and setStyleSheet() (which drives a full QStyleSheetStyle
+    // repolish) only runs when the resolved QSS actually changed.
+    if (event->type() == QEvent::ParentChange
+        || event->type() == QEvent::Polish
+        || event->type() == QEvent::Show
+        || event->type() == QEvent::ShowToParent) {
         QWidget* w = qobject_cast<QWidget*>(watched);
         if (w) {
             const auto it = m_trackedWidgets.constFind(w);
             if (it != m_trackedWidgets.constEnd()
-                && !it.value().stylesheetTemplate.isEmpty()) {
-                // Re-resolve against the new scope chain.  Cheap: only
-                // fires on rare reparent events, not in any hot path.
-                w->setStyleSheet(resolveFor(w, it.value().stylesheetTemplate));
+                && !it.value().stylesheetTemplate.isEmpty()
+                // Registration through applyStyleSheet() does NOT mean the
+                // widget is still wearing what we gave it.  The house pattern
+                // "register a generic themed look, then overwrite it directly
+                // with per-state colour" is everywhere — RxApplet's per-slice
+                // badge colour, VfoWidget's split badge and RADE SNR label, the
+                // status bar's TX indicator (which would otherwise repaint
+                // itself TX-red while the radio is receiving).  Re-resolving
+                // over one of those wipes real state, so only re-resolve while
+                // the widget still carries exactly the QSS we last applied.
+                && w->styleSheet() == it.value().appliedStylesheet) {
+                const QString resolved =
+                    resolveFor(w, it.value().stylesheetTemplate);
+                // No-op guard: Show + ShowToParent fire as a pair on every
+                // show, so without this each toggle costs two full repolishes
+                // per tracked widget for an identical result.
+                if (resolved != it.value().appliedStylesheet) {
+                    // Record BEFORE setStyleSheet: the repolish it triggers can
+                    // re-enter arbitrary widget code that touches
+                    // m_trackedWidgets, which would invalidate `it`.
+                    m_trackedWidgets[w].appliedStylesheet = resolved;
+                    w->setStyleSheet(resolved);
+                }
             }
         }
     }
@@ -1844,7 +1930,17 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         // Scope-aware re-apply — same path as applyStyleSheet() so an
         // edit at a non-root scope visibly takes effect for every
         // tracked widget under that container.
-        w->setStyleSheet(resolveFor(w, ctx.stylesheetTemplate));
+        //
+        // Unlike eventFilter this re-applies unconditionally, including over
+        // a sheet a caller set directly — a theme switch is an explicit,
+        // user-initiated repaint and that has always been its behaviour.
+        // Recording it keeps eventFilter's "still ours" test meaningful; skip
+        // this and the guard would latch off permanently after the first
+        // theme change.  Record before setStyleSheet(), which can re-enter
+        // widget code that mutates m_trackedWidgets.
+        const QString resolved = resolveFor(w, ctx.stylesheetTemplate);
+        m_trackedWidgets[w].appliedStylesheet = resolved;
+        w->setStyleSheet(resolved);
     }
 }
 

@@ -148,7 +148,13 @@ private:
     qint64 m_cwPhase = 0;      // sample counter; long overflows in ~25 h on LLP64
     int    m_cwSpan  = 0;      // current schedule span (persistent, no per-sample rescan)
     double m_cwPos   = 0.0;    // last in-cycle position, for wrap detection
-    long m_plPhase = 0;
+    // CW tone as a CONTINUOUS RADIANS accumulator, same contract as the birdie
+    // below: a mid-dah pitch change (setKnob "hz" is live via SimBackend's
+    // passthrough) must slide the frequency, never teleport the phase — a
+    // phase jump is exactly the click genCw's 5 ms raised-cosine edges exist
+    // to prevent. m_cwPhase stays purely as the keying-schedule clock. (#4618)
+    double m_cwPhaseRad = 0.0;
+    qint64 m_plPhase = 0;      // sample counter; long overflows in ~25 h on LLP64 (#4618)
     // Voice playback: the bundled speech clip's samples (mono float, 24 kHz),
     // loaded once, and the loop read position.
     std::vector<float> m_voiceSamples;
@@ -158,7 +164,7 @@ private:
     // Birdie phase as a CONTINUOUS RADIANS accumulator (not hz*absolute-time), so
     // changing the pitch (VFO tuning) doesn't teleport the phase and warble.
     double m_birdiePhaseRad = 0.0;
-    long m_hashPhase = 0, m_woodPhase = 0;
+    qint64 m_hashPhase = 0, m_woodPhase = 0;  // sample counters; long overflows in ~25 h on LLP64 (#4618)
 
     // RNG (own stream; Box-Muller spare)
     std::uint64_t m_rng = 0x5EEDULL;

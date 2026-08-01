@@ -163,20 +163,21 @@ void RadioConnection::startSyntheticDemoConnect()
                 "waterfall=0x42000000 center=14.100 bandwidth=0.008 "
                 "min_dbm=-140 max_dbm=-20 x_pixels=1024 y_pixels=700 fps=25 "
                 "ant_list=ANT1"));
-            // line_duration MUST match the rate SimBackend actually emits rows at,
-            // because #4425 made it load-bearing: the renderer now interpolates the
-            // waterfall/3D scroll position over one line_duration between rows. The
-            // demo emits a row every 9th audio frame — 9 × 128/24000 s = 48 ms — so
-            // declaring the old 100 told the renderer to animate each transition
-            // over 100 ms while rows arrived every 48 ms. Every animation was cut
-            // off and restarted about half-way, which reads as the noise floor
-            // rapidly jumping about (and, since the audio and the spectrum come
-            // from the same NoiseMixer scene, is audible too). (RFC #4288.)
+            // line_duration carries the 1..100 waterfall RATE, not milliseconds
+            // (core/WaterfallRate.h). #4425 made it load-bearing: the renderer
+            // interpolates the waterfall/3D scroll position over one row interval,
+            // so a declared rate whose cadence disagrees with the real one makes
+            // every animation cut off and restart part-way, which reads as the
+            // noise floor rapidly jumping about (and, since the audio and the
+            // spectrum come from the same NoiseMixer scene, is audible too).
+            // The demo emits a row every 9th audio frame — 9 × 128/24000 s =
+            // 48 ms — and asks for the top of the control so nothing re-gates it.
+            // (RFC #4288.)
             emitSyntheticStatus(QStringLiteral(
                 "SDE300001|display waterfall 0x42000000 client_handle=0xDE300001 "
                 "panadapter=0x40000000 line_duration=%1 auto_black=1 "
                 "black_level=15 color_gain=50")
-                .arg(AetherSDR::SimBackend::kWaterfallLineDurationMs));
+                .arg(AetherSDR::SimBackend::kWaterfallRate));
             emitSyntheticStatus(QStringLiteral(
                 "SDE300001|slice 0 client_handle=0xDE300001 pan=0x40000000 "
                 "RF_frequency=14.100000 mode=USB filter_lo=100 filter_hi=2900 "
