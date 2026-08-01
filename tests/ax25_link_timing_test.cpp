@@ -493,6 +493,78 @@ static void testRealGapStillUsesRejectException()
     CHECK(link.stats().iDuplicate == 0, "and are not mistaken for duplicates");
 }
 
+// A duplicate whose N(R) frees our send window must not leave queued data
+// stranded. The duplicate handler acknowledged the repeat and returned without
+// pumping, so with nothing outstanding and T1 stopped there was nothing left to
+// start the next segment: the mailbox sat silent with 516 bytes queued for the
+// full 126 s until T3 shook it loose. Observed live 2026-07-31 — "it just
+// stopped sending".
+static void testDuplicateDoesNotStrandQueuedData()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+    link.setPaclen(64);
+
+    QVector<Frame> sent;
+    QObject::connect(&link, &Ax25Connection::sendFrame, [&](const QByteArray& raw) {
+        if (auto f = Frame::decode(raw))
+            sent.append(*f);
+    });
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+
+    // A multi-segment reply: one frame goes out, the rest waits on the window.
+    link.sendData(QByteArray(200, 'M'));
+    CHECK(link.unacked() == 1, "window=1 puts one frame in flight");
+    CHECK(link.sendQueueBytes() > 0, "the rest is queued");
+
+    // The peer's I-frame arrives in sequence and is accepted.
+    link.onFrameReceived(Frame::makeI(call("N0PMS-1"), call("K7ABC"), 0, 0,
+                                      /*pf=*/true, QByteArrayLiteral("H\r")));
+
+    // Now the SAME frame again — a duplicate, because its ack was lost — and
+    // this time its N(R) acknowledges our outstanding segment.
+    sent.clear();
+    link.onFrameReceived(Frame::makeI(call("N0PMS-1"), call("K7ABC"), 0, /*nr=*/1,
+                                      /*pf=*/true, QByteArrayLiteral("H\r")));
+
+    CHECK(link.stats().iDuplicate >= 1, "the repeat is recognised as a duplicate");
+    CHECK(link.unacked() == 1,
+          "the freed window is immediately refilled from the queue, not left idle");
+    bool sentData = false;
+    for (const Frame& f : sent)
+        if (f.type == FrameType::I) sentData = true;
+    CHECK(sentData, "the next queued segment goes out on the duplicate's acknowledgement");
+}
+
+// The same guarantee, stated structurally: a connected link may never come to
+// rest with the window free and data still queued.
+static void testNeverIdleWithQueuedData()
+{
+    Ax25Connection link;
+    link.setLocalAddress(call("N0PMS-1"));
+    link.setPaclen(64);
+    QObject::connect(&link, &Ax25Connection::sendFrame, [](const QByteArray&) {});
+
+    link.onFrameReceived(Frame::makeU(call("N0PMS-1"), call("K7ABC"),
+                                      FrameType::SABM, true, true));
+    link.sendData(QByteArray(300, 'M')); // five segments at paclen 64
+
+    // Walk the whole reply out, acknowledging one frame at a time the way a
+    // half-duplex peer does. After every single exchange the invariant holds.
+    for (int i = 0; i < 6 && link.isConnected(); ++i) {
+        const bool queued = link.sendQueueBytes() > 0;
+        if (queued) {
+            CHECK(link.unacked() > 0,
+                  "with data queued the link always has a frame in flight");
+        }
+        link.onFrameReceived(Frame::makeS(call("N0PMS-1"), call("K7ABC"),
+                                          FrameType::RR, (i + 1) % 8, false, false));
+    }
+    CHECK(link.sendQueueBytes() == 0, "the whole reply drains");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -512,6 +584,8 @@ int main(int argc, char** argv)
     testResetDropsSilently();
     testLostAckIsRecoveredNotDeadlocked();
     testRealGapStillUsesRejectException();
+    testDuplicateDoesNotStrandQueuedData();
+    testNeverIdleWithQueuedData();
 
     if (g_failures == 0)
         std::fprintf(stderr, "ax25_link_timing_test: all checks passed\n");

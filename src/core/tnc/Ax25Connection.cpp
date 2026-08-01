@@ -562,7 +562,19 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
             ++m_stats.iDuplicate;
             emit activity(QStringLiteral("Duplicate I NS=%1 (ack lost) — re-acking N(R)=%2")
                 .arg(frame.ns).arg(m_vr));
-            sendAck(/*pollFinal=*/frame.pollFinal);
+            // The duplicate's N(R) may have acknowledged our own outstanding
+            // frame up at ackUpTo(), freeing the send window — so pump before
+            // acking, exactly as the in-sequence path does. Omitting this
+            // stalled the link dead: with the window free and T1 stopped,
+            // nothing was left to trigger the next segment, so a mailbox with
+            // 516 bytes still queued sat silent for the full 126 s until T3
+            // shook it loose. Observed live 2026-07-31 with iDuplicate=1.
+            // An I-frame carries N(R) and acknowledges for free, so the
+            // explicit RR is only needed when nothing went out.
+            m_ackPending = true;
+            pumpOutbound();
+            if (m_ackPending)
+                sendAck(/*pollFinal=*/frame.pollFinal);
         } else {
             // Out of sequence. Send REJ exactly ONCE per gap (reject exception),
             // then discard further out-of-sequence frames SILENTLY — even polled
@@ -664,6 +676,17 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
     case FrameType::Unknown:
         break; // UI handled elsewhere (beacons / monitor); ignore here.
     }
+
+    // Safety net: never sit idle with data still queued. Every branch above
+    // that frees the send window is meant to pump, but one that forgets stalls
+    // the link outright — T1 is stopped because nothing is outstanding, and
+    // nothing is left to start the next segment until T3 fires two minutes
+    // later. That is a silent, total stop with the operator watching a half-
+    // delivered menu, and it is worth making structural rather than trusting
+    // every present and future branch to remember. Bounded by the send window,
+    // so it can never key more than the one frame that branch owed anyway.
+    if (m_state == State::Connected && !m_sendBuffer.isEmpty() && outstanding() < m_window)
+        pumpOutbound();
 
     // Single choke point for idle detection: every state change reachable from
     // the air arrives through this switch, so arming here catches them all
