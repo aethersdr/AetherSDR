@@ -91,11 +91,24 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Qt6 components
-# Qt 6.2 minimum: matches Ubuntu 22.04 LTS (our oldest supported distro)
-# and is the floor where QWindow::startSystemMove() — used by the
-# frameless title-bar drag in TitleBar / ContainerWidget / PanadapterApplet
-# — became available.  Binary distributions bundle Qt 6.7+ for QRhiWidget.
-find_package(Qt6 6.2 REQUIRED COMPONENTS
+# Qt 6.8 minimum, matching the Qt every shipped artifact is built against:
+# the AppImage (both arches, .github/workflows/appimage.yml), the Windows
+# installer (check-windows pins 6.8.3 in ci.yml), and the Linux CI image
+# (.github/docker/Dockerfile installs 6.8.3 via aqt). One number, so a Qt API
+# that compiles in CI also compiles for a release build.
+#
+# Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
+# after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
+# CI image on Ubuntu 24.04's Qt 6.4.2, a release EOL upstream since the 6.4
+# series ended at 6.4.3. That gap rejected valid code (PR #4646, QList::assign)
+# while testing a Qt no artifact shipped.
+#
+# Consequence for source builds: Ubuntu 24.04's distro Qt (6.4.2) no longer
+# satisfies this — build against 6.8+ from aqt/Qt online installer, or use a
+# distro carrying it (Debian Trixie, Ubuntu 25.10+, Fedora 41+, Arch).
+# 6.8 also clears QRhiWidget (6.7+), so the GPU spectrum path is no longer
+# conditionally compiled out on Linux CI.
+find_package(Qt6 6.8 REQUIRED COMPONENTS
     Core
     Concurrent
     Widgets
@@ -331,7 +344,9 @@ endif()
 
 # GPU-accelerated spectrum/waterfall rendering via QRhi (#391)
 # Requires: Qt 6.7+ (QRhiWidget), Qt6::ShaderTools (build-time shader compilation)
-# Defaults to ON but auto-disables on Qt < 6.7 (e.g. Ubuntu 24.04 ships Qt 6.4).
+# The version guard below is unreachable now that find_package demands 6.8 — it
+# is kept as a cheap backstop so lowering the floor again can't silently produce
+# a build that references QRhiWidget on a Qt that lacks it.
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)

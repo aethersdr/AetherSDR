@@ -8,6 +8,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Minimum Qt raised to 6.8 — source builds on Ubuntu 24.04 need a newer Qt
+
+**Building from source now requires Qt 6.8 or newer.** Nothing changes for
+users of the release binaries: the AppImage, the Windows installer and the
+macOS build were already compiled against Qt 6.8.3 LTS, and still are.
+
+The old floor said 6.2 and nothing enforced it. The only CI leg near it was the
+Linux container on Ubuntu 24.04's **Qt 6.4.2** — seven minor versions behind
+current, and EOL upstream since the 6.4 series ended at 6.4.3. So the project
+was testing a Qt no artifact shipped, and *rejecting* code that is valid on
+every configuration it actually ships: PR #4646 was failed by CI for using
+`QList::assign()`, a Qt 6.6 addition that works fine on all three release
+builds. The reverse risk was live too, since no per-PR Linux job compiled
+against 6.8.3 — the AppImage first sees that Qt at release-tag time.
+
+The CI image now installs Qt 6.8.3 via aqtinstall instead of using the distro's,
+matching `appimage.yml` and the Windows leg, so one Qt version covers every
+check and every artifact. It also builds qtkeychain from source against that Qt,
+since the distro package is compiled against 6.4.2. A side effect: the CI image
+clears the QRhi floor (6.7+), so GPU spectrum rendering is no longer silently
+compiled out of Linux CI builds.
+
+Distro Qt satisfies 6.8 on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch.
+On **Ubuntu 24.04 LTS** it does not — build against a Qt from aqtinstall or the
+Qt online installer and pass
+`-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`. See the README's dependency
+section.
+
 ### Fixed
 
 - **Amplifier bar gauges no longer keep painting the old scale after the range

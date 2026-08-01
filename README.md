@@ -111,13 +111,21 @@ Pre-built binaries are available from [Releases](https://github.com/aethersdr/Ae
 
 Install all dependencies for a full-featured build. Optional packages are noted — the build succeeds without them but the corresponding features are disabled.
 
+**Qt 6.8 or newer is required.** This is the same Qt the release binaries are
+built against (6.8.3 LTS), so what CI compiles is what ships. Distro Qt clears
+it on Debian Trixie, Ubuntu 25.10+, Fedora 41+ and Arch. It does **not** clear
+on **Ubuntu 24.04 LTS**, which ships Qt 6.4.2 — build there against a Qt from
+[aqtinstall](https://github.com/miurahr/aqtinstall) or the Qt online installer
+and point CMake at it with `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64`.
+
 ```bash
 # Arch / CachyOS / Manjaro
 sudo pacman -S qt6-base qt6-multimedia qt6-websockets qt6-serialport \
   qt6-shadertools cmake ninja pkgconf autoconf automake libtool \
   fftw portaudio hidapi qtkeychain-qt6
 
-# Ubuntu 24.04+ / Debian / Linux Mint
+# Debian Trixie / Ubuntu 25.10+ / Linux Mint 23+
+# (Ubuntu 24.04's Qt is 6.4.2 — below the floor; see the note above.)
 sudo apt install qt6-base-dev qt6-base-private-dev qt6-multimedia-dev \
   qt6-websockets-dev qt6-serialport-dev qt6-shader-baker qt6-shadertools-dev \
   cmake ninja-build pkg-config autoconf automake libtool \
@@ -178,8 +186,8 @@ is required during configure or build.
 ### Windows 11
 
 Prerequisites: Visual Studio 2022 (Build Tools, Community, or higher) with the
-MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.7+ (`msvc2022_64`; the release
-binaries ship 6.8.3 LTS).
+MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.8+ (`msvc2022_64`; both CI and
+the release binaries use 6.8.3 LTS).
 
 ```bat
 :: 1. Activate the MSVC environment. Adjust the edition (BuildTools / Community /
@@ -214,9 +222,9 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="%
 cmake --build build --target AetherSDR
 ```
 
-### Qt 6.7+ for GPU Spectrum Rendering
+### GPU Spectrum Rendering
 
-GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater. If your distribution ships with an older version (e.g., Ubuntu 24.04, Debian 12, or Mint 21–22 include Qt 6.4.2), the build system automatically disables GPU rendering and falls back to the CPU-based `QPainter` path. (Release binaries ship Qt 6.8.3 LTS — the aarch64 AppImage included — so every release binary renders via QRhi; the 6.7 floor is the source-build minimum.)
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater (`QRhiWidget`). Since the build now requires Qt 6.8 as a minimum, every build — source or release binary, the aarch64 AppImage included — clears that floor and renders via QRhi. The CPU-based `QPainter` path remains as a runtime fallback for machines where GPU initialisation fails, not as a Qt-version fallback.
 
 Going the other way, `AETHER_NO_GPU=1` forces software OpenGL on an already-built binary, without a rebuild:
 
@@ -226,7 +234,7 @@ AETHER_NO_GPU=1 ./AetherSDR-*.AppImage
 
 That is the escape hatch if a GPU or driver renders the spectrum incorrectly — worth trying first on Raspberry Pi and other systems whose Mesa driver is newer than its hardware.
 
-To use GPU acceleration on these systems, install Qt 6.7+ manually:
+On a distribution whose Qt is older than the required 6.8 (notably Ubuntu 24.04 LTS at 6.4.2), install a newer Qt manually:
 
 1. **Option 1: Using a PPA (Ubuntu/Mint)**
    The `kubuntu-backports` PPA may provide a newer Qt — verify the version it ships before relying on it.
