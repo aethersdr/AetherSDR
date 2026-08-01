@@ -15,6 +15,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <optional>
 
 class QAudioSink;
 
@@ -160,6 +161,19 @@ private:
     // for the destructor — see the comment there.
     enum class FinalizeReport { Diagnose, Silent };
 
+    // Who asked. A refusal is reported EVERY time for a deliberate act (the
+    // operator pressed record and is owed an answer), but only on the first of
+    // a repeating run for auto-record — which retries on every MOX rising edge
+    // and would otherwise raise one notification per key-down for as long as
+    // the condition lasts.
+    enum class StartTrigger { Manual, Auto };
+    void beginRecording(StartTrigger trigger);
+
+    // Last refusal already reported for an auto-record attempt; cleared when a
+    // recording actually starts or the decision changes, so a genuinely new
+    // problem is never swallowed.
+    std::optional<RecordStartDecision> m_lastAutoBlocked;
+
     void startFile();
     void finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
     QString buildFilename() const;
@@ -218,3 +232,10 @@ private:
 };
 
 } // namespace AetherSDR
+
+// recordingBlocked carries this by value. Every connection today is direct
+// (same thread), which needs no registration — but a queued or cross-thread
+// connection would fail at RUNTIME with an unregistered type, which is a poor
+// way to find out. Declared here rather than in QsoRecordStartPolicy.h so that
+// header stays free of Qt entirely and its unit test can link without it.
+Q_DECLARE_METATYPE(AetherSDR::RecordStartDecision)

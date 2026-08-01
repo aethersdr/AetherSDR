@@ -1222,7 +1222,8 @@ MainWindow::MainWindow(QWidget* parent)
             // silently discarded refusal is the failure mode this whole change
             // exists to remove; if a future caller forgets to route, this says
             // so instead of leaving a stray header-only WAV.
-            QMessageBox::warning(this, tr("Radio Side Recording Is Selected"),
+            showRecorderNotice(QStringLiteral("recording-mode-is-radio"),
+                tr("Radio Side Recording Is Selected"),
                 tr("The radio is doing the recording, so the client recorder was "
                    "not started and no local file was created.\n\n"
                    "Switch to Client Side in Radio Settings → Recording if you "
@@ -1231,7 +1232,8 @@ MainWindow::MainWindow(QWidget* parent)
         }
         if (reason != AetherSDR::RecordStartDecision::BlockedPcAudioDisabled)
             return;
-        QMessageBox::warning(this, tr("PC Audio Required for Client-Side Recording"),
+        showRecorderNotice(QStringLiteral("pc-audio-disabled"),
+            tr("PC Audio Required for Client-Side Recording"),
             tr("Client-Side recording captures the same RX audio stream that PC "
                "Audio uses, so it cannot record while PC Audio is off. No file "
                "was created.\n\n"
@@ -1250,7 +1252,11 @@ MainWindow::MainWindow(QWidget* parent)
     // or empty file and no explanation.
     connect(m_qsoRecorder, &QsoRecorder::recordingError, this,
             [this](const QString& error) {
-        QMessageBox::warning(this, tr("QSO Recording"), error);
+        // One key for all recorder errors: auto-record's start/idle-stop cycle
+        // can raise the zero-capture diagnostic once per over, and stacking a
+        // modal per cycle would be worse than the silence it replaced.
+        showRecorderNotice(QStringLiteral("recorder-error"),
+                           tr("QSO Recording"), error);
     });
 
     // PUDU TX monitor — captures post-PooDoo TX int16 audio, plays
@@ -6338,6 +6344,45 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
     if (!repeaterFixup.isEmpty())
         m_radioModel.sendCommand(repeaterFixup);
     return true;
+}
+
+// QSO-recorder notices (#4629 review). Two properties the blocking
+// QMessageBox::warning() convenience does not have, both of which turned out to
+// matter:
+//
+//   NON-BLOCKING. warning() spins a nested event loop until the operator
+//   clicks. The producers here are the automation bridge's reply path — where
+//   it stalled `record start` until a human dismissed the box, observed
+//   directly while testing this branch — and QsoRecorder::onMoxChanged, where
+//   it would block the GUI thread mid-transmission.
+//
+//   DEDUPED. Auto-record retries on every MOX rising edge and the zero-capture
+//   diagnostic can fire once per over, so a repeating condition would stack a
+//   box per transmission, each one re-entering the event loop of the last.
+//   QsoRecorder suppresses repeats at the source for auto-record; this is the
+//   backstop that holds regardless of which producer fires.
+void MainWindow::showRecorderNotice(const QString& key,
+                                    const QString& title,
+                                    const QString& text)
+{
+    if (m_recorderNotice) {
+        if (m_recorderNoticeKey == key) {
+            // Same cause still unacknowledged — surface the existing box rather
+            // than adding another saying the same thing.
+            m_recorderNotice->raise();
+            m_recorderNotice->activateWindow();
+            return;
+        }
+        // A different problem supersedes the old message.
+        m_recorderNotice->close();
+    }
+
+    auto* box = new QMessageBox(QMessageBox::Warning, title, text,
+                                QMessageBox::Ok, this);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    m_recorderNotice = box;
+    m_recorderNoticeKey = key;
+    box->open();   // NOT exec(): returns immediately, no nested event loop
 }
 
 void MainWindow::applyMasterVolume(int pct)

@@ -22,6 +22,12 @@ namespace AetherSDR {
 QsoRecorder::QsoRecorder(QObject* parent)
     : QObject(parent)
 {
+    // recordingBlocked's argument type. Direct connections do not need this,
+    // and every connection today is direct — but registering costs nothing and
+    // means a future queued/cross-thread connection fails at compile time
+    // rather than silently dropping the signal at runtime.
+    qRegisterMetaType<RecordStartDecision>("AetherSDR::RecordStartDecision");
+
     // Default recording directory: ~/Documents/AetherSDR/Recordings
     m_recordingDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
                      + "/AetherSDR/Recordings";
@@ -111,6 +117,11 @@ RecordStartDecision QsoRecorder::evaluateStart() const
 
 void QsoRecorder::startRecording()
 {
+    beginRecording(StartTrigger::Manual);
+}
+
+void QsoRecorder::beginRecording(StartTrigger trigger)
+{
     if (m_recording) return;
 
     // Refuse before touching the filesystem (#4629). Creating the file first
@@ -119,15 +130,27 @@ void QsoRecorder::startRecording()
     // recorder fault rather than a configuration one.
     const RecordStartDecision decision = evaluateStart();
     if (decision != RecordStartDecision::Allow) {
-        qCWarning(lcAudio) << "QsoRecorder: start refused —"
-                           << (decision == RecordStartDecision::BlockedRecordingModeIsRadio
-                                   ? "Radio-Side recording is selected; the radio "
-                                     "records, not this client"
-                                   : "client-side recording needs PC Audio "
-                                     "(no RX audio stream exists)");
-        emit recordingBlocked(decision);
+        // Auto-record retries on EVERY MOX rising edge, so an unchanged refusal
+        // must be reported once, not once per transmission — the consumer is a
+        // dialog, and one per key-down would make the radio unusable rather than
+        // informative. A deliberate press always gets an answer.
+        const bool alreadyReported = trigger == StartTrigger::Auto
+                                     && m_lastAutoBlocked == decision;
+        m_lastAutoBlocked = decision;
+        if (!alreadyReported) {
+            qCWarning(lcAudio) << "QsoRecorder: start refused —"
+                               << (decision == RecordStartDecision::BlockedRecordingModeIsRadio
+                                       ? "Radio-Side recording is selected; the radio "
+                                         "records, not this client"
+                                       : "client-side recording needs PC Audio "
+                                         "(no RX audio stream exists)");
+            emit recordingBlocked(decision);
+        }
         return;
     }
+    // Cleared on success so a later refusal is reported afresh rather than
+    // being mistaken for a continuation of an earlier run.
+    m_lastAutoBlocked.reset();
 
     // Re-read settings in case they changed via Radio Setup dialog
     auto& s = AppSettings::instance();
@@ -209,9 +232,11 @@ void QsoRecorder::onMoxChanged(bool mox)
     // Only auto-record when in client-side recording mode
     bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
     if (mox) {
-        // TX started — begin recording if auto-record is on and not already recording
+        // TX started — begin recording if auto-record is on and not already
+        // recording. Auto trigger: a standing refusal is reported once, not on
+        // every key-down (see beginRecording).
         if (clientSide && m_autoRecord && !m_recording)
-            startRecording();
+            beginRecording(StartTrigger::Auto);
 
         // Reset idle timer on each TX
         m_idleTimer->stop();
@@ -295,7 +320,14 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
     // here means something else stranded the feed mid-session: the radio
     // dropped, the stream was torn down by another client, the backend swapped.
     // Whatever it was, say so rather than let a silent file pass for success.
-    if (dataBytes == 0 && report == FinalizeReport::Diagnose) {
+    // The >= 1s floor keeps a deliberate instant start/stop from being reported
+    // as a fault: under one second the recorder may legitimately not have seen a
+    // single audio block yet, and an error dialog for "you stopped it
+    // immediately" is noise. The tradeoff is a real blind spot — a sub-second
+    // recording that captured nothing is silently accepted — but that case
+    // yields no usable audio either way, whereas a false alarm on every quick
+    // tap trains the operator to dismiss this dialog unread.
+    if (dataBytes == 0 && durationSecs >= 1 && report == FinalizeReport::Diagnose) {
         qCWarning(lcAudio) << "QsoRecorder: recording captured no audio:" << filePath;
         emit recordingError(
             QStringLiteral("Recording captured no audio — the file contains only a "

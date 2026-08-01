@@ -75,6 +75,8 @@
 #include <QMainWindow>
 #include <QSplitter>
 #include <QPointer>
+
+class QMessageBox;
 #include <QLabel>
 #include <QList>
 #include <QMenu>
@@ -909,6 +911,20 @@ private:
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
+    // The one live QSO-recorder notice, if any (#4629 review). Held so a
+    // repeating condition raises the existing dialog instead of stacking a new
+    // one on top — QMessageBox::warning() spins a nested event loop, so a
+    // stacked run is both unclosable-feeling and re-entrant. QPointer because
+    // the box is WA_DeleteOnClose and may vanish without telling us.
+    QPointer<QMessageBox> m_recorderNotice;
+    QString               m_recorderNoticeKey;
+    // Show a non-blocking recorder notice, deduped on `key`. Non-blocking is
+    // the load-bearing part: the blocking form stalls the caller, which for
+    // this signal is either the automation bridge's reply path or the MOX
+    // handler mid-transmission.
+    void showRecorderNotice(const QString& key,
+                            const QString& title,
+                            const QString& text);
     std::unique_ptr<AutomationServer> m_automation;  // agent bridge (#3646); nullptr when off
     ClientPuduMonitor* m_finalMonitor{nullptr};
     AudioOutputRouter* m_outputRouter{nullptr};   // registry for output-following sinks (#3306)

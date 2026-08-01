@@ -29,7 +29,9 @@
 #include <QObject>
 #include <QString>
 #include <QTemporaryDir>
+#include <chrono>
 #include <cstdio>
+#include <thread>
 
 using namespace AetherSDR;
 
@@ -57,6 +59,21 @@ static void setMode(const char* recordingMode, const char* pcAudio)
     auto& s = AppSettings::instance();
     s.setValue(QStringLiteral("RecordingMode"), QString::fromLatin1(recordingMode));
     s.setValue(QStringLiteral("PcAudioEnabled"), QString::fromLatin1(pcAudio));
+    s.save();
+}
+
+// Written the way RadioSetupDialog writes it — the "True"/"False" STRING, which
+// is what QsoRecorder's start path compares against. Deliberately not
+// QsoRecorder::setAutoRecordEnabled(), which stores a bool: QVariant(true)
+// renders as "true", never matches == "True", and so silently clears
+// m_autoRecord on the next start. That setter has no callers in src/, so the
+// mismatch is latent rather than live, and fixing it is out of scope here — but
+// a test must exercise the representation the product actually uses.
+static void setAutoRecord(bool on)
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("QsoRecordingAutoRecord"),
+               on ? QStringLiteral("True") : QStringLiteral("False"));
     s.save();
 }
 
@@ -226,6 +243,93 @@ int main(int argc, char** argv)
         EXPECT_EQ_INT(fileCount(tmp.path()), 0);
     }
 
+    // ── Auto-record must not report the same refusal on every key-down ──────
+    // onMoxChanged() retries the start on EVERY MOX rising edge. Wired to a
+    // dialog, an unchanged refusal would raise one per transmission and stack
+    // them, turning an empty-file bug into an unusable radio. Report once; a
+    // deliberate press still always gets an answer.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Client", "False");
+        setAutoRecord(true);           // before construction: the ctor reads it
+
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+
+        int blocked = 0;
+        QObject::connect(&rec, &QsoRecorder::recordingBlocked,
+                         &rec, [&](RecordStartDecision) { ++blocked; });
+
+        for (int over = 0; over < 5; ++over) {
+            rec.onMoxChanged(true);    // key down
+            rec.onMoxChanged(false);   // unkey
+        }
+        EXPECT_EQ_INT(blocked, 1);                 // once, not five times
+        EXPECT_EQ_INT(fileCount(tmp.path()), 0);
+        EXPECT_TRUE(!rec.isRecording());
+
+        // A deliberate press is a fresh question and is always answered, even
+        // while the auto-record refusal is standing.
+        rec.startRecording();
+        EXPECT_EQ_INT(blocked, 2);
+        EXPECT_EQ_INT(fileCount(tmp.path()), 0);
+    }
+
+    // ── A refusal that stops applying is reported again next time ───────────
+    // The dedupe must not latch: once the condition clears and a recording
+    // succeeds, a later refusal is a new event and has to be surfaced.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Client", "False");
+        setAutoRecord(true);           // before construction: the ctor reads it
+
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+
+        int blocked = 0;
+        QObject::connect(&rec, &QsoRecorder::recordingBlocked,
+                         &rec, [&](RecordStartDecision) { ++blocked; });
+
+        rec.onMoxChanged(true);
+        rec.onMoxChanged(false);
+        EXPECT_EQ_INT(blocked, 1);
+
+        setMode("Client", "True");     // operator enables PC Audio
+        rec.onMoxChanged(true);
+        EXPECT_TRUE(rec.isRecording());
+        rec.stopRecording();
+        rec.onMoxChanged(false);
+
+        setMode("Client", "False");    // and turns it off again
+        rec.onMoxChanged(true);
+        EXPECT_EQ_INT(blocked, 2);     // reported afresh, not swallowed
+        rec.onMoxChanged(false);
+    }
+
+    // ── A sub-second start/stop is not a zero-capture fault ─────────────────
+    // Deliberately stopping a recording immediately can beat the first audio
+    // block. Reporting that as an error trains the operator to dismiss this
+    // dialog unread, which is worse than the blind spot it costs.
+    {
+        QTemporaryDir tmp;
+        EXPECT_TRUE(tmp.isValid());
+        setMode("Client", "True");
+
+        QsoRecorder rec;
+        rec.setRecordingDir(tmp.path());
+
+        int errors = 0;
+        QObject::connect(&rec, &QsoRecorder::recordingError,
+                         &rec, [&](const QString&) { ++errors; });
+
+        rec.startRecording();
+        EXPECT_TRUE(rec.isRecording());
+        rec.stopRecording();           // immediately — under one second
+        EXPECT_EQ_INT(errors, 0);
+    }
+
     // ── Zero-capture is reported, not passed off as success ─────────────────
     // The safety net: if anything else ever strands the audio feed mid-session,
     // stopping must not hand back a header-only file with no explanation.
@@ -243,6 +347,9 @@ int main(int argc, char** argv)
 
         rec.startRecording();
         EXPECT_TRUE(rec.isRecording());
+        // Past the one-second floor, so this is a real capture failure rather
+        // than an instant tap — see the sub-second case above.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
         rec.stopRecording();  // no audio was ever fed
 
         EXPECT_EQ_INT(errors, 1);

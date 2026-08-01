@@ -5453,10 +5453,22 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
     }
     if (a == QLatin1String("start")) {
         // The start can be REFUSED (#4629) — Client-Side mode with PC Audio
-        // disabled has no RX audio stream to record. `ok` already reported that
-        // correctly by reflecting isRecording(), but a bare false told a test
-        // nothing about WHY. Ask the policy first so the reply can name the
-        // cause; this is headless, so the GUI's dialog never appears here.
+        // disabled has no RX audio stream to record, and Radio-Side mode means
+        // the radio is the recorder. `ok` already reported that correctly by
+        // reflecting isRecording(), but a bare false told a test nothing about
+        // WHY, so ask the policy and name the cause.
+        //
+        // A GUI dialog DOES appear for this even when the caller is the bridge:
+        // the app is running with a window, and QsoRecorder::recordingBlocked is
+        // wired to a notice in MainWindow regardless of who triggered the start.
+        // That notice is deliberately non-blocking (MainWindow::
+        // showRecorderNotice) — the blocking form held this reply until a human
+        // dismissed the box, which is exactly how it behaved before that fix.
+        //
+        // wasRecording is captured BEFORE the attempt: with a recording already
+        // in flight, startRecording() is a no-op and the reply must describe the
+        // live recording, not stamp a refusal onto it (review of #4652).
+        const bool wasRecording = m_qsoRecorder->isRecording();
         const RecordStartDecision decision = m_qsoRecorder->evaluateStart();
         m_qsoRecorder->startRecording();
         QJsonObject reply{
@@ -5465,7 +5477,11 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
             {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
             {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
         };
-        if (decision != RecordStartDecision::Allow) {
+        // Only when this call actually failed to start something. A refusal
+        // stamped onto an already-running recording produced
+        // `ok:true, recording:true, path:"", reason:...` — a success carrying a
+        // failure reason, with a valid path blanked out from under the caller.
+        if (!wasRecording && decision != RecordStartDecision::Allow) {
             if (decision == RecordStartDecision::BlockedPcAudioDisabled) {
                 reply.insert(QStringLiteral("reason"),
                              QStringLiteral("pc-audio-disabled"));
