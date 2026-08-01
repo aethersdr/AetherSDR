@@ -29,13 +29,26 @@
 //                 Asserted on the CAPABILITY, so this stays true of any future
 //                 family that reports no supply rail.
 //   radio DSP     hasRadioSideDsp gates the radio's own NR/NB/ANF/NRL/ANFL/
-//                 ANFT, the APD row, the WNB row and the 8-band hardware EQ
-//                 applet. It must NOT gate the host-side equivalents — the
-//                 AetherDSP modules and the Aetherial RX/TX EQ — which are the
-//                 only audio DSP an operator has on a radio reporting false.
+//                 ANFT, the APD row and the WNB row. It must NOT gate the
+//                 host-side equivalents — the AetherDSP modules and the
+//                 Aetherial RX/TX EQ — which are the only audio DSP an operator
+//                 has on a radio reporting false. The 8-band EQ applet was on
+//                 this list until #4609 mapped its octave bands onto ClientEq
+//                 for any backend without a Flex command plane; the control is
+//                 no longer empty there, so it is no longer gated. WHICH of the
+//                 two surfaces onto that shared ClientEq/ClientComp may write is
+//                 a separate question, answered by core/HostVoiceChainPolicy.h
+//                 and pinned by tests/host_voice_chain_policy_test.cpp.
 //                 Asserted independent of
 //                 hasExtendedDsp — the base set and the extra 8000-series
 //                 filters are two different statements about a radio.
+//   wf auto-black hasRadioSideWaterfallAutoBlack gates ONLY the HW position of
+//                 the Display > Black Level button — the radio's per-tile level
+//                 embedded in the waterfall stream. It must NOT gate the SW
+//                 estimate, which is the only automatic floor an operator has
+//                 on a radio reporting false, and it must go permissive on
+//                 disconnect or the mask could never restore a stashed HW
+//                 intent (docs/architecture/radio-capabilities-map.md). (#4606)
 //   extended DSP  hasExtendedDspFilters() resolves through the BACKEND while
 //                 connected and falls back to the model-name table when not,
 //                 with Flex's answer unchanged on both routes.
@@ -77,6 +90,14 @@ static void check(bool ok, const char* what)
 static bool uiWouldShow(bool connected, bool declared)
 {
     return !connected || declared;
+}
+
+// GPS presence has two layers: the family must support a position source and
+// this connected unit must actually report one. Unlike the shared capability
+// helper above, either connected-layer false is enough to hide the surface.
+static bool gpsUiWouldShow(bool connected, bool familySupportsGps, bool unitHasGps)
+{
+    return !connected || (familySupportsGps && unitHasGps);
 }
 
 static RadioInfo hl2Info()
@@ -146,6 +167,17 @@ int main(int argc, char** argv)
         // the base one is true — which is exactly why they cannot be merged.
         check(caps.hasRadioSideDsp && !caps.hasExtendedDsp,
               "hasRadioSideDsp and hasExtendedDsp are independent");
+        check(caps.hasRadioSideWaterfallAutoBlack,
+              "Flex declares hasRadioSideWaterfallAutoBlack (per-tile auto_black)");
+        // Separate from hasRadioSideDsp on purpose: one is audio DSP driven by
+        // command-plane verbs, the other a display-plane computation embedded in
+        // the waterfall stream. Both happen to be true on a Flex and false on an
+        // HL2, so the shipped backends cannot demonstrate the independence —
+        // assert it on the struct, which is where merging them would start.
+        RadioCapabilities separate;
+        separate.hasRadioSideDsp = true;
+        check(!separate.hasRadioSideWaterfallAutoBlack,
+              "hasRadioSideDsp does not imply hasRadioSideWaterfallAutoBlack");
         // RFC #4603: the Flex persists its own operating state — an EMPTY
         // domain declaration is the load-bearing value here. If this ever
         // becomes non-empty, RadioStateMemory would start re-asserting
@@ -153,6 +185,49 @@ int main(int argc, char** argv)
         check(caps.clientSettingsDomains
                   == RadioCapabilities::ClientSettingsDomains{},
               "Flex declares clientSettingsDomains EMPTY (radio-authoritative)");
+
+        check(!gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
+              "connected GPSDO-less Flex hides the GPS stack");
+
+        const auto applyOscillatorPresence = [&model](const char* key, bool present) {
+            const QMap<QString, QString> status{
+                {QString::fromLatin1(key), present ? QStringLiteral("1")
+                                                   : QStringLiteral("0")}
+            };
+            const QString object = QStringLiteral("radio oscillator");
+            return QMetaObject::invokeMethod(
+                &model, "onStatusReceived", Qt::DirectConnection,
+                QGenericArgument("QString", &object),
+                QGenericArgument("QMap<QString,QString>", &status));
+        };
+
+        check(applyOscillatorPresence("gpsdo_present", true),
+              "GPSDO presence fixture reached RadioModel");
+        check(model.hasGpsHardware(),
+              "gpsdo_present=1 marks an optional 6000-series GPSDO present");
+        check(gpsUiWouldShow(true, caps.hasGpsLocation, model.hasGpsHardware()),
+              "connected optional-GPSDO Flex shows the GPS stack");
+        check(applyOscillatorPresence("gpsdo_present", false),
+              "GPSDO absence fixture reached RadioModel");
+        check(!model.hasGpsHardware(),
+              "gpsdo_present=0 clears optional GPSDO presence");
+
+        check(applyOscillatorPresence("gnss_present", true),
+              "GNSS presence fixture reached RadioModel");
+        check(model.hasGpsHardware(),
+              "gnss_present=1 marks on-board GNSS present");
+        check(applyOscillatorPresence("gnss_present", false),
+              "GNSS absence fixture reached RadioModel");
+        check(!model.hasGpsHardware(),
+              "gnss_present=0 clears on-board GNSS presence instead of latching");
+
+        check(applyOscillatorPresence("gpsdo_present", true),
+              "GPSDO reconnect fixture reached RadioModel");
+        check(QMetaObject::invokeMethod(
+                  &model, "onDisconnected", Qt::DirectConnection),
+              "disconnect fixture reached RadioModel");
+        check(!model.hasGpsHardware(),
+              "GPS presence does not leak from the previous radio session");
     }
 
     // ---- HL2 declares none of them ---------------------------------------
@@ -171,6 +246,8 @@ int main(int argc, char** argv)
               "HL2 declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp,
               "HL2 declares hasRadioSideDsp=false (host runs every noise module)");
+        check(!caps.hasRadioSideWaterfallAutoBlack,
+              "HL2 declares hasRadioSideWaterfallAutoBlack=false (no display engine)");
         check(!caps.hasWaveforms,
               "HL2 declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
@@ -231,6 +308,8 @@ int main(int argc, char** argv)
         check(!caps.hasDaxStreams, "Sim declares hasDaxStreams=false");
         check(!caps.hasExtendedDsp, "Sim declares hasExtendedDsp=false");
         check(!caps.hasRadioSideDsp, "Sim declares hasRadioSideDsp=false");
+        check(!caps.hasRadioSideWaterfallAutoBlack,
+              "Sim declares hasRadioSideWaterfallAutoBlack=false");
         check(!caps.hasWaveforms, "Sim declares hasWaveforms=false");
         check(!caps.hasMultiClientSessions,
               "Sim declares hasMultiClientSessions=false");
@@ -264,6 +343,11 @@ int main(int argc, char** argv)
         // and the WNB row.
         check(!model.hasRadioSideDsp(),
               "connected Sim: hasRadioSideDsp() is false, radio DSP hidden");
+        // Same accessor shape for the display-plane flag. False here is what
+        // drops HW from the Black Level cycle; the SW estimate is not gated on
+        // it and stays available, which is why nothing asserts it hidden.
+        check(!model.hasRadioSideWaterfallAutoBlack(),
+              "connected Sim: hasRadioSideWaterfallAutoBlack() is false, HW dropped");
         // The hardware EQ rides the same flag: EqualizerModel emits `eq RXsc`/
         // `eq TXsc`, command-plane verbs that reach nothing here. The Aetherial
         // RX/TX EQ is host-side and deliberately not covered by any capability.
@@ -311,6 +395,14 @@ int main(int argc, char** argv)
               "disconnected: the supply-voltage readout is restored");
         check(model.hasRadioSideDsp(),
               "disconnected: hasRadioSideDsp() goes permissive, radio DSP back");
+        // Load-bearing for the auto-black MASK, not just for tidiness: the mask
+        // never rewrites the stored HW intent, so the only thing that can bring
+        // HW back on the button is this flag going permissive again. If it
+        // stayed false after unplugging an HL2, a Flex user's stashed HW would
+        // be invisible until they reconnected — the exact failure the mask
+        // design exists to prevent. (#4606)
+        check(model.hasRadioSideWaterfallAutoBlack(),
+              "disconnected: hasRadioSideWaterfallAutoBlack() goes permissive, HW back");
     }
 
     // ---- Round-trip back to Flex ------------------------------------------
@@ -326,6 +418,8 @@ int main(int argc, char** argv)
               "round-trip: Flex regains hasDaxStreams after sim -> Flex");
         check(caps.hasRadioSideDsp,
               "round-trip: Flex regains hasRadioSideDsp after sim -> Flex");
+        check(caps.hasRadioSideWaterfallAutoBlack,
+              "round-trip: Flex regains hasRadioSideWaterfallAutoBlack");
         check(caps.hasWaveforms,
               "round-trip: Flex regains hasWaveforms after sim -> Flex");
         check(caps.hasMultiClientSessions,

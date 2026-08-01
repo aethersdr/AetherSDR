@@ -32,8 +32,45 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/ten9876/aethersdr-ci:latest
 
+    # Explicit CCACHE_DIR: the job runs as root inside a container, so `~`
+    # resolves to /root and an actions/cache `path:` of `~/.cache/ccache` would
+    # depend on the image's HOME. A fixed absolute path is unambiguous on both
+    # the cache and the compiler side.
+    env:
+      CCACHE_DIR: /ccache
+      # Sized from measurement, not guesswork: a full cold build of this
+      # configuration settles at ~0.5 GB. 1000M leaves headroom without wasting
+      # budget — and budget pressure here is about entry COUNT, not entry size,
+      # because the cache key carries github.run_id so every run writes a fresh
+      # entry. An oversized cap multiplies what each of those costs against the
+      # repo's 10 GB ceiling and risks LRU-evicting the Qt / FFTW / DeepFilterNet
+      # entries the other jobs depend on. (check-macos runs at 500M, but on a
+      # lighter configuration — no ENABLE_NVIDIA_AFX, no second liquid-dsp
+      # build tree.)
+      CCACHE_MAXSIZE: 1000M
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      # ccache is in .github/docker/Dockerfile as of #4655, but this job pins
+      # the image by :latest tag, so it runs against whatever was last
+      # published — including builds from before that layer existed. Install
+      # on demand when the image predates it; ~3 s and a no-op afterwards.
+      - name: Ensure ccache is present
+        run: command -v ccache || (apt-get update && apt-get install -y ccache)
+
+      - name: Cache ccache objects
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: /ccache
+          # Exact key never hits (run_id is unique) so every run writes a fresh
+          # entry; restore-keys pulls the most recent prior one. Standard ccache
+          # pattern — GitHub evicts by LRU within the repo's 10 GB budget, which
+          # is why CCACHE_MAXSIZE is capped well under it: this cache must not
+          # evict the Qt/FFTW/DeepFilter entries the other jobs depend on.
+          key: ccache-linux-build-${{ github.run_id }}
+          restore-keys: |
+            ccache-linux-build-
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -46,11 +83,33 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Zero ccache stats
+        run: ccache --zero-stats
+
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build -j$(nproc)
+
+      # The Build step above compiles `all`, so every test target in the tree
+      # is already linked by the time we get here — and until #4559 this
+      # workflow ran none of them. Two cross_needle_meter_test assertions duly
+      # sat failing on main unnoticed. Running it here costs the ~10 s of
+      # runtime and no build time at all.
+      #
+      # QT_QPA_PLATFORM=offscreen is what makes the render measurements
+      # deterministic (bit-identical across Windows / Linux x86_64 / macOS
+      # arm64 / Linux arm64 — see #4559). CMakeLists.txt sets it as a test
+      # property too; it is repeated here so the requirement is legible at the
+      # call site rather than only in the build system.
+      - name: Test cross-needle meter geometry
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "cross_needle_meter_test" --output-on-failure
 
       # #4146 turned liquid-dsp off by default, so the main build above no
       # longer proves the vendored snapshot still compiles. Build only the
@@ -62,59 +121,21 @@ jobs:
       - name: Verify vendored liquid-dsp still builds (opt-in)
         run: |
           cmake -B build-liquid -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DENABLE_LIQUID_DSP=ON
+            -DENABLE_LIQUID_DSP=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build-liquid --target liquid-static -j$(nproc)
 
-  check-system-libs-linux:
-    runs-on: ubuntu-latest
-    container: debian:sid
-    # Debian sid is a rolling/unstable target, chosen to canary the build
-    # against the newest system libraries. Keep it advisory so upstream sid
-    # churn (a package bump or a momentarily-uninstallable dep) can't block
-    # unrelated PRs; flip this off (or pin a stable release) to make it a gate.
-    continue-on-error: true
+      # Mirrors check-windows' "sccache stats" step, and exists for the same
+      # reason: #1963 disabled the Windows compiler cache for three months
+      # without anyone noticing, because nothing made the hit rate visible.
+      # A "Hits 0" line here means the launcher was dropped — read it before
+      # believing any wall-clock claim about this job. Runs last so it covers
+      # both the main build and the liquid-dsp verification above.
+      - name: ccache stats
+        if: always()
+        run: ccache --show-stats
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Install main dependencies
-        run: |
-          apt -U install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            pkgconf \
-            qt6-base-dev \
-            qt6-multimedia-dev \
-            qt6-serialbus-dev \
-            qt6-websockets-dev \
-            qtkeychain-qt6-dev \
-            libfftw3-dev \
-            libopus-dev \
-            qt6-shadertools-dev \
-            qt6-base-private-dev \
-            libhidapi-dev \
-            libonnxruntime-dev \
-            libpipewire-0.3-dev
-
-      - name: Install system library replacements
-        run: |
-          apt -U install -y --no-install-recommends \
-            libmspack-dev \
-            librtmidi-dev \
-            libasound2-dev \
-            zlib1g-dev \
-            libmosquitto-dev \
-            libliquid-dev \
-            libwhisper-dev
-
-      - name: Configure
-        run: |
-          cmake -B build -DUSE_SYSTEM_ZLIB=ON -DUSE_SYSTEM_MSPACK=ON -DUSE_SYSTEM_LIBMOSQUITTO=ON -DUSE_SYSTEM_RTMIDI=ON -DUSE_SYSTEM_LIQUID_DSP=ON -DUSE_SYSTEM_LIBWHISPER=ON -DENABLE_RADE=OFF
-
-      - name: Build
-        run: |
-          cmake --build build -j$(nproc)
 
   # Cross-platform build check — runs on every PR (no path gating).
   #
@@ -135,7 +156,14 @@ jobs:
   #   * Qt install        — handled by jurplel/install-qt-action's cache: true
   #   * FFTW3 third_party — actions/cache, keyed on the setup script + version
   #   * MSVC object files — sccache via GitHub Actions cache backend
-  # Net effect: cold cache ~5 min, warm cache ~2-3 min (was ~14 min).
+  #
+  # The old note here claimed "cold cache ~5 min, warm cache ~2-3 min (was ~14
+  # min)". That was measured before #1963 broke the sccache pre-flight (see the
+  # "Test sccache health" step), after which this job compiled from scratch on
+  # every run at a 21 min mean. Do not restore a warm-cache figure to this
+  # comment without measuring it: the "sccache stats" step at the end of this
+  # job prints the real hit rate, and a `Cache hits 0` line there means the
+  # launcher was dropped again.
   check-windows:
     runs-on: windows-latest
     env:
@@ -176,7 +204,7 @@ jobs:
         run: .\scripts\setup\setup-deepfilter.ps1
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
 
       # CMAKE_CXX_COMPILER_LAUNCHER is honoured by Ninja and Make
       # generators, NOT by the Visual Studio / MSBuild generator that
@@ -212,7 +240,17 @@ jobs:
         continue-on-error: true
         run: |
           'int main(){return 0;}' | Out-File -Encoding ASCII test.cpp
-          sccache cl /c test.cpp /Fo:test.obj 2>&1 | Tee-Object -Variable scOut
+          # cl.exe's /Fo takes NO colon separator. `/Fo:test.obj` names the
+          # output file ":test.obj", which is not a legal Windows path, so this
+          # pre-flight failed on EVERY run from #1963 (2026-04-25) to #4655:
+          #   failed to open file `D:\a\AetherSDR\AetherSDR\:test.obj`:
+          #   The filename, directory name, or volume label syntax is
+          #   incorrect. (os error 123)
+          # Because the step is continue-on-error and its failure path only
+          # sets healthy=false, the job went green while quietly dropping
+          # CMAKE_{C,CXX}_COMPILER_LAUNCHER — "Compile requests 0 / Cache hits
+          # 0" for three months on a required check. Keep it as /Fo<file>.
+          sccache cl /c test.cpp /Fotest.obj 2>&1 | Tee-Object -Variable scOut
           $exit = $LASTEXITCODE
           Remove-Item test.cpp,test.obj -ErrorAction SilentlyContinue
           if ($exit -eq 0) {
@@ -260,18 +298,44 @@ jobs:
       - name: Build
         # This job's purpose is to catch Windows-only compile/link regressions
         # (WASAPI, Q_OS_WIN paths) that Linux/macOS CI can't see — served by
-        # linking the app plus the handful of portability tests run below, NOT the
-        # default `all` target. Building every *_test.exe relinked the same
-        # libraries into hundreds of tiny executables for no added Windows coverage
-        # (cross-platform test linkage is already exercised by the Linux/macOS CI
-        # that build AND run the full suite), and that link tail was stalling for
-        # hours on the runner. timeout-minutes fails fast (with logs) if it ever
-        # hangs again, instead of running to the 6-hour job limit.
+        # linking the app plus the handful of tests run below, NOT the default
+        # `all` target. Building every *_test.exe relinked the same libraries
+        # into hundreds of tiny executables for no added Windows coverage, and
+        # that link tail was stalling for hours on the runner. timeout-minutes
+        # fails fast (with logs) if it ever hangs again, instead of running to
+        # the 6-hour job limit.
+        #
+        # This comment used to justify that by claiming cross-platform test
+        # linkage "is already exercised by the Linux/macOS CI that build AND
+        # run the full suite". It never was: before #4559 the only ctest calls
+        # in this file were the ThumbDV allow-list below and asr_gpu_probe_test
+        # in check-macos, and the Linux `build` job ran none. That wrong claim
+        # is how cross_needle_meter_test failed on main for weeks unnoticed.
+        # The Linux job now runs that one test; everything else still runs only
+        # in sanitizers.yml — weekly, and non-gating.
+        #
+        # cross_needle_meter_test is the deliberate exception to the
+        # no-test-tree rule here. #4559's separator assertion failed on Windows
+        # while passing on Linux, so gating its reformulated assertions on
+        # Windows too is what actually backs their claim to be bit-identical
+        # across platforms. One small test exe and ~10 s of ctest.
         timeout-minutes: 45
-        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target AetherSDR aether-dv-waveform thumbdv_queue_test dstar_model_test digital_voice_waveform_process_test cross_needle_meter_test
 
       - name: Test ThumbDV portability paths
         run: ctest --test-dir build -R "aether_dv_waveform_no_args|thumbdv_queue_test|dstar_model_test|digital_voice_waveform_process_test" --output-on-failure
+
+      # cross_needle_meter_test renders widgets; the offscreen platform makes
+      # its measurements deterministic (verified bit-identical across
+      # Windows/Linux x86_64/macOS arm64/Linux arm64 — see #4559). The Linux
+      # `build` job runs this too; Windows is the platform on which #4559's
+      # separator assertion actually failed, which is the point of gating both.
+      # CMakeLists.txt sets QT_QPA_PLATFORM as a test property as well — it is
+      # repeated here so the requirement is legible at the call site.
+      - name: Test cross-needle meter geometry
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -R "cross_needle_meter_test" --output-on-failure
 
       - name: sccache stats
         if: always()
@@ -313,6 +377,15 @@ jobs:
           key: ccache-macos-ci
           max-size: 500M
 
+      - name: Ensure offline Metal toolchain
+        # Build-time ASR kernel compilation (#4535) needs the offline Metal
+        # compiler at configure. Xcode 16 bundles it (probe succeeds, no-op);
+        # Xcode 26 ships it as a separate download, so this step keeps the job
+        # working across a runner-image Xcode bump.
+        run: |
+          xcrun -sdk macosx metal --version >/dev/null 2>&1 || \
+            sudo xcodebuild -downloadComponent MetalToolchain
+
       - name: Configure
         run: |
           cmake -B build -G Ninja \
@@ -327,3 +400,37 @@ jobs:
 
       - name: Build
         run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Run ASR GPU probe test (#4535 regression)
+        # arm64 runner = Apple Silicon: exercises the real Metal device init and
+        # embedded precompiled-metallib load on every PR. On the pre-#4553 code
+        # this call could invoke the runtime shader compiler and hang.
+        #
+        # AETHER_ASR_EXPECT_PRECOMPILED=1 makes the test fail (rather than pass
+        # quietly) if no Metal device is enumerated or if the build fell back to
+        # the embedded-source runtime-compile path — the CMake toolchain probe
+        # degrades with only a message(WARNING), so without this the gate could
+        # be green while guarding nothing. -V keeps the device list and the
+        # library-path line in the log, where a reviewer can actually see them.
+        env:
+          AETHER_ASR_EXPECT_PRECOMPILED: "1"
+        run: ctest --test-dir build -R asr_gpu_probe_test -V
+
+      - name: Compile ASR Metal kernels with the Intel-DMG flag set
+        # This job passes no CMAKE_OSX_DEPLOYMENT_TARGET, so it always takes the
+        # metal3.1 branch of the ASR precompile logic. macos-dmg.yml builds the
+        # Intel DMG at 13.0, which takes the other branch — metal3.0 plus the
+        # props.has_bfloat clamp, because bf16 kernels need >= 3.1. Nothing else
+        # in CI compiles that combination, so without this step it would first be
+        # exercised at tag time, on a release workflow, with REQUIRE_ASR_GPU=ON.
+        #
+        # Recompiling the already-merged kernel source is enough: the flags are
+        # the whole risk (a version-min / -std mismatch is a hard compile error),
+        # and the merged source is a build artifact of the step above.
+        run: |
+          src=build/third_party/whisper.cpp/ggml/src/ggml-metal/autogenerated/ggml-metal-embed.metal
+          test -f "$src" || { echo "merged kernel source missing at $src"; exit 1; }
+          xcrun -sdk macosx metal -O3 -mmacosx-version-min=13.0 -std=metal3.0 \
+            -DGGML_METAL_EMBED_LIBRARY=1 -DGGML_METAL_HAS_BF16=1 -c "$src" -o - |
+            xcrun -sdk macosx metallib - -o "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"
+          ls -l "$RUNNER_TEMP/ggml-metal-intel-dmg.metallib"

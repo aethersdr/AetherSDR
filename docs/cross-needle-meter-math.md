@@ -129,6 +129,18 @@ decluttered:
 3. Result is memoized in `swrLabelCenterCache`, keyed by the exact `QFont` used
    by the widget. A widget/application font change therefore recomputes the
    collision layout before rebuilding the static face.
+4. Recomputing is **not** the same as moving. Step 1's anchor is purely
+   geometric — arc length and `label_arc_fraction`, no font input — so the font
+   reaches placement only through step 2's collision test. A different font
+   repositions a number if and only if its box actually collides at that
+   anchor; where there is clearance to spare, identical placement under a
+   different font is the correct outcome, not a stale cache. A test that pins
+   the cache keying must therefore **force** a collision (grow the font size
+   until one is unavoidable) and must never assert "changing the font moved a
+   label" — that assertion pins a coincidence of clearance, and it is what
+   failed on a healthy build in #4559. Font *stretch* is doubly unsuitable as
+   the lever: how far a stretch widens a box, and whether the host's fallback
+   font honors it at all, are properties of the runner's font stack.
 
 To move the whole number ring, change **one** value: `label_arc_fraction`. The
 tests enforce association (each number nearest its own contour or its upper

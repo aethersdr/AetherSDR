@@ -1,34 +1,51 @@
 name: CodeQL
 
+# NO pull_request TRIGGER — deliberate (#4655).
+#
+# Analyzing C++ means building the whole project with no compiler cache (ccache
+# is unusable here: a cache hit means the compiler is never invoked, so the
+# extractor sees no translation unit and coverage silently drops). That measured
+# 39 min mean / 77 min max per run, making CodeQL the longest pole on every PR —
+# longer than the entire CI matrix. It also ran twice per merged PR, since
+# push:main re-scans the identical content ~10 min later.
+#
+# CodeQL is not a required status check and never blocked a merge, so the
+# pre-merge run bought "surfaced on the PR" over "surfaced on main shortly
+# after". We took the trade: scan once per merge, plus the weekly full sweep.
+# Re-adding `pull_request:` here is a one-line change if the posture call
+# changes — mirror the paths: block below when you do.
 on:
-  pull_request:
-    branches: [main]
-    # Skip CodeQL on doc-only PRs — analyzing C++ requires building the
-    # whole project (~23 min wall clock).  The weekly cron below gives
-    # us a periodic full scan regardless of PR activity.
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.github/**'
-  # Post-merge guard — paired with ci.yml's push:main trigger; same
-  # paths-ignore rules apply so docs/CI-only merges don't burn 23 min.
   push:
     branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-      - '.gitignore'
-      - '.github/**'
+    # Positive `paths:`, NOT `paths-ignore:`. GitHub skips a run only when EVERY
+    # changed file matches an ignore pattern, so a single unlisted file re-arms
+    # the whole workflow — and `tools/**` was never on the old ignore list.
+    # #4585 changed exactly two files, a workflow YAML and a Python script, and
+    # paid 58 min for a full Qt build to analyze neither of them. A positive
+    # filter fires when ANY file matches, which is the rule we actually want.
+    #
+    # Scope = what `cmake --build build` actually compiles, because CodeQL can
+    # only analyze translation units the build emits. tools/ is listed by
+    # EXTENSION so a change to one of its Python scripts does not re-arm this;
+    # tools/kiwi_directory_poc.cpp is a default target and does need coverage.
+    # hal-plugin/ is deliberately absent — it is a separate CMake project built
+    # only by packaging/macos/build-installer.sh, so this workflow never sees it.
+    paths:
+      - 'src/**'
+      - 'third_party/**'
+      - 'tools/**.cpp'
+      - 'tools/**.h'
+      - 'CMakeLists.txt'
+      - '.github/codeql/**'
+      - '.github/workflows/codeql.yml'
   schedule:
     - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC
 
-# Auto-cancel superseded runs when a newer commit lands on the same PR. PR runs
-# share a stable per-PR group (older run cancelled); runs on main append the
-# unique run_id so each is its own group — the post-merge push:main scan and the
-# weekly scheduled scan (both on main) stay fully parallel, never queue or cancel.
+# Every trigger above resolves to refs/heads/main, so each run gets its own
+# group (run_id suffix) and nothing is ever cancelled — the post-merge scan and
+# the weekly scheduled scan stay fully parallel. The ref guard is retained
+# verbatim so the block still behaves correctly if a pull_request trigger is
+# ever restored.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

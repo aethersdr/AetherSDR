@@ -2,6 +2,8 @@
 #include <QtGlobal>
 #ifdef Q_OS_LINUX
 
+#include "core/UlanziChordDecoder.h"
+
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -68,7 +70,6 @@ private:
     QString findMatchingDevice(QString* blockedName = nullptr) const;
     bool openAndGrab(const QString& path);
     void closeFd();
-    void emitChord(int keycode, int action);  // chord assembly + signature emit
 
     int m_fd{-1};
     QString m_devicePath;
@@ -78,12 +79,9 @@ private:
     QTimer* m_rescanTimer{nullptr};  // debounced rescan after directory change
     bool m_accessRequiredEmitted{false};  // de-dupe accessRequired across rescans
 
-    // Decoder state — Ulanzi Dial encodes some buttons as Ctrl+key chords
-    // and one as a Ctrl+Y+KEY_PREVIOUSSONG compound. We assemble chords
-    // by tracking modifier-down/up around non-modifier presses.
-    bool m_ctrlDown{false};
-    int m_lastNonModKey{-1};        // most recent non-mod key while Ctrl held
-    bool m_prevsongAlongsideCtrl{false};  // KEY_PREVIOUSSONG present in chord window
+    // Chord assembly and signature formatting are shared with the macOS and
+    // Windows backends (ulanzi_chord_decoder_test covers all three).
+    UlanziChordDecoder m_decoder;
 };
 
 } // namespace AetherSDR

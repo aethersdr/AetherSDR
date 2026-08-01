@@ -156,6 +156,31 @@ public:
     // and CW keying envelope.  Drives the ALC gauges in the Phone/CW applet.
     float swAlc() const { return m_swAlc; }
 
+    // Convenience: the TX-filter input/output pair (dBFS, from TX "SC_MIC" and
+    // TX "SC_FILT_2").  SC_MIC is where PC/remote audio enters the TX chain;
+    // SC_FILT_2 is the level after the second TX filter -- the last stage the
+    // operator's low/high cut can silence.  Comparing the two is what makes
+    // "the TX filter removed the audio" measurable instead of inferred (#4649).
+    float scMic() const { return m_scMic; }
+    float scFilt1() const { return m_scFilt1; }
+    float scFilt2() const { return m_scFilt2; }
+    // Whether a SAMPLE has landed for BOTH FILTER TAPS -- the same distinction
+    // hasSupplyVoltage() draws above, and load-bearing for the same reason: the
+    // index is set when the meter DEFINITION arrives while the value sits at its
+    // 0.0f initialiser until a VALUE packet lands.  0 dBFS is a very loud
+    // signal, so a comparison keyed on the index alone would read the
+    // initialiser as full-scale transmit audio.
+    bool hasTxFilterLevels() const
+    { return m_hasScFilt1Value && m_hasScFilt2Value; }
+    // Age gap between the two filter taps, ms. They publish at different
+    // rates, so a comparison across them is only meaningful while the pair
+    // is close in time; -1 when either has never produced a sample.
+    qint64 txFilterLevelSkewMs() const;
+    // Resolved for the ACTIVE TX slice; -1 when that slice has no such meter.
+    int scMicIndexForActiveTxSlice() const;
+    int scFilt1IndexForActiveTxSlice() const;
+    int scFilt2IndexForActiveTxSlice() const;
+
     // Convenience: PA heatsink temperature (°C).
     float paTemp() const { return m_paTemp; }
 
@@ -222,6 +247,9 @@ signals:
     // Drives the in-app ALC gauges; fires during voice peaks and CW keying.
     void swAlcChanged(float dbfs);
 
+    // Emitted when either side of the TX-filter pair changes (dBFS in, dBFS out).
+    void txFilterLevelsChanged(float scFilt1, float scFilt2);
+
     // Emitted when hardware telemetry meters change (PA temp, supply voltage).
     void hwTelemetryChanged(float paTemp, float supplyVolts);
 
@@ -269,6 +297,17 @@ private:
     int m_compLevelIdx{-1};  // "TX" / "COMP" (instantaneous)
     int m_hwAlcIdx{-1};      // "TX" / "HWALC" — external RCA jack voltage
     int m_swAlcIdx{-1};      // "TX" / "ALC"   — post-software-ALC SSB peak
+    // Per-slice, exactly like COMPPEAK above: a radio can publish one TX
+    // waveform meter block PER ACTIVE SLICE (6600 uses distinct sourceIndex
+    // values, 8000 repeats "TX- num=0" after each SLC block). A single index
+    // per meter would be last-definition-wins, and the TX-filter check would
+    // silently watch some other slice's filter.
+    QMap<int, int> m_scMicIdxByTxSource;    // "TX" / "SC_MIC"    (explicit sourceIndex)
+    QMap<int, int> m_scMicIdxBySlice;       //                    (implicit, num=0)
+    QMap<int, int> m_scFilt1IdxByTxSource;  // "TX" / "SC_FILT_1"
+    QMap<int, int> m_scFilt1IdxBySlice;
+    QMap<int, int> m_scFilt2IdxByTxSource;  // "TX" / "SC_FILT_2"
+    QMap<int, int> m_scFilt2IdxBySlice;
     int m_paTempIdx{-1};     // "RAD" / "PATEMP"
     int m_supplyIdx{-1};     // "RAD" / "+13.8A" (supply voltage, point A = before fuse)
     int m_ampFwdPwrIdx{-1};  // "AMP" / "FWD" (PGXL)
@@ -304,6 +343,14 @@ private:
     float m_compLevel{0.0f};
     float m_hwAlc{0.0f};
     float m_swAlc{0.0f};
+    float m_scMic{0.0f};
+    float m_scFilt1{0.0f};
+    float m_scFilt2{0.0f};
+    // Cleared wherever the matching index is, so a level can never
+    // outlive the meter it describes. See hasTxFilterLevels().
+    bool m_hasScMicValue{false};
+    bool m_hasScFilt1Value{false};
+    bool m_hasScFilt2Value{false};
     float m_paTemp{0.0f};
     float m_supplyVolts{0.0f};
     // Set when a "+13.8A" value packet lands, cleared wherever m_supplyIdx is,
